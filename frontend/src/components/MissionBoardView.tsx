@@ -122,6 +122,8 @@ import {
   actionsFor,
   ago,
   buildReceipt,
+  scopeWarnings,
+  type ScopeWarning,
   cardStatus,
   checkKindLabel,
   checksText,
@@ -1320,7 +1322,11 @@ export const EvidenceReceipt: React.FC<{
   names: Record<string, string>;
   busy?: boolean;
   onApproveCheck?: (c: Check) => void;
-}> = ({ receipt, names, busy = false, onApproveCheck }) => (
+  /** Paths a small task changed though its contract said they must not; it was still approved. */
+  scopeWarnings?: ScopeWarning[];
+  /** The bot that owns the task, for the scope warning. */
+  owner?: string | null;
+}> = ({ receipt, names, busy = false, onApproveCheck, scopeWarnings = [], owner }) => (
   <section aria-labelledby="receipt-h" className="space-y-3" data-receipt>
     <h4 id="receipt-h" tabIndex={-1} className="flex items-center focus:outline-none gap-1.5 text-xs font-semibold text-zinc-200">
       <ShieldCheck size={14} className="text-emerald-400" aria-hidden="true" /> Evidence receipt
@@ -1331,6 +1337,18 @@ export const EvidenceReceipt: React.FC<{
         {receipt.verifiedBy.by ? `, checked by ${receipt.verifiedBy.by}` : ''}
         {receipt.verifiedBy.check.finished_at ? ` ${ago(receipt.verifiedBy.check.finished_at)}` : ''}.
       </p>
+    )}
+    {scopeWarnings.length > 0 && (
+      <ul className="space-y-1.5" aria-label="Changed paths it must not change" data-scope-warnings>
+        {scopeWarnings.map((w) => (
+          <li key={w.id} className="flex items-start gap-1.5 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-200 break-words" data-scope-warning>
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0">
+              {owner || 'The bot'} changed <code className="break-all">{w.path}</code>, which this task said must not change. It was still approved because the task is small.
+            </span>
+          </li>
+        ))}
+      </ul>
     )}
     {receipt.waitingOnYou && (
       <p className="px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-200" data-waiting-on-you>
@@ -2063,6 +2081,8 @@ export const TaskDetailBody: React.FC<{
   canResolveRisks?: boolean;
   onResolveRisk?: (r: Risk, resolution: RiskResolution) => void;
   onOpenAuditCard?: (w: AuditWaiting) => void;
+  /** Low-tier scope findings from the newest verdict (scopeWarnings). */
+  scopeWarnings?: ScopeWarning[];
 }> = ({
   detail,
   names,
@@ -2094,6 +2114,7 @@ export const TaskDetailBody: React.FC<{
   canResolveRisks = true,
   onResolveRisk,
   onOpenAuditCard,
+  scopeWarnings = [],
 }) => {
   const t = detail.task;
   const shownNotice = noticeFor(notice, t.state);
@@ -2483,7 +2504,7 @@ export const TaskDetailBody: React.FC<{
         </section>
       )}
 
-      <EvidenceReceipt receipt={receipt} names={names} busy={busy} onApproveCheck={onApproveCheck} />
+      <EvidenceReceipt receipt={receipt} names={names} busy={busy} onApproveCheck={onApproveCheck} scopeWarnings={scopeWarnings} owner={owner} />
 
       <RestoreSection task={t} api={restoreApi} titleOf={(id) => tasksById[id]?.title} now={now} onRestored={onRestored} onError={onRestoreError} />
 
@@ -3106,6 +3127,7 @@ export const MissionBoardPage: React.FC<{
   const [scanning, setScanning] = useState(false);
   // Swarm Auditor: the open task's audits, the card it waits on, and the board's badge counts.
   const [risks, setRisks] = useState<TaskRisks | null>(null);
+  const [scopeWarns, setScopeWarns] = useState<ScopeWarning[]>([]);
   const [waitingCard, setWaitingCard] = useState<AuditWaiting | null>(null);
   const [riskCounts, setRiskCounts] = useState<Record<string, number>>({});
   const [canResolveRisks, setCanResolveRisks] = useState(true);
@@ -3186,6 +3208,10 @@ export const MissionBoardPage: React.FC<{
         missionsApi.workflowChanges('proposed', id).then((cs) => alive.current && openIdRef.current === id && setChanges(cs), () => {});
       } else setChanges([]);
       loadRisks(id);
+      missionsApi.verdicts(id).then(
+        (v) => alive.current && openIdRef.current === id && setScopeWarns(scopeWarnings(v)),
+        () => alive.current && openIdRef.current === id && setScopeWarns([]),
+      );
     } catch (e) {
       if (alive.current && openIdRef.current === id) setDetailError(failMsg(e));
     }
@@ -3272,6 +3298,7 @@ export const MissionBoardPage: React.FC<{
     setFailures([]);
     setChanges([]);
     setRisks(null);
+    setScopeWarns([]);
     setWaitingCard(null);
     setDetailError(null);
     setDetailNotice(null);
@@ -3862,6 +3889,7 @@ export const MissionBoardPage: React.FC<{
               onRestored={restored}
               onRestoreError={restoreError}
               risks={risks}
+              scopeWarnings={scopeWarns}
               auditWaiting={waitingCard}
               canResolveRisks={canResolveRisks}
               onResolveRisk={resolveRisk}
