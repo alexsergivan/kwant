@@ -1,0 +1,59 @@
+{
+  "version": "0.9.0",
+  "date": "2026-11-11",
+  "highlights": [
+    {
+      "id": "review-inbox",
+      "title": "Review a bot's work in the Inbox",
+      "text": "Inbox › New has a To review group with a verdict, what was checked and what couldn't be. Approve, Send back or Roll back, and approve low-risk passes together.",
+      "image": null,
+      "open": "inbox"
+    },
+    {
+      "id": "second-check",
+      "title": "A second check before you approve",
+      "text": "A teammate on another model runs a task's checks again in a clean copy of the files. It says Pass only when kwant ran a check itself, and lists what it couldn't check.",
+      "image": null,
+      "open": "board"
+    },
+    {
+      "id": "point-at-it",
+      "title": "Point at the part of the page you mean",
+      "text": "In Watch live, press Point and click part of the page. The bot gets its address, HTML, size and styles, and a picture of it. Point only reads the page.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "line-notes",
+      "title": "Notes on diff lines, sent as one message",
+      "text": "Add notes on lines of a Dev desk review card and send them together. CI failures and review comments on a bot's PR go back to that bot too.",
+      "image": null,
+      "open": "dev"
+    },
+    {
+      "id": "worktrees",
+      "title": "A worktree for each bot task",
+      "text": "The Dev desk's Worktrees tab makes a worktree from a branch, for a bot or for you. Remove never deletes the branch. Build folders are cleaned an hour after a task.",
+      "image": null,
+      "open": "dev"
+    },
+    {
+      "id": "watch-a-mission",
+      "title": "Watch a mission",
+      "text": "Pick a bot to check a mission's claims when it stops. A claim that doesn't hold sends its task back, and the report shows what was claimed and what was checked.",
+      "image": null,
+      "open": "board"
+    }
+  ],
+  "fixes": [
+    "One order everywhere: needs you, stuck or failed, to review, finished, working, waiting. Needs attention sits above Channels.",
+    "Roll back works after approval too: the approved record stays, a copy waits on hold, and the bot drops one Flight School tier.",
+    "Bots leave notes about their tools. Read and fix them under Notes from bots in Settings › Connections.",
+    "A message to a busy or stuck bot is kept, and a line under it says why it waits. Try again when the bot gave up.",
+    "One notification when a bot's turn shows no step for 15 minutes.",
+    "A bot's other chats wait while it waits on your answer to its question.",
+    "A monthly budget per bot, set through the API for now. At 100% the bot finishes its turn and starts nothing new.",
+    "Changing a bot's model starts its Flight School scorecard again.",
+    "A retried API send with the same client_message_id arrives once."
+  ]
+}

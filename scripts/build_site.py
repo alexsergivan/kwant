@@ -197,7 +197,8 @@ CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-hum
             "v077-claude-vm-card", "v077-isolation-notice-card", "v077-bring-your-bots-card",
             "v077-dev-fresh-card", "v077-import-several-card", "v077-whats-new-card",
             "v080-queued-under-running-card", "v080-import-card", "v080-prepush-card-card",
-            "v080-fresh-eyes-chip-card", "v080-before-after-card", "v080-drop-files-card", "v080-import-preview-card"}
+            "v080-fresh-eyes-chip-card", "v080-before-after-card", "v080-drop-files-card", "v080-import-preview-card",
+            "v090-attention-card", "v090-ci-fixit-card", "v090-ci-verdict-card", "v090-line-notes-card", "v090-point-at-it-card", "v090-review-inbox-card", "v090-roll-back-card", "v090-roll-back-restore-card", "v090-scope-warning-card", "v090-tool-notes-card", "v090-tool-notes-chat-card", "v090-verdict-card", "v090-watch-chat-card", "v090-watch-mission-card", "v090-worktrees-card"}
 
 
 def shot(root, name, alt, sizes):

@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-09">New in 0.9.0</a></li>
         <li><a href="#new-08">New in 0.8.2</a></li>
         <li><a href="#new-077">New in 0.7.7</a></li>
         <li><a href="#new-076">New in 0.7.6</a></li>
@@ -52,6 +53,73 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-09" class="fgroup" data-covers="0.9.0">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.0</p>
+      <h2>Check a bot's work before it counts</h2>
+      <p>A second checker on another model runs a task's checks again before you see it, and everything waiting on your review sits in one place in the Inbox. Roll work back even after you approved it, point at the part of a page you mean, leave notes on diff lines, and give each bot task its own worktree.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="review-inbox">Review a bot's work in one place</h3>
+        <p>Inbox › New has a <strong>To review</strong> group, highest risk first. Each item shows its verdict (Pass, Fail, Needs you or Not checked yet), who checked it, what it <strong>couldn't check</strong> and why, and folds for the decisions made, what done looks like and the evidence. Press <strong>Approve</strong>, <strong>Send back</strong> with a note that becomes a new criterion, or <strong>Roll back</strong>.</p>
+        <p>When two or more low-risk items passed every check with high confidence, <strong>Approve all</strong> approves them one at a time. An item with a held action, a Needs you verdict or anything it couldn't check is never in the batch.</p>
+      </div>
+      <div class="frame">{{video:clip-v090-review-inbox|Clip: in the Inbox, the person opens 'Speed up the search box' (Needs you, 'What done looks like 2 of 2 met'), then the size-chart task's Pass verdict ('4 of 4 met'), approves it, opens a task with no checks, then presses 'Approve all 3' on the low-risk batch. It ends on 'Approved 3 of 3' with each item ticked.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="point-at-it">Point at the part of the page you mean</h3>
+        <p>In Watch live, press <strong>Point</strong> and click the part of the page you mean. It goes into your message as a chip, and the bot gets the page address, a selector, the element's HTML, its size and styles, and a picture of it.</p>
+        <p>Point only reads: it never clicks or types in the page, and the page's own scripts can't see it. <a href="docs/browser.html#watch-live">Watch live</a></p>
+      </div>
+      <div class="frame">{{video:clip-v090-point-at-it|Clip: the person turns on Point in Ben's bot browser, hovers over parts of the tent page as they light up with their size, picks the Add to cart button, and types 'Make this button full width on phones'.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="line-notes">Notes on diff lines, sent as one message</h3>
+        <p>On a Dev desk review card, click beside a line, or drag for a range, and write a note. Notes stay as drafts until you send them, and the bot gets them all in one message with each file, line and code. After its next push, each note says whether that line changed. Nothing is posted to GitHub. <a href="docs/dev-mode.html#reviews">Dev mode reviews</a></p>
+      </div>
+      <div class="frame">{{video:clip-v090-line-notes|Clip: on the Dev desk, the person adds notes to diff lines in the size chart change, and they collect as drafts, which are then sent to Ann.}}</div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="second-check">
+        <span class="shot">{{shot:v090-verdict-card|Close-up of the verdict: a green 'Pass · high confidence' box saying the run was repeated from scratch on a clean copy, all 6 steps pass, the chart fits a 390px screen and prices are untouched, checked by fresh eyes on Codex because it's high risk. Below are Approve, Send back and Roll back, and the folded rows 'What done looks like · 4 of 4 met' and 'Evidence'.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A second check before you approve</h3><p>When a Mission board task moves to review, a teammate on another model runs its checks again in a clean copy of the files, and never writes to the task's folder. It says Pass only when kwant ran a check itself, lists what it couldn't check, and sends a first Fail back to the bot. A task can say what done means and which paths must not change. <a href="docs/mission-board.html#verified">Review on the Mission board</a></p></div>
+      </article>
+      <article class="card" id="roll-back">
+        <span class="shot">{{shot:v090-roll-back-card|Close-up of the Roll back dialog (copy path): approved at 15:01, so the approved record stays and a copy is made from before the run that waits on hold until you press Run. Below that: 'Ben moves down one Flight School tier for general: Act → Sandbox', Remove tax-table.json, 'Nothing left this computer', and a note that a safety checkpoint is taken first.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Roll back, even after you approved it</h3><p><strong>Roll back</strong> puts back only the files the task changed, lists what already left this computer, and takes a checkpoint first so you can undo it. Rolling back approved work says when it was approved and moves the bot down one Flight School tier for that kind of work. A verified task keeps its record: the roll back makes a copy from before the run, on hold until you press Run. <a href="docs/flight-school.html#tiers">Flight School tiers</a></p></div>
+      </article>
+      <article class="card" id="worktrees">
+        <span class="shot">{{shot:v090-worktrees-card|Close-up of worktrees per repo: trail-blog and trail-shop, each with '1 needs you' and New worktree, and rows for Ann's and Cody's branches with uncommitted-file counts and up-to-date status.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A worktree for each bot task</h3><p>The Dev desk's <strong>Worktrees</strong> tab, grouped by repo, makes a worktree from a new or existing branch, for a bot or just for you. The bot works in that folder, <strong>Remove</strong> never deletes the branch, and build folders git ignores are cleaned an hour after the task, unless you press <strong>Keep it</strong>.</p></div>
+      </article>
+      <article class="card" id="watch-mission">
+        <span class="shot">{{shot:v090-watch-mission-card|Close-up of the watch report: Ben checked 4 claims after the mission stopped; 'Resize the spring product photos' doesn't hold (6 photos in packs/ are still 4000 px wide), 'Add the pack size guide' can't tell, and Ben restarted the photo task.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Watch a mission</h3><p>Press <strong>Watch</strong> on a mission and pick a bot to check it. When the mission stops, that bot checks each claim with the browser, page source and attachments. A claim that doesn't hold sends its task back, and the report shows what was claimed and what was checked. <a href="docs/mission-board.html#missions">Missions</a></p></div>
+      </article>
+      <article class="card" id="ci-fixit">
+        <span class="shot">{{shot:v090-ci-fixit-card|Close-up of a Fix-it message: 'Fix-it for PR #31 on demo-org/demo-app (ben/tax-table)', 'CI failed: test (failure)', and the test output with expected 0.86, received 1.98.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>CI failures go back to the bot</h3><p>When a check fails or someone comments on a bot's pull request, the bot gets one Fix-it item with the end of the failing output or each comment with its file and line, at most 3 a day per PR. When the PR goes green, a reviewer that didn't write it says MERGE, HOLD or DO NOT MERGE, as advice. Nothing here merges or pushes.</p></div>
+      </article>
+      <article class="card" id="tool-notes">
+        <span class="shot">{{shot:v090-tool-notes-card|Close-up of 'Notes from bots': filter chips All 3 / Didn't work 1 / Tip 1 / Missing 1 / Fixed 0 and three notes: no way to set stock for one size (update_stock), pass since as YYYY-MM-DD (export_orders_csv), and refund_order needs cents, not euros, each with Mark fixed.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Bots leave notes about their tools</h3><p>When a tool didn't work, has a tip or is missing, a bot can file a note. Settings › Connections lists them under <strong>Notes from bots</strong>, where you can add your own and mark one fixed. Bots with the same tools get the open notes as hints in later turns.</p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="attention-order" class="span2"><h3>One order for what needs you</h3><p>The sidebar, the Inbox and the phone's Chats tab sort bots the same way: needs you, stuck or failed, to review, finished but not read, working, waiting. A <strong>Needs attention</strong> block sits above Channels.</p></li>
+      <li id="held-messages"><h3>Messages to a busy bot wait, and say why</h3><p>When a bot waits on you elsewhere or is stuck, your message is saved and a line under it says when it goes through.</p></li>
+      <li id="stuck-quiet"><h3>See when a bot is stuck or quiet</h3><p>Stuck bots show the reason, and a turn with no step for 15 minutes sends one "is quiet" notification.</p></li>
+      <li id="scope-warning"><h3>What must not change</h3><p>On a small task, a change to a must-not-change path shows an amber line in the task view instead of failing the check.</p></li>
+      <li id="monthly-budget"><h3>A monthly budget for a bot</h3><p>Set a token or dollar limit per bot with the API. At 80% you get a note; at 100% it finishes its turn and starts nothing new.</p></li>
+      <li id="fixes-090" class="span3"><h3>Smaller changes and fixes</h3><p>Review on the Mission board opens the item in the Inbox. While a bot has a question open for you, its other chats wait. Changing a bot's model starts its Flight School scorecard again. A retried send with the same message id arrives once.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-08" class="fgroup" data-covers="0.8.0 0.8.1 0.8.2">
   <div class="wrap">
@@ -428,7 +496,7 @@ card_art: team
     </div>
     <div class="grid two">
       <article class="card" id="dev-landed">
-        <span class="shot">{{shot:v07-dev-landed|The What landed tab of the Dev desk, watching demo-org/demo-app on main: a Since you last looked note saying 3 changes landed on main and 2 need you, grouped as Account, Checkout and Cart, above yesterday's landed cards. Each card has a short commit sha, a pull request number, a risk badge and a line count, and both shown wear the Verified sticker.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v07-dev-landed|The Dev desk watching 3 repos: demo-org/demo-app on GitHub, and trail-shop and trail-blog, which have no remote and show landed changes only. Below, the What landed (6), Reviews (8) and Worktrees (6) tabs, a chip for each repo, and today's landed cards, each with its commit, Direct push, a Low risk badge, What changes for you and Under the hood.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>What landed, in plain words</h3><p>One card per merge to the watched branch: what changed, how risky it is, and whether tests passed. <strong>Verified</strong> only when CI is green, another bot reviewed it and every finding was handled. <strong>Draft release notes</strong> writes them from the cards. <a href="docs/dev-mode.html">Dev mode</a></p></div>
       </article>
       <article class="card" id="dev-review">
@@ -632,7 +700,7 @@ card_art: team
         <div class="card-body"><h3>Truth Ledger: conflicts wait for you</h3><p>When two facts disagree, both are flagged Disputed until you pick Keep this one or Not a conflict. Facts show their evidence and the tasks that rely on them. On from 0.6.5, and with it off bots see exactly what they saw in 0.5.</p></div>
       </article>
       <article class="card" id="insights-06">
-        <span class="shot">{{shot:v6-board|The top of the Mission board: the week's numbers (7 verified, 0 false successes, 2 need you now, blocked 21 min), then verified per active week, 2.5 on average over 8 active weeks, as a bar chart, and cost per verified result, $0.22, from $2.63 over 20 settled tasks this week, failed runs included, with a note that it is based on 12 verified results that reported a cost and 4 runs reported none. Below, a fact dispute and QA's request for a higher Flight School tier.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v6-board|The top of the Mission board: Live now, then the week's numbers (7 verified, 0 false successes, 0 board tasks waiting on you, 1 h blocked, 578 tokens per verified, 0 fixed by AutoFix), verified per active week as a bar chart, and cost per verified result, Not reported because none of the 6 settled tasks reported a cost. Below, Facts and Goals, then the task columns.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Insights: verified per week, and the cost</h3><p>Verified results per active week over the last 8 weeks, and the cost of each one, failed runs included. A missing cost is said plainly, never shown as $0.</p></div>
       </article>
     </div>
@@ -732,7 +800,7 @@ card_art: team
     </div>
     <div class="grid two">
       <article class="card" id="board">
-        <span class="shot">{{shot:v3-board|The Mission board for a waitlist launch, with Ready, Working, Needs you, Review and Verified columns, and a strip above counting tasks verified this week, false successes and what needs you now.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v3-board|The Mission board's columns: Ready with three blocked Spring catalogue launch tasks, Working and Needs you empty, Review with two tasks, each with Review and Dismiss, and Verified with 7 tasks showing their checks passed and the tokens used.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>One board, five columns</h3><p>Missions, hand-offs, routine runs and loose ends you take on, from Ready to Verified. <strong>Needs you</strong> collects every question, approval and failure waiting on you.</p></div>
       </article>
       <article class="card" id="verified" data-holo-area>
