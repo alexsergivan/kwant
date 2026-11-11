@@ -1273,8 +1273,8 @@ pub fn handoff_rules() -> String {
     concrete task (\"@Writer, draft Pillar 1: …\"); kwnt sends it to them and resumes you with their result. That works for \
     a teammate who just reported, too. Only say you're handing off, asking or waiting for someone when you @mention them \
     with a task in this reply; to merely refer to a teammate, write the name without @. Keep handing on as the work needs. \
-    kwnt skips a mention, and tells you why under your reply, when it repeats exactly a task that teammate already got for \
-    this user message, or when that teammate failed its last {streak} tasks in a row here: then do it yourself or give it \
+    kwnt skips a mention, and tells you why under your reply, when it repeats exactly a task that teammate already finished \
+    or was cancelled on for this user message (a failed task may be retried as it was), or when that teammate failed its last {streak} tasks in a row here: then do it yourself or give it \
     to someone else. Only after {ceiling} hand-offs for one user message does the person press Continue; then tell them \
     what's waiting instead of claiming a handoff.",
     streak = super::routes::FAILURE_STREAK_LEN,

@@ -825,7 +825,9 @@ never wait for the person:
 - **Exact repeat**: the same task, normalised (trimmed, lowercased, whitespace collapsed; the
   lines that @mention the teammate, or its own line when it was sent one line of several), to the
   same teammate for this message: "already asked X exactly this in this request". A reworded
-  retry goes out.
+  retry goes out. Earlier hand-offs that ended `failed` don't count, so a failed task may be
+  retried word for word until the failure-streak guard stops it; completed and cancelled ones do
+  count (open ones are already skipped as "still working").
 - **Failure streak**: the teammate's last 3 hand-offs for this message all ended `failed`
   (cancelled or completed break it): "X failed its last 3 tasks here: do it yourself or give it to
   someone else". The person's next message resets it.

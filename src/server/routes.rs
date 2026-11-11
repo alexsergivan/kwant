@@ -1463,7 +1463,8 @@ pub(super) struct Relay<'a> {
 /// results it is about): a mention there is a correction or the next step, unless it only credits
 /// them ([`crate::router::only_credited`]). Loops end on machine guards that skip with a reason
 /// and never wait for the person: the same normalised task to the same teammate twice in one
-/// request ([`REPEATED_TASK`]), a teammate whose last [`FAILURE_STREAK_LEN`] tasks here failed
+/// request ([`REPEATED_TASK`]; an earlier one that failed doesn't count, so a failed task may be
+/// retried as-is until the failure-streak guard stops it), a teammate whose last [`FAILURE_STREAK_LEN`] tasks here failed
 /// ([`FAILURE_STREAK`]) and a relay back up its chain ([`RELAY_PING_PONG`]). Only past the hard
 /// ceiling [`MAX_DELEGATIONS_PER_REQUEST`] do mentions wait on a Continue notice
 /// ([`super::budget::pause_capped`]). Every mention that hands nothing on is said in the channel.
@@ -1614,7 +1615,10 @@ pub(super) async fn delegate_mentions(
         let unit_task = line.as_deref().map_or_else(|| task.clone(), line_task);
         let key = repeat_key(&unit_task, &specialist.name);
         let repeated = asked_now.iter().any(|(id, k)| id == &specialist.id && *k == key)
-            || this_request.iter().any(|d| d.specialist_kwant_id == specialist.id && repeat_key(&d.task, &specialist.name) == key);
+            || this_request.iter().any(|d| {
+                // A failed one may be retried as-is; the failure-streak guard stops that loop
+                d.specialist_kwant_id == specialist.id && d.status != "failed" && repeat_key(&d.task, &specialist.name) == key
+            });
         if repeated {
             skipped.push((specialist.name.clone(), REPEATED_TASK.replace("{name}", &specialist.name)));
             continue;
@@ -1702,6 +1706,7 @@ fn request_start(messages: &[crate::db::models::Message]) -> Option<chrono::Date
 /// that @mention it in what the lead (or a relaying teammate) said, after the last "mentioned you".
 /// Not the quoted request before it: a follow-up with no person message quotes the previous task
 /// there, so it grows each round. The same lead line asked twice matches; a reworded one doesn't.
+/// Earlier hand-offs that ended `failed` are not compared, so an identical retry goes out.
 pub fn repeat_key(task: &str, name: &str) -> String {
     const LINE: &str = "\n\nYour task is this line of ";
     let asked = match task.rfind(LINE).and_then(|at| task[at..].split_once("only:\n")) {
@@ -1744,12 +1749,17 @@ pub fn handoff_title(text: &str, name: &str) -> Option<String> {
         return None;
     }
     let rest = &line[lower.find(&mention)? + mention.len()..];
-    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | '-' | '–' | '—' | '*' | '_' | '.'));
+    // A '`' right after the name closes the inline code it was mentioned in ("`@QA` please …")
+    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | '-' | '–' | '—' | '*' | '_' | '.' | '`'));
     let end = rest
         .char_indices()
         .find(|&(i, c)| matches!(c, '.' | '!' | '?') && rest[i + c.len_utf8()..].starts_with(char::is_whitespace))
         .map(|(i, c)| i + c.len_utf8());
-    let sentence = rest[..end.unwrap_or(rest.len())].trim().trim_end_matches(['*', '_']).trim();
+    let mut sentence = rest[..end.unwrap_or(rest.len())].trim().trim_end_matches(['*', '_']).trim();
+    if sentence.matches('`').count() % 2 == 1 {
+        // An unpaired '`' closes inline code the mention opened ("`@QA run it`")
+        sentence = sentence.trim_end_matches('`').trim();
+    }
     if sentence.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
         return None;
     }
@@ -6469,6 +6479,14 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_mention_in_inline_code_leaves_no_stray_backtick_in_the_title() {
+        use super::handoff_title;
+        assert_eq!(handoff_title("`@QA` please revise your part.", "QA").as_deref(), Some("Please revise your part."));
+        assert_eq!(handoff_title("`@QA run the smoke tests`", "QA").as_deref(), Some("Run the smoke tests"));
+        assert_eq!(handoff_title("@QA run `cargo test` on staging.", "QA").as_deref(), Some("Run `cargo test` on staging."));
+    }
+
     use super::{
         is_persons, is_reply_by, person_words, scrub_urls, turn_failed_text, turn_plan, with_failure_meta, Carried, TurnOpts,
     };

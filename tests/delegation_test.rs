@@ -1222,6 +1222,69 @@ async fn an_exact_repeat_is_skipped_with_the_reason_and_a_reworded_ask_goes_out(
     assert!(ds[1].title.to_lowercase().contains("build part 2."), "{}", ds[1].title);
 }
 
+/// Ada's review of #520: a lead retrying a teammate that failed often uses the same words. An
+/// earlier identical hand-off that ended `failed` isn't a repeat: the same line goes out again.
+#[tokio::test]
+async fn a_failed_task_asked_again_word_for_word_goes_out() {
+    let env = setup().await;
+    let growth = add_bot(&env, "Growth").await;
+    let channel = team_channel_with(&env, "startup-retry", &[&env.lead, &env.specialist, &growth]).await;
+    say_after_seeding(&env, &channel, "Plan the launch RETRYMARK REPLYTAG:retry LINES:Growth:2", seed(&env, &channel, &growth, 1, "failed", Some("@Growth, please build part 1."))).await;
+
+    let to_growth = || async { handoffs_from(&env, &channel).await.into_iter().filter(|d| d.specialist_kwant_id == growth).collect::<Vec<_>>() };
+    wait_for("both lines", || async { to_growth().await.len() >= 3 }).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let msgs = channel_messages(&env, &channel).await;
+    assert!(refusals(&msgs).is_empty(), "no skip line: {:?}", refusals(&msgs));
+    assert!(capped(&msgs).is_empty(), "nothing waits for the person");
+    let ds = to_growth().await;
+    assert_eq!(ds.len(), 3, "the failed round, then lines 1 and 2: {:?}", ds.iter().map(|d| &d.title).collect::<Vec<_>>());
+    assert!(ds[1..].iter().any(|d| d.title.to_lowercase().contains("build part 1.")), "line 1 is retried as-is");
+}
+
+/// The same line failing 3 times in a row isn't retried a 4th time: the failure-streak guard skips
+/// it (not the repeat guard, which lets failed tasks through), and nothing pauses.
+#[tokio::test]
+async fn the_same_line_failing_three_times_is_stopped_by_the_streak_not_the_repeat_guard() {
+    let env = setup().await;
+    let growth = add_bot(&env, "Growth").await;
+    let channel = team_channel_with(&env, "startup-retry3", &[&env.lead, &env.specialist, &growth]).await;
+    say_after_seeding(&env, &channel, "Plan the launch RETRY3MARK REPLYTAG:retry3 LINES:Growth:2", seed(&env, &channel, &growth, 3, "failed", Some("@Growth, please build part 1."))).await;
+
+    wait_for("the skip note", || async { !refusals(&channel_messages(&env, &channel).await).is_empty() }).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let msgs = channel_messages(&env, &channel).await;
+    let reason = kwnt::server::routes::FAILURE_STREAK.replace("{name}", "Growth");
+    assert_eq!(refusals(&msgs), vec![format!("Not sent to Growth: {reason}")]);
+    assert!(capped(&msgs).is_empty(), "nothing waits for the person");
+    let n = handoffs_from(&env, &channel).await.into_iter().filter(|d| d.specialist_kwant_id == growth).count();
+    assert_eq!(n, 3, "no 4th try is started");
+}
+
+/// Only failed tasks may be retried as-is: the same line after a completed or a cancelled
+/// hand-off is still skipped as a repeat, and the other line goes out.
+#[tokio::test]
+async fn an_exact_repeat_after_a_completed_or_cancelled_hand_off_is_still_skipped() {
+    let env = setup().await;
+    let growth = add_bot(&env, "Growth").await;
+    for status in ["completed", "cancelled"] {
+        let channel = team_channel_with(&env, &format!("startup-done-{status}"), &[&env.lead, &env.specialist, &growth]).await;
+        let prompt = format!("Plan the launch DONEMARK{status} REPLYTAG:done{status} LINES:Growth:2");
+        say_after_seeding(&env, &channel, &prompt, seed(&env, &channel, &growth, 1, status, Some("@Growth, please build part 1."))).await;
+
+        let to_growth = || async { handoffs_from(&env, &channel).await.into_iter().filter(|d| d.specialist_kwant_id == growth).collect::<Vec<_>>() };
+        wait_for("the repeat note", || async { !refusals(&channel_messages(&env, &channel).await).is_empty() }).await;
+        wait_for("line 2", || async { to_growth().await.len() >= 2 }).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let msgs = channel_messages(&env, &channel).await;
+        let reason = kwnt::server::routes::REPEATED_TASK.replace("{name}", "Growth");
+        assert_eq!(refusals(&msgs), vec![format!("Not sent to Growth: {reason}")], "after a {status} one");
+        let ds = to_growth().await;
+        assert_eq!(ds.len(), 2, "after a {status} one: {:?}", ds.iter().map(|d| &d.title).collect::<Vec<_>>());
+        assert!(ds[1].title.to_lowercase().contains("build part 2."), "{}", ds[1].title);
+    }
+}
+
 #[test]
 fn the_repeat_key_is_what_the_teammate_was_asked_normalised() {
     use kwnt::server::routes::repeat_key;
