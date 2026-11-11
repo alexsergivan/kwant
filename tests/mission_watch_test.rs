@@ -417,6 +417,8 @@ async fn a_scheduled_stall_retry_leaves_the_task_alone() {
     // Once the retry is gone (skipped), the task is the watcher's again
     assert!(e.state.db.move_attempt(&a, "scheduled", "skipped", Some("test")).await.unwrap());
     assert!(!runner::due_to_retry(&e.state, &m, &t).await);
+    assert!(!stopped(&e, &m).await, "the skip is a change: 60 s more first");
+    quiet(&e, &t).await;
     assert!(stopped(&e, &m).await);
 }
 
@@ -443,6 +445,9 @@ async fn a_rate_limit_wait_leaves_the_task_alone() {
     watch::tick(&e.state).await;
     assert!(e.state.db.latest_watch_check(&m.id).await.unwrap().is_none());
     assert!(e.state.db.move_attempt(wait, "scheduled", "skipped", Some("test")).await.unwrap());
+    assert!(!runner::due_to_retry(&e.state, &m, &t).await);
+    assert!(!stopped(&e, &m).await, "the skip is a change: 60 s more first");
+    quiet(&e, &t).await;
     assert!(stopped(&e, &m).await);
 
     // 2. Every account was out: the owner's runner turn is parked in the mission's chat until the
