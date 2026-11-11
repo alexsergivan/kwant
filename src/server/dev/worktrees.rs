@@ -51,7 +51,7 @@ const SKIPPED_MAX: usize = 50;
 
 /// A folder name from a branch or a folder name: lowercased, every run of characters outside
 /// `[a-z0-9_]` turned into one `-`, trimmed of `-`, at most [`SLUG_MAX`] characters; `worktree`
-/// when nothing is left. `lin/H1 Worktrees` → `lin-h1-worktrees`. Never `.`/`..`, never hidden.
+/// when nothing is left. `Lin/H1-Worktrees` → `lin-h1-worktrees` (#486 N3: a git branch name has no spaces). Never `.`/`..`, never hidden.
 pub fn slug(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars().flat_map(char::to_lowercase) {
@@ -1291,6 +1291,7 @@ mod tests {
 
     #[test]
     fn branch_slugs_are_plain_folder_names() {
+        assert_eq!(slug("Lin/H1-Worktrees"), "lin-h1-worktrees");
         assert_eq!(slug("lin/H1 Worktrees"), "lin-h1-worktrees");
         assert_eq!(slug("pixel/inbox-empty-state"), "pixel-inbox-empty-state");
         assert_eq!(slug("../../etc"), "etc");
