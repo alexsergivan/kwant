@@ -18,7 +18,7 @@ use serde_json::json;
 /// Setting key: fresh tokens one chain may use before hand-offs pause; 0 turns the guard off.
 pub const SETTING: &str = "chain_token_budget";
 /// Off unless the person sets a budget, like task and mission limits (docs/mission-control.md §15).
-/// The hand-off count caps still stop a chain that loops.
+/// The hand-off guards still stop a chain that loops.
 pub const DEFAULT: u64 = 0;
 /// The budget every install had before it became opt-in; a stored value equal to it is cleared
 /// once ([`crate::db::Database::migrate_chain_budget_default`]).
@@ -26,8 +26,8 @@ pub const OLD_DEFAULT: u64 = 200_000;
 pub const MAX: u64 = 100_000_000;
 /// Message meta kind of the notice.
 pub const KIND: &str = "budget_paused";
-/// Message meta kind of the notice a lead's @mentions leave past the hand-off caps
-/// ([`super::routes::MAX_MENTION_DELEGATIONS_PER_BOT`], [`super::routes::MAX_DELEGATIONS_PER_REQUEST`]).
+/// Message meta kind of the notice a lead's @mentions leave past the hard ceiling on hand-offs
+/// for one message ([`super::routes::MAX_DELEGATIONS_PER_REQUEST`]).
 /// Carried on like a paused chain: Continue on it, or "continue" typed after it.
 pub const CAPPED_KIND: &str = "handoff_capped";
 
@@ -97,13 +97,15 @@ pub(super) async fn pause_if_over(scope: &TurnScope, spoken: &[String], replies:
     true
 }
 
-/// A lead's @mentions went past a hand-off cap: saves one notice naming the teammates `capped`
-/// (`sent` hand-offs so far for this request), which the person carries on with one press.
+/// A lead's @mentions went past the hard ceiling on hand-offs for one message: saves one notice
+/// naming the teammates `capped` (`sent` hand-offs so far for this request), which the person
+/// carries on with one press.
 pub(super) async fn pause_capped(scope: &TurnScope, lead: &Kwant, capped: &[&Kwant], sent: usize, text: &str, user_prompt: &str) {
     let names: Vec<String> = capped.iter().map(|k| k.name.clone()).collect();
-    tracing::info!(lead = %lead.id, sent, waiting = ?names, "hand-off caps reached: waiting for Continue");
+    tracing::info!(lead = %lead.id, sent, waiting = ?names, "hand-off ceiling reached: waiting for Continue");
     let line = format!(
-        "Paused after {sent} hand-offs so it doesn't loop: {} not sent yet. Press Continue or say \"continue\" to hand it on.",
+        "Paused after {} hand-offs for one message: {} not sent yet. Press Continue or say \"continue\" to carry on.",
+        super::routes::MAX_DELEGATIONS_PER_REQUEST,
         names.join(", "),
     );
     let meta = json!({
