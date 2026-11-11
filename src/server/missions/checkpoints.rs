@@ -1452,6 +1452,7 @@ pub async fn preview(State(state): State<AppState>, RawQuery(q): RawQuery, Path(
             }
             out["via"] = json!(via);
             out["step_down"] = super::flight_school::step_down_preview(&state.db, &task).await;
+            out["verified_at"] = super::flight_school::approved_at(&state.db, &task).await;
             Json(out).into_response()
         }
         Err(e) => plan_err(e),
