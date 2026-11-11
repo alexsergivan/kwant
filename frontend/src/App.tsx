@@ -49,6 +49,8 @@ import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { MissionBoardPage } from './components/MissionBoardView';
+import { WatchChatMessage } from './components/MissionWatch';
+import type { WatchMeta } from './missionWatch';
 import { MISSION_BOARD_SETTING_EVENT, emitMission, parseMissionBoardSetting, sourceChat } from './missions';
 import { type ChatTarget, type NotifiedChat, notifiedPlace, planOpenTarget } from './chatTarget';
 import { ParallelPage } from './components/ParallelUniverseView';
@@ -474,6 +476,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const ideaJarCount = useIdeaJarBadge(space.id);
   const jarWobble = useJarWobble();
   const [pendingMissionId, setPendingMissionId] = useState<string | null>(null);
+  const [pendingWatchReport, setPendingWatchReport] = useState(false);
   const [ideaToast, setIdeaToast] = useState<{ id: string; state: IdeaDropToastState } | null>(null);
   const [jarAnnouncement, setJarAnnouncement] = useState('');
   const [settingsFocusRow, setSettingsFocusRow] = useState<string | null>(null);
@@ -2128,6 +2131,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   /** Opens the thread, channel or direct chat an away item links to. */
   const openAwayItem = (item: AwayItem) => {
+    // 0.9.0 P1: a watch item opens its mission's report on the board, where the needs-you line is.
+    if (item.kind === 'watch' && item.mission_id) {
+      setPendingMissionId(item.mission_id);
+      setPendingWatchReport(true);
+      showPage('board');
+      return;
+    }
     const t = awayTarget(item);
     // 0.8.1 F6: the same opener as a notification's tap, so a gone chat lands in the bot's 1:1 and
     // an approval row shows its card
@@ -2511,6 +2521,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return decisionError(err, d === 'deny' ? 'say no' : d === 'undo' ? 'undo the hire' : 'hire it');
     }
   };
+  const renderWatchReport = (msg: ChatMessage, meta: WatchMeta, flash: boolean) => (
+    <WatchChatMessage
+      report={meta.report}
+      failed={meta.failed}
+      fallbackText={msg.text}
+      watcherName={kwantName(msg.sender_id) ?? chatTitle}
+      watcherId={msg.sender_id}
+      at={msg.created_at ?? null}
+      messageId={msg.id}
+      flash={flash}
+      onSeeClaims={
+        meta.missionId
+          ? () => {
+              setPendingMissionId(meta.missionId);
+              setPendingWatchReport(true);
+              showPage('board');
+            }
+          : undefined
+      }
+    />
+  );
   const renderBotAction = (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => {
     const owner = meta.kwant_id ?? undefined;
     return (
@@ -3865,7 +3896,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       openTaskId={pendingTaskId}
       onOpenedTaskId={() => setPendingTaskId(null)}
       openMissionId={pendingMissionId}
-      onOpenedMissionId={() => setPendingMissionId(null)}
+      openWatchReport={pendingWatchReport}
+      onOpenedMissionId={() => {
+        setPendingMissionId(null);
+        setPendingWatchReport(false);
+      }}
     />
   );
   const loose = (
@@ -4018,6 +4053,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderConnectionSuggestion={renderConnectionSuggestion}
           renderBotAction={renderBotAction}
           onOpenToolNote={openToolNote}
+          renderWatchReport={renderWatchReport}
           renderHire={renderHire}
           renderRouteChoice={renderRouteChoice}
           rerouteTargets={openThreadId ? [] : rerouteTargetsFor(currentChannel, kwants)}
