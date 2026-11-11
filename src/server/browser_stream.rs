@@ -291,7 +291,7 @@ fn wanted(event: &Value) -> bool {
     let method = event["method"].as_str().unwrap_or_default();
     match method {
         "Runtime.bindingCalled" => event["params"]["name"] == app_links::BINDING || event["params"]["name"] == recorder::BINDING,
-        "Log.entryAdded" => event["params"]["entry"]["text"].as_str().is_some_and(|text| text.starts_with(app_links::REFUSED_LOG)),
+        "Log.entryAdded" => event["params"]["entry"]["text"].as_str().is_some_and(|text| text.starts_with(app_links::REFUSED_LOG) || app_links::blocked_frame(text)),
         _ => !method.starts_with("Runtime.") && !method.starts_with("Log."),
     }
 }

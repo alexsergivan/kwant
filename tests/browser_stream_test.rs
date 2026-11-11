@@ -739,6 +739,14 @@ async fn a_link_to_another_app_is_stopped_or_its_prompt_closed_so_the_tab_keeps_
     push_event(&mock, "Log.entryAdded", json!({"entry":{"source":"other","level":"error","text":"Not allowed to launch 'snssdk1233://login?a=1' because a user gesture is required."}})).await;
     tokio::time::sleep(Duration::from_millis(900)).await;
     assert!(!mock.commands.lock().await.iter().any(|c| c["method"] == "Page.navigate"), "the page was left alone");
+    assert!(guard["params"]["source"].as_str().unwrap().contains("Content-Security-Policy"), "frames may load web pages only");
+
+    // TikTok's hidden bytedance: frame, which the guard's frame policy blocked: Chrome didn't ask
+    push_event(&mock, "Page.frameRequestedNavigation", json!({"frameId":"F3","url":"bytedance://dispatch_message/","reason":"scriptInitiated","disposition":"currentTab"})).await;
+    push_event(&mock, "Page.frameStartedNavigating", json!({"frameId":"F3","url":"bytedance://dispatch_message/","loaderId":"L3","navigationType":"differentDocument"})).await;
+    push_event(&mock, "Log.entryAdded", json!({"entry":{"source":"security","level":"error","text":"Framing '' violates the following Content Security Policy directive: \"frame-src * data: blob: about: filesystem: chrome-extension:\". The request has been blocked."}})).await;
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert!(!mock.commands.lock().await.iter().any(|c| c["method"] == "Page.navigate"), "a blocked frame isn't reloaded");
 
     // one got past the guard (a frame whose first address is the link): Chrome is asking, so the
     // tab steps off to about:blank and straight back to the sign-in page, which closes the prompt
@@ -748,6 +756,13 @@ async fn a_link_to_another_app_is_stopped_or_its_prompt_closed_so_the_tab_keeps_
     let steps: Vec<Value> = mock.commands.lock().await.iter()
         .filter(|c| matches!(c["method"].as_str(), Some("Page.navigate" | "Page.navigateToHistoryEntry"))).map(|c| c["params"].clone()).collect();
     assert_eq!(steps, vec![json!({"url":"about:blank"}), json!({"entryId":2})]);
+
+    // the page loaded again and opened the same app again: it isn't reloaded in a loop
+    push_event(&mock, "Page.frameStartedNavigating", json!({"frameId":"F4","url":"snssdk1233://login?c=1","loaderId":"L4","navigationType":"differentDocument"})).await;
+    let gave_up = app_link_notice(&mut ws, Duration::from_secs(5)).await.expect("told why it wasn't reloaded");
+    assert!(gave_up.contains("(snssdk1233:)") && !gave_up.contains("reloaded"), "{gave_up}");
+    let steps = mock.commands.lock().await.iter().filter(|c| matches!(c["method"].as_str(), Some("Page.navigate" | "Page.navigateToHistoryEntry"))).count();
+    assert_eq!(steps, 2, "no second reload");
     app_task.abort(); cdp_task.abort();
 }
 
