@@ -96,7 +96,7 @@ pub async fn run_mission(state: &AppState, mission: &Mission, max: usize) -> (Ve
         if picked.len() >= max {
             break;
         }
-        let who = t.owner_kwant_id.clone().or_else(|| t.suggested_kwant_id.clone()).unwrap_or_else(|| mission.lead_kwant_id.clone());
+        let who = runner_of(mission, t);
         let Ok(Some(bot)) = state.db.get_kwant(&who).await else { continue };
         if picked.iter().any(|(_, k)| k.id == bot.id) {
             continue;
@@ -152,11 +152,33 @@ async fn skip_for_spend(state: &AppState, mission: &Mission, why: &str) {
 /// Where a runner turn of `bot` in `m` runs: the mission's channel; its thread or direct chat only
 /// for the lead (threads and direct chats are one bot's own), else the bot's direct chat.
 fn mission_place(m: &Mission, bot: &crate::db::models::Kwant) -> (Option<String>, Option<String>) {
+    place_of(m, &bot.id)
+}
+
+fn place_of(m: &Mission, bot_id: &str) -> (Option<String>, Option<String>) {
     match (&m.channel_id, &m.thread_id) {
         (Some(c), _) => (Some(c.clone()), None),
-        (None, Some(t)) if bot.id == m.lead_kwant_id => (None, Some(t.clone())),
+        (None, Some(t)) if bot_id == m.lead_kwant_id => (None, Some(t.clone())),
         _ => (None, None),
     }
+}
+
+/// The bot that runs `t` for `m`: its owner, else the suggested bot, else the mission's lead.
+fn runner_of(m: &Mission, t: &Task) -> String {
+    t.owner_kwant_id.clone().or_else(|| t.suggested_kwant_id.clone()).unwrap_or_else(|| m.lead_kwant_id.clone())
+}
+
+/// "Due to retry" (P1 contract §3, D9): a retry of `t` is already coming, so nothing else should
+/// restart it. Any of: parked in `failed` for AutoFix; an AutoFix attempt scheduled (a stall retry,
+/// or a wait after a temporary error or rate limit, in whatever state the task is); or a turn of its
+/// bot parked where the mission runs it, until the usage limit resets or the bot's budget allows.
+pub async fn due_to_retry(state: &AppState, m: &Mission, t: &Task) -> bool {
+    if super::autofix::parked(state, t).await || super::autofix::retry_scheduled(state, &t.id).await {
+        return true;
+    }
+    let bot = runner_of(m, t);
+    let (channel, thread) = place_of(m, &bot);
+    state.db.parked_waiting_in(&bot, channel.as_deref(), thread.as_deref()).await.unwrap_or(false)
 }
 
 /// The chat id of [`mission_place`], as `TurnScope::context_id` names it.
@@ -253,7 +275,7 @@ async fn notify_outcome(state: &AppState, task_id: &str, kwant_id: &str, context
 /// Whether an AutoFix attempt of the task is scheduled. It can't have started yet: it waits for
 /// this mission's runner slot, which the caller still holds.
 async fn retry_coming(state: &AppState, task_id: &str) -> bool {
-    state.db.attempts_of(task_id).await.unwrap_or_default().iter().any(|a| a.status == "scheduled")
+    super::autofix::retry_scheduled(state, task_id).await
 }
 
 /// After a runner turn of `task_id`: still `working` means the bot didn't finish or let go, so the

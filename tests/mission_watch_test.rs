@@ -11,7 +11,9 @@ use kwnt::{
     broker::PermissionBroker,
     config::Config,
     db::{
+        autofix::{NewAttempt, NewFailure},
         mission_watch::NewWatchCheck,
+        parked::NewParkedTurn,
         missions::{Mission, NewMission, NewTask, Task},
         models::{Kwant, NewKwant},
         spaces::SpaceId,
@@ -21,7 +23,7 @@ use kwnt::{
     server::{
         continuity::{SelfScope, TurnOrigin},
         create_router, mcp_runtime,
-        missions::watch,
+        missions::{autofix, runner, watch},
         turns::ActiveTurn,
         AppState,
     },
@@ -353,4 +355,118 @@ async fn the_tick_finds_the_stop_and_records_a_limit_once_without_a_turn() {
     assert!(checks[0].stopped_at.is_some());
     assert_eq!(e.state.db.get_task(&t.id).await.unwrap().unwrap().state, "review", "nothing moved");
     assert_eq!(e.state.db.get_mission(&m.id).await.unwrap().unwrap().spent_tokens, 100, "no turn, no tokens");
+}
+
+/// Ages the task's history by five minutes, so the mission has been quiet past the 60 s.
+async fn quiet(e: &Env, t: &Task) {
+    let old = "strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-5 minutes')";
+    // The event log is append-only; this test's own database lifts that to age it
+    e.state.db.exec_raw_for_test("DROP TRIGGER IF EXISTS task_events_append_only_update").await.unwrap();
+    e.state.db.exec_raw_for_test(&format!("UPDATE task_events SET created_at = {old} WHERE task_id = '{}'", t.id)).await.unwrap();
+    e.state.db.exec_raw_for_test(&format!("UPDATE tasks SET updated_at = {old} WHERE id = '{}'", t.id)).await.unwrap();
+}
+
+async fn stopped(e: &Env, m: &Mission) -> bool {
+    let v = person(e, "GET", &format!("/api/missions/{}/watch", m.id), None).await;
+    v["watch"]["stopped"].as_bool().unwrap()
+}
+
+/// D9 (Rigel's S4): a stall retry AutoFix has scheduled is "due to retry", in whatever state the
+/// task is: the mission isn't stopped, no check starts, and a check already running doesn't send
+/// the task back.
+#[tokio::test]
+async fn a_scheduled_stall_retry_leaves_the_task_alone() {
+    let e = setup().await;
+    let (lead, owner, rigel) = (bot(&e, "Ada", "Lead").await, bot(&e, "Pixel", "Frontend").await, bot(&e, "Rigel", "QA").await);
+    let m = mission(&e, &lead).await;
+    let base = format!("/api/missions/{}/watch", m.id);
+    let t = task(&e, &m, &owner, "Export API", "review").await;
+    person(&e, "PUT", &base, Some(json!({"kwant_id": rigel.id}))).await;
+    quiet(&e, &t).await;
+    assert!(stopped(&e, &m).await, "quiet and settled: a stop");
+    assert!(!runner::due_to_retry(&e.state, &m, &t).await);
+
+    // The lease ran out and AutoFix scheduled the same run again
+    let f = e.state.db.insert_failure(&NewFailure { task: &t, source: "lease", class: "stalled", summary: "the lease ran out".into(), excerpt: None, diagnostics_path: None, checkpoint_id: None }).await.unwrap();
+    let a = NewAttempt { task: &t, failure_id: &f.id, strategy: "retry_same", idempotency_key: format!("{}:{}:retry_same", t.id, f.id), status: "scheduled", not_before: None, reason: "run it again".into() };
+    let a = e.state.db.insert_attempt(&a).await.unwrap().unwrap();
+    quiet(&e, &t).await;
+    assert!(runner::due_to_retry(&e.state, &m, &t).await);
+    assert!(!stopped(&e, &m).await, "a retry is coming: not a stop");
+    let (status, v) = call(&e.app, "POST", &format!("{base}/check"), None, None).await;
+    assert_eq!((status, v["code"].as_str()), (StatusCode::CONFLICT, Some("not_stopped")), "{v}");
+    watch::tick(&e.state).await;
+    assert!(e.state.db.latest_watch_check(&m.id).await.unwrap().is_none(), "the tick starts nothing");
+
+    // A check that was already running doesn't restart it either
+    let check = checking(&e, &m, &rigel).await;
+    watch::open_report(&rigel.id, &check.id, vec![t.id.clone()]);
+    let token = turn(&e, &rigel, Some(watch::PURPOSE)).await;
+    let report = json!({"check_id": check.id,
+        "claims": [{"task_id": t.id, "checked": "GET /export answers 500.", "verdict": "doesnt_hold"}],
+        "actions": [{"kind": "restart", "task_id": t.id, "reason": "GET /export answers 500."}]});
+    let (err, text) = tool(&e, &token, watch::TOOL, report).await;
+    assert!(!err, "{text}");
+    assert!(watch::settle(&e.state, &check, watch::take_report(&rigel.id), None, 10).await);
+    let t_now = e.state.db.get_task(&t.id).await.unwrap().unwrap();
+    assert_eq!((t_now.state.as_str(), t_now.attempts), ("review", 0), "not sent back, no attempt used");
+    let v = person(&e, "GET", &format!("{base}/checks"), None).await;
+    let action = &v["checks"][0]["actions"][0];
+    assert_eq!((action["applied"].as_bool(), action["why"].as_str()), (Some(false), Some("a retry is already coming")), "{v}");
+
+    // Once the retry is gone (skipped), the task is the watcher's again
+    assert!(e.state.db.move_attempt(&a, "scheduled", "skipped", Some("test")).await.unwrap());
+    assert!(!runner::due_to_retry(&e.state, &m, &t).await);
+    assert!(stopped(&e, &m).await);
+}
+
+/// D9 (Rigel's S4): a rate-limit wait is "due to retry" too, both kinds: AutoFix's backoff after a
+/// temporary error, and a turn parked until the usage limit resets where the mission runs the task.
+#[tokio::test]
+async fn a_rate_limit_wait_leaves_the_task_alone() {
+    let e = setup().await;
+    let (lead, owner, rigel) = (bot(&e, "Ada", "Lead").await, bot(&e, "Pixel", "Frontend").await, bot(&e, "Rigel", "QA").await);
+    let m = mission(&e, &lead).await;
+    let t = task(&e, &m, &owner, "Export API", "review").await;
+    person(&e, "PUT", &format!("/api/missions/{}/watch", m.id), Some(json!({"kwant_id": rigel.id}))).await;
+    quiet(&e, &t).await;
+    assert!(stopped(&e, &m).await);
+
+    // 1. A check hit a rate limit: AutoFix waits out a backoff, then runs it again
+    autofix::record(&e.state, &t.id, "check", "error", "test x\nHTTP 429: rate_limit exceeded", "rate limited").await.unwrap();
+    let attempts = e.state.db.attempts_of(&t.id).await.unwrap();
+    let wait = attempts.iter().find(|a| a.status == "scheduled").expect("a retry is scheduled");
+    assert!(wait.not_before.is_some_and(|at| at > chrono::Utc::now()), "it waits first: {:?}", wait.not_before);
+    quiet(&e, &t).await;
+    assert!(runner::due_to_retry(&e.state, &m, &t).await);
+    assert!(!stopped(&e, &m).await, "the wait is pending: not a stop");
+    watch::tick(&e.state).await;
+    assert!(e.state.db.latest_watch_check(&m.id).await.unwrap().is_none());
+    assert!(e.state.db.move_attempt(wait, "scheduled", "skipped", Some("test")).await.unwrap());
+    assert!(stopped(&e, &m).await);
+
+    // 2. Every account was out: the owner's runner turn is parked in the mission's chat until the
+    //    limit resets. Another bot's parked turn, or one in another chat, isn't this task's
+    let park = |kwant: &Kwant, channel: Option<String>| NewParkedTurn {
+        kwant_id: kwant.id.clone(),
+        channel_id: channel,
+        direct_kwant_id: None,
+        thread_id: None,
+        delegation_id: None,
+        depth: 0,
+        prompt: format!("[Mission Control] You hold task {}", t.id),
+        retry_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        reason: "usage_limit",
+    };
+    e.state.db.park_turn(&park(&rigel, Some(e.general.clone()))).await.unwrap().unwrap();
+    e.state.db.park_turn(&park(&owner, None)).await.unwrap().unwrap();
+    assert!(!runner::due_to_retry(&e.state, &m, &t).await);
+    assert!(stopped(&e, &m).await, "other bots' and chats' waits don't count");
+    let p = e.state.db.park_turn(&park(&owner, Some(e.general.clone()))).await.unwrap().unwrap();
+    assert!(runner::due_to_retry(&e.state, &m, &t).await);
+    assert!(!stopped(&e, &m).await, "its runner turn waits for the reset: not a stop");
+    watch::tick(&e.state).await;
+    assert!(e.state.db.latest_watch_check(&m.id).await.unwrap().is_none());
+    e.state.db.set_parked_status(&p.id, "done").await.unwrap();
+    assert!(stopped(&e, &m).await, "the retry ran: the task is the watcher's again");
 }

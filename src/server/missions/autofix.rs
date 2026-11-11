@@ -445,6 +445,12 @@ fn key(task_id: &str, failure_id: &str, strategy: &str) -> String {
 
 /// Records a failure of `task` (already moved to where Phase A or [`parks`] put it), then plans
 /// AutoFix's answer. `text` is the raw output; only its redacted form is stored.
+/// Whether an AutoFix attempt of the task is scheduled: a retry after a stall, a failed check or a
+/// temporary error (a rate limit among them), possibly still waiting out its backoff.
+pub async fn retry_scheduled(state: &AppState, task_id: &str) -> bool {
+    state.db.attempts_of(task_id).await.unwrap_or_default().iter().any(|a| a.status == "scheduled")
+}
+
 pub async fn record(state: &AppState, task_id: &str, source: &str, status: &str, text: &str, summary: &str) -> Option<Failure> {
     // A turn today's spending stop held never ran: not a failure, nothing to retry
     if crate::server::spend_stop::is_stop_error(text) {

@@ -242,7 +242,7 @@ pub async fn busy(state: &AppState, m: &Mission, tasks: &[Task]) -> bool {
                 return true;
             }
         }
-        if t.state == "failed" && super::autofix::parked(state, t).await {
+        if super::runner::due_to_retry(state, m, t).await {
             return true;
         }
         if t.state == "review" {
@@ -1122,6 +1122,10 @@ async fn send_back(state: &AppState, m: &Mission, bot: &Kwant, check: &WatchChec
     out["bot_name"] = json!(super::name_of(state, t.owner_kwant_id.as_deref()).await);
     if TERMINAL.contains(&t.state.as_str()) {
         return no(out, "it's finished");
+    }
+    // A retry got scheduled while the check ran: it restarts the task itself (D9)
+    if super::runner::due_to_retry(state, m, &t).await {
+        return no(out, "a retry is already coming");
     }
     if a.kind == "restart" && verdict == Some("holds") {
         return no(out, "the claim holds");
