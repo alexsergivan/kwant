@@ -31,6 +31,12 @@ import {
   upToDate,
   worktreeApi,
   worktreeStore,
+  type RankOf,
+  repoRollup,
+  repoRollupParts,
+  type RollupRank,
+  sortRepos,
+  sortWorktrees,
 } from '../../dev/worktrees';
 import { ModernAvatar } from '../ModernAvatar';
 import { threadsApi } from '../../threads';
@@ -43,7 +49,12 @@ export interface WtBot {
   id: string;
   name: string;
   role?: string | null;
+  /** H5 rank (1 needs you … 7 the rest) for the repo rollup and the row order; none = no order data. */
+  rank?: number;
 }
+
+// H5 mini dots (the sidebar's team rollup colours).
+const RANK_DOT: Record<RollupRank, string> = { 1: 'bg-amber-400', 2: 'bg-rose-400', 3: 'bg-[#38bdf8]', 4: 'bg-teal-400', 5: 'bg-[#9d8fff]' };
 
 export function useWorktrees(space: string, on: boolean): WorktreesData {
   const data = useSyncExternalStore(worktreeStore.subscribe, () => worktreeStore.get(space), () => worktreeStore.get(space));
@@ -75,6 +86,7 @@ export interface WorktreesPanelProps {
 export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bots, defaultBotId, onOpenChat, phone = false, now: nowProp, home = null }) => {
   const now = nowProp ?? Date.now();
   const botName = useCallback((id: string | null) => (id ? bots.find((b) => b.id === id)?.name ?? null : null), [bots]);
+  const rankOf = useCallback<RankOf>((id) => (id ? bots.find((b) => b.id === id)?.rank : undefined), [bots]);
   const [creating, setCreating] = useState<WorktreeRepo | null>(null);
   const [removing, setRemoving] = useState<Worktree | null>(null);
   const [menu, setMenu] = useState<Worktree | null>(null);
@@ -177,9 +189,9 @@ export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bot
   else if (!list || !list.repos.length)
     body = <EmptyTerm out="(no repo yet)" title="Worktrees show up once there’s a repo." line="Link a repo from Dev mode in the sidebar." data="no-repo" />;
   else
-    body = list.repos.map((r) => (
-      <RepoGroup key={r.repo} space={space} repo={r} home={home} phone={phone} onNew={(el) => openCreate(r, el)}>
-        {r.worktrees.map((w) => (
+    body = sortRepos(list.repos, rankOf).map((r) => (
+      <RepoGroup key={r.repo} space={space} repo={r} home={home} phone={phone} rankOf={rankOf} onNew={(el) => openCreate(r, el)}>
+        {sortWorktrees(r.worktrees, rankOf).map((w) => (
           <WorktreeRow key={w.id} w={w} repo={r.repo} {...rowProps} />
         ))}
         {r.other.map((o) => (
@@ -266,9 +278,22 @@ export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bot
 // ---------------------------------------------------------------------------
 // Groups and rows
 
-const RepoGroup: React.FC<{ space: string; repo: WorktreeRepo; home: string | null; phone: boolean; onNew: (el: HTMLElement) => void; children: React.ReactNode }> = ({ space, repo, home, phone, onNew, children }) => {
+const RepoGroup: React.FC<{ space: string; repo: WorktreeRepo; home: string | null; phone: boolean; rankOf: RankOf; onNew: (el: HTMLElement) => void; children: React.ReactNode }> = ({ space, repo, home, phone, rankOf, onNew, children }) => {
   const n = repo.worktrees.length + repo.other.length;
   const headId = useId();
+  // H5 N1: "● 1 needs you  ● 2 working" on the right of the header (ranks 1–4, words; zeros left out).
+  const parts = repoRollupParts(repoRollup(repo, rankOf));
+  const rollup = parts.length ? (
+    <span data-wt-rollup={repo.repo} className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-zinc-300 ${phone ? 'mb-2 ml-[23px]' : 'shrink-0'}`}>
+      {parts.map((p, i) => (
+        <span key={p.rank} className="inline-flex items-center gap-1.5" data-wt-rollup-rank={p.rank}>
+          <span className={`h-1.5 w-1.5 rounded-full ${RANK_DOT[p.rank]}`} aria-hidden="true" />
+          {i > 0 && <span className="sr-only">, </span>}
+          {p.text}
+        </span>
+      ))}
+    </span>
+  ) : null;
   return (
     <section aria-labelledby={headId} data-wt-repo={repo.repo}>
       <div className="mb-2 flex items-center gap-2">
@@ -285,6 +310,7 @@ const RepoGroup: React.FC<{ space: string; repo: WorktreeRepo; home: string | nu
           )}
         </h3>
         <span className="flex-1" />
+        {!phone && rollup}
         {!repo.error && (
           <button
             type="button"
@@ -298,6 +324,7 @@ const RepoGroup: React.FC<{ space: string; repo: WorktreeRepo; home: string | nu
           </button>
         )}
       </div>
+      {phone && rollup}
       {repo.error ? (
         <RepoError space={space} repo={repo.repo} />
       ) : n === 0 ? (
