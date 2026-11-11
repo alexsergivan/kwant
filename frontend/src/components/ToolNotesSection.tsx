@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Check, CircleX, Ellipsis, Pencil, Plus, StickyNote, Trash2, Undo2, X, Zap, CirclePlus } from 'lucide-react';
 import { relativeTime } from '../away';
 import { useEscapeLayer } from '../escape';
+import { ConnectionsError } from '../connections';
 import {
   FILTER_LABEL,
   KIND_LABEL,
@@ -25,6 +26,16 @@ import {
 export type ToolNotesApi = Pick<typeof toolNotesApi, 'list' | 'add' | 'update' | 'remove'>;
 
 const SHOWN = 5;
+
+/**
+ * What a failed save or delete says (D11): the server's own sentence for a refusal (409 "already
+ * open", 400 "280 characters at most", 403 "Only you…"), the offline sentence when the server
+ * couldn't be reached, and the generic line only otherwise.
+ */
+export function noteProblem(e: unknown, fallback: string): string {
+  if (e instanceof ConnectionsError && e.message.trim() && (e.status === 0 || (e.status >= 400 && e.status < 500))) return e.message;
+  return fallback;
+}
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const btn = `inline-flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${focusRing}`;
 const quietBtn = `${btn} min-h-[30px] px-2.5 border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
@@ -373,8 +384,23 @@ export const NoteRow: React.FC<NoteRowProps> = ({ n, now, phone, readOnly, mode,
   const where = n.where && onOpenWhere ? () => onOpenWhere(n.where!) : undefined;
   const label = `${fixed ? 'Fixed' : KIND_LABEL[n.kind]}: ${toolLabel(n)}`;
   const editing = mode === 'edit' && !readOnly;
+  // S1: when the editor closes (Esc, Cancel or Save), keyboard focus goes back to this note's
+  // "Edit note" button (⋯ on the phone) instead of falling to <body>.
+  const rowRef = useRef<HTMLLIElement>(null);
+  const editBtn = useRef<HTMLButtonElement>(null);
+  const moreBtn = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(editing);
+  useEffect(() => {
+    const closed = wasEditing.current && !editing;
+    wasEditing.current = editing;
+    if (!closed || mode !== 'view') return;
+    const active = document.activeElement;
+    if (active && active !== document.body && !rowRef.current?.contains(active)) return;
+    (editBtn.current ?? moreBtn.current)?.focus();
+  }, [editing, mode]);
   return (
     <li
+      ref={rowRef}
       aria-label={label}
       data-note={n.id}
       data-note-state={n.state}
@@ -425,7 +451,7 @@ export const NoteRow: React.FC<NoteRowProps> = ({ n, now, phone, readOnly, mode,
         {!readOnly && !editing && mode !== 'confirm' && (
           <div className="relative flex shrink-0 items-center gap-1">
             {phone ? (
-              <button type="button" className={`${btn} h-11 w-11 -my-2 -mr-2 text-zinc-300 hover:bg-zinc-800`} aria-label="More actions for this note" aria-haspopup="dialog" onClick={() => onMenu(true)}>
+              <button ref={moreBtn} type="button" className={`${btn} h-11 w-11 -my-2 -mr-2 text-zinc-300 hover:bg-zinc-800`} aria-label="More actions for this note" aria-haspopup="dialog" onClick={() => onMenu(true)}>
                 <Ellipsis size={18} aria-hidden="true" />
               </button>
             ) : fixed ? (
@@ -442,7 +468,7 @@ export const NoteRow: React.FC<NoteRowProps> = ({ n, now, phone, readOnly, mode,
                 <button type="button" className={quietBtn} onClick={() => onFix(n, true)}>
                   <Check size={13} aria-hidden="true" /> Mark fixed
                 </button>
-                <button type="button" className={iconBtn} aria-label="Edit note" onClick={() => onMode('edit')}>
+                <button ref={editBtn} type="button" className={iconBtn} aria-label="Edit note" onClick={() => onMode('edit')}>
                   <Pencil size={14} aria-hidden="true" />
                 </button>
                 <button type="button" className={iconBtn} aria-label="More actions for this note" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => onMenu(!menuOpen)}>
@@ -586,8 +612,8 @@ export const ToolNotesSection: React.FC<ToolNotesSectionProps> = ({
       }
       setSaid(fixed ? 'Marked fixed. Bots no longer see it.' : 'Note reopened.');
       await changed();
-    } catch {
-      setRowError('Couldn’t save the note. Try again.');
+    } catch (e) {
+      setRowError(noteProblem(e, 'Couldn’t save the note. Try again.'));
     } finally {
       setLeaving(null);
     }
@@ -605,8 +631,8 @@ export const ToolNotesSection: React.FC<ToolNotesSectionProps> = ({
       setSaid('Note saved.');
       void changed();
       return null;
-    } catch {
-      return 'Couldn’t save the note. Try again.';
+    } catch (e) {
+      return noteProblem(e, 'Couldn’t save the note. Try again.');
     }
   };
 
@@ -619,8 +645,8 @@ export const ToolNotesSection: React.FC<ToolNotesSectionProps> = ({
       if (filter === 'fixed' || (filter !== 'all' && filter !== body.kind)) setFilter('all');
       void changed();
       return null;
-    } catch {
-      return 'Couldn’t save the note. Try again.';
+    } catch (e) {
+      return noteProblem(e, 'Couldn’t save the note. Try again.');
     }
   };
 
@@ -630,8 +656,8 @@ export const ToolNotesSection: React.FC<ToolNotesSectionProps> = ({
       setSaid('Note deleted.');
       if (focusNote === n.id) onClearFocus?.();
       await changed();
-    } catch {
-      setRowError('Couldn’t delete the note. Try again.');
+    } catch (e) {
+      setRowError(noteProblem(e, 'Couldn’t delete the note. Try again.'));
     }
   };
 
