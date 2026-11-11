@@ -77,7 +77,7 @@ import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
 import { recentWork, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
-import { type H4Status, type HeldSend, applyBotStatusEvent, h4Api, heldFromReply, heldLine, stillHeld } from './h4Status';
+import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api, heldFromReply, heldLine, heldMessages, stillHeld } from './h4Status';
 import { HeldLine } from './components/HeldLine';
 import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
 import { LiveMissPage } from './components/WatchLive';
@@ -3738,7 +3738,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const out = await h4Api.retry(kwantId);
       if (out.status) setH4Status((prev) => ({ ...(prev ?? {}), [kwantId]: out.status! }));
-      setHeldSends((prev) => prev.filter((h) => h.kwantId !== kwantId));
+      setHeldSends((prev) => afterRelease(prev, kwantId, out.status));
       pushToast(out.released > 0 ? `Sent to ${name} again.` : `${name} can take messages again.`);
     } catch {
       haptic('warning');
@@ -3746,7 +3746,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
   const heldNotes: Record<string, React.ReactNode> = {};
-  for (const h of heldSends) {
+  // The session's send replies plus every message the server still holds (reload, other device, earlier sends).
+  for (const h of heldMessages(heldSends, h4Status, (id) => kwants.find((k) => k.id === id)?.name)) {
     const { text, tryAgain } = heldLine(h, h4Status?.[h.kwantId]);
     const node = <HeldLine key={h.messageId} text={text} onTryAgain={tryAgain ? tryAgainFor(h.kwantId, h.name) : undefined} />;
     heldNotes[h.tempId] = node;

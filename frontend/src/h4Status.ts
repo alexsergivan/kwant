@@ -22,6 +22,8 @@ export interface H4Status {
   turn?: { started_at?: string; turn_id?: string; context_id?: string; thread_id?: string | null };
   retry?: { at?: string; try?: number; of?: number };
   stuck?: { gave_up_at?: string; tries?: number };
+  /** needs_you/asked_question: the open question (its time goes in a waits_on_you held line). */
+  question?: { asked_at?: string };
   held: H4Held[];
 }
 
@@ -40,6 +42,7 @@ export function parseH4Status(v: unknown): H4Status | null {
   const t = rec(o.turn);
   const r = rec(o.retry);
   const s = rec(o.stuck);
+  const q = rec(o.question);
   const held = (Array.isArray(o.held) ? o.held : []).flatMap((h): H4Held[] => {
     const x = rec(h);
     const id = str(x?.id);
@@ -55,6 +58,7 @@ export function parseH4Status(v: unknown): H4Status | null {
     turn: t ? { started_at: str(t.started_at), turn_id: str(t.turn_id), context_id: str(t.context_id), thread_id: str(t.thread_id) ?? null } : undefined,
     retry: r ? { at: str(r.at), try: num(r.try), of: num(r.of) } : undefined,
     stuck: s ? { gave_up_at: str(s.gave_up_at), tries: num(s.tries) } : undefined,
+    question: q ? { asked_at: str(q.asked_at) } : undefined,
     held,
   };
 }
@@ -153,6 +157,37 @@ export function heldFromReply(reply: unknown, tempId: string): HeldSend | null {
 export function stillHeld(h: HeldSend, status?: H4Status): boolean {
   if (!status) return true;
   return status.held.some((x) => x.kind === 'message' && (x.id === h.messageId || x.id === h.tempId));
+}
+
+/**
+ * Every held message to show a line under (qa-510 S1/S2): the send replies of this session (the
+ * instant case, before the status catches up) plus each `kind:"message"` the server's status lists,
+ * so a reload, another device or an earlier held message still gets its line. One line per message.
+ */
+export function heldMessages(sends: HeldSend[], status: Record<string, H4Status> | null | undefined, nameOf: (kwantId: string) => string | undefined): HeldSend[] {
+  const out = [...sends];
+  const seen = new Set(sends.flatMap((h) => [h.messageId, h.tempId]));
+  for (const s of Object.values(status ?? {})) {
+    for (const x of s.held) {
+      if (x.kind !== 'message' || seen.has(x.id)) continue;
+      seen.add(x.id);
+      const reason = x.reason_code ?? (s.status === 'stuck' ? 'stuck' : s.status === 'needs_you' ? 'waits_on_you' : '');
+      out.push({
+        tempId: x.id,
+        messageId: x.id,
+        kwantId: s.kwant_id,
+        name: nameOf(s.kwant_id) ?? 'The bot',
+        reason,
+        questionAt: reason === 'waits_on_you' ? s.question?.asked_at : undefined,
+      });
+    }
+  }
+  return out;
+}
+
+/** After Try again: keep only the session's lines the server still holds (nit 2); all of the bot's without a status. */
+export function afterRelease(sends: HeldSend[], kwantId: string, status: H4Status | null): HeldSend[] {
+  return sends.filter((h) => h.kwantId !== kwantId || (status ? stillHeld(h, status) : false));
 }
 
 /** The line under a held message (Mira's H3 copy) and whether it offers Try again (N3). */
