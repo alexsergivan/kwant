@@ -279,6 +279,17 @@ async fn the_person_picks_the_watcher_and_its_report_sends_back_what_doesnt_hold
     let item = away["waiting"].as_array().unwrap().iter().find(|i| i["kind"] == "watch").cloned().unwrap_or(Value::Null);
     assert_eq!((item["mission_id"].clone(), item["task_id"].clone()), (json!(m.id), json!(deploy.id)), "{away}");
     assert!(away["unseen"]["waiting"].as_i64().unwrap() >= 1);
+    // ... on /api/inbox too, in Waiting on you, and counted the same (M2)
+    let inbox = person(&e, "GET", "/api/inbox", None).await;
+    let items = inbox["items"].as_array().unwrap();
+    let it = items.iter().find(|i| i["kind"] == "watch").cloned().unwrap_or(Value::Null);
+    assert_eq!((it["id"].clone(), it["group"].as_str(), it["task_id"].clone()), (item["id"].clone(), Some("waiting_on_you"), json!(deploy.id)), "{inbox}");
+    assert_eq!(it["sort_key"][0], json!(1), "{it}");
+    let away_waiting = away["waiting"].as_array().unwrap().len() as i64;
+    let inbox_waiting_away = items.iter().filter(|i| i["group"] == "waiting_on_you" && i["kind"] != "review").count() as i64;
+    assert_eq!(inbox_waiting_away, away_waiting, "{inbox}");
+    let reviews = items.iter().filter(|i| i["kind"] == "review").count() as i64 + i64::from(!inbox["batch"].is_null());
+    assert_eq!(inbox["counts"]["badge"].as_i64().unwrap() - reviews, away["unseen"]["total"].as_i64().unwrap(), "{inbox}");
     assert_eq!(person(&e, "GET", &base, None).await["watch"]["state"], "dont_hold");
 
     // Off: a check that ends after the watch was removed applies nothing
