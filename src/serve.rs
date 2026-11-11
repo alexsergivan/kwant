@@ -65,6 +65,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     // Audits that were waiting their turn when kwant stopped run now (the cut-off ones ended)
     crate::server::missions::auditor::resume_after_restart(&state).await;
     crate::server::missions::watch::resume_after_restart(&state).await;
+    crate::server::missions::verifier::resume_after_restart(&state).await;
     crate::server::missions::foundry::resume_after_restart(&state).await;
     crate::server::scheduler::spawn_background(state.clone(), cancel.clone());
     // Show it once: stop recordings a restart cut off, then purge steps and expire recordings

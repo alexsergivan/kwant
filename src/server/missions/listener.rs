@@ -436,14 +436,24 @@ pub async fn lead_review_note(state: &AppState, d: &crate::db::threads::Delegati
     if let Err(e) = state.db.log_task_event(&t.id, REVIEW_ASKED, "kwant", &detail).await {
         tracing::warn!(error = %e, task_id = %t.id, "could not log a lead review ask");
     }
-    Some(format!(
+    let mut note = format!(
         "(Board card {task} is in Review and you, who handed it out, review it: {who} can't approve its own work. Call \
         task_review with task_id \"{task}\": verdict \"pass\" with evidence_ids [\"{ev}\"] (its result) when it does what you \
         asked, or verdict \"fail\" with a note that says exactly what is missing or wrong. A fail sends it back to {who} \
         with your note, so don't also @mention {who} for that correction.)",
         task = t.id,
         ev = ev.id,
-    ))
+    );
+    // V3: the hand-off's contract, each criterion with its status; a claim without evidence bounces
+    if let Some((c, _, _)) = super::contract::load(state, &t.id).await {
+        let ids = super::contract::evidence_ids(state, &t.id).await;
+        note.push_str(&format!(
+            "\n(Its contract. A criterion marked CLAIM has no evidence: a pass is refused until every criterion is met with evidence, so \
+            send a claim back with a fail that asks for the evidence.)\n{}",
+            super::contract::lead_lines(&c, &ids)
+        ));
+    }
+    Some(note)
 }
 
 /// Task event logged each time the lead is asked to review a hand-off card (its results turn,

@@ -54,7 +54,7 @@ async fn setup() -> Env {
     let bot = state.db.list_kwants(&space).await.unwrap()[0].clone();
     let general = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap().id;
     let e = Env { app, state, bot, general, _tmp: tmp };
-    person(&e, "POST", "/api/settings", Some(json!({"mission_board": true}))).await;
+    person(&e, "POST", "/api/settings", Some(json!({"mission_board": true, "verifier": "off"}))).await;
     e
 }
 

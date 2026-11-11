@@ -177,6 +177,8 @@ PATCH  /api/tasks/:id      {title?, acceptance?, priority?, owner_kwant_id?, bud
                            (`owner_kwant_id` on POST and PATCH is who should do it: it is stored as
                             `suggested_kwant_id`; the task's `owner_kwant_id` stays empty until that bot claims it)
 POST   /api/tasks/:id/verify  {note?}          -> Task  (review -> verified, a `person` check)
+                                 {verdict_id?}: 404 not_found, or 409 stale {paths, message} when a newer
+                                 verdict exists or the files that verdict judged changed since; nothing written
 POST   /api/tasks/:id/reject  {reason}         -> Task  (review -> ready)
 POST   /api/tasks/:id/block   {reason}         -> Task
 POST   /api/tasks/:id/unblock                  -> Task
@@ -470,6 +472,7 @@ folder. A hand-off from a direct chat (no team) still uses the owner's own folde
 - `GET /api/tasks/:id/checkpoints`: oldest first. Each item: `{id, kind, attempt, created_at, created_by, files, bytes, skipped, git_head, error, restorable, effects_after: {workspace: n, external: [{tool_name, summary, at}]}}`. `effects_after` covers the calls between this checkpoint and the next.
 - `POST /api/tasks/:id/checkpoints` (person only): a manual checkpoint; 201 with the item, 500 if the snapshot failed.
 - `GET /api/tasks/:id/checkpoints/:cid/restore-preview`: `{checkpoint_id, preview_sha256, changes: [{path, action: overwrite|create|delete}], conflicts: [{path, changed_by_task}], skipped: [{path, why}], external_not_undone: [{tool_name, summary, at}], not_undone_note, effects_known, task_state_after, refused: null|fork_instead|running}`.
+  - 0.9.0: plus `via: "fork"|"restore"` and `step_down: {kwant_id, class, from, to} | null` (what the roll back would do to the owner's tier when the person had approved the task; the preview writes nothing). A verified task gets `via: "fork"` and `refused: null`: it rolls back by a fork from this checkpoint, and `POST .../restore` still answers 409 `fork_instead`.
   - Only paths this task's runs changed are restored. A path another task's run changed after the checkpoint is a conflict, left alone unless forced.
   - Conflict attribution (D11): `changed_by_task` names a task only when that task's own logged file calls (Write/Edit/MultiEdit/NotebookEdit, `turn_tool_calls.path`) wrote the path during a run after the checkpoint. A path that merely changed while another task ran in the same folder (a shell command, or anyone) is `{path, changed_by_task: null, why: "changed outside this task"}`, unless this task's own calls wrote it and it is still as this task's last run left it.
   - Every `force_paths` entry must be listed by the preview (in `changes` or `conflicts`); otherwise 422 `unknown_force_path` naming the paths, and nothing is written.
@@ -481,6 +484,7 @@ folder. A hand-off from a direct chat (no team) still uses the owner's own folde
   - A restore never re-runs a task by itself (D10). When the task ends up ready or backlog it is held (`held_at` set, `held` task event): neither the runner nor a bot's `task_claim` takes it until the person calls `POST /api/tasks/:id/run` (person only; `Idempotency-Key` accepted, and the same key replays the first 200; 409 `not_held` when it isn't held; `released` task event). `rerun: true` ("restore and run again") leaves it unheld, or lets go of an earlier hold.
   - Never writes through a symlink or outside the folder.
 - `POST /api/tasks/:id/fork` accepts `from_checkpoint`: the original's task-owned paths are restored to that checkpoint first (after a `before_restore`), then the fork is made. The response adds `restore`.
+  - 0.9.0 (roll back after approval): with `from_checkpoint`, `reason` is optional (default "Rolled back after approval") and `preview_sha256` may be sent; a plan that changed since that preview is 409 `stale_preview` and nothing is written. The fork is created on hold (`held` event) and starts only when the person presses Run (`POST /api/tasks/:fork_id/run`). The original stays verified; when the person had approved it, its owner drops one tier on the task's class (`stepped_down` in the response, null otherwise) and a `pass` latest verdict is overturned as `rolled_back`.
 - `task_json` gains `checkpoint_count`, `last_checkpoint_at` and `held_at` (null unless a restore holds the task).
 
 ## 13. AutoFix (Phase B3)

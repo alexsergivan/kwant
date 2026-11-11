@@ -59,6 +59,7 @@ pub mod show_once;
 pub mod isolated_folders;
 pub mod tool_notes;
 pub mod mission_watch;
+pub mod verifier;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -276,6 +277,8 @@ impl Database {
         db.migrate_show_once().await?;
         // Agents in the VM: folders an isolated turn used (add-only)
         db.migrate_isolated_folders().await?;
+        // 0.9.0 wave 3: task contracts and verifier verdicts (add-only)
+        db.migrate_verifier().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal
@@ -455,6 +458,23 @@ impl Database {
             sqlx::query("UPDATE messages SET sender_id = ? WHERE sender_role = 'kwant' AND sender_id = ?")
                 .bind(&input.name)
                 .bind(&existing.name)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if existing.preferred_model != input.preferred_model {
+            // 0.9.0 (contract §5.2): a new model starts a new scorecard window; the old tasks stay
+            let (tier,): (String,) = sqlx::query_as(
+                "SELECT COALESCE((SELECT tier FROM capability_policies WHERE kwant_id = ? AND task_class = '*' AND revoked_at IS NULL LIMIT 1), 'act')",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+            let detail = serde_json::json!({"from_model": existing.preferred_model, "to_model": input.preferred_model});
+            sqlx::query("INSERT INTO capability_events (kwant_id, task_class, kind, tier, actor, detail, created_at) VALUES (?, '*', 'scorecard_reset', ?, 'person', ?, ?)")
+                .bind(id)
+                .bind(&tier)
+                .bind(detail.to_string())
+                .bind(chrono::Utc::now().to_rfc3339())
                 .execute(&mut *tx)
                 .await?;
         }
