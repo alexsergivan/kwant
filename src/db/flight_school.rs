@@ -291,34 +291,8 @@ impl Database {
     /// row, if any, is revoked and the new one written in one transaction, with an event of `kind`
     /// (`granted` or `revoked`). The unique index keeps one live row per bot and class.
     pub async fn set_policy(&self, kwant_id: &str, class: &str, tier: &str, kind: &str, note: Option<&str>) -> Result<Policy, DbError> {
-        let now = Utc::now().to_rfc3339();
         let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE capability_policies SET revoked_at = ? WHERE kwant_id = ? AND task_class = ? AND revoked_at IS NULL")
-            .bind(&now)
-            .bind(kwant_id)
-            .bind(class)
-            .execute(&mut *tx)
-            .await?;
-        let policy = sqlx::query_as::<_, Policy>(
-            "INSERT INTO capability_policies (id, kwant_id, task_class, tier, granted_by, granted_at, note) VALUES (?, ?, ?, ?, 'person', ?, ?) RETURNING *",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(kwant_id)
-        .bind(class)
-        .bind(tier)
-        .bind(&now)
-        .bind(note)
-        .fetch_one(&mut *tx)
-        .await?;
-        sqlx::query("INSERT INTO capability_events (kwant_id, task_class, kind, tier, actor, detail, created_at) VALUES (?, ?, ?, ?, 'person', ?, ?)")
-            .bind(kwant_id)
-            .bind(class)
-            .bind(kind)
-            .bind(tier)
-            .bind(note)
-            .bind(&now)
-            .execute(&mut *tx)
-            .await?;
+        let policy = write_policy(&mut tx, kwant_id, class, tier, kind, note).await?;
         tx.commit().await?;
         Ok(policy)
     }
@@ -528,6 +502,47 @@ impl Database {
         .await?;
         Ok(row.is_some())
     }
+}
+
+
+/// [`Database::set_policy`]'s writes inside a caller's transaction: the live row for the bot and
+/// class is revoked, the new one inserted, and the change logged as a `kind` capability event.
+pub(super) async fn write_policy(
+    tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
+    kwant_id: &str,
+    class: &str,
+    tier: &str,
+    kind: &str,
+    note: Option<&str>,
+) -> Result<Policy, DbError> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query("UPDATE capability_policies SET revoked_at = ? WHERE kwant_id = ? AND task_class = ? AND revoked_at IS NULL")
+        .bind(&now)
+        .bind(kwant_id)
+        .bind(class)
+        .execute(&mut **tx)
+        .await?;
+    let policy = sqlx::query_as::<_, Policy>(
+        "INSERT INTO capability_policies (id, kwant_id, task_class, tier, granted_by, granted_at, note) VALUES (?, ?, ?, ?, 'person', ?, ?) RETURNING *",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(kwant_id)
+    .bind(class)
+    .bind(tier)
+    .bind(&now)
+    .bind(note)
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query("INSERT INTO capability_events (kwant_id, task_class, kind, tier, actor, detail, created_at) VALUES (?, ?, ?, ?, 'person', ?, ?)")
+        .bind(kwant_id)
+        .bind(class)
+        .bind(kind)
+        .bind(tier)
+        .bind(note)
+        .bind(&now)
+        .execute(&mut **tx)
+        .await?;
+    Ok(policy)
 }
 
 #[cfg(test)]

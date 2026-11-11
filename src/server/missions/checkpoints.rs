@@ -490,6 +490,11 @@ pub struct CleanCopy {
     /// What the copy is missing, as (path, why) in plain words (skipped by the snapshot, blob gone).
     pub missing: Vec<(String, String)>,
     pub after_run_id: String,
+    /// For each changed text file the copy holds (at most [`DIFF_MAX_BYTES`]), the 1-based lines of
+    /// its `after_run` version that the run added or changed: every line of a new file, else the
+    /// lines outside the longest common subsequence with its `before_run` version. A path is left
+    /// out when its old version can't be read, so callers fall back to the whole file (V10).
+    pub changed_lines: BTreeMap<String, BTreeSet<usize>>,
     /// The run's window: its `before_run` (or `after_run` when there is none) and its `after_run`.
     pub from: chrono::DateTime<chrono::Utc>,
     pub to: chrono::DateTime<chrono::Utc>,
@@ -554,11 +559,65 @@ pub async fn materialize_run(state: &AppState, task_id: &str, dest: &FsPath) -> 
                 missing.push((e.path.clone(), "its stored copy is gone".to_string()));
             }
         }
+        let mut changed_lines = BTreeMap::new();
+        let before_files: BTreeMap<&str, &Entry> = before_m.as_ref().map(|m| m.files.iter().map(|e| (e.path.as_str(), e)).collect()).unwrap_or_default();
+        let text = |e: &Entry| (e.bytes <= DIFF_MAX_BYTES).then(|| std::fs::read_to_string(blobs.join(&e.sha256)).ok()).flatten();
+        for p in &changed {
+            let Some(now) = after_files.get(p.as_str()).and_then(|e| text(e)) else { continue };
+            let lines = match (before_m.is_some(), before_files.get(p.as_str())) {
+                (true, None) => (1..=now.lines().count()).collect(),
+                (true, Some(e)) => match text(e) {
+                    Some(was) => changed_lines_of(&was, &now),
+                    None => continue,
+                },
+                (false, _) => continue,
+            };
+            changed_lines.insert(p.clone(), lines);
+        }
         let from = before.as_ref().map_or(after.created_at, |b| b.created_at);
-        Ok(Some(CleanCopy { files: n, changed, missing, after_run_id: after.id.clone(), from, to: after.created_at }))
+        Ok(Some(CleanCopy { files: n, changed, missing, after_run_id: after.id.clone(), changed_lines, from, to: after.created_at }))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The largest file [`CleanCopy::changed_lines`] diffs.
+pub const DIFF_MAX_BYTES: u64 = 512 * 1024;
+/// Above this many cells (old lines × new lines, after the common head and tail are cut) the middle
+/// counts as changed whole instead of being diffed.
+const DIFF_MAX_CELLS: usize = 4_000_000;
+
+/// The 1-based lines of `after` that aren't in a longest common subsequence of lines with `before`:
+/// the added and changed lines a diff's hunks show with `+`.
+pub fn changed_lines_of(before: &str, after: &str) -> BTreeSet<usize> {
+    let (a, b): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
+    let head = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let tail = a[head..].iter().rev().zip(b[head..].iter().rev()).take_while(|(x, y)| x == y).count();
+    let (a, b) = (&a[head..a.len() - tail], &b[head..b.len() - tail]);
+    if a.is_empty() || a.len().saturating_mul(b.len()) > DIFF_MAX_CELLS {
+        return (head + 1..=head + b.len()).collect();
+    }
+    // lcs[i][j] = the LCS length of a[i..] and b[j..]; min(len) <= 2000 here, so u16 holds it
+    let w = b.len() + 1;
+    let mut lcs = vec![0u16; (a.len() + 1) * w];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            lcs[i * w + j] = if a[i] == b[j] { lcs[(i + 1) * w + j + 1] + 1 } else { lcs[(i + 1) * w + j].max(lcs[i * w + j + 1]) };
+        }
+    }
+    let (mut i, mut j, mut out) = (0, 0, BTreeSet::new());
+    while j < b.len() {
+        if i < a.len() && a[i] == b[j] {
+            i += 1;
+            j += 1;
+        } else if i < a.len() && lcs[(i + 1) * w + j] >= lcs[i * w + j + 1] {
+            i += 1;
+        } else {
+            out.insert(head + j + 1);
+            j += 1;
+        }
+    }
+    out
 }
 
 /// How many paths a `stale` answer lists (contract §9.5).
@@ -1448,9 +1507,9 @@ pub async fn restore(
             let msg = format!("force_paths names a path the preview doesn't list: {}", unknown.join(", "));
             return Err(coded(StatusCode::UNPROCESSABLE_ENTITY, "unknown_force_path", &msg));
         }
-        let was_approved = super::flight_school::approved(&state.db, &task).await;
+        let approval = super::flight_school::approval(&state.db, &task).await;
         let mut out = write_back(&state, &task, &c, &p, b.force_paths.into_iter().collect()).await?;
-        out["stepped_down"] = super::flight_school::step_down_after_rollback(&state, &task, was_approved, &c.id).await;
+        out["stepped_down"] = super::flight_school::step_down_after_rollback(&state, &task, approval.as_deref(), &c.id).await;
         // Held before the move, so the runner never sees it ready and unheld (D10)
         let runnable = matches!(p.state_after.unwrap_or(task.state.as_str()), "ready" | "backlog");
         let changed = state.db.set_task_hold(&task.id, runnable && !b.rerun).await.map_err(internal)?;

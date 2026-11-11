@@ -455,10 +455,21 @@ pub fn one_down(tier: &str) -> Option<&'static str> {
     rank(tier).checked_sub(1).map(|r| TIERS[r])
 }
 
-/// Whether the person approved `task`: it is verified, or it has a passed `person` check
-/// (contract §5.1). Read before a rollback moves it.
-pub async fn approved(db: &Database, task: &Task) -> bool {
-    task.state == "verified" || db.list_checks(&task.id).await.unwrap_or_default().iter().any(|c| c.kind == "person" && c.status == "passed")
+/// Which approval of `task` a rollback would undo, as a stable key (R8b): its verification
+/// (`verified@<finished_at>`, new each time it is verified again), else its newest passed
+/// `person` check (`check:<id>@<finished_at>`). `None` when it isn't approved. A rollback steps the
+/// owner down once per key, however many forks or restores undo that approval. Approved means
+/// verified, or a passed `person` check (contract §5.1); read it before a rollback moves the task.
+pub async fn approval(db: &Database, task: &Task) -> Option<String> {
+    if task.state == "verified" {
+        return Some(format!("verified@{}", task.finished_at.map(|t| t.to_rfc3339()).unwrap_or_default()));
+    }
+    let checks = db.list_checks(&task.id).await.unwrap_or_default();
+    checks
+        .iter()
+        .filter(|c| c.kind == "person" && c.status == "passed")
+        .max_by_key(|c| c.finished_at)
+        .map(|c| format!("check:{}@{}", c.id, c.finished_at.map(|t| t.to_rfc3339()).unwrap_or_default()))
 }
 
 /// The owner, class and tiers a rollback of `task` would drop between, if it drops at all.
@@ -474,7 +485,8 @@ async fn step_down_plan(db: &Database, task: &Task) -> Option<(String, String, &
 /// §9.6 restore-preview): `{kwant_id, class, from, to}`, or null when it wasn't approved or
 /// nothing would drop.
 pub async fn step_down_preview(db: &Database, task: &Task) -> Value {
-    if !approved(db, task).await {
+    let Some(approval) = approval(db, task).await else { return Value::Null };
+    if db.stepped_down_for(&task.id, &approval).await.unwrap_or(false) {
         return Value::Null;
     }
     match step_down_plan(db, task).await {
@@ -485,24 +497,27 @@ pub async fn step_down_preview(db: &Database, task: &Task) -> Value {
 
 /// A rollback of an approved task (a restore, or a fork from a checkpoint): the owner drops one
 /// tier on the task's class, as a person-made policy (the rollback is theirs), and a pass verdict
-/// is recorded as overturned. Returns `{kwant_id, class, from, to}`, or null when nothing dropped.
+/// is recorded as overturned. `approval` is [`approval`] read before the rollback moved anything.
+/// One approval drops the owner once (R8b): a second fork or restore of it, even a concurrent
+/// one, drops nothing. Returns `{kwant_id, class, from, to}`, or null when nothing dropped.
 /// Never lifted on its own: the person grants the tier back.
-pub async fn step_down_after_rollback(state: &AppState, task: &Task, was_approved: bool, checkpoint_id: &str) -> Value {
-    if !was_approved {
-        return Value::Null;
-    }
+pub async fn step_down_after_rollback(state: &AppState, task: &Task, approval: Option<&str>, checkpoint_id: &str) -> Value {
+    let Some(approval) = approval else { return Value::Null };
     let note = json!({"reason": "rollback_after_approval", "task_id": task.id, "checkpoint_id": checkpoint_id});
     super::verifier::person_rolled_back(state, &task.id, &note.to_string()).await;
-    let Some((owner, class, from, to)) = step_down_plan(&state.db, task).await else { return Value::Null };
-    let owner = owner.as_str();
+    let plan = step_down_plan(&state.db, task).await;
     let mut detail = note;
-    detail["from_tier"] = json!(from);
-    detail["to_tier"] = json!(to);
-    match state.db.set_policy(owner, &class, to, "stepped_down", Some(&detail.to_string())).await {
-        Ok(_) => {
-            let _ = state.db.log_task_event(&task.id, "tier_stepped_down", "person", &detail).await;
+    if let Some((_, _, from, to)) = &plan {
+        detail["from_tier"] = json!(from);
+        detail["to_tier"] = json!(to);
+    }
+    let step = plan.as_ref().map(|(owner, class, _, to)| (owner.as_str(), class.as_str(), *to, &detail));
+    match state.db.step_down_once(&task.id, approval, checkpoint_id, step).await {
+        Ok(Some(Some(_))) => {
+            let (owner, class, from, to) = plan.expect("a step-down was written");
             json!({"kwant_id": owner, "class": class, "from": from, "to": to})
         }
+        Ok(_) => Value::Null,
         Err(e) => {
             tracing::warn!(task_id = %task.id, error = %e, "the tier step-down after a rollback wasn't saved");
             Value::Null

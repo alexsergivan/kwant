@@ -1054,6 +1054,60 @@ async fn a_verified_task_rolls_back_by_a_held_fork_and_steps_its_owner_down() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
 
+/// R8b (Rigel, #502 QA): two forks from a checkpoint of one verified task, sent at the same time
+/// without an Idempotency-Key, drop the owner one tier, not two. Whatever happens to the second
+/// fork (made, or 409 `stale_preview` because the first restored the files), there is one
+/// `tier_stepped_down` event and one `stepped_down` capability event. A later fork of the same
+/// verification drops nothing and its preview says so; the marker holds under a direct race too.
+#[tokio::test]
+async fn concurrent_forks_of_one_verification_step_the_owner_down_once() {
+    let e = setup().await;
+    let plan = json!([{"title": "A", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "a.txt"}}]}]);
+    let (mid, ids) = mission(&e, &e.bot.id, plan).await;
+    run(&e, &mid, &ids[0], &[("a.txt", Some("v1"))]).await;
+    assert_eq!(state_of(&e, &ids[0]).await, "verified");
+    let cid = id(of_kind(&checkpoints(&e, &ids[0]).await, "before_run")[0]);
+    let p = preview(&e, &ids[0], &cid).await;
+    let (from, class) = (p["step_down"]["from"].as_str().unwrap().to_string(), p["step_down"]["class"].as_str().unwrap().to_string());
+    let to = p["step_down"]["to"].as_str().unwrap().to_string();
+    let stepped = |e: &Env| {
+        let (db, bot) = (e.state.db.clone(), e.bot.id.clone());
+        async move { db.capability_events(&bot, 100).await.unwrap().into_iter().filter(|c| c.kind == "stepped_down").count() }
+    };
+
+    let uri = format!("/api/tasks/{}/fork", ids[0]);
+    let body = json!({"from_checkpoint": cid, "preview_sha256": p["preview_sha256"]});
+    let (a, b) = tokio::join!(send(&e.app, "POST", &uri, None, None, Some(body.clone())), send(&e.app, "POST", &uri, None, None, Some(body.clone())));
+    let ok: Vec<&Value> = [&a, &b].iter().filter(|r| r.0 == StatusCode::OK).map(|r| &r.1).collect();
+    assert!(!ok.is_empty(), "at least one fork is made: {a:?} {b:?}");
+    for r in [&a, &b] {
+        assert!(r.0 == StatusCode::OK || r.1["code"] == "stale_preview", "{r:?}");
+    }
+    assert_eq!(ok.iter().filter(|r| !r["stepped_down"].is_null()).count(), 1, "one response reports the drop: {ok:?}");
+    assert_eq!(events(&e, &ids[0], "tier_stepped_down").await.len(), 1);
+    assert_eq!(stepped(&e).await, 1);
+    let live = e.state.db.live_policy(&e.bot.id, &class).await.unwrap().unwrap();
+    assert_eq!(live.tier, to, "one tier down from {from}, not two");
+
+    // A later fork of the same verification: the preview shows no drop, and nothing drops
+    let again = preview(&e, &ids[0], &cid).await;
+    assert!(again["step_down"].is_null(), "{again}");
+    let (s, r, _) = send(&e.app, "POST", &uri, None, None, Some(json!({"from_checkpoint": cid, "preview_sha256": again["preview_sha256"]}))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["stepped_down"].is_null(), "{r}");
+    assert_eq!(stepped(&e).await, 1);
+    assert_eq!(e.state.db.live_policy(&e.bot.id, &class).await.unwrap().unwrap().tier, to);
+
+    // The marker itself, raced directly on another approval: one writer
+    let d = json!({"reason": "rollback_after_approval"});
+    let one = || e.state.db.step_down_once(&ids[0], "verified@other", &cid, Some((e.bot.id.as_str(), class.as_str(), "observe", &d)));
+    let (x, y) = tokio::join!(one(), one());
+    let (x, y) = (x.unwrap(), y.unwrap());
+    assert_eq!([x.is_some(), y.is_some()].iter().filter(|w| **w).count(), 1, "{x:?} {y:?}");
+    assert_eq!(stepped(&e).await, 2);
+    assert!(e.state.db.stepped_down_for(&ids[0], "verified@other").await.unwrap());
+}
+
 // V2: the verifier is on unless the person saved "off", and a handed-in task waits in review on
 // its hold until a pass verdict or the person's Verify. Every other test here turns it off in
 // setup, because they are about checkpoints, not the verifier.

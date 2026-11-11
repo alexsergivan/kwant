@@ -207,6 +207,15 @@ impl Database {
                 after_run_checkpoint_id TEXT,
                 scope_status TEXT NOT NULL DEFAULT '[]'
             )",
+            // R8b: one row per approval a rollback stepped its owner down for, so two forks (or a
+            // fork and a restore) of the same approval drop the owner once, not once each
+            "CREATE TABLE IF NOT EXISTS rollback_step_downs (
+                task_id TEXT NOT NULL,
+                approval TEXT NOT NULL,
+                checkpoint_id TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (task_id, approval)
+            )",
             "CREATE INDEX IF NOT EXISTS task_verdicts_task ON task_verdicts (task_id, created_at)",
             "CREATE INDEX IF NOT EXISTS task_verdicts_created ON task_verdicts (created_at)",
             "CREATE TRIGGER IF NOT EXISTS task_verdicts_no_delete BEFORE DELETE ON task_verdicts \
@@ -351,6 +360,61 @@ impl Database {
 
     /// Marks `verdict_id` overturned by the person, once and logs `verdict_overturned`. `false`
     /// when it already was.
+    /// The first rollback of one approval of a task (R8b): records `(task_id, approval)` and, in the
+    /// same write-locked transaction, steps the owner down (`step` = kwant_id, class, tier, detail)
+    /// and logs `tier_stepped_down` on the task. `Ok(None)` when that approval was already rolled
+    /// back, so nothing changes; `Ok(Some(None))` for the first rollback when there was nothing to
+    /// drop. Two concurrent forks of one verified task land here once each; only one writes.
+    pub async fn step_down_once(
+        &self,
+        task_id: &str,
+        approval: &str,
+        checkpoint_id: &str,
+        step: Option<(&str, &str, &str, &Value)>,
+    ) -> Result<Option<Option<super::flight_school::Policy>>, DbError> {
+        let mut tx = self.begin_write().await?;
+        let first = sqlx::query("INSERT OR IGNORE INTO rollback_step_downs (task_id, approval, checkpoint_id, created_at) VALUES (?, ?, ?, ?)")
+            .bind(task_id)
+            .bind(approval)
+            .bind(checkpoint_id)
+            .bind(Utc::now())
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            == 1;
+        if !first {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+        let mut policy = None;
+        if let Some((kwant_id, class, tier, detail)) = step {
+            let note = detail.to_string();
+            policy = Some(super::flight_school::write_policy(&mut tx, kwant_id, class, tier, "stepped_down", Some(&note)).await?);
+            sqlx::query(
+                "INSERT INTO task_events (task_id, mission_id, kind, actor, from_state, to_state, detail, created_at) \
+                 VALUES (?, (SELECT mission_id FROM tasks WHERE id = ?), 'tier_stepped_down', 'person', NULL, NULL, ?, ?)",
+            )
+            .bind(task_id)
+            .bind(task_id)
+            .bind(&note)
+            .bind(Utc::now())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(Some(policy))
+    }
+
+    /// Whether a rollback already used `approval` of the task (see [`Database::step_down_once`]).
+    pub async fn stepped_down_for(&self, task_id: &str, approval: &str) -> Result<bool, DbError> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT task_id FROM rollback_step_downs WHERE task_id = ? AND approval = ?")
+            .bind(task_id)
+            .bind(approval)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
     pub async fn overturn_verdict(&self, verdict_id: &str, to: &str, note: Option<&str>) -> Result<bool, DbError> {
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;

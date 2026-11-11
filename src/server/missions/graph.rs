@@ -324,14 +324,14 @@ pub async fn fork_task(State(state): State<AppState>, RawQuery(q): RawQuery, hea
     idempotent(&state, &headers, route, || async {
         let orig = load_task(&state, q.as_deref(), &id).await?;
         // The fork starts from the checkpoint: the original's task-owned paths go back first
-        let was_approved = super::flight_school::approved(&state.db, &orig).await;
+        let approval = super::flight_school::approval(&state.db, &orig).await;
         let restore = match from_checkpoint {
             Some(cid) => Some(super::checkpoints::restore_for_fork(&state, &orig, cid, p.preview_sha256.as_deref()).await?),
             None => None,
         };
         // A rollback of an approved task drops its owner one tier (0.9.0, contract §5.1)
         let stepped = match &restore {
-            Some(r) => super::flight_school::step_down_after_rollback(&state, &orig, was_approved, r["checkpoint_id"].as_str().unwrap_or("")).await,
+            Some(r) => super::flight_school::step_down_after_rollback(&state, &orig, approval.as_deref(), r["checkpoint_id"].as_str().unwrap_or("")).await,
             None => Value::Null,
         };
         // A fork from a checkpoint is held: it never starts by itself (§9.6)
