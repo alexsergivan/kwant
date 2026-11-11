@@ -533,47 +533,52 @@ export function shortPath(p: string, home: string | null = null): string {
 
 // ---- H5 N1: the repo header rollup and the one attention order on the Worktrees tab ----
 
-/** A bot's H5 rank (1 needs you · 2 stuck · 3 finished · 4 working · 5 waiting · 6 the rest). */
+/** A bot's H5 rank (1 needs you · 2 stuck · 3 to review · 4 finished · 5 working · 6 waiting · 7 the rest). */
 export type RankOf = (botId: string | null) => number | undefined;
 
 /**
- * One row's rank. The bot's ranks 1–3 follow it to each of its worktrees (the ask or the result is about
- * that bot); working counts only for the worktree a turn actually runs in, so a bot busy elsewhere doesn't
- * light up an idle folder. Removed rows and rows without a bot rank 6.
+ * One row's rank. The bot's ranks 1–4 follow it to each of its worktrees (the ask, the review or the result
+ * is about that bot); working counts only for the worktree a turn actually runs in, so a bot busy elsewhere
+ * doesn't light up an idle folder. Removed rows and rows without a bot rank 7.
  */
 export function rowRank(w: Worktree, rankOf: RankOf): number {
-  if (w.removed_at) return 6;
+  if (w.removed_at) return 7;
   const r = rankOf(w.kwant_id);
-  if (r !== undefined && r <= 3) return r;
-  return w.working ? 4 : 6;
+  if (r !== undefined && r <= 4) return r;
+  return w.working ? 5 : 7;
 }
 
 export interface RepoRollup {
   needs: number;
   stuck: number;
+  review: number;
   finished: number;
   working: number;
 }
 
 export function repoRollup(repo: WorktreeRepo, rankOf: RankOf): RepoRollup {
-  const c: RepoRollup = { needs: 0, stuck: 0, finished: 0, working: 0 };
+  const c: RepoRollup = { needs: 0, stuck: 0, review: 0, finished: 0, working: 0 };
   for (const w of repo.worktrees) {
     const r = rowRank(w, rankOf);
     if (r === 1) c.needs++;
     else if (r === 2) c.stuck++;
-    else if (r === 3) c.finished++;
-    else if (r === 4) c.working++;
+    else if (r === 3) c.review++;
+    else if (r === 4) c.finished++;
+    else if (r === 5) c.working++;
   }
   return c;
 }
 
-/** "1 needs you" / "2 need you", "1 stuck", "1 finished", "2 working" (H5 copy), zeros left out, in rank order. */
-export function repoRollupParts(c: RepoRollup): { rank: 1 | 2 | 3 | 4; text: string }[] {
-  const out: { rank: 1 | 2 | 3 | 4; text: string }[] = [];
+export type RollupRank = 1 | 2 | 3 | 4 | 5;
+
+/** "1 needs you" / "2 need you", "1 stuck", "1 to review", "1 finished", "2 working" (H5 copy), zeros left out, in rank order. */
+export function repoRollupParts(c: RepoRollup): { rank: RollupRank; text: string }[] {
+  const out: { rank: RollupRank; text: string }[] = [];
   if (c.needs) out.push({ rank: 1, text: `${c.needs} ${c.needs === 1 ? 'needs' : 'need'} you` });
   if (c.stuck) out.push({ rank: 2, text: `${c.stuck} stuck` });
-  if (c.finished) out.push({ rank: 3, text: `${c.finished} finished` });
-  if (c.working) out.push({ rank: 4, text: `${c.working} working` });
+  if (c.review) out.push({ rank: 3, text: `${c.review} to review` });
+  if (c.finished) out.push({ rank: 4, text: `${c.finished} finished` });
+  if (c.working) out.push({ rank: 5, text: `${c.working} working` });
   return out;
 }
 
@@ -584,6 +589,6 @@ export function sortWorktrees(list: Worktree[], rankOf: RankOf): Worktree[] {
 
 /** Repos by their best-ranked row, then by name. */
 export function sortRepos(repos: WorktreeRepo[], rankOf: RankOf): WorktreeRepo[] {
-  const best = (r: WorktreeRepo) => Math.min(6, ...r.worktrees.map((w) => rowRank(w, rankOf)));
+  const best = (r: WorktreeRepo) => Math.min(7, ...r.worktrees.map((w) => rowRank(w, rankOf)));
   return [...repos].sort((a, b) => best(a) - best(b) || a.repo.localeCompare(b.repo));
 }

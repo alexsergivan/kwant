@@ -46,9 +46,13 @@ import { HireCard, type HireDecision } from './components/HireCard';
 import { RouteChoiceCard } from './components/RouteChoiceCard';
 import { RouteChoiceMeta, applyRouteChoice, correctRoute, isAskingReply, rerouteTargetsFor, resolveRouteChoice } from './routeChoice';
 import type { RoutineFocus } from './components/RoutinesPanel';
-import { AwayPage } from './components/AwayView';
+import { InboxNew } from './components/InboxNew';
+import { inboxBadge, isReview, type InboxItem } from './api/inbox';
+import { batchItems, inboxNav, loadInbox, openItem, useInbox } from './inboxStore';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { MissionBoardPage } from './components/MissionBoardView';
+import { WatchChatMessage } from './components/MissionWatch';
+import type { WatchMeta } from './missionWatch';
 import { MISSION_BOARD_SETTING_EVENT, emitMission, parseMissionBoardSetting, sourceChat } from './missions';
 import { type ChatTarget, type NotifiedChat, notifiedPlace, planOpenTarget } from './chatTarget';
 import { ParallelPage } from './components/ParallelUniverseView';
@@ -366,6 +370,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     openAppSettings();
   };
   const openConnections = () => openSpaceSettings('connections');
+  // 0.9.0 P5: "See the note" in a chat opens Connections on that one note.
+  const [toolNoteFocus, setToolNoteFocus] = useState<string | null>(null);
+  const openToolNote = (noteId: string) => {
+    setToolNoteFocus(noteId);
+    openConnections();
+  };
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
     setSettingsScope('space');
@@ -409,6 +419,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const contentRef = useRef<HTMLDivElement>(null);
   useSettingsCover(!!spaceSettingsTab, contentRef);
   const closeSpaceSettings = () => {
+    setToolNoteFocus(null);
     setSpaceSettingsTab(null);
     setSettingsFocusRow(null);
     setSettingsClosedCount((n) => n + 1);
@@ -469,6 +480,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const ideaJarCount = useIdeaJarBadge(space.id);
   const jarWobble = useJarWobble();
   const [pendingMissionId, setPendingMissionId] = useState<string | null>(null);
+  const [pendingWatchReport, setPendingWatchReport] = useState(false);
   const [ideaToast, setIdeaToast] = useState<{ id: string; state: IdeaDropToastState } | null>(null);
   const [jarAnnouncement, setJarAnnouncement] = useState('');
   const [settingsFocusRow, setSettingsFocusRow] = useState<string | null>(null);
@@ -518,6 +530,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [awayCount, setAwayCount] = useState(0);
+  // 0.9.0 V1: the Inbox store (GET /api/inbox, or /api/away before the server has it).
+  const inboxState = useInbox();
+  const inboxCount = inboxBadge(inboxState.data, { unseen: { total: awayCount } }, prepushWaiting);
+  const reviewItems: InboxItem[] = inboxState.data ? [...inboxState.data.items, ...batchItems(inboxState.data)].filter(isReview) : [];
   // "Needs you" nudges (attention.ts): what waits on the person, the pill, and the "Show nudges" setting.
   const [awayWaiting, setAwayWaiting] = useState(0);
   /** What waits on you right now (approvals, questions), for the phone Chats tab's Needs you. */
@@ -568,11 +584,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setOpenedAt((prev) => ({ ...prev, [readChat]: Date.now() }));
     return () => setOpenedAt((prev) => ({ ...prev, [readChat]: Date.now() }));
   }, [readChat]);
-  const awaySinceRef = useRef<string | null>(null);
   const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const refreshAwayCount = (delay = 0) => {
     clearTimeout(awayTimerRef.current);
     awayTimerRef.current = setTimeout(() => {
+      void loadInbox();
       awayApi.get().then((r) => {
         setAwayCount(r.unseen.total);
         setAwayWaiting(r.unseen.waiting);
@@ -2153,6 +2169,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   /** Opens the thread, channel or direct chat an away item links to. */
   const openAwayItem = (item: AwayItem) => {
+    // 0.9.0 P1: a watch item opens its mission's report on the board, where the needs-you line is.
+    if (item.kind === 'watch' && item.mission_id) {
+      setPendingMissionId(item.mission_id);
+      setPendingWatchReport(true);
+      showPage('board');
+      return;
+    }
     const t = awayTarget(item);
     // 0.8.1 F6: the same opener as a notification's tap, so a gone chat lands in the bot's 1:1 and
     // an approval row shows its card
@@ -2536,6 +2559,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return decisionError(err, d === 'deny' ? 'say no' : d === 'undo' ? 'undo the hire' : 'hire it');
     }
   };
+  const renderWatchReport = (msg: ChatMessage, meta: WatchMeta, flash: boolean) => (
+    <WatchChatMessage
+      report={meta.report}
+      failed={meta.failed}
+      fallbackText={msg.text}
+      watcherName={kwantName(msg.sender_id) ?? chatTitle}
+      watcherId={msg.sender_id}
+      at={msg.created_at ?? null}
+      messageId={msg.id}
+      flash={flash}
+      onSeeClaims={
+        meta.missionId
+          ? () => {
+              setPendingMissionId(meta.missionId);
+              setPendingWatchReport(true);
+              showPage('board');
+            }
+          : undefined
+      }
+    />
+  );
   const renderBotAction = (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => {
     const owner = meta.kwant_id ?? undefined;
     return (
@@ -3727,6 +3771,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         finished: awayDone.finished,
         busy: busyKwants,
         status: botStatus,
+        reviews: reviewItems,
         h4: h4Status ?? undefined,
         openedAt: page === 'chat' && !isChannel && selectedId ? { ...openedAt, [selectedId]: Date.now() } : openedAt,
       })
@@ -3817,7 +3862,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setIsNewChannelOpen(true);
         playSfx('click');
       }}
-      inboxCount={awayCount + prepushWaiting}
+      inboxCount={inboxCount}
+      onOpenReview={(i: InboxItem) => {
+        openItem(i.id, null);
+        showPage('inbox', 'new');
+      }}
       inboxActive={page === 'inbox'}
       onOpenInbox={() => {
         showPage('inbox');
@@ -3855,7 +3904,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
 
   const away = (
-    <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} onApprovalResolved={dropApproval}
+    <InboxNew
+      onOpen={openAwayItem}
+      onCounts={setAwayCount}
+      onApprovalResolved={dropApproval}
+      onCrumb={(c) => showPage(c === 'board' ? 'board' : 'dev')}
       top={
         <>
           <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
@@ -3864,6 +3917,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }
     />
   );
+  // The board card, drawer and Dev desk open review items here (crumb set by the caller).
+  inboxNav.go = () => showPage('inbox', 'new');
   const backToList = isPhone ? () => { setPage('chat'); setPhoneView('list'); } : undefined;
   const parallel = <ParallelPage onBack={backToList} />;
   const connectionsPage = (
@@ -3873,6 +3928,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onAddTool={() => { setMcpStartAdding(true); setIsMcpOpen(true); }}
       onOpenAccounts={openSettings}
       onOpenLooseEnds={() => showPage('inbox', 'loose')}
+      focusNote={toolNoteFocus}
+      onClearFocusNote={() => setToolNoteFocus(null)}
+      onOpenNoteWhere={(w) => {
+        if (spaceSettingsTab) closeSpaceSettings();
+        openPlace({ channel_id: w.channel_id, kwant_id: w.direct_kwant_id, thread_id: w.thread_id, card_id: w.message_id });
+      }}
     />
   );
   const missionNames = Object.fromEntries(kwants.map((k) => [k.id, k.name]));
@@ -3907,7 +3968,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       openTaskId={pendingTaskId}
       onOpenedTaskId={() => setPendingTaskId(null)}
       openMissionId={pendingMissionId}
-      onOpenedMissionId={() => setPendingMissionId(null)}
+      openWatchReport={pendingWatchReport}
+      onOpenedMissionId={() => {
+        setPendingMissionId(null);
+        setPendingWatchReport(false);
+      }}
     />
   );
   const loose = (
@@ -3917,7 +3982,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       addImap={looseAddImap > 0}
     />
   );
-  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount + prepushWaiting} onBack={backToList} newPage={away} loosePage={loose} />;
+  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={inboxCount} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
           heldNotes={heldNotes}
@@ -4060,6 +4125,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderMcpSuggestion={renderMcpSuggestion}
           renderConnectionSuggestion={renderConnectionSuggestion}
           renderBotAction={renderBotAction}
+          onOpenToolNote={openToolNote}
+          renderWatchReport={renderWatchReport}
           renderHire={renderHire}
           renderRouteChoice={renderRouteChoice}
           rerouteTargets={openThreadId ? [] : rerouteTargetsFor(currentChannel, kwants)}
@@ -4157,7 +4224,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       badgeTone: 'violet',
       badgeNoun: ideaJarCount === 1 ? 'take ready' : 'takes ready',
     },
-    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: awayCount + prepushWaiting },
+    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: inboxCount },
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;

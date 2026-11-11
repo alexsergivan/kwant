@@ -398,6 +398,30 @@ pub async fn parked(state: &AppState, task: &Task) -> bool {
     task.state == "failed" && retried_in_place(task) && mode(state).await != "off" && task.attempts < task.max_attempts
 }
 
+/// How long after a failure AutoFix may still be planning its answer (the plan follows the
+/// failure at once; this only bounds a plan that never landed).
+const PLAN_GRACE_MINUTES: i64 = 10;
+
+/// Whether AutoFix will itself run `task` again (P1 D9, #513 M2): a failed, in-place task with
+/// attempts left whose latest failure has a `scheduled` or `running` attempt, or that AutoFix is
+/// about to plan (no attempt for it yet, a class it plans for, under [`PLAN_GRACE_MINUTES`] old).
+/// Not when AutoFix skipped it, gave up, the retry already ran and failed, the class needs the
+/// person, or a suggestion waits for the person: nothing moves those until someone acts.
+pub async fn will_retry(state: &AppState, task: &Task) -> bool {
+    if task.state != "failed" || !retried_in_place(task) || task.attempts >= task.max_attempts || mode(state).await == "off" {
+        return false;
+    }
+    let fresh = |at: DateTime<Utc>| Utc::now() - at < Duration::minutes(PLAN_GRACE_MINUTES);
+    let failures = state.db.failures_of(&task.id).await.unwrap_or_default();
+    let Some(f) = failures.last() else { return fresh(task.updated_at) };
+    let attempts = state.db.attempts_of(&task.id).await.unwrap_or_default();
+    let mut of_f = attempts.iter().filter(|a| a.failure_id == f.id).peekable();
+    if of_f.peek().is_none() {
+        return f.class != "needs_input" && fresh(f.created_at);
+    }
+    of_f.any(|a| matches!(a.status.as_str(), "scheduled" | "running"))
+}
+
 /// Attempts the task has used, counting a routine run's own run.
 fn used(task: &Task) -> i64 {
     if retried_in_place(task) {
@@ -445,6 +469,12 @@ fn key(task_id: &str, failure_id: &str, strategy: &str) -> String {
 
 /// Records a failure of `task` (already moved to where Phase A or [`parks`] put it), then plans
 /// AutoFix's answer. `text` is the raw output; only its redacted form is stored.
+/// Whether an AutoFix attempt of the task is scheduled: a retry after a stall, a failed check or a
+/// temporary error (a rate limit among them), possibly still waiting out its backoff.
+pub async fn retry_scheduled(state: &AppState, task_id: &str) -> bool {
+    state.db.attempts_of(task_id).await.unwrap_or_default().iter().any(|a| a.status == "scheduled")
+}
+
 pub async fn record(state: &AppState, task_id: &str, source: &str, status: &str, text: &str, summary: &str) -> Option<Failure> {
     // A turn today's spending stop held never ran: not a failure, nothing to retry
     if crate::server::spend_stop::is_stop_error(text) {

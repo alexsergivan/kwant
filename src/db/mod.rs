@@ -57,6 +57,9 @@ pub mod dev_jira;
 pub mod telegram;
 pub mod show_once;
 pub mod isolated_folders;
+pub mod tool_notes;
+pub mod mission_watch;
+pub mod verifier;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -222,6 +225,10 @@ impl Database {
         db.migrate_spend().await?;
         // 0.9.0 G2: per-bot monthly budgets (add-only; after usage, parked and routines)
         db.migrate_bot_budget().await?;
+        // 0.9.0 P5: tool notes (add-only)
+        db.migrate_tool_notes().await?;
+        // 0.9.0 P1: mission watches and their checks (add-only)
+        db.migrate_mission_watch().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;
@@ -270,6 +277,8 @@ impl Database {
         db.migrate_show_once().await?;
         // Agents in the VM: folders an isolated turn used (add-only)
         db.migrate_isolated_folders().await?;
+        // 0.9.0 wave 3: task contracts and verifier verdicts (add-only)
+        db.migrate_verifier().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal
@@ -452,6 +461,23 @@ impl Database {
                 .execute(&mut *tx)
                 .await?;
         }
+        if existing.preferred_model != input.preferred_model {
+            // 0.9.0 (contract §5.2): a new model starts a new scorecard window; the old tasks stay
+            let (tier,): (String,) = sqlx::query_as(
+                "SELECT COALESCE((SELECT tier FROM capability_policies WHERE kwant_id = ? AND task_class = '*' AND revoked_at IS NULL LIMIT 1), 'act')",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+            let detail = serde_json::json!({"from_model": existing.preferred_model, "to_model": input.preferred_model});
+            sqlx::query("INSERT INTO capability_events (kwant_id, task_class, kind, tier, actor, detail, created_at) VALUES (?, '*', 'scorecard_reset', ?, 'person', ?, ?)")
+                .bind(id)
+                .bind(&tier)
+                .bind(detail.to_string())
+                .bind(chrono::Utc::now().to_rfc3339())
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         self.get_kwant(id).await
     }
@@ -548,8 +574,14 @@ impl Database {
 
     /// [`Self::insert_message`] into a thread and/or with kwnt's own `meta`.
     pub async fn insert_message_with(&self, input: &NewMessage, extra: &MessageExtra) -> Result<Message, DbError> {
+        self.insert_message_as(None, input, extra).await
+    }
+
+    /// [`Self::insert_message_with`] under id `id` when given (one the caller reserved, e.g. a
+    /// send's id handed to its racing duplicates), else a new one.
+    pub async fn insert_message_as(&self, id: Option<&str>, input: &NewMessage, extra: &MessageExtra) -> Result<Message, DbError> {
         let mut conn = self.pool.acquire().await?;
-        insert_message_core(&mut conn, input, extra, Some(&self.data_dir.join("attachments"))).await
+        insert_message_core(&mut conn, id, input, extra, Some(&self.data_dir.join("attachments"))).await
     }
 
     pub async fn get_message(&self, id: &str) -> Result<Option<Message>, DbError> {
@@ -1171,18 +1203,19 @@ pub(crate) async fn insert_message_on(
     input: &NewMessage,
     extra: &MessageExtra,
 ) -> Result<Message, DbError> {
-    insert_message_core(conn, input, extra, None).await
+    insert_message_core(conn, None, input, extra, None).await
 }
 
 /// [`insert_message_on`] with the attachments directory, so a shared file's card can get a
 /// preview. Without it a file card has no block.
 async fn insert_message_core(
     conn: &mut sqlx::SqliteConnection,
+    id: Option<&str>,
     input: &NewMessage,
     extra: &MessageExtra,
     root: Option<&Path>,
 ) -> Result<Message, DbError> {
-    let id = Uuid::new_v4().to_string();
+    let id = id.map(str::to_string).unwrap_or_else(|| Uuid::new_v4().to_string());
     let tools_json = input
         .tool_calls
         .as_ref()

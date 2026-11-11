@@ -34,6 +34,7 @@ import {
   type RankOf,
   repoRollup,
   repoRollupParts,
+  type RollupRank,
   sortRepos,
   sortWorktrees,
 } from '../../dev/worktrees';
@@ -48,12 +49,12 @@ export interface WtBot {
   id: string;
   name: string;
   role?: string | null;
-  /** H5 rank (1 needs you … 6 the rest) for the repo rollup and the row order; none = no order data. */
+  /** H5 rank (1 needs you … 7 the rest) for the repo rollup and the row order; none = no order data. */
   rank?: number;
 }
 
 // H5 mini dots (the sidebar's team rollup colours).
-const RANK_DOT: Record<1 | 2 | 3 | 4, string> = { 1: 'bg-amber-400', 2: 'bg-rose-400', 3: 'bg-teal-400', 4: 'bg-[#9d8fff]' };
+const RANK_DOT: Record<RollupRank, string> = { 1: 'bg-amber-400', 2: 'bg-rose-400', 3: 'bg-[#38bdf8]', 4: 'bg-teal-400', 5: 'bg-[#9d8fff]' };
 
 export function useWorktrees(space: string, on: boolean): WorktreesData {
   const data = useSyncExternalStore(worktreeStore.subscribe, () => worktreeStore.get(space), () => worktreeStore.get(space));

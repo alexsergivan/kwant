@@ -1,6 +1,6 @@
 // H5 attention order (release-090/designs/h5-attention-order.md): one order everywhere a list of bots
-// or items is scanned. 1 Needs you · 2 Stuck or failed · 3 Finished, not read · 4 Working · 5 Waiting · 6 the rest.
-// Desktop pins ranks 1–3 above Channels (copies); the phone's Chats tab moves bots into sections.
+// or items is scanned. 1 Needs you · 2 Stuck or failed · 3 To review (0.9.0 V1) · 4 Finished, not read · 5 Working ·
+// 6 Waiting · 7 the rest. Desktop pins ranks 1–4 above Channels (copies); the phone's Chats tab moves bots into sections.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -42,35 +42,35 @@ const rows = (over = {}) => m.attentionRows({ kwants, needs: m.needsYouRows(wait
 const order = (rs) => rs.map((r) => `${r.rank}:${r.kwant.name}`);
 
 test('the one order: each bot once, at its highest rank, ties by name', () => {
-  assert.deepEqual(order(rows()), ['1:Lin', '1:Pixel', '2:Juno', '3:Iris', '4:Rigel', '4:Vega', '5:Mira', '6:Ada']);
+  assert.deepEqual(order(rows()), ['1:Lin', '1:Pixel', '2:Juno', '4:Iris', '5:Rigel', '5:Vega', '6:Mira', '7:Ada']);
   const r = rows();
   assert.equal(r.find((x) => x.kwant.id === 'jun').line, 'Failed: Claude stopped answering');
   assert.equal(r.find((x) => x.kwant.id === 'iri').line, 'Finished: legend under the plot');
   assert.equal(m.attentionRank({ needs: true, failed: true, working: true }), 1);
   assert.equal(m.attentionRank({ failed: true, finished: true }), 2);
-  assert.equal(m.attentionRank({ queued: true }), 5);
-  assert.equal(m.attentionRank({}), 6);
+  assert.equal(m.attentionRank({ queued: true }), 6);
+  assert.equal(m.attentionRank({}), 7);
   assert.equal(m.stuckLine({ kind: 'delegation', status: 'stuck', title: 'Long crawl' }), 'Stuck: Long crawl');
 });
 
-test('inside groups: needs and stuck oldest first, finished newest first, rank 6 keeps its order', () => {
+test('inside groups: needs and stuck oldest first, finished newest first, rank 7 keeps its order', () => {
   const two = [item('delegation', 'jun', { status: 'failed', timestamp: at(10) }), item('delegation', 'rig', { status: 'failed', timestamp: at(40) })];
   const fin = [item('delegation', 'iri', { status: 'completed', timestamp: at(30) }), item('delegation', 'veg', { status: 'completed', timestamp: at(5) })];
   const r = rows({ failed: two, finished: fin, busy: {}, status: {} });
-  assert.deepEqual(order(r).slice(0, 6), ['1:Lin', '1:Pixel', '2:Rigel', '2:Juno', '3:Vega', '3:Iris']);
-  assert.deepEqual(order(r).slice(6), ['6:Ada', '6:Mira'], 'the stable sidebar order, as given');
+  assert.deepEqual(order(r).slice(0, 6), ['1:Lin', '1:Pixel', '2:Rigel', '2:Juno', '4:Vega', '4:Iris']);
+  assert.deepEqual(order(r).slice(6), ['7:Ada', '7:Mira'], 'the stable sidebar order, as given');
   // attentionSort alone
-  const s = m.attentionSort([{ kwant: { name: 'B' }, rank: 4 }, { kwant: { name: 'A' }, rank: 4 }, { kwant: { name: 'Z' }, rank: 1, at: 2 }, { kwant: { name: 'Y' }, rank: 1, at: 1 }]);
+  const s = m.attentionSort([{ kwant: { name: 'B' }, rank: 5 }, { kwant: { name: 'A' }, rank: 5 }, { kwant: { name: 'Z' }, rank: 1, at: 2 }, { kwant: { name: 'Y' }, rank: 1, at: 1 }]);
   assert.deepEqual(s.map((x) => x.kwant.name), ['Y', 'Z', 'A', 'B']);
 });
 
-test('rank 2 only counts failures from the last 24 h; rank 3 ends once the chat is opened', () => {
+test('rank 2 only counts failures from the last 24 h; rank 4 (finished) ends once the chat is opened', () => {
   const old = [item('delegation', 'jun', { status: 'failed', timestamp: at(25 * 60) })];
-  assert.equal(rows({ failed: old }).find((x) => x.kwant.id === 'jun').rank, 6);
+  assert.equal(rows({ failed: old }).find((x) => x.kwant.id === 'jun').rank, 7);
   // Opened Iris's chat after it finished: read
-  assert.equal(rows({ openedAt: { iri: NOW - 60_000 } }).find((x) => x.kwant.id === 'iri').rank, 6);
+  assert.equal(rows({ openedAt: { iri: NOW - 60_000 } }).find((x) => x.kwant.id === 'iri').rank, 7);
   // Opened before it finished: still unread
-  assert.equal(rows({ openedAt: { iri: NOW - 3600_000 } }).find((x) => x.kwant.id === 'iri').rank, 3);
+  assert.equal(rows({ openedAt: { iri: NOW - 3600_000 } }).find((x) => x.kwant.id === 'iri').rank, 4);
 });
 
 test('rollup words: zeros left out, "1 needs you", working only when nothing else', () => {

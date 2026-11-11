@@ -25,6 +25,8 @@ pub const ALLOWED_TOOLS: &[&str] = &[
     "task_review",
     // The Swarm Auditor's challenge
     "audit_challenge",
+    // The Verifier's report (V2): it records findings, kwant gives the verdict
+    "verify_report",
     // Looking at a result that is a web page
     "browser_open",
     "browser_page",

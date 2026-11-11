@@ -266,6 +266,13 @@ export interface RestorePreview {
   effects_known: boolean;
   task_state_after: 'ready' | 'backlog' | null;
   refused: RestoreRefusal | null;
+  /** 0.9.0 (contract §9.6): a verified task rolls back by a fork from this checkpoint. The server
+   *  sends `refused: null` with `via: "fork"`; the client keeps `refused: "fork_instead"` for it. */
+  via?: 'fork' | 'restore';
+  /** What the roll back would do to the owner's tier, or null (nothing written by the preview). */
+  step_down?: { kwant_id: string; class: string; from: string; to: string } | null;
+  /** When the task was approved, when the server sends it (roll back after approval). */
+  verified_at?: string | null;
 }
 
 /** `POST /api/tasks/:id/checkpoints/:cid/restore` (person-only; `Idempotency-Key` header required). */
@@ -1824,11 +1831,26 @@ export const missionsApi = {
     call<ResolveFlagResult>(`/api/tasks/${enc(taskId)}/flags/${enc(flagId)}/resolve`, 'POST', note ? { resolution, note } : { resolution }, { 'Idempotency-Key': key }),
   /** Copy a task to redo it; the same key returns the same copy. */
   fork: (taskId: string, reason: string, key: string) => call<Task>(`/api/tasks/${enc(taskId)}/fork`, 'POST', { reason }, { 'Idempotency-Key': key }),
+  /**
+   * 0.9 D2: roll back after approval. A copy of the task from `from_checkpoint`, with the original's
+   * task-owned paths put back first; it waits on hold until Run. 409 `stale_preview` on a changed preview.
+   */
+  forkFromCheckpoint: (taskId: string, body: { reason: string; from_checkpoint: string; preview_sha256: string }, key: string) =>
+    call<Task & { restore?: RestoreResult | null; stepped_down?: { kwant_id: string; class: string; from: string; to: string } | null }>(
+      `/api/tasks/${enc(taskId)}/fork`,
+      'POST',
+      body,
+      { 'Idempotency-Key': key },
+    ),
   /** Let a task a restore held run again (person only). */
   /** Take a held task off hold. The same key replays the first 200, so a double press is a success. */
   runHeld: (id: string, key: string) => call<{ task: Task }>(`/api/tasks/${enc(id)}/run`, 'POST', {}, { 'Idempotency-Key': key }).then((r) => r.task),
   checkpoints: (id: string) => call<Checkpoint[]>(`/api/tasks/${enc(id)}/checkpoints`),
-  restorePreview: (id: string, cid: string) => call<RestorePreview>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore-preview`),
+  restorePreview: (id: string, cid: string) =>
+    call<RestorePreview>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore-preview`).then((p) => ({
+      ...p,
+      refused: p.refused ?? (p.via === 'fork' ? 'fork_instead' : null),
+    })),
   restore: (id: string, cid: string, body: { preview_sha256: string; force_paths?: string[]; rerun?: boolean }, key: string) =>
     call<RestoreResult>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore`, 'POST', body, { 'Idempotency-Key': key }),
   failures: (id: string) => call<TaskFailure[]>(`/api/tasks/${enc(id)}/failures`),
@@ -1838,6 +1860,8 @@ export const missionsApi = {
   cancelAutofix: (id: string, aid: string) => call<AutofixAttempt>(`/api/tasks/${enc(id)}/autofix/${enc(aid)}/cancel`, 'POST', {}),
   workflowChanges: (status: WorkflowChangeStatus = 'proposed', taskId?: string) =>
     call<WorkflowChange[]>(`/api/workflow-changes?status=${status}${taskId ? `&task_id=${enc(taskId)}` : ''}`),
+  /** The verifier's verdicts on this task, newest first (raw: read them with scopeWarnings). */
+  verdicts: (id: string) => call<{ verdicts?: unknown }>(`/api/tasks/${enc(id)}/verdicts`).then((r) => r.verdicts),
   /** Swarm Auditor: the task's audits and their risks. */
   risks: (id: string) => call<TaskRisks>(`/api/tasks/${enc(id)}/risks`),
   /** The space's unresolved risks, for the board's badges. */
@@ -2310,4 +2334,33 @@ export function flushOnPageLeave(
     win.removeEventListener('pagehide', flush);
     doc.removeEventListener('visibilitychange', onHide);
   };
+}
+
+/** A path a small (low-tier) task changed although its contract said it must not, and the task was still approved. */
+export interface ScopeWarning {
+  id: string;
+  path: string;
+}
+
+const SCOPE_PREFIX = 'Changed a path it must not change: ';
+
+/**
+ * The scope findings of the newest verdict when it is a low-tier pass: the server records each
+ * changed must_not_change path as one medium `scope` finding ("Changed a path it must not change:
+ * <path>") and still approves the task. Anything else, or data of another shape, gives [].
+ */
+export function scopeWarnings(verdicts: unknown): ScopeWarning[] {
+  if (!Array.isArray(verdicts) || verdicts.length === 0) return [];
+  const v = verdicts[0] as Record<string, unknown> | null;
+  if (!v || typeof v !== 'object' || v.risk_tier !== 'low' || v.verdict !== 'pass' || v.overturned_at || !Array.isArray(v.findings)) return [];
+  const out: ScopeWarning[] = [];
+  for (const f of v.findings as Record<string, unknown>[]) {
+    if (!f || typeof f !== 'object') continue;
+    const kind = f.step ?? f.kind;
+    if (kind !== 'scope' || f.severity !== 'medium' || typeof f.text !== 'string' || !f.text.startsWith(SCOPE_PREFIX)) continue;
+    const path = f.text.slice(SCOPE_PREFIX.length).trim();
+    if (!path || out.some((w) => w.path === path)) continue;
+    out.push({ id: typeof f.id === 'string' && f.id ? f.id : path, path });
+  }
+  return out;
 }

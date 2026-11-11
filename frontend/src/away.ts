@@ -1,7 +1,7 @@
 // "While you were away" (batch 3): what agents need from you, finished and failed since you last
 // looked. Pure helpers, so the page and the node tests share them; the API calls are at the bottom.
 
-export type AwayKind = 'question' | 'approval' | 'delegation' | 'routine_run';
+export type AwayKind = 'question' | 'approval' | 'delegation' | 'routine_run' | 'watch';
 export type AwaySection = 'waiting' | 'finished' | 'failed';
 export type ApprovalDecision = 'allow_once' | 'always_allow' | 'deny';
 
@@ -28,6 +28,9 @@ export interface AwayItem {
   details?: Record<string, unknown>;
   /** Approvals only: set when the payment floor asked, also on servers that send no details. */
   payment_reason?: string;
+  /** 0.9.0 P1, watch items only: the watched mission and the first task that needs the person. */
+  mission_id?: string | null;
+  task_id?: string | null;
 }
 
 export interface AwayCounts {
@@ -107,6 +110,8 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: str
     case 'approval':
       // Its turn stopped waiting, but the card is open and a late Allow resumes the work.
       return item.status === 'waiting' ? { label: 'Still open', tone: 'sky' } : { label: 'Needs approval', tone: 'amber' };
+    case 'watch':
+      return { label: 'Watch', tone: 'amber' };
     case 'routine_run':
       return item.status === 'ok' ? { label: 'Routine ran', tone: 'emerald' } : { label: 'Routine failed', tone: 'rose' };
     case 'delegation':
@@ -146,6 +151,28 @@ export function awayTarget(item: Pick<AwayItem, 'kwant_id' | 'link'>): AwayTarge
   if (l.thread_id) return { thread: l.thread_id, kwant: item.kwant_id };
   if (l.channel_id) return { channel: l.channel_id };
   return { direct: l.direct_kwant_id || item.kwant_id };
+}
+
+/**
+ * 0.9.0 P1: a watch item comes as {at, mission_id, task_id, thread_id} with no `timestamp` or `link`
+ * (p1-contract section 8). Give it the shape every card reads; other items pass through untouched.
+ */
+export function normalizeAwayItem(raw: AwayItem): AwayItem {
+  if (raw.kind !== 'watch') return raw;
+  const r = raw as AwayItem & { at?: unknown; thread_id?: unknown };
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
+  return {
+    ...r,
+    timestamp: str(r.timestamp) ?? str(r.at) ?? '',
+    link: r.link ?? { thread_id: str(r.thread_id), channel_id: null, direct_kwant_id: str(r.kwant_id) },
+    mission_id: str(r.mission_id),
+    task_id: str(r.task_id),
+  };
+}
+
+export function normalizeAway(r: AwayResponse): AwayResponse {
+  const fix = (l: AwayItem[] | undefined) => (Array.isArray(l) ? l.map(normalizeAwayItem) : []);
+  return { ...r, waiting: fix(r.waiting), finished: fix(r.finished), failed: fix(r.failed) };
 }
 
 /** Drops an acted-on item right away, before the refresh confirms it. */
@@ -208,7 +235,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 const enc = encodeURIComponent;
 
 export const awayApi = {
-  get: (since?: string) => call<AwayResponse>('GET', `/api/away${since ? `?since=${enc(since)}` : ''}`),
+  get: (since?: string) => call<AwayResponse>('GET', `/api/away${since ? `?since=${enc(since)}` : ''}`).then(normalizeAway),
   seen: () => call<{ last_seen: string }>('POST', '/api/away/seen'),
   answer: (id: string, choice: number) => call<unknown>('POST', `/api/questions/${enc(id)}/answer`, { choice }),
   resolve: (id: string, decision: ApprovalDecision) => call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, { decision }),

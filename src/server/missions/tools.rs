@@ -23,7 +23,7 @@ fn ok(v: Value) -> ToolResult {
 const NAMES: [&str; 8] = ["mission_plan", "task_list", "task_claim", "task_update", "task_attach_evidence", "task_request_check", "task_review", "workflow_propose"];
 
 pub fn handles(name: &str) -> bool {
-    NAMES.contains(&name) || super::auditor::TOOL_NAMES.contains(&name)
+    NAMES.contains(&name) || super::auditor::TOOL_NAMES.contains(&name) || name == super::contract::TOOL || name == super::verifier::TOOL
 }
 
 fn check_schema() -> Value {
@@ -168,6 +168,7 @@ pub fn tools() -> Vec<Value> {
     ]
     .into_iter()
     .chain(super::auditor::tools())
+    .chain([super::contract::tool(), super::verifier::tool()])
     .collect()
 }
 
@@ -188,6 +189,9 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
             return fail("No such audit in your space.");
         }
         return super::auditor::call(state, scope, name, args).await;
+    }
+    if name == super::verifier::TOOL {
+        return super::verifier::call(scope, args).await;
     }
     if name == "mission_plan" {
         return plan(state, scope, &space, args).await;
@@ -221,7 +225,11 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
     if let Some(why) = super::auditor::held(state, &scope.kwant_id, name, &task).await {
         return fail(why);
     }
+    if let Some(why) = super::verifier::held(&scope.kwant_id, name, &task) {
+        return fail(why);
+    }
     match name {
+        n if n == super::contract::TOOL => super::contract::call(state, &scope.kwant_id, &task, args).await,
         "task_claim" => claim(state, scope, &task).await,
         "task_update" => update(state, scope, &task, args).await,
         "task_attach_evidence" => evidence(state, scope, &task, args).await,
@@ -565,6 +573,15 @@ async fn review(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
     }
     if verdict == "pass" && ids.is_empty() {
         return fail("A pass must cite at least one evidence id on this task.");
+    }
+    // V3: with a stored contract, a pass needs every criterion met with evidence (a claim bounces)
+    if verdict == "pass" {
+        if let Some((c, _, _)) = super::contract::load(state, &task.id).await {
+            let ev: Vec<String> = on_task.iter().map(|e| e.id.clone()).collect();
+            if let Some(why) = super::contract::pass_blocker(&c, &ev) {
+                return fail(why);
+            }
+        }
     }
     // "Checked with fresh eyes" (Ada's review of #456, Later 6): a lead's hand-off review runs
     // fresh-eyes with only the brief and the result; any other review says it wasn't

@@ -1,5 +1,5 @@
 // 0.9.0 H5/H1 follow-ups (Pixel): S1 "Needs you" oldest ask first whatever its kind (qa-494.md S1);
-// N2 H4 `stuck` reaches rank 2 and rank 4 runs longest first; N1 the Dev desk repo rollup and order;
+// N2 H4 `stuck` reaches rank 2 and rank 5 (working) runs longest first; N1 the Dev desk repo rollup and order;
 // N3 the held-send line offers Try again after `stalled_gave_up` (qa-499.md N3).
 process.env.TZ = 'UTC';
 
@@ -89,10 +89,10 @@ test('N2: gave up reads "stopped after 2 tries"; needs-you still beats stuck; st
   assert.equal(att.find((r) => r.kwant.id === 'rig').line, 'Stuck: the AI stopped answering');
 });
 
-test('N2: rank 4 runs longest first by the H4 turn start', () => {
+test('N2: rank 5 (working) runs longest first by the H4 turn start', () => {
   const h4 = { iri: st('iri', 'working', { turn: { started_at: at(3) } }), rig: st('rig', 'working', { turn: { started_at: at(45) } }) };
   const att = m.attentionRows({ kwants, needs: [], failed: [], finished: [], busy: { iri: 'Working', rig: 'Working' }, status: { iri: 'working', rig: 'working' }, h4, now: NOW });
-  assert.deepEqual(order(att).filter((x) => x.startsWith('4:')), ['4:Rigel', '4:Iris']);
+  assert.deepEqual(order(att).filter((x) => x.startsWith('5:')), ['5:Rigel', '5:Iris']);
 });
 
 test('N2: status list and bot_status events parse; an older server (404) gives null', async () => {
@@ -200,15 +200,15 @@ test('N3: retry posts to the person-only route', async () => {
 const rankOf = (ranks) => (id) => (id ? ranks[id] : undefined);
 
 test('N1: row ranks, the repo rollup in words, and the order of rows and repos', () => {
-  const r = rankOf({ 'k-lin': 1, 'k-rigel': 5 });
+  const r = rankOf({ 'k-lin': 1, 'k-rigel': 6 });
   const shop = fx.LIST.repos[0];
-  assert.deepEqual(shop.worktrees.map((w) => m.rowRank(w, r)), [4, 1, 6, 6], 'Pixel works (4), Lin needs you (1), Rigel is waiting (6), mine (6)');
+  assert.deepEqual(shop.worktrees.map((w) => m.rowRank(w, r)), [5, 1, 7, 7], 'Pixel works (5), Lin needs you (1), Rigel is waiting (7), mine (7)');
   assert.deepEqual(m.sortWorktrees(shop.worktrees, r).map((w) => w.id), ['w2', 'w1', 'w3', 'w4']);
   const c = m.repoRollup(shop, r);
-  assert.deepEqual(c, { needs: 1, stuck: 0, finished: 0, working: 1 });
+  assert.deepEqual(c, { needs: 1, stuck: 0, review: 0, finished: 0, working: 1 });
   assert.deepEqual(m.repoRollupParts(c).map((p) => p.text), ['1 needs you', '1 working']);
-  assert.deepEqual(m.repoRollupParts({ needs: 2, stuck: 1, finished: 3, working: 0 }).map((p) => p.text), ['2 need you', '1 stuck', '3 finished']);
-  assert.equal(m.rowRank({ ...shop.worktrees[0], removed_at: at(1) }, r), 6);
+  assert.deepEqual(m.repoRollupParts({ needs: 2, stuck: 1, review: 1, finished: 3, working: 0 }).map((p) => p.text), ['2 need you', '1 stuck', '1 to review', '3 finished']);
+  assert.equal(m.rowRank({ ...shop.worktrees[0], removed_at: at(1) }, r), 7);
   // A repo with a stuck bot goes above one that is only working; ties by name.
   const a = { ...shop, repo: 'zed', worktrees: [{ ...fx.WORKING, kwant_id: 'k-x' }] };
   const b = { ...shop, repo: 'alpha', worktrees: [{ ...fx.MINE }] };
@@ -226,15 +226,44 @@ test('N1: the Worktrees tab shows the rollup on the repo header and orders repos
   };
   m.worktreeStore._reset();
   await m.worktreeStore.load('sp1');
-  const bots = fx.BOTS.map((b) => ({ ...b, rank: b.id === 'k-lin' ? 1 : b.id === 'k-pixel' ? 4 : undefined }));
+  const bots = fx.BOTS.map((b) => ({ ...b, rank: b.id === 'k-lin' ? 1 : b.id === 'k-pixel' ? 5 : undefined }));
   const host = await render(h(m.WorktreesPanel, { space: 'sp1', data: m.worktreeStore.get('sp1'), bots, now: fx.NOW, home: '/home/ann' }));
   const roll = host.querySelector('[data-wt-rollup="shop"]');
   assert.ok(roll, 'shop has a rollup');
   assert.equal(roll.textContent.replace(/\s+/g, ' ').trim(), '1 needs you, 1 working', 'read as a list, with a hidden comma');
-  assert.deepEqual([...roll.querySelectorAll('[data-wt-rollup-rank]')].map((e) => e.getAttribute('data-wt-rollup-rank')), ['1', '4']);
+  assert.deepEqual([...roll.querySelectorAll('[data-wt-rollup-rank]')].map((e) => e.getAttribute('data-wt-rollup-rank')), ['1', '5']);
   assert.equal(host.querySelector('[data-wt-rollup="site"]'), null, 'no rollup on a repo with nothing going on');
   const ids = [...host.querySelectorAll('[data-wt-row]')].map((e) => e.getAttribute('data-wt-row'));
   assert.deepEqual(ids.slice(0, 2), ['w2', 'w1'], 'Lin needs you, so its worktree is first; Pixel works next');
   const repos = [...host.querySelectorAll('section[data-wt-repo]')].map((e) => e.getAttribute('data-wt-repo'));
   assert.deepEqual(repos, ['shop', 'site'], 'the repo with the ask comes before the quiet one');
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Union with 0.9 V1 (#506 "To review") on the integrated tree
+
+const rv = (kwant_id, group, min, title = 'PR') => ({ ...item('review', kwant_id, { timestamp: at(min), title }), group, sort_key: [] });
+
+test('Union: plain asks first in needsYouRows order, then reviews that need you oldest first', () => {
+  const needs = m.needsYouRows([item('question', 'pix', { timestamp: at(2) }), item('approval', 'jun', { timestamp: at(10) })], { iri: 1 }, all);
+  const reviews = [rv('lin', 'waiting_on_you', 90), rv('veg', 'waiting_on_you', 120)];
+  const att = m.attentionRows({ kwants, needs, failed: [], finished: [], reviews, busy: {}, status: {}, now: NOW });
+  assert.deepEqual(order(att).slice(0, 5), ['1:Juno', '1:Pixel', '1:Iris', '1:Vega', '1:Lin'], 'reviews come after every plain ask, even older ones; a browser step stays last among asks');
+});
+
+test('Union: stuck from an Inbox failure, a live H4 stuck or a review at rank 2; to review oldest; working longest first', () => {
+  const h4 = {
+    lin: st('lin', 'stuck', { reason_code: 'stalled_retrying', since: at(5), waits_on: { kind: 'ai', label: 'Claude' } }),
+    rig: st('rig', 'working', { turn: { started_at: at(20) } }),
+    iri: st('iri', 'working', {}),
+  };
+  const failed = [item('turn', 'lin', { status: 'failed', timestamp: at(30), title: 'Deploy' }), item('turn', 'pix', { status: 'failed', timestamp: at(10), title: 'Build' })];
+  const reviews = [rv('jun', 'failed_or_stuck', 15, 'Couldn’t'), rv('lin', 'failed_or_stuck', 60), rv('veg', 'to_review', 40, 'Old'), rv('pix', 'to_review', 5)];
+  const att = m.attentionRows({ kwants, needs: [], failed, finished: [], reviews, busy: { rig: 'Working', iri: 'Working' }, status: { rig: 'working', iri: 'working' }, h4, now: NOW });
+  assert.deepEqual(order(att), ['2:Lin', '2:Juno', '2:Pixel', '3:Vega', '5:Rigel', '5:Iris']);
+  const lin = att[0];
+  assert.equal(lin.at, NOW - 60 * 60_000, 'the oldest of failure, stuck and review orders the group');
+  assert.equal(lin.line, 'Stuck: Claude stopped answering', 'the live H4 line wins');
+  assert.equal(lin.review?.kwant_id, 'lin', 'the older review gives the item it opens');
+  assert.equal(att[1].line, 'Couldn’t approve: Couldn’t');
 });

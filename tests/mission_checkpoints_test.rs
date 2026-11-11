@@ -128,8 +128,8 @@ async fn setup_in(data: impl FnOnce(&Path) -> PathBuf) -> Env {
     let general = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap().id;
     let e = Env { app, state, bot, general, _tmp: tmp };
     // Retries here are the person's: AutoFix (on by default) would pick up failures itself, and the
-    // Swarm Auditor (on by default) would hold a task it audited in review
-    person(&e, "POST", "/api/settings", Some(json!({"mission_board": true, "autofix": "off", "auditor": "off"}))).await;
+    // Swarm Auditor and the verifier (both on by default) would hold a handed-in task in review
+    person(&e, "POST", "/api/settings", Some(json!({"mission_board": true, "autofix": "off", "auditor": "off", "verifier": "off"}))).await;
     e
 }
 
@@ -413,7 +413,8 @@ async fn a_verified_task_forks_instead_and_a_running_one_is_refused() {
     assert_eq!(state_of(&e, &ids[0]).await, "verified");
     let cid = id(of_kind(&checkpoints(&e, &ids[0]).await, "before_run")[0]);
     let p = preview(&e, &ids[0], &cid).await;
-    assert_eq!(p["refused"], "fork_instead", "{p}");
+    assert!(p["refused"].is_null(), "a verified task rolls back by a fork (§9.6): {p}");
+    assert_eq!(p["via"], "fork", "{p}");
     let (s, v, _) = restore(&e, &ids[0], &cid, "k-verified", &p["preview_sha256"]).await;
     assert_eq!((s, v["code"].as_str()), (StatusCode::CONFLICT, Some("fork_instead")), "{v}");
     assert_eq!(std::fs::read_to_string(folder(&e, &mid).await.join("a.txt")).unwrap(), "v1", "nothing written");
@@ -904,4 +905,303 @@ async fn a_folder_swapped_for_a_symlink_after_its_checkpoint_is_refused_at_resto
     assert_eq!(std::fs::read_to_string(victim.join("a.txt")).unwrap(), "ORIGINAL", "nothing written through the symlink");
     assert_eq!(std::fs::read_to_string(dir.with_file_name("moved").join("a.txt")).unwrap(), "v1");
     assert!(of_kind(&checkpoints(&e, &ids[0]).await, "before_restore").is_empty(), "no safety checkpoint either");
+}
+
+/// 0.9.0 V2 (contract §9.5): Verify with a `verdict_id` is refused as stale when a newer verdict
+/// exists or the files the verdict judged changed since; a refusal verifies nothing and records
+/// no overturn. With the files back as judged it verifies, and overturns the fail.
+#[tokio::test]
+async fn verify_refuses_a_stale_verdict_and_writes_nothing() {
+    let e = setup().await;
+    let (mid, ids) = mission(&e, &e.bot.id, json!([{"title": "A", "owner": e.bot.id}])).await;
+    let dir = folder(&e, &mid).await;
+    std::fs::write(dir.join("a.txt"), "v0").unwrap();
+    run(&e, &mid, &ids[0], &[("a.txt", Some("v1"))]).await;
+    assert_eq!(state_of(&e, &ids[0]).await, "review");
+    let after = id(of_kind(&checkpoints(&e, &ids[0]).await, "after_run")[0]);
+    let verdict = |v: &str| kwnt::db::verifier::NewVerdict {
+        task_id: ids[0].clone(),
+        round: 1,
+        verdict: v.into(),
+        confidence: "high".into(),
+        risk_tier: "low".into(),
+        risk_reasons: json!([]),
+        steps: json!([]),
+        findings: json!([]),
+        couldnt_verify: json!([]),
+        difference: "no_model_turn".into(),
+        next: "counted".into(),
+        criteria_status: json!([]),
+        scope_status: json!([]),
+        after_run_checkpoint_id: Some(after.clone()),
+        ..Default::default()
+    };
+    let old = e.state.db.add_verdict(&verdict("pass")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let latest = e.state.db.add_verdict(&verdict("fail")).await.unwrap();
+    let uri = format!("/api/tasks/{}/verify", ids[0]);
+
+    let (s, v) = call(&e.app, "POST", &uri, None, Some(json!({"verdict_id": "no-such-verdict"}))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")), "{v}");
+    let (s, v) = call(&e.app, "POST", &uri, None, Some(json!({"verdict_id": old.id}))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::CONFLICT, Some("stale")), "{v}");
+    assert_eq!(v["paths"], json!([]), "{v}");
+    assert_eq!(v["message"], "a newer verdict exists", "{v}");
+
+    std::fs::write(dir.join("a.txt"), "edited after the verdict").unwrap();
+    let (s, v) = call(&e.app, "POST", &uri, None, Some(json!({"verdict_id": latest.id}))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::CONFLICT, Some("stale")), "{v}");
+    assert_eq!(v["paths"], json!(["a.txt"]), "{v}");
+    // Nothing was written: still in review, no person check, no overturn
+    assert_eq!(state_of(&e, &ids[0]).await, "review");
+    assert!(e.state.db.list_checks(&ids[0]).await.unwrap().iter().all(|c| c.kind != "person"));
+    assert!(e.state.db.latest_verdict(&ids[0]).await.unwrap().unwrap().overturned_at.is_none());
+
+    // Back as judged: verified, and the fail is overturned
+    std::fs::write(dir.join("a.txt"), "v1").unwrap();
+    let (s, v) = call(&e.app, "POST", &uri, None, Some(json!({"verdict_id": latest.id, "note": "looked"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(state_of(&e, &ids[0]).await, "verified");
+    assert_eq!(e.state.db.latest_verdict(&ids[0]).await.unwrap().unwrap().overturned_to.as_deref(), Some("verified"));
+}
+
+/// 0.9.0 D2 (contract §9.6): a verified task rolls back by a fork from its checkpoint. The preview
+/// says so and what the owner's tier would drop to, writing nothing; a plan that changed since the
+/// preview is 409 `stale_preview` and writes nothing; the fork is held with the default reason, the
+/// owner drops one tier and the pass verdict is overturned as `rolled_back`.
+#[tokio::test]
+async fn a_verified_task_rolls_back_by_a_held_fork_and_steps_its_owner_down() {
+    let e = setup().await;
+    let plan = json!([{"title": "A", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "a.txt"}}]}]);
+    let (mid, ids) = mission(&e, &e.bot.id, plan).await;
+    let dir = folder(&e, &mid).await;
+    run(&e, &mid, &ids[0], &[("a.txt", Some("v1"))]).await;
+    assert_eq!(state_of(&e, &ids[0]).await, "verified");
+    let pass = kwnt::db::verifier::NewVerdict {
+        task_id: ids[0].clone(),
+        round: 1,
+        verdict: "pass".into(),
+        confidence: "high".into(),
+        risk_tier: "low".into(),
+        risk_reasons: json!([]),
+        steps: json!([]),
+        findings: json!([]),
+        couldnt_verify: json!([]),
+        difference: "no_model_turn".into(),
+        next: "counted".into(),
+        criteria_status: json!([]),
+        scope_status: json!([]),
+        ..Default::default()
+    };
+    let pass = e.state.db.add_verdict(&pass).await.unwrap();
+    let policies = |e: &Env| {
+        let (db, bot) = (e.state.db.clone(), e.bot.id.clone());
+        async move { db.policies_of(&bot).await.unwrap().len() }
+    };
+    let had = policies(&e).await;
+    let cid = id(of_kind(&checkpoints(&e, &ids[0]).await, "before_run")[0]);
+    let p = preview(&e, &ids[0], &cid).await;
+    assert!(p["refused"].is_null(), "{p}");
+    assert_eq!(p["via"], "fork", "{p}");
+    let from = p["step_down"]["from"].as_str().unwrap().to_string();
+    let to = match from.as_str() {
+        "act" => "sandbox",
+        "sandbox" => "observe",
+        other => panic!("the default bot starts above observe, got {other}"),
+    };
+    assert_eq!(p["step_down"]["kwant_id"], e.bot.id.as_str(), "{p}");
+    assert_eq!(p["step_down"]["to"], to, "{p}");
+    assert!(p["step_down"]["class"].is_string(), "{p}");
+    assert_eq!(policies(&e).await, had, "a preview writes nothing");
+
+    // Edited after the preview: refused, nothing written
+    std::fs::write(dir.join("a.txt"), "v2, edited after the preview").unwrap();
+    let uri = format!("/api/tasks/{}/fork", ids[0]);
+    let body = |sha: &Value| json!({"from_checkpoint": cid, "preview_sha256": sha});
+    let (s, v, _) = send(&e.app, "POST", &uri, None, Some("k-stale-fork"), Some(body(&p["preview_sha256"]))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::CONFLICT, Some("stale_preview")), "{v}");
+    assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v2, edited after the preview");
+    assert!(events(&e, &ids[0], "forked").await.is_empty(), "no fork");
+    assert!(of_kind(&checkpoints(&e, &ids[0]).await, "before_restore").is_empty(), "no safety checkpoint");
+    assert_eq!(policies(&e).await, had, "no step-down");
+    assert!(e.state.db.latest_verdict(&ids[0]).await.unwrap().unwrap().overturned_at.is_none());
+
+    // Fresh: the files go back, the fork is held, the owner drops one tier
+    std::fs::write(dir.join("a.txt"), "v1").unwrap();
+    let fresh = preview(&e, &ids[0], &cid).await;
+    let (s, r, _) = send(&e.app, "POST", &uri, None, Some("k-roll"), Some(body(&fresh["preview_sha256"]))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(!dir.join("a.txt").exists(), "a.txt goes back to before the run");
+    assert_eq!(r["stepped_down"], fresh["step_down"], "{r}");
+    assert!(r["held_at"].is_string(), "the fork is held: {r}");
+    let fork_id = r["id"].as_str().unwrap().to_string();
+    assert_eq!(events(&e, &fork_id, "held").await.len(), 1);
+    assert_eq!(events(&e, &ids[0], "forked").await[0]["reason"], "Rolled back after approval");
+    assert_eq!(state_of(&e, &ids[0]).await, "verified", "the original keeps its record");
+    let live = e.state.db.live_policy(&e.bot.id, p["step_down"]["class"].as_str().unwrap()).await.unwrap().unwrap();
+    assert_eq!(live.tier, to);
+    let v = e.state.db.latest_verdict(&ids[0]).await.unwrap().unwrap();
+    assert_eq!((v.id.as_str(), v.overturned_to.as_deref()), (pass.id.as_str(), Some("rolled_back")));
+
+    // The runner leaves the fork alone until the person presses Run
+    kwnt::server::missions::runner::tick(&e.state).await;
+    assert!(e.state.db.open_claim(&fork_id).await.unwrap().is_none(), "a held fork isn't claimed");
+    let r = person(&e, "POST", &format!("/api/tasks/{fork_id}/run"), None).await;
+    assert!(r["task"]["held_at"].is_null(), "{r}");
+
+    // A fork without a checkpoint still needs a reason
+    let (s, _, _) = send(&e.app, "POST", &uri, None, Some("k-no-reason"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+/// R8b (Rigel, #502 QA): two forks from a checkpoint of one verified task, sent at the same time
+/// without an Idempotency-Key, drop the owner one tier, not two. Whatever happens to the second
+/// fork (made, or 409 `stale_preview` because the first restored the files), there is one
+/// `tier_stepped_down` event and one `stepped_down` capability event. A later fork of the same
+/// verification drops nothing and its preview says so; the marker holds under a direct race too.
+#[tokio::test]
+async fn concurrent_forks_of_one_verification_step_the_owner_down_once() {
+    let e = setup().await;
+    let plan = json!([{"title": "A", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "a.txt"}}]}]);
+    let (mid, ids) = mission(&e, &e.bot.id, plan).await;
+    run(&e, &mid, &ids[0], &[("a.txt", Some("v1"))]).await;
+    assert_eq!(state_of(&e, &ids[0]).await, "verified");
+    let cid = id(of_kind(&checkpoints(&e, &ids[0]).await, "before_run")[0]);
+    let p = preview(&e, &ids[0], &cid).await;
+    let (from, class) = (p["step_down"]["from"].as_str().unwrap().to_string(), p["step_down"]["class"].as_str().unwrap().to_string());
+    let to = p["step_down"]["to"].as_str().unwrap().to_string();
+    let stepped = |e: &Env| {
+        let (db, bot) = (e.state.db.clone(), e.bot.id.clone());
+        async move { db.capability_events(&bot, 100).await.unwrap().into_iter().filter(|c| c.kind == "stepped_down").count() }
+    };
+
+    let uri = format!("/api/tasks/{}/fork", ids[0]);
+    let body = json!({"from_checkpoint": cid, "preview_sha256": p["preview_sha256"]});
+    let (a, b) = tokio::join!(send(&e.app, "POST", &uri, None, None, Some(body.clone())), send(&e.app, "POST", &uri, None, None, Some(body.clone())));
+    let ok: Vec<&Value> = [&a, &b].iter().filter(|r| r.0 == StatusCode::OK).map(|r| &r.1).collect();
+    assert!(!ok.is_empty(), "at least one fork is made: {a:?} {b:?}");
+    for r in [&a, &b] {
+        assert!(r.0 == StatusCode::OK || r.1["code"] == "stale_preview", "{r:?}");
+    }
+    assert_eq!(ok.iter().filter(|r| !r["stepped_down"].is_null()).count(), 1, "one response reports the drop: {ok:?}");
+    assert_eq!(events(&e, &ids[0], "tier_stepped_down").await.len(), 1);
+    assert_eq!(stepped(&e).await, 1);
+    let live = e.state.db.live_policy(&e.bot.id, &class).await.unwrap().unwrap();
+    assert_eq!(live.tier, to, "one tier down from {from}, not two");
+
+    // A later fork of the same verification: the preview shows no drop, and nothing drops
+    let again = preview(&e, &ids[0], &cid).await;
+    assert!(again["step_down"].is_null(), "{again}");
+    let (s, r, _) = send(&e.app, "POST", &uri, None, None, Some(json!({"from_checkpoint": cid, "preview_sha256": again["preview_sha256"]}))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["stepped_down"].is_null(), "{r}");
+    assert_eq!(stepped(&e).await, 1);
+    assert_eq!(e.state.db.live_policy(&e.bot.id, &class).await.unwrap().unwrap().tier, to);
+
+    // The marker itself, raced directly on another approval: one writer
+    let d = json!({"reason": "rollback_after_approval"});
+    let one = || e.state.db.step_down_once(&ids[0], "verified@other", &cid, Some((e.bot.id.as_str(), class.as_str(), "observe", &d)));
+    let (x, y) = tokio::join!(one(), one());
+    let (x, y) = (x.unwrap(), y.unwrap());
+    assert_eq!([x.is_some(), y.is_some()].iter().filter(|w| **w).count(), 1, "{x:?} {y:?}");
+    assert_eq!(stepped(&e).await, 2);
+    assert!(e.state.db.stepped_down_for(&ids[0], "verified@other").await.unwrap());
+}
+
+/// #503 follow-up (Ada, Nov 11): the restore preview sends `verified_at`, the time of the approval
+/// a rollback would undo, the same approval the R8b step-down is keyed on: the task's `finished_at`
+/// when verified, else the passed `person` check's `finished_at`; null when it isn't approved. It
+/// stays set after that approval's one step-down was used.
+#[tokio::test]
+async fn the_restore_preview_says_when_the_approval_it_would_undo_was_given() {
+    let at = |v: &Value| v.as_str().map(|s| chrono::DateTime::parse_from_rfc3339(s).unwrap_or_else(|e| panic!("{s}: {e}")).with_timezone(&chrono::Utc));
+    let e = setup().await;
+
+    // Verified: the time it was verified
+    let plan = json!([{"title": "A", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "a.txt"}}]}]);
+    let (mid, ids) = mission(&e, &e.bot.id, plan).await;
+    run(&e, &mid, &ids[0], &[("a.txt", Some("v1"))]).await;
+    let t = task(&e, &ids[0]).await;
+    assert_eq!(t["task"]["state"], "verified", "{t}");
+    let verified = at(&t["task"]["finished_at"]).expect("a verified task has finished_at");
+    let cid = id(of_kind(&checkpoints(&e, &ids[0]).await, "before_run")[0]);
+    let p = preview(&e, &ids[0], &cid).await;
+    assert_eq!(at(&p["verified_at"]), Some(verified), "{p}");
+    assert!(!p["step_down"].is_null(), "{p}");
+
+    // After the approval's one step-down: no drop left, but it was still approved then
+    let uri = format!("/api/tasks/{}/fork", ids[0]);
+    let (s, r, _) = send(&e.app, "POST", &uri, None, Some("k-verified-at"), Some(json!({"from_checkpoint": cid, "preview_sha256": p["preview_sha256"]}))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(!r["stepped_down"].is_null(), "{r}");
+    let again = preview(&e, &ids[0], &cid).await;
+    assert!(again["step_down"].is_null(), "{again}");
+    assert_eq!(at(&again["verified_at"]), Some(verified), "{again}");
+
+    // Not approved: null
+    let (_mid, tid, _dir) = cli_mission(&e).await;
+    assert_ne!(state_of(&e, &tid).await, "verified");
+    let cid = id(of_kind(&checkpoints(&e, &tid).await, "before_run")[0]);
+    let p = preview(&e, &tid, &cid).await;
+    assert!(p.as_object().unwrap().contains_key("verified_at"), "sent, as null: {p}");
+    assert!(p["verified_at"].is_null(), "{p}");
+    assert!(p["step_down"].is_null(), "{p}");
+
+    // Approved by a passed person check: that check's time
+    let check = kwnt::db::missions::NewCheck {
+        task_id: tid.clone(),
+        kind: "person".into(),
+        spec: json!({}),
+        required: true,
+        approved: true,
+        requested_by: "person".into(),
+        approved_by: None,
+    };
+    let c = e.state.db.add_check(&check).await.unwrap();
+    e.state.db.finish_check(&c.id, "passed", None, "person", None).await.unwrap();
+    let checked = e.state.db.list_checks(&tid).await.unwrap().into_iter().find(|x| x.id == c.id).unwrap().finished_at.expect("a finished check has finished_at");
+    let p = preview(&e, &tid, &cid).await;
+    assert_eq!(at(&p["verified_at"]), Some(checked), "{p}");
+}
+
+// V2: the verifier is on unless the person saved "off", and a handed-in task waits in review on
+// its hold until a pass verdict or the person's Verify. Every other test here turns it off in
+// setup, because they are about checkpoints, not the verifier.
+#[tokio::test]
+async fn the_verifier_is_on_unless_saved_off_and_holds_a_handed_in_task() {
+    let e = setup().await;
+    assert_eq!(person(&e, "GET", "/api/settings", None).await["verifier"], "off");
+    e.state.db.set_setting("verifier", "").await.unwrap();
+    assert_eq!(person(&e, "GET", "/api/settings", None).await["verifier"], "on", "anything but off is on");
+    let plan = json!([{"title": "A", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "a.txt"}}]}]);
+    let (mid, ids) = mission(&e, &e.bot.id, plan).await;
+    let tid = ids[0].clone();
+    run(&e, &mid, &tid, &[("a.txt", Some("v1"))]).await;
+
+    // The hold is added during the hand-in itself, so it is there by the time the call returns
+    let holds: Vec<_> = e.state.db.list_checks(&tid).await.unwrap().into_iter().filter(|c| c.kind == "peer_review" && c.requested_by == "verifier").collect();
+    assert_eq!(holds.len(), 1, "{holds:?}");
+    assert!(holds[0].required && holds[0].approved, "{holds:?}");
+
+    // While the hold is pending the task stays in review; the person's Verify finishes it
+    for _ in 0..300 {
+        let state = state_of(&e, &tid).await;
+        let pending = !e.state.db.pending_verifier_holds(&tid).await.unwrap().is_empty();
+        if state == "verified" {
+            assert!(!pending, "verified with the hold still pending");
+            break;
+        }
+        assert_eq!(state, "review");
+        if pending {
+            // The verifier can pass it between these two reads: then the Verify is a 409
+            let (s, v) = call(&e.app, "POST", &format!("/api/tasks/{tid}/verify"), None, Some(json!({}))).await;
+            assert!(s.is_success() || s == StatusCode::CONFLICT, "{s} {v}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(state_of(&e, &tid).await, "verified");
+    let hold = e.state.db.list_checks(&tid).await.unwrap().into_iter().find(|c| c.id == holds[0].id).unwrap();
+    assert_eq!(hold.status, "passed", "{hold:?}");
+    let by_verdict = e.state.db.verdicts_of(&tid).await.unwrap().iter().any(|v| v.verdict == "pass");
+    assert!(by_verdict || hold.checked_by.as_deref() == Some("person"), "a pass verdict or the person finished the hold: {hold:?}");
 }

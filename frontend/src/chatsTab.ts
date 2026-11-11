@@ -1,6 +1,7 @@
 // The phone's Chats tab lists everything you talk to: who needs you first, then who is working,
 // then channels, team chats and every other bot's direct chat (spec 0.6.13 B1).
 import type { AwayItem } from './away';
+import type { InboxItem } from './api/inbox';
 import { type H4Status, h4StuckAt, h4StuckLine, h4StartedAt } from './h4Status';
 
 /** One bot waiting on you: the newest approval or question it asked, or an open browser step. */
@@ -71,18 +72,23 @@ export const directIds = <K extends { id: string; name: string }>(kwants: K[], s
 // ---- H5: the one attention order, used by the sidebar block, the phone sections and the Inbox ----
 
 /**
- * 1 Needs you · 2 Stuck or failed · 3 Finished, not read · 4 Working · 5 Waiting in line · 6 everyone else.
- * A bot sits in the highest group it qualifies for.
+ * 1 Needs you · 2 Stuck or failed · 3 To review (0.9 V1) · 4 Finished, not read · 5 Working · 6 Waiting in
+ * line · 7 everyone else. A bot sits in the highest group it qualifies for.
  */
-export type AttentionRank = 1 | 2 | 3 | 4 | 5 | 6;
+export type AttentionRank = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+/** The ranks pinned in "Needs attention" on desktop, and given a dot on team rollups. */
+export const PINNED_RANK = 4;
 
 export interface AttentionRow<K> {
   kwant: K;
   rank: AttentionRank;
-  /** The status line for ranks 1–3 ("Asked you a question", "Stuck: …", "Finished: …"). */
+  /** The status line for ranks 1–4 ("Asked you a question", "Stuck: …", "To review: …", "Finished: …"). */
   line?: string;
-  /** Ranks 1–3: the ask or Inbox item it comes from (none for a browser step). */
+  /** Ranks 1–4: the ask or Inbox item it comes from (none for a browser step). */
   item?: AwayItem;
+  /** Set when the row comes from a review item: clicking it opens that item in the Inbox. */
+  review?: InboxItem;
   needs?: NeedsYouRow;
   /** When it asked, failed or finished, for the order inside the group. */
   at?: number;
@@ -94,10 +100,12 @@ export interface AttentionInput<K> {
   needs: NeedsYouRow[];
   /** Inbox `failed` items from the last 24 h: rank 2 with H4's `stuck`. */
   failed?: AwayItem[];
-  /** H4 status per bot (#499): `stuck` is rank 2 without an Inbox item; a turn's start orders rank 4. */
+  /** H4 status per bot (#499): `stuck` is rank 2 without an Inbox item; a turn's start orders rank 5. */
   h4?: Record<string, H4Status>;
   /** Inbox `finished` items not seen yet. */
   finished?: AwayItem[];
+  /** 0.9 V1: the Inbox's review items (any group), including the Low-risk card's. */
+  reviews?: InboxItem[];
   /** Live turns per bot (`busyLines`), and each bot's dot status (queued vs working). */
   busy?: Record<string, string>;
   status?: Record<string, string>;
@@ -117,37 +125,49 @@ export const stuckLine = (i: AwayItem): string => {
 
 export const finishedLine = (i: AwayItem): string => (i.title ? `Finished: ${i.title}` : 'Finished');
 
+/** A review item's rank and line, from the Inbox group it sits in. */
+export function reviewRank(i: InboxItem): { rank: 1 | 2 | 3; line: string } {
+  if (i.group === 'waiting_on_you') {
+    const yourCall = i.verdict?.result === 'fail' && !!i.round && i.round.n >= i.round.max;
+    return { rank: 1, line: `${yourCall ? 'Your call' : 'Needs you'}: ${i.title}` };
+  }
+  if (i.group === 'failed_or_stuck') return { rank: 2, line: `Couldn’t approve: ${i.title}` };
+  return { rank: 3, line: `To review: ${i.title}` };
+}
+
 /** One rank for one bot (the rules; `attentionRows` applies them to everyone). */
-export function attentionRank(bot: { needs?: boolean; failed?: boolean; finished?: boolean; working?: boolean; queued?: boolean }): AttentionRank {
+export function attentionRank(bot: { needs?: boolean; failed?: boolean; review?: boolean; finished?: boolean; working?: boolean; queued?: boolean }): AttentionRank {
   if (bot.needs) return 1;
   if (bot.failed) return 2;
-  if (bot.finished) return 3;
-  if (bot.working) return 4;
-  if (bot.queued) return 5;
-  return 6;
+  if (bot.review) return 3;
+  if (bot.finished) return 4;
+  if (bot.working) return 5;
+  if (bot.queued) return 6;
+  return 7;
 }
 
 /**
- * The order inside and across groups: rank first; then oldest first for 1 and 2 and running longest
- * first for 4 (a row without a time after those with one), newest first for 3; 5 by name; ties by
- * name A→Z. Rank 6 keeps its input order.
+ * The order inside and across groups: rank first; then oldest first for 1–3 and running longest first
+ * for 5 (a row without a time after those with one), newest first for 4; 6 by name; ties by name A→Z.
+ * Rank 7 keeps its input order. `attentionRows` then puts rank 1's plain asks in needsYouRows' order,
+ * ahead of the reviews that need you.
  */
 export function attentionSort<K extends { name: string }>(rows: AttentionRow<K>[]): AttentionRow<K>[] {
   const pos = new Map(rows.map((r, i) => [r, i]));
   const last = Number.POSITIVE_INFINITY;
   return [...rows].sort((a, b) => {
     if (a.rank !== b.rank) return a.rank - b.rank;
-    if (a.rank === 6) return pos.get(a)! - pos.get(b)!;
-    if ((a.rank <= 2 || a.rank === 4) && a.at !== b.at) return (a.at ?? last) - (b.at ?? last);
-    if (a.rank === 3 && a.at !== b.at) return (b.at ?? 0) - (a.at ?? 0);
+    if (a.rank === 7) return pos.get(a)! - pos.get(b)!;
+    if ((a.rank <= 3 || a.rank === 5) && a.at !== b.at) return (a.at ?? last) - (b.at ?? last);
+    if (a.rank === 4 && a.at !== b.at) return (b.at ?? 0) - (a.at ?? 0);
     return a.kwant.name.localeCompare(b.kwant.name);
   });
 }
 
 /** Every bot with its rank and line, in the one order. */
 export function attentionRows<K extends { id: string; name: string }>(input: AttentionInput<K>): AttentionRow<K>[] {
-  const { kwants, needs, failed = [], finished = [], busy = {}, status = {}, h4 = {}, openedAt = {}, now = Date.now() } = input;
-  const needsBy = new Map(needs.map((r) => [r.kwant_id, r]));
+  const { kwants, needs, failed = [], finished = [], reviews = [], busy = {}, status = {}, h4 = {}, openedAt = {}, now = Date.now() } = input;
+  const needsBy = new Map(needs.map((r, i) => [r.kwant_id, { r, i }]));
   // Oldest failure per bot from the last 24 h; newest finished item per bot not read since.
   const failedBy = new Map<string, AwayItem>();
   for (const i of failed) {
@@ -163,32 +183,59 @@ export function attentionRows<K extends { id: string; name: string }>(input: Att
     const had = finishedBy.get(i.kwant_id);
     if (!had || t > ts(had)) finishedBy.set(i.kwant_id, i);
   }
+  // Review items: each bot's highest-ranked one, oldest first inside a rank.
+  const reviewBy = new Map<string, { i: InboxItem; rank: 1 | 2 | 3; line: string }>();
+  for (const i of reviews) {
+    if (i.kind !== 'review') continue;
+    const r = reviewRank(i);
+    const had = reviewBy.get(i.kwant_id);
+    if (!had || r.rank < had.rank || (r.rank === had.rank && ts(i as AwayItem) < ts(had.i as AwayItem))) reviewBy.set(i.kwant_id, { i, ...r });
+  }
   const rows = kwants.map((k): AttentionRow<K> => {
     const n = needsBy.get(k.id);
     const f = failedBy.get(k.id);
     const d = finishedBy.get(k.id);
+    const v = reviewBy.get(k.id);
     const s = h4[k.id];
     const stuck = s?.status === 'stuck' ? s : undefined;
     const queued = status[k.id] === 'queued';
-    const rank = attentionRank({ needs: !!n, failed: !!f || !!stuck, finished: !!d, working: !!busy[k.id] && !queued, queued: !!busy[k.id] && queued });
-    if (rank === 1) return { kwant: k, rank, line: n!.line, item: n!.item, needs: n, at: n!.at };
+    const rank = attentionRank({
+      needs: !!n || v?.rank === 1,
+      failed: !!f || !!stuck || v?.rank === 2,
+      review: v?.rank === 3,
+      finished: !!d,
+      working: !!busy[k.id] && !queued,
+      queued: !!busy[k.id] && queued,
+    });
+    const fromReview = (x: { i: InboxItem; line: string }): AttentionRow<K> => ({ kwant: k, rank, line: x.line, item: x.i as AwayItem, review: x.i, at: ts(x.i as AwayItem) });
+    if (rank === 1) return n ? { kwant: k, rank, line: n.r.line, item: n.r.item, needs: n.r, at: n.r.at } : fromReview(v!);
     if (rank === 2) {
-      // A live stuck status says more than an Inbox failure; the group order uses the older of the two.
-      const at = Math.min(stuck ? h4StuckAt(stuck) : Infinity, f ? ts(f) : Infinity);
-      return { kwant: k, rank, line: stuck ? h4StuckLine(stuck) : stuckLine(f!), item: f, at };
+      // The Inbox failure or the review that couldn't be approved, whichever is older, gives the item; a
+      // live H4 stuck status says more than either, so its line wins. The group order uses the oldest.
+      const rv = v?.rank === 2 ? v : undefined;
+      const base: AttentionRow<K> = f && !(rv && ts(rv.i as AwayItem) < ts(f)) ? { kwant: k, rank, line: stuckLine(f), item: f } : rv ? fromReview(rv) : { kwant: k, rank };
+      const at = Math.min(stuck ? h4StuckAt(stuck) : Infinity, f ? ts(f) : Infinity, rv ? ts(rv.i as AwayItem) : Infinity);
+      return { ...base, line: stuck ? h4StuckLine(stuck) : base.line, at };
     }
-    if (rank === 3) return { kwant: k, rank, line: finishedLine(d!), item: d, at: ts(d) };
-    if (rank === 4) return { kwant: k, rank, at: h4StartedAt(s) };
+    if (rank === 3) return fromReview(v!);
+    if (rank === 4) return { kwant: k, rank, line: finishedLine(d!), item: d, at: ts(d) };
+    if (rank === 5) return { kwant: k, rank, at: h4StartedAt(s) };
     return { kwant: k, rank };
   });
-  return attentionSort(rows);
+  // Needs-you rows keep needsYouRows' own order (oldest ask first; a browser step has no time); a review
+  // that needs you comes after them, oldest first.
+  const sorted = attentionSort(rows);
+  const ones = sorted.filter((r) => r.rank === 1);
+  const asks = ones.filter((r) => !r.review).sort((a, b) => needsBy.get(a.kwant.id)!.i - needsBy.get(b.kwant.id)!.i);
+  return [...asks, ...ones.filter((r) => r.review), ...sorted.filter((r) => r.rank !== 1)];
 }
 
-/** "2 need you, 1 stuck, 1 finished" (zeros left out). */
-export function rollupLabel(counts: { needs: number; stuck: number; finished: number; working?: number }): string {
+/** "2 need you, 1 stuck, 1 to review, 1 finished" (zeros left out). */
+export function rollupLabel(counts: { needs: number; stuck: number; review?: number; finished: number; working?: number }): string {
   const parts: string[] = [];
   if (counts.needs) parts.push(`${counts.needs} ${counts.needs === 1 ? 'needs' : 'need'} you`);
   if (counts.stuck) parts.push(`${counts.stuck} stuck`);
+  if (counts.review) parts.push(`${counts.review} to review`);
   if (counts.finished) parts.push(`${counts.finished} finished`);
   if (!parts.length && counts.working) parts.push(`${counts.working} working`);
   return parts.join(', ');

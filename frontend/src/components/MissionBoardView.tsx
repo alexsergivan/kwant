@@ -46,6 +46,8 @@ import { isFactNeedsYou } from '../truthLedger';
 import { RisksSection } from './RisksSection';
 import { AuditWaiting, Risk, RiskResolution, TaskRisks, auditCardPlace, auditLive, auditWaiting, openRiskCounts, riskBadgeText, riskResolvedText } from '../auditor';
 import { awayApi } from '../away';
+import { verdictShort } from '../api/inbox';
+import { inboxNav, openReview, reviewForTask, useInbox } from '../inboxStore';
 import { playSfx } from '../audio/chiptune';
 import {
   ACTION_DONE,
@@ -120,6 +122,8 @@ import {
   actionsFor,
   ago,
   buildReceipt,
+  scopeWarnings,
+  type ScopeWarning,
   cardStatus,
   checkKindLabel,
   checksText,
@@ -168,6 +172,9 @@ import {
 } from '../missions';
 import { DEFAULT_CLASS, ENGINE_CANT_SANDBOX, TIER_HINTS, classLabel, engineCantSandboxText, showsTier, tierLabel, toClass, validClass } from '../flightSchool';
 import { ScrollRow } from './ScrollRow';
+import { MissionWatchControls, WatchBoardContext, type WatchBoard } from './MissionWatch';
+import { watchApi, type WatchApi } from '../missionWatch';
+import { usePhoneLayout } from '../usePhoneLayout';
 
 const TONES: Record<Tone, string> = {
   emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
@@ -185,6 +192,7 @@ const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-1
 const subtleBtn = `${actionBtn} -ml-3 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 underline underline-offset-2 decoration-zinc-600`;
 const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
 const goodBtn = `${actionBtn} bg-emerald-600 text-white hover:bg-emerald-500`;
+const reviewBtn = `${actionBtn} bg-violet-500/80 text-white hover:bg-violet-500`;
 const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg-rose-500/10`;
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40';
 // Card-sized buttons: compact on desktop, a full 40px tap target on the phone.
@@ -590,6 +598,8 @@ export const MissionSummary: React.FC<{
     .filter(([k]) => k !== 'cancelled')
     .reduce((n, [, v]) => n + v, 0);
   return (
+    <MissionWatchControls mission={m}>
+      {({ chip, report }) => (
     <section className={`${card} p-3 sm:p-4 space-y-2`} data-mission={m.id} aria-label={`Mission: ${m.title}`}>
       <div className="flex flex-wrap items-start gap-2">
         <Target size={16} className="mt-0.5 shrink-0 text-sky-400" aria-hidden="true" />
@@ -604,6 +614,7 @@ export const MissionSummary: React.FC<{
         </div>
         <Badge tone={st.tone}>{st.label}</Badge>
         {m.over_budget && <Badge tone="rose">Over its limit</Badge>}
+        {chip && <div className="basis-full sm:basis-auto min-w-0" data-watch-chip-slot>{chip}</div>}
       </div>
       <div className="space-y-1">
         <div className="flex flex-wrap justify-between gap-x-3 text-[11px] text-zinc-400">
@@ -623,6 +634,7 @@ export const MissionSummary: React.FC<{
         )}
       </div>
       {m.over_budget && <p className="text-[11px] text-rose-300">No new task starts until you raise or remove the mission’s token limit.</p>}
+      {report}
       {m.status === 'draft' && (
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <p className="text-xs text-amber-200 flex-1 min-w-[12rem]">{m.lead_name ?? 'A bot'} planned this. Nothing runs until you approve it.</p>
@@ -635,6 +647,8 @@ export const MissionSummary: React.FC<{
         </div>
       )}
     </section>
+      )}
+    </MissionWatchControls>
   );
 };
 
@@ -665,7 +679,11 @@ export const TaskCard: React.FC<{
   const flags = openFlags(t);
   const dimmed = t.state === 'backlog' && !flags.length && !t.held_at;
   const autofixLive = !!autofixCardText(t, now);
-  const quick = onQuick && columnOfTask(t) === 'review' ? quickActionsFor(t) : [];
+  // 0.9.0 V1: in Review the card's one button is Review (the item in the Inbox); Dismiss and Try again stay.
+  useInbox();
+  const reviewHere = !!inboxNav.go && t.state === 'review';
+  const verdict = reviewHere ? verdictShort(reviewForTask(t.id)?.verdict) : null;
+  const quick = onQuick && columnOfTask(t) === 'review' ? quickActionsFor(t).filter((a) => !reviewHere || (a !== 'verify' && a !== 'reject')) : [];
   const [sending, setSending] = useState(false);
   const [burst, setBurst] = useState(0);
   const [note, setNote] = useState('');
@@ -731,6 +749,11 @@ export const TaskCard: React.FC<{
             </span>
           )}
         </span>
+        {verdict && (
+          <span className="block text-[11px] text-zinc-300" data-card-verdict>
+            {verdict}
+          </span>
+        )}
         {status && (
           <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && approvalHolds(t.checks_summary)) ? 'text-amber-200' : autofixLive ? 'text-violet-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
@@ -774,8 +797,19 @@ export const TaskCard: React.FC<{
           Remove limit and continue
         </button>
       )}
-      {quick.length > 0 && !sending && (
+      {(quick.length > 0 || reviewHere) && !sending && (
         <div className="mt-1.5 flex flex-wrap gap-1.5" data-card-actions>
+          {reviewHere && (
+            <button
+              type="button"
+              onClick={() => openReview(t.id, 'board')}
+              className={`${cardBtn} border border-violet-400/40 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25`}
+              data-card-review
+            >
+              <ShieldCheck size={12} aria-hidden="true" />
+              Review
+            </button>
+          )}
           {quick.map((a) => (
             <button
               key={a}
@@ -1288,7 +1322,11 @@ export const EvidenceReceipt: React.FC<{
   names: Record<string, string>;
   busy?: boolean;
   onApproveCheck?: (c: Check) => void;
-}> = ({ receipt, names, busy = false, onApproveCheck }) => (
+  /** Paths a small task changed though its contract said they must not; it was still approved. */
+  scopeWarnings?: ScopeWarning[];
+  /** The bot that owns the task, for the scope warning. */
+  owner?: string | null;
+}> = ({ receipt, names, busy = false, onApproveCheck, scopeWarnings = [], owner }) => (
   <section aria-labelledby="receipt-h" className="space-y-3" data-receipt>
     <h4 id="receipt-h" tabIndex={-1} className="flex items-center focus:outline-none gap-1.5 text-xs font-semibold text-zinc-200">
       <ShieldCheck size={14} className="text-emerald-400" aria-hidden="true" /> Evidence receipt
@@ -1299,6 +1337,18 @@ export const EvidenceReceipt: React.FC<{
         {receipt.verifiedBy.by ? `, checked by ${receipt.verifiedBy.by}` : ''}
         {receipt.verifiedBy.check.finished_at ? ` ${ago(receipt.verifiedBy.check.finished_at)}` : ''}.
       </p>
+    )}
+    {scopeWarnings.length > 0 && (
+      <ul className="space-y-1.5" aria-label="Changed paths it must not change" data-scope-warnings>
+        {scopeWarnings.map((w) => (
+          <li key={w.id} className="flex items-start gap-1.5 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-200 break-words" data-scope-warning>
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0">
+              {owner || 'The bot'} changed <code className="break-all">{w.path}</code>, which this task said must not change. It was still approved because the task is small.
+            </span>
+          </li>
+        ))}
+      </ul>
     )}
     {receipt.waitingOnYou && (
       <p className="px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-200" data-waiting-on-you>
@@ -2031,6 +2081,8 @@ export const TaskDetailBody: React.FC<{
   canResolveRisks?: boolean;
   onResolveRisk?: (r: Risk, resolution: RiskResolution) => void;
   onOpenAuditCard?: (w: AuditWaiting) => void;
+  /** Low-tier scope findings from the newest verdict (scopeWarnings). */
+  scopeWarnings?: ScopeWarning[];
 }> = ({
   detail,
   names,
@@ -2062,6 +2114,7 @@ export const TaskDetailBody: React.FC<{
   canResolveRisks = true,
   onResolveRisk,
   onOpenAuditCard,
+  scopeWarnings = [],
 }) => {
   const t = detail.task;
   const shownNotice = noticeFor(notice, t.state);
@@ -2085,7 +2138,11 @@ export const TaskDetailBody: React.FC<{
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
   const st = taskStateLabel(t);
   // Unblocking without a new limit would stop it again at once.
-  const actions = actionsFor(t).filter((a) => !(limitHit && a === 'unblock'));
+  // 0.9.0 V1: a task in Review is decided in the Inbox; the drawer keeps Cancel and shows the verdict.
+  useInbox();
+  const reviewHere = !!inboxNav.go && t.state === 'review';
+  const reviewItem = reviewHere ? reviewForTask(t.id) : null;
+  const actions = actionsFor(t).filter((a) => !(limitHit && a === 'unblock') && !(reviewHere && (a === 'verify' || a === 'reject' || a === 'run_checks')));
   const chat = sourceChat(t);
   const [showAll, setShowAll] = useState(false);
   const shownEvents = detail.events.filter((e) => !isQuietEvent(e));
@@ -2177,7 +2234,17 @@ export const TaskDetailBody: React.FC<{
             </div>
           </form>
         )}
-        {t.state === 'review' && <p className="text-[11px] text-zinc-500">“Mark verified” records that you checked it yourself.</p>}
+        {reviewHere && (
+          <div className="flex flex-wrap items-center gap-2" data-drawer-review>
+            <p className="text-xs text-zinc-300 min-w-0" data-drawer-verdict>
+              {reviewItem ? (verdictShort(reviewItem.verdict) ?? 'Not checked yet') : 'Waiting for the reviewer'}
+              {reviewItem?.verdict.line && <span className="text-zinc-400"> · {reviewItem.verdict.line}</span>}
+            </p>
+            <button type="button" onClick={() => openReview(t.id, 'board')} className={reviewBtn} data-drawer-review-open>
+              <ShieldCheck size={13} aria-hidden="true" /> Review in Inbox
+            </button>
+          </div>
+        )}
         {t.state === 'verified' && onFork && !forking && (
           <button type="button" disabled={busy} onClick={() => setForking(true)} className={quietBtn} data-fork>
             <Copy size={13} aria-hidden="true" /> Redo as a copy
@@ -2437,7 +2504,7 @@ export const TaskDetailBody: React.FC<{
         </section>
       )}
 
-      <EvidenceReceipt receipt={receipt} names={names} busy={busy} onApproveCheck={onApproveCheck} />
+      <EvidenceReceipt receipt={receipt} names={names} busy={busy} onApproveCheck={onApproveCheck} scopeWarnings={scopeWarnings} owner={owner} />
 
       <RestoreSection task={t} api={restoreApi} titleOf={(id) => tasksById[id]?.title} now={now} onRestored={onRestored} onError={onRestoreError} />
 
@@ -3027,13 +3094,18 @@ export const MissionBoardPage: React.FC<{
   onOpenedTaskId?: () => void;
   /** A mission to select once the board has loaded (Open on board from an idea's take). */
   openMissionId?: string | null;
+  /** 0.9.0 P1: with `openMissionId`, also open that mission's watch report ("See the claims"). */
+  openWatchReport?: boolean;
+  /** 0.9.0 P1: the watch API; tests and the shots pass a fake. */
+  watchApi?: WatchApi;
   onOpenedMissionId?: () => void;
-}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace, openTaskId = null, onOpenedTaskId, openMissionId = null, onOpenedMissionId }) => {
+}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace, openTaskId = null, onOpenedTaskId, openMissionId = null, onOpenedMissionId, openWatchReport = false, watchApi: watchClient = watchApi }) => {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [insights, setInsights] = useState<Insights | null>(null);
   const [refreshCount, setRefreshCount] = useState(0);
   const [missionId, setMissionId] = useState<string | null>(null);
+  const [watchReportFor, setWatchReportFor] = useState<string | null>(null);
   const [column, setColumn] = useState<Column>('ready');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -3055,6 +3127,7 @@ export const MissionBoardPage: React.FC<{
   const [scanning, setScanning] = useState(false);
   // Swarm Auditor: the open task's audits, the card it waits on, and the board's badge counts.
   const [risks, setRisks] = useState<TaskRisks | null>(null);
+  const [scopeWarns, setScopeWarns] = useState<ScopeWarning[]>([]);
   const [waitingCard, setWaitingCard] = useState<AuditWaiting | null>(null);
   const [riskCounts, setRiskCounts] = useState<Record<string, number>>({});
   const [canResolveRisks, setCanResolveRisks] = useState(true);
@@ -3135,6 +3208,10 @@ export const MissionBoardPage: React.FC<{
         missionsApi.workflowChanges('proposed', id).then((cs) => alive.current && openIdRef.current === id && setChanges(cs), () => {});
       } else setChanges([]);
       loadRisks(id);
+      missionsApi.verdicts(id).then(
+        (v) => alive.current && openIdRef.current === id && setScopeWarns(scopeWarnings(v)),
+        () => alive.current && openIdRef.current === id && setScopeWarns([]),
+      );
     } catch (e) {
       if (alive.current && openIdRef.current === id) setDetailError(failMsg(e));
     }
@@ -3221,6 +3298,7 @@ export const MissionBoardPage: React.FC<{
     setFailures([]);
     setChanges([]);
     setRisks(null);
+    setScopeWarns([]);
     setWaitingCard(null);
     setDetailError(null);
     setDetailNotice(null);
@@ -3253,6 +3331,7 @@ export const MissionBoardPage: React.FC<{
   useEffect(() => {
     if (!openMissionId || tasks === null) return;
     setMissionId(openMissionId);
+    setWatchReportFor(openWatchReport ? openMissionId : null);
     onOpenedMissionId?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openMissionId, tasks === null]);
@@ -3698,9 +3777,28 @@ export const MissionBoardPage: React.FC<{
 
   const tasksById = useMemo(() => Object.fromEntries((tasks ?? []).map((t) => [t.id, t])), [tasks]);
   const listed = openId ? tasksById[openId] : undefined;
+  const phone = usePhoneLayout();
+  const watchBoard = useMemo<WatchBoard>(
+    () => ({
+      api: watchClient,
+      phone,
+      onChanged: (id, w) => setMissions((list) => list.map((x) => (x.id === id ? ({ ...x, watch: w } as Mission) : x))),
+      onOpenChat: onOpenPlace
+        ? (m) => {
+            const kwantId = m.thread_id ? m.lead_kwant_id : m.channel_id ? null : m.direct_kwant_id ?? m.lead_kwant_id;
+            onOpenPlace({ channelId: m.thread_id ? null : m.channel_id, kwantId, threadId: m.thread_id });
+          }
+        : undefined,
+      onOpenTask: (id) => openTask(id),
+      openReportFor: watchReportFor,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [watchClient, phone, onOpenPlace, watchReportFor],
+  );
 
   return (
     <AvatarsContext.Provider value={avatars ?? NO_AVATARS}>
+      <WatchBoardContext.Provider value={watchBoard}>
       <MissionBoardView
         tasks={boardTasks}
         missions={missions}
@@ -3791,6 +3889,7 @@ export const MissionBoardPage: React.FC<{
               onRestored={restored}
               onRestoreError={restoreError}
               risks={risks}
+              scopeWarnings={scopeWarns}
               auditWaiting={waitingCard}
               canResolveRisks={canResolveRisks}
               onResolveRisk={resolveRisk}
@@ -3837,6 +3936,7 @@ export const MissionBoardPage: React.FC<{
           )}
         </TaskPanel>
       )}
+      </WatchBoardContext.Provider>
     </AvatarsContext.Provider>
   );
 };

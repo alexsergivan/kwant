@@ -35,7 +35,7 @@ struct Env {
 async fn setup() -> Env {
     let e = setup_fresh().await;
     // These tests drive the board by hand: AutoFix (on by default) would pick up failures itself
-    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"mission_board": true, "autofix": "off"}))).await;
+    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"mission_board": true, "autofix": "off", "verifier": "off"}))).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     e
 }
