@@ -2,6 +2,7 @@
 // then channels, team chats and every other bot's direct chat (spec 0.6.13 B1).
 import type { AwayItem } from './away';
 import type { InboxItem } from './api/inbox';
+import { type H4Status, h4StuckAt, h4StuckLine, h4StartedAt } from './h4Status';
 
 /** One bot waiting on you: the newest approval or question it asked, or an open browser step. */
 export interface NeedsYouRow {
@@ -10,6 +11,8 @@ export interface NeedsYouRow {
   line: string;
   /** Opens the chat with this card; none for a browser step (its chat shows the step). */
   item?: AwayItem;
+  /** When this bot's oldest open ask began (any kind); none for a browser step alone. */
+  at?: number;
 }
 
 // Tools people approve most, in words; anything else falls back to "Wants your approval".
@@ -35,8 +38,9 @@ export const approvalLine = (tool?: string | null): string => {
 };
 
 /**
- * Bots that need you, in the order they asked, one row each. An approval wins over a question,
- * a question over a browser step: the line names the thing that blocks the bot hardest.
+ * Bots that need you, oldest ask first (S1: by how long the ask has waited, whatever its kind), one row
+ * each. The line names the thing that blocks the bot hardest (an approval over a question over a browser
+ * step), but the row's time is the bot's oldest open ask. A browser step alone has no time and goes last.
  */
 export function needsYouRows(waiting: AwayItem[], openSteps: Record<string, number>, kwantIds: Set<string>): NeedsYouRow[] {
   const rank = (r: NeedsYouRow) => (r.item?.kind === 'approval' ? 0 : r.item ? 1 : 2);
@@ -44,14 +48,17 @@ export function needsYouRows(waiting: AwayItem[], openSteps: Record<string, numb
   const put = (r: NeedsYouRow) => {
     if (!kwantIds.has(r.kwant_id)) return;
     const had = rows.get(r.kwant_id);
-    if (!had || rank(r) < rank(had)) rows.set(r.kwant_id, r);
+    const t = r.item ? Date.parse(r.item.timestamp) : NaN;
+    const at = Number.isFinite(t) ? (had?.at !== undefined ? Math.min(had.at, t) : t) : had?.at;
+    rows.set(r.kwant_id, { ...(!had || rank(r) < rank(had) ? r : had), ...(at !== undefined ? { at } : {}) });
   };
   for (const item of waiting) {
     if (item.kind === 'approval') put({ kwant_id: item.kwant_id, line: approvalLine(item.tool_name), item });
     else if (item.kind === 'question') put({ kwant_id: item.kwant_id, line: 'Asked you a question', item });
   }
   for (const [id, n] of Object.entries(openSteps)) if (n > 0) put({ kwant_id: id, line: 'Needs you in the browser' });
-  return [...rows.values()];
+  const last = Number.POSITIVE_INFINITY;
+  return [...rows.values()].sort((a, b) => (a.at ?? last) - (b.at ?? last));
 }
 
 /** Working: bots with a live turn that are not already under Needs you, by name. */
@@ -89,10 +96,12 @@ export interface AttentionRow<K> {
 
 export interface AttentionInput<K> {
   kwants: K[];
-  /** `needsYouRows()`: already oldest first. */
+  /** `needsYouRows()`: each row carries its oldest ask's time. */
   needs: NeedsYouRow[];
-  /** Inbox `failed` items (until H4 ships its `stuck` status, the only source of rank 2). */
+  /** Inbox `failed` items from the last 24 h: rank 2 with H4's `stuck`. */
   failed?: AwayItem[];
+  /** H4 status per bot (#499): `stuck` is rank 2 without an Inbox item; a turn's start orders rank 5. */
+  h4?: Record<string, H4Status>;
   /** Inbox `finished` items not seen yet. */
   finished?: AwayItem[];
   /** 0.9 V1: the Inbox's review items (any group), including the Low-risk card's. */
@@ -138,15 +147,18 @@ export function attentionRank(bot: { needs?: boolean; failed?: boolean; review?:
 }
 
 /**
- * The order inside and across groups: rank first; then oldest first for 1–3, newest first for 4;
- * 5 and 6 by name (the sidebar has no turn start times); ties by name A→Z. Rank 7 keeps its input order.
+ * The order inside and across groups: rank first; then oldest first for 1–3 and running longest first
+ * for 5 (a row without a time after those with one), newest first for 4; 6 by name; ties by name A→Z.
+ * Rank 7 keeps its input order. `attentionRows` then puts rank 1's plain asks in needsYouRows' order,
+ * ahead of the reviews that need you.
  */
 export function attentionSort<K extends { name: string }>(rows: AttentionRow<K>[]): AttentionRow<K>[] {
   const pos = new Map(rows.map((r, i) => [r, i]));
+  const last = Number.POSITIVE_INFINITY;
   return [...rows].sort((a, b) => {
     if (a.rank !== b.rank) return a.rank - b.rank;
     if (a.rank === 7) return pos.get(a)! - pos.get(b)!;
-    if (a.rank <= 3 && a.at !== b.at) return (a.at ?? 0) - (b.at ?? 0);
+    if ((a.rank <= 3 || a.rank === 5) && a.at !== b.at) return (a.at ?? last) - (b.at ?? last);
     if (a.rank === 4 && a.at !== b.at) return (b.at ?? 0) - (a.at ?? 0);
     return a.kwant.name.localeCompare(b.kwant.name);
   });
@@ -154,7 +166,7 @@ export function attentionSort<K extends { name: string }>(rows: AttentionRow<K>[
 
 /** Every bot with its rank and line, in the one order. */
 export function attentionRows<K extends { id: string; name: string }>(input: AttentionInput<K>): AttentionRow<K>[] {
-  const { kwants, needs, failed = [], finished = [], reviews = [], busy = {}, status = {}, openedAt = {}, now = Date.now() } = input;
+  const { kwants, needs, failed = [], finished = [], reviews = [], busy = {}, status = {}, h4 = {}, openedAt = {}, now = Date.now() } = input;
   const needsBy = new Map(needs.map((r, i) => [r.kwant_id, { r, i }]));
   // Oldest failure per bot from the last 24 h; newest finished item per bot not read since.
   const failedBy = new Map<string, AwayItem>();
@@ -184,20 +196,30 @@ export function attentionRows<K extends { id: string; name: string }>(input: Att
     const f = failedBy.get(k.id);
     const d = finishedBy.get(k.id);
     const v = reviewBy.get(k.id);
+    const s = h4[k.id];
+    const stuck = s?.status === 'stuck' ? s : undefined;
     const queued = status[k.id] === 'queued';
     const rank = attentionRank({
       needs: !!n || v?.rank === 1,
-      failed: !!f || v?.rank === 2,
+      failed: !!f || !!stuck || v?.rank === 2,
       review: v?.rank === 3,
       finished: !!d,
       working: !!busy[k.id] && !queued,
       queued: !!busy[k.id] && queued,
     });
     const fromReview = (x: { i: InboxItem; line: string }): AttentionRow<K> => ({ kwant: k, rank, line: x.line, item: x.i as AwayItem, review: x.i, at: ts(x.i as AwayItem) });
-    if (rank === 1) return n ? { kwant: k, rank, line: n.r.line, item: n.r.item, needs: n.r, at: n.r.item ? ts(n.r.item) : n.i } : fromReview(v!);
-    if (rank === 2) return f && !(v?.rank === 2 && ts(v.i as AwayItem) < ts(f)) ? { kwant: k, rank, line: stuckLine(f), item: f, at: ts(f) } : fromReview(v!);
+    if (rank === 1) return n ? { kwant: k, rank, line: n.r.line, item: n.r.item, needs: n.r, at: n.r.at } : fromReview(v!);
+    if (rank === 2) {
+      // The Inbox failure or the review that couldn't be approved, whichever is older, gives the item; a
+      // live H4 stuck status says more than either, so its line wins. The group order uses the oldest.
+      const rv = v?.rank === 2 ? v : undefined;
+      const base: AttentionRow<K> = f && !(rv && ts(rv.i as AwayItem) < ts(f)) ? { kwant: k, rank, line: stuckLine(f), item: f } : rv ? fromReview(rv) : { kwant: k, rank };
+      const at = Math.min(stuck ? h4StuckAt(stuck) : Infinity, f ? ts(f) : Infinity, rv ? ts(rv.i as AwayItem) : Infinity);
+      return { ...base, line: stuck ? h4StuckLine(stuck) : base.line, at };
+    }
     if (rank === 3) return fromReview(v!);
     if (rank === 4) return { kwant: k, rank, line: finishedLine(d!), item: d, at: ts(d) };
+    if (rank === 5) return { kwant: k, rank, at: h4StartedAt(s) };
     return { kwant: k, rank };
   });
   // Needs-you rows keep needsYouRows' own order (oldest ask first; a browser step has no time); a review

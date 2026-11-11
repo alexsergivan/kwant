@@ -217,7 +217,7 @@ export interface DevDeskViewProps {
   /** The space's teams, so a team with no repo gets "Link a repo" in the repo list. */
   teams?: DevTeamRef[];
   /** 0.7.6: the space's bots, so a ticket's work reads "Built by Ann and Ben", not ids. */
-  bots?: { id: string; name: string; role?: string | null }[];
+  bots?: { id: string; name: string; role?: string | null; rank?: number }[];
   /** Opens a bot's chat: 0.9.0 G1 "Open {bot}'s chat" after line notes are sent (1:1, no thread), and
    * 0.9.0 H1 the Worktrees tab's "Open chat" (that thread when the worktree has one). */
   onOpenChat?: (botId: string, threadId?: string | null) => void;
