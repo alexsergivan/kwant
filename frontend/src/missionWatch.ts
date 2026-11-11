@@ -574,6 +574,8 @@ export interface WatchApi {
   checkNow: (missionId: string) => Promise<MissionWatch | null>;
   /** One check by id ("See the claims" in the chat). */
   check: (checkId: string) => Promise<WatchReport | null>;
+  /** The mission's checks, newest first (for the last finished report while a new one runs). */
+  checks?: (missionId: string, limit?: number) => Promise<WatchReport[]>;
 }
 
 const watchOf = (r: { watch?: unknown } | null) => parseWatch(r?.watch);
@@ -589,7 +591,14 @@ export const watchApi: WatchApi = {
   stop: (id) => call<{ watch?: unknown }>(`/api/missions/${enc(id)}/watch`, 'DELETE').then(watchOf),
   checkNow: (id) => call<{ watch?: unknown }>(`/api/missions/${enc(id)}/watch/check`, 'POST', {}).then(watchOf),
   check: (checkId) => call<unknown>(`/api/watch-checks/${enc(checkId)}`).then(parseReport),
+  checks: (id, limit = 10) =>
+    call<{ checks?: unknown }>(`/api/missions/${enc(id)}/watch/checks?limit=${limit}`).then((r) =>
+      (Array.isArray(r?.checks) ? r.checks : []).map(parseReport).filter((x): x is WatchReport => !!x),
+    ),
 };
+
+/** The id of the newest check that has finished, or null while the newest one is still checking. */
+export const finishedCheckId = (w: MissionWatch | null): string | null => (w?.last_check && w.last_check.status !== 'checking' ? w.last_check.id : null);
 
 /** The mission's watch from the board payload, parsed; null when the server sends none. */
 export const missionWatch = (m: Mission): MissionWatch | null => parseWatch((m as { watch?: unknown }).watch);

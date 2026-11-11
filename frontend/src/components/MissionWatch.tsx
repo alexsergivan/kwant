@@ -15,6 +15,7 @@ import {
   codeParts,
   costText,
   defaultCandidate,
+  finishedCheckId,
   failedChatText,
   firstNeedsYou,
   footerText,
@@ -88,7 +89,7 @@ export const WatchChip = React.forwardRef<
       aria-controls={controls}
       aria-label={v.label}
       data-watch-chip={v.tone}
-      className={`shrink-0 inline-flex max-w-full items-center gap-1.5 rounded-full border ${phone ? 'h-9 px-3 text-[13px]' : 'h-7 px-[11px] text-[12.5px]'} font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${CHIP_TONES[v.tone]} ${ring}`}
+      className={`shrink-0 inline-flex max-w-full items-center gap-1.5 rounded-full border ${phone ? 'h-9 px-3 text-[13px]' : 'h-7 px-[11px] text-[12.5px]'} font-medium transition-colors motion-reduce:transition-none motion-reduce:duration-0 disabled:cursor-not-allowed disabled:opacity-50 ${CHIP_TONES[v.tone]} ${ring}`}
     >
       <ChipIcon v={v} size={14} />
       {/* The label is announced politely when a check finishes; the button keeps its own aria-label. */}
@@ -155,10 +156,11 @@ export const WatchSetup: React.FC<{
   const [confirmStop, setConfirmStop] = useState(false);
   const cs = candidates ?? [];
   const initial = (on && cs.find((c) => c.kwant_id === watch?.kwant_id && c.can_run)) || defaultCandidate(cs);
-  const [pick, setPick] = useState<string | null>(initial?.kwant_id ?? null);
-  useEffect(() => {
-    if (pick === null && initial) setPick(initial.kwant_id);
-  }, [initial, pick]);
+  // The person's pick, else the current watcher or the default. Derived in render (not set in an
+  // effect) so the radio is checked on the same commit the candidates arrive, and the layout effect
+  // below can focus it.
+  const [chosen, setPick] = useState<string | null>(null);
+  const pick = chosen ?? initial?.kwant_id ?? null;
   const picked = cs.find((c) => c.kwant_id === pick) ?? null;
   const box = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -204,6 +206,11 @@ export const WatchSetup: React.FC<{
       <div className="space-y-3" data-watch-stop-confirm>
         <p className="text-[14px] font-semibold text-zinc-100">Stop watching this mission?</p>
         <p className="text-[13px] text-zinc-300">{watcher} won’t check claims any more. Past reports stay in the mission chat.</p>
+        {error && (
+          <p role="alert" className="text-[12.5px] text-rose-300" data-watch-stop-error>
+            {error}
+          </p>
+        )}
         <div className="flex justify-end gap-2">
           <button type="button" className={ghostBtn} onClick={() => setConfirmStop(false)}>
             Cancel
@@ -645,46 +652,53 @@ const Controls: React.FC<{
   const { api, phone, timeZone } = board;
   const w = m.watch ?? null;
   const view = chipView(m, timeZone);
-  const checkId = w?.last_check?.id ?? null;
+  const finishedId = finishedCheckId(w);
   const autoOpen = reportOpensItself(w);
   const askedOpen = board.openReportFor === m.id;
   const [reportOpen, setReportOpen] = useState<boolean>(autoOpen || askedOpen);
   const [report, setReport] = useState<WatchReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
+  /** Set when a check is running and no earlier check has finished: there is no report yet. */
+  const [noReport, setNoReport] = useState(false);
   const [candidates, setCandidates] = useState<WatchCandidate[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [panel, setPanel] = useState<null | 'setup' | 'change'>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A write from the chip itself failed (Try again, or the phone's Undo): shown under the chip. */
+  const [chipError, setChipError] = useState<string | null>(null);
   const [undo, setUndo] = useState<{ kwant: string } | null>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const panelId = useId();
   const reportId = useId();
 
-  // A new finished check opens the report when it has something to say.
-  const seenCheck = useRef(checkId);
+  // A check that finishes opens the report when it has something to say. Keyed on the check
+  // reaching a finished status, not on its id: the server keeps one id from checking to done.
+  const seenFinished = useRef(finishedId);
   useEffect(() => {
-    if (checkId !== seenCheck.current) {
-      seenCheck.current = checkId;
-      if (autoOpen) setReportOpen(true);
-    }
-  }, [checkId, autoOpen]);
+    if (finishedId === seenFinished.current) return;
+    seenFinished.current = finishedId;
+    if (finishedId && autoOpen) setReportOpen(true);
+  }, [finishedId, autoOpen]);
   useEffect(() => {
     if (askedOpen) setReportOpen(true);
   }, [askedOpen]);
 
   // Fetch the report for the last finished check when it's open and we don't have that one.
-  const doneCheck = w?.last_check && w.last_check.status !== 'checking' ? w.last_check.id : report?.id ?? null;
+  const doneCheck = finishedId ?? report?.id ?? null;
   const wantReport = reportOpen && hasReport(w);
+  // Opened while a check runs and no report is loaded: fetch the last finished one, if any.
+  const wantEarlier = wantReport && !doneCheck;
   useEffect(() => {
     if (!wantReport || !doneCheck || report?.id === doneCheck) return;
     let live = true;
     setReportError(null);
+    setNoReport(false);
     api.get(m.id).then(
       (x) => {
         if (!live) return;
-        if (x.report) setReport(x.report);
+        if (x.report && x.report.status !== 'checking') setReport(x.report);
         else setReportError('The report couldn’t be read. Open the mission chat to see the message.');
         if (x.candidates.length) setCandidates(x.candidates);
       },
@@ -694,6 +708,26 @@ const Controls: React.FC<{
       live = false;
     };
   }, [wantReport, doneCheck, m.id]);
+  useEffect(() => {
+    if (!wantEarlier) return;
+    let live = true;
+    setReportError(null);
+    setNoReport(false);
+    const earlier: Promise<WatchReport | null> = api.checks
+      ? api.checks(m.id, 5).then((xs) => xs.find((x) => x.status !== 'checking') ?? null)
+      : api.get(m.id).then((x) => (x.report && x.report.status !== 'checking' ? x.report : null));
+    earlier.then(
+      (r) => {
+        if (!live) return;
+        if (r) setReport(r);
+        else setNoReport(true);
+      },
+      (e: Error) => live && setReportError(e.message),
+    );
+    return () => {
+      live = false;
+    };
+  }, [wantEarlier, m.id]);
 
   const close = () => {
     setPanel(null);
@@ -701,6 +735,7 @@ const Controls: React.FC<{
     requestAnimationFrame(() => chipRef.current?.focus());
   };
   const openPanel = (mode: 'setup' | 'change') => {
+    setChipError(null);
     setPanel(mode);
     setError(null);
     setLoadError(null);
@@ -725,15 +760,18 @@ const Controls: React.FC<{
     return () => window.clearTimeout(t);
   }, [undo]);
 
-  const run = async (f: () => Promise<MissionWatch | null>, after?: () => void) => {
+  const run = async (f: () => Promise<MissionWatch | null>, after?: () => void, onChip?: (msg: string) => string) => {
     setBusy(true);
     setError(null);
+    setChipError(null);
     try {
       const next = await f();
       if (next) board.onChanged(m.id, next);
       after?.();
     } catch (e) {
-      setError((e as Error).message);
+      const msg = (e as Error).message;
+      if (onChip) setChipError(onChip(msg));
+      else setError(msg);
     } finally {
       setBusy(false);
     }
@@ -743,7 +781,7 @@ const Controls: React.FC<{
 
   const onChip = () => {
     if (view.click === 'report') setReportOpen((o) => !o);
-    else if (view.click === 'retry') void run(() => api.checkNow(m.id));
+    else if (view.click === 'retry') void run(() => api.checkNow(m.id), undefined, (msg) => msg);
     else if (view.click === 'setup' || view.click === 'settings') {
       if (panel) close();
       else openPanel('setup');
@@ -755,9 +793,9 @@ const Controls: React.FC<{
   const chip = (
     <div ref={wrap} className="relative" data-watch-wrap>
       <WatchChip ref={chipRef} view={view} expanded={expanded} phone={phone} onClick={onChip} controls={view.click === 'report' ? reportId : panel ? panelId : undefined} />
-      {view.click === 'retry' && error && (
-        <p role="alert" className="mt-1 text-[12px] text-rose-300">
-          {error}
+      {chipError && !panel && (
+        <p role="alert" className="mt-1 max-w-[320px] break-words text-[12px] text-rose-300" data-watch-chip-error>
+          {chipError}
         </p>
       )}
       {panel && (
@@ -793,7 +831,12 @@ const Controls: React.FC<{
           onUndo={() => {
             const k = undo.kwant;
             setUndo(null);
-            void run(() => api.set(m.id, k));
+            // The chip already shows the real state (off) from the stop; a failed Undo leaves it so.
+            void run(
+              () => api.set(m.id, k),
+              undefined,
+              (msg) => `Couldn’t turn the watch back on: ${msg.replace(/[.\s]+$/, '')}. The mission isn’t watched now.`,
+            );
           }}
           onClose={() => setUndo(null)}
         />
@@ -819,8 +862,14 @@ const Controls: React.FC<{
         onOpenInbox={board.onOpenTask ? (a) => board.onOpenTask!(a.task_id) : undefined}
       />
     ) : (
-      <p id={reportId} role="status" className={`text-[12.5px] ${reportError ? 'text-rose-300' : 'text-zinc-500'} ${phone ? '' : 'mt-3.5 border-t border-hairline pt-3.5'}`} data-watch-report-loading>
-        {reportError ?? 'Loading the report…'}
+      <p
+        id={reportId}
+        role="status"
+        className={`text-[12.5px] ${reportError ? 'text-rose-300' : 'text-zinc-500'} ${phone ? '' : 'mt-3.5 border-t border-hairline pt-3.5'}`}
+        data-watch-report-loading={noReport ? undefined : ''}
+        data-watch-report-none={noReport ? '' : undefined}
+      >
+        {reportError ?? (noReport ? `No report yet. ${w?.kwant_name ?? 'The watcher'} is checking the claims, and the report shows here when it’s done.` : 'Loading the report…')}
       </p>
     );
   }
