@@ -1347,8 +1347,11 @@ impl BrowserController {
                     }),
                 };
                 if let Some(page) = home {
-                    if let (Some(ws), Some(id)) = (page["webSocketDebuggerUrl"].as_str(), page["id"].as_str()) {
+                    if let Some(ws) = page["webSocketDebuggerUrl"].as_str() {
                         let ws = self.reachable_ws_url(ws)?;
+                        // a DevTools endpoint that names no page ids (a proxy, a test double):
+                        // its page as before, with no popups to follow
+                        let Some(id) = page["id"].as_str() else { return Ok(ws) };
                         self.popups.set_home(id);
                         self.follow_popups().await;
                         // a popup that just closed may still be in front until its close arrives

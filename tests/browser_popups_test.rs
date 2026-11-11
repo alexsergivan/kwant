@@ -121,6 +121,8 @@ async fn next_message(ws: &mut Ws, kind: &str, matches: impl Fn(&Value) -> bool)
             let message = ws.next().await?.ok()?;
             let WsMessage::Text(text) = message else { continue };
             let value: Value = serde_json::from_str(&text).unwrap_or_default();
+            // the person sees every error: opening a popup or closing it by a click is none
+            assert_ne!(value["type"], "error", "the live view reported an error: {value}");
             if value["type"] == "ping" { ws.send(WsMessage::Text(json!({"action": "pong"}).to_string())).await.ok()?; }
             if value["type"] == "frame" { ws.send(WsMessage::Text(json!({"action": "frame_ack", "id": value["id"]}).to_string())).await.ok()?; }
             if value["type"] == kind && matches(&value) { return Some(value); }

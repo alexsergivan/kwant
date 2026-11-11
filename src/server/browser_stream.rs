@@ -325,10 +325,17 @@ fn wanted(event: &Value) -> bool {
     }
 }
 
+/// A reply that never came because the page's socket closed with the command out.
+const PAGE_CLOSED: &str = "Browser connection closed";
+
+fn page_closed(e: &BrowserError) -> bool {
+    matches!(e, BrowserError::Ws(m) if m == PAGE_CLOSED)
+}
+
 async fn settle(reply: Reply, wait: Duration) -> Result<Value, BrowserError> {
     match timeout(wait, reply).await {
         Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err(BrowserError::Ws("Browser connection closed".into())),
+        Ok(Err(_)) => Err(BrowserError::Ws(PAGE_CLOSED.into())),
         Err(_) => Err(BrowserError::Timeout),
     }
 }
@@ -510,12 +517,19 @@ fn refresh_location(cdp: &Cdp, ctrl: &BrowserController, shared: &Arc<Shared>, c
     tokio::spawn(async move {
         while shared.location.next().is_some() {
             // blocks while a dialog is open, so never on the stream loop
-            let Ok(result) = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await else { continue };
-            if let Some(url) = result["result"]["value"]["url"].as_str() { *ctrl.current_url.lock().await = Some(url.to_string()); }
-            if let Some(title) = result["result"]["value"]["title"].as_str() { *ctrl.current_title.lock().await = Some(title.to_string()); }
-            let _ = client.send(json!({"type":"location","url":ctrl.current_url.lock().await.clone(),"title":ctrl.current_title.lock().await.clone()}));
+            let Some(location) = read_location(&cdp, &ctrl).await else { continue };
+            let _ = client.send(location);
         }
     });
+}
+
+/// The `location` message for the page `cdp` is on (its address and title, also kept on the
+/// controller); `None` when the page doesn't answer within `PROBE_WAIT` (a dialog is open).
+async fn read_location(cdp: &Cdp, ctrl: &BrowserController) -> Option<Value> {
+    let result = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await.ok()?;
+    if let Some(url) = result["result"]["value"]["url"].as_str() { *ctrl.current_url.lock().await = Some(url.to_string()); }
+    if let Some(title) = result["result"]["value"]["title"].as_str() { *ctrl.current_title.lock().await = Some(title.to_string()); }
+    Some(json!({"type":"location","url":ctrl.current_url.lock().await.clone(),"title":ctrl.current_title.lock().await.clone()}))
 }
 
 impl Shared {
@@ -812,13 +826,21 @@ impl Worker {
     fn finish(&self, id: Value, replies: Vec<Reply>, editable: bool) {
         let (client, cdp) = (self.client.clone(), self.cdp.clone());
         tokio::spawn(async move {
+            let mut closed = false;
             for reply in replies {
-                if let Err(e) = settle(reply, ACTION_WAIT).await {
-                    let _ = client.send(error(&id, e));
-                    return;
+                match settle(reply, ACTION_WAIT).await {
+                    Ok(_) => {}
+                    // the page closed with the input out: a popup the click itself closed
+                    // ("Continue" on a sign-in). The view goes back to its opener, and a browser
+                    // that went away ends the stream, so the person sees no error for it.
+                    Err(e) if page_closed(&e) => { closed = true; break; }
+                    Err(e) => {
+                        let _ = client.send(error(&id, e));
+                        return;
+                    }
                 }
             }
-            let extra = if editable { json!({"editable": focused_editable(&cdp).await}) } else { json!({}) };
+            let extra = if editable { json!({"editable": !closed && focused_editable(&cdp).await}) } else { json!({}) };
             let _ = client.send(ack(&id, extra));
         });
     }
@@ -1332,7 +1354,14 @@ async fn stream(
                     recorder_script = None;
                     recorder_acts(socket, ctrl, cdp, shared, rec, vec![Act::Install], &mut recorder_script).await?;
                 }
-                refresh_location(cdp, ctrl, shared, client_tx);
+                // the address bar moves before the new page's first picture is shown: a still
+                // page (the opener once its popup closed) draws that picture once, and a client
+                // must know whose it is. Its frames wait in `events` until the loop reads them.
+                match read_location(cdp, ctrl).await {
+                    Some(location) => send(socket, location).await?,
+                    // a dialog open on the new page: the address follows when it answers
+                    None => refresh_location(cdp, ctrl, shared, client_tx),
+                }
             }
             let app_link_due = app_links.deadline();
             tokio::select! {
