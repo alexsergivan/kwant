@@ -385,6 +385,24 @@ test('roll back by restore (in review, person check passed) still shows the step
   const { q: q2 } = await mount(FX.oneTap, api2);
   await click(q2('[data-roll-back]'));
   assert.equal(q2('[data-step-down]'), null);
+  assert.equal(q2('[data-after-approval]'), null);
+});
+
+test('roll back by restore after a person check passed shows "This was approved at <time>"', async () => {
+  const base = fakeApi();
+  const { api, calls } = fakeApi({
+    restorePreview: async () => ({ ...base.preview, via: 'restore', verified_at: '2026-11-10T14:50:00Z', step_down: null }),
+  });
+  const { q } = await mount(FX.oneTap, api);
+  await click(q('[data-roll-back]'));
+  const line = q('[data-after-approval]');
+  assert.ok(line, 'approved-at line in the restore branch');
+  assert.match(line.textContent, /^This was approved at \S.*\. Rolling it back undoes that approval\.$/);
+  assert.ok(line.querySelector('strong').textContent.trim().length > 0, 'the time is shown');
+  assert.match(q('[data-rollback-body]').textContent, /Puts this task’s files back to how they were before/);
+  await click(q('[data-rollback-confirm]'));
+  assert.ok(calls.some((c) => c[0] === 'restore'));
+  assert.equal(calls.some((c) => c[0] === 'forkFromCheckpoint'), false);
 });
 
 test('no roll back button when rollback_ok is false; Escape closes the dialog', async () => {
