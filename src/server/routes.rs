@@ -2043,7 +2043,19 @@ pub(super) type ChatHandover = std::sync::Arc<std::sync::Mutex<Option<super::tur
 pub(super) type DeliverySeen = std::sync::Arc<std::sync::Mutex<super::delivery_check::Seen>>;
 
 /// See [`TurnOpts::delivery_next`].
-pub(super) type DeliveryNext = std::sync::Arc<std::sync::Mutex<Option<(String, crate::router::delivery::DeliveryPlan)>>>;
+pub(super) type DeliveryNext = std::sync::Arc<std::sync::Mutex<Option<NextTurn>>>;
+
+/// The delivery check's one continuation, as the save step asked for it.
+#[derive(Debug, Clone)]
+pub struct NextTurn {
+    pub prompt: String,
+    /// The plan it is checked against: none for a follow-through continuation without one.
+    pub plan: Option<crate::router::delivery::DeliveryPlan>,
+    /// It is only a follow-through continuation: the last step failed and the reply ended on a
+    /// plan it didn't carry out (see [`super::delivery_check::promise_line`]), and nothing the
+    /// plan wanted is missing. Its label says so.
+    pub follow_through: bool,
+}
 
 impl TurnOpts {
     /// Options that run the turn on `agent` at `effort` (both needed), skipping Laya.
@@ -2148,11 +2160,11 @@ pub(super) async fn try_kwant_turn(
     opts.delivery_seen = Some(DeliverySeen::default());
     let carried = Carried::of(&opts);
     let first = try_kwant_turn_once(scope, target_kwant, prompt, opts).await;
-    let Some((prompt, plan)) = next.and_then(|n| n.lock().ok().and_then(|mut n| n.take())) else {
+    let Some(NextTurn { prompt, plan, follow_through }) = next.and_then(|n| n.lock().ok().and_then(|mut n| n.take())) else {
         return first;
     };
-    tracing::info!(kwant = %target_kwant.id, "reply missed what the person expected: one automatic continuation");
-    let again = |prompt: String| try_kwant_turn_once(scope, target_kwant, prompt, carried.continuation(plan, handover));
+    tracing::info!(kwant = %target_kwant.id, follow_through, "reply missed what the person expected: one automatic continuation");
+    let again = |prompt: String| try_kwant_turn_once(scope, target_kwant, prompt, carried.continuation(plan, follow_through, handover));
     super::delivery_check::after_turn(first, Some(prompt), scope.cancel_token.is_cancelled(), again).await
 }
 
@@ -2254,11 +2266,17 @@ impl Carried {
     /// (kwant's continuation prompt never makes a new one), and never continued again. It starts
     /// on the first turn's chat slot when `handover` holds it (see [`TurnOpts::chat_handover`]),
     /// and counts what the delivery's earlier turns did (see [`TurnOpts::delivery_seen`]).
-    fn continuation(self, plan: crate::router::delivery::DeliveryPlan, handover: Option<ChatHandover>) -> TurnOpts {
+    /// `follow_through`: it only continues after a failed step the reply promised to get past.
+    fn continuation(self, plan: Option<crate::router::delivery::DeliveryPlan>, follow_through: bool, handover: Option<ChatHandover>) -> TurnOpts {
         let delivery_seen = self.delivery_seen.clone();
+        let label = if follow_through {
+            "Automatic continuation (once): the last step failed and the reply ended on a plan that didn't run"
+        } else {
+            "Automatic continuation (once): the reply was missing what the person expected"
+        };
         TurnOpts {
-            label: Some("Automatic continuation (once): the reply was missing what the person expected".into()),
-            delivery: Some(plan),
+            label: Some(label.into()),
+            delivery: plan,
             delivery_continued: true,
             chat_handover: handover,
             delivery_seen,
@@ -3643,10 +3661,15 @@ async fn run_kwant_turn_inner(
                 let expect = plan.as_ref().and_then(super::delivery_check::Expect::from_plan);
                 let checked = opts.delivery_checked();
                 let verdict = if checked {
+                    // Follow-through (0.9.4): the turn's last tool step, if it failed, and a declined card
+                    let (ran_tools, failed_step, declined) = super::delivery_check::tool_steps_in(activity.as_ref());
                     let own = super::delivery_check::Seen {
                         image_shared: pictures.shared_image,
                         has_shot: pictures.last_shot.is_some(),
                         pushed: super::delivery_check::pushed_in(activity.as_ref()),
+                        ran_tools,
+                        failed_step,
+                        declined,
                     };
                     // ...counting what the delivery's earlier turns did (F1)
                     let seen = match opts.delivery_seen.as_ref().map(|d| d.lock()) {
@@ -3700,6 +3723,10 @@ async fn run_kwant_turn_inner(
                 }
                 if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref(), checked) {
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
+                }
+                // 0.9.4: a reply that ends with `Blocked: <what>. <what unblocks it>` says so in its meta
+                if let Some(blocked) = super::keep_going::blocked_line(&asst_msg.text) {
+                    meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = serde_json::json!({ "text": blocked });
                 }
                 let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);
@@ -3755,9 +3782,15 @@ async fn run_kwant_turn_inner(
                     // A held reply is decided first (the decided reply is checked against the held
                     // plan and continues through the same slot); only a reply the person sees is
                     // continued or recorded. The continuation carries this plan, never a new one.
-                    if let (Some(prompt), Some(next), Some(p)) = (&verdict.continue_with, &opts.delivery_next, &plan) {
-                        if let Ok(mut next) = next.lock() {
-                            *next = Some((prompt.clone(), p.clone()));
+                    if let (Some(prompt), Some(next)) = (&verdict.continue_with, &opts.delivery_next) {
+                        use super::delivery_check::Missing;
+                        let follow = verdict.missing.contains(&Missing::FollowThrough);
+                        let follow_through = follow && verdict.missing.iter().all(|m| *m == Missing::FollowThrough);
+                        // A plan's misses continue only with that plan; follow-through needs none
+                        if plan.is_some() || follow {
+                            if let Ok(mut next) = next.lock() {
+                                *next = Some(NextTurn { prompt: prompt.clone(), plan: plan.clone(), follow_through });
+                            }
                         }
                     }
                     if let (Some(outcome), Some(e)) = (verdict.outcome, &expect) {
@@ -6736,7 +6769,7 @@ mod tests {
         let first = person_turn();
         assert!(first.continuation_slot().is_some());
         let ideas = turn_plan(&first, Some(&saved("user", "user", "What cool feature can we add?", None)), &[], true, "").unwrap();
-        let next = Carried::of(&first).continuation(ideas.clone(), None);
+        let next = Carried::of(&first).continuation(Some(ideas.clone()), false, None);
         assert_eq!(next.delivery.as_ref(), Some(&ideas));
         assert!(next.delivery_continued && next.continuation_slot().is_none(), "continued once at most");
         // kwant's continuation prompt can't make a plan of its own
@@ -6745,6 +6778,18 @@ mod tests {
         let expect = Expect::from_plan(&ideas).unwrap();
         let v = check("Still no picture.", Some(&expect), next.delivery_continued, &Seen::default());
         assert!(v.continue_with.is_none() && v.outcome.is_some(), "{v:?}");
+    }
+
+    /// 0.9.4 follow-through: a continuation with no plan stays without one (kwant's prompt can't
+    /// make one), says why it runs, and is never continued again.
+    #[test]
+    fn a_follow_through_continuation_has_no_plan_and_never_continues_again() {
+        let next = Carried::of(&person_turn()).continuation(None, true, None);
+        assert_eq!(next.delivery, None);
+        assert!(next.label.as_deref().is_some_and(|l| l.contains("the last step failed")), "{:?}", next.label);
+        assert!(next.delivery_continued && next.continuation_slot().is_none());
+        let prompt = saved("user", "user", "Your last step (Bash) failed or was refused, and your reply ends with a plan", None);
+        assert_eq!(turn_plan(&next, Some(&prompt), &[], true, ""), None);
     }
 
     /// #469 round 3, must-fix 2: no-tools, fresh-eyes and BRIEF turns get no plan, so no hint

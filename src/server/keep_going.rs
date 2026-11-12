@@ -11,7 +11,10 @@
 //! - past that, one "Keep going?" card. "Keep going" is a person message, so it brings a fresh
 //!   allowance and starts a keep-going turn; "That's enough for now" ends it.
 //!
-//! The `Done:` line is stored on the reply's meta as [`DONE_KEY`].
+//! The `Done:` line is stored on the reply's meta as [`DONE_KEY`]. A lead whose last line is
+//! `Blocked: <what is blocked>. <what would unblock it>` (0.9.4) never gets a keep-going turn: the
+//! line becomes a question card at once, like a question, and its answer resumes the chain. The
+//! save step stores any reply's `Blocked:` line on its meta as [`BLOCKED_KEY`].
 
 use super::routes::{try_kwant_turn, TurnOpts, TurnScope};
 use super::AppState;
@@ -36,6 +39,8 @@ pub const CARD_KEY: &str = "keep_going_card";
 pub const ASK_KEY: &str = "keep_going_ask";
 /// On a reply that ends with `Done: …`: `{text}`, what the lead said it checked.
 pub const DONE_KEY: &str = "chain_done";
+/// On a reply that ends with `Blocked: …` (0.9.4): `{text}`, what is blocked and what unblocks it.
+pub const BLOCKED_KEY: &str = "blocked";
 pub const KEEP_GOING: &str = "Keep going";
 pub const ENOUGH: &str = "That's enough for now";
 /// What a keep-going turn is told.
@@ -63,13 +68,24 @@ pub async fn turns_allowed(state: &AppState) -> usize {
 /// The `Done: …` line a reply ends with, if it does: its last non-empty line, markdown
 /// decoration aside, starts with "Done:" and says what was done.
 pub fn done_line(reply: &str) -> Option<String> {
+    end_line(reply, "done:")
+}
+
+/// The `Blocked: <what is blocked>. <what would unblock it>` line a reply ends with, if it does
+/// (0.9.4): parsed like [`done_line`].
+pub fn blocked_line(reply: &str) -> Option<String> {
+    end_line(reply, "blocked:")
+}
+
+/// The reply's last non-empty line, markdown decoration aside, when it starts with `head`
+/// (lowercase, ASCII, ending in ':'): what follows it.
+fn end_line(reply: &str, head: &str) -> Option<String> {
     let last = reply.lines().map(str::trim).rfind(|l| !l.is_empty())?;
     let bare = last.trim_start_matches(['*', '_', '-', '>', '`', ' ']);
-    let head = bare.get(..5)?;
-    if !head.eq_ignore_ascii_case("done:") {
+    if !bare.get(..head.len())?.eq_ignore_ascii_case(head) {
         return None;
     }
-    let what = bare[5..].trim().trim_matches(['*', '_', '`', ' ']).trim();
+    let what = bare[head.len()..].trim().trim_matches(['*', '_', '`', ' ']).trim();
     (!what.is_empty()).then(|| what.to_string())
 }
 
@@ -175,6 +191,10 @@ async fn verdict(scope: &TurnScope, lead: &Kwant, snap: &Snapshot, reply: &str) 
     }
     if let Some(done) = done_line(reply) {
         return Verdict::Done(done);
+    }
+    // Blocked: only the person (or a setting) unblocks it, so it is asked, never pushed on
+    if let Some(blocked) = blocked_line(reply) {
+        return Verdict::Asks(format!("Blocked: {blocked}"));
     }
     let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
     if let Some(q) = crate::router::sticky::person_question(reply).filter(|_| !super::asks::hands_on(reply, &names)) {
@@ -369,6 +389,24 @@ mod tests {
         assert_eq!(done_line("All done."), None);
         assert_eq!(done_line(""), None);
         assert_eq!(done_line("Dön"), None);
+    }
+
+    #[test]
+    fn a_blocked_line_ends_the_reply() {
+        let real = "The render failed twice.\n\nBlocked: terminal commands are off for this bot on the shared Mac. Allow Terminal for this team on that computer, then say continue.";
+        assert_eq!(
+            blocked_line(real).as_deref(),
+            Some("terminal commands are off for this bot on the shared Mac. Allow Terminal for this team on that computer, then say continue.")
+        );
+        assert_eq!(blocked_line("**Blocked:** no key for the Stripe API. Add it in Settings.").as_deref(), Some("no key for the Stripe API. Add it in Settings."));
+        assert_eq!(blocked_line("- blocked: CI is down\n\n").as_deref(), Some("CI is down"));
+        // Not the last line, empty, a Done line, or "blocked" inside a sentence
+        assert_eq!(blocked_line("Blocked: CI.\nI'll retry later."), None);
+        assert_eq!(blocked_line("Blocked:"), None);
+        assert_eq!(blocked_line("Done: checked it."), None);
+        assert_eq!(blocked_line("The deploy is blocked: no key."), None);
+        assert_eq!(done_line("Blocked: CI is down."), None);
+        assert_eq!(blocked_line(""), None);
     }
 
     #[test]

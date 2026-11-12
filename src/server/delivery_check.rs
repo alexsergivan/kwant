@@ -10,6 +10,12 @@
 //!   Only a firm plan continues ([`DeliveryPlan::firm`]): a lean one ("@Ann look at this") is
 //!   recorded as a hit or a miss and gets the no-picture line only when the reply claims a picture.
 //! - The result is recorded as a delivery hit or miss ([`record_delivery_note`]).
+//! - Follow-through (0.9.4): a turn whose last tool step failed or was refused and whose reply
+//!   ends on a plan it didn't carry out ("I'll check the file sizes next.", see [`promise_line`])
+//!   gets the same one continuation, told to retry, try another way, or end with a
+//!   `Blocked: <what>. <what unblocks it>` line. It needs no plan. If the continuation still ends
+//!   on a promise after a failed step, its reply gets [`follow_line`]. A step the person declined
+//!   on an approval card is never pushed again. Follow-through is never a delivery note.
 //!
 //! What the person expected comes from the turn's one `DeliveryPlan` (`src/router/delivery.rs`),
 //! the same plan the prompt's "[What to deliver]" hint renders, read through [`Expect::from_plan`].
@@ -42,7 +48,7 @@ impl Expect {
 }
 
 /// What the turn really did.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Seen {
     /// It put an image into the chat (`share_file`, `browser_screenshot` with `share: true`).
     pub image_shared: bool,
@@ -50,16 +56,45 @@ pub struct Seen {
     pub has_shot: bool,
     /// It pushed a commit or opened a PR (see [`pushed_in`]).
     pub pushed: bool,
+    /// It ran at least one tool step (see [`tool_steps_in`]).
+    pub ran_tools: bool,
+    /// Its last tool step, when that one failed or was refused (see [`tool_steps_in`]). A later
+    /// tool step that worked means the bot moved on: then this is `None`.
+    pub failed_step: Option<FailedStep>,
+    /// The person declined an approval card in it: that step is never pushed again.
+    pub declined: bool,
+}
+
+/// A tool step that failed or was refused: the tool's name and the step's short title.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedStep {
+    pub tool: String,
+    pub title: String,
 }
 
 impl Seen {
     /// This turn's `self` counted with what its delivery's earlier turns did (`so_far`, which it
     /// then joins): an image shared or a push made by any turn of the delivery counts (0.8.1 F1).
     /// `has_shot` stays this turn's own: only its own screenshot can be shared under its reply.
+    /// The last tool step is the delivery's last: a turn that ran no tool (a continuation that
+    /// only promised again) still ends after the earlier turn's failed step, and a turn that ran
+    /// tools has its own. A declined card in any of its turns counts.
     pub fn with_earlier(self, so_far: &mut Seen) -> Seen {
         so_far.image_shared |= self.image_shared;
         so_far.pushed |= self.pushed;
-        Seen { image_shared: so_far.image_shared, has_shot: self.has_shot, pushed: so_far.pushed }
+        so_far.declined |= self.declined;
+        if self.ran_tools {
+            so_far.ran_tools = true;
+            so_far.failed_step = self.failed_step;
+        }
+        Seen {
+            image_shared: so_far.image_shared,
+            has_shot: self.has_shot,
+            pushed: so_far.pushed,
+            ran_tools: so_far.ran_tools,
+            failed_step: so_far.failed_step.clone(),
+            declined: so_far.declined,
+        }
     }
 }
 
@@ -71,6 +106,9 @@ pub enum Missing {
     Image,
     /// No PR or branch link in the reply, and nothing pushed.
     Link,
+    /// The last tool step failed or was refused, and the reply ends on a plan it didn't carry
+    /// out. Never a delivery note (see [`shows`]).
+    FollowThrough,
 }
 
 /// A delivery note's verdict.
@@ -95,6 +133,9 @@ pub struct Verdict {
     pub continue_with: Option<String>,
     /// The delivery note to record: none without a plan, nor while a continuation decides it.
     pub outcome: Option<Outcome>,
+    /// Add [`follow_line`] for this tool: the continuation still ended on a promise after a
+    /// failed step.
+    pub follow_line: Option<String>,
 }
 
 /// The P9 continuation for a missing image (Ada's wording).
@@ -105,12 +146,42 @@ take a screenshot with share: true, and reply.";
 pub const LINK_PROMPT: &str = "You were asked for a change, and your reply has no link to it. Commit and push your work, \
 then reply with the PR or branch link.";
 
+/// Longest promise or step title quoted in the follow-through prompt (characters).
+const MAX_QUOTE_CHARS: usize = 200;
+
+/// The follow-through continuation (0.9.4): what failed and what the reply promised, then the
+/// rule. Ada's wording.
+pub fn follow_prompt(step: &FailedStep, promise: &str) -> String {
+    let title = clip(step.title.trim(), MAX_QUOTE_CHARS);
+    let what = if title.is_empty() || title == step.tool { step.tool.clone() } else { format!("{}: {title}", step.tool) };
+    format!(
+        "Your last step ({what}) failed or was refused, and your reply ends with a plan that didn't run (\"{}\"). \
+Do it now: retry once if it may have been a fluke, then try another way (another tool or command, reading instead of \
+running, your bot browser, or a teammate who can). If nothing works, end with one line \
+`Blocked: <what is blocked>. <what would unblock it>`.",
+        clip(promise.trim(), MAX_QUOTE_CHARS)
+    )
+}
+
+/// Added to a continuation's reply that still ends on a promise after a failed step.
+pub fn follow_line(tool: &str) -> String {
+    format!("_kwant: this stopped after a failed step ({tool}) without another try or a reason._")
+}
+
+fn clip(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text.to_string(),
+    }
+}
+
 /// Most `done_when` checks quoted in a continuation, and the longest one (characters).
 const MAX_CHECKS: usize = 5;
 const MAX_CHECK_CHARS: usize = 200;
 
 /// Checks one reply. `continued` says the turn is the one continuation already. A lean `expect`
-/// never continues and adds the no-picture line only for a claimed picture.
+/// never continues and adds the no-picture line only for a claimed picture. Follow-through
+/// continues with or without a plan (see the module docs).
 pub fn check(reply: &str, expect: Option<&Expect>, continued: bool, seen: &Seen) -> Verdict {
     let claims = claims_picture(reply);
     let wants_image = expect.is_some_and(|e| e.image);
@@ -127,35 +198,51 @@ pub fn check(reply: &str, expect: Option<&Expect>, continued: bool, seen: &Seen)
     if expect.is_some_and(|e| e.link) && !seen.pushed && !has_change_link(reply) {
         v.missing.push(Missing::Link);
     }
+    // Planned misses, before follow-through joins them: only these are a delivery note
+    let planned = v.missing.clone();
+    let follow = seen.failed_step.as_ref().filter(|_| !seen.declined).and_then(|step| Some((step, promise_line(reply)?)));
+    if follow.is_some() {
+        v.missing.push(Missing::FollowThrough);
+    }
     let firm = expect.is_some_and(|e| e.firm);
-    match expect {
-        Some(e) if firm && !v.missing.is_empty() && !continued => {
-            v.continue_with = Some(continuation_prompt(&v.missing, &e.done_when))
-        }
-        _ => {
-            v.no_picture_line = !image && (claims || (wants_image && firm));
-            v.outcome = expect.map(|_| if v.missing.is_empty() { Outcome::Hit } else { Outcome::Miss });
-        }
+    // What one continuation would ask for: a firm plan's misses, and follow-through
+    let mut asks: Vec<Missing> = if firm { planned.clone() } else { vec![] };
+    if follow.is_some() {
+        asks.push(Missing::FollowThrough);
+    }
+    if !asks.is_empty() && !continued {
+        let done_when = expect.map(|e| e.done_when.as_slice()).unwrap_or_default();
+        v.continue_with = Some(continuation_prompt(&asks, done_when, follow));
+    } else {
+        v.no_picture_line = !image && (claims || (wants_image && firm));
+        v.outcome = expect.map(|_| if planned.is_empty() { Outcome::Hit } else { Outcome::Miss });
+        v.follow_line = follow.map(|(step, _)| step.tool.clone());
     }
     v
 }
 
 /// The continuation's prompt: what is missing, how to deliver it, and the plan's checks.
-pub fn continuation_prompt(missing: &[Missing], done_when: &[String]) -> String {
+/// `follow` is the failed step and the reply's promise, for [`Missing::FollowThrough`].
+pub fn continuation_prompt(missing: &[Missing], done_when: &[String], follow: Option<(&FailedStep, String)>) -> String {
     let what: Vec<&str> = missing
         .iter()
         .map(|m| match m {
             Missing::Image => "an image in the chat",
             Missing::Link => "a PR or branch link",
+            Missing::FollowThrough => "another try after the failed step",
         })
         .collect();
     let mut out = format!("[kwnt: one automatic continuation. Missing from your last reply: {}.]", what.join(" and "));
     for m in missing {
         out.push(' ');
-        out.push_str(match m {
-            Missing::Image => IMAGE_PROMPT,
-            Missing::Link => LINK_PROMPT,
-        });
+        match m {
+            Missing::Image => out.push_str(IMAGE_PROMPT),
+            Missing::Link => out.push_str(LINK_PROMPT),
+            Missing::FollowThrough => match &follow {
+                Some((step, promise)) => out.push_str(&follow_prompt(step, promise)),
+                None => continue,
+            },
+        }
     }
     let checks: Vec<String> = done_when
         .iter()
@@ -168,6 +255,113 @@ pub fn continuation_prompt(missing: &[Missing], done_when: &[String]) -> String 
         out.push_str(&format!(" Done when: {}.", checks.join("; ").trim_end_matches('.')));
     }
     out
+}
+
+/// Words that open a first-person plan: "I'll check…", "Let me retry…", "I'm going to…".
+const PROMISE_OPENERS: &[&str] = &["i'll ", "i will ", "let me ", "i'm going to ", "i am going to ", "going to ", "i'm gonna "];
+/// Words a plan may start with before its opener: "Next, I'll…", "Now let me…".
+const PROMISE_LEADS: &[&str] = &["next", "now", "then", "so", "ok", "okay", "first", "and", "after that"];
+/// A last paragraph with any of these waits on the person or offers, so it isn't a promise:
+/// "I'll continue once you allow Terminal", "Let me know if…", "I'll wait for your answer".
+const NOT_A_PROMISE: &[&str] = &[
+    "once you", "when you", "after you", "if you", "as soon as you", "until you", "let me know", "wait for you",
+    "waiting for you", "wait for your", "i'll be here", "i'll wait",
+];
+
+/// The plan the reply ends on and didn't carry out, if it does (0.9.4): its last paragraph
+/// (the last item of a list), markdown aside, has a sentence that opens in the first person with
+/// "I'll", "I will", "Let me", "Next I'll", "Now I'll", "I'm going to" or "Going to". Not a promise:
+/// a `Done:` or `Blocked:` line, a question to the person, or a line that waits on the person
+/// ("once you…", "when you…", "after you…", "if you…") or offers ("Let me know…"). Conservative
+/// on purpose: it only matters after a failed step. Returns that sentence.
+pub fn promise_line(reply: &str) -> Option<String> {
+    let para = reply.split("\n\n").map(str::trim).filter(|p| !p.is_empty()).last()?;
+    let lines: Vec<&str> = para.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let listed = |l: &str| l.starts_with(['-', '*', '+']) || l.split_once(['.', ')']).is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    let last = if lines.iter().any(|l| listed(l)) { lines.last()?.to_string() } else { lines.join(" ") };
+    let bare = strip_markdown(&last).replace(['’', '‘'], "'");
+    // ASCII lowercase keeps byte offsets, so the sentence spans index `bare` too
+    let lower = bare.to_ascii_lowercase();
+    if lower.starts_with("done:") || lower.starts_with("blocked:") || lower.trim_end_matches(['*', '_', '`', ')', ' ']).ends_with('?') {
+        return None;
+    }
+    if NOT_A_PROMISE.iter().any(|w| lower.contains(w)) {
+        return None;
+    }
+    let sentences = sentence_spans(&lower);
+    sentences.into_iter().find_map(|(at, end)| {
+        let s = lower[at..end].trim_start();
+        let s = strip_leads(s);
+        PROMISE_OPENERS.iter().any(|o| s.starts_with(o)).then(|| bare[at..end].trim().to_string())
+    })
+}
+
+/// A line without its leading list marker, heading or quote, and the emphasis around it.
+fn strip_markdown(line: &str) -> String {
+    let mut s = line.trim();
+    loop {
+        let before = s;
+        s = s.trim_start_matches(['#', '>', '*', '_', '`', '-', '+', ' ']);
+        if let Some((n, rest)) = s.split_once(['.', ')']) {
+            if !n.is_empty() && n.len() <= 3 && n.chars().all(|c| c.is_ascii_digit()) {
+                s = rest;
+            }
+        }
+        if s == before {
+            break;
+        }
+    }
+    s.replace("**", "").replace("__", "").trim().to_string()
+}
+
+/// Byte spans of the sentences in `text`: they end at ". ", "! ", "; " or ": ".
+fn sentence_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes = text.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        if matches!(b, b'.' | b'!' | b';' | b':') && bytes.get(i + 1).is_some_and(|n| *n == b' ') {
+            out.push((start, i + 1));
+            start = i + 1;
+        }
+    }
+    if start < text.len() {
+        out.push((start, text.len()));
+    }
+    out
+}
+
+/// A sentence without the words a plan may start with ("Next, ", "Now ").
+fn strip_leads(mut s: &str) -> &str {
+    loop {
+        let before = s;
+        for lead in PROMISE_LEADS {
+            if let Some(rest) = s.strip_prefix(lead) {
+                if rest.starts_with([' ', ',']) {
+                    s = rest.trim_start_matches([',', ' ']);
+                }
+            }
+        }
+        if s == before {
+            return s;
+        }
+    }
+}
+
+/// The turn's tool steps, from its saved activity (`{"steps": [...]}`): whether it ran any, its
+/// last one when that one failed (a refused tool call is a failed step too), and whether the
+/// person declined an approval card in it.
+pub fn tool_steps_in(activity: Option<&Value>) -> (bool, Option<FailedStep>, bool) {
+    let Some(steps) = activity.and_then(|a| a["steps"].as_array()) else {
+        return (false, None, false);
+    };
+    let declined = steps.iter().any(|s| s["kind"] == "approval" && s["status"] == "declined");
+    let last = steps.iter().rfind(|s| s["kind"] == "tool" && !matches!(s["status"].as_str(), Some("running" | "waiting")));
+    let failed = last.filter(|s| s["status"] == "failed").map(|s| FailedStep {
+        tool: s["tool"].as_str().unwrap_or("a tool").to_string(),
+        title: s["title"].as_str().unwrap_or("").to_string(),
+    });
+    (last.is_some(), failed, declined)
 }
 
 /// The reply links a PR, merge request, branch, compare view or commit on a git host
@@ -249,11 +443,13 @@ async fn record_in(db: &crate::db::Database, kwant_id: &str, context_id: &str, e
     super::delivery_plan::record_check(db, kwant_id, context_id, &wanted, outcome == Outcome::Hit, &missing).await;
 }
 
-/// What `expect` wanted and what was `missing`, as the delivery note's [`Show`]s.
+/// What `expect` wanted and what was `missing`, as the delivery note's [`Show`]s. Follow-through
+/// isn't something the plan wanted, so the planner never learns from it.
 fn shows(expect: &Expect, missing: &[Missing]) -> (Vec<Show>, Vec<Show>) {
     let show = |m: &Missing| match m {
-        Missing::Image => Show::Image,
-        Missing::Link => Show::Link,
+        Missing::Image => Some(Show::Image),
+        Missing::Link => Some(Show::Link),
+        Missing::FollowThrough => None,
     };
     let mut wanted = Vec::new();
     if expect.image {
@@ -262,7 +458,7 @@ fn shows(expect: &Expect, missing: &[Missing]) -> (Vec<Show>, Vec<Show>) {
     if expect.link {
         wanted.push(Show::Link);
     }
-    (wanted, missing.iter().map(show).collect())
+    (wanted, missing.iter().filter_map(show).collect())
 }
 
 /// Runs `again` (the continuation turn, given its prompt) when the first turn's check asked for
@@ -282,18 +478,20 @@ where
     }
 }
 
-/// The reply as saved: with [`NO_PICTURE_LINE`](super::picture_claims::NO_PICTURE_LINE) when the verdict says so.
+/// The reply as saved: with [`NO_PICTURE_LINE`](super::picture_claims::NO_PICTURE_LINE) and
+/// [`follow_line`] when the verdict says so.
 pub fn apply(reply: String, v: &Verdict) -> String {
-    if v.no_picture_line {
-        super::picture_claims::with_no_picture_line(&reply)
-    } else {
-        reply
+    let reply = if v.no_picture_line { super::picture_claims::with_no_picture_line(&reply) } else { reply };
+    match &v.follow_line {
+        Some(tool) => format!("{}\n\n{}", reply.trim_end(), follow_line(tool)).trim_start().to_string(),
+        None => reply,
     }
 }
 
 /// The reply's `meta.delivery`, when the check ran (`checked`) and did something or had an
 /// expectation: `{"missing": [...], "auto_shared": bool, "no_picture": bool, "continues": bool,
-/// "outcome": "hit"|"miss", "lean": bool}` (`lean`: the plan only leaned, so it didn't continue). A turn the check skips (see `TurnOpts::delivery_checked`) has none.
+/// "outcome": "hit"|"miss", "lean": bool, "follow_line": bool}` (`lean`: the plan only leaned, so it didn't continue;
+/// `follow_line`: [`follow_line`] was added). A turn the check skips (see `TurnOpts::delivery_checked`) has none.
 pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value> {
     if !checked || (*v == Verdict::default() && expect.is_none()) {
         return None;
@@ -305,6 +503,7 @@ pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value
         "continues": v.continue_with.is_some(),
         "outcome": v.outcome,
         "lean": expect.is_some_and(|e| !e.firm),
+        "follow_line": v.follow_line.is_some(),
     }))
 }
 
@@ -312,6 +511,7 @@ pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value
 mod tests {
     use super::*;
     use crate::router::delivery::Deliverable;
+    use serde_json::json;
     use crate::server::picture_claims::NO_PICTURE_LINE;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -324,9 +524,9 @@ mod tests {
     fn explain() -> Expect {
         Expect::default()
     }
-    const NOTHING: Seen = Seen { image_shared: false, has_shot: false, pushed: false };
-    const SHARED: Seen = Seen { image_shared: true, has_shot: true, pushed: false };
-    const SHOT: Seen = Seen { image_shared: false, has_shot: true, pushed: false };
+    const NOTHING: Seen = Seen { image_shared: false, has_shot: false, pushed: false, ran_tools: false, failed_step: None, declined: false };
+    const SHARED: Seen = Seen { image_shared: true, has_shot: true, ..NOTHING };
+    const SHOT: Seen = Seen { has_shot: true, ..NOTHING };
 
     /// Plays a turn and its continuation the way `routes::try_kwant_turn` does: returns the joined
     /// reply, how many continuations ran, and the last verdict.
@@ -687,9 +887,163 @@ mod tests {
 
         let mut delivery = Seen::default();
         let pushed = Seen { pushed: true, ..SHOT }.with_earlier(&mut delivery);
-        assert_eq!(pushed, Seen { image_shared: false, has_shot: true, pushed: true });
+        assert_eq!(pushed, Seen { has_shot: true, pushed: true, ..NOTHING });
         let next = NOTHING.with_earlier(&mut delivery);
-        assert_eq!(next, Seen { image_shared: false, has_shot: false, pushed: true }, "the shot stays the first turn's");
+        assert_eq!(next, Seen { pushed: true, ..NOTHING }, "the shot stays the first turn's");
         assert!(!check("Done, no link here.", Some(&change()), true, &next).missing.contains(&Missing::Link));
+    }
+
+    // ---- 0.9.4 follow-through ----
+
+    const REAL: &str = "The render command was refused.\n\nI'll check the file sizes and measure the frame timings next.";
+
+    fn failed(tool: &str) -> Seen {
+        Seen { ran_tools: true, failed_step: Some(FailedStep { tool: tool.into(), title: "render the video".into() }), ..NOTHING }
+    }
+
+    #[test]
+    fn a_reply_that_ends_on_a_plan_is_a_promise() {
+        assert_eq!(promise_line(REAL).as_deref(), Some("I'll check the file sizes and measure the frame timings next."));
+        for (reply, want) in [
+            ("Tried it.\n\nLet me retry with a smaller batch.", "Let me retry with a smaller batch."),
+            ("Failed.\n\nNext, I’ll open the page in the browser.", "Next, I'll open the page in the browser."),
+            ("Failed.\n\n**Now I'll** read the log instead.", "Now I'll read the log instead."),
+            ("The build broke. I'm going to run it again with logs.", "I'm going to run it again with logs."),
+            ("Summary:\n- tests pass\n- I will push the fix next", "I will push the fix next"),
+            ("Refused.\n\nGoing to try the API instead.", "Going to try the API instead."),
+        ] {
+            assert_eq!(promise_line(reply).as_deref(), Some(want), "{reply}");
+        }
+    }
+
+    #[test]
+    fn done_blocked_questions_and_waits_are_not_promises() {
+        for reply in [
+            "Done: the render is at out.mp4 and plays.",
+            "The render was refused.\n\nBlocked: terminal commands are off for this bot. Allow Terminal, then say continue.",
+            "I'll need your pick: should I use the dark theme?",
+            "I'll continue once you allow Terminal on the Mac.",
+            "I'll pick it up when you've signed in.",
+            "Let me know if you want the long version.",
+            "I'll wait for your answer.",
+            "I'll run it again after you add the key.",
+            "If you want, I'll redo it in 4K.",
+            "The render failed, so I used the old frames instead. The video is at out.mp4.",
+            "I'll check the logs.\n\nThe render is at out.mp4 and plays.",
+            "",
+        ] {
+            assert_eq!(promise_line(reply), None, "{reply}");
+        }
+    }
+
+    #[test]
+    fn the_last_tool_step_is_read_from_the_activity() {
+        let steps = |s: Value| Some(json!({ "steps": s }));
+        let (ran, f, d) = tool_steps_in(steps(json!([
+            { "kind": "thinking", "status": "done" },
+            { "kind": "tool", "tool": "Read", "title": "read a.txt", "status": "ok" },
+            { "kind": "tool", "tool": "Bash", "title": "render", "status": "failed" },
+            { "kind": "note", "status": "done" },
+        ]))
+        .as_ref());
+        assert!(ran && !d);
+        assert_eq!(f, Some(FailedStep { tool: "Bash".into(), title: "render".into() }));
+        // A later tool step that worked: nothing to follow through
+        let (_, f, _) = tool_steps_in(steps(json!([
+            { "kind": "tool", "tool": "Bash", "title": "render", "status": "failed" },
+            { "kind": "tool", "tool": "Bash", "title": "render small", "status": "ok" },
+        ]))
+        .as_ref());
+        assert_eq!(f, None);
+        // A declined card is seen; no activity is nothing
+        let (_, _, d) = tool_steps_in(steps(json!([{ "kind": "approval", "status": "declined" }, { "kind": "tool", "tool": "Bash", "status": "failed" }])).as_ref());
+        assert!(d);
+        assert_eq!(tool_steps_in(None), (false, None, false));
+    }
+
+    #[test]
+    fn a_failed_step_and_a_promise_continue_once_without_a_plan() {
+        let v = check(REAL, None, false, &failed("Bash"));
+        assert_eq!(v.missing, vec![Missing::FollowThrough]);
+        let prompt = v.continue_with.expect("follow-through continues without a plan");
+        assert!(prompt.contains("Your last step (Bash: render the video) failed or was refused"), "{prompt}");
+        assert!(prompt.contains("(\"I'll check the file sizes and measure the frame timings next.\")"), "{prompt}");
+        assert!(prompt.contains("`Blocked: <what is blocked>. <what would unblock it>`"), "{prompt}");
+        assert_eq!(v.outcome, None, "no plan, no delivery note");
+        // Lean plans and firm ones alike
+        let lean = Expect { firm: false, ..explain() };
+        assert!(check(REAL, Some(&lean), false, &failed("Bash")).continue_with.is_some());
+        assert!(check(REAL, Some(&explain()), false, &failed("Bash")).continue_with.is_some());
+    }
+
+    #[test]
+    fn a_later_ok_step_a_declined_card_or_no_promise_doesnt_continue() {
+        assert_eq!(check(REAL, None, false, &Seen { ran_tools: true, ..NOTHING }).continue_with, None, "the last step worked");
+        assert_eq!(check(REAL, None, false, &Seen { declined: true, ..failed("Bash") }).continue_with, None, "the person declined");
+        let blocked = "Refused.\n\nBlocked: terminal is off. Allow Terminal, then say continue.";
+        assert_eq!(check(blocked, None, false, &failed("Bash")).continue_with, None);
+        assert_eq!(check("The render is at out.mp4.", None, false, &failed("Bash")).continue_with, None);
+    }
+
+    #[test]
+    fn the_continuation_never_continues_and_gets_the_kwant_line() {
+        let v = check("Still failing.\n\nI'll try again later.", None, true, &failed("Bash"));
+        assert_eq!(v.continue_with, None);
+        assert_eq!(v.follow_line.as_deref(), Some("Bash"));
+        let text = apply("Still failing.\n\nI'll try again later.".into(), &v);
+        assert!(text.ends_with(&follow_line("Bash")), "{text}");
+        assert_eq!(follow_line("Bash"), "_kwant: this stopped after a failed step (Bash) without another try or a reason._");
+        assert_eq!(meta(&v, None, true).unwrap()["missing"], json!(["follow_through"]));
+        assert_eq!(meta(&v, None, true).unwrap()["follow_line"], json!(true));
+        // A continuation that got past it, or ended Blocked:, gets no line
+        let ok = check("Rendered with ffmpeg instead: out.mp4.", None, true, &Seen { ran_tools: true, ..NOTHING });
+        assert_eq!((ok.follow_line, ok.missing), (None, vec![]));
+        let b = check("Blocked: terminal is off. Allow it, then say continue.", None, true, &failed("Bash"));
+        assert_eq!(b.follow_line, None);
+    }
+
+    #[test]
+    fn an_image_miss_and_follow_through_are_one_prompt() {
+        let v = check(REAL, Some(&ideas()), false, &failed("Bash"));
+        assert_eq!(v.missing, vec![Missing::Image, Missing::FollowThrough]);
+        let prompt = v.continue_with.unwrap();
+        assert_eq!(prompt.matches("[kwnt: one automatic continuation").count(), 1, "{prompt}");
+        assert!(prompt.contains("Missing from your last reply: an image in the chat and another try after the failed step."), "{prompt}");
+        assert!(prompt.contains(IMAGE_PROMPT) && prompt.contains("Your last step (Bash"), "{prompt}");
+        assert!(prompt.contains("Done when: one mockup image per idea is shared."), "{prompt}");
+        // A lean plan's image miss isn't asked for; follow-through still is
+        let lean = Expect { firm: false, ..ideas() };
+        let prompt = check(REAL, Some(&lean), false, &failed("Bash")).continue_with.unwrap();
+        assert!(!prompt.contains(IMAGE_PROMPT) && prompt.contains("Your last step"), "{prompt}");
+    }
+
+    #[test]
+    fn follow_through_is_never_a_delivery_note() {
+        let (_, missing) = shows(&change(), &[Missing::FollowThrough]);
+        assert!(missing.is_empty());
+        // The outcome after the continuation is the plan's own: a hit here
+        let v = check("Still broken.\n\nI'll look again.", Some(&change()), true, &Seen { pushed: true, ..failed("Bash") });
+        assert_eq!((v.outcome, v.missing), (Some(Outcome::Hit), vec![Missing::FollowThrough]));
+    }
+
+    #[test]
+    fn a_continuation_without_tools_keeps_the_failed_step() {
+        let mut delivery = Seen::default();
+        let first = failed("Bash").with_earlier(&mut delivery);
+        assert!(first.failed_step.is_some());
+        let then = NOTHING.with_earlier(&mut delivery);
+        assert_eq!(then.failed_step, first.failed_step, "it promised again without trying");
+        let fixed = Seen { ran_tools: true, ..NOTHING }.with_earlier(&mut delivery);
+        assert_eq!(fixed.failed_step, None, "it ran a tool that worked");
+        let declined = Seen { declined: true, ..NOTHING }.with_earlier(&mut delivery);
+        assert!(declined.declined && Seen::default().with_earlier(&mut delivery).declined);
+    }
+
+    #[tokio::test]
+    async fn a_failed_step_plays_out_as_one_continuation() {
+        let (text, runs, last) = play(None, (REAL, failed("Bash")), ("Rendered with ffmpeg instead: out.mp4.", Seen { ran_tools: true, ..NOTHING })).await;
+        assert_eq!(runs, 1);
+        assert_eq!(text, format!("{REAL}\n\nRendered with ffmpeg instead: out.mp4."));
+        assert_eq!(last.follow_line, None);
     }
 }

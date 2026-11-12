@@ -284,7 +284,7 @@ async fn a_stalled_lead_gets_a_keep_going_turn_and_its_mention_goes_out() {
     assert!(kg[0].contains(keep_going::PROMPT), "{}", kg[0]);
     assert!(kg[0].contains("> @"), "it quotes the person: {}", kg[0]);
     assert!(kg[0].contains("Build the level, both parts."), "{}", kg[0]);
-    assert!(kg[0].contains("End every reply in one of three ways"), "{}", kg[0]);
+    assert!(kg[0].contains("End every reply in one of four ways"), "{}", kg[0]);
     let second = delegations(&env).await.into_iter().find(|d| d.task.contains("KGMARK")).expect("the keep-going turn's mention is a hand-off");
     assert_eq!(second.specialist_kwant_id, env.checker);
     assert_eq!(second.origin_channel_id.as_deref(), Some(env.channel.as_str()));
@@ -375,6 +375,36 @@ async fn a_prose_question_becomes_a_card_and_its_answer_keeps_the_chain_going() 
     let last = *lead_replies(&env, &msgs).last().unwrap();
     assert_eq!(meta_of(last)[keep_going::DONE_KEY]["text"], "published cover A and checked the store page.");
     assert!(open_questions(&env).await.is_empty());
+}
+
+/// 0.9.4: a lead whose last line is `Blocked: …` gets no keep-going turn: the line is stored as
+/// `meta.blocked` and becomes a question card at once, whose answer resumes the chain.
+#[tokio::test]
+async fn a_blocked_line_becomes_a_card_not_a_keep_going_turn() {
+    let env = setup().await;
+    env.queue("res", &["The render was refused twice.\\nBlocked: terminal commands are off for this bot on the shared Mac. Allow Terminal for this team, then say continue."]);
+    env.queue("kg", &["Rendered it.\\nDone: rendered the intro and checked its length."]);
+    person_asks(&env, "Render the intro.").await;
+    hand_off(&env, "Cut the intro", true).await;
+    wait_for("the card", || async { !open_questions(&env).await.is_empty() }).await;
+    settled(&env).await;
+    assert!(env.prompts("kg").is_empty(), "blocked: asked, never pushed on");
+    let msgs = messages(&env).await;
+    let blocked = lead_replies(&env, &msgs).into_iter().find(|m| m.text.starts_with("The render was refused")).expect("the reply");
+    let text = "terminal commands are off for this bot on the shared Mac. Allow Terminal for this team, then say continue.";
+    assert_eq!(meta_of(blocked)[keep_going::BLOCKED_KEY]["text"], text);
+    let open = open_questions(&env).await;
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0].question, format!("Blocked: {text}"));
+    assert_eq!(card_meta(&env, &open[0]).await[keep_going::ASK_KEY], true);
+
+    // The person unblocks it: the chain resumes
+    answer(&env, &open[0].id, "Allowed. Continue").await;
+    wait_for("the keep-going turn after the answer", || async { !env.prompts("kg").is_empty() }).await;
+    settled(&env).await;
+    let msgs = messages(&env).await;
+    let last = *lead_replies(&env, &msgs).last().unwrap();
+    assert_eq!(meta_of(last)[keep_going::DONE_KEY]["text"], "rendered the intro and checked its length.");
 }
 
 /// Two keep-going turns that still hand nothing on: one "Keep going?" card, never a second.
@@ -542,14 +572,15 @@ async fn another_open_hand_off_means_no_keep_going_turn() {
     settled(&env).await;
 }
 
-/// The lead's prompts: no "one answer" left, and the hand-off rules name the three ends.
+/// The lead's prompts: no "one answer" left, and the hand-off rules name the four ends.
 #[test]
 fn the_prompts_name_the_three_ends() {
     let rules = delegation::handoff_rules();
     assert!(!rules.contains("one answer"), "{rules}");
-    assert!(rules.contains("End every reply in one of three ways"), "{rules}");
+    assert!(rules.contains("End every reply in one of four ways"), "{rules}");
     assert!(rules.contains("@mention, or do it yourself in this reply"), "{rules}");
     assert!(rules.contains("ask them with the question tool"), "{rules}");
     assert!(rules.contains("`Done: <what you checked>`"), "{rules}");
+    assert!(rules.contains("`Blocked: <what is blocked>. <what would unblock it>`"), "{rules}");
     assert!(keep_going::PROMPT.starts_with("The person's request isn't marked done"));
 }
