@@ -251,7 +251,7 @@ export function composioBody(url: string, apiKey: string, enabled: boolean): Com
 
 /** What the add form says when the server refuses. */
 export function composioErrorText(e: unknown): string {
-  if (e instanceof ConnectionsError && e.status === 409) return 'Composio is already added. Change it under Tools instead.';
+  if (e instanceof ConnectionsError && e.status === 409) return 'Composio is already added. Change it under Advanced instead.';
   if (e instanceof ConnectionsError && e.status === 400) return e.message;
   return e instanceof Error ? e.message : 'Something went wrong.';
 }

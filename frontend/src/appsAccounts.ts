@@ -11,7 +11,6 @@ import type { Engine, Profile } from './profiles';
 
 /** Where Apps & accounts opens: at the top, at AI accounts, or with Advanced open. */
 export type { AppsSection } from './nav';
-import type { AppsSection } from './nav';
 
 export interface AppTile {
   /** Composio's toolkit slug. */
