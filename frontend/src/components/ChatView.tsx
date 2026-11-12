@@ -242,7 +242,7 @@ export interface ChatViewProps {
   terminalLogs?: TerminalLogEntry[];
   onRefreshVm?: () => void;
   onRestartVm?: () => void;
-  onNavigateVm?: (url: string) => void;
+  onNavigateVm?: (url: string, page?: string | null) => void;
   /** Some bot in the space runs without asking (the saved-passwords note). */
   vmApprovalsOff?: boolean;
   /** The CAPTCHA the open bot's browser waits on, and a counter that opens it to solve. */
@@ -256,6 +256,10 @@ export interface ChatViewProps {
   /** Answers that step as done from the browser; resolves to an error message on failure. */
   onVmStepDone?: (id: string) => Promise<string | void> | void;
   vmSolveRequest?: number;
+  /** 0.9.3: show this page of the team's browser (a card's Sign in / Solve); `n` goes up per ask. */
+  vmPagePick?: { page: string; n: number } | null;
+  /** Bot names by id, for the pane's page strip. */
+  vmBotNames?: Record<string, string>;
   /** Show it once: the single bot this chat's browser belongs to (absent in teams and channels). */
   vmShowOnceBot?: { id: string; name: string };
   /** Pinned team/channel instructions, shown collapsed above the messages. */
@@ -498,6 +502,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   vmSwitcher,
   onVmStepDone,
   vmSolveRequest,
+  vmPagePick,
+  vmBotNames,
   vmShowOnceBot,
   pinned = [],
   onEditInstructions,
@@ -2596,6 +2602,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       switcher={vmSwitcher}
       onStepDone={onVmStepDone}
       solveRequest={vmSolveRequest}
+      pagePick={vmPagePick}
+      botNames={vmBotNames}
       showOnceBot={vmShowOnceBot}
       point={pointSink}
     />

@@ -13,7 +13,8 @@ export interface HumanStepCardProps {
   /** A turn is paused on this step right now (else Done starts a new reply). */
   waiting: boolean;
   /** Shows the bot's browser panel; `solve` takes control and, on a phone, opens it full screen. */
-  onOpenBrowser?: (sandboxTarget: string | null, solve?: boolean) => void;
+  /** `page`: the step's own browser page (0.9.3), else its team page. */
+  onOpenBrowser?: (sandboxTarget: string | null, solve?: boolean, page?: string | null) => void;
   /** Resolve to an error message on failure. */
   onDone: (id: string) => Promise<string | void>;
   onSkip: (id: string) => Promise<string | void>;
@@ -119,7 +120,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
             {onOpenBrowser && captcha && (
               <button
                 type="button"
-                onClick={() => onOpenBrowser(view.sandbox_target, true)}
+                onClick={() => onOpenBrowser(view.sandbox_target, true, view.page_key ?? view.sandbox_target)}
                 className={`inline-flex items-center justify-center gap-2 min-h-[48px] sm:min-h-[38px] px-4 py-2 rounded-xl text-base sm:text-sm font-semibold bg-amber-400 text-zinc-950 hover:bg-amber-300 ${focusRing}`}
               >
                 <Puzzle size={16} className="shrink-0" aria-hidden="true" /> Solve it
@@ -128,7 +129,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
             {onOpenBrowser && !captcha && (
               <button
                 type="button"
-                onClick={() => onOpenBrowser(view.sandbox_target, true)}
+                onClick={() => onOpenBrowser(view.sandbox_target, true, view.page_key ?? view.sandbox_target)}
                 className={`inline-flex items-center justify-center gap-2 min-h-[48px] sm:min-h-[38px] px-4 py-2 rounded-xl text-base sm:text-sm font-semibold bg-amber-400 text-zinc-950 hover:bg-amber-300 ${focusRing}`}
               >
                 <MonitorPlay size={16} className="shrink-0" aria-hidden="true" /> Open browser

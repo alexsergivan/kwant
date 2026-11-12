@@ -1,6 +1,9 @@
 /** Always tunnel through Kwnt's public origin, including HTTPS reverse proxies. */
-export function browserStreamUrl(location: { protocol: string; host: string }, id: string) {
-  return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/sandbox/' + encodeURIComponent(id) + '/stream';
+/** The live view of a team's browser; `page` (0.9.3) picks one of its pages, else the server's default. */
+export function browserStreamUrl(location: { protocol: string; host: string }, id: string, page?: string | null) {
+  const base = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/sandbox/' + encodeURIComponent(id) + '/stream';
+  // A job page's key holds '#' (team#bot#chat), so it must be encoded or it would read as a fragment
+  return page ? `${base}?page=${encodeURIComponent(page)}` : base;
 }
 
 /** Map a pointer through the centered letterboxing applied by object-fit: contain. */
