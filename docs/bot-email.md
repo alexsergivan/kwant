@@ -80,7 +80,7 @@ Refused mail is logged in `bot_email_log` with its reason (`not_on_list`, `dmarc
 | `mail_wait_code` | yes | waits up to `timeout_secs` (10–900, default 300) and returns only `Sign-in code: …` or `Sign-in link: …` |
 | `mail_send` | no | mails the person (send list only) |
 
-The tools are offered in every turn. They refuse, and point the bot to `request_human_step` (kind `two_factor`), when:
+The tools are offered in every turn. They refuse, and point the bot to `request_human_step` (kind `two_factor`) if that turn has it, or to asking in its reply, when:
 - email isn't set up;
 - the password is locked;
 - the bot's email is off.
