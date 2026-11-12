@@ -18,7 +18,8 @@ use tokio::sync::watch;
 
 /// The release feed both the Mac app and the server read: the newest non-prerelease release's
 /// `latest.json` (`{version, notes, pub_date, ...}`), written by scripts/mac_latest_json.py.
-pub const LATEST_JSON: &str = "https://github.com/alexsergivan/kwant/releases/latest/download/latest.json";
+pub const LATEST_JSON: &str =
+    "https://github.com/alexsergivan/kwant/releases/latest/download/latest.json";
 pub const RELEASES: &str = "https://github.com/alexsergivan/kwant/releases";
 /// How often the server looks again on its own; "Check again" looks at once.
 pub const RECHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
@@ -113,7 +114,9 @@ impl Refused {
     pub fn message(&self) -> &'static str {
         match self {
             Refused::Unsupported => "this kwant doesn't check for updates (KWNT_UPDATE_CHECK=off)",
-            Refused::CannotInstall => "this kwant updates with a command, not from the app: see How to update",
+            Refused::CannotInstall => {
+                "this kwant updates with a command, not from the app: see How to update"
+            }
             Refused::Busy => "an update check or install is already running",
             Refused::NothingToInstall => "no newer version is available",
         }
@@ -147,7 +150,11 @@ impl UpdateHub {
             checked_at: None,
             how: None,
         });
-        Self { updater: Mutex::new(None), status, desktop_app: AtomicBool::new(false) }
+        Self {
+            updater: Mutex::new(None),
+            status,
+            desktop_app: AtomicBool::new(false),
+        }
     }
 
     /// The hub of this process: the Mac shell registers on it, the server reads it.
@@ -317,8 +324,17 @@ fn now_rfc3339() -> String {
 pub fn how_here() -> How {
     let exe = std::env::current_exe().ok();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let unit = std::fs::read_to_string("/proc/self/cgroup").ok().and_then(|c| Unit::from_cgroup(&c));
-    how_for(crate::doctor::Platform::detect(), std::env::consts::OS, std::env::consts::ARCH, exe.as_deref(), home.as_deref(), unit)
+    let unit = std::fs::read_to_string("/proc/self/cgroup")
+        .ok()
+        .and_then(|c| Unit::from_cgroup(&c));
+    how_for(
+        crate::doctor::Platform::detect(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        exe.as_deref(),
+        home.as_deref(),
+        unit,
+    )
 }
 
 /// The systemd unit kwnt runs as, when it is `kwnt.service`.
@@ -337,7 +353,11 @@ impl Unit {
             if !path.split('/').any(|part| part == "kwnt.service") {
                 return None;
             }
-            Some(if path.split('/').any(|part| part.starts_with("user@")) { Unit::User } else { Unit::System })
+            Some(if path.split('/').any(|part| part.starts_with("user@")) {
+                Unit::User
+            } else {
+                Unit::System
+            })
         })
     }
 }
@@ -356,10 +376,16 @@ pub fn how_for(
 ) -> How {
     use crate::doctor::Platform;
     if platform == Platform::Docker {
-        return How { kind: "docker", command: Some("docker compose pull kwnt && docker compose up -d".into()) };
+        return How {
+            kind: "docker",
+            command: Some("docker compose pull kwnt && docker compose up -d".into()),
+        };
     }
     if os == "windows" {
-        return How { kind: "windows", command: None };
+        return How {
+            kind: "windows",
+            command: None,
+        };
     }
     let built_here = exe.is_none_or(|p| p.components().any(|c| c.as_os_str() == "target"));
     let arch = match arch {
@@ -371,40 +397,65 @@ pub fn how_for(
         ("linux", Some(arch), Some(dir)) if !built_here => {
             // install.sh's own place: running it again downloads, checks and restarts (never sudo).
             if home.is_some_and(|h| dir == h.join(".local/bin")) {
-                return How { kind: "binary", command: Some(INSTALL_SH.into()) };
+                return How {
+                    kind: "binary",
+                    command: Some(INSTALL_SH.into()),
+                };
             }
-            let sudo = if home.is_some_and(|h| dir.starts_with(h)) { "" } else { "sudo " };
+            let sudo = if home.is_some_and(|h| dir.starts_with(h)) {
+                ""
+            } else {
+                "sudo "
+            };
             let get = format!("curl -fsSL {RELEASES}/latest/download/kwnt-linux-{arch}.tar.gz | {sudo}tar -xz -C {} kwnt", dir.display());
             let restart = match unit {
                 Some(Unit::User) => "systemctl --user restart kwnt",
                 Some(Unit::System) => "sudo systemctl restart kwnt",
                 None => "# then stop kwnt serve and start it again",
             };
-            How { kind: "binary", command: Some(format!("{get}\n{restart}")) }
+            How {
+                kind: "binary",
+                command: Some(format!("{get}\n{restart}")),
+            }
         }
-        _ => How { kind: "source", command: Some("git pull && make build".into()) },
+        _ => How {
+            kind: "source",
+            command: Some("git pull && make build".into()),
+        },
     }
 }
 
 /// The latest release, from [`LATEST_JSON`]. `Err` with the person's words when it can't tell.
 pub async fn fetch_latest(client: &reqwest::Client, url: &str) -> Result<Available, String> {
-    let res = client.get(url).timeout(CHECK_TIMEOUT).send().await.map_err(|e| {
-        if e.is_timeout() {
-            "GitHub didn't answer in time.".to_string()
-        } else {
-            "GitHub couldn't be reached.".to_string()
-        }
-    })?;
+    let res = client
+        .get(url)
+        .timeout(CHECK_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "GitHub didn't answer in time.".to_string()
+            } else {
+                "GitHub couldn't be reached.".to_string()
+            }
+        })?;
     if !res.status().is_success() {
         return Err(format!("GitHub answered {}.", res.status().as_u16()));
     }
-    let v: serde_json::Value = res.json().await.map_err(|_| "GitHub's answer wasn't readable.".to_string())?;
+    let v: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|_| "GitHub's answer wasn't readable.".to_string())?;
     parse_latest(&v).ok_or_else(|| "GitHub's answer had no version.".to_string())
 }
 
 /// `latest.json` → the release, or `None` when it has no `x.y.z` version.
 pub fn parse_latest(v: &serde_json::Value) -> Option<Available> {
-    let version = v["version"].as_str()?.trim().trim_start_matches('v').to_string();
+    let version = v["version"]
+        .as_str()?
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
     release_parts(&version)?;
     Some(Available {
         notes: v["notes"].as_str().unwrap_or_default().to_string(),
@@ -419,10 +470,18 @@ pub const RETRY_AFTER_ERROR: Duration = Duration::from_secs(30 * 60);
 
 /// Whether the release check should look again now.
 pub fn check_due(s: &Status, now: chrono::DateTime<chrono::Utc>) -> bool {
-    let Some(at) = s.checked_at.as_deref().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()) else {
+    let Some(at) = s
+        .checked_at
+        .as_deref()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+    else {
         return true;
     };
-    let every = if s.state == State::Error && s.available.is_none() { RETRY_AFTER_ERROR } else { RECHECK_EVERY };
+    let every = if s.state == State::Error && s.available.is_none() {
+        RETRY_AFTER_ERROR
+    } else {
+        RECHECK_EVERY
+    };
     now.signed_duration_since(at).to_std().unwrap_or_default() >= every
 }
 
@@ -460,7 +519,9 @@ impl Updater for ReleaseCheck {
 /// seconds after start, then every [`RECHECK_EVERY`] (wall clock, so a sleeping laptop looks
 /// again when it wakes). Stops if the app's updater takes over. `KWNT_UPDATE_CHECK=off` skips it.
 pub fn start_release_check(hub: Arc<UpdateHub>) {
-    if std::env::var("KWNT_UPDATE_CHECK").is_ok_and(|v| matches!(v.trim(), "off" | "0" | "false" | "no")) {
+    if std::env::var("KWNT_UPDATE_CHECK")
+        .is_ok_and(|v| matches!(v.trim(), "off" | "0" | "false" | "no"))
+    {
         tracing::info!("update check off (KWNT_UPDATE_CHECK)");
         return;
     }
@@ -471,9 +532,17 @@ pub fn start_release_check(hub: Arc<UpdateHub>) {
     // A test feed (a local latest.json) for trying the states; GitHub's otherwise
     let url = std::env::var("KWNT_UPDATE_FEED")
         .ok()
-        .filter(|u| u.starts_with("https://") || u.starts_with("http://127.0.0.1") || u.starts_with("http://localhost"))
+        .filter(|u| {
+            u.starts_with("https://")
+                || u.starts_with("http://127.0.0.1")
+                || u.starts_with("http://localhost")
+        })
         .unwrap_or_else(|| LATEST_JSON.to_string());
-    let check = Arc::new(ReleaseCheck { hub: hub.clone(), client, url });
+    let check = Arc::new(ReleaseCheck {
+        hub: hub.clone(),
+        client,
+        url,
+    });
     if !hub.register_check(check, how_here()) {
         return;
     }
@@ -667,7 +736,10 @@ mod tests {
     }
 
     fn how() -> How {
-        How { kind: "docker", command: Some("docker compose pull kwnt && docker compose up -d".into()) }
+        How {
+            kind: "docker",
+            command: Some("docker compose pull kwnt && docker compose up -d".into()),
+        }
     }
 
     #[test]
@@ -686,7 +758,11 @@ mod tests {
         assert_eq!(s.state, State::Available);
         assert!(s.checked_at.is_some(), "a finished check says when");
         assert_eq!(hub.install(), Err(Refused::CannotInstall));
-        assert_eq!(hub.status().state, State::Available, "a refused install changes nothing");
+        assert_eq!(
+            hub.status().state,
+            State::Available,
+            "a refused install changes nothing"
+        );
     }
 
     #[test]
@@ -742,13 +818,19 @@ mod tests {
         hub.check().unwrap();
         hub.found(None);
         let s = hub.status();
-        let at: chrono::DateTime<chrono::Utc> = chrono::DateTime::parse_from_rfc3339(s.checked_at.as_deref().unwrap()).unwrap().into();
+        let at: chrono::DateTime<chrono::Utc> =
+            chrono::DateTime::parse_from_rfc3339(s.checked_at.as_deref().unwrap())
+                .unwrap()
+                .into();
         assert!(!check_due(&s, at + chrono::Duration::hours(5)));
         assert!(check_due(&s, at + chrono::Duration::hours(6)));
         hub.check().unwrap();
         hub.failed("offline");
         let s = hub.status();
-        let at: chrono::DateTime<chrono::Utc> = chrono::DateTime::parse_from_rfc3339(s.checked_at.as_deref().unwrap()).unwrap().into();
+        let at: chrono::DateTime<chrono::Utc> =
+            chrono::DateTime::parse_from_rfc3339(s.checked_at.as_deref().unwrap())
+                .unwrap()
+                .into();
         assert!(!check_due(&s, at + chrono::Duration::minutes(29)));
         assert!(check_due(&s, at + chrono::Duration::minutes(30)));
     }
@@ -760,9 +842,20 @@ mod tests {
         assert_eq!(a.version, "0.9.4");
         assert_eq!(a.notes, "kwant 0.9.4: things");
         assert_eq!(a.date.as_deref(), Some("2026-11-12T20:49:18Z"));
-        assert_eq!(a.url, "https://github.com/alexsergivan/kwant/releases/tag/mac-v0.9.4");
-        assert_eq!(parse_latest(&serde_json::json!({"version": "v1.0.0"})).unwrap().version, "1.0.0");
-        assert_eq!(parse_latest(&serde_json::json!({"version": "latest"})), None);
+        assert_eq!(
+            a.url,
+            "https://github.com/alexsergivan/kwant/releases/tag/mac-v0.9.4"
+        );
+        assert_eq!(
+            parse_latest(&serde_json::json!({"version": "v1.0.0"}))
+                .unwrap()
+                .version,
+            "1.0.0"
+        );
+        assert_eq!(
+            parse_latest(&serde_json::json!({"version": "latest"})),
+            None
+        );
         assert_eq!(parse_latest(&serde_json::json!({})), None);
     }
 
@@ -770,7 +863,9 @@ mod tests {
     async fn fetch_latest_says_why_it_couldnt() {
         let client = reqwest::Client::new();
         // nothing listens on port 9 here
-        let e = fetch_latest(&client, "http://127.0.0.1:9/latest.json").await.unwrap_err();
+        let e = fetch_latest(&client, "http://127.0.0.1:9/latest.json")
+            .await
+            .unwrap_err();
         assert_eq!(e, "GitHub couldn't be reached.");
     }
 
@@ -779,36 +874,124 @@ mod tests {
         use crate::doctor::Platform;
         use std::path::Path;
         let home = Some(Path::new("/home/me"));
-        let docker = how_for(Platform::Docker, "linux", "x86_64", Some(Path::new("/usr/local/bin/kwnt")), home, None);
+        let docker = how_for(
+            Platform::Docker,
+            "linux",
+            "x86_64",
+            Some(Path::new("/usr/local/bin/kwnt")),
+            home,
+            None,
+        );
         assert_eq!(docker.kind, "docker");
-        assert_eq!(docker.command.as_deref(), Some("docker compose pull kwnt && docker compose up -d"));
+        assert_eq!(
+            docker.command.as_deref(),
+            Some("docker compose pull kwnt && docker compose up -d")
+        );
         // install.sh's place: run it again (it upgrades in place, restarts its user unit, never sudo)
-        let installed = how_for(Platform::Linux, "linux", "x86_64", Some(Path::new("/home/me/.local/bin/kwnt")), home, Some(Unit::User));
-        assert_eq!(installed, How { kind: "binary", command: Some(INSTALL_SH.into()) });
-        let bin = how_for(Platform::Linux, "linux", "x86_64", Some(Path::new("/usr/local/bin/kwnt")), home, Some(Unit::System));
+        let installed = how_for(
+            Platform::Linux,
+            "linux",
+            "x86_64",
+            Some(Path::new("/home/me/.local/bin/kwnt")),
+            home,
+            Some(Unit::User),
+        );
+        assert_eq!(
+            installed,
+            How {
+                kind: "binary",
+                command: Some(INSTALL_SH.into())
+            }
+        );
+        let bin = how_for(
+            Platform::Linux,
+            "linux",
+            "x86_64",
+            Some(Path::new("/usr/local/bin/kwnt")),
+            home,
+            Some(Unit::System),
+        );
         assert_eq!(bin.kind, "binary");
         assert_eq!(
             bin.command.as_deref(),
             Some("curl -fsSL https://github.com/alexsergivan/kwant/releases/latest/download/kwnt-linux-x86_64.tar.gz | sudo tar -xz -C /usr/local/bin kwnt\nsudo systemctl restart kwnt")
         );
-        let arm = how_for(Platform::Linux, "linux", "aarch64", Some(Path::new("/opt/kwnt/kwnt")), home, None);
-        assert!(arm.command.as_deref().unwrap().contains("kwnt-linux-aarch64.tar.gz | sudo tar -xz -C /opt/kwnt kwnt\n# then stop kwnt serve"));
+        let arm = how_for(
+            Platform::Linux,
+            "linux",
+            "aarch64",
+            Some(Path::new("/opt/kwnt/kwnt")),
+            home,
+            None,
+        );
+        assert!(arm.command.as_deref().unwrap().contains(
+            "kwnt-linux-aarch64.tar.gz | sudo tar -xz -C /opt/kwnt kwnt\n# then stop kwnt serve"
+        ));
         // under the home folder: no sudo
-        let mine = how_for(Platform::Linux, "linux", "aarch64", Some(Path::new("/home/me/apps/kwnt")), home, Some(Unit::User));
-        assert!(mine.command.as_deref().unwrap().contains("| tar -xz -C /home/me/apps kwnt\nsystemctl --user restart kwnt"));
-        let src = how_for(Platform::Linux, "linux", "x86_64", Some(Path::new("/home/me/kwant/target/release/kwnt")), home, None);
+        let mine = how_for(
+            Platform::Linux,
+            "linux",
+            "aarch64",
+            Some(Path::new("/home/me/apps/kwnt")),
+            home,
+            Some(Unit::User),
+        );
+        assert!(mine
+            .command
+            .as_deref()
+            .unwrap()
+            .contains("| tar -xz -C /home/me/apps kwnt\nsystemctl --user restart kwnt"));
+        let src = how_for(
+            Platform::Linux,
+            "linux",
+            "x86_64",
+            Some(Path::new("/home/me/kwant/target/release/kwnt")),
+            home,
+            None,
+        );
         assert_eq!(src.kind, "source");
-        assert_eq!(how_for(Platform::Mac, "macos", "aarch64", Some(Path::new("/usr/local/bin/kwnt")), home, None).kind, "source");
-        assert_eq!(how_for(Platform::Linux, "windows", "x86_64", None, home, None), How { kind: "windows", command: None });
+        assert_eq!(
+            how_for(
+                Platform::Mac,
+                "macos",
+                "aarch64",
+                Some(Path::new("/usr/local/bin/kwnt")),
+                home,
+                None
+            )
+            .kind,
+            "source"
+        );
+        assert_eq!(
+            how_for(Platform::Linux, "windows", "x86_64", None, home, None),
+            How {
+                kind: "windows",
+                command: None
+            }
+        );
     }
 
     #[test]
     fn systemd_unit_from_cgroup() {
-        assert_eq!(Unit::from_cgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/kwnt.service\n"), Some(Unit::User));
-        assert_eq!(Unit::from_cgroup("0::/system.slice/kwnt.service\n"), Some(Unit::System));
+        assert_eq!(
+            Unit::from_cgroup(
+                "0::/user.slice/user-1000.slice/user@1000.service/app.slice/kwnt.service\n"
+            ),
+            Some(Unit::User)
+        );
+        assert_eq!(
+            Unit::from_cgroup("0::/system.slice/kwnt.service\n"),
+            Some(Unit::System)
+        );
         // another service's child (a shell in a bot host) is not kwnt's unit
-        assert_eq!(Unit::from_cgroup("0::/system.slice/openmausbot.service\n"), None);
-        assert_eq!(Unit::from_cgroup("0::/user.slice/user-1000.slice/session-3.scope\n"), None);
+        assert_eq!(
+            Unit::from_cgroup("0::/system.slice/openmausbot.service\n"),
+            None
+        );
+        assert_eq!(
+            Unit::from_cgroup("0::/user.slice/user-1000.slice/session-3.scope\n"),
+            None
+        );
         assert_eq!(Unit::from_cgroup(""), None);
     }
 

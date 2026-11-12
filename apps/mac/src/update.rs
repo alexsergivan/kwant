@@ -77,7 +77,9 @@ pub fn start(app: &AppHandle) {
 fn check_due(last: Option<SystemTime>, now: SystemTime) -> bool {
     match last {
         None => true,
-        Some(last) => now.duration_since(last).map_or(true, |gone| gone >= CHECK_EVERY),
+        Some(last) => now
+            .duration_since(last)
+            .map_or(true, |gone| gone >= CHECK_EVERY),
     }
 }
 
@@ -190,7 +192,10 @@ mod tests {
         assert!(!check_due(Some(t), t + Duration::from_secs(59 * 60)));
         // a night asleep: due on the first look after waking
         assert!(check_due(Some(t), t + Duration::from_secs(9 * 60 * 60)));
-        assert!(check_due(Some(t + Duration::from_secs(60)), t), "clock went back");
+        assert!(
+            check_due(Some(t + Duration::from_secs(60)), t),
+            "clock went back"
+        );
     }
 
     #[test]

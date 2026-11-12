@@ -117,7 +117,13 @@ async fn unsupported_with_the_check_off() {
     for uri in ["/api/app/update/check", "/api/app/update/install"] {
         let (status, v) = call(&e.app, "POST", uri, None).await;
         assert_eq!(status, StatusCode::CONFLICT, "{uri}: {v}");
-        assert!(v["error"].as_str().unwrap().contains("doesn't check for updates"), "{v}");
+        assert!(
+            v["error"]
+                .as_str()
+                .unwrap()
+                .contains("doesn't check for updates"),
+            "{v}"
+        );
     }
 }
 
@@ -125,7 +131,10 @@ async fn unsupported_with_the_check_off() {
 async fn off_the_mac_app_the_check_reports_and_says_how() {
     let e = setup(None).await;
     let check = Arc::new(FakeUpdater::default());
-    let how = How { kind: "docker", command: Some("docker compose pull kwnt && docker compose up -d".into()) };
+    let how = How {
+        kind: "docker",
+        command: Some("docker compose pull kwnt && docker compose up -d".into()),
+    };
     assert!(e.state.app_update.register_check(check.clone(), how));
     let person = e.state.api_token.reveal().to_string();
 
@@ -133,7 +142,10 @@ async fn off_the_mac_app_the_check_reports_and_says_how() {
     assert_eq!(v["supported"], true);
     assert_eq!(v["can_install"], false);
     assert_eq!(v["how"]["kind"], "docker");
-    assert_eq!(v["how"]["command"], "docker compose pull kwnt && docker compose up -d");
+    assert_eq!(
+        v["how"]["command"],
+        "docker compose pull kwnt && docker compose up -d"
+    );
     assert!(v["checked_at"].is_null(), "not checked yet");
 
     // Check again: the person's, like on the Mac
@@ -149,12 +161,17 @@ async fn off_the_mac_app_the_check_reports_and_says_how() {
     // Never installs here
     let (status, v) = call(&e.app, "POST", "/api/app/update/install", Some(&person)).await;
     assert_eq!(status, StatusCode::CONFLICT, "{v}");
-    assert!(v["error"].as_str().unwrap().contains("How to update"), "{v}");
+    assert!(
+        v["error"].as_str().unwrap().contains("How to update"),
+        "{v}"
+    );
     assert_eq!(*check.calls.lock().unwrap(), vec!["check"]);
 
     // GitHub can't be reached: an error, never "latest"
     e.state.app_update.check().unwrap();
-    e.state.app_update.failed("Couldn't check for updates: GitHub couldn't be reached.");
+    e.state
+        .app_update
+        .failed("Couldn't check for updates: GitHub couldn't be reached.");
     let (_, v) = call(&e.app, "GET", "/api/app/update", None).await;
     assert_eq!(v["state"], "error");
     assert!(v["error"].as_str().unwrap().starts_with("Couldn't check"));
@@ -163,16 +180,32 @@ async fn off_the_mac_app_the_check_reports_and_says_how() {
 #[tokio::test]
 async fn no_ready_to_install_notification_off_the_mac_app() {
     let e = setup(None).await;
-    e.state.app_update.register_check(Arc::new(FakeUpdater::default()), How { kind: "docker", command: None });
+    e.state.app_update.register_check(
+        Arc::new(FakeUpdater::default()),
+        How {
+            kind: "docker",
+            command: None,
+        },
+    );
     let mut events = e.state.event_sender.subscribe();
     app_update_routes::spawn_notifier(e.state.clone());
     e.state.app_update.check().unwrap();
     e.state.app_update.found(Some(release("99.0.0")));
     tokio::time::sleep(Duration::from_millis(200)).await;
     while let Ok(ev) = events.try_recv() {
-        assert!(!matches!(ev, RuntimeEvent::Notify { ref kind, .. } if kind == "app_update"), "no notification");
+        assert!(
+            !matches!(ev, RuntimeEvent::Notify { ref kind, .. } if kind == "app_update"),
+            "no notification"
+        );
     }
-    assert_eq!(e.state.db.get_setting(app_update_routes::NOTIFIED_SETTING).await.unwrap(), None);
+    assert_eq!(
+        e.state
+            .db
+            .get_setting(app_update_routes::NOTIFIED_SETTING)
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
