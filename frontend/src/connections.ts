@@ -243,8 +243,8 @@ export interface ComposioBody {
 /** The add form as the API wants it, or why it can't be sent yet. */
 export function composioBody(url: string, apiKey: string, enabled: boolean): ComposioBody | { error: string } {
   const u = url.trim();
-  if (!u) return { error: 'Paste the MCP URL from your Composio dashboard.' };
-  if (!isComposioUrl(u)) return { error: 'That isn’t a Composio address. It should start with https:// and be on composio.dev.' };
+  if (!u) return { error: 'Paste your Composio link first. It’s under MCP in Composio.' };
+  if (!isComposioUrl(u)) return { error: 'That isn’t a Composio link. Copy the one under MCP in Composio; it starts with https:// and is on composio.dev.' };
   const key = apiKey.trim();
   return key ? { url: u, api_key: key, enabled } : { url: u, enabled };
 }

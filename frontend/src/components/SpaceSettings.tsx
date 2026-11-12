@@ -21,10 +21,9 @@ import {
 import { ScrollRow } from './ScrollRow';
 import { playSfx } from '../audio/chiptune';
 import { SPACE_COLORS, SPACE_ICONS, Space, spaceColor, spaceNameError, spacesApi } from '../spaces';
-import { useEngines } from '../useEngines';
-import { useProfiles } from '../useProfiles';
+import type { EnginesApi } from '../useEngines';
+import type { ProfilesState } from '../useProfiles';
 import type { Profile } from '../profiles';
-import { AccountPriority } from './AccountPriority';
 import { EnginesPanel } from './EnginesPanel';
 import { ApiKeysPanel } from './ApiKeysPanel';
 import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
@@ -241,7 +240,8 @@ export const SpaceSettings: React.FC<Props> = (p) => {
                   sectionSeq={p.appsSection?.seq}
                   focusClaudeSignIn={p.focusClaudeSignIn}
                   openAdvanced={p.toolNoteOpen}
-                  manageAccounts={<AccountsTab {...p} />}
+                  onProfilesChanged={p.onProfilesChanged}
+                  manageAccounts={(shared) => <AccountsTab {...p} {...shared} />}
                   advanced={p.connections}
                 />
               )}
@@ -532,15 +532,11 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
   );
 };
 
-const AccountsTab: React.FC<Props> = ({ space, focusClaudeSignIn, onProfilesChanged }) => {
-  const engines = useEngines(true);
-  const accounts = useProfiles(true, onProfilesChanged);
+// Apps & accounts › Sign-ins and settings: each AI's sign-in, install and API keys. The order lives in the
+// AI accounts list above (AccountPriority), so it isn't repeated here.
+const AccountsTab: React.FC<Props & { engines: EnginesApi; accounts: ProfilesState }> = ({ focusClaudeSignIn, engines, accounts }) => {
   return (
     <div className="space-y-3">
-      <p className="text-xs text-zinc-400">What runs your kwant bots in {space.name}: the accounts here, and This machine when it’s on.</p>
-      {accounts.profiles && accounts.profiles.length > 1 && (
-        <AccountPriority profiles={accounts.profiles} engines={engines.engines} onChanged={accounts.reload} />
-      )}
       <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} />
       <ApiKeysPanel
         onSaved={() => {

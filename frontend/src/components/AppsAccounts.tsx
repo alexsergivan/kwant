@@ -4,17 +4,15 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Check, ChevronRight, ExternalLink, Loader2, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronRight, ExternalLink, Info, Loader2, RefreshCw, X } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { CatalogEntry, ComposioApp, Connection, ConnectionsError, ConnectionsList, composioBody, composioErrorText, connectionsApi } from '../connections';
 import {
   APP_TILES,
-  AccountRow,
   AppTile,
   AppsSection,
   GiveError,
   accountNeedsYou,
-  accountRows,
   appInitials,
   approvalLine,
   botsWithServer,
@@ -22,36 +20,40 @@ import {
   listNames,
   serverIdOf,
   tileFor,
-  usedByLine,
 } from '../appsAccounts';
 import { inDesktopApp } from '../externalLinks';
 import { useEscapeLayer } from '../escape';
-import { useProfiles } from '../useProfiles';
-import type { Profile } from '../profiles';
+import { ProfilesState, useProfiles } from '../useProfiles';
+import { EnginesApi, useEngines } from '../useEngines';
+import type { EngineInfo } from '../engines';
+import { AccountPriority } from './AccountPriority';
+import { Profile, cardOf } from '../profiles';
 import type { Kwant } from './Sidebar';
 import { ComposioAppSearch } from './ConnectionsView';
 import { usePhoneLayout } from '../usePhoneLayout';
+import { ModernAvatar } from './ModernAvatar';
 
 /** The tile mark: plain initials on the overlay colour, never a brand logo. */
 const TILE_BG = '#231d4b';
 export const COMPOSIO_HOME = 'https://platform.composio.dev';
 
 const btn =
-  'inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
+  'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
 const primaryBtn = `${btn} bg-sky-600 text-white hover:bg-sky-500`;
 const linkBtn =
-  'inline-flex items-center gap-1 min-h-[32px] text-xs font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
+  'inline-flex items-center gap-1 min-h-[44px] sm:min-h-[32px] text-xs font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const field =
-  'w-full min-h-[40px] sm:min-h-[36px] px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-sky-500';
+  'w-full min-h-[40px] sm:min-h-[36px] px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-sky-500 aria-[invalid=true]:border-rose-500/60';
 const sectionTitle = 'text-xs font-semibold text-zinc-300 uppercase tracking-wider';
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
-export const AppMark: React.FC<{ name: string; size?: number }> = ({ name, size = 36 }) => (
+export const AppMark: React.FC<{ name: string; size?: number; tint?: string }> = ({ name, size = 36, tint = 'text-violet-100' }) => (
   <span
     aria-hidden="true"
-    className="shrink-0 inline-flex items-center justify-center rounded-lg font-semibold text-violet-100 border border-violet-400/20"
+    data-app-mark-tint={tint}
+    className={`shrink-0 inline-flex items-center justify-center rounded-lg font-semibold ${tint} border border-violet-400/20`}
     style={{ background: TILE_BG, width: size, height: size, fontSize: size * 0.36 }}
   >
     {appInitials(name)}
@@ -83,32 +85,43 @@ export interface ConnectSheetProps {
   spaceName: string;
   spaceMode?: string;
   onClose: () => void;
-  /** After the bots have it: what to tell the person. */
-  onDone: (message: string) => void;
+  /** After the bots have it: which app (null: Composio itself) and the names of the bots that have it now. */
+  onDone: (result: { app: AppTile | null; who: string[] }) => void;
   api?: ConnectApi;
   phone?: boolean;
   /** Tests and screenshots: start with these filled in. */
   initial?: { url?: string; picked?: string[]; opened?: boolean; error?: string };
 }
 
-/** One numbered step of the sheet. Outside the sheet, so typing in a step keeps its focus. */
-const Step: React.FC<{ n: 1 | 2 | 3; title: string; done: boolean; error: string | null; children: React.ReactNode }> = ({ n, title, done, error, children }) => (
-  <li className="flex gap-3" data-sheet-step={n} data-done={done || undefined}>
-    <span
-      aria-hidden="true"
-      className={`shrink-0 mt-0.5 w-6 h-6 rounded-full inline-flex items-center justify-center text-[11px] font-semibold ${
-        done ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40' : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
-      }`}
-    >
-      {done ? <Check size={12} /> : n}
-    </span>
+/** One numbered step of the sheet. Outside the sheet, so typing in a step keeps its focus.
+ * `n` is the step's key (errors, tests); `label` is the number shown (null: a lone step, no number). */
+const Step: React.FC<{ n: 1 | 2 | 3; label?: number | null; title: string; done: boolean; error: string | null; errorInChildren?: boolean; children: React.ReactNode }> = ({
+  n,
+  label = n,
+  title,
+  done,
+  error,
+  errorInChildren,
+  children,
+}) => (
+  <li className="flex gap-3" data-sheet-step={n} data-step-label={label ?? undefined} data-done={done || undefined}>
+    {label !== null && (
+      <span
+        aria-hidden="true"
+        className={`shrink-0 mt-0.5 w-6 h-6 rounded-full inline-flex items-center justify-center text-[11px] font-semibold ${
+          done ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40' : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
+        }`}
+      >
+        {done ? <Check size={12} /> : label}
+      </span>
+    )}
     <div className="min-w-0 flex-1 space-y-2">
       <p className="text-xs font-medium text-zinc-100">
-        <span className="sr-only">Step {n}{done ? ', done' : ''}: </span>
+        {label !== null && <span className="sr-only">Step {label}{done ? ', done' : ''}: </span>}
         {title}
       </p>
       {children}
-      {error && (
+      {error && !errorInChildren && (
         <p role="alert" className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-200" data-sheet-error={n}>
           {error}
         </p>
@@ -155,8 +168,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
     };
   }, [ready, serverId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const name = app?.name ?? 'Composio';
-  const title = app ? `Connect ${app.name}` : 'Set up Composio';
+  const title = app ? `Connect ${app.name}` : ready ? 'Choose bots for Composio' : 'Set up Composio';
   const chosenBots = kwants.filter((k) => picked.includes(k.id));
   const approval = approvalLine(app?.acts ?? 'Send, post or change things', chosenBots, spaceMode);
   const toggle = (kid: string) => (setPicked((p) => (p.includes(kid) ? p.filter((x) => x !== kid) : [...p, kid])), setError((x) => (x?.step === 3 ? null : x)));
@@ -181,9 +193,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
         step: 1,
         text: keyRefused
           ? `Composio refused your API key, so the ${app.name} sign-in can’t start here. Fix the key under Advanced › Manage tools, or sign in to ${app.name} on composio.dev.`
-          : `Couldn’t start the ${app.name} sign-in on Composio: ${errText(e)
-              .replace(/[;,.]?\s*try again later\.?$/i, '')
-              .replace(/\.$/, '')}. Composio may be down; try again in a minute.`,
+          : `Composio couldn’t be reached, so the ${app.name} sign-in didn’t open. Try again in a minute.`,
       });
     } finally {
       setSigningIn(false);
@@ -220,14 +230,14 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
         setError({ step: 3, text: ready ? `Giving it to your bots didn’t work: ${why}. Try again.` : `Composio is added, but giving it to your bots didn’t work: ${why}. Try again.` });
         return;
       }
-      const who = chosenBots.map((k) => k.name);
-      onDone(who.length ? `${name} is on for ${listNames(who)}.` : `No bot has Composio now.`);
+      onDone({ app, who: chosenBots.map((k) => k.name) });
     } finally {
       setSaving(false);
     }
   };
 
-  const stepDone = (n: 1 | 2 | 3) => (n === 3 ? false : n === 1 ? (ready ? signInOpened : opened) : ready || !!serverId);
+  const stepDone = (n: 1 | 2 | 3) =>
+    n === 3 ? picked.length > 0 : n === 1 ? (ready ? signInOpened : opened) : ready || !!serverId || !('error' in composioBody(url, key, false));
   const stepProps = (n: 1 | 2 | 3) => ({ n, done: stepDone(n), error: error?.step === n ? error.text : null });
 
   const panel = isPhone
@@ -240,14 +250,14 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
       <div ref={rootRef} role="dialog" aria-modal="true" aria-labelledby={`${id}-t`} tabIndex={-1} className={`${panel} flex flex-col focus:outline-none bg-zinc-900 border-zinc-800 shadow-2xl`}>
         {isPhone && <span aria-hidden="true" className="mx-auto mt-2 h-1 w-10 rounded-full bg-zinc-700" />}
         <div className="flex items-start gap-3 px-4 sm:px-5 pt-4 pb-3 border-b border-zinc-800">
-          {app ? <AppMark name={app.name} /> : <AppMark name="Composio" />}
+          {app ? <AppMark name={app.name} tint={app.tint} /> : <AppMark name="Composio" />}
           <div className="min-w-0 flex-1">
             <h2 id={`${id}-t`} className="text-sm font-semibold text-zinc-100">
               {title}
             </h2>
-            <p className="text-[11px] text-zinc-400">{ready ? 'Composio is set up, so this takes a minute' : 'Takes about 2 minutes'}</p>
+            <p className="text-[11px] text-zinc-400">{!ready ? 'Takes about 2 minutes' : app ? 'Composio is set up, so this takes a minute' : 'Picked bots can use every app on your Composio'}</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 -mr-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
+          <button type="button" onClick={onClose} aria-label="Close" className="inline-flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 -mr-2 sm:-mr-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500">
             <X size={17} />
           </button>
         </div>
@@ -294,8 +304,8 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                         </a>
                         , add {app.name} to the same MCP server you gave kwant bots and sign in there.{' '}
                         {composio.can_search
-                          ? 'kwant bots can’t start the sign-in for you because your Composio link has no user_id.'
-                          : 'kwant bots can’t start the sign-in for you without your Composio API key (Advanced › Manage tools).'}
+                          ? 'kwant bots can’t open this sign-in for you with your Composio link, so sign in there.'
+                          : 'To sign in from here instead, add your Composio API key under Advanced › Manage tools.'}
                       </p>
                     )}
                   </Step>
@@ -311,7 +321,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                       <span className="sr-only">(opens in a new tab)</span>
                     </a>
                   </Step>
-                  <Step {...stepProps(2)} title="Paste your Composio link">
+                  <Step {...stepProps(2)} errorInChildren title="Paste your Composio link">
                     <label htmlFor={`${id}-url`} className="sr-only">
                       Composio MCP link
                     </label>
@@ -325,10 +335,15 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                       placeholder="https://backend.composio.dev/v3/mcp/…"
                       value={url}
                       onChange={(e) => (setUrl(e.target.value), setError((x) => (x?.step === 2 ? null : x)))}
-                      aria-describedby={`${id}-url-h`}
+                      aria-describedby={error?.step === 2 ? `${id}-url-e ${id}-url-h` : `${id}-url-h`}
                       aria-invalid={error?.step === 2 ? true : undefined}
                       disabled={!!serverId}
                     />
+                    {error?.step === 2 && (
+                      <p id={`${id}-url-e`} role="alert" className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-200" data-sheet-error={2}>
+                        {error.text}
+                      </p>
+                    )}
                     <p id={`${id}-url-h`} className="text-[11px] text-zinc-400">
                       In Composio, open <span className="text-zinc-200">MCP</span> in the left menu, pick your server (or create one with {app ? app.name : 'your apps'}), and copy its URL. It starts with https:// and is on composio.dev.
                     </p>
@@ -348,7 +363,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                   </Step>
                 </>
               )}
-              <Step {...stepProps(3)} title="Which bots get it?">
+              <Step {...stepProps(3)} label={ready ? (app ? 2 : null) : 3} title="Which bots get it?">
                 {!pickedLoaded ? (
                   <p className="flex items-center gap-2 text-[11px] text-zinc-400">
                     <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Checking which bots have it…
@@ -365,11 +380,14 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                           <label
                             key={k.id}
                             data-sheet-bot={k.id}
-                            className={`inline-flex items-center gap-2 min-h-[40px] sm:min-h-[32px] px-3 rounded-full border text-xs cursor-pointer focus-within:outline focus-within:outline-2 focus-within:outline-sky-500 ${
+                            className={`inline-flex items-center gap-2 min-h-[44px] sm:min-h-[32px] px-3 rounded-full border text-xs cursor-pointer focus-within:outline focus-within:outline-2 focus-within:outline-sky-500 ${
                               on ? 'border-sky-500/60 bg-sky-500/15 text-zinc-100' : 'border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:border-zinc-600'
                             }`}
                           >
                             <input type="checkbox" className="accent-sky-500" checked={on} onChange={() => toggle(k.id)} />
+                            <span aria-hidden="true" className="inline-flex">
+                              <ModernAvatar role={k.avatar_sprite} name={k.name} size={20} kwantId={k.id} />
+                            </span>
                             {k.name}
                           </label>
                         );
@@ -378,8 +396,10 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                   </fieldset>
                 )}
                 <p className="text-[11px] text-zinc-400">
-                  {picked.length === 0 ? (ready ? 'No bot has it. Tick the ones that should.' : 'None until you tick one.') : `${listNames(chosenBots.map((k) => k.name))} ${chosenBots.length === 1 ? 'gets' : 'get'} it, turned on.`}{' '}
-                  Composio is one connection, so these bots can use every app you’ve connected on Composio.
+                  {picked.length === 0 ? (ready ? 'No bot has it. Tick the ones that should.' : 'None until you tick one.') : `${listNames(chosenBots.map((k) => k.name))} ${chosenBots.length === 1 ? 'gets' : 'get'} it, turned on.`}
+                </p>
+                <p className="text-[11px] text-zinc-300" data-sheet-one-connection>
+                  Composio is one connection: the bots you tick can use every app on it{app ? `, not only ${app.name}` : ''}.
                 </p>
               </Step>
             </ol>
@@ -414,15 +434,21 @@ export interface AppsAccountsProps {
   focusClaudeSignIn?: number;
   /** Opens Advanced (a bot's tool note was asked for). */
   openAdvanced?: boolean;
-  /** Manage AI accounts: order, sign-ins and API keys (the old Accounts tab). */
-  manageAccounts: React.ReactNode;
+  /** Sign-ins and settings: each AI's sign-in, install and API keys (the old Accounts tab, without its order).
+   * Gets the page's own engines and accounts, so both stay in step. */
+  manageAccounts: (shared: { engines: EnginesApi; accounts: ProfilesState }) => React.ReactNode;
+  /** Every fresh accounts list, so bot pickers stay current. */
+  onProfilesChanged?: (profiles: Profile[]) => void;
   /** Advanced: tool servers, Telegram and notes from bots (the old Connections list); gets Composio's "Choose bots". */
   advanced: (chooseComposioBots: () => void) => React.ReactNode;
   onNewBot?: () => void;
   /** Tests and screenshots. */
   data?: ConnectionsList | null;
   profiles?: Profile[] | null;
+  engines?: EngineInfo[] | null;
   connectApi?: ConnectApi;
+  /** Tests: whether Composio has a sign-in for an app (default: ask Composio). */
+  appStatus?: (slug: string) => Promise<{ connected: boolean }>;
   initialSheet?: { slug: string | null; initial?: ConnectSheetProps['initial'] };
   phone?: boolean;
 }
@@ -435,12 +461,17 @@ type Load = { state: 'loading' } | { state: 'error'; text: string } | { state: '
 
 export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
   const [load, setLoad] = useState<Load>(p.data ? { state: 'ok', data: tidyList(p.data) } : { state: 'loading' });
-  const profilesHook = useProfiles(p.profiles === undefined);
+  const profilesHook = useProfiles(p.profiles === undefined, p.onProfilesChanged);
   const profiles = p.profiles !== undefined ? p.profiles : profilesHook.profiles;
+  const enginesHook = useEngines(p.engines === undefined);
+  const engines = p.engines !== undefined ? p.engines : enginesHook.engines;
+  const accountsState: ProfilesState = p.profiles !== undefined ? { profiles: p.profiles, error: null, reload: async () => {} } : profilesHook;
+  const enginesState: EnginesApi = p.engines !== undefined ? { ...enginesHook, engines: p.engines } : enginesHook;
   const [sheet, setSheet] = useState<{ app: AppTile | null; initial?: ConnectSheetProps['initial'] } | null>(
     p.initialSheet ? { app: p.initialSheet.slug ? tileFor(APP_TILES.find((t) => t.slug === p.initialSheet!.slug) ?? { slug: p.initialSheet.slug, name: p.initialSheet.slug }) : null, initial: p.initialSheet.initial } : null,
   );
-  const [notice, setNotice] = useState<string | null>(null);
+  // ok: earned (the app is signed in). info: true but not the whole story yet (neutral, not green).
+  const [notice, setNotice] = useState<{ text: string; tone: 'ok' | 'info' } | null>(null);
   const [manageOpen, setManageOpen] = useState(!!p.focusClaudeSignIn);
   const [advancedOpen, setAdvancedOpen] = useState(p.section === 'advanced' || !!p.openAdvanced);
   const [connectedApps, setConnectedApps] = useState<Record<string, boolean>>({});
@@ -450,17 +481,19 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
   const alive = useRef(true);
   const fixed = p.data !== undefined;
 
-  const reload = useCallback(async () => {
-    if (fixed) return;
+  const reload = useCallback(async (): Promise<ConnectionsList | null> => {
+    if (fixed) return p.data ? tidyList(p.data) : null;
     try {
-      const data = await connectionsApi.list();
-      if (alive.current) setLoad({ state: 'ok', data: tidyList(data) });
+      const data = tidyList(await connectionsApi.list());
+      if (alive.current) setLoad({ state: 'ok', data });
+      return data;
     } catch (e) {
       if (!alive.current) return;
       if (e instanceof ConnectionsError && e.status === 401) setLoad({ state: 'token' });
       else setLoad({ state: 'error', text: errText(e) });
+      return null;
     }
-  }, [fixed]);
+  }, [fixed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     alive.current = true;
@@ -502,11 +535,45 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
     };
   }, [fixed, composio?.added, composio?.can_connect]);
 
-  const rows = data ? accountRows(data.connections, profiles ?? null) : [];
+  const usedByOf = (profileId: string) => data?.connections.find((c) => c.id === `account:${profileId}`)?.used_by.map((u) => u.name) ?? [];
   const needs = data ? data.connections.filter((c) => accountNeedsYou(c)).length : 0;
-  const openManage = () => {
+  /** Opens "Sign-ins and settings", at one AI's card when given: its existing sign-in or set-up. */
+  const openManage = (engineCard?: string) => {
     setManageOpen(true);
-    window.setTimeout(() => manageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+    window.setTimeout(() => {
+      const card = engineCard ? manageRef.current?.querySelector<HTMLElement>(`[data-engine="${CSS.escape(engineCard)}"]`) : null;
+      (card ?? manageRef.current)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      card?.querySelector<HTMLElement>('button:not([disabled]), a[href]')?.focus({ preventScroll: true });
+    }, 50);
+  };
+  const reloadAccounts = async () => {
+    await Promise.all([accountsState.reload(), enginesState.reload(), reload()]);
+  };
+
+  /** What to say after a connect: only "Gmail is on for Ann." once Composio confirms a Gmail sign-in (F1). */
+  const doneNotice = async (app: AppTile | null, who: string[]) => {
+    const fresh = await reload();
+    if (!alive.current) return;
+    if (!who.length) return setNotice({ text: 'No bot has Composio now.', tone: 'info' });
+    const names = listNames(who);
+    if (!app) return setNotice({ text: `Composio is on for ${names}.`, tone: 'info' });
+    const entry = fresh?.catalog.find((e) => e.id === 'composio') ?? composio;
+    let signedIn = false;
+    if (entry?.can_connect) {
+      try {
+        signedIn = (await (p.appStatus ?? connectionsApi.composioAppStatus)(app.slug)).connected;
+        if (alive.current) setConnectedApps((m) => ({ ...m, [app.slug]: signedIn }));
+      } catch {
+        signedIn = false;
+      }
+    }
+    if (!alive.current) return;
+    const user = who.length === 1 ? names : 'They';
+    setNotice(
+      signedIn
+        ? { text: `${app.name} is on for ${names}.`, tone: 'ok' }
+        : { text: `Composio is on for ${names}. ${user} can use ${app.name} once you’ve signed in to ${app.name} on Composio.`, tone: 'info' },
+    );
   };
 
   const openApp = (app: AppTile | null) => {
@@ -522,14 +589,19 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
   return (
     <div className="space-y-6" data-apps-accounts>
       <p className="text-xs text-zinc-400">
-        The apps your bots can use and the AI they think with. Apps connect through Composio; nothing secret is shown here.
+        The apps your bots can use, and the AI they think with.
       </p>
 
       <div role="status" aria-live="polite">
         {notice && (
-          <p className="flex items-start gap-2 px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-100" data-apps-notice>
-            <Check size={14} className="mt-px shrink-0" aria-hidden="true" />
-            {notice}
+          <p
+            className={`flex items-start gap-2 px-3 py-2 rounded-lg border text-xs ${
+              notice.tone === 'ok' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-zinc-700 bg-zinc-900/60 text-zinc-200'
+            }`}
+            data-apps-notice={notice.tone}
+          >
+            {notice.tone === 'ok' ? <Check size={14} className="mt-px shrink-0" aria-hidden="true" /> : <Info size={14} className="mt-px shrink-0 text-zinc-400" aria-hidden="true" />}
+            {notice.text}
           </p>
         )}
       </div>
@@ -563,6 +635,8 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
         <ul className="grid grid-cols-2 sm:grid-cols-3 gap-2" aria-busy={load.state === 'loading'}>
           {APP_TILES.map((t) => {
             const connected = connectedApps[t.slug];
+            // Composio is added but kwant can't ask it (no key or no user_id): it may be signed in, we can't tell.
+            const unknowable = !connected && !!composio?.added && !composio.can_connect;
             return (
               <li key={t.slug}>
                 <button
@@ -573,14 +647,14 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
                   className="w-full h-full min-h-[88px] flex flex-col items-start gap-2 p-3 rounded-xl border border-zinc-800 bg-zinc-900/60 text-left hover:border-zinc-600 hover:bg-zinc-900 transition-colors disabled:opacity-60 disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
                 >
                   <span className="flex items-center gap-2 w-full min-w-0">
-                    <AppMark name={t.name} size={30} />
+                    <AppMark name={t.name} size={30} tint={t.tint} />
                     <span className="min-w-0">
                       <span className="block text-xs font-medium text-zinc-100 truncate">{t.name}</span>
-                      <span className="block text-[11px] text-zinc-500 truncate" title={t.blurb}>{t.blurb}</span>
+                      <span className="block text-[11px] text-zinc-500 line-clamp-2" title={t.blurb}>{t.blurb}</span>
                     </span>
                   </span>
-                  <span className={`text-[11px] font-medium ${connected ? 'text-emerald-300' : 'text-sky-300'}`}>
-                    {load.state === 'loading' ? 'Checking…' : connected ? '✓ Connected · Choose bots' : 'Connect'}
+                  <span className={`text-[11px] font-medium ${connected ? 'text-emerald-300' : unknowable ? 'text-zinc-300' : 'text-sky-300'}`} data-tile-state={connected ? 'connected' : unknowable ? 'unknown' : 'connect'}>
+                    {load.state === 'loading' ? 'Checking…' : connected ? '✓ Connected · Choose bots' : unknowable ? 'Sign in or choose bots' : 'Connect'}
                     <span className="sr-only"> {t.name}</span>
                   </span>
                 </button>
@@ -627,26 +701,25 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
             </span>
           )}
         </div>
-        {load.state === 'loading' ? (
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 space-y-2" aria-hidden="true">
+        {!profiles || (load.state === 'loading' && !data) ? (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 space-y-2" aria-hidden="true" data-ai-loading>
             <div className="h-3 w-40 rounded bg-zinc-800 animate-pulse motion-reduce:animate-none" />
             <div className="h-3 w-56 rounded bg-zinc-800 animate-pulse motion-reduce:animate-none" />
           </div>
-        ) : data && rows.length === 0 ? (
-          <p className="px-3 py-3 rounded-xl border border-dashed border-zinc-800 text-xs text-zinc-400" data-empty="account">
-            No AI accounts yet.{' '}
-            <button type="button" className={linkBtn} onClick={openManage}>
-              Sign in to one
-            </button>
-          </p>
         ) : (
-          data && (
-            <ul className="rounded-xl border border-zinc-800 bg-zinc-900/60 divide-y divide-zinc-800">
-              {rows.map((r) => (
-                <AccountItem key={r.id} r={r} onManage={openManage} />
-              ))}
-            </ul>
-          )
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
+            <AccountPriority
+              profiles={profiles}
+              engines={engines}
+              spaceName={p.spaceName}
+              usedBy={usedByOf}
+              onChanged={reloadAccounts}
+              onSignIn={(a) => openManage(cardOf(a))}
+              onSetUp={(a) => openManage(cardOf(a))}
+              onAddAccount={() => openManage()}
+              onEngineOn={(id) => enginesState.setEnabled(id, true)}
+            />
+          </div>
         )}
         <details
           ref={manageRef}
@@ -657,9 +730,10 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
         >
           <summary className="flex items-center gap-2 min-h-[40px] px-3 cursor-pointer list-none text-xs font-medium text-zinc-300 hover:text-zinc-100 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500">
             <ChevronRight size={14} className="transition-transform group-open:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
-            Sign in, add an account or an API key
+            Sign-ins and settings
+            <span className="font-normal text-zinc-500">· add an account or an API key</span>
           </summary>
-          {manageOpen && <div className="px-3 pb-3 space-y-3">{p.manageAccounts}</div>}
+          {manageOpen && <div className="px-3 pb-3 space-y-3">{p.manageAccounts({ engines: enginesState, accounts: accountsState })}</div>}
         </details>
       </section>
 
@@ -692,50 +766,13 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
           phone={p.phone}
           initial={sheet.initial}
           onClose={() => setSheet(null)}
-          onDone={(msg) => {
+          onDone={({ app, who }) => {
             setSheet(null);
-            setNotice(msg);
-            reload();
+            void doneNotice(app, who);
           }}
         />
       )}
     </div>
-  );
-};
-
-const AccountItem: React.FC<{ r: AccountRow; onManage: () => void }> = ({ r, onManage }) => {
-  const badge =
-    r.state === 'needs_you'
-      ? { text: r.statusText ?? 'Needs sign-in', cls: 'border-amber-500/30 bg-amber-500/10 text-amber-200' }
-      : r.state === 'ready'
-        ? { text: 'Ready', cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' }
-        : r.state === 'off'
-          ? { text: 'Off', cls: 'border-zinc-700 bg-zinc-800 text-zinc-300' }
-          : null;
-  return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2.5" data-ai-account={r.profileId} data-ai-state={r.state}>
-      <div className="min-w-0 flex-1 basis-48">
-        <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-zinc-100">
-          {r.title}
-          {badge && <span className={`px-1.5 py-px rounded border text-[11px] font-normal ${badge.cls}`}>{badge.text}</span>}
-        </p>
-        <p className="text-[11px] text-zinc-400 truncate">{r.detail}</p>
-        <p className={`text-[11px] ${r.usedBy.length ? 'text-zinc-300' : 'text-zinc-500'}`}>{usedByLine(r.usedBy)}</p>
-      </div>
-      {r.state === 'needs_you' ? (
-        <button type="button" className={`${btn} border border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20`} onClick={onManage}>
-          Sign in<span className="sr-only"> to {r.title}</span>
-        </button>
-      ) : r.state === 'sign_in' ? (
-        <button type="button" className={linkBtn} onClick={onManage} data-quiet-sign-in>
-          Sign in<span className="sr-only"> to {r.title}</span>
-        </button>
-      ) : (
-        <button type="button" className={linkBtn} onClick={onManage}>
-          Manage<span className="sr-only"> {r.title}</span>
-        </button>
-      )}
-    </li>
   );
 };
 

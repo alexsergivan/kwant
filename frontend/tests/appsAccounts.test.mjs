@@ -120,10 +120,10 @@ test('a bad link stops at step 2 with words, and no bot stops at step 3', async 
   const api = fakeApi();
   const host = await mount(m.ConnectSheet, sheetProps({ api }));
   await submit(host);
-  assert.match(text(host.querySelector('[data-sheet-error="2"]')), /Paste the MCP URL/);
+  assert.match(text(host.querySelector('[data-sheet-error="2"]')), /^Paste your Composio link first\. It’s under MCP in Composio\.$/);
   await type(host.querySelector('input[type="url"]'), 'https://example.com/mcp');
   await submit(host);
-  assert.match(text(host.querySelector('[data-sheet-error="2"]')), /isn’t a Composio address/);
+  assert.match(text(host.querySelector('[data-sheet-error="2"]')), /^That isn’t a Composio link\. Copy the one under MCP in Composio; it starts with https:\/\/ and is on composio\.dev\.$/);
   await type(host.querySelector('input[type="url"]'), 'https://backend.composio.dev/v3/mcp/abc');
   await submit(host);
   assert.match(text(host.querySelector('[data-sheet-error="3"]')), /Tick at least one bot/);
@@ -154,14 +154,14 @@ test('Composio refusing the link shows its reason at step 2', async () => {
 test('picking one bot adds Composio and gives it to just that bot, then says so', async () => {
   const api = fakeApi();
   let done = null;
-  const host = await mount(m.ConnectSheet, sheetProps({ api, onDone: (t) => (done = t) }));
+  const host = await mount(m.ConnectSheet, sheetProps({ api, onDone: (r) => (done = r) }));
   await type(host.querySelector('input[type="url"]'), 'https://backend.composio.dev/v3/mcp/abc');
   await click(host.querySelector('[data-sheet-bot="k1"] input'));
   assert.match(text(host), /Ann gets it, turned on/);
   await submit(host);
   assert.deepEqual(api.calls[0], ['add', { url: 'https://backend.composio.dev/v3/mcp/abc', enabled: false }], 'added off: only the picks turn it on');
   assert.deepEqual(api.calls[1], ['give', 'cmp1', ['k1', 'k2', 'k3'], ['k1']]);
-  assert.equal(done, 'Gmail is on for Ann.');
+  assert.deepEqual({ app: done.app.slug, who: done.who }, { app: 'gmail', who: ['Ann'] }, 'the page words the result once it knows the sign-in');
 });
 
 test('with Composio set up the sheet starts at the app’s own sign-in and the bots that have it now', async () => {
@@ -184,8 +184,8 @@ test('Composio down while starting the app sign-in says so at step 1', async () 
   g.window.open = () => null;
   await click(host.querySelector('[data-sheet-signin]'));
   const t = text(host.querySelector('[data-sheet-error="1"]'));
-  assert.match(t, /Composio couldn't be reached\. Composio may be down; try again in a minute\./);
-  assert.equal(t.match(/try again/g).length, 1, 'the server\'s own "try again later" isn\'t repeated');
+  assert.match(t, /Composio couldn’t be reached, so the Gmail sign-in didn’t open\. Try again in a minute\./);
+  assert.equal(t.match(/try again/gi).length, 1, 'the server\'s own "try again later" isn\'t repeated');
 });
 
 test('a refused Composio key says so and doesn’t blame an outage', async () => {
@@ -211,12 +211,15 @@ test('focus moves into the sheet (a modal: Tab is trapped by useEscapeLayer) and
 
 test('the approval line follows the bots’ real approvals and never promises "asks first" when off', () => {
   assert.equal(m.approvalLine('Send mail', [bots[0]], 'ask').tone, 'ok');
-  assert.match(m.approvalLine('Send mail', [bots[0]], 'ask').text, /only after you say yes/);
+  assert.equal(m.approvalLine('Send mail', [bots[0]], 'ask').text, 'Send mail only after you say yes');
   assert.match(m.approvalLine('Send mail', [bots[2]], 'ask').text, /without asking/);
   const mixed = m.approvalLine('Send mail', [bots[0], bots[2]], 'ask');
   assert.match(mixed.text, /Cody won’t ask first/);
   assert.doesNotMatch(m.approvalLine('Send mail', [], 'off').text, /say yes/);
-  assert.match(m.approvalLine('Send mail', [{ name: 'X', approvals_effective: 'smart' }], 'ask').text, /risky/);
+  // F3 (Ada): smart asks before anything outward, so it gets the same line as ask.
+  assert.deepEqual(m.approvalLine('Send mail', [{ name: 'X', approvals_effective: 'smart' }], 'ask'), { text: 'Send mail only after you say yes', tone: 'ok' });
+  assert.match(m.approvalLine('Send mail', [bots[2]], 'ask').text, /\(approvals are off\)$/);
+  assert.equal(mixed.text, 'Send mail: Cody won’t ask first (approvals off); the others ask you');
   const html = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps({ initial: { picked: ['k3'] } })));
   assert.match(html, /data-sheet-approval="warn"/);
   assert.ok(!html.includes('only after you say yes'));
@@ -278,35 +281,18 @@ test('an unused account that isn’t signed in is a quiet Sign in, never "needs 
   assert.equal(m.countsLine([used, unused]), '0 connected · 1 needs you');
   assert.equal(m.countsLine([unused]), '0 connected');
   assert.equal(m.pageCounts([used, unused]), '0 AI accounts ready · 0 tool servers on · 1 needs you');
-  const rows = m.accountRows([unused, used], [profile('p1', 'claude'), profile('p2', 'codex', { kind: 'cli_home' })]);
-  assert.deepEqual(rows.map((r) => [r.title, r.state]), [['Claude', 'needs_you'], ['Codex', 'sign_in']]);
-});
-
-test('accounts are named by engine, say who uses them, and say which when one engine has two', () => {
-  const rows = m.accountRows(
-    [
-      acct('sys', { used_by: [{ id: 'k1', name: 'Ann' }, { id: 'k2', name: 'Ben' }, { id: 'k3', name: 'Cody' }] }),
-      acct('p2', { name: 'Work', detail: 'claude · work@example.com' }),
-      acct('p3', { name: 'Grok key', detail: 'grok' }),
-    ],
-    [profile('sys', 'claude'), profile('p2', 'claude', { kind: 'cli_home' }), profile('p3', 'grok', { kind: 'api_key', has_key: true })],
-  );
-  assert.deepEqual(rows.map((r) => r.title), ['Claude', 'Claude · Work', 'Grok']);
-  assert.equal(rows[0].detail, 'Signed in on this computer · me@example.com');
-  assert.equal(m.usedByLine(rows[0].usedBy), 'Used by Ann, Ben and Cody');
-  assert.equal(m.usedByLine([]), 'No bot uses it yet');
-  assert.equal(rows[2].detail, 'API key');
 });
 
 // ── The page ─────────────────────────────────────────────────────────────────────────────────
 
 const data = (over = {}) => ({
-  connections: [acct('sys', { used_by: [{ id: 'k1', name: 'Ann' }] }), acct('p2', { name: 'Work', detail: 'codex', status: 'needs_sign_in' })],
+  connections: [acct('sys', { used_by: [{ id: 'k1', name: 'Ann' }, { id: 'k2', name: 'Ben' }] }), acct('p2', { name: 'Work', detail: 'codex', status: 'needs_sign_in' })],
   counts: {}, vault: { status: 'ok' }, catalog: [composio()], ...over,
 });
 const pageProps = (over = {}) => ({
-  spaceName: 'Home', spaceMode: 'ask', kwants: bots, data: data(), profiles: [profile('sys', 'claude'), profile('p2', 'codex', { kind: 'cli_home' })],
-  manageAccounts: h('p', null, 'MANAGE'), advanced: () => h('p', null, 'ADVANCED'), phone: false, ...over,
+  spaceName: 'Home', spaceMode: 'ask', kwants: bots, data: data(), profiles: [profile('sys', 'claude'), profile('p2', 'codex', { kind: 'cli_home', signed_in: false, priority: 1 })],
+  engines: [{ id: 'claude', name: 'Claude', kind: 'cli', status: 'ready', enabled: true, ready: true, models: [] }, { id: 'codex', name: 'Codex', kind: 'cli', status: 'ready', enabled: true, ready: true, models: [] }],
+  manageAccounts: () => h('p', null, 'MANAGE'), advanced: () => h('p', null, 'ADVANCED'), phone: false, ...over,
 });
 
 test('the page puts app tiles first, then another app, AI accounts, and a closed Advanced', () => {
@@ -320,6 +306,21 @@ test('the page puts app tiles first, then another app, AI accounts, and a closed
   assert.ok(html.includes('data-quiet-sign-in'), 'the unused Codex account offers a quiet Sign in');
   assert.ok(!html.includes('data-ai-needs'), 'and nothing "needs you"');
   assert.ok(!html.includes('Turn on in Tools'));
+  // Decision 2: the order groups are the list, so each account shows once, with who uses it.
+  const ai = html.slice(html.indexOf('data-ai-accounts'), html.indexOf('data-apps-advanced'));
+  assert.equal((ai.match(/data-account-title/g) ?? []).length, 2, 'each account once');
+  assert.match(ai, /Used by Ann and Ben/);
+  assert.match(ai, /Signed in on this computer/);
+  assert.doesNotMatch(ai, /This machine|MANAGE/, 'sign-ins and keys stay collapsed');
+  assert.match(ai, /Sign-ins and settings/);
+  // F10: the intro names both halves.
+  assert.match(html, /The apps your bots can use, and the AI they think with\./);
+  // F7: each tile has its own initials colour and a two-line blurb.
+  const tints = [...html.matchAll(/data-app-mark-tint="([^"]+)"/g)].map((x) => x[1]);
+  assert.equal(new Set(tints).size, 6, `six tints: ${tints}`);
+  assert.equal((html.match(/line-clamp-2/g) ?? []).length, 6);
+  // F8: phone-sized targets on the page's buttons.
+  assert.match(html, /min-h-\[44px\] sm:min-h-\[32px\]/);
 });
 
 test('a tile opens the Connect sheet and Escape closes it', async () => {
@@ -363,4 +364,65 @@ test('old Settings addresses land on Apps & accounts and are rewritten', () => {
     assert.equal(m.viewSegment(r.view), 'settings/apps');
   }
   assert.deepEqual(m.parseView('settings/apps'), { view: { kind: 'settings', scope: 'space', tab: 'apps' }, legacy: false });
+});
+
+// ── Mira's design check (design-check.md F1–F9) ──────────────────────────────────────────────
+
+const readyComposio = () => composio({ added: true, enabled: true, connection_id: 'mcp:cmp1', can_connect: true });
+
+test('F1: the done line is green only when Composio confirms the app sign-in; otherwise it says what’s left', async () => {
+  for (const [signedIn, tone, want] of [
+    [true, 'ok', 'Gmail is on for Ann.'],
+    [false, 'info', 'Composio is on for Ann. Ann can use Gmail once you’ve signed in to Gmail on Composio.'],
+  ]) {
+    const host = await mount(m.AppsAccounts, pageProps({
+      data: data({ catalog: [readyComposio()] }), connectApi: fakeApi(), appStatus: async () => ({ connected: signedIn }),
+      initialSheet: { slug: 'gmail', initial: { picked: ['k1'] } },
+    }));
+    await submit(document.querySelector('[data-connect-sheet]'));
+    const n = host.querySelector('[data-apps-notice]');
+    assert.equal(n?.getAttribute('data-apps-notice'), tone);
+    assert.equal(text(n), want);
+    for (const u of [...mounted]) u();
+  }
+});
+
+test('F1: a tile Composio can’t check says "Sign in or choose bots", not Connect or Connected', () => {
+  const html = m.renderToStaticMarkup(h(m.AppsAccounts, pageProps({ data: data({ catalog: [composio({ added: true, enabled: true, connection_id: 'mcp:cmp1', can_connect: false })] }) })));
+  assert.equal((html.match(/data-tile-state="unknown"/g) ?? []).length, 6);
+  assert.match(html, /Sign in or choose bots/);
+  const fresh = m.renderToStaticMarkup(h(m.AppsAccounts, pageProps()));
+  assert.equal((fresh.match(/data-tile-state="connect"/g) ?? []).length, 6);
+});
+
+test('F2: with Composio set up the steps are 1 and 2, and Choose bots alone has no number', () => {
+  const ready = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps({ composio: readyComposio() })));
+  assert.deepEqual([...ready.matchAll(/data-step-label="(\d+)"/g)].map((x) => x[1]), ['1', '2']);
+  const choose = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps({ app: null, composio: readyComposio() })));
+  assert.match(choose, /Choose bots for Composio/);
+  assert.match(choose, /Picked bots can use every app on your Composio/);
+  assert.doesNotMatch(choose, /data-step-label=/);
+  assert.doesNotMatch(choose, /Step \d/);
+});
+
+test('F4: bot chips show the bot’s face and step 3 says Composio is one connection', () => {
+  const html = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps()));
+  const chip = html.slice(html.indexOf('data-sheet-bot="k1"'), html.indexOf('data-sheet-bot="k2"'));
+  assert.match(chip, /aria-hidden="true"/);
+  assert.match(chip, /min-h-\[44px\]/);
+  assert.match(html, /data-sheet-one-connection="true">Composio is one connection: the bots you tick can use every app on it, not only Gmail\./);
+});
+
+test('F5: the link error sits right under the field and is read with it; a good link ticks step 2', async () => {
+  const host = await mount(m.ConnectSheet, sheetProps({ api: fakeApi() }));
+  const input = host.querySelector('input[type="url"]');
+  await submit(host);
+  const err = host.querySelector('[data-sheet-error="2"]');
+  assert.equal(err.getAttribute('role'), 'alert');
+  assert.ok(input.getAttribute('aria-describedby').split(' ').includes(err.id));
+  assert.equal(input.getAttribute('aria-invalid'), 'true');
+  const after = [...input.closest('[data-sheet-step]').querySelectorAll('*')];
+  assert.ok(after.indexOf(err) > after.indexOf(input), 'error after the input');
+  await type(input, 'https://backend.composio.dev/v3/mcp/abc');
+  assert.equal(host.querySelector('[data-sheet-step="2"]').getAttribute('data-done'), 'true');
 });

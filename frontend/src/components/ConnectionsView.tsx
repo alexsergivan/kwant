@@ -217,7 +217,7 @@ export const ComposioAppSearch: React.FC<{
   if (!entry.can_search) {
     return (
       <p className="text-[11px] text-zinc-400" data-composio-search="needs-key">
-        To find apps from here, add your Composio API key as the <code className="text-zinc-300">x-api-key</code> header of the Composio server under Advanced › Manage tools.
+        To search apps here, add your Composio API key to the Composio server under Advanced › Manage tools (as the header <code className="text-zinc-300">x-api-key</code>).
       </p>
     );
   }

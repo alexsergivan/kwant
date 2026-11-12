@@ -7,7 +7,6 @@
 import type { Connection } from './connections';
 import { personFetch } from './auth';
 import { formToPayload, serverToForm, type McpServer } from './mcp';
-import type { Engine, Profile } from './profiles';
 
 /** Where Apps & accounts opens: at the top, at AI accounts, or with Advanced open. */
 export type { AppsSection } from './nav';
@@ -22,16 +21,18 @@ export interface AppTile {
   can: string[];
   /** The step that acts for the person (sends, posts, buys): the approvals line goes next to it. */
   acts: string;
+  /** Our own tint for the initials on the #231d4b ground (not a brand colour); search hits have none. */
+  tint?: string;
 }
 
 /** The tiles, in order (brief: Gmail, Google Calendar, Slack, Notion, Shopify, GitHub). */
 export const APP_TILES: AppTile[] = [
-  { slug: 'gmail', name: 'Gmail', blurb: 'Read mail, write drafts', can: ['Read and search your mail', 'Write drafts for you to check'], acts: 'Send mail' },
-  { slug: 'googlecalendar', name: 'Google Calendar', blurb: 'See and add events', can: ['See your calendar', 'Find free time'], acts: 'Add or move events' },
-  { slug: 'slack', name: 'Slack', blurb: 'Read channels, post messages', can: ['Read channels and threads', 'Search messages'], acts: 'Post messages' },
-  { slug: 'notion', name: 'Notion', blurb: 'Read and edit pages', can: ['Read and search your pages', 'Draft new pages'], acts: 'Change or delete pages' },
-  { slug: 'shopify', name: 'Shopify', blurb: 'Orders and products', can: ['See orders, products and customers', 'Look up stock'], acts: 'Change orders or products' },
-  { slug: 'github', name: 'GitHub', blurb: 'Issues and pull requests', can: ['Read repositories, issues and pull requests', 'Draft issues and comments'], acts: 'Post, merge or close' },
+  { slug: 'gmail', tint: 'text-rose-300', name: 'Gmail', blurb: 'Read mail, write drafts', can: ['Read and search your mail', 'Write drafts for you to check'], acts: 'Send mail' },
+  { slug: 'googlecalendar', tint: 'text-blue-300', name: 'Google Calendar', blurb: 'See and add events', can: ['See your calendar', 'Find free time'], acts: 'Add or move events' },
+  { slug: 'slack', tint: 'text-amber-200', name: 'Slack', blurb: 'Read and post messages', can: ['Read channels and threads', 'Search messages'], acts: 'Post messages' },
+  { slug: 'notion', tint: 'text-zinc-200', name: 'Notion', blurb: 'Read and edit pages', can: ['Read and search your pages', 'Draft new pages'], acts: 'Change or delete pages' },
+  { slug: 'shopify', tint: 'text-emerald-300', name: 'Shopify', blurb: 'Orders and products', can: ['See orders, products and customers', 'Look up stock'], acts: 'Change orders or products' },
+  { slug: 'github', tint: 'text-violet-200', name: 'GitHub', blurb: 'Issues and pull requests', can: ['Read repositories, issues and pull requests', 'Draft issues and comments'], acts: 'Post, merge or close' },
 ];
 
 /** A search hit opened in the sheet: what we can say about an app we have no copy for. */
@@ -63,10 +64,12 @@ export function approvalLine(acts: string, bots: Array<{ name: string; approvals
   const mode = (m: string | null | undefined): Mode => (m === 'off' || m === 'smart' ? m : 'ask');
   const modes = bots.length ? bots.map((b) => mode(b.approvals_effective ?? spaceMode)) : [mode(spaceMode)];
   const free = bots.filter((b) => mode(b.approvals_effective ?? spaceMode) === 'off').map((b) => b.name);
-  if (modes.every((m) => m === 'ask')) return { text: `${acts} only after you say yes, every time`, tone: 'ok' };
+  // Smart asks before any tool the server doesn't mark read-only, for every engine (Ada, fixes-542 F3), so it reads like ask.
+  // Not "every time": the approval can be answered "always allow" for the session.
+  if (modes.every((m) => m !== 'off')) return { text: `${acts} only after you say yes`, tone: 'ok' };
   if (modes.every((m) => m === 'off')) return { text: `${acts} without asking you first (approvals are off)`, tone: 'warn' };
   if (free.length) return { text: `${acts}: ${listNames(free)} won’t ask first (approvals off); the others ask you`, tone: 'warn' };
-  return { text: `${acts}: asks you first when the step looks risky (approvals: ask only when risky)`, tone: 'warn' };
+  return { text: `${acts}: ${listNames(free)} won’t ask first (approvals off); the others ask you`, tone: 'warn' };
 }
 
 export function listNames(names: string[]): string {
@@ -74,74 +77,13 @@ export function listNames(names: string[]): string {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-// ── AI accounts, named by engine ─────────────────────────────────────────────────────────────
-
-export const ENGINE_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', grok: 'Grok', copilot: 'Copilot', ollama: 'Ollama', custom: 'Custom API' };
-
-export interface AccountRow {
-  id: string;
-  profileId: string;
-  engine: Engine | string;
-  /** "Claude", "Codex" … The profile's own name follows when an engine has more than one. */
-  title: string;
-  /** "Signed in on this computer · me@example.com" */
-  detail: string;
-  usedBy: string[];
-  /** ready: works. sign_in: nobody uses it and it isn't signed in (quiet, never "needs you"). needs_you: a bot uses it and it can't run. off. */
-  state: 'ready' | 'sign_in' | 'needs_you' | 'off' | 'unknown';
-  statusText: string | null;
-}
+// ── AI accounts: the needs-you count ─────────────────────────────────────────────────────────────
 
 const BAD = new Set(['needs_sign_in', 'error', 'limited', 'locked']);
 
 /** True when an account connection needs the person: it's broken and a bot uses it. */
 export const accountNeedsYou = (c: Pick<Connection, 'kind' | 'status' | 'used_by'>): boolean =>
   c.kind === 'account' && BAD.has(c.status) && c.used_by.length > 0;
-
-/** The AI accounts list: one row per account, named by its engine, with who thinks with it. */
-export function accountRows(connections: Connection[], profiles: Profile[] | null): AccountRow[] {
-  const byId = new Map((profiles ?? []).map((p) => [p.id, p]));
-  const rows = connections
-    .filter((c) => c.kind === 'account')
-    .map((c) => {
-      const profileId = c.id.replace(/^account:/, '');
-      const p = byId.get(profileId);
-      const engine = p?.engine ?? (c.detail ?? '').split(' · ')[0] ?? 'custom';
-      const label = (c.detail ?? '').includes(' · ') ? (c.detail ?? '').split(' · ').slice(1).join(' · ') : null;
-      const system = p ? p.kind === 'system' : c.name === 'This machine';
-      const where = p?.custom ? (c.detail ?? 'Custom server') : system ? 'Signed in on this computer' : p?.has_key ? 'API key' : 'Added account';
-      const bad = BAD.has(c.status);
-      const state: AccountRow['state'] =
-        c.status === 'off' ? 'off' : c.status === 'connected' ? 'ready' : bad ? (c.used_by.length ? 'needs_you' : 'sign_in') : 'unknown';
-      const notSignedIn = c.status === 'needs_sign_in';
-      return {
-        id: c.id,
-        profileId,
-        engine,
-        title: ENGINE_NAMES[engine] ?? c.name,
-        detail: notSignedIn && !label ? 'Not signed in' : [where, label].filter(Boolean).join(' · '),
-        usedBy: c.used_by.map((u) => u.name),
-        state,
-        statusText: c.status_detail,
-        name: c.name,
-      };
-    });
-  // An engine with several accounts: say which one ("Claude · Work"). "This machine" stays plain.
-  const counts = new Map<string, number>();
-  rows.forEach((r) => counts.set(r.title, (counts.get(r.title) ?? 0) + 1));
-  return rows
-    .map(({ name, ...r }) => (counts.get(r.title)! > 1 && name !== 'This machine' ? { ...r, title: `${r.title} · ${name}` } : r))
-    .sort((a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title));
-}
-
-// Used accounts first, then unused ones, then off.
-const rank = (r: AccountRow) => (r.state === 'off' ? 3 : r.usedBy.length ? 0 : r.state === 'ready' ? 1 : 2);
-
-export function usedByLine(names: string[]): string {
-  if (names.length === 0) return 'No bot uses it yet';
-  if (names.length > 3) return `Used by ${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
-  return `Used by ${listNames(names)}`;
-}
 
 // ── Giving the Composio server to the chosen bots ────────────────────────────────────────────
 
