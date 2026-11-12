@@ -106,7 +106,7 @@ fn mr(iid: u64, title: &str, head: (&str, &str), base: &str, draft: bool) -> Val
         "iid": iid, "title": title, "description": "What it does.", "draft": draft, "state": "opened",
         "web_url": format!("https://gitlab.example.com/group/app/-/merge_requests/{iid}"),
         "author": {"username": "ana"}, "source_branch": head.0, "sha": head.1, "target_branch": base,
-        "updated_at": "2026-11-06T10:00:00Z", "merged_at": null, "merge_commit_sha": null,
+        "updated_at": mock_github::recent(), "merged_at": null, "merge_commit_sha": null,
     })
 }
 
@@ -115,7 +115,7 @@ fn pr(number: u64, title: &str, head: (&str, &str), base: &str) -> Value {
         "number": number, "title": title, "body": "What it does.", "state": "open",
         "html_url": format!("https://codeberg.example.com/org/app/pulls/{number}"),
         "user": {"login": "ana"}, "head": {"ref": head.0, "sha": head.1}, "base": {"ref": base},
-        "merged": false, "merged_at": null, "merge_commit_sha": null, "updated_at": "2026-11-06T10:00:00Z",
+        "merged": false, "merged_at": null, "merge_commit_sha": null, "updated_at": mock_github::recent(),
     })
 }
 

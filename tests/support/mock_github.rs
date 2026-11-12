@@ -348,6 +348,15 @@ pub fn file(name: &str, status: &str, patch: &str) -> Value {
 }
 
 /// A pull request; `merged` gives `(merge_commit_sha, merged_at)`.
+/// One fixed time an hour before this test run started, as GitHub writes it. A PR or MR is only
+/// reviewed while it is fresh (`KWANT_DEV_REVIEW_DAYS`, 7 days by default), so a hard-coded date
+/// stops every PR card a week after it was written (it did on 2026-11-12). The same value for
+/// every call keeps the order of PRs that share it as it was.
+pub fn recent() -> String {
+    static AT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    AT.get_or_init(|| (chrono::Utc::now() - chrono::Duration::hours(1)).format("%Y-%m-%dT%H:%M:%SZ").to_string()).clone()
+}
+
 pub fn pull(number: u64, title: &str, head: (&str, &str), base: &str, author: &str, merged: Option<(&str, &str)>) -> Value {
     json!({
         "number": number, "title": title, "body": "", "state": if merged.is_some() { "closed" } else { "open" },
@@ -355,7 +364,7 @@ pub fn pull(number: u64, title: &str, head: (&str, &str), base: &str, author: &s
         "user": user(author),
         "head": {"ref": head.0, "sha": head.1}, "base": {"ref": base, "sha": "0000000000000000000000000000000000000000"},
         "merged_at": merged.map(|m| m.1), "merge_commit_sha": merged.map(|m| m.0),
-        "merged_by": merged.map(|_| user("demo-person")), "updated_at": "2026-11-05T03:00:00Z",
+        "merged_by": merged.map(|_| user("demo-person")), "updated_at": recent(),
     })
 }
 
