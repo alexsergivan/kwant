@@ -136,7 +136,7 @@ async fn nothing_goes_to_composio_until_it_is_added_with_a_key() {
         v["error"]
             .as_str()
             .unwrap()
-            .contains("Add the Composio connector first"),
+            .contains("Add Composio first"),
         "{v}"
     );
     let (s, _) = call(
@@ -166,7 +166,8 @@ async fn nothing_goes_to_composio_until_it_is_added_with_a_key() {
     )
     .await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    assert!(v["error"].as_str().unwrap().contains("x-api-key"), "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Add your Composio API key"), "{v}");
+    assert_eq!(v["action"], "replace_key", "{v}");
     let (s, _) = call(
         &env.app,
         "POST",
@@ -203,9 +204,13 @@ async fn search_and_connect_use_the_persons_key_and_user() {
         !list.to_string().contains("ck-secret-1"),
         "the key is never listed"
     );
-    assert!(
-        seen.lock().unwrap().is_empty(),
-        "listing doesn't call Composio"
+    // Listing asks Composio once which apps are connected, then keeps that for a minute.
+    let (_, again) = call(&env.app, "GET", "/api/connections", None).await;
+    assert_eq!(again["catalog"][0]["mode"], "url");
+    assert_eq!(
+        seen.lock().unwrap().drain(..).map(|c| c.1).collect::<Vec<_>>(),
+        vec!["/api/v3.1/connected_accounts?limit=200&statuses=ACTIVE&user_ids=u-1".to_string()],
+        "one call for two listings"
     );
 
     // Bad queries and app names are refused before any call.
@@ -250,6 +255,8 @@ async fn search_and_connect_use_the_persons_key_and_user() {
     assert_eq!(v["apps"][0]["slug"], "gmail");
     assert_eq!(v["apps"][0]["tools_count"], 23);
     assert_eq!(v["can_connect"], true);
+    assert_eq!(v["apps"][0]["connected"], false, "the fake has no account for u-1 without a filter: {v}");
+    assert_eq!(v["connected_checked"], true, "{v}");
     assert!(v["warning"]
         .as_str()
         .unwrap()
@@ -270,7 +277,7 @@ async fn search_and_connect_use_the_persons_key_and_user() {
         .contains("Composio's servers"));
 
     let seen = seen.lock().unwrap().clone();
-    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert_eq!(seen.len(), 4, "{seen:?}");
     assert!(
         seen.iter().all(|(_, _, key, _)| key == "ck-secret-1"),
         "every call carries the person's key"
@@ -280,11 +287,16 @@ async fn search_and_connect_use_the_persons_key_and_user() {
         "/api/v3.1/toolkits?limit=20&search=g mail&sort_by=usage"
     );
     assert_eq!(
-        (seen[1].1.as_str(), &seen[1].3),
-        ("/api/v3.1/tool_router/session", &json!({"user_id": "u-1"}))
+        seen[1].1,
+        "/api/v3.1/connected_accounts?limit=200&statuses=ACTIVE&user_ids=u-1",
+        "one account call for the whole page"
     );
     assert_eq!(
         (seen[2].1.as_str(), &seen[2].3),
+        ("/api/v3.1/tool_router/session", &json!({"user_id": "u-1"}))
+    );
+    assert_eq!(
+        (seen[3].1.as_str(), &seen[3].3),
         (
             "/api/v3.1/tool_router/session/trs_1/link",
             &json!({"toolkit": "gmail"})
@@ -313,7 +325,7 @@ async fn a_refused_key_or_missing_user_is_explained() {
     .await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
     assert!(
-        v["error"].as_str().unwrap().contains("refused the API key"),
+        v["error"].as_str().unwrap().contains("Composio didn't accept this key"),
         "{v}"
     );
     assert!(
@@ -329,7 +341,8 @@ async fn a_refused_key_or_missing_user_is_explained() {
     )
     .await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    assert!(v["error"].as_str().unwrap().contains("no user_id"), "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Switch to the one-key setup"), "{v}");
+    assert_eq!(v["action"], "switch", "{v}");
     assert_eq!(
         seen.lock().unwrap().len(),
         1,
@@ -409,11 +422,12 @@ async fn app_status_tells_whether_the_sign_in_finished() {
     let status = |slug: &str| format!("/api/connections/composio/apps/{slug}/status");
     let (s, v) = call(&env.app, "GET", &status("gmail"), None).await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    assert!(v["error"].as_str().unwrap().contains("Add the Composio connector first"), "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Add Composio first"), "{v}");
     add_composio(&env, "https://backend.composio.dev/v3/mcp/abc/mcp?user_id=u-1", None).await;
     let (s, v) = call(&env.app, "GET", &status("gmail"), None).await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    assert!(v["error"].as_str().unwrap().contains("x-api-key"), "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Add your Composio API key"), "{v}");
+    assert_eq!(v["action"], "replace_key", "{v}");
     assert!(seen.lock().unwrap().is_empty());
 }
 
@@ -437,7 +451,8 @@ async fn app_status_asks_composio_for_this_user_and_app_only() {
     assert_eq!(v, json!({"connected": false}), "an unfinished sign-in or another app's account isn't this one: {s} {v}");
     let (s, v) = call(&env.app, "GET", &status("broken"), None).await;
     assert_eq!(s, StatusCode::BAD_GATEWAY, "{v}");
-    assert!(v["error"].as_str().unwrap().contains("boom"), "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Composio couldn't be reached"), "{v}");
+    assert_eq!(v["action"], "try_again", "{v}");
 
     let seen = seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 4, "{seen:?}");
@@ -454,7 +469,8 @@ async fn app_status_explains_a_refused_key_or_missing_user() {
     add_composio(&env, "https://backend.composio.dev/v3/mcp/abc/mcp", Some("ck-1")).await;
     let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps/gmail/status", None).await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    assert!(v["error"].as_str().unwrap().contains("no user_id"), "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Switch to the one-key setup"), "{v}");
+    assert_eq!(v["action"], "switch", "{v}");
     assert!(seen.lock().unwrap().is_empty());
 }
 
