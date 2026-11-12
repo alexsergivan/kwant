@@ -2959,6 +2959,16 @@ async fn run_kwant_turn_inner(
         if let Some(ctx) = &mcp_ctx {
             event_broadcast.activity.add_secrets(ctx.secret_values());
         }
+        // 0.9.5: a connection that fails says so in this chat, once per connection (see `tool_failures`)
+        let failure_watch = mcp_ctx.as_ref().map(|ctx| {
+            let place = super::tool_failures::Place {
+                channel_id: channel_id.clone(),
+                direct_kwant_id: kwant_id.clone(),
+                thread_id: scope.thread_id.clone(),
+                context_id: tag.context_id.clone(),
+            };
+            super::tool_failures::TurnWatch::start(state, place, &target_kwant.id, &target_kwant.name, &tag.turn_id, &ctx.servers, ctx.secret_values())
+        });
         let with_tools = mcp_ctx
             .as_ref()
             .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME));
@@ -3390,6 +3400,9 @@ async fn run_kwant_turn_inner(
                                 side_effects |= visible;
                                 acted |= matches!(event, RuntimeEvent::ToolCallPending { .. } | RuntimeEvent::ApprovalRequired { .. });
                                 event_broadcast.activity.relay(&event);
+                                if let Some(w) = &failure_watch {
+                                    w.0.observe(&event).await;
+                                }
                             }
                             None => break,
                         }
@@ -3570,6 +3583,10 @@ async fn run_kwant_turn_inner(
         if cancelled || gave_up.is_some() || !matches!(driver_result, Some(Ok(Ok(_)))) {
             // (and toward the bot's monthly budget, G2; usage the engine streamed is reported usage)
             super::spend_stop::book_turn(state, &target_kwant.id, state.turns.usage_seen(&tag.turn_id), None, true).await;
+        }
+        // Failures still waiting for a retry are posted now, before the reply
+        if let Some(w) = &failure_watch {
+            w.0.finish().await;
         }
         let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
         // Ends what still runs; kept on the reply so the steps show after a reload

@@ -30,6 +30,9 @@ use std::sync::{Arc, Mutex};
 pub const SECRET_MASK: &str = "********";
 /// Server name kwnt uses for its own permission endpoint in agent CLI configs.
 pub const RESERVED_SERVER_NAME: &str = "kwnt";
+/// What a driver says (as a thinking line) when one of the turn's servers could not be reached
+/// at the start: `"MCP server unavailable: <server>: <why>"` (read by `server::tool_failures`).
+pub const UNAVAILABLE_PREFIX: &str = "MCP server unavailable: ";
 /// Server name of the agents' own continuity tools (`mcp__kwnt_tools__memory_add`, …).
 pub const SELF_SERVER_NAME: &str = "kwnt_tools";
 pub const DEFAULT_TIMEOUT_SECS: i64 = 30;

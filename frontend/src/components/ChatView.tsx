@@ -63,6 +63,8 @@ import { DropBot, DropLayer, DropPhase } from './DropLayer';
 import { EarlierCopies, FileTiles, PointChip, UploadChip } from './Attachments';
 import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
 import { parseToolNoteMeta } from '../toolNotes';
+import { ToolFailureLine } from './ToolFailureLine';
+import { parseToolFailureMeta } from '../toolFailures';
 import { ToolNoteLine } from './ToolNoteLine';
 import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
@@ -301,6 +303,8 @@ export interface ChatViewProps {
   renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
   /** 0.9.0 P5: a bot's tool-note line (meta kind "tool_note"); "See the note" opens it on Connections. */
   onOpenToolNote?: (noteId: string) => void;
+  /** 0.9.5: a connection-failure line's fix button (meta kind "tool_failure") opens Connections. */
+  onOpenConnections?: () => void;
   /** A mission watcher's check report (message meta kind "watch"). */
   renderWatchReport?: (msg: ChatMessage, meta: WatchMeta, flash: boolean) => React.ReactNode;
   /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */
@@ -526,6 +530,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderConnectionSuggestion,
   renderBotAction,
   onOpenToolNote,
+  onOpenConnections,
   renderWatchReport,
   renderHire,
   renderRouteChoice,
@@ -1307,6 +1312,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (watch && renderWatchReport) return <React.Fragment key={msg.id}>{renderWatchReport(msg, watch, flashId === msg.id)}</React.Fragment>;
     const botAction = msg.meta && renderBotAction ? parseBotActionMeta(msg.meta) : null;
     if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
+    const toolFailure = msg.meta ? parseToolFailureMeta(msg.meta) : null;
+    if (toolFailure)
+      return <ToolFailureLine key={msg.id} meta={toolFailure} messageId={msg.id} flash={flashId === msg.id} onFix={onOpenConnections} />;
     const toolNote = msg.meta ? parseToolNoteMeta(msg.meta) : null;
     if (toolNote)
       return (
