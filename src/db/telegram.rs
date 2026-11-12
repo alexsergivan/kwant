@@ -382,32 +382,37 @@ impl Database {
 
     /// The approvals switch. On needs a pairing; off always works.
     pub async fn telegram_set_allow(&self, space: &str, on: bool) -> Result<bool, DbError> {
+        if !on {
+            return Ok(self.telegram_allow_off(space).await?.0);
+        }
         let now = crate::clock::now();
-        let r = if on {
-            sqlx::query("UPDATE telegram_links SET allow_approvals = 1, allow_since = COALESCE(allow_since, ?), updated_at = ? WHERE space_id = ? AND state = ?")
-                .bind(now)
-                .bind(now)
-                .bind(space)
-                .bind(PAIRED)
-                .execute(&self.pool)
-                .await?
-        } else {
-            let r = sqlx::query("UPDATE telegram_links SET allow_approvals = 0, allow_since = NULL, updated_at = ? WHERE space_id = ?")
-                .bind(now)
-                .bind(space)
-                .execute(&self.pool)
-                .await?;
-            self.telegram_disarm_asks(space).await?;
-            r
-        };
+        let r = sqlx::query("UPDATE telegram_links SET allow_approvals = 1, allow_since = COALESCE(allow_since, ?), updated_at = ? WHERE space_id = ? AND state = ?")
+            .bind(now)
+            .bind(now)
+            .bind(space)
+            .bind(PAIRED)
+            .execute(&self.pool)
+            .await?;
         Ok(r.rows_affected() == 1)
     }
 
+    /// The switch goes off. Also returns the asks this call disarmed, each with the Telegram
+    /// message id it had at that moment: the caller edits those that have one, and the sender
+    /// edits the others once their id is stored (see [`Self::telegram_ask_sent`]).
+    pub async fn telegram_allow_off(&self, space: &str) -> Result<(bool, Vec<TelegramAsk>), DbError> {
+        let r = sqlx::query("UPDATE telegram_links SET allow_approvals = 0, allow_since = NULL, updated_at = ? WHERE space_id = ?")
+            .bind(crate::clock::now())
+            .bind(space)
+            .execute(&self.pool)
+            .await?;
+        let disarmed = self.telegram_disarm_asks(space).await?;
+        Ok((r.rows_affected() == 1, disarmed))
+    }
+
     /// Every Allow once button still out stops counting, in the database, whether or not kwant can
-    /// reach Telegram to edit the messages (Lin's M1).
-    pub async fn telegram_disarm_asks(&self, space: &str) -> Result<(), DbError> {
-        sqlx::query("UPDATE telegram_asks SET allow = 0 WHERE space_id = ?").bind(space).execute(&self.pool).await?;
-        Ok(())
+    /// reach Telegram to edit the messages (Lin's M1). Returns the asks it disarmed (allow 1 → 0).
+    pub async fn telegram_disarm_asks(&self, space: &str) -> Result<Vec<TelegramAsk>, DbError> {
+        Ok(sqlx::query_as::<_, TelegramAsk>("UPDATE telegram_asks SET allow = 0 WHERE space_id = ? AND allow = 1 RETURNING *").bind(space).fetch_all(&self.pool).await?)
     }
 
     pub async fn telegram_set_state(&self, space: &str, state: &str, error: Option<&str>) -> Result<(), DbError> {
@@ -533,9 +538,10 @@ impl Database {
         Ok(())
     }
 
-    pub async fn telegram_ask_sent(&self, id: &str, message_id: i64) -> Result<(), DbError> {
-        sqlx::query("UPDATE telegram_asks SET message_id = ? WHERE id = ?").bind(message_id).bind(id).execute(&self.pool).await?;
-        Ok(())
+    /// Stores the Telegram id of a sent ask and returns the ask as it is now. One statement, so
+    /// it and [`Self::telegram_disarm_asks`] never both miss (or both see) a card in flight.
+    pub async fn telegram_ask_sent(&self, id: &str, message_id: i64) -> Result<Option<TelegramAsk>, DbError> {
+        Ok(sqlx::query_as::<_, TelegramAsk>("UPDATE telegram_asks SET message_id = ? WHERE id = ? RETURNING *").bind(message_id).bind(id).fetch_optional(&self.pool).await?)
     }
 
     /// Closes an open ask. True for the one caller that closed it (an answer counts once).

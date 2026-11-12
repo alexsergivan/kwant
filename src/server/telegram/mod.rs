@@ -489,7 +489,9 @@ async fn send_loop(state: AppState, runner: Arc<Runner>, mut rx: mpsc::Unbounded
                     }
                     if i + 1 == n {
                         if let Some(a) = &ask_id {
-                            let _ = state.db.telegram_ask_sent(a, tg_id).await;
+                            if let Ok(Some(ask)) = state.db.telegram_ask_sent(a, tg_id).await {
+                                bridge::ask_sent(&state, &runner, &ask, markup.as_ref()).await;
+                            }
                         }
                     }
                 }

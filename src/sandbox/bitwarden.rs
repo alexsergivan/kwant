@@ -52,6 +52,8 @@ pub enum UnlockError {
     Wrong,
     #[error("Bitwarden asks for a two-step login code")]
     TwoFactor(Vec<String>),
+    #[error("that two-step login code was not accepted")]
+    TwoFactorRejected(Vec<String>),
     #[error("Bitwarden emailed a code to confirm this new device")]
     NewDeviceOtp,
     #[error("another Bitwarden account is set up; forget it first")]
@@ -73,6 +75,7 @@ impl UnlockError {
         match self {
             UnlockError::Wrong => "wrong",
             UnlockError::TwoFactor(_) => "two_factor",
+            UnlockError::TwoFactorRejected(_) => "two_factor_rejected",
             UnlockError::NewDeviceOtp => "new_device_otp",
             UnlockError::OtherAccount => "other_account",
             UnlockError::Invalid(_) => "invalid",
@@ -421,6 +424,11 @@ pub struct BitwardenStore {
     session: tokio::sync::Mutex<Option<Session>>,
     http: reqwest::Client,
     rng: SystemRandom,
+    /// The device id sent before any account is set up: random, and the same on every try while
+    /// kwnt runs, so the code Bitwarden emails for a new device matches the device that types it.
+    /// Saved with the settings once a connect succeeds. Never derived from the server or email:
+    /// anyone could work that out and pass for a device the account already trusts.
+    pending_device_id: String,
 }
 
 impl std::fmt::Debug for BitwardenStore {
@@ -464,6 +472,7 @@ impl BitwardenStore {
                 .build()
                 .unwrap_or_default(),
             rng: SystemRandom::new(),
+            pending_device_id: uuid::Uuid::new_v4().to_string(),
         }
     }
 
@@ -547,10 +556,10 @@ impl BitwardenStore {
             return Err(UnlockError::Invalid("the API key's client secret is missing".into()));
         }
         let cfg = BitwardenConfig {
-            server_url: base,
+            server_url: base.clone(),
             email: email.clone(),
             client_id: client_id.clone(),
-            device_id: existing.as_ref().map(|c| c.device_id.clone()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            device_id: existing.as_ref().map(|c| c.device_id.clone()).unwrap_or_else(|| self.pending_device_id.clone()),
         };
 
         let (kdf, salt) = self.prelogin(&ep, &email, status).await?;
@@ -578,7 +587,7 @@ impl BitwardenStore {
                 if let (Some(p), Some(t)) = (req.two_factor_provider, req.two_factor_token.as_deref()) {
                     form.extend([
                         ("twoFactorProvider", p.to_string()),
-                        ("twoFactorToken", t.trim().to_string()),
+                        ("twoFactorToken", normalize_code(p, t)),
                         ("twoFactorRemember", "0".into()),
                     ]);
                 }
@@ -748,6 +757,12 @@ impl BitwardenStore {
         if form.iter().any(|(k, v)| *k == "grant_type" && v == "password") {
             rb = rb.header("Auth-Email", URL_SAFE_NO_PAD.encode(email));
         }
+        // Bitwarden answers `invalid_grant` both for a wrong password and for a rejected
+        // two-step code, so remember whether one was sent: that is the only thing that tells
+        // the two apart, and calling a stale code a wrong password sends the person back to
+        // the password field for a code they cannot fix there.
+        let sent_code = form.iter().any(|(k, _)| *k == "twoFactorToken");
+        let sent_provider = form.iter().find(|(k, _)| *k == "twoFactorProvider").map(|(_, v)| v.clone());
         drop(form);
         let resp = rb.send().await.map_err(|e| UnlockError::Unreachable(short(&e.without_url().to_string())))?;
         let status = resp.status();
@@ -755,12 +770,6 @@ impl BitwardenStore {
         let body: Value = resp.json().await.unwrap_or(Value::Null);
         if status.is_success() {
             return Ok(body);
-        }
-        if let Some(p) = field(&body, "TwoFactorProviders2").and_then(Value::as_object) {
-            return Err(UnlockError::TwoFactor(p.keys().cloned().collect()));
-        }
-        if let Some(p) = field(&body, "TwoFactorProviders").and_then(Value::as_array) {
-            return Err(UnlockError::TwoFactor(p.iter().map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).collect()));
         }
         let message = [
             field_str(&body, "error_description"),
@@ -772,11 +781,29 @@ impl BitwardenStore {
         .find(|m| !m.trim().is_empty())
         .unwrap_or_default()
         .to_string();
-        if message.to_lowercase().contains("new device") {
-            return Err(UnlockError::NewDeviceOtp);
-        }
         let error = field_str(&body, "error").unwrap_or_default();
         let lower = message.to_lowercase();
+
+        // A rejected code comes back looking exactly like a fresh challenge: the same
+        // `TwoFactorProviders2` list, the same 400. Reading that list first therefore reported every
+        // wrong code as "a code is needed", handing the person the same empty box back for as long as
+        // they kept trying, with nothing to say their code had been looked at and refused. Whether a
+        // code was sent is the only thing that separates the two cases, so that is what decides now.
+        // Only a refusal (4xx) is about the code; a 429 or a 5xx says nothing about it. No log line
+        // here: unlock() already logs the kind and status, and the server's text can quote the
+        // person's IP address (spec C3).
+        if sent_code && status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(UnlockError::TwoFactorRejected(sent_provider.into_iter().collect()));
+        }
+        if lower.contains("new device") {
+            return Err(UnlockError::NewDeviceOtp);
+        }
+        if let Some(p) = field(&body, "TwoFactorProviders2").and_then(Value::as_object) {
+            return Err(UnlockError::TwoFactor(p.keys().cloned().collect()));
+        }
+        if let Some(p) = field(&body, "TwoFactorProviders").and_then(Value::as_array) {
+            return Err(UnlockError::TwoFactor(p.iter().map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).collect()));
+        }
         if matches!(error, "invalid_grant" | "invalid_client")
             || status == reqwest::StatusCode::UNAUTHORIZED
             || lower.contains("password is incorrect")
@@ -1254,5 +1281,30 @@ mod tests {
         req.email = Some("x@attacker.test".into());
         req.master_password = "DUMMY".into();
         assert!(matches!(store.unlock(req).await, Err(UnlockError::OtherAccount)));
+    }
+}
+
+
+/// The Bitwarden app shows a code as `123 456`, and people paste it that way. The server matches
+/// digits only, so a code carrying its space was refused as if it were wrong. Typed-digit methods are
+/// reduced to their digits; a YubiKey (3) sends a long string and is passed through untouched.
+fn normalize_code(provider: u32, code: &str) -> String {
+    let code = code.trim();
+    if provider == 0 || provider == 1 {
+        code.chars().filter(|c| c.is_ascii_digit()).collect()
+    } else {
+        code.to_string()
+    }
+}
+
+#[cfg(test)]
+mod code_tests {
+    use super::normalize_code;
+
+    #[test]
+    fn a_code_pasted_with_its_space_still_matches() {
+        assert_eq!(normalize_code(0, " 123 456 "), "123456");
+        assert_eq!(normalize_code(1, "123456"), "123456");
+        assert_eq!(normalize_code(3, "cccccccc"), "cccccccc");
     }
 }

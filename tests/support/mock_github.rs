@@ -347,16 +347,18 @@ pub fn file(name: &str, status: &str, patch: &str) -> Value {
     json!({"filename": name, "status": status, "additions": adds, "deletions": dels, "patch": patch})
 }
 
-/// A pull request; `merged` gives `(merge_commit_sha, merged_at)`.
-/// One fixed time an hour before this test run started, as GitHub writes it. A PR or MR is only
-/// reviewed while it is fresh (`KWANT_DEV_REVIEW_DAYS`, 7 days by default), so a hard-coded date
-/// stops every PR card a week after it was written (it did on 2026-11-12). The same value for
-/// every call keeps the order of PRs that share it as it was.
-pub fn recent() -> String {
-    static AT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    AT.get_or_init(|| (chrono::Utc::now() - chrono::Duration::hours(1)).format("%Y-%m-%dT%H:%M:%SZ").to_string()).clone()
+/// An RFC 3339 time `hours` hours before one moment fixed for the whole test run, as GitHub
+/// writes it. Dev mode reviews a branch or PR only while it is fresh (`KWANT_DEV_REVIEW_DAYS`, 7
+/// days by default, [`kwnt::server::dev::poller::is_fresh`]), so a hard-coded date turns every
+/// review card off a week after the test was written (2026-11-05 fixtures did on 2026-11-12).
+/// One base for every call keeps fixtures in the same order and spacing.
+pub fn hours_ago(hours: i64) -> String {
+    static BASE: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> = std::sync::OnceLock::new();
+    let base = *BASE.get_or_init(chrono::Utc::now);
+    (base - chrono::Duration::hours(hours)).format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// A pull request; `merged` gives `(merge_commit_sha, merged_at)`.
 pub fn pull(number: u64, title: &str, head: (&str, &str), base: &str, author: &str, merged: Option<(&str, &str)>) -> Value {
     json!({
         "number": number, "title": title, "body": "", "state": if merged.is_some() { "closed" } else { "open" },
@@ -364,7 +366,7 @@ pub fn pull(number: u64, title: &str, head: (&str, &str), base: &str, author: &s
         "user": user(author),
         "head": {"ref": head.0, "sha": head.1}, "base": {"ref": base, "sha": "0000000000000000000000000000000000000000"},
         "merged_at": merged.map(|m| m.1), "merge_commit_sha": merged.map(|m| m.0),
-        "merged_by": merged.map(|_| user("demo-person")), "updated_at": recent(),
+        "merged_by": merged.map(|_| user("demo-person")), "updated_at": hours_ago(1),
     })
 }
 

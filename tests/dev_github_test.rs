@@ -122,7 +122,7 @@ async fn a_lost_base_commit_falls_back_to_the_newest() {
     let gh = MockGithub::start(&PORTS).await;
     let token = canary_token();
     gh.require_token(&token);
-    let list: Vec<Value> = (2..=4).rev().map(|n| commit(&sha(n), &format!("Change {n}"), ("Demo Person", "demo@example.com"), &[], "2026-11-05T01:00:00Z")).collect();
+    let list: Vec<Value> = (2..=4).rev().map(|n| commit(&sha(n), &format!("Change {n}"), ("Demo Person", "demo@example.com"), &[], &hours_ago(3))).collect();
     gh.json(&format!("{R}/commits"), Value::Array(list)).fault(&format!("{R}/commits/{}", sha(1)), Fault::MissingBase);
     let c = client(&gh, &token);
 
@@ -187,8 +187,8 @@ fn seed(gh: &MockGithub) {
         c
     };
     let patch = "@@ -1,2 +1,2 @@\n-let retries = 1;\n+let retries = 3;";
-    let merged = commit(&sha(2), "Retry the upload (#5)", person, &[&sha(1)], "2026-11-05T02:00:00Z");
-    let direct = commit(&sha(1), "Fix the README", person, &[], "2026-11-05T01:00:00Z");
+    let merged = commit(&sha(2), "Retry the upload (#5)", person, &[&sha(1)], &hours_ago(2));
+    let direct = commit(&sha(1), "Fix the README", person, &[], &hours_ago(3));
     gh.json("/user", user("demo-person"))
         .json(R, repo(REPO, "main"))
         .json(&format!("{R}/branches/main"), json!({"name": "main"}))
@@ -197,14 +197,14 @@ fn seed(gh: &MockGithub) {
         .json(&format!("{R}/commits"), json!([merged, direct]))
         .json(&format!("{R}/commits/{}", sha(2)), with_files(merged.clone(), json!([file("src/upload.rs", "modified", patch)])))
         .json(&format!("{R}/commits/{}", sha(1)), with_files(direct.clone(), json!([file("README.md", "modified", "-old\n+new")])))
-        .json(&format!("{R}/commits/{}/pulls", sha(2)), json!([pull(5, "Retry the upload", ("retry", &sha(9)), "main", "demo-person", Some((&sha(2), "2026-11-05T02:00:00Z")))]))
+        .json(&format!("{R}/commits/{}/pulls", sha(2)), json!([pull(5, "Retry the upload", ("retry", &sha(9)), "main", "demo-person", Some((&sha(2), &hours_ago(2))))]))
         .json(&format!("{R}/commits/{}/pulls", sha(1)), json!([]))
         .json(&format!("{R}/pulls/5/files"), json!([file("src/upload.rs", "modified", patch)]))
         .json(&format!("{R}/commits/{}/check-runs", sha(2)), check_runs(&[("rust", "completed", Some("success"))]))
         .json(&format!("{R}/commits/{}/check-runs", sha(1)), check_runs(&[("rust", "completed", Some("failure"))]))
         .json(&format!("{R}/pulls"), json!([pull(8, "Add a cache", ("cache", &sha(3)), "main", "demo-person", None)]))
         .json(&format!("{R}/pulls/8/files"), json!([file("src/cache.rs", "added", "+pub struct Cache;")]))
-        .json(&format!("{R}/commits/{}", sha(3)), commit(&sha(3), "Add a cache", person, &[&sha(2)], "2026-11-05T03:00:00Z"))
+        .json(&format!("{R}/commits/{}", sha(3)), commit(&sha(3), "Add a cache", person, &[&sha(2)], &hours_ago(1)))
         .json(&format!("{R}/commits/{}/check-runs", sha(3)), check_runs(&[("rust", "in_progress", None)]));
 }
 

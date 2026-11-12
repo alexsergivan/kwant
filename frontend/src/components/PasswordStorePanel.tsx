@@ -180,7 +180,13 @@ export const BitwardenLoginForm: React.FC<{
       const p = err instanceof StoreError ? err.problem : ({ kind: 'error', message: 'Couldn’t reach the server.' } as UnlockProblem);
       setProblem(p);
       setTriedServer(server);
-      if (p.kind === 'two-factor') {
+      if (p.kind === 'code-rejected') {
+        // Keep the master password: it was never the problem, and re-typing it hides the real one.
+        // Keep the list already shown: the server names only the method that was tried.
+        setStep((s) => (s?.kind === 'two-factor' ? s : { kind: 'two-factor', providers: p.providers }));
+        setCode('');
+        codeRef.current?.focus();
+      } else if (p.kind === 'two-factor') {
         setStep(p);
         setProvider(p.providers.find((x) => x.usable)?.id ?? null);
         setCode('');

@@ -32,7 +32,7 @@ fn seed(gh: &MockGithub, name: &str) {
     let person = ("Lin (kwant bot)", "lin-bot@users.noreply.example.com");
     let patch = "@@ -1,2 +1,2 @@\n-let retries = 1;\n+let retries = 3;";
     let green = check_runs(&[("rust", "completed", Some("success"))]);
-    let mut first = commit(&sha(1), "Fix the README", person, &[], "2026-11-05T01:00:00Z");
+    let mut first = commit(&sha(1), "Fix the README", person, &[], &hours_ago(3));
     gh.json(&r, repo(name, "main"))
         .json(&format!("{r}/contents"), json!([{"name": "Cargo.toml", "type": "file"}]))
         .json(&format!("{r}/branches/main"), json!({"name": "main"}))
@@ -45,7 +45,7 @@ fn seed(gh: &MockGithub, name: &str) {
         .json(&format!("{r}/pulls"), json!([pull(12, "Add a cache", ("cache", &sha(3)), "main", "demo-person", None)]))
         .json(&format!("{r}/pulls/12"), pull(12, "Add a cache", ("cache", &sha(3)), "main", "demo-person", None))
         .json(&format!("{r}/pulls/12/files"), json!([file("src/cache.rs", "modified", patch)]))
-        .json(&format!("{r}/commits/{}", sha(3)), commit(&sha(3), "Add a cache", person, &[&sha(1)], "2026-11-05T03:00:00Z"))
+        .json(&format!("{r}/commits/{}", sha(3)), commit(&sha(3), "Add a cache", person, &[&sha(1)], &hours_ago(1)))
         .json(&format!("{r}/commits/{}/check-runs", sha(3)), green);
 }
 

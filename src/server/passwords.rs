@@ -539,6 +539,7 @@ pub async fn unlock_bitwarden(State(state): State<AppState>, headers: HeaderMap,
             let (status, extra) = match e {
                 UnlockError::Wrong => (StatusCode::UNAUTHORIZED, json!({"wrong_password": true})),
                 UnlockError::TwoFactor(providers) => (StatusCode::UNAUTHORIZED, json!({"needs": "two_factor", "providers": providers})),
+                UnlockError::TwoFactorRejected(providers) => (StatusCode::UNAUTHORIZED, json!({"needs": "two_factor", "code_rejected": true, "providers": providers})),
                 UnlockError::NewDeviceOtp => (StatusCode::UNAUTHORIZED, json!({"needs": "new_device_otp"})),
                 UnlockError::OtherAccount => (StatusCode::CONFLICT, json!({})),
                 UnlockError::Invalid(_) | UnlockError::Unsupported(_) => (StatusCode::BAD_REQUEST, json!({})),
