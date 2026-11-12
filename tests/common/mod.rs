@@ -219,6 +219,8 @@ pub async fn setup_with(change: impl FnOnce(&mut AppState)) -> Env {
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // These chains predate keep-going turns; a stalled lead isn't nudged here.
+    db.set_setting("keep_going_turns", "0").await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let config = Config {
