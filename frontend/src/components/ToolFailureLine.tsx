@@ -4,7 +4,8 @@
 // line stays, says so in green with a plugged icon, and loses its button. Mira's design check
 // (release-095/tool-failure-line/design-check.md F3–F6): a needs-you line is brighter with an
 // amber button and tells a screen reader; lines of one turn sit 4 px apart; the button has a
-// 44 px hit area on a phone.
+// 44 px hit area on a phone. That area is the invisible ::before, so the button opts out of the
+// phones' 44 px min-height (data-compact), which would make its line of text twice as tall.
 import React from 'react';
 import { Plug, Unplug } from 'lucide-react';
 import { ToolFailureMeta } from '../toolFailures';
@@ -36,6 +37,7 @@ export const ToolFailureLine: React.FC<{
             {' '}
             <button
               type="button"
+              data-compact
               onClick={onFix}
               className={`relative before:absolute before:content-[''] before:-inset-x-2 before:-inset-y-[14px] font-medium ${urgent ? 'text-amber-200' : 'text-zinc-200'} underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500`}
             >

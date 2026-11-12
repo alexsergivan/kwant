@@ -79,6 +79,8 @@ test('F5 and F6: a line under another sits 4 px close; the button has an invisib
   assert.match(ui.line({ ...props, tight: true }), /^<div[^>]*!mt-1/);
   assert.doesNotMatch(ui.line(props), /!mt-1/);
   assert.match(ui.line(props), /<button[^>]*relative before:absolute before:content-\[(?:''|&#x27;&#x27;)\] before:-inset-x-2 before:-inset-y-\[14px\]/);
+  // The phones' 44 px min-height would make the button's line of text twice as tall: it opts out
+  assert.match(ui.line(props), /<button[^>]*data-compact/);
 });
 
 test('no button without a place to fix it; a fixed connection says it works again', () => {
