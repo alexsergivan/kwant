@@ -14,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -980,10 +980,9 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
         // the rest now, and that task comes back with its own batch once it ran
         .filter(|s| s.continue_lead && s.origin_context() == d.origin_context() && !is_parked(s))
         .collect();
-    if siblings.iter().any(Delegation::is_open) {
-        return None;
-    }
-    let end = |s: &Delegation| s.ended_at.unwrap_or(s.created_at);
+    // One still running hasn't ended yet: its run reaches to now, so it overlaps everything
+    // after its start
+    let end = |s: &Delegation| if s.is_open() { DateTime::<Utc>::MAX_UTC } else { s.ended_at.unwrap_or(s.created_at) };
     // Grow from `d` to every delegation whose run overlaps the batch's span, to the results
     // that relayed work to a batch member or were relayed from one (they ran one after the other),
     // and to the hand-offs the same lead turn started (one may have ended before the next began)
@@ -1010,6 +1009,14 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
             hi = hi.max(end(&s));
             batch.push(s);
         }
+    }
+    // Wait for a member still running: the last one to end reports them all. A task the lead
+    // started after this batch ended isn't part of it and doesn't hold its report back: it
+    // used to, and when it began between this one's end and this check (the next hand-off
+    // starting while this result was still being posted), this result was never reported
+    // because that task's own batch doesn't reach back to it
+    if batch.iter().any(Delegation::is_open) {
+        return None;
     }
     // A batch the person stopped entirely stays stopped; anything else (a result, a failure, a
     // restart cutting it short) is the lead's to report

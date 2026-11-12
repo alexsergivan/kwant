@@ -184,6 +184,37 @@ where
     panic!("timed out waiting for {what}");
 }
 
+/// [`wait_for`] that, when it times out, shows what happened in `channel` (its messages and the
+/// lead's hand-offs from it), so a failure on CI says where the chain stopped.
+async fn wait_or_dump<F, Fut>(env: &Env, channel: &str, what: &str, mut check: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..300 {
+        if check().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let msgs: Vec<String> = channel_messages(env, channel)
+        .await
+        .iter()
+        .map(|m| format!("{:?} {}/{} [{}] {}", m.created_at, m.sender_role, m.sender_id, meta_kind(m).unwrap_or_default(), m.text.chars().take(160).collect::<String>()))
+        .collect();
+    let handoffs: Vec<String> = env
+        .state
+        .db
+        .list_delegations(Some(&env.lead), None, 12)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|d| d.origin_channel_id.as_deref() == Some(channel))
+        .map(|d| format!("{} {:?}..{:?} {} → {} “{}”", d.status, d.created_at, d.ended_at, d.id, d.specialist_kwant_id, d.title))
+        .collect();
+    panic!("timed out waiting for {what}\nmessages:\n{}\nhand-offs (newest first):\n{}", msgs.join("\n"), handoffs.join("\n"));
+}
+
 async fn delegation_status(env: &Env, id: &str) -> String {
     let (_, d) = call(&env.app, "GET", &format!("/api/delegations/{id}"), None).await;
     d["status"].as_str().unwrap_or("").to_string()
@@ -1706,16 +1737,84 @@ async fn the_65th_hand_off_pauses_and_continue_sends_it_once() {
     wait_for("part 2 to finish", || async { delegation_status(&env, &ds[1].id).await == "completed" }).await;
     assert!(ds[1].title.to_lowercase().contains("build part 2."), "{}", ds[1].title);
 
+    // The lead hears part 2 before the next round starts, so that round is the only one running
+    let lead = name(&env, &env.lead).await;
+    let part2 = ds[1].id.clone();
+    let reported = || async {
+        let msgs = channel_messages(&env, &channel).await;
+        let result = msgs.iter().position(|m| meta_kind(m).as_deref() == Some("delegation_result") && meta_of(m)["delegation_id"] == part2.as_str());
+        result.is_some_and(|at| msgs[at..].iter().any(|m| m.sender_role == "kwant" && m.sender_id == lead))
+    };
+    wait_or_dump(&env, &channel, "the lead's turn with part 2", || async { reported().await }).await;
+
     // The next round: the lead's follow-up hands Builder a correction, with no second notice
     let d = delegate_from(&env, &channel, &env.specialist, "Check REPLYTAG:after", "Check FOLLOWUP:Builder").await;
     wait_for("the check", || async { delegation_status(&env, &d).await == "completed" }).await;
-    wait_for("Builder's correction", || async { to_builder().await.iter().any(|d| d.task.contains("please revise your part")) }).await;
+    wait_or_dump(&env, &channel, "Builder's correction", || async { to_builder().await.iter().any(|d| d.task.contains("please revise your part")) }).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let ds = to_builder().await;
     assert_eq!(ds.iter().filter(|d| d.task.contains("Your task is this line")).count(), 2, "Continue sent only the line that waited");
     let notices = capped(&channel_messages(&env, &channel).await);
     assert_eq!(notices.len(), 1, "no re-pause: {:?}", notices.iter().map(|m| &m.text).collect::<Vec<_>>());
     assert_eq!(meta_of(&notices[0])["resumed"], json!(true));
+}
+
+/// A result whose report runs after the lead already started the next hand-off still reaches
+/// the lead. The next one, still running, began after this one ended, so it isn't part of its
+/// batch: it used to hold the report back, and its own batch doesn't reach back to this one, so
+/// the lead never heard this result (CI, 2026-11-12: the next round started while a result was
+/// still being posted).
+#[tokio::test]
+async fn a_result_reported_after_the_next_hand_off_started_still_reaches_the_lead() {
+    let env = setup().await;
+    let channel = team_channel_with(&env, "race", &[&env.lead, &env.specialist]).await;
+    // The first one ended; its report waits for the lead's turn that started it
+    let (_, first) = env
+        .state
+        .db
+        .create_delegation(&kwnt::db::threads::NewDelegation {
+            lead_kwant_id: env.lead.clone(),
+            specialist_kwant_id: env.specialist.clone(),
+            origin_channel_id: Some(channel.clone()),
+            origin_kwant_id: None,
+            origin_thread_id: None,
+            team_id: None,
+            task: "Racemark first REPLYTAG:racefirst".into(),
+            title: "Racemark first".into(),
+            continue_lead: true,
+            depth: 1,
+            follow_up_at: None,
+        })
+        .await
+        .unwrap();
+    env.state.db.set_delegation_lead_turn(&first.id, "racemark-turn").await.unwrap();
+    assert!(env.state.db.finish_delegation(&first.id, "completed", None, None).await.unwrap());
+    // Before it is reported, the lead hands on the next one, which keeps running
+    let release = env.release_file("racemark-next");
+    let next = delegate_from(&env, &channel, &env.specialist, &format!("Racemark next LONGTASK:{} REPLYTAG:racenext", release.display()), "Racemark next").await;
+    assert!(["queued", "running"].contains(&delegation_status(&env, &next).await.as_str()));
+    // Now the first one's report runs (its lead turn ended; a restart cut it short here)
+    let turn = kwnt::db::continuity::RunningTurn {
+        turn_id: "racemark-turn".into(),
+        kwant_id: env.lead.clone(),
+        kwant_name: name(&env, &env.lead).await,
+        channel_id: Some(channel.clone()),
+        direct_kwant_id: None,
+        thread_id: None,
+        started_at: chrono::Utc::now(),
+    };
+    delegation::release_cut_short(&env.state, &[turn]).await;
+    wait_or_dump(&env, &channel, "the lead's turn with the first result", || async {
+        !prompts_with("finished the task you delegated (“Racemark first”)").is_empty()
+    })
+    .await;
+    // The next one reports on its own when it ends
+    std::fs::write(&release, "").unwrap();
+    wait_for("the next one", || async { delegation_status(&env, &next).await == "completed" }).await;
+    wait_or_dump(&env, &channel, "the lead's turn with the next result", || async {
+        !prompts_with("finished the task you delegated (“Racemark next”)").is_empty()
+    })
+    .await;
 }
 
 /// A call to kwnt's own tools as the agent turn that holds `token`, as its CLI makes it.
