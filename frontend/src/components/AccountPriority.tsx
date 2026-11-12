@@ -41,9 +41,9 @@ export interface AccountPriorityProps {
   onSetUp?: (p: Profile) => void;
   onAddAccount?: () => void;
   /** Turns a whole engine back on (the engine's own switch). */
-  onEngineOn?: (engine: EngineInfo['id']) => Promise<void>;
+  onEngineOn?: (engine: EngineInfo['id']) => Promise<boolean | void>;
   /** Turns a whole engine off: "Turn off" on the only account its engine has on. */
-  onEngineOff?: (engine: EngineInfo['id']) => Promise<void>;
+  onEngineOff?: (engine: EngineInfo['id']) => Promise<boolean | void>;
   now?: number;
 }
 
@@ -142,7 +142,8 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
     setError(null);
     setBusy(p.id);
     try {
-      if (engineOff && onEngineOn) await onEngineOn(cardOf(p));
+      // The engine switch says no by returning false (it puts itself back); stop before any "is on".
+      if (engineOff && onEngineOn && (await onEngineOn(cardOf(p))) === false) throw new Error('engine switch failed');
       const others = rest.filter((x) => x.id !== p.id);
       const updates = priorityUpdates([...used, p], others);
       const mine = updates.find((u) => u.id === p.id);
@@ -154,8 +155,10 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
       setAnnounce(`${nameOf(p)} is on. Your bots use it if the ones above run out.`);
       setFocusKey(`${p.id}:more`);
     } catch (e) {
-      fail(e, `Could not turn on ${engineLabel(p)}.`);
+      fail(e, `Couldn’t turn on ${nameOf(p)}.`);
       await onChanged().catch(() => undefined);
+      // A Not used row has no More menu: focus goes back to the row's Turn on.
+      setFocusKey(`${p.id}:on`);
     } finally {
       setBusy(null);
     }
@@ -175,7 +178,7 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
     try {
       if (p.is_default && !next) {
         if (!onEngineOff) throw new Error('no engine switch');
-        await onEngineOff(engine);
+        if ((await onEngineOff(engine)) === false) throw new Error('engine switch failed');
         await onChanged();
         setAnnounce(`${nameOf(p)} is off. Your bots skip ${engineLabel(p)}.`);
       } else {

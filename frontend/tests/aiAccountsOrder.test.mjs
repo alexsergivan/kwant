@@ -348,6 +348,54 @@ test('Turn off that fails says so in plain words, never the server’s text, and
   assert.equal(document.activeElement === more, true, 'focus is on the row’s More button');
 });
 
+// ── Round 6 (qa.md round 5, item 1 last row): the engine's own switch fails ─────────────────────
+test('Turn off whose engine switch fails: "Couldn’t turn off …", no "is off", focus on the row’s More', async () => {
+  const profs = oleks();
+  profs[1].is_default = true; // Grok on this computer: Grok's main and only account
+  const calls = server(profs);
+  const engines = oleksEngines.map((e) => ({ ...e }));
+  const engineOff = [];
+  const { host } = await mount(profs, engines, {
+    // Like useEngines.setEnabled on a failed PUT: it puts the switch back and returns false.
+    onEngineOff: async (id) => {
+      engineOff.push(id);
+      return false;
+    },
+  });
+  await turnOffRow(host, 'sys-grok');
+  assert.deepEqual(engineOff, ['grok']);
+  assert.equal(text(host.querySelector('[data-order-error]')), 'Couldn’t turn off Grok (on this computer). It is back as it was.');
+  assert.doesNotMatch(statusText(host), /is off/);
+  assert.doesNotMatch(host.textContent, /is off\./, 'no success words anywhere');
+  assert.equal(calls.filter((c) => c[0] === 'PATCH').length, 0);
+  assert.ok(host.querySelector('[data-group="backup"] [data-account="sys-grok"]'), 'the row stays where it was');
+  const more = host.querySelector('[data-account="sys-grok"] [data-row-menu]');
+  assert.equal(more.getAttribute('data-focus-key'), 'sys-grok:more');
+  assert.equal(document.activeElement === more, true, 'focus is on the row’s More button');
+});
+
+test('Turn on whose engine switch fails: "Couldn’t turn on …", no "is on", focus back on the row’s Turn on', async () => {
+  const profs = oleks();
+  const calls = server(profs);
+  const engines = oleksEngines.map((e) => ({ ...e }));
+  const engineOn = [];
+  const { host } = await mount(profs, engines, {
+    onEngineOn: async (id) => {
+      engineOn.push(id);
+      return false;
+    },
+  });
+  await click(host.querySelector('[data-account="sys-codex"] [data-turn-on]'));
+  assert.deepEqual(engineOn, ['codex']);
+  assert.equal(text(host.querySelector('[data-order-error]')), 'Couldn’t turn on Codex (on this computer). It is back as it was.');
+  assert.doesNotMatch(statusText(host), /is on/);
+  assert.doesNotMatch(host.textContent, /is on\. Your bots/, 'no success words anywhere');
+  assert.equal(calls.filter((c) => c[0] === 'PATCH').length, 0, 'the account is not turned on without its engine');
+  const on = host.querySelector('[data-account="sys-codex"] [data-turn-on]');
+  assert.ok(host.querySelector('[data-group="not-used"] [data-account="sys-codex"]'), 'the row stays in Not used');
+  assert.equal(document.activeElement === on, true, 'focus is back on the row’s Turn on (Not used rows have no More)');
+});
+
 // ── Round 5 (qa.md item 3): bots on auto are named only on "Used first" ─────────────────────────
 test('auto bots only on Used first: backup and Not used rows name pinned bots (usedBy pinnedOnly)', () => {
   // Rigel's space: Ann and Ben on auto, Cody pinned to Codex, Gus pinned to Grok; Grok first.
