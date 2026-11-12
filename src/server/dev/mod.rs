@@ -20,6 +20,7 @@ pub mod landed;
 pub mod line_notes;
 pub mod notes;
 pub mod poller;
+pub mod recipient;
 pub mod post;
 pub mod prepush;
 pub mod repo;
