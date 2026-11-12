@@ -14,6 +14,8 @@
 //!   slow reply, or a stall when it waits past the stall limit).
 //! - `FAILTURN`: die with no output. `APIERROR:<tag>` / `APIERRORPLAIN:<tag>`: end with "API Error:
 //!   500 test stub" as claude's error result / as plain text, once per tag.
+//! - `FAILSTEP:<tag>` / `BLOCKSTEP:<tag>` in the current request (not the history): run a Bash
+//!   tool step that fails, then end on a plan ("I'll retry the render…") / on a `Blocked:` line.
 //!
 //! Each test file that uses it is its own binary, because it changes PATH.
 #![allow(dead_code)]
@@ -90,6 +92,22 @@ if cap:
     else:
         text = "partial " + cap[-1] + note
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": text}))
+    sys.exit(0)
+# FAILSTEP:<tag> / BLOCKSTEP:<tag> in the current request: a Bash step that fails, then a reply
+# that ends on a plan / on a Blocked: line
+req = prompt.rsplit("Current User Request:\n", 1)[-1]
+fs = re.findall(r"(FAIL|BLOCK)STEP:([A-Za-z0-9_]+)", req)
+if fs:
+    kind, tag = fs[-1]
+    tid = "toolu_" + tag
+    print(json.dumps({"type": "assistant", "message": {"id": "msg_" + tag, "content": [
+        {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "render.sh", "description": "render the intro"}}]}}))
+    print(json.dumps({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": "Permission to use Bash has been denied."}]}}))
+    end = ("I'll retry the render with a smaller size next." if kind == "FAIL"
+        else "Blocked: terminal commands are off for this bot. Allow Terminal for this team, then say continue.")
+    print(json.dumps({"type": "result", "is_error": False, "num_turns": 2,
+        "result": "The render command was refused (" + tag + ").\n\n" + end}))
     sys.exit(0)
 # REPLYTEXT:<base64>: reply exactly that text
 rt = re.findall(r"REPLYTEXT:([A-Za-z0-9+/=]+)", prompt)

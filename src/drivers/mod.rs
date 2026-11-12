@@ -453,8 +453,14 @@ pub const BROWSER_SPEED: &str = "\n[Browser speed]\n\
 pub const LOOK_FIRST: &str = "\n\n[Look first, then finish]\n\
     - Before you propose or build anything for a project, read what is there: its README, the live site, its design tokens, \
     CSS and components. Reuse its styles and words; never guess what a product does from its name.\n\
-    - When a step fails, try at least two other ways before you report it (grep without the glob; for dark mode, emulate \
-    prefers-color-scheme or set the theme class). Never delete a good result because a retry failed.\n\
+    - On a failed or refused step (an error, a tool that isn't allowed, a timeout), don't stop: retry once if it may have \
+    been a fluke, then reach the result another way: another tool or command, reading instead of running (grep without \
+    the glob; for dark mode, emulate prefers-color-scheme or set the theme class), your bot browser, or a teammate who can. \
+    Never delete a good result because a retry failed. If the person declined an approval card, don't retry that step.\n\
+    - If nothing works, end with one line `Blocked: <what is blocked>. <what would unblock it>`, for example `Blocked: \
+    terminal commands are off for this bot on the shared Mac. Allow Terminal for this team on that computer, then say \
+    continue.`\n\
+    - Never end a turn on \"I'll check…\", \"Let me…\" or \"Next I'll…\": do it in this turn, or end with the Blocked: line.\n\
     - Before you say it's done, check the result yourself: run it, render it or take a screenshot.\n\
     - Keep the reply short: what you did, what you checked, what is left.";
 
@@ -1167,8 +1173,23 @@ pub(crate) mod tests {
             assert!(!prompt.contains("[Speed]"), "{access:?}");
             assert_eq!(prompt.contains("[Browser speed]"), access != BrowserAccess::Unavailable, "{access:?}");
             assert_eq!(prompt.matches(LOOK_FIRST).count(), 1, "{access:?}");
-            assert!(prompt.contains("try at least two other ways"), "{access:?}");
             assert_eq!(prompt.matches(PERSON_SEES).count(), 1, "{access:?}");
+        }
+        // 0.9.4 follow-through: the three parts of the failed-step rule, once on every engine
+        let rule = [
+            "On a failed or refused step (an error, a tool that isn't allowed, a timeout), don't stop: retry once if it may have been a fluke",
+            "If the person declined an approval card, don't retry that step.",
+            "If nothing works, end with one line `Blocked: <what is blocked>. <what would unblock it>`",
+            "Never end a turn on \"I'll check…\", \"Let me…\" or \"Next I'll…\": do it in this turn, or end with the Blocked: line.",
+        ];
+        let i = with_approvals(crate::mcp::Approvals::Ask);
+        for access in ACCESSES {
+            for (engine, prompt) in engine_prompts(&i, access) {
+                for part in rule {
+                    assert_eq!(prompt.matches(part).count(), 1, "{engine} {access:?}: {part}");
+                }
+                assert!(!prompt.contains("try at least two other ways"), "{engine} {access:?}: the old rule is gone");
+            }
         }
         let mut i = input();
         i.no_tools = true;
