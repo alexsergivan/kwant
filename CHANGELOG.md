@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.3] - 2026-11-12
+
+kwant 0.9.3: each bot job gets its own page in its team's browser, so a sign-in that one bot waits on no longer stops the team's other bots.
+
+### Changed
+- **Each job gets its own browser page.** Before, a team's bots shared one browser page, and a sign-in or CAPTCHA step held it for the whole team: while one bot waited for you to sign in to TikTok, another bot in the same team couldn't open Google Flow. Now each bot gets its own page in the team's browser for each chat it works in, and a step holds only the page it's on, so the team's other bots keep working. The pages share the team's sign-ins, so signing in on one page counts for all of them. A team has at most 4 job pages at once. A page nobody has used for 30 minutes closes, and a page whose bot is still working is never closed. A 5th job waits up to a minute for a page, then says "All 4 of this team's browser pages are in use by other jobs." Your own browsing, and bots working outside a chat, use the team's shared page as before. (#531)
+- **The browser view shows the page that needs you.** When a team has 2 or more pages, a strip above the address bar lists them by bot and site, for example Architect on tiktok.com. The team's own page is "Shared", and a page that needs you has a yellow dot. The view goes to the page of the newest open step, and **Open browser** or **Solve it** on a card opens that card's page. Pick a tab to watch another page: a new step then marks its tab without moving you. While you have control, the other tabs wait ("Hand back to switch pages"). The address bar opens sites on the page you're looking at. (#532)
+
 ## [Mac 0.9.2] - 2026-11-12
 
 kwant 0.9.2: teams keep going until the job is done, "Continue with Google" and other sign-in popups open in the bot's live browser view, and Bitwarden accounts with two-step login connect.

@@ -1,0 +1,24 @@
+{
+  "version": "0.9.3",
+  "date": "2026-11-12",
+  "highlights": [
+    {
+      "id": "page-per-job",
+      "title": "A sign-in no longer stops the whole team",
+      "text": "Each bot job gets its own page in the team's browser. A sign-in or CAPTCHA holds only its own page, so the team's other bots keep working. The pages share the team's sign-ins.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "page-strip",
+      "title": "See each bot's page in the browser view",
+      "text": "When a team has 2 or more pages, a strip above the address bar lists them by bot and site. A page that needs you has a yellow dot, and the view goes to it.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A team has at most 4 job pages at once. A 5th job waits up to a minute for one to free up, then gets a message that all 4 are in use.",
+    "The address bar opens sites on the page you're looking at."
+  ]
+}
