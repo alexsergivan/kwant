@@ -47,7 +47,7 @@ async fn an_older_kwants_headless_chrome_is_restarted_once() {
         if let Some((e, _)) = computer::running_local_chrome(&profile).await { endpoint = Some(e); break; }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    endpoint.expect("the older Chrome answers");
+    assert!(endpoint.is_some(), "the older Chrome answers");
     assert_eq!(computer::launched_headless(&profile), None);
     assert!(computer::started_by_older_kwant(&profile));
 
