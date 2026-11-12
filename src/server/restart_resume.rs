@@ -1,10 +1,12 @@
 //! 0.9.5 "Runs never stop silently": a reply that a kwnt restart cut off continues by itself,
 //! once. A running turn records its tool steps as they start and finish
 //! ([`crate::db::continuity::RunningTurn::steps`]); at the next start the turn runs again with
-//! a note saying what was cut off. A step that could have changed something outside (sent,
-//! posted, pushed, paid) is never re-run blindly: the bot is told it was cut off mid-call, checks
-//! whether it took effect, and only then retries; if it can't tell, it asks the person once. A
-//! step that only reads may simply run again.
+//! a note saying what was cut off. A step that only reads may simply run again. A step that acted
+//! locally (a shell command, an edit, a click) is never re-run blindly: the bot is told it was cut
+//! off mid-call, checks whether it took effect, and only then retries; if it can't tell, it asks
+//! the person once. A step that reaches outside (send, post, push, pay, publish, merge, deploy;
+//! see [`outward`]) isn't continued at all: kwant asks the person instead ([`outward_line`]), with
+//! no Retry, since Retry would resend the whole request and could do it twice.
 //!
 //! Bounded: the continuation is itself marked ([`crate::db::continuity::RunningTurn::resumed`]),
 //! so a second restart asks the person instead (the notice with Retry and a Needs-you item). A
@@ -98,6 +100,52 @@ pub fn read_only(name: &str) -> bool {
     READ_ONLY_PREFIXES.iter().any(|p| bare.starts_with(p)) || READ_ONLY_PARTS.iter().any(|p| bare.contains(p))
 }
 
+/// Words in a tool's own name that mean it reaches outside: a message, a post, a push, a payment.
+const OUTWARD_NAME_PARTS: &[&str] = &[
+    "send", "post", "publish", "tweet", "reply", "comment", "email", "mail", "message", "push", "merge", "deploy", "release",
+    "pay", "charge", "checkout", "purchase", "buy", "order", "transfer", "invoice", "refund", "submit", "invite", "share",
+    "upload", "create_pull_request", "create_issue", "dm",
+];
+/// What a shell command or a click's arguments say when the step reaches outside.
+const OUTWARD_ARG_PARTS: &[&str] = &[
+    "git push", "gh pr merge", "gh pr create", "gh release", "npm publish", "cargo publish", "docker push", "twine upload",
+    "kubectl apply", "wrangler deploy", "fly deploy", "vercel deploy", "vercel --prod", "sendmail", "mailx ", "curl -x post", "curl -x put",
+    "curl -x delete", "curl --data", "curl -d ", "\"send\"", "\"post\"", "\"publish\"", "\"pay", "\"buy", "\"submit\"", "\"tweet\"",
+    "\"reply\"",
+];
+
+/// Whether a step reaches outside, so it may already have gone out and must not run again without
+/// the person: its name says so, or (a shell command, a click) its arguments do. Unknown names
+/// that don't say so count as local (checked first, see [`prompt`]); reads are never outward.
+pub fn outward(name: &str, args: &str) -> bool {
+    if read_only(name) {
+        return false;
+    }
+    let tool = name.rsplit("__").next().unwrap_or(name).to_ascii_lowercase();
+    let bare = tool.trim_start_matches("agent_").trim_start_matches("browser_");
+    let words: Vec<&str> = bare.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let named = OUTWARD_NAME_PARTS.iter().any(|p| if p.contains('_') { bare.contains(p) } else { words.contains(p) });
+    let args = args.to_ascii_lowercase();
+    named || OUTWARD_ARG_PARTS.iter().any(|p| args.contains(p))
+}
+
+/// The step a restart cut off mid-call that reaches outside, if any: then the reply isn't
+/// continued and the person is asked instead.
+pub fn cut_off_outward(t: &RunningTurn) -> Option<Step> {
+    steps_of(t).into_iter().rev().find(|s| !s.done && outward(&s.name, &s.args))
+}
+
+/// The chat notice and Needs-you line when the cut-off step reaches outside: what stopped, why
+/// it isn't continued, and the one action (tell the bot in the chat).
+pub fn outward_line(t: &RunningTurn, step: &Step) -> String {
+    format!(
+        "{name}'s reply was cut off when kwant restarted, in the middle of `{step}`, which may already have gone out. \
+         kwant won't run it again by itself. Check whether it went out, then tell {name} in the chat whether to do it again.",
+        name = t.kwant_name,
+        step = step.name,
+    )
+}
+
 fn steps_of(t: &RunningTurn) -> Vec<Step> {
     t.steps.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default()
 }
@@ -111,10 +159,10 @@ fn step_line(s: &Step) -> String {
 }
 
 /// The prompt that continues `t` after a restart; `None` when it isn't continued (no message
-/// recorded, or it was already a continuation).
+/// recorded, already a continuation, or the cut-off step reaches outside: [`cut_off_outward`]).
 pub fn prompt(t: &RunningTurn) -> Option<String> {
     let original = t.prompt.as_deref().filter(|p| !p.trim().is_empty())?;
-    if t.resumed == Some(true) {
+    if t.resumed == Some(true) || cut_off_outward(t).is_some() {
         return None;
     }
     let steps = steps_of(t);
@@ -227,13 +275,41 @@ mod tests {
     }
 
     #[test]
-    fn a_step_that_acts_is_checked_before_it_runs_again() {
-        let p = prompt(&turn(&[step("Read", true), step("mcp__slack__send_message", false)], None)).unwrap();
-        assert!(p.contains("`mcp__slack__send_message` with {\"x\":1} was cut off mid-call"), "{p}");
+    fn a_step_that_acts_locally_is_checked_before_it_runs_again() {
+        let p = prompt(&turn(&[step("Read", true), step("Edit", false)], None)).unwrap();
+        assert!(p.contains("`Edit` with {\"x\":1} was cut off mid-call"), "{p}");
         assert!(p.contains("Check first whether it took effect"), "{p}");
         assert!(p.contains("If you can't tell, don't run it again: ask the person once"), "{p}");
         assert!(!p.contains("Don't do them again"), "a finished read isn't listed: {p}");
         assert!(p.ends_with("\n\npost the launch note"), "{p}");
+    }
+
+    /// deer-flow row (Ada): a step that reaches outside, cut off mid-call, is never run again by
+    /// kwant or the bot on its own: the reply isn't continued and the person is asked instead.
+    #[test]
+    fn a_cut_off_step_that_reaches_outside_is_not_continued_and_the_person_is_asked() {
+        for name in ["mcp__slack__send_message", "mcp__x__create_post", "mcp__gmail__send_email", "mcp__stripe__charge", "mcp__gh__merge_pull_request", "mcp__gh__create_pull_request", "mcp__shop__checkout", "mcp__tg__send"] {
+            assert!(outward(name, "{}"), "{name}");
+            let t = turn(&[step("Read", true), step(name, false)], None);
+            assert!(prompt(&t).is_none(), "{name} is not continued");
+            let line = outward_line(&t, &cut_off_outward(&t).unwrap());
+            assert!(line.contains(&format!("in the middle of `{name}`, which may already have gone out")), "{line}");
+            assert!(line.ends_with("then tell Ben in the chat whether to do it again."), "{line}");
+        }
+        // A shell command or a click is outward when its arguments say so
+        assert!(outward("Bash", r#"{"command":"git push origin main"}"#));
+        assert!(outward("Bash", r#"{"command":"curl -X POST https://api.example.com/pay"}"#));
+        assert!(outward("mcp__browser__agent_browser_click", r#"{"element":"Post","ref":"\"post\""}"#));
+        assert!(!outward("Bash", r#"{"command":"cargo test"}"#));
+        assert!(!outward("mcp__browser__agent_browser_click", r#"{"ref":"e12"}"#));
+        // Reads and local edits never are, even when a word matches
+        for name in ["Read", "mcp__gmail__list_messages", "mcp__slack__get_message", "Edit", "Write", "mcp__x__search_posts", "mcp__gh__get_pull_request"] {
+            assert!(!outward(name, "{}"), "{name}");
+        }
+        // A finished outward step isn't cut off: it's listed as done, never repeated
+        let t = turn(&[step("mcp__slack__send_message", true), step("Read", false)], None);
+        assert!(cut_off_outward(&t).is_none());
+        assert!(prompt(&t).unwrap().contains("Don't do them again"));
     }
 
     #[test]

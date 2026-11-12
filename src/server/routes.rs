@@ -2454,7 +2454,8 @@ pub(super) async fn turn_once(
 
 /// Says in each chat which reply a previous run of kwnt cut off by stopping mid-turn. Runs once at
 /// startup, before any new turn can start. The note's meta is
-/// `{"kind":"turn_interrupted","interrupted":true,"kwant_id","kwant_name","turn_id","started_at"}`.
+/// `{"kind":"turn_interrupted","interrupted":true,"kwant_id","kwant_name","turn_id","started_at"}`,
+/// plus `outward_step` (the tool name) when the cut-off step reached outside: no Retry then.
 pub async fn interrupt_running_turns(state: &AppState) -> usize {
     let Ok(turns) = state.db.take_running_turns().await else {
         return 0;
@@ -2464,17 +2465,25 @@ pub async fn interrupt_running_turns(state: &AppState) -> usize {
         if continue_after_restart(state, t).await {
             continue;
         }
+        // Cut off in the middle of a step that reaches outside (a send, a post, a push, a payment):
+        // it may already have gone out, so nothing runs it again by itself and the notice has no
+        // Retry (that resends the whole request); the person says whether to (0.9.5, deer-flow row)
+        let outward = super::restart_resume::cut_off_outward(t);
+        let text = match &outward {
+            Some(step) => super::restart_resume::outward_line(t, step),
+            None => format!("This reply from {} was interrupted by a restart. Send your message again to retry.", t.kwant_name),
+        };
         let msg = NewMessage {
             channel_id: t.channel_id.clone(),
             direct_kwant_id: t.direct_kwant_id.clone(),
             sender_role: "system".into(),
             sender_id: "kwnt".into(),
-            text: format!("This reply from {} was interrupted by a restart. Send your message again to retry.", t.kwant_name),
+            text: text.clone(),
             reasoning_content: None,
             tool_calls: None,
             tokens_used: 0,
         };
-        let meta = json!({
+        let mut meta = json!({
             "kind": "turn_interrupted",
             "interrupted": true,
             "kwant_id": t.kwant_id,
@@ -2482,6 +2491,9 @@ pub async fn interrupt_running_turns(state: &AppState) -> usize {
             "turn_id": t.turn_id,
             "started_at": t.started_at,
         });
+        if let Some(step) = &outward {
+            meta["outward_step"] = json!(step.name);
+        }
         let saved = state.db.insert_message_with(&msg, &MessageExtra { thread_id: t.thread_id.clone(), meta: Some(meta) }).await.ok();
         if let Some(tid) = &t.thread_id {
             let _ = state.db.touch_thread(tid).await;
@@ -2494,7 +2506,10 @@ pub async fn interrupt_running_turns(state: &AppState) -> usize {
                 direct_kwant_id: t.direct_kwant_id.clone(),
                 thread_id: t.thread_id.clone(),
             };
-            let line = format!("{}'s reply was cut off when kwant restarted. Retry in the chat sends your message again.", t.kwant_name);
+            let line = match &outward {
+                Some(_) => text.clone(),
+                None => format!("{}'s reply was cut off when kwant restarted. Retry in the chat sends your message again.", t.kwant_name),
+            };
             super::stopped::ask(state, &place, saved.as_ref().map(|m| m.id.as_str()), &line, super::stopped::Resume::ResendMessage).await;
         }
     }
@@ -4431,7 +4446,7 @@ async fn send_chat_routed(
                     target_kwant.name, target_kwant.title, reason
                 )));
 
-                let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id).await;
+                let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id, from_person).await;
                 execute_single_turn(
                     state.clone(),
                     target_kwant.clone(),
@@ -4666,7 +4681,7 @@ async fn send_chat_routed(
             return Ok(Json(v));
         }
         let team_keys = active_team.as_ref().map(|t| (t.id.clone(), t.name.clone()));
-        let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id).await;
+        let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id, from_person).await;
         execute_single_turn(
             state.clone(),
             target_kwant.clone(),
@@ -4789,7 +4804,7 @@ async fn send_to_thread(
     let prompt = payload.prompt + &note;
     let target = kwant.clone();
     // H3: the message is saved and shows; its turn waits while the bot is stuck or waits on the person
-    let held = super::bot_status::hold(&state, &kwant, &thread.id, "message", &saved.id).await;
+    let held = super::bot_status::hold_from(&state, &kwant, &thread.id, "message", &saved.id, from_person).await;
     let held_id = held.as_ref().map(|_| saved.id.clone());
     tokio::spawn(async move {
         let _job = job;
@@ -4811,9 +4826,11 @@ async fn send_to_thread(
 }
 
 /// Holds a chat or 1:1 message to `kwant` while it is stuck or waits on the person elsewhere (H3).
-async fn held_send(state: &AppState, kwant: &Kwant, payload: &SendChatPayload, message_id: &str) -> Option<serde_json::Value> {
+/// The person's own message in the chat where the bot gave up after a stall is its Retry and goes
+/// now (0.9.5).
+async fn held_send(state: &AppState, kwant: &Kwant, payload: &SendChatPayload, message_id: &str, from_person: bool) -> Option<serde_json::Value> {
     let context = payload.channel_id.clone().or_else(|| payload.kwant_id.clone()).unwrap_or_else(|| kwant.id.clone());
-    super::bot_status::hold(state, kwant, &context, "message", message_id).await
+    super::bot_status::hold_from(state, kwant, &context, "message", message_id, from_person).await
 }
 
 /// A held send answers `status: "held"` with why (`release-090/h4-contract.md` §7a).

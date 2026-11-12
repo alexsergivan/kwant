@@ -122,3 +122,26 @@ test('the expired approval notice has Retry, and none in a read-only view', () =
   const readOnly = m.renderToStaticMarkup(m.createElement(m.ExpiredApprovalNotice, props));
   assert.doesNotMatch(readOnly, /data-approval-retry/);
 });
+
+test('a restart cut off mid send: the notice says so in its own words and offers no Retry', () => {
+  const user = { id: 'u1', sender_role: 'user', sender_id: 'user', text: 'post the launch note', meta: null };
+  const text = "Ben's reply was cut off when kwant restarted, in the middle of `mcp__slack__send_message`, which may already have gone out. kwant won't run it again by itself. Check whether it went out, then tell Ben in the chat whether to do it again.";
+  const note = {
+    id: 'n1',
+    sender_role: 'system',
+    sender_id: 'kwnt',
+    text,
+    meta: JSON.stringify({ kind: 'turn_interrupted', interrupted: true, kwant_name: 'Ben', outward_step: 'mcp__slack__send_message' }),
+  };
+  const i = m.parseInterruption(note);
+  assert.equal(i.kind, 'restart');
+  assert.equal(i.outwardStep, 'mcp__slack__send_message');
+  assert.equal(m.interruptionText(i), text);
+  assert.equal(m.retryTargets([user, note]).size, 0, 'never resent blindly');
+  const html = m.renderToStaticMarkup(m.createElement(m.InterruptedNotice, { messageId: 'n1', interruption: i, retry: null, onRetry: () => {} }));
+  assert.ok(html.includes('may already have gone out'), html);
+  assert.ok(!html.includes('Retry'), html);
+  // A plain restart keeps its Retry
+  const plain = { ...note, text: 'This reply from Ben was interrupted by a restart.', meta: JSON.stringify({ kind: 'turn_interrupted', interrupted: true, kwant_name: 'Ben' }) };
+  assert.equal(m.retryTargets([user, plain]).get('n1').text, 'post the launch note');
+});

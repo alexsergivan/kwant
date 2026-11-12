@@ -12,8 +12,14 @@ export interface Interruption {
   botName: string;
   /** Seconds of silence before the watchdog stopped the reply (stall only). */
   secs?: number;
-  /** What went wrong, in the saved message's own words without its "⚠️ [Bot]" tag (failed only). */
+  /** What went wrong, in the saved message's own words without its "⚠️ [Bot]" tag (failed, and a restart mid outward step). */
   detail?: string;
+  /**
+   * 0.9.5: the restart cut off a step that reaches outside (a send, a post, a push, a payment). It may
+   * already have gone out, so there's no Retry (that resends the whole request): the notice asks the
+   * person to tell the bot in the chat whether to do it again.
+   */
+  outwardStep?: string;
 }
 
 /** A failed reply's text without its leading "⚠️ [Bot] " tag. */
@@ -31,6 +37,9 @@ export function parseInterruption(msg: ChatMessage): Interruption | null {
     const m = parseMetaObject(msg.meta);
     if (m?.kind !== 'turn_interrupted' || m.interrupted !== true) return null;
     const name = typeof m.kwant_name === 'string' && m.kwant_name.trim() ? m.kwant_name : 'The bot';
+    if (typeof m.outward_step === 'string' && m.outward_step) {
+      return { kind: 'restart', botName: name, outwardStep: m.outward_step, detail: msg.text.trim() || undefined };
+    }
     return { kind: 'restart', botName: name };
   }
   if (msg.sender_role === 'kwant') {
@@ -55,6 +64,7 @@ export function parseInterruption(msg: ChatMessage): Interruption | null {
 
 export function interruptionText(i: Interruption): string {
   if (i.kind === 'failed') return i.detail || `${i.botName} couldn't finish this reply.`;
+  if (i.outwardStep) return i.detail || `${i.botName}'s reply was cut off when the app restarted, in the middle of a step that may already have gone out. Tell ${i.botName} in the chat whether to do it again.`;
   return i.kind === 'restart'
     ? `${i.botName}'s reply was cut off when the app restarted.`
     : i.secs
@@ -77,7 +87,10 @@ export function retryTargets(messages: ChatMessage[]): Map<string, RetryTarget> 
     const msg = messages[i];
     if (msg.sender_role === 'user') return out;
     // Isolation refusals and the request limit end a reply too (agents-in-vm notices 1–7).
-    if (!parseInterruption(msg) && !isIsolationNotice(msg)) continue;
+    const parsed = parseInterruption(msg);
+    if (!parsed && !isIsolationNotice(msg)) continue;
+    // A step that may already have gone out is never resent blindly: no Retry (0.9.5)
+    if (parsed?.outwardStep) return out;
     for (let j = i - 1; j >= 0; j--) {
       const prev = messages[j];
       if (prev.sender_role !== 'user') continue;
