@@ -17,9 +17,13 @@
 //! live status without a verdict, then one row per must_not_change entry from `scope_status`.
 //! Acceptance lines as `not_checked` are only the fallback for a task with no stored contract.
 //!
-//! `POST /api/away/seen` only moves the marker for finished and failed items: review items stay
-//! listed until they are approved, sent back or rolled back.
+//! `POST /api/away/seen` only moves the marker: every item carries `unread` (newer than the
+//! marker), and the badge counts unread ones. Since 0.9.5 B, finished and failed items stay
+//! listed for 7 days whether seen or not; review items stay until they are approved, sent back
+//! or rolled back. Done items (finished, failed, to review) and team jobs carry the answer, the
+//! trail and the why ([`super::inbox_done`]).
 
+use super::inbox_done;
 use super::away::{self, item, last_seen, rfc3339, waiting_approvals, DEFAULT_LOOKBACK_DAYS, MAX_ITEMS, STUCK_AFTER_MINUTES};
 use super::missions::contract::{self, Contract};
 use super::spaces::Scope;
@@ -536,6 +540,7 @@ fn watch_item(mut v: Value, last_seen: Option<DateTime<Utc>>) -> Value {
     let id = v["id"].as_str().unwrap_or("").to_string();
     v["group"] = json!(Group::WaitingOnYou.key());
     v["sort_key"] = sort_key(Group::WaitingOnYou, None, at_ms, unread, &name, &id);
+    v["unread"] = json!(unread);
     v
 }
 
@@ -666,6 +671,7 @@ fn away_item(row: crate::db::away::AwayRow, group: Group, last_seen: Option<Date
     let id = v["id"].as_str().unwrap_or("").to_string();
     v["group"] = json!(group.key());
     v["sort_key"] = sort_key(group, None, at.timestamp_millis(), unread, &name, &id);
+    v["unread"] = json!(unread);
     v
 }
 
@@ -752,8 +758,10 @@ pub struct InboxQuery {
     pub since: Option<String>,
 }
 
-/// `GET /api/inbox?since=<RFC 3339>&space=`: `since` defaults to the last-seen marker, else 7
-/// days ago, as on `GET /api/away`; it only bounds finished and failed items.
+/// `GET /api/inbox?since=<RFC 3339>&space=`: `since` bounds finished and failed items and team
+/// jobs. It defaults to 7 days ago, and an older one is cut to that ([`inbox_done::done_since`]):
+/// done items stay for 7 days, seen or not. The badge still counts what is newer than the
+/// last-seen marker, as on `GET /api/away`.
 pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Query<InboxQuery>) -> Response {
     let now = Utc::now();
     let Ok(seen) = last_seen(&state, &space).await else {
@@ -761,9 +769,9 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     };
     let default_since = seen.unwrap_or(now - Duration::days(DEFAULT_LOOKBACK_DAYS));
     let since = match q.since.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        None => default_since,
+        None => inbox_done::done_since(now, None),
         Some(s) => match DateTime::parse_from_rfc3339(s) {
-            Ok(t) => t.with_timezone(&Utc),
+            Ok(t) => inbox_done::done_since(now, Some(t.with_timezone(&Utc))),
             Err(_) => {
                 let msg = "since must be an RFC 3339 time, e.g. 2026-10-17T09:00:00Z";
                 return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response();
@@ -783,10 +791,23 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
         let prepush = state.db.prepush_cards(space.as_str(), 50).await?;
         let prepush_needs_you = prepush.iter().filter(|c| (c.status == BLOCKED || c.status == PREPUSH_FAILED) && c.tries >= NEEDS_YOU_TRIES).count() as i64;
         let reviews = gather(&state, &space).await?;
-        Ok::<_, DbError>((waiting, finished, failed, waiting_count + unseen_finished + unseen_failed, prepush_needs_you, reviews))
+        let team_jobs = inbox_done::team_jobs(&state, &space, since, seen).await?;
+        let unseen_jobs = inbox_done::unread_count(&state, &space, default_since).await?;
+        let unseen = waiting_count + unseen_finished + unseen_failed + unseen_jobs;
+        // The answer, trail and why of each done item
+        let mut done = Vec::with_capacity(finished.len() + failed.len());
+        for (row, group) in failed.into_iter().map(|r| (r, Group::FailedOrStuck)).chain(finished.into_iter().map(|r| (r, Group::Finished))) {
+            let facts = inbox_done::away_facts(&state, &row.kind, &row.id).await?;
+            done.push((row, group, facts));
+        }
+        let mut review_facts = Vec::with_capacity(reviews.len());
+        for r in &reviews {
+            review_facts.push(inbox_done::task_facts(&state, &r.task, &r.kwant_name, r.in_review_since).await?);
+        }
+        Ok::<_, DbError>((waiting, done, unseen, prepush_needs_you, reviews, review_facts, team_jobs))
     }
     .await;
-    let Ok((waiting, finished, failed, unseen_total, prepush_needs_you, reviews)) = result else {
+    let Ok((waiting, done, unseen_total, prepush_needs_you, reviews, review_facts, team_jobs)) = result else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     // What a mission watcher left for the person (P1), listed and counted as on /api/away
@@ -796,9 +817,28 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     let mut items: Vec<Value> = Vec::new();
     items.extend(waiting.into_iter().map(|r| away_item(r, Group::WaitingOnYou, seen)));
     items.extend(watch.into_iter().map(|v| watch_item(v, seen)));
-    items.extend(failed.into_iter().map(|r| away_item(r, Group::FailedOrStuck, seen)));
-    items.extend(finished.into_iter().map(|r| away_item(r, Group::Finished, seen)));
-    items.extend(reviews.iter().filter_map(|r| review_item(r, seen)).map(|(v, _)| v));
+    // An approval's title is its own question when the call names what it is about (Iris's #539).
+    // `question` is sent only then, so the Inbox can tell it from today's tool title, which stays
+    // in `title` when there is none (every screen prints `title`).
+    for v in items.iter_mut().filter(|v| v["kind"] == "approval") {
+        if let Some(q) = inbox_done::approval_question(&v["details"]) {
+            v["title"] = json!(q);
+            v["question"] = json!(q);
+        }
+    }
+    for (row, group, facts) in done {
+        let mut v = away_item(row, group, seen);
+        let unread = v["unread"].as_bool().unwrap_or(true);
+        inbox_done::apply(&mut v, &facts, unread);
+        items.push(v);
+    }
+    for (r, facts) in reviews.iter().zip(&review_facts) {
+        if let Some((mut v, _)) = review_item(r, seen) {
+            inbox_done::apply(&mut v, facts, seen.is_none_or(|s| r.in_review_since > s));
+            items.push(v);
+        }
+    }
+    items.extend(team_jobs);
     Json(response(items, unseen_total, prepush_needs_you, since, seen, now)).into_response()
 }
 

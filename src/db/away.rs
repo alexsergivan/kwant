@@ -3,6 +3,7 @@
 //! routine runs). Read-only apart from the user's last-seen marker.
 
 use super::spaces::SpaceId;
+use super::models::Message;
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
@@ -83,6 +84,9 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS delegations_by_end ON delegations (status, ended_at) WHERE ended_at IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS delegations_running ON delegations (started_at) WHERE status = 'running'",
             "CREATE INDEX IF NOT EXISTS routine_runs_by_end ON routine_runs (status, ended_at) WHERE ended_at IS NOT NULL",
+            // 0.9.5 B: a lead's reply that ended with `Done: …` (keep_going's `chain_done` meta), so
+            // team jobs are found without scanning messages
+            "CREATE INDEX IF NOT EXISTS messages_chain_done ON messages (created_at) WHERE instr(meta, '\"chain_done\"') > 0",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
@@ -204,6 +208,118 @@ impl Database {
     }
 }
 
+/// A lead's reply that ended with `Done: …` (0.9.5 B team jobs). `meta` holds `chain_done`.
+#[derive(Debug, Clone, FromRow)]
+pub struct DoneReplyRow {
+    pub id: String,
+    pub channel_id: Option<String>,
+    pub direct_kwant_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub sender_id: String,
+    pub text: String,
+    pub meta: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `?1` = since. The partial index `messages_chain_done` matches this filter exactly.
+const DONE_REPLIES: &str = "
+    SELECT id, channel_id, direct_kwant_id, thread_id, sender_id, text, meta, created_at
+    FROM messages
+    WHERE instr(meta, '\"chain_done\"') > 0 AND created_at > ?1 AND sender_role = 'kwant'";
+
+impl Database {
+    /// Lead replies that ended with `Done: …` after `since`, newest first (any space: the caller
+    /// keeps the ones whose lead is in its space).
+    pub async fn done_replies(&self, since: DateTime<Utc>, limit: i64) -> Result<Vec<DoneReplyRow>, DbError> {
+        Ok(sqlx::query_as(&format!("{DONE_REPLIES} ORDER BY created_at DESC, rowid DESC LIMIT ?2"))
+            .bind(since)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// A routine run's result message, its routine's instructions, the routine's id and what
+    /// started the run (`schedule`, `manual`, `event`).
+    pub async fn routine_run_result(&self, run_id: &str) -> Result<Option<(Option<String>, String, String, String)>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT r.message_id, rt.instructions, r.routine_id, r.trigger FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id WHERE r.id = ?",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// The kwant called `name` in `space` (a reply's `sender_id` is its kwant's name).
+    pub async fn kwant_id_named(&self, name: &str, space: &SpaceId) -> Result<Option<String>, DbError> {
+        Ok(sqlx::query_scalar(
+            "SELECT id FROM kwants WHERE name = ? AND COALESCE(space_id, 'spc_default') = ? ORDER BY created_at, rowid LIMIT 1",
+        )
+        .bind(name)
+        .bind(space.as_str())
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// The person's last message in a chat (channel, direct chat or thread) at or before `at`:
+    /// where the request a lead's `Done:` closes started.
+    pub async fn last_person_message_before(&self, context: &str, at: DateTime<Utc>) -> Result<Option<Message>, DbError> {
+        // One indexed lookup per kind of chat; a context id is only ever one of them
+        for col in ["channel_id", "direct_kwant_id", "thread_id"] {
+            let row = sqlx::query_as::<_, Message>(&format!(
+                "SELECT * FROM messages WHERE {col} = ? AND created_at <= ? AND sender_role = 'user' ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ))
+            .bind(context)
+            .bind(at)
+            .fetch_optional(&self.pool)
+            .await?;
+            if row.is_some() {
+                return Ok(row);
+            }
+        }
+        Ok(None)
+    }
+
+    /// The bot's reply that holds a task's result: its first reply in the task's chat from
+    /// `review_at` (the hand-in is a tool call, the reply lands when the turn ends) within
+    /// `slack`, else its last one before.
+    pub async fn task_result_message(
+        &self,
+        context: &str,
+        bot_name: &str,
+        review_at: DateTime<Utc>,
+        slack: chrono::Duration,
+    ) -> Result<Option<Message>, DbError> {
+        for col in ["thread_id", "channel_id", "direct_kwant_id"] {
+            let after = sqlx::query_as::<_, Message>(&format!(
+                "SELECT * FROM messages WHERE {col} = ? AND sender_role = 'kwant' AND sender_id = ? AND created_at >= ? AND created_at <= ? \
+                 ORDER BY created_at, rowid LIMIT 1"
+            ))
+            .bind(context)
+            .bind(bot_name)
+            .bind(review_at)
+            .bind(review_at + slack)
+            .fetch_optional(&self.pool)
+            .await?;
+            if after.is_some() {
+                return Ok(after);
+            }
+            let before = sqlx::query_as::<_, Message>(&format!(
+                "SELECT * FROM messages WHERE {col} = ? AND sender_role = 'kwant' AND sender_id = ? AND created_at < ? \
+                 ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ))
+            .bind(context)
+            .bind(bot_name)
+            .bind(review_at)
+            .fetch_optional(&self.pool)
+            .await?;
+            if before.is_some() {
+                return Ok(before);
+            }
+        }
+        Ok(None)
+    }
+}
+
 /// Newest first, at most `limit`.
 fn newest(mut rows: Vec<AwayRow>, limit: i64) -> Vec<AwayRow> {
     rows.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
@@ -245,5 +361,15 @@ mod tests {
             assert!(!detail.iter().any(|d| d.starts_with("SCAN")), "full scan: {detail:?}\n{sql}");
             assert!(detail.iter().any(|d| d.contains(idx)), "{idx} unused: {detail:?}");
         }
+        // Team jobs (0.9.5 B): two parameters, no space
+        let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {DONE_REPLIES} ORDER BY created_at DESC LIMIT ?2"))
+            .bind(Utc::now())
+            .bind(50)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        let detail: Vec<String> = rows.into_iter().map(|r| r.3).collect();
+        assert!(!detail.iter().any(|d| d.starts_with("SCAN")), "full scan: {detail:?}");
+        assert!(detail.iter().any(|d| d.contains("messages_chain_done")), "messages_chain_done unused: {detail:?}");
     }
 }

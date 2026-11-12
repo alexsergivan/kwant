@@ -994,7 +994,7 @@ pub async fn after_run(state: &AppState, task: &Task) {
 // The side-effect ledger
 
 /// Claude's tools that only read or plan.
-const NO_EFFECT_TOOLS: [&str; 11] =
+pub const NO_EFFECT_TOOLS: [&str; 11] =
     ["Read", "Glob", "Grep", "LS", "WebSearch", "TodoWrite", "TodoRead", "NotebookRead", "ToolSearch", "BashOutput", "ExitPlanMode"];
 /// Claude's tools that write one file.
 const FILE_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
