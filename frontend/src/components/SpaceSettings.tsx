@@ -537,7 +537,7 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
 const AccountsTab: React.FC<Props & { engines: EnginesApi; accounts: ProfilesState }> = ({ focusClaudeSignIn, engines, accounts }) => {
   return (
     <div className="space-y-3">
-      <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} />
+      <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} hideRoutes />
       <ApiKeysPanel
         onSaved={() => {
           // Saving a key or the Ollama address re-checks engines on the server; show the result.

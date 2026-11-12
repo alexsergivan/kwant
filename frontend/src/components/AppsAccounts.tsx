@@ -488,7 +488,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
       if (alive.current) setLoad({ state: 'ok', data });
       return data;
     } catch (e) {
-      if (!alive.current) return;
+      if (!alive.current) return null;
       if (e instanceof ConnectionsError && e.status === 401) setLoad({ state: 'token' });
       else setLoad({ state: 'error', text: errText(e) });
       return null;

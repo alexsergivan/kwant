@@ -21,6 +21,7 @@ const m = await loadBundled(`
   export { parseView, viewSegment, SPACE_SETTINGS_TABS } from './src/nav';
   export { AppsAccounts, ConnectSheet } from './src/components/AppsAccounts';
   export { ConnectionsView } from './src/components/ConnectionsView';
+  export { EnginesPanel } from './src/components/EnginesPanel';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createRoot } from 'react-dom/client';
   export { createElement } from 'react';
@@ -425,4 +426,16 @@ test('F5: the link error sits right under the field and is read with it; a good 
   assert.ok(after.indexOf(err) > after.indexOf(input), 'error after the input');
   await type(input, 'https://backend.composio.dev/v3/mcp/abc');
   assert.equal(host.querySelector('[data-sheet-step="2"]').getAttribute('data-done'), 'true');
+});
+
+test('Sign-ins and settings has no account list of its own: no "What runs your kwant bots" there', () => {
+  const { EnginesPanel } = m;
+  const engines = [{ id: 'claude', name: 'Claude Code CLI', kind: 'cli', status: 'ready', enabled: true, ready: true, models: [], checked_at: null, uses: { profile_id: 'sys', label: 'This machine' } }];
+  const api = { engines, error: null, rechecking: false, recheck: async () => {}, setEnabled: async () => {}, reload: async () => {} };
+  const accounts = { profiles: [profile('sys', 'claude')], error: null, reload: async () => {} };
+  const full = m.renderToStaticMarkup(h(EnginesPanel, { api, accounts }));
+  assert.match(full, /data-route-summary/, 'the panel still has it elsewhere');
+  const here = m.renderToStaticMarkup(h(EnginesPanel, { api, accounts, hideRoutes: true }));
+  assert.doesNotMatch(here, /data-route-summary|What runs your/);
+  assert.match(here, /Claude Code CLI/, 'sign-ins stay');
 });
