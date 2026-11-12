@@ -36,6 +36,7 @@ import {
   openStepsByKwant,
   turnsAwaitingStep,
 } from './humanSteps';
+import { notifyBrowserPages, pageTeam, stepPage } from './browserPages';
 import { McpSuggestionCard } from './components/McpSuggestionCard';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
 import type { ConnectionSuggestionMeta } from './connectionSuggestions';
@@ -683,8 +684,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     else if (n.kind === 'fact_disputed') openBoardForTier();
     else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) {
       setIsVmPaneOpen(true);
+      const step = latestOpenStep(humanStepsRef.current, n.kwant_id);
+      // The step's own page, not whichever page the pane showed last
+      pickPage(stepPage(step));
       // A CAPTCHA lands straight in the solve view
-      if (latestOpenStep(humanStepsRef.current, n.kwant_id)?.kind === 'captcha') setSolveRequest((v) => v + 1);
+      if (step?.kind === 'captcha') setSolveRequest((v) => v + 1);
     }
     else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openPlaceRef.current(n);
   };
@@ -969,6 +973,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [turnsHydrated, setTurnsHydrated] = useState(0);
   const [browsingSeeded, setBrowsingSeeded] = useState(0);
   const [solveRequest, setSolveRequest] = useState(0);
+  // 0.9.3: a card's Sign in / Solve (or a step notification) asks the pane to show that step's own page
+  const [pagePick, setPagePick] = useState<{ page: string; n: number } | null>(null);
+  const pickPage = (page: string | null | undefined) => {
+    if (page) setPagePick((p) => ({ page, n: (p?.n ?? 0) + 1 }));
+  };
   const [activeUrl, setActiveUrl] = useState('');
   const [pageTitle, setPageTitle] = useState('');
   const [screenshotBase64, setScreenshotBase64] = useState<string | null>(null);
@@ -1459,6 +1468,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const st: HumanStep | undefined = event.data?.step;
             if (!st?.id) break;
             setHumanSteps((prev) => applyHumanStep(prev, st));
+            notifyBrowserPages(stepPage(st));
             if (st.status === 'open') playSfx('alert');
             break;
           }
@@ -1612,6 +1622,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'browser_navigated':
           case 'BrowserNavigated': {
             const teamId = event.data?.team_id;
+            notifyBrowserPages(teamId);
             setBrowsing((m) => noteBrowser(m, teamId, event.data?.url, Date.now()));
             const currentTid = activeSandboxIdRef.current;
             const k = currentKwantRef.current;
@@ -1662,6 +1673,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'sandbox_status':
           case 'SandboxStatusChanged': {
             const teamId = event.data?.team_id;
+            notifyBrowserPages(teamId);
             const currentTid = activeSandboxIdRef.current;
             const k = currentKwantRef.current;
             const t = currentTeamRef.current;
@@ -2413,7 +2425,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         kwantId={st?.kwant_id}
         live={st}
         waiting={!!turnId && !!turns[turnId]}
-        onOpenBrowser={(_target, solve) => {
+        onOpenBrowser={(_target, solve, page) => {
+          pickPage(page);
           setIsVmPaneOpen(true);
           if (solve) {
             setSolveRequest((v) => v + 1);
@@ -3328,13 +3341,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
-  const handleNavigateVm = async (url: string) => {
+  // `page`: the page the pane shows (0.9.3), so the address bar drives that page and not the team page
+  const handleNavigateVm = async (url: string, page?: string | null) => {
     const sid = activeSandboxId;
     if (!sid || sid === 'default') return;
+    const target = page && pageTeam(page) === sid ? page : sid;
     setBrowserError(null);
     setIsVmPaneOpen(true);
     try {
-      const res = await fetch(`/api/sandbox/${sid}/navigate`, {
+      const res = await fetch(`/api/sandbox/${encodeURIComponent(target)}/navigate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
@@ -4094,6 +4109,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           vmSwitcher={vmSwitcher}
           onVmStepDone={(id) => answerHumanStep(id, 'done')}
           vmSolveRequest={solveRequest}
+          vmPagePick={pagePick}
+          vmBotNames={kwantNames}
           vmShowOnceBot={currentKwant && !currentTeam ? { id: currentKwant.id, name: currentKwant.name } : undefined}
           pinned={pinned}
           onEditInstructions={

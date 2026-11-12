@@ -30,13 +30,16 @@ export function takeoverRefusedText(message: { code?: unknown; error?: unknown }
   return BOT_BUSY_TEXT;
 }
 
-export function useBrowserStream(id: string | undefined, visible: boolean) {
+/** `page` (0.9.3): which of the team's pages to show; null or undefined is the server's default. A change reconnects. */
+export function useBrowserStream(id: string | undefined, visible: boolean, page?: string | null) {
   const socket = useRef<WebSocket | null>(null);
   const sequence = useRef(0);
   const pending = useRef(new Set<number>());
   const takingControl = useRef(false);
   const lastImage = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
+  // The page the open stream shows (null: the server's default), set with its first frame
+  const [livePage, setLivePage] = useState<string | null>(null);
   const [controlling, setControlling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +72,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
     let reconnect: ReturnType<typeof setTimeout>;
     let attempts = 0;
     const connect = () => {
-      const ws = new WebSocket(browserStreamUrl(window.location, id));
+      const ws = new WebSocket(browserStreamUrl(window.location, id, page));
       socket.current = ws;
       ws.onopen = () => {
         if (disposed) { ws.close(); return; }
@@ -97,6 +100,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
           case 'frame': {
             attempts = 0;
             setConnected(true);
+            setLivePage(page ?? null);
             const width = Number(message.width) > 0 ? Number(message.width) : 1280;
             const height = Number(message.height) > 0 ? Number(message.height) : 800;
             // An identical picture leaves <img src> unchanged, so no load event comes to acknowledge it
@@ -175,6 +179,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
       actionsById.current.clear();
       failWaiters();
       setConnected(false);
+      setLivePage(null);
       setControlling(false);
       setBusy(false);
       setFrame(null);
@@ -185,7 +190,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
       setViewport(null);
       setResizeIgnored(false);
     };
-  }, [id, visible]);
+  }, [id, visible, page]);
 
   /**
    * `input` marks a discrete action that waits for the page's ack (and shows "Relaying…").
@@ -247,6 +252,8 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
   const clearError = useCallback(() => setError(null), []);
 
   return {
+    /** The page the connected stream shows, null for the server's default (meaningful while `connected`). */
+    page: livePage,
     connected, controlling, busy, error, frame, location, tapFocus, viewport, select, dialog, cursor, unsupported, resizeIgnored,
     send, request, acknowledgeFrame, restoreViewport, clearSelect, clearDialog, clearError,
   };

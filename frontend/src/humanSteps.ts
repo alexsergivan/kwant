@@ -26,6 +26,8 @@ export interface HumanStep {
   reason: string;
   url: string | null;
   sandbox_target: string | null;
+  /** 0.9.3: the browser page the step holds (`team#bot#chat`); null on older steps, which hold the team page. */
+  page_key?: string | null;
   /** CAPTCHA steps: the widget's box, while known. */
   target?: CaptchaTarget | null;
   source: 'bot' | 'auto';
@@ -43,6 +45,8 @@ export interface HumanStepMeta {
   reason: string;
   url: string | null;
   sandbox_target: string | null;
+  /** 0.9.3: the page to show for this step (the card's Sign in / Solve opens it). */
+  page_key: string | null;
   target: CaptchaTarget | null;
   source: 'bot' | 'auto';
   status: HumanStepStatus;
@@ -73,6 +77,7 @@ export function parseHumanStepMeta(raw: unknown): HumanStepMeta | null {
     reason: typeof m.reason === 'string' ? m.reason : '',
     url: typeof m.url === 'string' && m.url ? m.url : null,
     sandbox_target: typeof m.sandbox_target === 'string' && m.sandbox_target ? m.sandbox_target : null,
+    page_key: typeof m.page_key === 'string' && m.page_key ? m.page_key : null,
     target: parseCaptchaTarget(m.target),
     source: m.source === 'auto' ? 'auto' : 'bot',
     status: statusOf(m.status),
@@ -87,6 +92,7 @@ export function humanStepView(meta: HumanStepMeta, live?: HumanStep | null): Hum
     status: live.status,
     url: live.url ?? meta.url,
     sandbox_target: live.sandbox_target ?? meta.sandbox_target,
+    page_key: live.page_key ?? meta.page_key,
     target: parseCaptchaTarget(live.target) ?? meta.target,
   };
 }

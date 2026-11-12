@@ -32,6 +32,9 @@ import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 import { PointLayer, PointSink } from './PointLayer';
 import { POINT_COPY, footerText } from '../point';
+import { choosePage, pageTeam, shownPage, stepPage } from '../browserPages';
+import { useBrowserPages } from '../useBrowserPages';
+import { BrowserPageStrip } from './BrowserPageStrip';
 
 const PHONE_QUERY = '(max-width: 639px)';
 
@@ -86,7 +89,8 @@ export interface VirtualMachinePaneProps {
   terminalLogs?: TerminalLogEntry[];
   onRefresh?: () => void;
   onRestartVm?: () => void;
-  onNavigate?: (url: string) => void;
+  /** `page`: the page shown (0.9.3), so the address bar drives that page. */
+  onNavigate?: (url: string, page?: string | null) => void;
   /** Some bot in the space runs without asking (shown next to saved passwords). */
   approvalsOff?: boolean;
   /** The CAPTCHA this bot's browser is stuck on (open, or closed a moment ago). */
@@ -103,6 +107,10 @@ export interface VirtualMachinePaneProps {
   showOnceBot?: { id: string; name: string };
   /** G3 Point at it: where picks go (the composer). Without it there's no Point button. */
   point?: PointSink;
+  /** 0.9.3: show this page of the team's browser (a card's Sign in / Solve); `n` goes up per ask. */
+  pagePick?: { page: string; n: number } | null;
+  /** Bot names by id, for the page strip. */
+  botNames?: Record<string, string>;
 }
 
 type PaneTab = 'browser' | 'terminal' | 'vault';
@@ -122,6 +130,11 @@ let handledSolve = 0;
 export function rememberPaneTab(teamId: string | undefined, tab: PaneTab): void {
   if (teamId) chosenTabs.set(teamId, tab);
 }
+
+// 0.9.3: the page the person picked, per team, for the same reason as the tab: the pane remounts.
+// `at` is when it was picked, so a page list asked for before that can't call it closed.
+const pickedPages = new Map<string, { page: string; at: number }>();
+let handledPagePick = 0;
 
 export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   isOpen,
@@ -145,6 +158,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   point,
   switcher,
   showOnceBot,
+  pagePick = null,
+  botNames,
 }) => {
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
@@ -161,8 +176,50 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const isLocal = computer.state.settings?.mode === 'local';
   const isWindow = showsLocalWindow(computer.state.settings);
 
+  // 0.9.3: which of the team's pages to show. The person's pick wins while it exists; else the newest
+  // open step's page; else the server's default. A new step only marks its tab (Ada's brief, §3).
+  const pages = useBrowserPages(teamId, isOpen && !isWindow);
+  const [picked, setPickedState] = useState<{ page: string; at: number } | null>(() => (teamId && pickedPages.get(teamId)) || null);
+  const setPicked = useCallback(
+    (page: string | null) => {
+      const next = page ? { page, at: Date.now() } : null;
+      if (teamId) {
+        if (next) pickedPages.set(teamId, next);
+        else pickedPages.delete(teamId);
+      }
+      setPickedState(next);
+    },
+    [teamId],
+  );
+  // A card's Sign in / Solve, or a step notification: that step's page, if it is this team's
+  useEffect(() => {
+    if (!pagePick || pagePick.n <= handledPagePick || !teamId || pageTeam(pagePick.page) !== teamId) return;
+    handledPagePick = pagePick.n;
+    setPicked(pagePick.page);
+    pages.reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagePick?.n, teamId]);
+  const pageKeys = useMemo(() => pages.list?.pages.map((p) => p.page) ?? null, [pages.list]);
+  // A list asked for before the pick can't know the picked page yet
+  const knownPages = pageKeys && (!picked || (pages.list?.at ?? 0) >= picked.at) ? pageKeys : null;
+  const openStep = humanStep?.status === 'open' ? humanStep : captchaStep?.status === 'open' ? captchaStep : null;
+  const chosenPage = choosePage({ picked: picked?.page ?? null, stepPage: stepPage(openStep), pages: knownPages });
+  // The picked page closed (idle, or the cap made room): forget it, so it never comes back by itself
+  useEffect(() => {
+    if (picked && knownPages && !knownPages.includes(picked.page)) setPicked(null);
+  }, [picked, knownPages, setPicked]);
+  const pageOnScreen = shownPage(chosenPage, pages.list, teamId);
+  const pageInfo = pages.list?.pages.find((p) => p.page === pageOnScreen) ?? null;
+  // A step or CAPTCHA is only this view's when it holds the page on screen
+  const onScreen = (s: HumanStep | null | undefined) => (s && stepPage(s) === pageOnScreen ? s : null);
+  humanStep = onScreen(humanStep);
+  captchaStep = onScreen(captchaStep);
+  const botName = useCallback((id: string) => botNames?.[id], [botNames]);
+  // Who the page on screen belongs to: its bot on a job page, else the team ("Architect needs you to sign in")
+  const pageBot = (pageInfo?.job && pageInfo.kwant_id && botNames?.[pageInfo.kwant_id]) || teamName;
+
   // Interactive Remote Control State
-  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending);
+  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending, chosenPage);
   const isControlMode = stream.controlling;
   const isInteracting = stream.busy;
   const narrow = useNarrow();
@@ -176,9 +233,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [solvedNote, setSolvedNote] = useState(false);
 
   // Once the stream reports where the tab is, trust it; before that, the last URL the app heard of.
-  const pageUrl = stream.location ? stream.location.url : activeUrl;
+  const pageUrl = stream.location ? stream.location.url : chosenPage ? pageInfo?.url ?? '' : activeUrl;
   // The same for the title: a new page's empty title must not fall back to the previous page's.
-  const shownTitle = stream.location ? stream.location.title : pageTitle;
+  const shownTitle = stream.location ? stream.location.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
   const currentScreenshot = isBlankPage(pageUrl) ? null : stream.frame?.image || screenshotBase64;
   const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
@@ -210,10 +267,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   }, [solveRequest]);
   const { connected, controlling, send } = stream;
   useEffect(() => {
-    if (!wantsControl || !connected) return;
+    // On the chosen page only: a card's Solve switches page and asks for control in one go
+    if (!wantsControl || !connected || stream.page !== chosenPage) return;
     setWantsControl(false);
     if (!controlling) send({ action: 'take_control' });
-  }, [wantsControl, connected, controlling, send]);
+  }, [wantsControl, connected, controlling, send, stream.page, chosenPage]);
 
   // The CAPTCHA went away: by itself it says so, then hands the browser back; any other way just closes
   const captchaStatus = captchaStep?.status;
@@ -292,11 +350,13 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const takeOver = useCallback(() => {
     playSfx('click');
     setWaitBot(null);
+    // Taking over a page picks it: a step on another page must not pull the view (and the control) away
+    if (!picked && pageKeys && pageKeys.length >= 2 && pageOnScreen) setPicked(pageOnScreen);
     setActiveTab('browser');
     setFullScreen(true);
     if (connected) send({ action: 'take_control' });
     else setWantsControl(true);
-  }, [connected, send]);
+  }, [connected, send, picked, pageKeys, pageOnScreen, setPicked]);
 
   // The server let go (timeout, the bot's turn ended it, another tab): the stage closes with it
   const wasControlling = useRef(false);
@@ -564,6 +624,19 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           </div>
         ) : activeTab === 'browser' ? (
           <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden">
+            {pages.list && (
+              <BrowserPageStrip
+                pages={pages.list.pages}
+                current={pageOnScreen}
+                botName={botName}
+                disabled={isControlMode}
+                narrow={narrow}
+                onPick={(page) => {
+                  playSfx('click');
+                  setPicked(page);
+                }}
+              />
+            )}
             {/* Browser Address Bar */}
             <div className="flex items-center gap-1.5 p-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs">
               <Globe size={13} className="text-zinc-400 flex-shrink-0" />
@@ -579,7 +652,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                       target = `https://${target}`;
                     }
                     if (isControlMode) stream.send({ action: 'navigate', url: target }, true);
-                    else onNavigate(target);
+                    else onNavigate(target, chosenPage);
                   }
                 }}
                 placeholder="https://..."
@@ -629,7 +702,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 }`}
               >
                 {solvedNote ? <CheckCircle2 size={13} aria-hidden="true" /> : <Puzzle size={13} aria-hidden="true" />}
-                <span className="flex-1">{solvedNote ? `Solved, ${teamName} continues` : `Solve the puzzle, ${teamName} continues by itself`}</span>
+                <span className="flex-1">{solvedNote ? `Solved, ${pageBot} continues` : `Solve the puzzle, ${pageBot} continues by itself`}</span>
                 {!solvedNote && (!isControlMode || narrow) && (
                   <button
                     type="button"
@@ -656,11 +729,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 )}
                 <div className="flex-1 min-w-0">
                   {waitBot.gaveUp ? (
-                    <p className="text-[13px] leading-[18px] text-zinc-100">@{teamName} is finishing a step, try again in a moment.</p>
+                    <p className="text-[13px] leading-[18px] text-zinc-100">@{pageBot} is finishing a step, try again in a moment.</p>
                   ) : (
                     <>
                       <p className="text-[13px] leading-[18px] text-zinc-100">
-                        <span className="font-semibold">@{teamName} is finishing a step.</span> Taking over as soon as it’s done.
+                        <span className="font-semibold">@{pageBot} is finishing a step.</span> Taking over as soon as it’s done.
                       </p>
                       <p className="mt-0.5 text-xs text-[#a39dcc]">Trying every second for 10 seconds.</p>
                     </>
@@ -768,7 +841,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     >
                       {needsYou && !waitingForBot && (
                         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#fcd34d]">
-                          <Hand size={14} aria-hidden="true" /> @{teamName} {needsYou}
+                          <Hand size={14} aria-hidden="true" /> @{pageBot} {needsYou}
                         </span>
                       )}
                       <span
@@ -777,14 +850,14 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                         }`}
                       >
                         {waitingForBot ? (
-                          <>Waiting for @{teamName}…</>
+                          <>Waiting for @{pageBot}…</>
                         ) : (
                           <>
                             <MousePointerClick size={15} aria-hidden="true" /> {waitBot?.gaveUp ? 'Try again' : 'Take over'}
                           </>
                         )}
                       </span>
-                      {!needsYou && !waitingForBot && !waitBot?.gaveUp && <span className="text-xs text-zinc-200">Click anywhere to take over. @{teamName} pauses.</span>}
+                      {!needsYou && !waitingForBot && !waitBot?.gaveUp && <span className="text-xs text-zinc-200">Click anywhere to take over. @{pageBot} pauses.</span>}
                     </button>
                   )}
                 </>
@@ -834,7 +907,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 onNavigate
                   ? (origin) => {
                       playSfx('click');
-                      onNavigate(origin);
+                      onNavigate(origin, chosenPage);
                       setActiveTab('browser');
                     }
                   : undefined
@@ -848,7 +921,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {showFullScreen && (
         <BrowserControlOverlay
-          botName={teamName}
+          botName={pageBot}
           pageUrl={pageUrl}
           image={frameSrc}
           page={stream.frame ? { width: stream.frame.width, height: stream.frame.height } : undefined}
@@ -879,7 +952,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {showStage && (
         <BrowserTakeoverStage
-          botName={teamName}
+          botName={pageBot}
           othersBrowsing={switching}
           pageUrl={pageUrl}
           pageTitle={shownTitle}
@@ -888,12 +961,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           step={stepForStage}
           notice={
             solvedNote
-              ? { tone: 'success', text: `Solved, ${teamName} continues` }
+              ? { tone: 'success', text: `Solved, ${pageBot} continues` }
               : captchaOpen
-                ? { tone: 'warn', text: `Solve the puzzle, ${teamName} continues by itself` }
+                ? { tone: 'warn', text: `Solve the puzzle, ${pageBot} continues by itself` }
                 : null
           }
-          onNavigate={onNavigate}
+          onNavigate={onNavigate ? (url) => onNavigate(url, chosenPage) : undefined}
           onHandBack={handBackOrStop}
           onRetryControl={takeOver}
           extraAction={recordSteps}
