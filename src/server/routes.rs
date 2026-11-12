@@ -1052,8 +1052,10 @@ pub(super) async fn run_routine_turn(
     prompt: String,
     routine_name: &str,
 ) -> Result<Option<String>, String> {
-    let opts = TurnOpts { source: Some(super::bot_status::TurnSource::routine(routine_name)), ..TurnOpts::default() };
-    run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, Vec::new()).await
+    // 0.9.5: nobody watches a routine run, so a busy browser step it ends on is retried here,
+    // bounded (see [`super::busy_retry::unwatched`]); a run that still ends busy fails to the Inbox
+    let opts = || TurnOpts { source: Some(super::bot_status::TurnSource::routine(routine_name)), ..TurnOpts::default() };
+    run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, true, Vec::new()).await
 }
 
 /// [`run_routine_turn`] with the routing card for the reply (`meta.routing`) and extra stop keys
@@ -1068,24 +1070,42 @@ pub(super) async fn run_routed_turn(
     routing: Option<serde_json::Value>,
     stop_keys: Vec<String>,
 ) -> Result<Option<String>, String> {
-    run_turn_with(state, kwant, channel_id, thread_id, prompt, TurnOpts { routing, ..TurnOpts::default() }, stop_keys).await
+    let mut routing = Some(routing);
+    let opts = move || TurnOpts { routing: routing.take().flatten(), ..TurnOpts::default() };
+    run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, false, stop_keys).await
 }
 
-/// [`run_routed_turn`] with any turn options.
+/// [`run_routed_turn`] with any turn options (`opts` makes them; called again for each busy
+/// retry of an `unwatched` turn, see [`super::busy_retry::unwatched`]).
+#[allow(clippy::too_many_arguments)]
 async fn run_turn_with(
     state: &AppState,
     kwant: &Kwant,
     channel_id: Option<String>,
     thread_id: Option<String>,
     prompt: String,
-    opts: TurnOpts,
+    mut opts: impl FnMut() -> TurnOpts,
+    unwatched: bool,
     stop_keys: Vec<String>,
 ) -> Result<Option<String>, String> {
     let context_key = thread_id.clone().or_else(|| channel_id.clone()).unwrap_or_else(|| kwant.id.clone());
     let job = state.turns.start_job(std::iter::once(context_key.clone()).chain(stop_keys));
     let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
-    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), opts).await;
-    let reply = continue_once_if_capped(&scope, kwant, reply, false).await;
+    let reply = if unwatched {
+        let scope = &scope;
+        super::busy_retry::unwatched(scope, &kwant.name, &prompt, |p, slot| {
+            let mut o = opts();
+            o.busy_slot = Some(slot.clone());
+            async move {
+                let reply = try_kwant_turn(scope, kwant, p, o).await;
+                continue_once_if_capped_into(scope, kwant, reply, false, Some(&slot)).await
+            }
+        })
+        .await
+    } else {
+        let reply = try_kwant_turn(&scope, kwant, prompt.clone(), opts()).await;
+        continue_once_if_capped(&scope, kwant, reply, false).await
+    };
     match reply {
         Ok(text) => {
             let reply_id = state
@@ -1122,6 +1142,18 @@ pub(super) async fn continue_once_if_capped(
     first: Result<String, String>,
     always_ask: bool,
 ) -> Result<String, String> {
+    continue_once_if_capped_into(scope, kwant, first, always_ask, None).await
+}
+
+/// [`continue_once_if_capped`] for an unwatched turn: the continuation, when there is one, is the
+/// turn that ended last, so only its busy step (if any) is left in `busy_slot`.
+pub(super) async fn continue_once_if_capped_into(
+    scope: &TurnScope,
+    kwant: &Kwant,
+    first: Result<String, String>,
+    always_ask: bool,
+    busy_slot: Option<&super::busy_retry::Slot>,
+) -> Result<String, String> {
     let Ok(text) = &first else {
         return first;
     };
@@ -1129,9 +1161,13 @@ pub(super) async fn continue_once_if_capped(
         return first;
     }
     tracing::info!(kwant = %kwant.id, "turn hit the model-call cap: one automatic continuation");
+    if let Some(slot) = busy_slot {
+        let _ = slot.take();
+    }
     let opts = TurnOpts {
         label: Some("Automatic continuation (once): the last turn ran out of model calls".into()),
         always_ask,
+        busy_slot: busy_slot.cloned(),
         ..Default::default()
     };
     match try_kwant_turn(scope, kwant, CONTINUE_PROMPT.to_string(), opts).await {
@@ -1968,6 +2004,9 @@ pub(super) struct TurnOpts {
     /// How many times kwnt already ran this message again because the browser was busy (see
     /// [`super::busy_retry`]); at [`super::busy_retry::MAX_RETRIES`] the person is asked instead.
     pub(super) busy_retries: u8,
+    /// A turn nobody watches (a routine run, a hand-off): a busy browser step it ends on is left
+    /// here for its caller to retry (see [`super::busy_retry::unwatched`]), never parked in a chat.
+    pub(super) busy_slot: Option<super::busy_retry::Slot>,
     /// The delegation this turn works on; a parked retry restarts the delegation.
     pub(super) delegation_id: Option<String>,
     /// (agent, effort) to run on instead of asking Laya: a turn resumed after a late Allow
@@ -3940,7 +3979,9 @@ async fn run_kwant_turn_inner(
             // 0.9.5: the reply ended with its last browser step refused because the browser was
             // busy (by code): kwnt runs that step again by itself, bounded, or asks once
             let busy_step = super::busy_retry::take(&tag.turn_id);
-            if let (Some(step), false, false, true) = (&busy_step, continues, opts.no_tools, stop_asks(scope, &opts)) {
+            if let (Some(step), false, false, Some(slot)) = (&busy_step, continues, opts.no_tools, &opts.busy_slot) {
+                slot.put(step.clone());
+            } else if let (Some(step), false, false, true) = (&busy_step, continues, opts.no_tools, stop_asks(scope, &opts)) {
                 super::busy_retry::after_turn(scope, target_kwant, &park_prompt, step, opts.busy_retries).await;
             } else if !continues && !opts.no_tools && stop_asks(scope, &opts) {
                 let probe = super::human_steps::ask_for_sign_in_wall(state, &turn_scope, &turn_page);

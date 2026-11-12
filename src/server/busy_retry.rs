@@ -12,10 +12,16 @@
 //! handlers answered (`continuity::call_browser_tool`), never from the bot's text or tool output
 //! it could echo. A step that may reach outside (a click on "Send", "Pay"…, see
 //! [`super::restart_resume::outward`]) is never run again by itself: the person is asked.
+//!
+//! Turns nobody watches (a routine run, a hand-off) get the same bounds through [`unwatched`]: the
+//! turn leaves its busy step in a [`Slot`] instead of parking a retry in a chat, its caller waits
+//! the cooldown and runs it again, and when the retries run out (or the step looks outward) the
+//! run fails the way it fails today: a routine run to the Inbox, a hand-off back to its lead.
 
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::future::Future;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// The `code` of a browser call that failed because the browser is there but overloaded.
@@ -212,6 +218,90 @@ pub(super) async fn after_turn(
     super::stopped::ask(state, &place, saved.as_ref().map(|m| m.id.as_str()), &line, super::stopped::Resume::ResendMessage).await;
 }
 
+/// Where a turn nobody watches (a routine run, a hand-off) leaves the busy browser step it ended
+/// on, for its caller to retry (see [`unwatched`]), instead of parking a retry in a chat.
+#[derive(Debug, Clone, Default)]
+pub struct Slot(Arc<Mutex<Option<Step>>>);
+
+impl Slot {
+    pub fn put(&self, step: Step) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(step);
+    }
+
+    /// The step a turn ended on, if it ended busy. Forgets it.
+    pub fn take(&self) -> Option<Step> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+}
+
+/// Why an unwatched run failed when kwnt didn't (or no longer) retry its busy step: the run's
+/// error, which goes where a failed run goes today (a routine's Inbox item, a hand-off's lead).
+pub fn unwatched_failure(step: &Step, exit: &Exit) -> String {
+    match exit {
+        Exit::Outward => format!(
+            "the browser was busy at `{tool}`, a step that may reach outside (a send, a post, a payment), so it wasn't run again \
+             by itself. Check whether it went through before running it again",
+            tool = step.tool,
+        ),
+        _ => format!("the browser stayed busy after {MAX_RETRIES} automatic retries of `{tool}`", tool = step.tool),
+    }
+}
+
+/// The bounded retry for a turn nobody watches. `run` runs the turn with a prompt and the
+/// [`Slot`] it leaves a busy end in; `wait` says the retry in its chat, waits the cooldown and
+/// answers `false` if the run was stopped meanwhile. A turn that ended on a busy step runs again
+/// (the `attempt`th retry, told to retry that step) up to [`MAX_RETRIES`] times; then, or at once
+/// for an outward step, it fails with [`unwatched_failure`]. A turn that failed, or didn't end
+/// busy, is returned as it is.
+pub async fn retry_loop<R, RF, W, WF>(original: &str, mut run: R, mut wait: W) -> Result<String, String>
+where
+    R: FnMut(String, Slot) -> RF,
+    RF: Future<Output = Result<String, String>>,
+    W: FnMut(Step, u8, Duration) -> WF,
+    WF: Future<Output = bool>,
+{
+    let mut done = 0u8;
+    let mut next = original.to_string();
+    loop {
+        let slot = Slot::default();
+        let outcome = run(next, slot.clone()).await;
+        let step = slot.take();
+        let (Ok(_), Some(step)) = (&outcome, step) else {
+            return outcome;
+        };
+        match decide(&step, done) {
+            Exit::Retry { attempt, after } => {
+                if !wait(step.clone(), attempt, after).await {
+                    return Err("stopped".into());
+                }
+                done = attempt;
+                next = prompt(&step, original);
+            }
+            exit => return Err(unwatched_failure(&step, &exit)),
+        }
+    }
+}
+
+/// [`retry_loop`] for a turn in `scope` (a routine run's chat, a hand-off's thread): each retry is
+/// said there in one line, and the wait ends early, as stopped, when the run is stopped.
+pub(super) async fn unwatched<R, RF>(scope: &super::routes::TurnScope, name: &str, original: &str, run: R) -> Result<String, String>
+where
+    R: FnMut(String, Slot) -> RF,
+    RF: Future<Output = Result<String, String>>,
+{
+    retry_loop(original, run, |step, attempt, after| async move {
+        let at = chrono::Utc::now() + chrono::Duration::from_std(after).unwrap_or_else(|_| chrono::Duration::seconds(60));
+        let note = scope.message("system", "kwnt", retry_note(name, &step, attempt, at));
+        scope.save(&note, Some(serde_json::json!({"kind": "browser_busy_retry", "attempt": attempt}))).await;
+        tracing::info!(bot = name, attempt, tool = %step.tool, "the browser was busy in an unwatched run: retrying the step by itself");
+        tokio::select! {
+            _ = tokio::time::sleep(after) => !scope.cancel_token.is_cancelled(),
+            _ = scope.cancel_token.cancelled() => false,
+        }
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +399,125 @@ mod tests {
             retry_note("Ben", &step, 1, at),
             "The browser was busy when Ben ran `browser_act` (it is overloaded, not gone), so Ben tries that same step again at 22:30 UTC (retry 1 of 2)."
         );
+    }
+
+    /// A fake unwatched run: each turn answers `replies[n]` and, where `busy[n]`, ends on `step`.
+    /// Returns the outcome, the prompts each turn got and the waits (attempt, cooldown).
+    async fn drive(step: Step, busy: &[bool], stop_at: Option<u8>) -> (Result<String, String>, Vec<String>, Vec<(u8, Duration)>) {
+        let prompts = Mutex::new(Vec::new());
+        let waits = Mutex::new(Vec::new());
+        let outcome = retry_loop(
+            "Check the price on example.com",
+            |p, slot| {
+                let n = {
+                    let mut ps = prompts.lock().unwrap();
+                    ps.push(p);
+                    ps.len() - 1
+                };
+                if busy.get(n).copied().unwrap_or(false) {
+                    slot.put(step.clone());
+                }
+                async move { Ok(format!("reply {n}")) }
+            },
+            |s, attempt, after| {
+                assert_eq!(s, step, "the retry is for the same step");
+                waits.lock().unwrap().push((attempt, after));
+                let go_on = stop_at != Some(attempt);
+                async move { go_on }
+            },
+        )
+        .await;
+        (outcome, prompts.into_inner().unwrap(), waits.into_inner().unwrap())
+    }
+
+    fn busy_retries_of(prompts: &[String], step: &Step) {
+        assert_eq!(prompts[0], "Check the price on example.com", "the first run gets the request as it is");
+        for p in &prompts[1..] {
+            assert!(p.starts_with(PROMPT_HEAD), "each retry is told the browser was busy");
+            assert!(p.contains(&format!("`{}`", step.tool)), "and to retry the same step");
+            assert_eq!(p.matches("Check the price on example.com").count(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_routine_run_that_ends_busy_is_retried_twice_then_fails_to_the_inbox() {
+        let step = act(json!({"action": "scroll", "delta_y": 400}));
+        let (outcome, prompts, waits) = drive(step.clone(), &[true, true, true], None).await;
+        assert_eq!(prompts.len(), 3, "the run, then 2 retries, never a third");
+        busy_retries_of(&prompts, &step);
+        assert_eq!(waits, vec![(1, Duration::from_secs(60)), (2, Duration::from_secs(120))]);
+        // The run fails, so it is recorded as failed and the Inbox gets today's routine_failed item
+        let err = outcome.expect_err("the run fails once the retries are used up");
+        assert_eq!(err, "the browser stayed busy after 2 automatic retries of `browser_act`");
+        assert_eq!(
+            super::super::scheduler::failed_body("Morning prices", Some(&err)),
+            "The routine \"Morning prices\" did not finish: the browser stayed busy after 2 automatic retries of `browser_act`. \
+             Open the routine to see the run or run it again."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hand_off_that_ends_busy_is_retried_twice_then_fails_back_to_its_lead() {
+        let step = Step { tool: "browser_open".into(), args: json!({"url": "https://example.com"}).to_string() };
+        let (outcome, prompts, waits) = drive(step.clone(), &[true, true, true], None).await;
+        assert_eq!(prompts.len(), 3);
+        busy_retries_of(&prompts, &step);
+        assert_eq!(waits.iter().map(|w| w.0).collect::<Vec<_>>(), vec![1, 2]);
+        // Reported the way a failed hand-off is today: failed, with the why, to the origin chat and its lead
+        let (status, error) = super::super::delegation::ended_as(&outcome);
+        assert_eq!(status, "failed");
+        assert_eq!(error.as_deref(), Some("the browser stayed busy after 2 automatic retries of `browser_open`"));
+        assert_eq!(
+            super::super::delegation::report_text("Find the price", &outcome),
+            "Couldn't finish “Find the price”: the browser stayed busy after 2 automatic retries of `browser_open`"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unwatched_run_that_gets_through_on_a_retry_ends_with_that_reply() {
+        let step = act(json!({"action": "click", "ref": "e9"}));
+        let (outcome, prompts, waits) = drive(step, &[true, false], None).await;
+        assert_eq!(outcome, Ok("reply 1".into()));
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(waits, vec![(1, Duration::from_secs(60))]);
+        // a run that never ended busy runs once
+        let (outcome, prompts, waits) = drive(act(json!({})), &[false], None).await;
+        assert_eq!((outcome, prompts.len(), waits.len()), (Ok("reply 0".into()), 1, 0));
+    }
+
+    #[tokio::test]
+    async fn an_unwatched_outward_step_is_never_run_again_by_itself() {
+        let send = act(json!({"action": "click", "ref": "e4", "name": "Send"}));
+        let (outcome, prompts, waits) = drive(send, &[true, true, true], None).await;
+        assert_eq!((prompts.len(), waits.len()), (1, 0), "straight to the one failure, no retry");
+        let err = outcome.unwrap_err();
+        assert!(err.contains("may reach outside") && err.contains("wasn't run again by itself"), "{err}");
+        assert_eq!(super::super::delegation::ended_as(&Err(err)).0, "failed");
+    }
+
+    #[tokio::test]
+    async fn an_unwatched_run_stopped_while_it_waits_ends_stopped() {
+        let (outcome, prompts, _) = drive(act(json!({"action": "scroll"})), &[true, true, true], Some(1)).await;
+        assert_eq!(prompts.len(), 1, "nothing runs after the stop");
+        assert_eq!(outcome, Err("stopped".into()));
+        assert_eq!(super::super::delegation::ended_as(&outcome).0, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn an_unwatched_turn_that_failed_is_returned_as_it_is() {
+        let step = act(json!({}));
+        let mut runs = 0;
+        let outcome = retry_loop(
+            "x",
+            |_, slot| {
+                runs += 1;
+                slot.put(step.clone());
+                async { Err::<String, String>("the claude driver failed: boom".into()) }
+            },
+            |_, _, _| async { true },
+        )
+        .await;
+        assert_eq!(runs, 1);
+        assert_eq!(outcome, Err("the claude driver failed: boom".into()));
     }
 }

@@ -2,7 +2,7 @@
 //! specialist that runs in its own thread in the background and reports back to the chat it came
 //! from. See `design-A.md` (batch 2) for the API and SSE contract.
 
-use super::routes::{continue_once_if_capped, scope_for, try_kwant_turn, TurnOpts};
+use super::routes::{continue_once_if_capped, continue_once_if_capped_into, scope_for, try_kwant_turn, TurnOpts};
 use super::AppState;
 use crate::db::models::{Kwant, MessageExtra, NewMessage};
 use crate::db::spaces::SpaceId;
@@ -556,13 +556,24 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
         origin = origin_brief(&state, &d).await,
         again = if after_restart { RESTARTED_NOTE } else { "" },
     );
-    let mut opts = TurnOpts::default();
-    opts.on_started = Some(on_started);
-    opts.retried = retried;
-    opts.delegation_id = Some(d.id.clone());
-    opts.source = Some(super::bot_status::TurnSource::bot(&lead.name));
-    let outcome = try_kwant_turn(&scope, &specialist, prompt, opts).await;
-    let outcome = continue_once_if_capped(&scope, &specialist, outcome, false).await;
+    // 0.9.5: nobody watches a hand-off, so a busy browser step it ends on is retried here, bounded
+    // (see [`super::busy_retry::unwatched`]); one that still ends busy fails back to its lead
+    let mut on_started: Option<futures::future::BoxFuture<'static, ()>> = Some(on_started);
+    let outcome = super::busy_retry::unwatched(&scope, &specialist.name, &prompt, |p, slot| {
+        let mut opts = TurnOpts::default();
+        // marks the hand-off running once, when its first turn gets its slot
+        opts.on_started = on_started.take();
+        opts.retried = retried;
+        opts.delegation_id = Some(d.id.clone());
+        opts.source = Some(super::bot_status::TurnSource::bot(&lead.name));
+        opts.busy_slot = Some(slot.clone());
+        let (scope, specialist) = (&scope, &specialist);
+        async move {
+            let outcome = try_kwant_turn(scope, specialist, p, opts).await;
+            continue_once_if_capped_into(scope, specialist, outcome, false, Some(&slot)).await
+        }
+    })
+    .await;
     let outcome = match outcome {
         Err(_) if job.token.is_cancelled() => Err("stopped".to_string()),
         other => other,
@@ -684,14 +695,28 @@ pub const RESTARTED_NOTE: &str = "\n\n[kwnt restarted while an earlier run of th
 files may already be written, messages sent or settings changed. Check what is already done before redoing anything, \
 and don't repeat a step that can't be undone (sending, posting, deleting, paying) unless you've confirmed it didn't happen.]";
 
-/// Ends `d` with `outcome`: the result in the origin chat, then the lead (with its batch, or on
-/// its own when the person sent the task back: `carried_on`).
-async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: Result<String, String>, carried_on: bool) {
-    let (status, error) = match &outcome {
+/// A delegation's status, and its error, for how its run ended.
+pub(super) fn ended_as(outcome: &Result<String, String>) -> (&'static str, Option<String>) {
+    match outcome {
         Ok(_) => ("completed", None),
         Err(e) if e == "stopped" => ("cancelled", Some("stopped by the user".to_string())),
         Err(e) => ("failed", Some(clip(e, 500))),
-    };
+    }
+}
+
+/// What the origin chat (and so the lead) reads for how the delegation `title` ended.
+pub(super) fn report_text(title: &str, outcome: &Result<String, String>) -> String {
+    match outcome {
+        Ok(reply) => result_text(reply),
+        Err(e) if e == "stopped" => format!("Stopped work on “{title}”."),
+        Err(e) => format!("Couldn't finish “{title}”: {}", clip(e, 500)),
+    }
+}
+
+/// Ends `d` with `outcome`: the result in the origin chat, then the lead (with its batch, or on
+/// its own when the person sent the task back: `carried_on`).
+async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: Result<String, String>, carried_on: bool) {
+    let (status, error) = ended_as(&outcome);
     // Someone may have cancelled it meanwhile; then the cancel already reported it
     if !state.db.finish_delegation(&d.id, status, error.as_deref(), None).await.unwrap_or(false) {
         return;
@@ -699,11 +724,7 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
     let Ok(Some(done)) = state.db.get_delegation(&d.id).await else {
         return;
     };
-    let text = match &outcome {
-        Ok(reply) => result_text(reply),
-        Err(_) if status == "cancelled" => format!("Stopped work on “{}”.", done.title),
-        Err(e) => format!("Couldn't finish “{}”: {}", done.title, clip(e, 500)),
-    };
+    let text = report_text(&done.title, &outcome);
     let result_id = post_to_origin(state, &done, "kwant", &specialist.name, text, meta("delegation_result", &done, &specialist.name)).await;
     if let Some(id) = &result_id {
         let _ = state.db.set_delegation_result_message(&done.id, id).await;
