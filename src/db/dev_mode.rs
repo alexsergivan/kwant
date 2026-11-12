@@ -9,8 +9,10 @@ use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
 
-/// Most model calls Dev mode makes per space per day (plan D8).
-pub const CALLS_CAP: i64 = 30;
+/// No daily cap on Dev mode's model calls: the default since 0.9.5. Cost is held by the space's
+/// daily spending stop and each bot's monthly budget, which every card turn passes; a fixed 30
+/// calls a day (plan D8) failed cards on a busy repo with no way out.
+pub const NO_CALL_CAP: i64 = i64::MAX;
 
 /// Most repos one space watches (team-repos.md T4).
 pub const MAX_REPOS: usize = 10;
@@ -826,6 +828,23 @@ impl Database {
             .await?)
     }
 
+    /// Failed cards whose only fault was the old daily call cap (their `error` is
+    /// `generate::cap_reason`: "Today's N Dev mode model calls…"), last written at or after
+    /// `since`: back to pending, so a restart writes them again. A card that went stale stays as
+    /// it is. The number put back.
+    pub async fn requeue_capped_dev_cards(&self, since: DateTime<Utc>) -> Result<u64, DbError> {
+        let done = sqlx::query(
+            "UPDATE dev_cards SET status = 'pending', updated_at = ?2, rev = rev + 1
+             WHERE status = 'failed' AND updated_at >= ?1
+               AND card LIKE '%\"error\":\"Today''s % Dev mode model calls for this space are used up%'",
+        )
+        .bind(since)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected())
+    }
+
     /// Cards still pending (a restart left them), oldest first.
     pub async fn pending_dev_cards(&self) -> Result<Vec<DevCardRow>, DbError> {
         Ok(sqlx::query_as(&format!("SELECT {CARD_COLS} FROM dev_cards WHERE status = 'pending' ORDER BY created_at")).fetch_all(&self.pool).await?)
@@ -872,8 +891,8 @@ impl Database {
         Ok(row.map(|r| r.0).unwrap_or(0))
     }
 
-    /// Takes one model call from today's cap (`dev::call_cap()`, default [`CALLS_CAP`]): false (and
-    /// nothing counted) once it's used up.
+    /// Counts one model call against today's cap (`dev::call_cap()`, none unless
+    /// `KWANT_DEV_CALL_CAP` sets one): false (and nothing counted) once it's used up.
     pub async fn take_dev_call(&self, space_id: &str) -> Result<bool, DbError> {
         self.take_dev_call_at(space_id, crate::server::dev::now(), crate::server::dev::call_cap()).await
     }

@@ -67,7 +67,7 @@ card_art: avatar:devops
   <li><strong>Draft release notes</strong> writes notes from every landed card since the last tag.</li>
   <li><strong>Verified</strong> goes on a merge only when another bot reviewed that exact head in kwant, every finding was fixed or dismissed, and CI on the merge is green. A pull request merged before its review was ready stays "not verified": the sticker says what was checked before the change landed, not after.</li>
 </ul>
-<p>kwant checks the repo every 5 minutes. The first check writes up the last 5 merges. Card text is written by one of the space's bots, at most 30 model calls per space per day; the risk, the test checks and CI come from rules and need no model.</p>
+<p>kwant checks the repo every 5 minutes. The first check writes up the last 5 merges. Card text is written by one of the space's bots, and its model calls count toward the space's daily spending stop and the bot's monthly budget; the risk, the test checks and CI come from rules and need no model.</p>
 
 <h2 id="reviews">Reviews</h2>
 <p>The <strong>Reviews</strong> tab has one card per open pull request, written by a bot that didn't write the code, on a different engine when the space has one. A new push to the pull request gets a new review.</p>
