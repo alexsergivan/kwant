@@ -1,5 +1,6 @@
-//! `/api/app/update`: the Mac app's in-app update (see [`crate::app_update`]). GET is open to
-//! bots like other status reads; check and install are person-only (`auth::person_only`).
+//! `/api/app/update`: the Mac app's in-app update, and elsewhere the release check (see
+//! [`crate::app_update`]). GET is open to bots like other status reads; check and install are
+//! person-only (`auth::person_only`).
 
 use super::continuity::{notify, Notification};
 use super::AppState;
@@ -12,18 +13,19 @@ use axum::Json;
 /// The setting that remembers which version the person was already told about.
 pub const NOTIFIED_SETTING: &str = "app_update_notified_version";
 
-/// `GET /api/app/update`: `{supported, current, state, available, progress, error}`.
+/// `GET /api/app/update`: `{supported, can_install, current, state, available, progress, error,
+/// checked_at, how}`.
 pub async fn get_status(AxState(state): AxState<AppState>) -> Json<Status> {
     Json(state.app_update.status())
 }
 
-/// `POST /api/app/update/check`: 202 with the status; 409 off the Mac app or while busy.
+/// `POST /api/app/update/check`: 202 with the status; 409 with the check off or while busy.
 pub async fn check(AxState(state): AxState<AppState>) -> Response {
     reply(state.app_update.check())
 }
 
-/// `POST /api/app/update/install`: 202 with the status; 409 off the Mac app, while busy, or with
-/// no newer version found. The app relaunches by itself once the new version is in place.
+/// `POST /api/app/update/install`: 202 with the status; 409 off the Mac app (`can_install: false`),
+/// while busy, or with no newer version found. The app relaunches by itself once the new version is in place.
 pub async fn install(AxState(state): AxState<AppState>) -> Response {
     reply(state.app_update.install())
 }
@@ -36,14 +38,15 @@ fn reply(result: Result<Status, Refused>) -> Response {
 }
 
 /// Tells the person once per version that an update is out, through the usual notifications.
-/// Runs for the life of the server; does nothing off the Mac app, where the state never changes.
+/// Runs for the life of the server; only in the app that installs (a server's own "is ready, open
+/// kwant bots to update" would be wrong: there the card says how).
 pub fn spawn_notifier(state: AppState) {
     let mut rx = state.app_update.subscribe();
     tokio::spawn(async move {
         loop {
             let available = {
                 let s = rx.borrow_and_update();
-                (s.state == State::Available).then(|| s.available.clone()).flatten()
+                (s.can_install && s.state == State::Available).then(|| s.available.clone()).flatten()
             };
             if let Some(a) = available {
                 notify_once(&state, &a.version).await;

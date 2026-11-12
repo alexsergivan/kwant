@@ -1710,7 +1710,7 @@ pub fn effective_kinds(saved: &[String], known: &[String]) -> Vec<String> {
 /// Kinds this server can't raise, so its settings page doesn't offer them: the web app leaves
 /// them out of a save, which must not read as the person turning them off.
 fn unavailable_kinds(state: &AppState) -> Vec<&'static str> {
-    if state.app_update.status().supported {
+    if state.app_update.status().can_install {
         Vec::new()
     } else {
         vec!["app_update"]
