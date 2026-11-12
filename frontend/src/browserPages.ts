@@ -78,12 +78,13 @@ export function pageOwner(p: Pick<BrowserPage, 'job' | 'kwant_id'>, botName: (id
   return botName(p.kwant_id) || PAGE_COPY.someBot;
 }
 
-/** Where the tab is: the site's host, else the title, else "a blank page". */
+/** Where the tab is: the site's host, else the title (not an "about:" one), else "nothing open". */
 export function pageWhere(p: Pick<BrowserPage, 'url' | 'title'>): string {
-  return pageHost(p.url) || p.title?.trim() || PAGE_COPY.blank;
+  const title = p.title?.trim();
+  return pageHost(p.url) || (title && !title.startsWith('about:') ? title : null) || PAGE_COPY.blank;
 }
 
-/** The tab's tooltip and accessible name: "Architect's page: tiktok.com (waiting for you)". */
+/** The tab's tooltip and accessible name: "Architect's page: tiktok.com (needs you)". */
 export function pageLabel(p: BrowserPage, botName: (id: string) => string | undefined): string {
   const owner = pageOwner(p, botName);
   const whose = p.job ? `${owner}'s page` : PAGE_COPY.sharedLong;
@@ -95,10 +96,9 @@ export const PAGE_COPY = {
   shared: 'Shared',
   sharedLong: 'Shared page',
   someBot: 'A bot',
-  blank: 'a blank page',
-  waiting: 'waiting for you',
-  needsYou: 'Needs you',
-  handBackFirst: 'Hand back first to switch pages',
+  blank: 'nothing open',
+  waiting: 'needs you',
+  handBackFirst: 'Hand back to switch pages',
 };
 
 // Live list refreshes: App hears BrowserNavigated, SandboxStatusChanged and human_step_updated

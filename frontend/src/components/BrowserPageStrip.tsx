@@ -1,6 +1,7 @@
 import React, { useId } from 'react';
 
 import { BrowserPage, PAGE_COPY, pageLabel, pageOwner, pageWhere } from '../browserPages';
+import { ScrollRow } from './ScrollRow';
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff]';
 
@@ -24,8 +25,8 @@ export const BrowserPageStrip: React.FC<Props> = ({ pages, current, botName, onP
   const hintId = useId();
   if (pages.length < 2) return null;
   return (
-    <div role="group" aria-label={PAGE_COPY.stripName} data-page-strip="" className="flex items-center gap-2 -m-1">
-      <div className="kw-scroll-row min-w-0 flex items-center gap-1 overflow-x-auto p-1">
+    <div role="group" aria-label={PAGE_COPY.stripName} data-page-strip="" className={`flex items-center gap-2 -my-1 -ml-1 ${narrow ? 'flex-wrap' : ''}`}>
+      <ScrollRow className="kw-scroll-row min-w-0 flex items-center gap-1 overflow-x-auto p-1">
         {pages.map((p) => {
           const here = p.page === current;
           const label = pageLabel(p, botName);
@@ -53,9 +54,11 @@ export const BrowserPageStrip: React.FC<Props> = ({ pages, current, botName, onP
             </button>
           );
         })}
-      </div>
+      </ScrollRow>
       {disabled && (
-        <span id={hintId} data-page-strip-hint="" className="sr-only">
+        <span id={hintId} data-page-strip-hint=""
+          className={`text-[11px] text-zinc-400 ${narrow ? 'basis-full' : 'shrink-0 whitespace-nowrap'}`}
+        >
           {PAGE_COPY.handBackFirst}
         </span>
       )}

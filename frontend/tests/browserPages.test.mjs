@@ -70,12 +70,13 @@ test('tab words: bot and site, "Shared" for the team page, and the waiting mark'
   const names = { architect: 'Architect' };
   const name = (id) => names[id];
   const held = { page: ARCHITECT, team_id: TEAM, kwant_id: 'architect', chat_id: 'chat-a', job: true, url: 'https://www.tiktok.com/login', title: 'Log in | TikTok', held: true, idle_seconds: 3 };
-  assert.equal(pageLabel(held, name), "Architect's page: tiktok.com (waiting for you)");
+  assert.equal(pageLabel(held, name), "Architect's page: tiktok.com (needs you)");
   const team = { ...held, page: TEAM, kwant_id: null, chat_id: null, job: false, url: 'about:blank', title: '', held: false };
   assert.equal(pageOwner(team, name), 'Shared');
-  assert.equal(pageLabel(team, name), 'Shared page: a blank page');
+  assert.equal(pageLabel(team, name), 'Shared page: nothing open');
   assert.equal(pageOwner({ job: true, kwant_id: 'gone' }, name), 'A bot');
   assert.equal(pageWhere({ url: null, title: 'Flow' }), 'Flow');
+  assert.equal(pageWhere({ url: 'about:blank', title: 'about:blank' }), 'nothing open');
 });
 
 test('parsePageList: keeps the server\'s list and drops what it cannot read', () => {
