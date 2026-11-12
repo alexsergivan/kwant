@@ -15,6 +15,26 @@ pub const BROWSER_IMAGE: &str = "kwnt-browser:v2";
 const BROWSER_DOCKERFILE: &str = include_str!("../../docker/browser.Dockerfile");
 const BROWSER_ENTRYPOINT: &str = include_str!("../../docker/browser-entrypoint.sh");
 
+/// Joins a job page's key: `team#bot#chat` (see [`job_page_key`]).
+pub const PAGE_SEP: char = '#';
+
+/// The key of a job's own page in its team's browser: one page per (sandbox target, bot, chat).
+/// `None` when a part is empty or holds [`PAGE_SEP`] (such a job uses the team page).
+pub fn job_page_key(team: &str, kwant: &str, chat: &str) -> Option<String> {
+    let ok = |p: &str| !p.is_empty() && !p.contains(PAGE_SEP);
+    (ok(team) && ok(kwant) && ok(chat)).then(|| format!("{team}{PAGE_SEP}{kwant}{PAGE_SEP}{chat}"))
+}
+
+/// The team (sandbox target) a page belongs to: the key itself for the team page.
+pub fn page_team(key: &str) -> &str {
+    key.split(PAGE_SEP).next().unwrap_or(key)
+}
+
+/// Whether this key names a job's own page rather than a team page.
+pub fn is_job_page(key: &str) -> bool {
+    key.contains(PAGE_SEP)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct SessionTarget {
     context: String,
@@ -38,6 +58,10 @@ pub struct BrowserService {
     last_use: std::sync::Mutex<Option<std::time::SystemTime>>,
     /// Local mode without Chrome: the private browser kwnt downloads on first use (O5).
     chrome_setup: std::sync::Arc<ChromeSetup>,
+    /// When each page (team or job page) was last used in this run: the job-page cap closes the
+    /// least recently used one, the idle sweep the ones past their limit, and the live view
+    /// shows the newest. A page kept from an earlier run counts from when this run first saw it.
+    page_use: std::sync::Mutex<HashMap<String, std::time::Instant>>,
 }
 
 struct ServiceState {
@@ -54,6 +78,7 @@ impl BrowserService {
             local_window: std::sync::atomic::AtomicBool::new(false), state: Mutex::new(None),
             last_error: std::sync::Mutex::new(None), last_use: std::sync::Mutex::new(None),
             chrome_setup: std::sync::Arc::new(ChromeSetup::system()),
+            page_use: Default::default(),
         }
     }
 
@@ -377,6 +402,18 @@ impl BrowserService {
     }
 
     pub async fn session(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
+        self.open(id, workspace).await
+    }
+
+    /// A job's own page ([`job_page_key`]): a new page in its team's browser context, so the
+    /// team's sign-ins and cookies are shared, opened in a window of its own in local mode. It
+    /// is kept across restarts like a team page. The team page is opened first if needed (its
+    /// context is the one shared).
+    pub async fn page_session(&self, key: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
+        self.open(key, workspace).await
+    }
+
+    async fn open(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
         let result = match self.ensure_private_browser().await {
             Ok(()) => self.open_session(id, workspace).await,
             Err(e) => Err(e),
@@ -409,7 +446,11 @@ impl BrowserService {
         let existing = state.sessions.get(id).filter(|session| targets["targetInfos"].as_array()
             .is_some_and(|targets| targets.iter().any(|target| target["targetId"] == session.target)));
         let local = self.mode() == ComputerMode::Local;
-        let fresh_context = existing.is_none() && !local;
+        let alive = |target: &str| targets["targetInfos"].as_array()
+            .is_some_and(|targets| targets.iter().any(|t| t["targetId"] == target));
+        let team = page_team(id);
+        let job = is_job_page(id);
+        let mut fresh_context = existing.is_none() && !local;
         let session = if let Some(existing) = existing { existing.clone() } else if local {
             // Local pages share the kwant profile's default context, so a sign-in in the window
             // is kept. (`context` stays empty.) Each bot gets its own window, not a tab: Chrome
@@ -417,32 +458,36 @@ impl BrowserService {
             let target = state.browser.send_cdp_command("Target.createTarget", json!({"url": "about:blank", "newWindow": true})).await?;
             SessionTarget { context: String::new(), target: target["targetId"].as_str()
                 .ok_or_else(|| BrowserError::Protocol("Browser page missing".into()))?.to_string() }
-        } else {
-            // Do not dispose on detach: contexts survive a Kwnt server restart.
-            let context = state.browser.send_cdp_command("Target.createBrowserContext", json!({"disposeOnDetach": false})).await?;
-            let context = context["browserContextId"].as_str()
-                .ok_or_else(|| BrowserError::Protocol("Browser context missing".into()))?.to_string();
-            let target = state.browser.send_cdp_command("Target.createTarget", json!({
-                "url": "about:blank", "browserContextId": context
-            })).await;
-            let target = match target {
-                Ok(target) => target,
-                Err(error) => {
-                    let _ = state.browser.send_cdp_command("Target.disposeBrowserContext", json!({"browserContextId": context})).await;
-                    return Err(error);
+        } else if job {
+            // A job page: a new page in the team's context (the team page's), never a context of
+            // its own, so a sign-in made on any page of the team holds on all of them. In a window
+            // of its own, as in local mode: a second tab would leave the page behind it unpainted,
+            // and its screenshots (so every navigation) would hang until the 15 s timeout.
+            let team_session = state.sessions.get(team).filter(|s| alive(&s.target)).cloned();
+            let context = match team_session {
+                Some(team_session) => { fresh_context = false; team_session.context }
+                None => {
+                    let team_session = Self::new_context_page(&state.browser).await?;
+                    state.sessions.insert(team.to_string(), team_session.clone());
+                    team_session.context
                 }
             };
+            let target = state.browser.send_cdp_command("Target.createTarget", json!({
+                "url": "about:blank", "browserContextId": context, "newWindow": true
+            })).await?;
             SessionTarget { context, target: target["targetId"].as_str()
                 .ok_or_else(|| BrowserError::Protocol("Browser page missing".into()))?.to_string() }
+        } else {
+            Self::new_context_page(&state.browser).await?
         };
         state.sessions.insert(id.to_string(), session.clone());
         self.save_sessions(&state.sessions).await?;
         let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target), false);
         if !local {
             // The VM browser's profile is on tmpfs, so its contexts' cookies go when the
-            // container restarts: keep them per bot in the data folder (local mode's on-disk
-            // profile already keeps them).
-            ctrl.set_cookie_jar(Some(self.cookie_jar(id)));
+            // container restarts: keep them per team in the data folder (local mode's on-disk
+            // profile already keeps them). A job page shares its team's context, so its jar.
+            ctrl.set_cookie_jar(Some(self.cookie_jar(team)));
             if fresh_context {
                 let restored = ctrl.restore_cookies().await;
                 if restored > 0 { tracing::debug!("Restored {} browser cookies for {}", restored, id); }
@@ -456,6 +501,85 @@ impl BrowserService {
         Ok(ctrl)
     }
 
+    /// A new browser context (VM mode) with one blank page in it.
+    async fn new_context_page(browser: &BrowserController) -> Result<SessionTarget, BrowserError> {
+        {
+            // Do not dispose on detach: contexts survive a Kwnt server restart.
+            let context = browser.send_cdp_command("Target.createBrowserContext", json!({"disposeOnDetach": false})).await?;
+            let context = context["browserContextId"].as_str()
+                .ok_or_else(|| BrowserError::Protocol("Browser context missing".into()))?.to_string();
+            let target = browser.send_cdp_command("Target.createTarget", json!({
+                "url": "about:blank", "browserContextId": context
+            })).await;
+            let target = match target {
+                Ok(target) => target,
+                Err(error) => {
+                    let _ = browser.send_cdp_command("Target.disposeBrowserContext", json!({"browserContextId": context})).await;
+                    return Err(error);
+                }
+            };
+            Ok(SessionTarget { context, target: target["targetId"].as_str()
+                .ok_or_else(|| BrowserError::Protocol("Browser page missing".into()))?.to_string() })
+        }
+    }
+
+    /// Records that a page was used now (see `page_use`).
+    pub fn touch_page(&self, key: &str) {
+        self.page_use.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), std::time::Instant::now());
+    }
+
+    /// Forgets a job page's use when it couldn't open (no room, or the browser failed), so it
+    /// isn't counted as one of its team's pages.
+    pub fn forget_page(&self, key: &str) {
+        if is_job_page(key) {
+            self.page_use.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        }
+    }
+
+    /// When a page was last used in this run, if it was.
+    pub fn page_used_at(&self, key: &str) -> Option<std::time::Instant> {
+        self.page_use.lock().unwrap_or_else(|e| e.into_inner()).get(key).copied()
+    }
+
+    /// The team's job pages that are open (or kept from an earlier run), each with when it was
+    /// last used, oldest first. A kept page this run hasn't used yet counts as used now.
+    pub async fn job_pages(&self, team: &str) -> Vec<(String, std::time::Instant)> {
+        let prefix = format!("{team}{PAGE_SEP}");
+        let mut keys: Vec<String> = match self.state.lock().await.as_ref() {
+            Some(state) => state.sessions.keys().filter(|k| k.starts_with(&prefix)).cloned().collect(),
+            None => Vec::new(),
+        };
+        let mut use_ = self.page_use.lock().unwrap_or_else(|e| e.into_inner());
+        keys.extend(use_.keys().filter(|k| k.starts_with(&prefix)).cloned());
+        keys.sort();
+        keys.dedup();
+        let now = std::time::Instant::now();
+        let mut pages: Vec<(String, std::time::Instant)> = keys.into_iter()
+            .map(|k| { let at = *use_.entry(k.clone()).or_insert(now); (k, at) }).collect();
+        pages.sort_by_key(|(_, at)| *at);
+        pages
+    }
+
+    /// Every page this run knows of (team and job pages), with when it was last used.
+    pub fn pages_in_use(&self) -> Vec<(String, std::time::Instant)> {
+        self.page_use.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(k, at)| (k.clone(), *at)).collect()
+    }
+
+    /// Closes a job's page. Its team's context and sign-ins stay; the next call from that job
+    /// opens a new page.
+    pub async fn close_page(&self, key: &str) -> Result<(), BrowserError> {
+        if !is_job_page(key) { return Ok(()); }
+        self.page_use.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        let mut lock = self.state.lock().await;
+        if let Some(state) = lock.as_mut() {
+            if let Some(session) = state.sessions.remove(key) {
+                let _ = state.browser.send_cdp_command("Target.closeTarget", json!({"targetId": session.target})).await;
+                self.save_sessions(&state.sessions).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Where a bot's VM-browser cookies are kept between container restarts.
     pub fn cookie_jar(&self, id: &str) -> PathBuf {
         let name: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).take(120).collect();
@@ -463,8 +587,12 @@ impl BrowserService {
     }
 
     pub async fn reset(&self, id: &str) -> Result<(), BrowserError> {
+        // a job page shares its team's context: resetting it only closes it
+        if is_job_page(id) { return self.close_page(id).await; }
         // A reset is a clean slate, including the saved sign-ins
         let _ = std::fs::remove_file(self.cookie_jar(id));
+        let prefix = format!("{id}{PAGE_SEP}");
+        self.page_use.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| !k.starts_with(&prefix));
         let mut lock = self.state.lock().await;
         if lock.is_none() && self.sessions_file().exists() {
             *lock = Some(self.connect().await?);
@@ -478,6 +606,14 @@ impl BrowserService {
                     state.browser.send_cdp_command("Target.disposeBrowserContext", json!({"browserContextId": session.context})).await?;
                 }
             }
+            // the team's job pages go with it (in the VM they were in the context just disposed)
+            let jobs: Vec<String> = state.sessions.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+            for key in jobs {
+                if let Some(session) = state.sessions.remove(&key) {
+                    let _ = state.browser.send_cdp_command("Target.closeTarget", json!({"targetId": session.target})).await;
+                }
+            }
+            self.save_sessions(&state.sessions).await?;
         }
         Ok(())
     }

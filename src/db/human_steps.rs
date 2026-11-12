@@ -46,6 +46,11 @@ pub struct HumanStep {
     pub message_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
+    /// The page of the bot browser the step holds: a job's own page
+    /// (`team#bot#chat`, see `server::browser_pages`) or the team page. `NULL` on steps saved
+    /// before pages existed, which held the team page ([`Self::page`]).
+    #[sqlx(default)]
+    pub page_key: Option<String>,
 }
 
 fn target_object<S: serde::Serializer>(target: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
@@ -54,6 +59,12 @@ fn target_object<S: serde::Serializer>(target: &Option<String>, s: S) -> Result<
 }
 
 impl HumanStep {
+    /// The page this step holds: its own page key, else (a step saved before job pages) the
+    /// team page, which is the sandbox target itself.
+    pub fn page(&self) -> Option<&str> {
+        self.page_key.as_deref().or(self.sandbox_target.as_deref())
+    }
+
     /// The chat id the step was asked in: channel, thread or the direct chat's kwant.
     pub fn context_id(&self) -> String {
         self.channel_id
@@ -137,6 +148,8 @@ pub struct HumanStepPlace {
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub sandbox_target: Option<String>,
+    /// The page it holds; `None` is the team page (`sandbox_target`).
+    pub page_key: Option<String>,
 }
 
 /// A new step (with `true`), or one already open that the ask gets back (with `false`): the
@@ -169,7 +182,8 @@ const CREATE_HUMAN_STEPS: &str = "CREATE TABLE IF NOT EXISTS human_steps (
     status TEXT NOT NULL CHECK (status IN ('open', 'done', 'declined', 'cancelled', 'resolved_auto', 'timed_out')),
     message_id TEXT,
     created_at TIMESTAMP NOT NULL,
-    closed_at TIMESTAMP
+    closed_at TIMESTAMP,
+    page_key TEXT
 )";
 
 impl Database {
@@ -191,6 +205,13 @@ impl Database {
                 .await?;
             sqlx::query("DROP TABLE human_steps_old").execute(&mut *tx).await?;
             tx.commit().await?;
+        }
+        // 0.9.3: the page a step holds (additive; older rows keep NULL, the team page)
+        let has_page: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('human_steps') WHERE name = 'page_key'")
+            .fetch_one(&self.pool)
+            .await?;
+        if has_page == 0 {
+            sqlx::query("ALTER TABLE human_steps ADD COLUMN page_key TEXT").execute(&self.pool).await?;
         }
         sqlx::query("CREATE INDEX IF NOT EXISTS human_steps_by_status ON human_steps (status, kwant_id)").execute(&self.pool).await?;
         Ok(())
@@ -219,8 +240,8 @@ impl Database {
         // Writes first so the transaction holds SQLite's write lock before it reads
         let id = Uuid::new_v4().to_string();
         let inserted = sqlx::query(&format!(
-            "INSERT INTO human_steps (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, created_at, target)
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12, ?14
+            "INSERT INTO human_steps (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, created_at, target, page_key)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12, ?14, ?16
              WHERE (SELECT COUNT(*) FROM human_steps WHERE kwant_id = ?2 AND status = 'open') < ?13
                AND NOT EXISTS (SELECT 1 FROM human_steps WHERE status = 'open' AND ?6 IS NOT NULL AND turn_id = ?6)
                AND NOT EXISTS (SELECT 1 FROM human_steps WHERE {})",
@@ -241,6 +262,7 @@ impl Database {
         .bind(MAX_OPEN_PER_KWANT)
         .bind(target)
         .bind(&site)
+        .bind(&place.page_key)
         .execute(&mut *tx)
         .await?;
         if inserted.rows_affected() == 0 {
@@ -322,10 +344,12 @@ impl Database {
             .await?)
     }
 
-    /// Whether a step is open in this bot browser (it stays the person's until then).
-    pub async fn human_step_open_in(&self, sandbox_target: &str) -> Result<bool, DbError> {
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM human_steps WHERE status = 'open' AND sandbox_target = ?")
-            .bind(sandbox_target)
+    /// Whether a step is open on this browser page (it stays the person's until then): a job's
+    /// page key, or a sandbox target for its team page. A step saved before job pages (no
+    /// `page_key`) holds its team page.
+    pub async fn human_step_open_on(&self, page: &str) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM human_steps WHERE status = 'open' AND COALESCE(page_key, sandbox_target) = ?")
+            .bind(page)
             .fetch_one(&self.pool)
             .await?;
         Ok(n > 0)
@@ -385,7 +409,7 @@ mod tests {
         let (s, new, _) = db.create_human_step_with_card(&place("t1"), "sign_in", "Log in", None, None, "bot", |_| None).await.unwrap();
         assert!(new);
         assert_eq!(s.context_id(), "k");
-        assert!(db.human_step_open_in("k").await.unwrap());
+        assert!(db.human_step_open_on("k").await.unwrap());
         let (again, new, _) = db.create_human_step_with_card(&place("t1"), "captcha", "Solve", None, None, "auto", |_| None).await.unwrap();
         assert!(!new);
         assert_eq!(again.id, s.id);
@@ -395,7 +419,7 @@ mod tests {
         let closed = db.get_human_step(&s.id).await.unwrap().unwrap();
         assert_eq!(closed.status, "done");
         assert!(closed.closed_at.is_some());
-        assert!(!db.human_step_open_in("k").await.unwrap());
+        assert!(!db.human_step_open_on("k").await.unwrap());
         for i in 0..MAX_OPEN_PER_KWANT {
             db.create_human_step_with_card(&place(&format!("t{}", i + 10)), "other", "Do it", None, None, "bot", |_| None).await.unwrap();
         }
@@ -486,5 +510,46 @@ mod tests {
         let (s, ..) = db.create_human_step_with_card(&place, "captcha", "Solve", None, None, "auto", |_| None).await.unwrap();
         assert!(db.close_human_step(&s.id, "timed_out").await.unwrap());
         assert!(serde_json::to_value(db.get_human_step(&s.id).await.unwrap().unwrap()).unwrap()["target"].is_null());
+    }
+
+    /// 0.9.3: a step holds only its own page; a step saved before pages (no page key, as an
+    /// older kwnt left it) holds its team page, and a table from before the column gains it.
+    #[tokio::test]
+    async fn a_step_holds_its_page_and_old_steps_hold_the_team_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        // a table as 0.9.2 left it: no page_key column, one open step on team "t"
+        sqlx::query("DROP TABLE human_steps").execute(&db.pool).await.unwrap();
+        sqlx::query(&CREATE_HUMAN_STEPS.replace(",\n    page_key TEXT", "")).execute(&db.pool).await.unwrap();
+        sqlx::query("INSERT INTO human_steps (id, kwant_id, kind, reason, sandbox_target, source, status, created_at) VALUES ('old', 'k', 'sign_in', 'Log in', 't', 'bot', 'open', ?)")
+            .bind(Utc::now()).execute(&db.pool).await.unwrap();
+        // Migrate the way kwnt starts: reopen, so the one-connection migration pool runs it. Changing
+        // the table under this test's runtime pool would leave another pooled connection with a
+        // `SELECT *` column list from before (sqlx's index-out-of-bounds panic, then None).
+        db.pool.close().await;
+        let db = Database::init(tmp.path()).await.unwrap();
+        let old = db.get_human_step("old").await.unwrap().unwrap();
+        assert_eq!(old.page_key, None);
+        assert_eq!(old.page(), Some("t"), "an old step holds its team page");
+        assert!(db.human_step_open_on("t").await.unwrap());
+        assert!(!db.human_step_open_on("t#k#chat").await.unwrap(), "a job page is free while the team page is held");
+        assert!(db.close_human_step("old", "done").await.unwrap());
+        // a job's step holds that job's page only
+        let place = HumanStepPlace {
+            kwant_id: "k".into(),
+            thread_id: Some("chat".into()),
+            turn_id: Some("turn".into()),
+            sandbox_target: Some("t".into()),
+            page_key: Some("t#k#chat".into()),
+            ..Default::default()
+        };
+        let (s, _, _) = db.create_human_step_with_card(&place, "sign_in", "Log in", None, None, "bot", |_| None).await.unwrap();
+        assert_eq!(s.page(), Some("t#k#chat"));
+        assert!(db.human_step_open_on("t#k#chat").await.unwrap());
+        assert!(!db.human_step_open_on("t").await.unwrap(), "the team page stays free");
+        assert!(!db.human_step_open_on("t#k#other").await.unwrap());
+        // migrating again changes nothing
+        db.migrate_human_steps().await.unwrap();
+        assert_eq!(db.get_human_step(&s.id).await.unwrap().unwrap().page_key.as_deref(), Some("t#k#chat"));
     }
 }

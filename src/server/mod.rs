@@ -34,6 +34,7 @@ pub mod questions;
 pub mod activity;
 pub mod bot_status;
 pub mod human_steps;
+pub mod browser_pages;
 pub mod skills;
 pub mod spaces;
 pub mod asks;
@@ -124,6 +125,8 @@ pub struct AppState {
     pub questions: Arc<questions::QuestionHub>,
     /// `request_human_step` calls waiting for the person to sign in or solve a CAPTCHA.
     pub human_steps: Arc<human_steps::HumanStepHub>,
+    /// Opening job pages: one lock per team and the wait for room (0.9.3).
+    pub job_pages: Arc<browser_pages::JobPages>,
     /// "Sign in with Claude" for the Claude engine.
     pub claude_login: Arc<engine_login::ClaudeLogin>,
     /// "Sign in with ChatGPT" (Codex device code) for the Codex engine.
@@ -193,6 +196,7 @@ impl AppState {
             scheduler_wake: Default::default(),
             questions: Default::default(),
             human_steps: Default::default(),
+            job_pages: Default::default(),
             claude_login: Default::default(),
             codex_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Codex)),
             grok_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Grok)),
@@ -335,6 +339,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/navigate", post(routes::navigate_sandbox_api))
         .route("/api/sandbox/:team_id/interact", post(routes::interact_sandbox))
         .route("/api/sandbox/:team_id/stream", get(browser_stream::upgrade))
+        .route("/api/sandbox/:team_id/pages", get(browser_pages::list_pages))
         .route("/api/sandbox/:team_id/page", get(routes::get_sandbox_page_api))
         .route("/api/sandbox/:team_id/act", post(routes::act_sandbox_api))
         .route("/api/sandbox/:team_id/cite", post(routes::cite_sandbox))

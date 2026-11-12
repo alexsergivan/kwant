@@ -175,9 +175,23 @@ fn meta_json(m: &CredentialMeta) -> Value {
 }
 
 /// The browser controller already open for this target, if any; listing never starts a browser.
+/// With a page per job (0.9.3), the page holding a password waiting to be saved wins (the person
+/// signed in on a job's page), then the page the live view shows, then the team page.
 async fn open_controller(state: &AppState, path_id: &str, owner: &str) -> Option<crate::sandbox::BrowserController> {
-    let controllers = state.browser_controllers.lock().await;
-    controllers.get(owner).or_else(|| controllers.get(path_id)).cloned()
+    let live = super::browser_pages::live_page(state, path_id).await;
+    let prefix = format!("{path_id}{}", super::browser_pages::PAGE_SEP);
+    let found: Vec<crate::sandbox::BrowserController> = {
+        let controllers = state.browser_controllers.lock().await;
+        [live.as_str(), owner, path_id].into_iter().filter_map(|k| controllers.get(k))
+            .chain(controllers.iter().filter(|(k, _)| k.starts_with(&prefix)).map(|(_, c)| c))
+            .cloned().collect()
+    };
+    for ctrl in &found {
+        if ctrl.pending().await.is_some() {
+            return Some(ctrl.clone());
+        }
+    }
+    found.into_iter().next()
 }
 
 pub async fn list(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {

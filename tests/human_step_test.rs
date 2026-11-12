@@ -53,8 +53,8 @@ async fn done_resumes_the_waiting_turn() {
     assert_eq!((meta["kind"].as_str(), meta["human_step_id"].as_str(), meta["status"].as_str()), (Some("human_step"), Some(id.as_str()), Some("open")));
     assert!(!card.text.contains("pw") && !card.text.contains("token"));
 
-    // The bot's browser is the person's while the step is open
-    if let Some(target) = s["sandbox_target"].as_str() {
+    // The bot's browser page (the job's own, 0.9.3) is the person's while the step is open
+    if let Some(target) = s["page_key"].as_str().or(s["sandbox_target"].as_str()) {
         assert!(kwnt::server::human_steps::browser_is_held(&env.state, target).await);
     }
 
@@ -64,7 +64,7 @@ async fn done_resumes_the_waiting_turn() {
     let reply = wait_reply(&env, &env.a, "answer h1").await;
     assert!(reply.text.contains("TOOL[The person says the step is done"), "{}", reply.text);
     assert_eq!(step(&env, &id).await["step"]["status"], "done");
-    if let Some(target) = s["sandbox_target"].as_str() {
+    if let Some(target) = s["page_key"].as_str().or(s["sandbox_target"].as_str()) {
         assert!(!kwnt::server::human_steps::browser_is_held(&env.state, target).await, "handed back");
     }
     let card = messages(&env, &env.a).await.into_iter().find(|m| m.id == card.id).unwrap();

@@ -154,7 +154,9 @@ async fn a_bot_sees_the_page_as_a_jpeg_at_the_width_it_asks_for() {
     let url = serve_page().await;
     let opened = rpc(&app, &token, "tools/call", json!({"name": "browser_open", "arguments": {"url": url}})).await;
     assert_eq!(opened["isError"], false, "{opened}");
-    let ctrl = state.browser_controllers.lock().await.get(&bot.id).cloned().unwrap();
+    // The turn runs in the bot's DM, so its browser tools use that job's own page (0.9.3)
+    let page = kwnt::server::browser_pages::job_page_key(&bot.id, &bot.id, &bot.id).unwrap();
+    let ctrl = state.browser_controllers.lock().await.get(&page).cloned().expect("the job's page");
     let panel_before = ctrl.last_screenshot.lock().await.clone();
 
     // At its own size: the VM browser's 1280×800

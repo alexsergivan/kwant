@@ -263,12 +263,18 @@ async fn a_captcha_met_through_the_shell_browser_api_asks_the_person() {
     assert!(read("Ossi", "curl2").contains("waiting on the person"));
     assert_asked(&env, &bot, &mut events).await;
 
-    // The person's own panel (the plain route) is told where their step is, not told to end a turn
-    let (s, v) = call(&env.app, "POST", &format!("/api/sandbox/{bot}/navigate"), Some(json!({"url": format!("{}px_wall.html", env.fixtures)}))).await;
+    // The person's own panel (the plain route) on the step's page is told where their step is,
+    // not told to end a turn
+    let page = kwnt::server::browser_pages::job_page_key(&bot, &bot, &bot).unwrap();
+    let held = format!("/api/sandbox/{}/navigate", page.replace('#', "%23"));
+    let (s, v) = call(&env.app, "POST", &held, Some(json!({"url": format!("{}px_wall.html", env.fixtures)}))).await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
     let error = v["error"].as_str().unwrap();
     assert_eq!(error, kwnt::server::routes::HELD_FOR_PERSON);
     assert!(error.contains("Take control") && !error.contains("end your turn"), "{error}");
+    // Only that page is held (0.9.3): the team page is free
+    let (s, v) = call(&env.app, "POST", &format!("/api/sandbox/{bot}/navigate"), Some(json!({"url": format!("{}px_wall.html", env.fixtures)}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
 }
 
 /// Two bots of one team share its browser and run at once (Rigel's N3, Oleks's "mixing

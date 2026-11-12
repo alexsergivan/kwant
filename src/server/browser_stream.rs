@@ -1190,12 +1190,31 @@ async fn focused_editable(cdp: &Cdp) -> bool {
         .ok().and_then(|r| r["result"]["value"].as_bool()).unwrap_or(false)
 }
 
-pub async fn upgrade(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap, ws: WebSocketUpgrade) -> Result<Response, StatusCode> {
+/// `?page=`: which of the team's pages to show (a key from `GET /api/sandbox/:id/pages`).
+#[derive(Debug, Default, Deserialize)]
+pub struct StreamQuery {
+    #[serde(default)]
+    pub page: Option<String>,
+}
+
+pub async fn upgrade(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<StreamQuery>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, StatusCode> {
     // Prevent a third-party website from controlling an authenticated same-origin session.
     let origin = headers.get("origin").and_then(|v| v.to_str().ok()).and_then(|s| reqwest::Url::parse(s).ok()).ok_or(StatusCode::FORBIDDEN)?;
     let host = headers.get("host").and_then(|v| v.to_str().ok()).ok_or(StatusCode::FORBIDDEN)?;
     let expected = reqwest::Url::parse(&format!("{}://{}", origin.scheme(), host)).map_err(|_| StatusCode::FORBIDDEN)?;
     if !matches!(origin.scheme(), "http" | "https") || origin.origin() != expected.origin() { return Err(StatusCode::FORBIDDEN); }
+    // The page shown: the one asked for (a page of this team only), else the page an open step
+    // holds, else the page used last (0.9.3: each job has its own page)
+    let id = match query.page.filter(|p| super::browser_pages::page_team(p) == id) {
+        Some(page) => page,
+        None => super::browser_pages::live_page(&state, &id).await,
+    };
     Ok(ws.max_message_size(32 * 1024).on_upgrade(move |socket| async move {
         let result = serve(socket, state, id).await;
         if let Err(error) = result { tracing::debug!("Browser stream ended: {}", error); }
@@ -1288,7 +1307,8 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
     let (jobs, jobs_rx) = mpsc::unbounded_channel::<Job>();
     let worker = Worker { ctrl: ctrl.clone(), cdp: cdp.clone(), shared: shared.clone(), client: client_tx.clone(), swallowed: 0, open_select: None };
     let worker = tokio::spawn(worker.run(jobs_rx));
-    let mut rec = StageRecorder::new(state.clone(), id.clone(), shared.socket);
+    // Show it once records on the team's stage, whichever of its pages is shown
+    let mut rec = StageRecorder::new(state.clone(), super::browser_pages::page_team(&id).to_string(), shared.socket);
     let pointer = Pointer::new(state.clone(), cdp.clone(), client_tx.clone());
     let result = stream(&mut socket, &ctrl, &cdp, &mut events, &mut page, &shared, &client_tx, &mut client_rx, &jobs, &mut rec, &pointer).await;
     // a recording live on this socket stops here (Show it once: `closed`), its steps kept, after

@@ -734,9 +734,11 @@ pub const BROWSER_CITE: &str = "browser_cite";
 /// Same holds as the other browser tools: the person's sign-in/CAPTCHA step or their control.
 pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope, args: &Value) -> (Value, bool) {
     let text = |t: &str| json!([{"type": "text", "text": t}]);
-    let Some(target) = &scope.sandbox_target else {
+    // the turn's own page: its job page in a chat, else the team page
+    let Some(target) = super::browser_pages::scope_page(scope) else {
         return (text(&format!("Unknown tool {BROWSER_SCREENSHOT}.")), true);
     };
+    let target = &target;
     if super::human_steps::browser_is_held(state, target).await {
         return (
             text("The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions until they finish it."),
@@ -755,8 +757,9 @@ pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope,
         Value::Bool(b) => *b,
         _ => return (text("share must be true or false"), true),
     };
-    let Some(ctrl) = super::routes::get_or_create_browser_controller(state, target).await else {
-        return (text(&state.browser_service.unavailable_reason()), true);
+    let ctrl = match super::routes::open_page(state, target, state.job_pages.wait()).await {
+        Ok(ctrl) => ctrl,
+        Err(refusal) => return (text(&page_refusal_text(state, refusal)), true),
     };
     match ctrl.capture_for_agent(width).await {
         Ok(shot) => {
@@ -826,9 +829,13 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     // Each turn is its own reader: a new turn gets the whole page on its first read. A turn
     // without an id always gets the whole page
     let reader = scope.turn_id.clone().unwrap_or_default();
-    // This bot drives the browser now, so its site rules are the ones that hold
-    if let Some(ctrl) = super::routes::get_or_create_browser_controller(state, target).await {
-        ctrl.site_guard.set_driver(&scope.kwant_id);
+    // This bot drives the browser now, so its site rules are the ones that hold. Its job page
+    // opens here (waiting for room when its team's pages are all in use), so the tool below
+    // finds it open
+    match super::routes::open_page(state, target, state.job_pages.wait()).await {
+        Ok(ctrl) => ctrl.site_guard.set_driver(&scope.kwant_id),
+        Err(refusal @ super::routes::PageRefusal::PagesFull) => return (page_refusal_text(state, refusal), true),
+        Err(super::routes::PageRefusal::Unavailable) => {}
     }
     let (text, is_error) = run_browser_tool(state, target, &reader, name, args).await;
     // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left. Also
@@ -862,6 +869,14 @@ fn wall_check_helps(text: &str, page: Option<&Value>) -> bool {
         return false;
     }
     !(text.starts_with("The user has taken control") || text.ends_with(" is required") || text.starts_with("action is required"))
+}
+
+/// What a bot's browser tool says when its page couldn't be had.
+fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> String {
+    match refusal {
+        super::routes::PageRefusal::PagesFull => super::browser_pages::pages_full_message(),
+        super::routes::PageRefusal::Unavailable => state.browser_service.unavailable_reason(),
+    }
 }
 
 /// `reader` names who reads (empty: nobody known), for `browser_page` to answer "unchanged" when
@@ -1290,8 +1305,10 @@ async fn call_tool(
                 }
             }
         }
-        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE => match &scope.sandbox_target {
-            Some(target) => call_browser_tool(state, scope, target, name, args).await,
+        // on the turn's own page (its job page in a chat), so a page held for another job's
+        // sign-in doesn't stop this one
+        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE => match super::browser_pages::scope_page(scope) {
+            Some(target) => call_browser_tool(state, scope, &target, name, args).await,
             None => (format!("Unknown tool {name}."), true),
         },
         super::rerouting::HAND_BACK => super::rerouting::tool_call(state, scope, args).await,

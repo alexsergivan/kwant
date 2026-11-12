@@ -652,7 +652,8 @@ pub async fn prepare_turn_with_opts(
     }
     // Signed-in http servers get their (refreshed) access token as a secret header
     super::mcp_oauth::authorize_servers(state, &mut servers).await;
-    let browser = self_scope.as_ref().and_then(|s| s.sandbox_target.clone()).map(|t| (state.clone(), t));
+    // the payment check reads the page this turn's browser tools use (its job page in a chat)
+    let browser = self_scope.as_ref().and_then(super::browser_pages::scope_page).map(|t| (state.clone(), t));
     let self_tools = self_scope.is_some() && !servers.iter().any(|s| s.name.eq_ignore_ascii_case(mcp::SELF_SERVER_NAME));
     if self_tools {
         servers.push(super::continuity::self_server(&local_base_url(state), &token));

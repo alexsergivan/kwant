@@ -2782,7 +2782,10 @@ async fn run_kwant_turn_inner(
         // A replay works in its own scratch browser and asks nobody
         let _turn_on_browser = opts.rehearse.is_none().then(|| state.human_steps.track_turn(&sandbox_target, turn_scope.clone()));
 
-        let active_ctrl = state.browser_controllers.lock().await.get(&sandbox_target).cloned();
+        // The turn's own page: its job page in this chat (0.9.3), so another job's sign-in held
+        // on the team browser doesn't stop it; the team page when the turn has no chat
+        let turn_page = super::browser_pages::scope_page(&turn_scope).unwrap_or_else(|| sandbox_target.clone());
+        let active_ctrl = state.browser_controllers.lock().await.get(&turn_page).cloned();
         // The user may have browsed in the live viewer since the last turn; read the real location
         let active_browser_url = if let Some(ref ctrl) = active_ctrl {
             let _ = ctrl.sync_location().await;
@@ -2800,9 +2803,9 @@ async fn run_kwant_turn_inner(
                 "🌐 Navigating bot browser to {}...",
                 target_url
             )));
-            if let Some(ctrl) = get_or_create_browser_controller(state, &sandbox_target).await {
+            if let Some(ctrl) = get_or_create_browser_controller(state, &turn_page).await {
                 ctrl.site_guard.set_driver(&target_kwant.id);
-                let navigated = match guard_bot_action(state, &ctrl, &sandbox_target).await {
+                let navigated = match guard_bot_action(state, &ctrl, &turn_page).await {
                     Ok(()) => ctrl.navigate(&target_url).await,
                     Err(e) => Err(e),
                 };
@@ -2828,7 +2831,7 @@ async fn run_kwant_turn_inner(
                     let wall = crate::sandbox::detect_bot_wall(&nav.url, &nav.title, &page_text).or(captcha.as_ref().map(|c| c.label()));
                     // The person is asked at once; the bot hears it was, instead of a block to report
                     let asked = match wall {
-                        Some(_) => super::human_steps::ask_for_bot_wall(state, &turn_scope, &json!({"url": nav.url, "captcha": captcha})).await,
+                        Some(_) => super::human_steps::ask_for_bot_wall(state, &turn_scope, &turn_page, &json!({"url": nav.url, "captcha": captcha})).await,
                         None => None,
                     };
                     final_prompt = if let (Some(kind), Some(note)) = (wall, asked) {
@@ -5527,14 +5530,103 @@ pub fn detect_url_in_prompt(prompt: &str) -> Option<String> {
     })
 }
 
+/// The controller of one browser page: `team_id` is a page key, the team page (a sandbox target)
+/// or a job's own page ([`super::browser_pages`]). A new job page opens in its team's context,
+/// after room is made under the team's job-page cap; `None` at once when the browser is
+/// unavailable or every job page of the team is held or in use (see [`page_controller`] for a
+/// call that waits for room).
 pub async fn get_or_create_browser_controller(
     state: &AppState,
     team_id: &str,
 ) -> Option<crate::sandbox::BrowserController> {
+    open_page(state, team_id, std::time::Duration::ZERO).await.ok()
+}
+
+/// Why a page couldn't be had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageRefusal {
+    /// The browser didn't start or answer.
+    Unavailable,
+    /// Every job page of the team is held or in use, and none freed up in time.
+    PagesFull,
+}
+
+/// The page's controller for a bot's browser call: like [`get_or_create_browser_controller`],
+/// but a job page that finds its team's pages all in use waits up to
+/// [`super::browser_pages::PAGE_WAIT`] for one to free up, then gets a clear 503 saying so
+/// (nothing is wrong with the browser) instead of "browser unavailable".
+pub async fn page_controller(
+    state: &AppState,
+    key: &str,
+) -> Result<crate::sandbox::BrowserController, (StatusCode, Json<serde_json::Value>)> {
+    open_page(state, key, state.job_pages.wait()).await.map_err(|refusal| page_refused(state, refusal))
+}
+
+/// The answer to a call whose page couldn't be had.
+pub(crate) fn page_refused(state: &AppState, refusal: PageRefusal) -> (StatusCode, Json<serde_json::Value>) {
+    match refusal {
+        PageRefusal::Unavailable => browser_unavailable(state),
+        PageRefusal::PagesFull => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
+            "error": super::browser_pages::pages_full_message(),
+            "code": PAGES_FULL,
+            "is_running": true,
+        }))),
+    }
+}
+
+/// The `code` of a call refused because every job page of the team is in use.
+pub const PAGES_FULL: &str = "PAGES_FULL";
+
+/// Opens (or returns) a page's controller. A job page that isn't open yet is made room for and
+/// opened under its team's lock, so two jobs opening at once never pass the cap; with no room it
+/// tries again each second until `wait` has passed.
+pub async fn open_page(
+    state: &AppState,
+    key: &str,
+    wait: std::time::Duration,
+) -> Result<crate::sandbox::BrowserController, PageRefusal> {
     // follow a mode switch made elsewhere (another kwnt process sharing the data dir)
     super::computer::apply_mode(state).await;
     // keeps the browser container from being stopped as idle while bots use it
     state.browser_service.note_use();
+    let team = super::browser_pages::page_team(key).to_string();
+    if !super::browser_pages::is_job_page(key) {
+        state.browser_service.touch_page(key);
+        return controller_for(state, key, &team).await.ok_or(PageRefusal::Unavailable);
+    }
+    // An open job page that answers needs no lock; any page is only ever opened under it
+    let existing = state.browser_controllers.lock().await.get(key).cloned();
+    if let Some(ctrl) = existing {
+        state.browser_service.touch_page(key);
+        if !ctrl.is_managed_session() || ctrl.refresh_location().await.is_ok() {
+            return Ok(ctrl);
+        }
+    }
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        let lock = state.job_pages.team_lock(&team);
+        let opening = lock.lock().await;
+        let open = state.browser_controllers.lock().await.contains_key(key);
+        if open || super::browser_pages::make_room(state, &team, key).await {
+            state.browser_service.touch_page(key);
+            let ctrl = controller_for(state, key, &team).await;
+            drop(opening);
+            return ctrl.ok_or(PageRefusal::Unavailable);
+        }
+        drop(opening);
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            tracing::warn!(page = %key, "every job page of this team is held or in use; no room for another");
+            return Err(PageRefusal::PagesFull);
+        }
+        tokio::time::sleep((deadline - now).min(std::time::Duration::from_secs(1))).await;
+    }
+}
+
+/// The page's controller, opening the page when it isn't open (or no longer answers).
+async fn controller_for(state: &AppState, team_id: &str, team: &str) -> Option<crate::sandbox::BrowserController> {
+    let team = team.to_string();
+    let job = super::browser_pages::is_job_page(team_id);
     let mut controllers = state.browser_controllers.lock().await;
     let mut driver = None;
     if let Some(ctrl) = controllers.get(team_id) {
@@ -5543,11 +5635,19 @@ pub async fn get_or_create_browser_controller(
         driver = ctrl.site_guard.driver();
         controllers.remove(team_id);
     }
-    let (_, workspace) = resolve_sandbox_target_info(state, team_id).await?;
-    match state.browser_service.session(team_id, &workspace).await {
+    let Some((_, workspace)) = resolve_sandbox_target_info(state, &team).await else {
+        state.browser_service.forget_page(team_id);
+        return None;
+    };
+    let opened = if job {
+        state.browser_service.page_session(team_id, &workspace).await
+    } else {
+        state.browser_service.session(team_id, &workspace).await
+    };
+    match opened {
         Ok(ctrl) => {
             // Passwords belong to the team, channel or bot (by id), never to a folder
-            if let Some((owner, _)) = super::passwords::password_owner(state, team_id).await {
+            if let Some((owner, _)) = super::passwords::password_owner(state, &team).await {
                 ctrl.attach_vault(state.credentials.clone(), &owner).await;
             }
             // The new page keeps the old one's driving bot, so its site rules still hold
@@ -5556,11 +5656,16 @@ pub async fn get_or_create_browser_controller(
             }
             controllers.insert(team_id.to_string(), ctrl.clone());
             let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
-                team_id: team_id.to_string(), container_name: "browser-service".into(), is_running: true,
+                team_id: team, container_name: "browser-service".into(), is_running: true,
             });
             Some(ctrl)
         }
-        Err(error) => { tracing::warn!("Browser service unavailable: {}", error); None }
+        Err(error) => {
+            tracing::warn!("Browser service unavailable: {}", error);
+            // a job page that didn't open isn't one of the team's pages
+            if job { state.browser_service.forget_page(team_id); }
+            None
+        }
     }
 }
 
@@ -5576,7 +5681,11 @@ pub(crate) async fn guard_bot_action(
     ctrl.site_guard.set_actor(Actor::Bot);
     let driver = match ctrl.site_guard.driver() {
         Some(driver) => Some(driver),
-        None => state.db.get_kwant(team_id).await.ok().flatten().map(|k| k.id),
+        // a job's page is driven by its bot; the team page by the bot whose own browser it is
+        None => match team_id.split(super::browser_pages::PAGE_SEP).nth(1) {
+            Some(kwant) => Some(kwant.to_string()),
+            None => state.db.get_kwant(team_id).await.ok().flatten().map(|k| k.id),
+        },
     };
     let rules = match &driver {
         Some(kwant) => state
@@ -5627,14 +5736,13 @@ pub async fn get_browser_screenshot(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id).await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     // The user may have navigated in the live viewer; keep url/title (and other viewers) in sync
     let previous_url = ctrl.current_url.lock().await.clone();
     if let Some((new_url, new_title)) = ctrl.sync_location().await {
         if previous_url.as_deref() != Some(new_url.as_str()) {
             let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
-                team_id: team_id.clone(),
+                team_id: super::browser_pages::page_team(&team_id).to_string(),
                 url: new_url,
                 title: new_title,
                 status_code: 200,
@@ -5669,6 +5777,11 @@ pub async fn restart_sandbox(
         } else { None };
         state.browser_service.reset(&team_id).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
         controllers.remove(&team_id);
+        // Restarting the team page closes its job pages too (0.9.3)
+        if !super::browser_pages::is_job_page(&team_id) {
+            let prefix = format!("{team_id}{}", super::browser_pages::PAGE_SEP);
+            controllers.retain(|k, _| !k.starts_with(&prefix));
+        }
     }
     let running = get_or_create_browser_controller(&state, &team_id).await.is_some();
     let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
@@ -5683,13 +5796,12 @@ pub async fn navigate_sandbox(
     Path(team_id): Path<String>,
     Json(payload): Json<NavigatePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id).await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     guard_bot_action(&state, &ctrl, &team_id).await.map_err(browser_request_failed)?;
     let nav = ctrl.navigate(&payload.url).await.map_err(browser_request_failed)?;
 
     let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
-        team_id: team_id.clone(),
+        team_id: super::browser_pages::page_team(&team_id).to_string(),
         url: nav.url.clone(),
         title: nav.title.clone(),
         status_code: nav.status_code,
@@ -5697,7 +5809,7 @@ pub async fn navigate_sandbox(
 
     if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
         let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
-            team_id: team_id.clone(),
+            team_id: super::browser_pages::page_team(&team_id).to_string(),
             url: nav.url.clone(),
             image_base64: b64,
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -5707,7 +5819,7 @@ pub async fn navigate_sandbox(
     // Return the real page so agents can't mistake a redirect/CAPTCHA for success
     let mut page = sandbox_page_state(&ctrl).await;
     page["status"] = json!(if page["blocked"].as_bool() == Some(true) { "blocked" } else { "navigated" });
-    page["team_id"] = json!(team_id);
+    page["team_id"] = json!(super::browser_pages::page_team(&team_id));
     page["requested_url"] = json!(payload.url);
     page["status_code"] = json!(nav.status_code);
     Ok(Json(page))
@@ -5745,7 +5857,7 @@ pub async fn interact_sandbox(
         }))));
     }
 
-    let ctrl = get_or_create_browser_controller(&state, &team_id).await.ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
 
     let _permit = ctrl.control.try_read().map_err(|_| (StatusCode::CONFLICT, Json(json!({"error":"Browser is controlled by a person."}))))?;
     // The person's own input: their navigation is never held to a bot's site rules
@@ -5773,7 +5885,7 @@ pub async fn interact_sandbox(
     let current_url = ctrl.current_url.lock().await.clone().unwrap_or_default();
 
     let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
-        team_id: team_id.clone(),
+        team_id: super::browser_pages::page_team(&team_id).to_string(),
         url: current_url.clone(),
         image_base64: screenshot.clone(),
         timestamp: chrono::Utc::now().to_rfc3339(),
@@ -5907,6 +6019,12 @@ impl BotCall {
     fn caller(&self) -> super::human_steps::Caller<'_> {
         super::human_steps::Caller { kwant: &self.kwant, chat: self.chat.as_deref() }
     }
+
+    /// The page this call uses in `team`'s browser: the job's own page on the chat route, the
+    /// team page on the route without a chat.
+    fn page_in(team: &str) -> impl Fn(&BotCall) -> String + '_ {
+        move |by| super::browser_pages::call_page(team, Some(&by.kwant), by.chat.as_deref())
+    }
 }
 
 /// `POST /api/sandbox/:id/bot/:kwant_id/navigate`: the browser API a bot's prompt gave it before
@@ -5978,10 +6096,11 @@ pub async fn act_sandbox_bot_chat(
 /// `POST /api/sandbox/:id/bot/:kwant_id/chat/:chat/cite`.
 pub async fn cite_sandbox_bot_chat(
     State(state): State<AppState>,
-    Path((team_id, _kwant_id, _chat)): Path<(String, String, String)>,
+    Path((team_id, kwant_id, chat)): Path<(String, String, String)>,
     payload: Json<CitePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    cite_sandbox(State(state), Path(team_id), payload).await
+    let page = super::browser_pages::call_page(&team_id, Some(&kwant_id), Some(&chat));
+    cite_sandbox(State(state), Path(page), payload).await
 }
 
 /// `by`: the bot that made the call (its own route), `None` on the plain route.
@@ -5991,9 +6110,10 @@ async fn navigate_as(
     by: Option<BotCall>,
     payload: Json<NavigatePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    refuse_while_held(&state, &team_id, by.is_some()).await?;
-    let result = navigate_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
-    ask_on_wall(&state, &team_id, by.as_ref().map(BotCall::caller), result).await
+    let page = by.as_ref().map_or_else(|| team_id.clone(), BotCall::page_in(&team_id));
+    refuse_while_held(&state, &page, by.is_some()).await?;
+    let result = navigate_sandbox(State(state.clone()), Path(page.clone()), payload).await;
+    ask_on_wall(&state, &team_id, &page, by.as_ref().map(BotCall::caller), result).await
 }
 
 async fn page_as(
@@ -6002,12 +6122,13 @@ async fn page_as(
     by: Option<BotCall>,
     query: Query<PageQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let result = get_sandbox_page(State(state.clone()), Path(team_id.clone()), query).await;
+    let page = by.as_ref().map_or_else(|| team_id.clone(), BotCall::page_in(&team_id));
+    let result = get_sandbox_page(State(state.clone()), Path(page.clone()), query).await;
     // A page held for the person's step was already asked about
-    if super::human_steps::browser_is_held(&state, &team_id).await {
+    if super::human_steps::browser_is_held(&state, &page).await {
         return result;
     }
-    ask_on_wall(&state, &team_id, by.as_ref().map(BotCall::caller), result).await
+    ask_on_wall(&state, &team_id, &page, by.as_ref().map(BotCall::caller), result).await
 }
 
 async fn act_as(
@@ -6016,9 +6137,10 @@ async fn act_as(
     by: Option<BotCall>,
     payload: Json<InteractPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    refuse_while_held(&state, &team_id, by.is_some()).await?;
-    let result = act_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
-    ask_on_wall(&state, &team_id, by.as_ref().map(BotCall::caller), result).await
+    let page = by.as_ref().map_or_else(|| team_id.clone(), BotCall::page_in(&team_id));
+    refuse_while_held(&state, &page, by.is_some()).await?;
+    let result = act_sandbox(State(state.clone()), Path(page.clone()), payload).await;
+    ask_on_wall(&state, &team_id, &page, by.as_ref().map(BotCall::caller), result).await
 }
 
 /// What a browser call is told while the browser is held for the person's step: a bot (its own
@@ -6027,7 +6149,8 @@ async fn act_as(
 pub const HELD_FOR_BOT: &str = "The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions and end your turn; you get a new one when they finish.";
 pub const HELD_FOR_PERSON: &str = "This browser is set aside for the step a bot asked you to do (a sign-in or human check). Take control in the browser panel to use it, or press Done or Decline on the card in the chat first.";
 
-/// A bot action on a browser the person was handed for a step waits until they finish it.
+/// A bot action on a browser page the person was handed for a step waits until they finish it.
+/// `team_id`: the page key (only that page is held; the team's other pages aren't).
 async fn refuse_while_held(state: &AppState, team_id: &str, bot: bool) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if super::human_steps::browser_is_held(state, team_id).await {
         return Err((StatusCode::CONFLICT, Json(json!({"error": if bot { HELD_FOR_BOT } else { HELD_FOR_PERSON }}))));
@@ -6042,6 +6165,7 @@ async fn refuse_while_held(state: &AppState, team_id: &str, bot: bool) -> Result
 async fn ask_on_wall(
     state: &AppState,
     team_id: &str,
+    on: &str,
     by: Option<super::human_steps::Caller<'_>>,
     result: Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -6049,7 +6173,7 @@ async fn ask_on_wall(
     match result {
         Ok(Json(mut page)) => {
             if page["blocked"] == json!(true) {
-                if let Some(note) = super::human_steps::ask_for_bot_wall(state, &turn, &page).await {
+                if let Some(note) = super::human_steps::ask_for_bot_wall(state, &turn, on, &page).await {
                     page["notice"] = json!(note);
                     page["human_step"] = json!("asked");
                 }
@@ -6057,12 +6181,12 @@ async fn ask_on_wall(
             Ok(Json(page))
         }
         Err((status, Json(mut body))) if status != StatusCode::CONFLICT && status != StatusCode::BAD_REQUEST => {
-            let page = match state.browser_controllers.lock().await.get(team_id).cloned() {
+            let page = match state.browser_controllers.lock().await.get(on).cloned() {
                 Some(ctrl) => Some(sandbox_page_state(&ctrl).await),
                 None => None,
             };
             if let Some(page) = page.filter(|p| p["blocked"] == json!(true)) {
-                if let Some(note) = super::human_steps::ask_for_bot_wall(state, &turn, &page).await {
+                if let Some(note) = super::human_steps::ask_for_bot_wall(state, &turn, on, &page).await {
                     body["notice"] = json!(note);
                     body["human_step"] = json!("asked");
                 }
@@ -6077,7 +6201,7 @@ async fn broadcast_sandbox_screenshot(state: &AppState, team_id: &str, ctrl: &cr
     if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
         let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
         let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
-            team_id: team_id.to_string(),
+            team_id: super::browser_pages::page_team(team_id).to_string(),
             url,
             image_base64: b64,
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -6146,9 +6270,7 @@ pub async fn get_sandbox_page(
     Path(team_id): Path<String>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id)
-        .await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     let snap = ctrl.snapshot().await;
     let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default()).await;
     if query.wants_blocks() {
@@ -6181,9 +6303,7 @@ pub async fn cite_sandbox(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     use crate::sandbox::cite;
     let refuse = |msg: String| (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": msg })));
-    let ctrl = get_or_create_browser_controller(&state, &team_id)
-        .await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     let Some(frames) = ctrl.frame_texts().await else {
         return Err(refuse("Couldn't read the page to check the quote. Open a page first.".into()));
     };
@@ -6220,9 +6340,7 @@ pub async fn act_sandbox(
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id)
-        .await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     let args = json!({"action": payload.action, "text": payload.text, "key": payload.key, "ref": payload.ref_});
     if let Some(why) = super::continuity::browser_act_payment(&state, &team_id, &args).await {
         let mut page = sandbox_page_state(&ctrl).await;
@@ -6242,9 +6360,7 @@ pub async fn act_sandbox_allowed(
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id)
-        .await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
     guard_bot_action(&state, &ctrl, &team_id).await.map_err(browser_request_failed)?;
     let _ = ctrl.site_guard.take_refusal();
@@ -6357,7 +6473,7 @@ pub async fn act_sandbox_allowed(
     }
     if let Some(url) = page["url"].as_str() {
         let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
-            team_id: team_id.clone(),
+            team_id: super::browser_pages::page_team(&team_id).to_string(),
             url: url.to_string(),
             title: page["title"].as_str().unwrap_or("").to_string(),
             status_code: 200,
