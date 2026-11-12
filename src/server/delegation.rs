@@ -1293,10 +1293,11 @@ pub fn handoff_rules() -> String {
     or was cancelled on for this user message (a failed task may be retried as it was), or when that teammate failed its last {streak} tasks in a row here: then do it yourself or give it \
     to someone else. Only after {ceiling} hand-offs for one user message does the person press Continue; then tell them \
     what's waiting instead of claiming a handoff.\n\n\
-    End every reply in one of three ways: (1) hand the next step on by @mention, or do it yourself in this reply; \
+    End every reply in one of four ways: (1) hand the next step on by @mention, or do it yourself in this reply; \
     (2) if only the person can give what's needed (a choice they asked to make, a sign-in, money, sending something), \
     ask them with the question tool; (3) if the whole request is finished and you checked it, end with a last line \
-    `Done: <what you checked>`. A summary that hands nothing on, asks nothing and isn't done leaves the work \
+    `Done: <what you checked>`; (4) if a step failed and nothing you or a teammate can do gets past it, end with a last \
+    line `Blocked: <what is blocked>. <what would unblock it>`, and kwnt asks the person. A summary that hands nothing on, asks nothing and isn't done leaves the work \
     stopped, so kwnt asks you to go on.",
     streak = super::routes::FAILURE_STREAK_LEN,
     ceiling = super::routes::MAX_DELEGATIONS_PER_REQUEST,
