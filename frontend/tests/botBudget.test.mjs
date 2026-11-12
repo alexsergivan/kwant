@@ -358,3 +358,8 @@ test('wiring: bot settings, chat, sidebar, Inbox, Settings › Usage and live re
   assert.match(app, /onOpenBotBudget=\{raiseBudget\}/);
   assert.match(src('components/SettingsModal.tsx'), /<BudgetOverview open=\{isOpen\} onOpenBot=\{onOpenBotBudget\} \/>/);
 });
+
+test('Inbox: the all-clear line hides while a Needs you block sits above it', () => {
+  assert.match(src('components/InboxNew.tsx'), /\[\[data-needs-you\]~&\]:hidden[^>]*data-all-clear/);
+  for (const f of ['components/BotBudget.tsx', 'components/SpendStop.tsx', 'components/dev/PrepushThread.tsx']) assert.match(src(f), /data-needs-you>/, f);
+});

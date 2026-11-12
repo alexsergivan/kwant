@@ -149,7 +149,7 @@ export const PrepushNeedsYou: React.FC<{ cards: Card[]; names: Record<string, st
   const list = needsYou(cards);
   if (list.length === 0) return null;
   return (
-    <section aria-labelledby="needs-prepush-h" data-needs-prepush>
+    <section aria-labelledby="needs-prepush-h" data-needs-prepush data-needs-you>
       <h3 id="needs-prepush-h" className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
         <ArrowUpFromLine size={12} aria-hidden="true" />
         Needs you

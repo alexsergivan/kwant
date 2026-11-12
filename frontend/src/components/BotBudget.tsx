@@ -204,7 +204,7 @@ export const BudgetNeedsYou: React.FC<{ onRaise?: (kwantId: string) => void; sen
   const items = list ? budgetsNeedingYou(list.bots) : [];
   if (!items.length) return null;
   return (
-    <section aria-labelledby="needs-budget-h" data-needs-budget>
+    <section aria-labelledby="needs-budget-h" data-needs-budget data-needs-you>
       <h3 id="needs-budget-h" className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
         <Gauge size={12} aria-hidden="true" />
         Needs you
@@ -229,9 +229,9 @@ export const BudgetNeedsYou: React.FC<{ onRaise?: (kwantId: string) => void; sen
                         : `${b.kwant_name} has used ${meterPercent(b)}% of its monthly budget.`}
                     </span>
                   </p>
-                  <div className="mt-1.5 pl-[23px] flex items-center gap-2">
+                  <div className="mt-1.5 pl-[23px] flex flex-wrap items-center gap-x-2 gap-y-1">
                     <BudgetMeter budget={b} className="max-w-[160px]" />
-                    <span className="min-w-0 truncate text-[11px] text-amber-200/60 font-mono">{usedLine(b)}</span>
+                    <span className="min-w-0 break-words text-[11px] text-amber-200/60 font-mono">{usedLine(b)}</span>
                   </div>
                 </div>
                 {paused ? (
@@ -482,9 +482,9 @@ export const BudgetOverview: React.FC<{ open: boolean; onOpenBot?: (kwantId: str
     <div className="space-y-2" role="group" aria-labelledby="budget-overview-h" data-budget-overview>
       <div>
         <p id="budget-overview-h" className="text-[11px] font-semibold text-zinc-200">
-          Monthly budgets in this space
+          Monthly budget per bot
         </p>
-        <p className="text-[11px] text-zinc-500">Each bot’s use this month. Set a bot’s budget in its settings, under Usage.</p>
+        <p className="text-[11px] text-zinc-500">The bots in the space you’re in, and their use this month. Set a bot’s budget in its settings, under Usage.</p>
       </div>
       {error && !list ? (
         <p role="alert" className="flex items-center gap-2 text-[11px] text-rose-300">
@@ -509,9 +509,9 @@ export const BudgetOverview: React.FC<{ open: boolean; onOpenBot?: (kwantId: str
                 <li key={b.kwant_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2" data-budget-row={b.state}>
                   <span className="min-w-0 flex-1 basis-32 truncate text-[11px] font-medium text-zinc-200">{b.kwant_name || 'Unnamed bot'}</span>
                   <span className={`shrink-0 rounded-full border px-1.5 py-px text-[10px] ${chip.tone}`}>{chip.text}</span>
-                  <span className="basis-full sm:basis-auto sm:w-56 flex items-center gap-2 min-w-0">
+                  <span className="basis-full sm:basis-auto sm:w-80 flex items-center gap-2 min-w-0">
                     {hasBudget(b) && <BudgetMeter budget={b} className="max-w-[72px]" />}
-                    <span className="min-w-0 truncate font-mono text-[11px] tabular-nums text-zinc-400" title={usedLine(b)}>
+                    <span className="min-w-0 break-words font-mono text-[11px] tabular-nums text-zinc-400">
                       {usedLine(b)}
                     </span>
                   </span>
