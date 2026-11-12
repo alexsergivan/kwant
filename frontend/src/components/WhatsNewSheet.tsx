@@ -15,7 +15,6 @@ import {
   highlightView,
   markSeen,
   openRequest,
-  openWhatsNew,
   otherDialogOpen,
   releaseUrl,
   seenVersion,
