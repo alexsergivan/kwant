@@ -82,6 +82,8 @@ async fn setup() -> Env {
     fake_cli();
     let tmp = tempfile::tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
+    // These chains predate keep-going turns; a stalled lead isn't nudged here.
+    db.set_setting("keep_going_turns", "0").await.unwrap();
     let config = Config {
         data_dir: tmp.path().to_path_buf(),
         laya_url: "http://127.0.0.1:9".into(),

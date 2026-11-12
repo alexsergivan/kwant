@@ -167,6 +167,25 @@ impl Database {
         Ok(res.rows_affected())
     }
 
+    /// A bot's plain "waiting on a reply" entries in one chat (no question card) end: the ask
+    /// became a card, which has its own entry.
+    pub async fn close_plain_waiting(
+        &self,
+        kwant_id: &str,
+        channel_id: Option<&str>,
+        direct_kwant_id: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> Result<u64, DbError> {
+        let res = sqlx::query(&format!("UPDATE waiting_on_person SET status = 'closed' WHERE question_id IS NULL AND status != 'closed' AND {SAME_CHAT}"))
+            .bind(kwant_id)
+            .bind(channel_id.unwrap_or(""))
+            .bind(direct_kwant_id.unwrap_or(""))
+            .bind(thread_id.unwrap_or(""))
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
+
     /// The entries whose reminder is due by `now`, each claimed (`open` → `reminded`) so it goes
     /// out once, whoever else is looking.
     pub async fn take_due_waiting(&self, now: DateTime<Utc>) -> Result<Vec<WaitingItem>, DbError> {

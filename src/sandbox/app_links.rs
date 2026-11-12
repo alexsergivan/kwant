@@ -6,9 +6,15 @@
 //! it. It closes only on a cross-site navigation, so even a reload leaves the page dead.
 //!
 //! kwnt keeps it from opening in the first place: [`GUARD_JS`] runs in an isolated world of every
-//! document and cancels a navigation to such a link before it reaches Chrome. What it can't
-//! cancel (a frame whose first address is the link) is caught by [`AppLinkWatch`], which tells
-//! the live view to step the tab off the page and back, the one thing that closes the prompt.
+//! document and cancels a navigation to such a link before it reaches Chrome. A frame leaving its
+//! first, empty document fires no `navigate` event, so the guard can't see that one: TikTok's
+//! sign-in fires `bytedance://dispatch_message/` that way, from a hidden iframe it removes after
+//! 300 ms, again on every new QR code. For frames the guard also gives every document a content
+//! security policy that only lets frames load web pages ([`FRAME_POLICY`]): Chrome blocks such a
+//! frame itself, before it would ask, and says so in its log ([`blocked_frame`]).
+//! Anything that still gets past both is caught by [`AppLinkWatch`], which tells the live view
+//! to step the tab off the page and back, the one thing that closes the prompt, once per app in
+//! [`WINDOW`]: a page that opens the same app again on every load isn't reloaded in a loop.
 //! A link that fired while no live view was open is found when one opens: [`PROBE_ARM_JS`] and
 //! [`PROBE_READ_JS`] check that the page still gets a mouse move, and a tab that doesn't is
 //! stepped off and back the same way.
@@ -31,7 +37,15 @@ const NO_PROMPT: &[&str] = &["mailto", "news", "snews"];
 /// Chrome's console line when it refuses a link outright (no user gesture) instead of asking.
 pub const REFUSED_LOG: &str = "Not allowed to launch";
 
-/// Cancels navigations to another app in this document. Runs in [`WORLD`], once per world.
+/// The content security policy every document gets: frames may load web pages (`*` is any
+/// http(s) address or one of the page's own scheme) and what a tab opens itself, never another
+/// app. Policies only add up, so a page's own policy still holds as it was.
+pub const FRAME_POLICY: &str = "frame-src * data: blob: about: filesystem: chrome-extension:";
+
+/// Cancels navigations to another app in this document, and sets [`FRAME_POLICY`] so a frame
+/// can't load one either. Runs in [`WORLD`], once per world, before the page's own scripts.
+/// The policy goes in as a `<meta>` at the top of `<head>` (as soon as there is one) and the
+/// element is taken out again at once: the policy stays, and the page never sees the tag.
 pub const GUARD_JS: &str = r#"(() => {
   if (self.__kwntAppLinks || !self.navigation) return;
   self.__kwntAppLinks = true;
@@ -43,13 +57,36 @@ pub const GUARD_JS: &str = r#"(() => {
     event.preventDefault();
     try { self.__BINDING__(scheme); } catch (e) {}
   });
+  // a frame leaving its first, empty document fires no navigate event: Chrome blocks that one
+  const policy = () => {
+    const head = document.head;
+    if (!head) return false;
+    const meta = document.createElement('meta');
+    meta.httpEquiv = 'Content-Security-Policy';
+    meta.content = __FRAME_POLICY__;
+    head.prepend(meta);
+    meta.remove();
+    return true;
+  };
+  if (!policy()) {
+    const watch = new MutationObserver(() => { if (policy()) watch.disconnect(); });
+    watch.observe(document, { childList: true, subtree: true });
+  }
 })()"#;
 
-/// [`GUARD_JS`] with its scheme list and binding filled in.
+/// [`GUARD_JS`] with its scheme list, binding and policy filled in.
 pub fn guard_js() -> String {
     GUARD_JS
         .replace("__IN_BROWSER__", &serde_json::to_string(IN_BROWSER).unwrap_or_default())
         .replace("__BINDING__", BINDING)
+        .replace("__FRAME_POLICY__", &serde_json::to_string(FRAME_POLICY).unwrap_or_default())
+}
+
+/// Whether Chrome logged `text` because [`FRAME_POLICY`] blocked a frame from opening another
+/// app: "Framing '' violates the following Content Security Policy directive: "frame-src *"…".
+/// Chrome didn't ask, so the page still takes input.
+pub fn blocked_frame(text: &str) -> bool {
+    text.starts_with("Framing '") && text.contains("Content Security Policy directive: \"frame-src")
 }
 
 /// The scheme of `url` when it opens another app, lowercased. A link the tab opens itself, or
@@ -110,8 +147,8 @@ pub fn shown_scheme(raw: &str) -> Option<String> {
 
 /// How long after a link starts loading Chrome may still refuse it outright (no prompt).
 pub const SETTLE: Duration = Duration::from_millis(400);
-/// At most this many recoveries in [`WINDOW`]: a page that opens its app again on every load
-/// would otherwise be stepped off and back forever.
+/// At most this many recoveries in [`WINDOW`], and at most one per app: a page that opens its
+/// app again on every load would otherwise be stepped off and back forever.
 pub const MAX_RECOVERIES: usize = 3;
 pub const WINDOW: Duration = Duration::from_secs(60);
 /// The person is told about a stopped link at most this often.
@@ -123,7 +160,8 @@ pub const NOTICE_GAP: Duration = Duration::from_secs(5);
 pub enum Verdict {
     /// Chrome is asking: step the tab off the page and back, then tell the person.
     Recover(Option<String>),
-    /// Chrome is asking again too often: leave the page as it is and tell the person why.
+    /// Chrome is asking again too often, or again for an app it was just recovered from: leave
+    /// the page as it is and tell the person why.
     GiveUp(Option<String>),
 }
 
@@ -169,7 +207,8 @@ pub const PROBE_READ_JS: &str = r#"(() => {
 #[derive(Debug, Default)]
 pub struct AppLinkWatch {
     pending: Option<(String, Instant)>,
-    recoveries: VecDeque<Instant>,
+    /// When each recovery in the last [`WINDOW`] ran, and for which app (`None`: a tab found stuck).
+    recoveries: VecDeque<(Instant, Option<String>)>,
     noticed: Option<Instant>,
 }
 
@@ -180,9 +219,10 @@ impl AppLinkWatch {
         if let Some(scheme) = prompting_scheme(url) { self.pending = Some((scheme, now + SETTLE)); }
     }
 
-    /// Chrome logged `text`. A refusal means it didn't ask, so the page still takes input.
+    /// Chrome logged `text`. A refusal, or a frame [`FRAME_POLICY`] blocked, means it didn't
+    /// ask, so the page still takes input.
     pub fn logged(&mut self, text: &str) {
-        if text.starts_with(REFUSED_LOG) { self.pending = None; }
+        if text.starts_with(REFUSED_LOG) || blocked_frame(text) { self.pending = None; }
     }
 
     /// When [`Self::due`] has something to say.
@@ -205,9 +245,11 @@ impl AppLinkWatch {
     }
 
     fn verdict(&mut self, scheme: Option<String>, now: Instant) -> Verdict {
-        while self.recoveries.front().is_some_and(|t| now.duration_since(*t) >= WINDOW) { self.recoveries.pop_front(); }
-        if self.recoveries.len() >= MAX_RECOVERIES { return Verdict::GiveUp(scheme); }
-        self.recoveries.push_back(now);
+        while self.recoveries.front().is_some_and(|(t, _)| now.duration_since(*t) >= WINDOW) { self.recoveries.pop_front(); }
+        // the page loads again on a recovery and opens the same app again: one reload is enough
+        let again = scheme.is_some() && self.recoveries.iter().any(|(_, s)| *s == scheme);
+        if again || self.recoveries.len() >= MAX_RECOVERIES { return Verdict::GiveUp(scheme); }
+        self.recoveries.push_back((now, scheme.clone()));
         Verdict::Recover(scheme)
     }
 
@@ -291,19 +333,70 @@ mod tests {
     fn a_prompt_is_recovered_after_it_settles_a_few_times_a_minute_at_most() {
         let mut watch = AppLinkWatch::default();
         let t = Instant::now();
-        for i in 0..MAX_RECOVERIES as u64 {
-            let at = t + Duration::from_secs(i);
-            watch.started("snssdk1233://login", at);
-            watch.started("tiktok://second-in-the-same-burst", at);
+        let apps = ["snssdk1233", "tiktok", "zoommtg"];
+        for (i, app) in apps.iter().enumerate() {
+            let at = t + Duration::from_secs(i as u64);
+            watch.started(&format!("{app}://login"), at);
+            watch.started("intent://second-in-the-same-burst", at);
             assert_eq!(watch.due(at + SETTLE / 2), None, "Chrome may still refuse it");
-            assert_eq!(watch.due(at + SETTLE), Some(Verdict::Recover(Some("snssdk1233".into()))));
+            assert_eq!(watch.due(at + SETTLE), Some(Verdict::Recover(Some(app.to_string()))));
             assert_eq!(watch.due(at + SETTLE), None, "once per link");
         }
-        watch.started("snssdk1233://login", t + Duration::from_secs(10));
-        assert_eq!(watch.due(t + Duration::from_secs(11)), Some(Verdict::GiveUp(Some("snssdk1233".into()))));
+        assert_eq!(apps.len(), MAX_RECOVERIES);
+        watch.started("itms-apps://x", t + Duration::from_secs(10));
+        assert_eq!(watch.due(t + Duration::from_secs(11)), Some(Verdict::GiveUp(Some("itms-apps".into()))));
         // a minute after the first, one may run again
         watch.started("snssdk1233://login", t + WINDOW);
         assert_eq!(watch.due(t + WINDOW + SETTLE), Some(Verdict::Recover(Some("snssdk1233".into()))));
+    }
+
+    #[test]
+    fn a_page_that_opens_the_same_app_on_every_load_is_reloaded_once() {
+        // TikTok's sign-in fires bytedance: on every new QR code, and a reload makes a new one
+        let mut watch = AppLinkWatch::default();
+        let t = Instant::now();
+        let link = "bytedance://dispatch_message/";
+        watch.started(link, t);
+        assert_eq!(watch.due(t + SETTLE), Some(Verdict::Recover(Some("bytedance".into()))));
+        for secs in [2, 5, 30, 59] {
+            let at = t + Duration::from_secs(secs);
+            watch.started(link, at);
+            assert_eq!(watch.due(at + SETTLE), Some(Verdict::GiveUp(Some("bytedance".into()))), "{secs}s: not reloaded again");
+        }
+        // another app may still be recovered, and the same one once the window has passed
+        watch.started("snssdk1233://login", t + Duration::from_secs(3));
+        assert_eq!(watch.due(t + Duration::from_secs(4)), Some(Verdict::Recover(Some("snssdk1233".into()))));
+        watch.started(link, t + WINDOW);
+        assert_eq!(watch.due(t + WINDOW + SETTLE), Some(Verdict::Recover(Some("bytedance".into()))));
+    }
+
+    #[test]
+    fn a_frame_the_policy_blocked_needs_no_recovery() {
+        // Chrome 154's line when FRAME_POLICY blocks TikTok's hidden bytedance: frame
+        let blocked = "Framing '' violates the following Content Security Policy directive: \"frame-src * data: blob: about: filesystem: chrome-extension:\". \
+                       The request has been blocked. Note that '*' matches only URLs with network schemes ('http', 'https', 'ws', 'wss'), or URLs whose scheme matches `self`'s scheme.";
+        assert!(blocked_frame(blocked));
+        for other in ["Framing 'https://a/' violates the following Content Security Policy directive: \"default-src 'self'\".",
+            "Refused to load the script 'x' because it violates the following Content Security Policy directive: \"frame-src *\"", "Not allowed to launch 'x:'", ""] {
+            assert!(!blocked_frame(other), "{other}");
+        }
+        let mut watch = AppLinkWatch::default();
+        let t = Instant::now();
+        watch.started("bytedance://dispatch_message/", t);
+        watch.logged(blocked);
+        assert_eq!(watch.deadline(), None);
+        assert_eq!(watch.due(t + SETTLE), None);
+    }
+
+    #[test]
+    fn the_guard_keeps_frames_to_web_pages_only() {
+        let js = guard_js();
+        assert!(js.contains(&format!("meta.content = {};", serde_json::to_string(FRAME_POLICY).unwrap())), "{js}");
+        assert!(js.contains("'Content-Security-Policy'") && js.contains("meta.remove()") && js.contains("MutationObserver"));
+        // the policy names no app scheme and every frame scheme the tab opens itself
+        assert!(FRAME_POLICY.starts_with("frame-src * "));
+        for scheme in ["data:", "blob:", "about:", "filesystem:", "chrome-extension:"] { assert!(FRAME_POLICY.contains(scheme), "{scheme}"); }
+        assert!(!js.contains("__FRAME_POLICY__"));
     }
 
     #[test]
@@ -312,7 +405,7 @@ mod tests {
         let t = Instant::now();
         assert_eq!(watch.stuck(t), Verdict::Recover(None));
         for i in 1..MAX_RECOVERIES as u64 {
-            watch.started("snssdk1233://login", t + Duration::from_secs(i));
+            watch.started(&format!("app{i}://login"), t + Duration::from_secs(i));
             assert!(matches!(watch.due(t + Duration::from_secs(i) + SETTLE), Some(Verdict::Recover(_))));
         }
         assert_eq!(watch.stuck(t + Duration::from_secs(10)), Verdict::GiveUp(None));

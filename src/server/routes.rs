@@ -940,14 +940,15 @@ fn team_context(t: &Team) -> crate::drivers::TeamContext {
 
 /// Max follow-up turns kwants may trigger by @mentioning each other for one user message.
 const MAX_HANDOFFS: usize = 4;
-/// Delegations a lead's @mentions may start for one user message, follow-up rounds included:
-/// a lead resumed with results can hand on again, but never in an endless loop.
-pub const MAX_DELEGATIONS_PER_REQUEST: usize = 16;
-/// How often one teammate may be handed work by @mention for one user message, so two bots
-/// naming each other stop after a few rounds instead of running to the total cap. A mention past
-/// either cap leaves a Continue notice ([`super::budget::CAPPED_KIND`]); the chain token budget
-/// still pauses a long chain on its own.
-pub const MAX_MENTION_DELEGATIONS_PER_BOT: usize = 4;
+/// The hard ceiling on delegations a lead's @mentions may start for one user message, follow-up
+/// rounds included. It's the only hand-off count that waits for the person: a mention past it
+/// leaves a Continue notice ([`super::budget::CAPPED_KIND`]). Below it, loops end on machine
+/// guards that skip with a reason ([`REPEATED_TASK`], [`FAILURE_STREAK`], [`RELAY_PING_PONG`]);
+/// the chain token budget still pauses a long chain on its own.
+pub const MAX_DELEGATIONS_PER_REQUEST: usize = 64;
+/// Failed delegations in a row, to one teammate in one request, after which a mention to it is
+/// skipped (the lead does it itself or gives it to someone else).
+pub const FAILURE_STREAK_LEN: usize = 3;
 
 #[allow(clippy::too_many_arguments)]
 fn execute_single_turn(
@@ -1363,6 +1364,10 @@ where
 /// A teammate's result @mentioned one already in this chain of relays.
 const RELAY_PING_PONG: &str = "it already worked on this chain of hand-offs, so a teammate's result can't hand it back. Ask the lead to send it";
 const IN_CODE_BLOCK: &str = "the mention was inside code. Write the name as plain text to ask them";
+/// The same task, normalised, already went to this teammate for this user message.
+pub const REPEATED_TASK: &str = "already asked {name} exactly this in this request";
+/// The teammate's last [`FAILURE_STREAK_LEN`] delegations for this user message all failed.
+pub const FAILURE_STREAK: &str = "{name} failed its last 3 tasks here: do it yourself or give it to someone else";
 /// A follow-up that only credited a teammate who just reported ("As @SEO found, …").
 const CREDIT_ONLY: &str = "the mention only credited their result. To hand them more work, @mention them with the task";
 
@@ -1456,13 +1461,16 @@ pub(super) struct Relay<'a> {
 /// delegate tool), and when the last one ends the lead is resumed once with every result to give
 /// the user one answer; that follow-up may hand on again, also to `just_reported` teammates (whose
 /// results it is about): a mention there is a correction or the next step, unless it only credits
-/// them ([`crate::router::only_credited`]). One user message starts at most
-/// [`MAX_DELEGATIONS_PER_REQUEST`], at most [`MAX_MENTION_DELEGATIONS_PER_BOT`] to any one
-/// teammate, which is what ends a loop; mentions past a cap wait on a Continue notice
-/// ([`super::budget::pause_capped`]). Every other mention that hands nothing on is said in the
-/// channel. Teammates the lead already delegated to from this channel (with the tool) aren't sent
-/// it twice. `resumed`: the person pressed Continue on such a notice: only these teammates are
-/// handed the work, with a fresh allowance.
+/// them ([`crate::router::only_credited`]). Loops end on machine guards that skip with a reason
+/// and never wait for the person: the same normalised task to the same teammate twice in one
+/// request ([`REPEATED_TASK`]; an earlier one that failed doesn't count, so a failed task may be
+/// retried as-is until the failure-streak guard stops it), a teammate whose last [`FAILURE_STREAK_LEN`] tasks here failed
+/// ([`FAILURE_STREAK`]) and a relay back up its chain ([`RELAY_PING_PONG`]). Only past the hard
+/// ceiling [`MAX_DELEGATIONS_PER_REQUEST`] do mentions wait on a Continue notice
+/// ([`super::budget::pause_capped`]). Every mention that hands nothing on is said in the channel.
+/// Teammates the lead already delegated to from this channel (with the tool) aren't sent it twice.
+/// `resumed`: the person pressed Continue on such a notice: only these teammates are handed the
+/// work, with a fresh allowance.
 pub(super) async fn delegate_mentions(
     scope: &TurnScope,
     lead: &Kwant,
@@ -1491,7 +1499,7 @@ pub(super) async fn delegate_mentions(
     let mine: Vec<_> = scope
         .state
         .db
-        .list_delegations(Some(&lead.id), None, 50)
+        .list_delegations(Some(&lead.id), None, 4 * MAX_DELEGATIONS_PER_REQUEST as i64)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -1499,17 +1507,17 @@ pub(super) async fn delegate_mentions(
         .collect();
     let open: Vec<&str> = mine.iter().filter(|d| d.is_open()).map(|d| d.specialist_kwant_id.as_str()).collect();
     // Delegations this user message already started, counting earlier follow-up rounds
-    let messages = scope.state.db.list_messages(&cid, 100).await.unwrap_or_default();
-    let since = messages.iter().rev().find(|m| m.sender_role == "user").or(messages.first()).and_then(|m| m.created_at);
-    let this_request: Vec<_> = match resumed {
+    let messages = scope.state.db.list_messages(&cid, 400).await.unwrap_or_default();
+    let since = request_start(&messages);
+    let mut this_request: Vec<_> = match resumed {
         Some(_) => Vec::new(),
         None => mine.iter().filter(|d| d.continue_lead && since.is_some_and(|t| d.created_at >= t)).collect(),
     };
+    this_request.sort_by_key(|d| d.created_at);
     let mut room = MAX_DELEGATIONS_PER_REQUEST.saturating_sub(this_request.len());
-    let asked = |id: &str| this_request.iter().filter(|d| d.specialist_kwant_id == id).count();
 
     let mut targets: Vec<&Kwant> = Vec::new();
-    // Past a cap: they wait on a Continue notice instead of a dead end
+    // Past the ceiling: they wait on a Continue notice instead of a dead end
     let mut capped: Vec<&Kwant> = Vec::new();
     for &i in &found.targets {
         let k = &scope.teammates[i];
@@ -1528,8 +1536,8 @@ pub(super) async fn delegate_mentions(
             skipped.push((k.name.clone(), CREDIT_ONLY.to_string()));
         } else if open.contains(&k.id.as_str()) {
             skipped.push((k.name.clone(), "still working on an earlier task from this chat".to_string()));
-        } else if asked(&k.id) >= MAX_MENTION_DELEGATIONS_PER_BOT {
-            capped.push(k);
+        } else if failure_streak(this_request.iter().copied(), &k.id) {
+            skipped.push((k.name.clone(), FAILURE_STREAK.replace("{name}", &k.name)));
         } else {
             targets.push(k);
         }
@@ -1592,24 +1600,29 @@ pub(super) async fn delegate_mentions(
             units.push((specialist, None));
             continue;
         }
-        let mut left = MAX_MENTION_DELEGATIONS_PER_BOT.saturating_sub(asked(&specialist.id));
         for line in lines {
-            // Continue sends only the lines that weren't sent before the cap
+            // Continue sends only the lines that weren't sent before the ceiling
             let sent = |d: &crate::db::threads::Delegation| d.specialist_kwant_id == specialist.id && d.task.starts_with(&line_task(&line));
             if resumed.is_some() && mine.iter().any(sent) {
                 continue;
             }
-            if left == 0 {
-                if !capped.iter().any(|c| c.id == specialist.id) {
-                    capped.push(specialist);
-                }
-                break;
-            }
-            left -= 1;
             units.push((specialist, Some(line)));
         }
     }
+    // (teammate, normalised task) handed out this round, so a line said twice goes once
+    let mut asked_now: Vec<(String, String)> = Vec::new();
     for (specialist, line) in units {
+        let unit_task = line.as_deref().map_or_else(|| task.clone(), line_task);
+        let key = repeat_key(&unit_task, &specialist.name);
+        let repeated = asked_now.iter().any(|(id, k)| id == &specialist.id && *k == key)
+            || this_request.iter().any(|d| {
+                // A failed one may be retried as-is; the failure-streak guard stops that loop
+                d.specialist_kwant_id == specialist.id && d.status != "failed" && repeat_key(&d.task, &specialist.name) == key
+            });
+        if repeated {
+            skipped.push((specialist.name.clone(), REPEATED_TASK.replace("{name}", &specialist.name)));
+            continue;
+        }
         if room == 0 {
             if !capped.iter().any(|c| c.id == specialist.id) {
                 capped.push(specialist);
@@ -1635,7 +1648,7 @@ pub(super) async fn delegate_mentions(
         let req = super::delegation::StartRequest {
             lead: lead.clone(),
             specialist: specialist.clone(),
-            task: line.as_deref().map_or_else(|| task.clone(), line_task),
+            task: unit_task,
             title: Some(match &line {
                 Some(l) => handoff_title(l, &specialist.name).unwrap_or_else(|| first_line(l)),
                 None => handoff_title(text, &specialist.name).unwrap_or_else(|| title_for(specialist)),
@@ -1651,6 +1664,7 @@ pub(super) async fn delegate_mentions(
         match super::delegation::create(&scope.state, req).await {
             Ok(c) => {
                 started.insert(specialist.id.clone(), c.delegation.id.clone());
+                asked_now.push((specialist.id.clone(), key));
                 sent += 1;
                 room -= 1;
                 created.push(c);
@@ -1669,6 +1683,56 @@ pub(super) async fn delegate_mentions(
     }
 }
 
+/// When the current request's hand-offs are counted from: the later of the person's last message
+/// and the last capped-hand-off notice they carried on, so a Continue starts a fresh allowance even
+/// when no "continue" message follows it. Falls back to the oldest message in view.
+fn request_start(messages: &[crate::db::models::Message]) -> Option<chrono::DateTime<chrono::Utc>> {
+    let user = messages.iter().rev().find(|m| m.sender_role == "user").and_then(|m| m.created_at);
+    let resumed = messages
+        .iter()
+        .rev()
+        .find(|m| {
+            m.meta
+                .as_deref()
+                .and_then(|x| serde_json::from_str::<serde_json::Value>(x).ok())
+                .is_some_and(|meta| meta["kind"] == super::budget::CAPPED_KIND && meta["resumed"] == true)
+        })
+        .and_then(|m| m.created_at);
+    user.max(resumed).or_else(|| messages.first().and_then(|m| m.created_at))
+}
+
+/// What a hand-off asks of `name`, normalised (trimmed, lowercased, whitespace collapsed), for the
+/// exact-repeat guard: the line it was given when it was sent one line of several, else the lines
+/// that @mention it in what the lead (or a relaying teammate) said, after the last "mentioned you".
+/// Not the quoted request before it: a follow-up with no person message quotes the previous task
+/// there, so it grows each round. The same lead line asked twice matches; a reworded one doesn't.
+/// Earlier hand-offs that ended `failed` are not compared, so an identical retry goes out.
+pub fn repeat_key(task: &str, name: &str) -> String {
+    const LINE: &str = "\n\nYour task is this line of ";
+    let asked = match task.rfind(LINE).and_then(|at| task[at..].split_once("only:\n")) {
+        Some((_, rest)) => rest.lines().next().unwrap_or_default().to_string(),
+        None => {
+            let said = task.rfind(" mentioned you").map_or(task, |at| &task[at..]);
+            let lines: Vec<&str> = said.lines().filter(|l| mentions(l, name)).collect();
+            if lines.is_empty() { task.to_string() } else { lines.join("\n") }
+        }
+    };
+    asked.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Whether `line` @mentions `name` (case-insensitive, whole name).
+fn mentions(line: &str, name: &str) -> bool {
+    let (line, at) = (line.to_lowercase(), format!("@{}", name.to_lowercase()));
+    line.match_indices(&at).any(|(i, _)| !line[i + at.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+}
+
+/// Whether the teammate's last [`FAILURE_STREAK_LEN`] delegations of this request (oldest first)
+/// all failed. Cancelled or completed ones break the streak.
+fn failure_streak<'a>(this_request: impl DoubleEndedIterator<Item = &'a crate::db::threads::Delegation>, id: &str) -> bool {
+    let last: Vec<_> = this_request.rev().filter(|d| d.specialist_kwant_id == id).take(FAILURE_STREAK_LEN).collect();
+    last.len() == FAILURE_STREAK_LEN && last.iter().all(|d| d.status == "failed")
+}
+
 /// A hand-off's title from what the lead asked `name` for: the first sentence of the line that
 /// @mentions them, without the mention. Two hand-offs from one message then read differently on
 /// the board (Oleks, 2026-10-29: four cards all named after his message). `None` when the line
@@ -1685,12 +1749,17 @@ pub fn handoff_title(text: &str, name: &str) -> Option<String> {
         return None;
     }
     let rest = &line[lower.find(&mention)? + mention.len()..];
-    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | '-' | '–' | '—' | '*' | '_' | '.'));
+    // A '`' right after the name closes the inline code it was mentioned in ("`@QA` please …")
+    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | '-' | '–' | '—' | '*' | '_' | '.' | '`'));
     let end = rest
         .char_indices()
         .find(|&(i, c)| matches!(c, '.' | '!' | '?') && rest[i + c.len_utf8()..].starts_with(char::is_whitespace))
         .map(|(i, c)| i + c.len_utf8());
-    let sentence = rest[..end.unwrap_or(rest.len())].trim().trim_end_matches(['*', '_']).trim();
+    let mut sentence = rest[..end.unwrap_or(rest.len())].trim().trim_end_matches(['*', '_']).trim();
+    if sentence.matches('`').count() % 2 == 1 {
+        // An unpaired '`' closes inline code the mention opened ("`@QA run it`")
+        sentence = sentence.trim_end_matches('`').trim();
+    }
     if sentence.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
         return None;
     }
@@ -6410,6 +6479,14 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_mention_in_inline_code_leaves_no_stray_backtick_in_the_title() {
+        use super::handoff_title;
+        assert_eq!(handoff_title("`@QA` please revise your part.", "QA").as_deref(), Some("Please revise your part."));
+        assert_eq!(handoff_title("`@QA run the smoke tests`", "QA").as_deref(), Some("Run the smoke tests"));
+        assert_eq!(handoff_title("@QA run `cargo test` on staging.", "QA").as_deref(), Some("Run `cargo test` on staging."));
+    }
+
     use super::{
         is_persons, is_reply_by, person_words, scrub_urls, turn_failed_text, turn_plan, with_failure_meta, Carried, TurnOpts,
     };

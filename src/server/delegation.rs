@@ -14,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -980,10 +980,9 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
         // the rest now, and that task comes back with its own batch once it ran
         .filter(|s| s.continue_lead && s.origin_context() == d.origin_context() && !is_parked(s))
         .collect();
-    if siblings.iter().any(Delegation::is_open) {
-        return None;
-    }
-    let end = |s: &Delegation| s.ended_at.unwrap_or(s.created_at);
+    // One still running hasn't ended yet: its run reaches to now, so it overlaps everything
+    // after its start
+    let end = |s: &Delegation| if s.is_open() { DateTime::<Utc>::MAX_UTC } else { s.ended_at.unwrap_or(s.created_at) };
     // Grow from `d` to every delegation whose run overlaps the batch's span, to the results
     // that relayed work to a batch member or were relayed from one (they ran one after the other),
     // and to the hand-offs the same lead turn started (one may have ended before the next began)
@@ -1010,6 +1009,14 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
             hi = hi.max(end(&s));
             batch.push(s);
         }
+    }
+    // Wait for a member still running: the last one to end reports them all. A task the lead
+    // started after this batch ended isn't part of it and doesn't hold its report back: it
+    // used to, and when it began between this one's end and this check (the next hand-off
+    // starting while this result was still being posted), this result was never reported
+    // because that task's own batch doesn't reach back to it
+    if batch.iter().any(Delegation::is_open) {
+        return None;
     }
     // A batch the person stopped entirely stays stopped; anything else (a result, a failure, a
     // restart cutting it short) is the lead's to report
@@ -1051,7 +1058,9 @@ async fn result_of(state: &AppState, d: &Delegation) -> String {
 }
 
 /// Gives the lead one turn in the origin chat with every result of the batch, so it checks them
-/// and gives the user one answer. Tasks that didn't complete say what the lead should do about it.
+/// and keeps the person's request moving: it hands the next step on, asks the person, or ends with
+/// `Done: …` (see [`super::keep_going`], which steps in when it does none of these). Tasks that
+/// didn't complete say what the lead should do about it.
 async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], opening: Option<String>) {
     let Ok(Some(lead)) = state.db.get_kwant(&d.lead_kwant_id).await else {
         return;
@@ -1116,8 +1125,10 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     let prompt = format!(
         "{opening} The results are in the chat above, quoted here:\n\n{results}\
         Check each result against what the user asked. If something is missing or wrong, hand that teammate a concrete \
-        correction by @mention (below). Otherwise continue with the user's request and give them one answer \
-        that uses the results. If a task failed, was stopped or was cut short, say so plainly. Don't repeat the results in full.\n\n\
+        correction by @mention (below). If a task failed, was stopped or was cut short, say so plainly. Don't repeat the \
+        results in full. Then take the user's request to its next step: a draft or step on the way needs no approval \
+        unless the person asked to approve it, so show it, say what comes next and go on (they can say stop if they want \
+        changes).\n\n\
         {rules}",
         rules = handoff_rules(),
     );
@@ -1129,6 +1140,8 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     let beside_running = lead_turn_runs(state, batch.iter().chain([d]));
     let mut opts = TurnOpts::default();
     opts.beside_running = beside_running;
+    let context = d.origin_context().unwrap_or(&lead.id).to_string();
+    let before = super::keep_going::snapshot(state, &context, &lead).await;
     let outcome = try_kwant_turn(&scope, &lead, prompt, opts).await;
     // The cards of the batch are reviewed in a turn of their own that sees only each brief and
     // result (fresh eyes), then the ones still waiting get one reminder (a failed turn counts too)
@@ -1147,9 +1160,12 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
             .find(|m| m.sender_role == "user")
             .map(|m| m.text)
             .unwrap_or_else(|| d.task.clone());
-        super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply)], &user_prompt).await;
+        super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply.clone())], &user_prompt).await;
         // The chain may be over now: several open questions for the person become one list
         super::asks::consolidate(&scope).await;
+        // Nothing handed on, asked or marked done: the lead goes on (after the review above, so
+        // a review line isn't where the chat stops)
+        super::keep_going::after_lead_turn(&scope, &lead, before, reply).await;
     }
 }
 
@@ -1272,11 +1288,18 @@ pub fn handoff_rules() -> String {
     "How handing on works: to give a teammate a correction or the next step, @mention them in this reply with the \
     concrete task (\"@Writer, draft Pillar 1: …\"); kwnt sends it to them and resumes you with their result. That works for \
     a teammate who just reported, too. Only say you're handing off, asking or waiting for someone when you @mention them \
-    with a task in this reply; to merely refer to a teammate, write the name without @. Limits for this user message: each \
-    teammate gets at most {per_bot} tasks by mention and all teammates at most {total} in total. Past that the mention is \
-    not sent yet: a notice asks the person to press Continue, so tell them what's waiting instead of claiming a handoff.",
-    per_bot = super::routes::MAX_MENTION_DELEGATIONS_PER_BOT,
-    total = super::routes::MAX_DELEGATIONS_PER_REQUEST,
+    with a task in this reply; to merely refer to a teammate, write the name without @. Keep handing on as the work needs. \
+    kwnt skips a mention, and tells you why under your reply, when it repeats exactly a task that teammate already finished \
+    or was cancelled on for this user message (a failed task may be retried as it was), or when that teammate failed its last {streak} tasks in a row here: then do it yourself or give it \
+    to someone else. Only after {ceiling} hand-offs for one user message does the person press Continue; then tell them \
+    what's waiting instead of claiming a handoff.\n\n\
+    End every reply in one of three ways: (1) hand the next step on by @mention, or do it yourself in this reply; \
+    (2) if only the person can give what's needed (a choice they asked to make, a sign-in, money, sending something), \
+    ask them with the question tool; (3) if the whole request is finished and you checked it, end with a last line \
+    `Done: <what you checked>`. A summary that hands nothing on, asks nothing and isn't done leaves the work \
+    stopped, so kwnt asks you to go on.",
+    streak = super::routes::FAILURE_STREAK_LEN,
+    ceiling = super::routes::MAX_DELEGATIONS_PER_REQUEST,
     )
 }
 

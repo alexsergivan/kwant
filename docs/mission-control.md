@@ -811,25 +811,41 @@ hand-off of the batch ends. Lines inside a code fence don't count.
 Dedupe, and why: a teammate named on **one** line, or on lines that also name other teammates,
 still gets one hand-off with the whole message, as before, since kwant can't tell which part of a
 shared line is whose. The same line repeated word for word counts once (it's a repeat, not more
-work). Lines past the per-teammate cap (4) wait for Continue; on Continue, lines already sent are
-skipped, so no line is sent twice. The lead's open limit (`delegation::MAX_OPEN_PER_LEAD`, 5 unfinished)
+work). Lines past the hard ceiling (64 hand-offs for one message) wait for Continue; on Continue,
+lines already sent are skipped, so no line is sent twice. The lead's open limit (`delegation::MAX_OPEN_PER_LEAD`, 5 unfinished)
 still applies per hand-off: a line past it is refused with the usual `handoff_refused` note. A dependency wait
 ("after @X") on a teammate with several cards waits for the last of them started.
 
-### Capped hand-offs: the Continue notice
+### Hand-off guards, and the Continue notice
 
-One person message starts at most `routes::MAX_DELEGATIONS_PER_REQUEST` (16) hand-offs by mention,
-at most `routes::MAX_MENTION_DELEGATIONS_PER_BOT` (4) to one teammate. These caps are what stop
-loops by default; `chain_token_budget` adds a token limit only when the person sets one (§15). Mentions past a cap are not dropped: kwant saves one system message in the channel
-with meta
+A lead hands on by mention as often as the work needs; there is no per-teammate cap. Loops end on
+machine guards that skip the mention with a `handoff_refused` note ("Not sent to X: why") and
+never wait for the person:
+
+- **Exact repeat**: the same task, normalised (trimmed, lowercased, whitespace collapsed; the
+  lines that @mention the teammate, or its own line when it was sent one line of several), to the
+  same teammate for this message: "already asked X exactly this in this request". A reworded
+  retry goes out. Earlier hand-offs that ended `failed` don't count, so a failed task may be
+  retried word for word until the failure-streak guard stops it; completed and cancelled ones do
+  count (open ones are already skipped as "still working").
+- **Failure streak**: the teammate's last 3 hand-offs for this message all ended `failed`
+  (cancelled or completed break it): "X failed its last 3 tasks here: do it yourself or give it to
+  someone else". The person's next message resets it.
+- **Relay ping-pong**: a teammate's result can't hand work back up its own chain of relays.
+
+`chain_token_budget` adds a token limit only when the person sets one (§15). The one hand-off
+count that waits for the person is the hard ceiling `routes::MAX_DELEGATIONS_PER_REQUEST` (64
+hand-offs by mention for one person message, counted from the later of their last message and the
+last capped notice they carried on). Mentions past it are not dropped: kwant saves one system
+message in the channel with meta
 
 ```json
 {"kind": "handoff_capped", "lead": "<lead id>", "waiting": ["<name>"], "waiting_ids": ["<id>"],
- "sent": 16, "text": "<the lead's reply>", "user_prompt": "<the person's message>", "resumed": false}
+ "sent": 64, "text": "<the lead's reply>", "user_prompt": "<the person's message>", "resumed": false}
 ```
 
-and text "Paused after N hand-offs so it doesn't loop: A, B not sent yet. Press Continue or say
-"continue" to hand it on." It works like the `budget_paused` notice: `POST
+and text "Paused after 64 hand-offs for one message: A, B not sent yet. Press Continue or say
+"continue" to carry on." It works like the `budget_paused` notice: `POST
 /api/chains/:message_id/continue` (person only; 409 once continued, 410 if the lead is gone), or the
 person typing "continue" while it's the newest bot message. Continuing sets `resumed` true and hands
 only the waiting teammates the lead's reply, with a fresh allowance.

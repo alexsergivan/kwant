@@ -177,7 +177,7 @@ pub(super) async fn consolidate(scope: &TurnScope) {
 }
 
 /// Adds `key` to a message's meta, keeping the rest, and tells the clients.
-async fn set_meta_key(state: &AppState, m: &Message, key: &str, value: Value) {
+pub(super) async fn set_meta_key(state: &AppState, m: &Message, key: &str, value: Value) {
     let mut meta = match meta_of(m) {
         Value::Object(o) => Value::Object(o),
         _ => json!({}),

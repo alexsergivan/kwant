@@ -95,7 +95,9 @@ import {
   applyDelegation,
   applyTurnEvent,
   backgroundTurns,
+  delegationsToRefresh,
   hydrateTurns,
+  isStaleDelegationFetch,
   messageContextId,
   parseDelegationMeta,
   queuePosition,
@@ -300,6 +302,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const knownThreadsRef = useRef<Set<string>>(new Set());
   const threadsLoadingRef = useRef<Set<string>>(new Set());
   const delegationsFetchedRef = useRef<Set<string>>(new Set());
+  /** One counter for live hand-off updates (`live[id]`) and refetches, so an older fetch can't win. */
+  const delegationSeqRef = useRef<{ n: number; live: Record<string, number> }>({ n: 0, live: {} });
+  const noteLiveDelegation = (id: string) => {
+    delegationSeqRef.current.live[id] = ++delegationSeqRef.current.n;
+  };
   const selectedIdRef = useRef<string>(selectedId);
   selectedIdRef.current = selectedId;
   const isChannelRef = useRef<boolean>(isChannel);
@@ -1066,6 +1073,25 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   }, [messages]);
 
+  /** After a stream drop: refetch hand-offs still open here (and failed first fetches), whose cards may
+   *  have missed their running/finished event. A live update that lands first is kept. */
+  const refreshOpenDelegations = () => {
+    for (const id of delegationsToRefresh(delegationsRef.current, delegationsFetchedRef.current)) {
+      const sent = ++delegationSeqRef.current.n;
+      threadsApi.delegation(id).then(
+        (d) => {
+          if (isStaleDelegationFetch(delegationSeqRef.current.live, d.id, sent)) return;
+          setDelegations((prev) => ({ ...prev, [d.id]: d }));
+          setThreadsByKwant((prev) => {
+            const next = applyDelegation(prev[d.specialist_kwant_id], d);
+            return next === prev[d.specialist_kwant_id] ? prev : { ...prev, [d.specialist_kwant_id]: next };
+          });
+        },
+        () => undefined,
+      );
+    }
+  };
+
   // Connect to SSE stream
   useEffect(() => {
     const sse = new EventSource(eventsUrl(space.id));
@@ -1113,12 +1139,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       dropped = true;
     };
     // First connect and every reconnect: running turns from the server. After a drop, also
-    // whatever changed meanwhile in the open chat and the open bot's conversations.
+    // whatever changed meanwhile in the open chat, the open bot's conversations and open hand-offs.
     sse.onopen = () => {
       hydrateFromServer();
       if (dropped) {
         refreshContext(openCtxRef.current);
         if (!isChannelRef.current && selectedIdRef.current) loadThreads(selectedIdRef.current);
+        refreshOpenDelegations();
       }
       dropped = false;
     };
@@ -1180,6 +1207,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const dl: Delegation | undefined = event.data?.delegation;
             if (!dl?.id) break;
             knownThreadsRef.current.add(dl.thread_id);
+            noteLiveDelegation(dl.id);
             setDelegations((prev) => ({ ...prev, [dl.id]: dl }));
             const list = threadsByKwantRef.current[dl.specialist_kwant_id];
             if (list && !list.some((t) => t.id === dl.thread_id)) loadThreads(dl.specialist_kwant_id);
@@ -2273,6 +2301,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       if (d && (d.status === 'queued' || d.status === 'running')) {
         const next = await threadsApi.cancelDelegation(d.id);
+        noteLiveDelegation(next.id);
         setDelegations((prev) => ({ ...prev, [next.id]: next }));
       } else {
         await threadsApi.cancel(t.id);
@@ -2298,6 +2327,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const handleCancelDelegation = async (id: string): Promise<string | void> => {
     try {
       const next = await threadsApi.cancelDelegation(id);
+      noteLiveDelegation(next.id);
       setDelegations((prev) => ({ ...prev, [next.id]: next }));
     } catch (err) {
       return `Couldn't stop it: ${errText(err)}`;

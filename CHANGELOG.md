@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.1] - 2026-11-12
+
+kwant 0.9.1: bots hand work to each other without stopping to ask you, hand-off cards catch up after a lost connection, and TikTok's QR sign-in no longer freezes the bot's browser.
+
+### Fixed
+- **Hand-offs keep going without you.** A lead can @mention the same teammate as often as the work needs. The old limits of 4 hand-offs to one teammate and 16 for one message are gone, so a chain no longer pauses for **Continue** at the 5th mention. Loops stop on their own instead: the same task sent word for word to the same teammate again is skipped with "already asked X exactly this in this request", and a teammate whose last 3 tasks here failed is skipped with "X failed its last 3 tasks here: do it yourself or give it to someone else". The lead sees why and carries on; your next message resets it. A task that failed may be sent again as it was. Only 64 hand-offs for one message still pause with a **Continue** notice, and after you continue, the count starts again. (#520)
+- **Hand-off cards catch up after a lost connection.** When the app lost its live connection while a teammate worked, its card could stay on "Waiting for X" after the hand-off had finished. Now the app checks every open hand-off again when it reconnects, without a page reload. (#521)
+- **TikTok's QR sign-in no longer freezes the bot's browser.** TikTok's sign-in page keeps asking to open its own app (`bytedance:`) from a hidden frame. kwant reloaded the page each time, which made a new QR code and asked again, until it gave up and the live view stopped taking clicks. kwant now blocks frames that try to open another app before Chrome asks, so the page keeps working, and it reloads a page at most once per app a minute. Web, `srcdoc`, `data:` and `blob:` frames still load. (#522)
+
 ## [Mac 0.9.0] - 2026-11-11
 
 kwant 0.9.0: a second check and one place to review a bot's work, roll back even after you approved it, notes on diff lines and on the page a bot is looking at, a worktree for each bot task, and one order for what needs you.

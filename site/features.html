@@ -59,7 +59,7 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
-        <li><a href="#new-09">New in 0.9.0</a></li>
+        <li><a href="#new-09">New in 0.9.1</a></li>
         <li><a href="#new-08">New in 0.8.2</a></li>
         <li><a href="#new-077">New in 0.7.7</a></li>
         <li><a href="#new-076">New in 0.7.6</a></li>
@@ -95,10 +95,10 @@
   </div>
 </nav>
 
-<section id="new-09" class="fgroup" data-covers="0.9.0">
+<section id="new-09" class="fgroup" data-covers="0.9.0 0.9.1">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.9.0</p>
+      <p class="kicker">New in 0.9.0 and 0.9.1</p>
       <h2>Check a bot's work before it counts</h2>
       <p>A second checker on another model runs a task's checks again before you see it, and everything waiting on your review sits in one place in the Inbox. Roll work back even after you approved it, point at the part of a page you mean, leave notes on diff lines, and give each bot task its own worktree.</p>
     </div>
@@ -157,6 +157,7 @@
       <li id="stuck-quiet"><h3>See when a bot is stuck or quiet</h3><p>Stuck bots show the reason, and a turn with no step for 15 minutes sends one "is quiet" notification.</p></li>
       <li id="scope-warning"><h3>What must not change</h3><p>On a small task, a change to a must-not-change path shows an amber line in the task view instead of failing the check.</p></li>
       <li id="monthly-budget"><h3>A monthly budget for a bot</h3><p>Set a token or dollar limit per bot with the API. At 80% you get a note; at 100% it finishes its turn and starts nothing new.</p></li>
+      <li id="fixes-091" class="span3"><h3>Fixed in 0.9.1</h3><p>Bots hand work to each other as often as the work needs: there is no pause at 4 hand-offs to one teammate or 16 for one message. A task sent again word for word is skipped with the reason, and so is any task for a teammate whose last 3 tasks failed. You press Continue only after 64 hand-offs for one message. Hand-off cards catch up after a lost connection, and TikTok's QR sign-in no longer freezes the bot's browser.</p></li>
       <li id="fixes-090" class="span3"><h3>Smaller changes and fixes</h3><p>Review on the Mission board opens the item in the Inbox. While a bot has a question open for you, its other chats wait. Changing a bot's model starts its Flight School scorecard again. A retried send with the same message id arrives once.</p></li>
     </ul>
   </div>
@@ -1258,7 +1259,7 @@
 </footer>
 <script src="assets/js/site.js?v=6d3de1ef56" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-11","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-12","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
