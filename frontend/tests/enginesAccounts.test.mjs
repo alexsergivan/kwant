@@ -203,3 +203,11 @@ test('F11: the built-in login reads "Signed in on this computer" only when on an
   const offEngine = panel([engine('claude', { enabled: false, status: 'disabled', ready: false })], [signedIn]);
   assert.equal(summary(offEngine, 'claude'), 'Off · Turn on to use the sign-in on this computer');
 });
+
+test('R1 (design-check-r3): the built-in login title wraps instead of truncating; other names still truncate', () => {
+  const html = panel([engine('claude', { uses: { profile_id: 'prf_system_claude', label: 'This machine' } })], [{ ...machine, signed_in: true }, personal]);
+  const cls = (id) => html.match(new RegExp(`<span id="account-${id}-name" class="([^"]*)"`))[1];
+  assert.doesNotMatch(cls('prf_system_claude'), /truncate|max-w-/);
+  assert.match(cls('prf_system_claude'), /break-words/);
+  assert.match(cls('prf_personal'), /truncate max-w-\[12rem\]/);
+});

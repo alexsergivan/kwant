@@ -609,7 +609,7 @@ const AccountRow: React.FC<{
               </form>
             ) : (
               <span className="inline-flex items-center gap-1 min-w-0">
-                <span id={nameId} className={`text-xs font-semibold truncate max-w-[12rem] ${off ? 'text-zinc-400' : 'text-zinc-100'}`}>
+                <span id={nameId} className={`text-xs font-semibold ${isSystem ? 'break-words' : 'truncate max-w-[12rem]'} ${off ? 'text-zinc-400' : 'text-zinc-100'}`}>
                   {isSystem ? systemTitle(p, status) : p.name}
                 </span>
                 {!isSystem && (
