@@ -181,7 +181,9 @@ def run_task(k, chat, bots, prompt, timeout, deny_shell=False):
     """Sends `prompt` and waits until no bot of the task has a turn running or queued for SETTLE
     seconds, a question card waits on the person, or `timeout`. Plays the person on approval cards.
     Returns (ended, seconds, approvals): ended is "settled", "question" or "timeout"."""
-    s, v = k.call("POST", "/api/chat/send", {"channel_id": chat, "prompt": prompt, "sender_id": "user"})
+    # Addressed to the lead: with no addressee a team chat routes on plain names ("Ask Bea…" goes
+    # to Bea), whatever the chat's routing mode, and task 7 must test the lead handing work on
+    s, v = k.call("POST", "/api/chat/send", {"channel_id": chat, "prompt": prompt, "sender_id": "user", "kwant_id": bots[0]})
     assert s == 200, (s, v)
     start = time.time()
     idle_since, approvals = None, []
@@ -480,7 +482,7 @@ def t7_prompt(d):
 def t7_check(d, ctx):
     s, v = ctx["k"].call("GET", "/api/delegations")
     items = v if isinstance(v, list) else []
-    handed = [x for x in items if x.get("specialist_kwant_id") == ctx["bots"][1]]
+    handed = [x for x in items if x.get("specialist_kwant_id") in (ctx["bots"][1], ctx["names"][1])]
     final = os.path.join(d, "final.md")
     notes = os.path.join(d, "notes.md")
     final_ok = os.path.exists(final) and len(open(final).read().strip()) > 100
@@ -684,10 +686,12 @@ def judge(said, reply):
 
 
 def last_word(msgs, lead):
-    """The lead's last reply in the task chat, and the cards posted after it."""
+    """The lead's last reply in the task chat, and the cards posted after it. `lead` is the bot's id,
+    or a tuple of its id and name: the chat history names the sender by its display name."""
+    lead = {lead} if isinstance(lead, str) else set(lead)
     reply_i = None
     for i, m in enumerate(msgs):
-        if m.get("sender_role") == "kwant" and m.get("sender_id") == lead and not kind(m):
+        if m.get("sender_role") == "kwant" and m.get("sender_id") in lead and not kind(m):
             reply_i = i
     reply = msgs[reply_i] if reply_i is not None else {}
     after = msgs[reply_i + 1:] if reply_i is not None else msgs
@@ -721,8 +725,8 @@ def one_task(a, task, run, run_root, port):
         msgs = channel_messages(k, chat)
         threads = thread_messages(k, bots[1:])
         steps = tool_steps(msgs + threads)
-        final = last_word(msgs, bots[0])
-        ctx = {"k": k, "bots": bots, "reply": "\n".join(m.get("text") or "" for m in msgs if m.get("sender_role") == "kwant"),
+        final = last_word(msgs, (bots[0], names[0]))
+        ctx = {"k": k, "bots": bots, "names": list(names), "reply": "\n".join(m.get("text") or "" for m in msgs if m.get("sender_role") == "kwant"),
                "steps": steps, "approvals": approvals, "seed_hashes": seed_hashes}
         try:
             passed, facts = check(folder, ctx)

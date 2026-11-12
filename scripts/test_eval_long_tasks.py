@@ -82,6 +82,11 @@ class LastWordTest(unittest.TestCase):
         self.assertEqual(w["blocked_meta"], "the site needs your sign-in. Sign in, then say go.")
         self.assertEqual(w["cards"], [{"kind": "ask_user", "text": "Can you sign in to the billing site?"}])
 
+    def test_the_chat_names_the_lead_by_its_display_name(self):
+        msgs = [msg("user", "user", "Do it"), msg("kwant", "Rex", "I wrote data.csv.")]
+        self.assertEqual(lt.last_word(msgs, ("kwant-uuid", "Rex"))["reply"], "I wrote data.csv.")
+        self.assertEqual(lt.last_word(msgs, "kwant-uuid")["reply"], "")
+
     def test_no_reply_at_all(self):
         w = lt.last_word([msg("user", "user", "Do it")], "lead")
         self.assertEqual((w["reply"], w["blocked_meta"], w["cards"]), ("", None, []))
