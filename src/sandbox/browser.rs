@@ -1398,14 +1398,29 @@ impl BrowserController {
         resp.json().await.map_err(|e| BrowserError::Http(e.to_string()))
     }
 
-    /// Starts following the popups the bot's page opens, unless that is already running.
+    /// The browser-level DevTools address of this controller's browser.
+    async fn browser_ws(&self) -> Option<String> {
+        let version = self.devtools_json("/json/version").await.ok()?;
+        let advertised = version["webSocketDebuggerUrl"].as_str()?;
+        self.reachable_ws_url(advertised).ok()
+    }
+
+    /// Makes sure every page, popup and worker of this browser tells sites what it really is,
+    /// without the headless token ([`super::identity`]). Cheap once its keeper runs.
+    pub async fn keep_identity(&self) {
+        if let Some(browser_ws) = self.browser_ws().await {
+            super::identity::keep(browser_ws).await;
+        }
+    }
+
+    /// Starts following the popups the bot's page opens, unless that is already running. Also
+    /// starts the identity keeper again if the browser restarted under this controller.
     async fn follow_popups(&self) {
         if self.popups.is_watching() {
             return;
         }
-        let Ok(version) = self.devtools_json("/json/version").await else { return };
-        let Some(advertised) = version["webSocketDebuggerUrl"].as_str() else { return };
-        let Ok(browser_ws) = self.reachable_ws_url(advertised) else { return };
+        let Some(browser_ws) = self.browser_ws().await else { return };
+        super::identity::keep(browser_ws.clone()).await;
         self.popups.watch(browser_ws).await;
     }
 

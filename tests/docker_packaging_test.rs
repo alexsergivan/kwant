@@ -31,3 +31,17 @@ fn test_copied_entrypoints_are_world_readable() {
         assert!(!content.contains("chmod +x"), "{dockerfile} must not rely on chmod +x alone");
     }
 }
+
+/// The browser images start Chromium as a normal browser: no `--user-agent` (it empties the client
+/// hints Google checks before a sign-in), no `--enable-automation` in any form (Chrome reads
+/// `--enable-automation=false` as the switch being on), and `navigator.webdriver` kept false.
+#[test]
+fn test_browser_images_start_chromium_as_a_normal_browser() {
+    for script in ["docker/browser-entrypoint.sh", "docker/entrypoint.sh"] {
+        let content = std::fs::read_to_string(script).unwrap();
+        let command: String = content.lines().filter(|l| !l.trim_start().starts_with('#')).collect::<Vec<_>>().join("\n");
+        assert!(!command.contains("--user-agent"), "{script} must not set --user-agent");
+        assert!(!command.contains("--enable-automation"), "{script} must not pass --enable-automation");
+        assert!(command.contains("--disable-blink-features=AutomationControlled"), "{script} must keep navigator.webdriver false");
+    }
+}

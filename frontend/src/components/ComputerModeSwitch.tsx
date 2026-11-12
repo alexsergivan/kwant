@@ -28,7 +28,7 @@ export interface ComputerModeApi {
   select: (mode: ComputerMode) => void;
   dismissError: () => void;
   /** Local mode: opens the bots' Chrome as a window, or brings it back into the app. */
-  setWindow: (visible: boolean) => void;
+  setWindow: (visible: boolean, untilSignedIn?: boolean) => void;
   /** True while a window switch restarts Chrome. */
   windowPending: boolean;
   /** "Run Claude inside the VM": saves at once; on failure the switch goes back and `isoError` says why. */
@@ -77,11 +77,11 @@ export function useComputerMode(enabled: boolean): ComputerModeApi {
   }, []);
 
   const [windowPending, setWindowPending] = useState(false);
-  const setWindow = useCallback((visible: boolean) => {
+  const setWindow = useCallback((visible: boolean, untilSignedIn = false) => {
     if (stateRef.current.pending) return;
     playSfx('click');
     setWindowPending(true);
-    saveLocalWindow(visible).then((r) => {
+    saveLocalWindow(visible, untilSignedIn).then((r) => {
       setWindowPending(false);
       if (r.ok) {
         dispatch({ type: 'saved', settings: r.settings });
@@ -287,6 +287,32 @@ export const OpenWindowButton: React.FC<{ api: ComputerModeApi; label?: boolean 
       {api.windowPending ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <AppWindow size={13} aria-hidden="true" />}
       {label && <span className="text-[10px] font-semibold whitespace-nowrap">Open as window</span>}
     </button>
+  );
+};
+
+/**
+ * A sign-in page that refuses a windowless browser (Google's "This browser or app may not be
+ * secure"): one line, and on the desktop apps one button that opens the same Chrome as a real
+ * window for the sign-in. It comes back into the app by itself once the sign-in is over.
+ */
+export const SignInLine: React.FC<{ signIn: { text: string; action: string | null } | null; api?: ComputerModeApi }> = ({ signIn, api }) => {
+  if (!signIn) return null;
+  return (
+    <div role="status" data-signin-line className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-2 rounded-lg border border-amber-400/30 bg-amber-950/40 text-xs text-amber-200">
+      <span>{signIn.text}</span>
+      {signIn.action && api && (
+        <button
+          type="button"
+          onClick={() => api.setWindow(true, true)}
+          disabled={api.windowPending}
+          aria-busy={api.windowPending || undefined}
+          className="inline-flex items-center gap-1 font-semibold underline underline-offset-2 text-amber-100 enabled:hover:text-white disabled:opacity-60"
+        >
+          {api.windowPending ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <AppWindow size={12} aria-hidden="true" />}
+          {signIn.action}
+        </button>
+      )}
+    </div>
   );
 };
 

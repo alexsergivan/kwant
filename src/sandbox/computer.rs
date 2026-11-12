@@ -122,17 +122,38 @@ pub fn find_chrome(
             }
         }
     }
+    if os == "windows" {
+        if let Some(found) = windows_chrome(&windows_roots()) {
+            return Some(found);
+        }
+    }
+    // by name first, then by folder: an installed Google Chrome anywhere on the path wins over a
+    // Chromium earlier on it, so sites see the same brand as on everyone else's Chrome
     let on_path = path.and_then(|path| {
-        std::env::split_paths(path).find_map(|dir| {
-            CHROME_COMMANDS
-                .iter()
-                .map(|name| dir.join(name))
-                .find(|candidate| candidate.is_file())
-        })
+        let dirs: Vec<PathBuf> = std::env::split_paths(path).collect();
+        CHROME_COMMANDS
+            .iter()
+            .find_map(|name| dirs.iter().map(|dir| dir.join(name)).find(|candidate| candidate.is_file()))
     });
     on_path
         .or_else(|| playwright_chromium(os, home?))
         .or_else(|| super::chrome_download::downloaded_chrome(os, home?))
+}
+
+/// Where Windows installs Chrome: per machine (`Program Files`, both) and per person
+/// (`%LOCALAPPDATA%`).
+fn windows_roots() -> Vec<PathBuf> {
+    ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(|var| std::env::var_os(var).map(PathBuf::from))
+        .collect()
+}
+
+/// The installed Google Chrome under one of `roots`, else a Chromium there.
+pub fn windows_chrome(roots: &[PathBuf]) -> Option<PathBuf> {
+    const APPS: [&str; 2] = ["Google/Chrome/Application/chrome.exe", "Chromium/Application/chrome.exe"];
+    APPS.iter()
+        .find_map(|app| roots.iter().map(|root| root.join(app)).find(|candidate| candidate.is_file()))
 }
 
 /// The newest Chromium Playwright downloaded into the person's cache (`kwnt setup` puts one there
@@ -259,27 +280,42 @@ pub fn read_devtools_port(profile: &Path) -> Option<u16> {
     text.lines().next()?.trim().parse().ok().filter(|&p| p > 0)
 }
 
+/// Chrome's switch that keeps `navigator.webdriver` false while a debugging port is open. A
+/// Chrome feature switch, not a script: the page sees the same browser a person uses.
+pub const NOT_AUTOMATED: &str = "--disable-blink-features=AutomationControlled";
+
+/// Whether the browser at `path` is Google Chrome (not Chromium or Chrome for Testing), whose
+/// pages name "Google Chrome" among their brands.
+pub fn is_google_chrome(path: &Path) -> bool {
+    let text = path.to_string_lossy().to_lowercase().replace('\\', "/");
+    (text.contains("google chrome") || text.contains("google-chrome") || text.contains("google/chrome/application"))
+        && !text.contains("for testing")
+}
+
 /// The viewport of windowless local Chrome, matching the vm browser and the in-app viewer.
 pub const HEADLESS_WINDOW_SIZE: &str = "1280,800";
 
 /// Chrome's command line for local mode: its own profile, never the person's everyday one, and a
 /// debugging port Chrome picks itself (it listens on 127.0.0.1). Without a window (`headless`)
-/// unless the person asked to see one. A windowless Chrome sends `user_agent` (see
-/// [`headed_user_agent`]) instead of its own, which tells every site it is "HeadlessChrome".
-pub fn chrome_args(profile: &Path, headless: bool, user_agent: Option<&str>) -> Vec<String> {
+/// unless the person asked to see one.
+///
+/// Chrome keeps its own user agent: a `--user-agent` flag empties the client hints a real Chrome
+/// fills, and Google refuses sign-in on that. The headless token is taken out over DevTools
+/// instead, with the browser's own client hints ([`super::identity`]). With a debugging port
+/// Chrome says `navigator.webdriver` is true; [`NOT_AUTOMATED`] turns that off. No
+/// `--enable-automation`, which adds the "controlled by automated software" bar.
+pub fn chrome_args(profile: &Path, headless: bool) -> Vec<String> {
     let mut args = vec![
         format!("--user-data-dir={}", profile.display()),
         "--remote-debugging-port=0".into(),
         "--remote-debugging-address=127.0.0.1".into(),
         "--no-first-run".into(),
         "--no-default-browser-check".into(),
+        NOT_AUTOMATED.into(),
     ];
     if headless {
         args.push("--headless=new".into());
         args.push(format!("--window-size={HEADLESS_WINDOW_SIZE}"));
-        if let Some(agent) = user_agent {
-            args.push(format!("--user-agent={agent}"));
-        }
     }
     args.push("about:blank".into());
     args
@@ -358,11 +394,40 @@ pub fn launched_headless(profile: &Path) -> Option<bool> {
     }
 }
 
+/// The file kwant writes next to [`LAUNCH_MODE_FILE`] once it starts Chrome as Chrome
+/// ([`chrome_args`]: no `--user-agent`, not marked automated). Kwant 0.9.4 and older wrote none.
+const LAUNCH_IDENTITY_FILE: &str = "kwant-launch-identity";
+
+fn record_launch_identity(profile: &Path) -> std::io::Result<()> {
+    std::fs::write(profile.join(LAUNCH_IDENTITY_FILE), "chrome")
+}
+
+/// Whether the windowless Chrome on `profile` was started by an older kwant, with a made-up
+/// `--user-agent` and without [`NOT_AUTOMATED`]: sites read it as automated (Google refuses its
+/// sign-in), and what kwant sets over DevTools can't undo that, so it has to be started again.
+pub fn started_by_older_kwant(profile: &Path) -> bool {
+    let line = profile_owner(profile).and_then(command_line);
+    is_older_launch(line.as_deref(), profile.join(LAUNCH_IDENTITY_FILE).exists())
+}
+
+/// [`started_by_older_kwant`] from the Chrome's command line, else (no command line, as on
+/// Windows) from whether kwant left its launch mark. A Chrome kwant starts now always passes, so
+/// it is never restarted twice.
+pub fn is_older_launch(command_line: Option<&str>, marked: bool) -> bool {
+    match command_line {
+        Some(line) => {
+            let mut args = line.split(' ');
+            line.contains(" --user-agent=") || !args.any(|arg| arg == NOT_AUTOMATED)
+        }
+        None => !marked,
+    }
+}
+
 /// Whether a running kwant Chrome is windowless: from its command line, else from the form kwant
-/// recorded when it started it, else from its user agent (only an older kwant's Chrome has
-/// neither, and that one still says "HeadlessChrome" when windowless). The user agent alone is
-/// wrong for kwant's own windowless Chrome, which reads like a windowed one: trusting it made
-/// every call see the wrong form and restart Chrome.
+/// recorded when it started it, else from its user agent (`/json/version` still says
+/// "HeadlessChrome" when windowless: the identity kwant gives pages doesn't change it). Its
+/// command line comes first, as a Chrome an older kwant started with `--user-agent` reads like a
+/// windowed one.
 pub fn is_windowless(command_line: Option<&str>, launched_headless: Option<bool>, user_agent: &str) -> bool {
     match (command_line, launched_headless) {
         (Some(line), _) => is_headless_command_line(line),
@@ -371,8 +436,8 @@ pub fn is_windowless(command_line: Option<&str>, launched_headless: Option<bool>
     }
 }
 
-/// Whether a running Chrome is windowless, from its `/json/version` user agent. Only right for a
-/// Chrome started without kwant's user agent (see [`is_windowless`]).
+/// Whether a running Chrome is windowless, from its `/json/version` user agent. Wrong for a
+/// Chrome an older kwant started with `--user-agent` (see [`is_windowless`]).
 pub fn is_headless_user_agent(user_agent: &str) -> bool {
     user_agent.contains("HeadlessChrome")
 }
@@ -399,20 +464,14 @@ async fn user_agent(endpoint: &str) -> Option<String> {
     Some(version["User-Agent"].as_str().unwrap_or_default().to_string())
 }
 
-/// The kwant Chrome running on `profile`: its CDP endpoint and whether it is windowless. That comes
-/// from [`is_windowless`], since its user agent reads like a windowed one.
+/// The kwant Chrome running on `profile`: its CDP endpoint and whether it is windowless (see
+/// [`is_windowless`]).
 pub async fn running_local_chrome(profile: &Path) -> Option<(String, bool)> {
     let port = read_devtools_port(profile)?;
     let endpoint = format!("http://127.0.0.1:{port}");
     let agent = user_agent(&endpoint).await?;
     let line = profile_owner(profile).and_then(command_line);
     Some((endpoint, is_windowless(line.as_deref(), launched_headless(profile), &agent)))
-}
-
-/// Whether the Chrome at `endpoint` still tells sites it is "HeadlessChrome": one started before
-/// kwant set its user agent, which kwant restarts so sites see a normal Chrome.
-pub async fn says_headless(endpoint: &str) -> bool {
-    user_agent(endpoint).await.is_some_and(|agent| is_headless_user_agent(&agent))
 }
 
 /// The live Chrome holding `profile`, from the `SingletonLock` link Chrome keeps in it
@@ -659,10 +718,10 @@ fn launch_local_chrome(profile: &Path, headless: bool) -> Result<(), String> {
     std::fs::create_dir_all(profile).map_err(|e| e.to_string())?;
     // without it, a Chrome whose command line can't be read would be taken for the wrong form
     record_launch_mode(profile, headless)
+        .and_then(|()| record_launch_identity(profile))
         .map_err(|e| format!("Could not write to {}: {e}", profile.display()))?;
-    let agent = if headless { chrome_user_agent(&chrome) } else { None };
     let mut cmd = std::process::Command::new(&chrome);
-    cmd.args(chrome_args(profile, headless, agent.as_deref()))
+    cmd.args(chrome_args(profile, headless))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -855,7 +914,7 @@ mod tests {
     #[test]
     fn chrome_uses_its_own_profile_and_a_loopback_port() {
         for headless in [true, false] {
-            let args = chrome_args(Path::new("/data/local-chrome"), headless, None);
+            let args = chrome_args(Path::new("/data/local-chrome"), headless);
             assert!(args.contains(&"--user-data-dir=/data/local-chrome".to_string()));
             assert!(args.contains(&"--remote-debugging-port=0".to_string()));
             assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_string()));
@@ -864,10 +923,10 @@ mod tests {
 
     #[test]
     fn chrome_is_windowless_unless_a_window_is_asked_for() {
-        let args = chrome_args(Path::new("/p"), true, None);
+        let args = chrome_args(Path::new("/p"), true);
         assert!(args.contains(&"--headless=new".to_string()));
         assert!(args.contains(&"--window-size=1280,800".to_string()));
-        let args = chrome_args(Path::new("/p"), false, None);
+        let args = chrome_args(Path::new("/p"), false);
         assert!(!args.iter().any(|a| a.starts_with("--headless")));
         assert!(!args.iter().any(|a| a.starts_with("--window-size")));
         assert!(is_headless_user_agent("Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/131.0 Safari/537.36"));
@@ -875,7 +934,7 @@ mod tests {
     }
 
     #[test]
-    fn windowless_chrome_sends_the_windowed_user_agent() {
+    fn web_fetch_sends_the_windowed_user_agent() {
         assert_eq!(
             headed_user_agent("Google Chrome 131.0.6778.86 \n", "macos").as_deref(),
             Some("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -890,12 +949,50 @@ mod tests {
         assert_eq!(headed_user_agent("", "linux"), None);
         assert_eq!(headed_user_agent("Chromium version unknown", "linux"), None);
 
-        let agent = headed_user_agent("Chromium 154.0.8037.92", "linux").unwrap();
-        let args = chrome_args(Path::new("/p"), true, Some(&agent));
-        assert!(args.contains(&format!("--user-agent={agent}")));
-        assert!(!args.iter().any(|a| a.contains("Headless") && a.starts_with("--user-agent")));
-        // a window already sends the normal one
-        assert!(!chrome_args(Path::new("/p"), false, Some(&agent)).iter().any(|a| a.starts_with("--user-agent")));
+    }
+
+    #[test]
+    fn chrome_keeps_its_own_user_agent_and_is_not_marked_automated() {
+        for headless in [true, false] {
+            let args = chrome_args(Path::new("/p"), headless);
+            // the flag empties the client hints Google asks for; the identity is set over DevTools
+            assert!(!args.iter().any(|a| a.starts_with("--user-agent")), "{args:?}");
+            assert!(!args.iter().any(|a| a.starts_with("--enable-automation")), "{args:?}");
+            assert!(args.contains(&"--disable-blink-features=AutomationControlled".to_string()), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn google_chrome_is_told_apart_from_chromium() {
+        assert!(is_google_chrome(Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")));
+        assert!(is_google_chrome(Path::new("/usr/bin/google-chrome-stable")));
+        assert!(is_google_chrome(Path::new(r"C:\Program Files\Google\Chrome\Application\chrome.exe")));
+        assert!(!is_google_chrome(Path::new("/Applications/Chromium.app/Contents/MacOS/Chromium")));
+        assert!(!is_google_chrome(Path::new("/usr/bin/chromium")));
+        assert!(!is_google_chrome(Path::new("/home/me/.cache/kwant/chrome/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")));
+    }
+
+    #[test]
+    fn an_installed_google_chrome_is_preferred_over_a_chromium_earlier_on_the_path() {
+        let early = tempfile::tempdir().unwrap();
+        let late = tempfile::tempdir().unwrap();
+        std::fs::write(early.path().join("chromium"), "").unwrap();
+        std::fs::write(late.path().join("google-chrome"), "").unwrap();
+        let path = std::env::join_paths([early.path(), late.path()]).unwrap();
+        assert_eq!(find_chrome(None, "linux", None, path.to_str()), Some(late.path().join("google-chrome")));
+
+        let machine = tempfile::tempdir().unwrap();
+        let person = tempfile::tempdir().unwrap();
+        let chromium = machine.path().join("Chromium/Application/chrome.exe");
+        std::fs::create_dir_all(chromium.parent().unwrap()).unwrap();
+        std::fs::write(&chromium, "").unwrap();
+        let roots = [machine.path().to_path_buf(), person.path().to_path_buf()];
+        assert_eq!(windows_chrome(&roots), Some(chromium));
+        let chrome = person.path().join("Google/Chrome/Application/chrome.exe");
+        std::fs::create_dir_all(chrome.parent().unwrap()).unwrap();
+        std::fs::write(&chrome, "").unwrap();
+        assert_eq!(windows_chrome(&roots), Some(chrome));
+        assert_eq!(windows_chrome(&[]), None);
     }
 
     #[tokio::test]
@@ -906,9 +1003,9 @@ mod tests {
 
     #[test]
     fn windowless_is_read_from_the_command_line() {
-        let headless = chrome_args(Path::new("/p"), true, Some("Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0"));
+        let headless = chrome_args(Path::new("/p"), true);
         assert!(is_headless_command_line(&format!("/usr/lib/chromium/chromium {}", headless.join(" "))));
-        let window = chrome_args(Path::new("/p"), false, None);
+        let window = chrome_args(Path::new("/p"), false);
         assert!(!is_headless_command_line(&format!("/usr/lib/chromium/chromium {}", window.join(" "))));
         assert!(is_headless_command_line("chrome --headless --user-data-dir=/p"));
         // a profile or user agent that merely mentions it is not the flag
@@ -935,6 +1032,26 @@ mod tests {
         assert_eq!(launched_headless(dir.path()), Some(true));
         record_launch_mode(dir.path(), false).unwrap();
         assert_eq!(launched_headless(dir.path()), Some(false));
+    }
+
+    #[test]
+    fn a_windowless_chrome_an_older_kwant_started_is_started_again() {
+        let profile = Path::new("/p");
+        let now = format!("chromium {}", chrome_args(profile, true).join(" "));
+        assert!(!is_older_launch(Some(&now), false), "kwant's own launch, read from its command line");
+        let old = format!(
+            "chromium --user-data-dir=/p --remote-debugging-port=0 --headless=new --window-size={HEADLESS_WINDOW_SIZE} --user-agent=Mozilla/5.0 (X11; Linux x86_64) Chrome/141.0.0.0 Safari/537.36 about:blank"
+        );
+        assert!(is_older_launch(Some(&old), true), "0.9.4: a made-up user agent, marked automated");
+        assert!(is_older_launch(Some(&format!("{now} --user-agent=x")), false));
+        // no command line (Windows): kwant's mark decides
+        assert!(is_older_launch(None, false));
+        assert!(!is_older_launch(None, true));
+
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!dir.path().join(LAUNCH_IDENTITY_FILE).exists());
+        record_launch_identity(dir.path()).unwrap();
+        assert!(dir.path().join(LAUNCH_IDENTITY_FILE).exists());
     }
 
     /// Rigel's finding on #22: kwant's windowless Chrome answers with a windowed user agent, and

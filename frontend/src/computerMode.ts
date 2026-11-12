@@ -209,8 +209,13 @@ async function putSettings(path: string, body: unknown, failed: string): Promise
 export const saveComputerMode = (mode: ComputerMode) => putSettings('/api/settings/computer', { mode }, 'Switching failed');
 
 /** Opens the bots' Chrome as a window (`true`) or puts it back in the app (`false`). */
-export const saveLocalWindow = (visible: boolean) =>
-  putSettings('/api/settings/computer/window', { visible }, visible ? 'Could not open the window' : 'Could not bring the browser back');
+/** `untilSignedIn`: the window is for a sign-in, and comes back into the app once it is over. */
+export const saveLocalWindow = (visible: boolean, untilSignedIn = false) =>
+  putSettings(
+    '/api/settings/computer/window',
+    untilSignedIn ? { visible, until_signed_in: true } : { visible },
+    visible ? 'Could not open the window' : 'Could not bring the browser back',
+  );
 
 /** Turns "Run Claude inside the VM" on or off. A 400's code is put in people's words (fix 5). */
 export async function saveIsolateClaude(on: boolean): Promise<SaveResult> {
