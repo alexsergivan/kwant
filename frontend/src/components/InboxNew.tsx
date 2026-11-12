@@ -119,10 +119,15 @@ export function clock(ts: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** A row's title: an approve that came back says so. */
+/**
+ * A row's title: an approve that came back says so. An approval shows its own question when the
+ * server sent one (0.9.5 part B), else the card's action in words; `title` is always present, so
+ * it is never the test.
+ */
 export function rowTitle(i: InboxItem): string {
   if (isReview(i) && (i.stale || i.approve_error)) return `Couldn’t approve: ${i.title}`;
   if (isDoneGroup(i.group) && isRoutineItem(i)) return doneTitle(i);
+  if (i.kind === 'approval' && typeof i.question === 'string' && i.question.trim()) return i.question;
   return isReview(i) ? i.title : awayTitle(i as AwayItem);
 }
 

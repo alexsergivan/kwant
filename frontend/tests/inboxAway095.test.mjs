@@ -117,6 +117,22 @@ test('queue: Needs you · 1 then Done while you were away · 2, kicker and place
   root.unmount();
 });
 
+test('approval row: its own question when sent, else the card action; title alone is never used', async () => {
+  const data = clone(fx.AWAY_INBOX);
+  let r = await mountInbox({}, data);
+  const title = (q) => q('[data-row="ap-1"]').textContent;
+  assert.match(title(r.q), /Approve “Spring sale: 15% off”\?/);
+  r.root.unmount();
+  const bare = clone(fx.AWAY_INBOX);
+  const ap = bare.items.find((x) => x.id === 'ap-1');
+  delete ap.question;
+  ap.title = 'Use gmail (mail)';
+  r = await mountInbox({}, bare);
+  assert.equal(title(r.q).includes('Use gmail (mail)'), false, 'no raw server title');
+  assert.equal(title(r.q).includes('Approve “Spring sale'), false);
+  r.root.unmount();
+});
+
 test('pane order: meta, chips, answer with Open in chat, What Ben did, Why, then Looks good and Ask Ben to redo…', async () => {
   const opened = [];
   const edits = [];
