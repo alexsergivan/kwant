@@ -18,7 +18,8 @@
 //! Acceptance lines as `not_checked` are only the fallback for a task with no stored contract.
 //!
 //! `POST /api/away/seen` only moves the marker: every item carries `unread` (newer than the
-//! marker), and the badge counts unread ones. Since 0.9.5 B, finished and failed items stay
+//! marker), and the badge counts unread ones as `GET /api/away` does: team jobs carry `unread`
+//! but are not in the badge, so it matches `/api/away`. Since 0.9.5 B, finished and failed items stay
 //! listed for 7 days whether seen or not; review items stay until they are approved, sent back
 //! or rolled back. Done items (finished, failed, to review) and team jobs carry the answer, the
 //! trail and the why ([`super::inbox_done`]).
@@ -761,7 +762,7 @@ pub struct InboxQuery {
 /// `GET /api/inbox?since=<RFC 3339>&space=`: `since` bounds finished and failed items and team
 /// jobs. It defaults to 7 days ago, and an older one is cut to that ([`inbox_done::done_since`]):
 /// done items stay for 7 days, seen or not. The badge still counts what is newer than the
-/// last-seen marker, as on `GET /api/away`.
+/// last-seen marker, as on `GET /api/away`; unread team jobs are not counted.
 pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Query<InboxQuery>) -> Response {
     let now = Utc::now();
     let Ok(seen) = last_seen(&state, &space).await else {
@@ -792,8 +793,9 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
         let prepush_needs_you = prepush.iter().filter(|c| (c.status == BLOCKED || c.status == PREPUSH_FAILED) && c.tries >= NEEDS_YOU_TRIES).count() as i64;
         let reviews = gather(&state, &space).await?;
         let team_jobs = inbox_done::team_jobs(&state, &space, since, seen).await?;
-        let unseen_jobs = inbox_done::unread_count(&state, &space, default_since).await?;
-        let unseen = waiting_count + unseen_finished + unseen_failed + unseen_jobs;
+        // The same sum as `/api/away`'s `unseen.total` (`away::unread_total`): team jobs carry
+        // `unread` in the list but are not counted, so the two badges agree.
+        let unseen = waiting_count + unseen_finished + unseen_failed;
         // The answer, trail and why of each done item
         let mut done = Vec::with_capacity(finished.len() + failed.len());
         for (row, group) in failed.into_iter().map(|r| (r, Group::FailedOrStuck)).chain(finished.into_iter().map(|r| (r, Group::Finished))) {

@@ -7,7 +7,10 @@
 //!   a team job's is the lead's `Done:` reply.
 //! - `answer_excerpt`: that message as plain text, at most [`EXCERPT_CHARS`], secrets masked.
 //! - `trail` (`trail_dropped`): up to [`TRAIL_MAX`] `{at, kind, label, detail, status, by}`
-//!   steps from the message's saved `meta.activity` (the activity store; no second one).
+//!   steps from the message's saved `meta.activity` (the activity store; no second one). `kind`
+//!   is `page` (opened or read a web page), `message` (sent something to a person or a place
+//!   outside this chat, from the fixed [`MESSAGE_TOOLS`] list), `write` (anything else that may
+//!   have changed something) or `tool` (read only).
 //! - `why` (`why_kind`): the routine's instruction, or the task's, hand-off's or request's first
 //!   line, at most [`WHY_CHARS`].
 //! - `changed` (Iris's name, part F) and `changed_nothing`: whether the job wrote anything.
@@ -132,6 +135,52 @@ fn is_page(tool: &str) -> bool {
     PAGE_TOOLS.contains(&own_tool(tool))
 }
 
+/// Tools that send something to a person or a place outside this chat: a trail step of kind
+/// `message`, which counts as a change. Matched without case on the tool's own name (the part
+/// after the last `__`, so `mcp__gmail__send_email` and Composio's `GMAIL_SEND_EMAIL` both match).
+/// A fixed list: any other tool that may change something stays `write`.
+const MESSAGE_TOOLS: [&str; 26] = [
+    // mail
+    "send_email",
+    "send_mail",
+    "sendmail",
+    "reply_to_email",
+    "gmail_send_email",
+    "gmail_reply_to_thread",
+    "outlook_send_email",
+    // Slack
+    "slack_post_message",
+    "slack_send_message",
+    "slack_sends_a_message_to_a_slack_channel",
+    "chat_postmessage",
+    // Discord
+    "discord_send_message",
+    "discordbot_create_message",
+    // Telegram
+    "telegram_send_message",
+    "send_telegram_message",
+    // X
+    "post_tweet",
+    "create_tweet",
+    "twitter_creation_of_a_post",
+    "twitter_create_post",
+    "x_create_post",
+    "x_post",
+    // kwnt's own send and post tools
+    "send_message",
+    "post_message",
+    "post_to_room",
+    "message_person",
+    "send_voice_note",
+];
+
+/// Whether a tool sends a message outside this chat ([`MESSAGE_TOOLS`]).
+pub fn is_message(tool: &str) -> bool {
+    let own = own_tool(tool);
+    let name = own.rsplit("__").next().unwrap_or(own);
+    MESSAGE_TOOLS.iter().any(|m| m.eq_ignore_ascii_case(name))
+}
+
 /// Whether a saved activity step may have changed something.
 pub fn step_changes(step: &Value) -> bool {
     match step["kind"].as_str() {
@@ -182,6 +231,7 @@ pub fn trail_rows(meta: &Value, by: Option<&str>) -> (Vec<Value>, i64) {
         .map(|s| {
             let kind = match s["tool"].as_str() {
                 Some(t) if is_page(t) => "page",
+                Some(t) if is_message(t) && step_changes(s) => "message",
                 _ if step_changes(s) => "write",
                 _ => "tool",
             };
@@ -443,11 +493,6 @@ async fn done_replies(state: &AppState, space: &SpaceId, since: DateTime<Utc>) -
     Ok(out)
 }
 
-/// Unread team jobs, for the badge: `Done:` replies after the last-seen marker.
-pub async fn unread_count(state: &AppState, space: &SpaceId, marker: DateTime<Utc>) -> Result<i64, DbError> {
-    Ok(done_replies(state, space, marker).await?.len() as i64)
-}
-
 /// The space's team jobs since `since`, as finished inbox items.
 pub async fn team_jobs(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen: Option<DateTime<Utc>>) -> Result<Vec<Value>, DbError> {
     let mut items = Vec::new();
@@ -458,14 +503,15 @@ pub async fn team_jobs(state: &AppState, space: &SpaceId, since: DateTime<Utc>, 
         let context = context_of(&msg).unwrap_or(&lead.id).to_string();
         let request = state.db.last_person_message_before(&context, r.created_at).await?;
         let from = request.as_ref().and_then(|m| m.created_at);
-        // The hand-offs the lead made from this chat for this request
+        // The hand-offs the lead made from this chat for this request (with no request found,
+        // the 7 days before the `Done:`)
+        let from = from.unwrap_or(r.created_at - Duration::days(DONE_DAYS));
         let handoffs: Vec<_> = state
             .db
-            .list_delegations(Some(&lead.id), None, 100)
+            .lead_delegations(&lead.id, from, r.created_at)
             .await?
             .into_iter()
             .filter(|d| [&d.origin_thread_id, &d.origin_channel_id, &d.origin_kwant_id].iter().any(|o| o.as_deref() == Some(context.as_str())))
-            .filter(|d| from.is_none_or(|f| d.created_at >= f) && d.created_at <= r.created_at)
             .collect();
         let mut members: Vec<Value> = Vec::new();
         let mut more = Vec::new();
@@ -570,6 +616,40 @@ mod tests {
         assert_eq!(trail_changed(std::slice::from_ref(&meta)), Some(true));
         assert_eq!(trail_changed(&[json!({})]), Some(false), "a reply with no steps only answered");
         assert_eq!(trail_changed(&[]), None);
+    }
+
+    #[test]
+    fn sending_tools_on_the_list_are_message_steps() {
+        for t in [
+            "mcp__kwnt__send_email",
+            "mcp__gmail__send_email",
+            "GMAIL_SEND_EMAIL",
+            "SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL",
+            "mcp__slack__slack_post_message",
+            "TELEGRAM_SEND_MESSAGE",
+            "TWITTER_CREATION_OF_A_POST",
+            "mcp__agents__post_to_room",
+            "mcp__agents__message_person",
+        ] {
+            assert!(is_message(t), "{t}");
+        }
+        // Off the list: still a change, but `write`
+        for t in ["mcp__github__create_issue", "Bash", "SLACK_LIST_CHANNELS", "send_money"] {
+            assert!(!is_message(t), "{t}");
+        }
+        let step = |tool: &str, status: &str| json!({"kind": "tool", "status": status, "tool": tool, "title": "t", "started_at": "2026-11-12T10:00:00Z"});
+        let meta = json!({"activity": {"steps": [
+            step("GMAIL_SEND_EMAIL", "ok"),
+            step("mcp__github__create_issue", "ok"),
+            step("mcp__agents__post_to_room", "failed"),
+        ]}});
+        let (rows, _) = trail_rows(&meta, None);
+        let kinds: Vec<_> = rows.iter().map(|r| r["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["message", "write", "message"]);
+        assert_eq!(trail_changed(std::slice::from_ref(&json!({"activity": {"steps": [step("TELEGRAM_SEND_MESSAGE", "ok")]}}))), Some(true), "a message counts as changed");
+        // A send that was declined never ran: not a message, nothing changed
+        let declined = json!({"kind": "approval", "status": "declined", "tool": "send_email"});
+        assert!(!step_changes(&declined));
     }
 
     #[test]

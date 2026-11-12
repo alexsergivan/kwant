@@ -13,7 +13,8 @@ use kwnt::{
     config::Config,
     db::{
         continuity::NewRoutine,
-        models::{Kwant, NewApproval, NewMessage},
+        missions::{NewTask, TaskChange},
+        models::{Kwant, NewApproval, NewChannel, NewMessage},
         spaces::SpaceId,
         threads::NewDelegation,
         Database,
@@ -253,7 +254,11 @@ async fn a_leads_done_line_is_a_team_job_with_members_trail_and_why() {
     assert_eq!((trail[1]["label"].as_str(), trail[1]["by"].clone()), (Some("Reading the list"), Value::Null));
     assert_eq!(job["changed_nothing"], true, "opening a page and reading changed nothing");
     assert_eq!(job["unread"], true);
-    assert_eq!(v["counts"]["badge"], 1 + 1, "the job plus the member's finished hand-off: {v}");
+    // Team jobs carry unread but are not in the badge: only the member's finished hand-off is,
+    // as on /api/away
+    assert_eq!(v["counts"]["badge"], 1, "{v}");
+    let (_, away) = call(&app, "GET", "/api/away").await;
+    assert_eq!(v["counts"]["badge"], away["unseen"]["total"], "{away}");
 
     // Seen: still listed, now read
     call(&app, "POST", "/api/away/seen").await;
@@ -293,4 +298,143 @@ async fn an_approval_is_titled_with_its_own_question() {
     let (_, away) = call(&app, "GET", "/api/away").await;
     let a = away["waiting"].as_array().unwrap().iter().find(|i| i["id"] == json!(ids[0])).unwrap();
     assert_eq!(a["title"], "Use send (mail)");
+}
+
+/// A lead's `Done:` reply in its direct chat, as keep-going marks it.
+async fn done_reply(state: &AppState, lead: &Kwant, text: &str, steps: Vec<Value>) -> String {
+    reply(state, lead, text, steps, json!({"chain_done": {"text": text, "at": Utc::now()}})).await
+}
+
+#[tokio::test]
+async fn the_inbox_badge_matches_away_without_team_jobs() {
+    let (app, state, _tmp) = setup().await;
+    let k = state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].clone();
+    let at = "2026-11-12T09:00:00.000Z";
+    let (run, _) = routine_run(&state, &k, "Uptime", "Check the site.", "Up.", vec![step("WebFetch", "Opening booktun.ing", at)]).await;
+    let job = done_reply(&state, &k, "Done: three bloggers listed.", vec![step("GMAIL_SEND_EMAIL", "Sending the list", at)]).await;
+
+    let v = inbox(&app).await;
+    assert_eq!(find(&v, &run).unwrap()["unread"], true);
+    let j = find(&v, &job).unwrap_or_else(|| panic!("no team job: {v}"));
+    assert_eq!(j["unread"], true, "a team job still says it is unread");
+    assert_eq!(j["trail"][0]["kind"], "message", "sending mail is a message step");
+    assert_eq!(j["changed"], true, "a message counts as changed");
+    let (_, away) = call(&app, "GET", "/api/away").await;
+    assert_eq!(away["unseen"]["total"], 1, "{away}");
+    assert_eq!(v["counts"]["badge"], 1, "the routine run only: {v}");
+    assert_eq!(v["counts"]["badge"], away["unseen"]["total"]);
+}
+
+/// Timing for impl-b.md: 50 finished and 50 failed done items with a 30-step activity each, 10
+/// reviews and 5 team jobs; prints the median of 5 `GET /api/inbox`. Run by hand:
+/// `cargo test --test inbox_away_b_test inbox_timing -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore]
+async fn inbox_timing() {
+    let (app, state, _tmp) = setup().await;
+    let space = SpaceId::default_space();
+    let kwants = state.db.list_kwants(&space).await.unwrap();
+    let (lead, member) = (kwants[0].clone(), kwants[1].clone());
+    let steps = |n: usize| -> Vec<Value> {
+        (0..30)
+            .map(|i| match i % 3 {
+                0 => step("WebFetch", &format!("Opening page {n}.{i}"), "2026-11-12T09:00:00.000Z"),
+                1 => step("Read", &format!("Reading file {n}.{i}"), "2026-11-12T09:00:01.000Z"),
+                _ => step("Bash", &format!("Running step {n}.{i}"), "2026-11-12T09:00:02.000Z"),
+            })
+            .collect()
+    };
+    for n in 0..50 {
+        routine_run(&state, &k_of(&kwants, n), &format!("Finished {n}"), "Check the site.\nPost one line.", "## Status\nAll good.", steps(n)).await;
+    }
+    for n in 0..50 {
+        let k = k_of(&kwants, n);
+        let routine = state
+            .db
+            .create_routine(&NewRoutine {
+                kwant_id: k.id.clone(),
+                name: format!("Failed {n}"),
+                instructions: "Deploy the site.".into(),
+                schedule: json!({"type": "interval", "every_minutes": 60}).to_string(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let run = state.db.start_routine_run(&routine.id, "manual", "running", None).await.unwrap();
+        let msg = reply(&state, &k, "Deploy failed: 401.", steps(100 + n), json!({})).await;
+        state.db.finish_routine_run(&run.id, "error", Some("401 from the host"), Some(&msg)).await.unwrap();
+    }
+    let chan = state
+        .db
+        .create_channel(&space, &NewChannel {
+            name: "ops".into(),
+            description: None,
+            lead_kwant_id: lead.id.clone(),
+            member_kwants: vec![lead.id.clone(), member.id.clone()],
+            routing_mode: "auto".into(),
+        })
+        .await
+        .unwrap();
+    let change = |r: &str| TaskChange { kind: "state".into(), reason: Some(r.into()), ..Default::default() };
+    for n in 0..10 {
+        let t = state
+            .db
+            .create_task(&space, &NewTask {
+                title: format!("Review {n}"),
+                acceptance: "- Works\n- No new dependencies".into(),
+                state: "ready".into(),
+                owner_kwant_id: Some(member.id.clone()),
+                max_attempts: 10,
+                source_kind: "person".into(),
+                channel_id: Some(chan.id.clone()),
+                created_by: "person".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        state.db.claim_task(&t.id, &member.id, None, None, 600_000, false, &member.id).await.unwrap().unwrap();
+        assert!(state.db.move_task(&t.id, "working", "review", &member.id, &change("done")).await.unwrap());
+    }
+    for n in 0..5 {
+        state.db.insert_message(&message("user", "user", &lead.id, &format!("Job {n}: find bloggers"))).await.unwrap();
+        let (_, d) = state
+            .db
+            .create_delegation(&NewDelegation {
+                lead_kwant_id: lead.id.clone(),
+                specialist_kwant_id: member.id.clone(),
+                origin_channel_id: None,
+                origin_kwant_id: Some(lead.id.clone()),
+                origin_thread_id: None,
+                team_id: None,
+                task: format!("Part of job {n}"),
+                title: format!("Job {n}"),
+                continue_lead: false,
+                depth: 1,
+                follow_up_at: None,
+            })
+            .await
+            .unwrap();
+        assert!(state.db.mark_delegation_running(&d.id).await.unwrap());
+        let found = reply(&state, &member, "Found them.", steps(200 + n), json!({})).await;
+        assert!(state.db.finish_delegation(&d.id, "completed", None, Some(&found)).await.unwrap());
+        done_reply(&state, &lead, &format!("Done: job {n} finished."), steps(300 + n)).await;
+    }
+
+    let v = inbox(&app).await;
+    let c = &v["counts"];
+    println!("items {} counts {c}", v["items"].as_array().unwrap().len());
+    let mut ms = Vec::new();
+    for _ in 0..5 {
+        let t = std::time::Instant::now();
+        let v = inbox(&app).await;
+        ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        assert!(v["items"].as_array().unwrap().len() >= 100);
+    }
+    ms.sort_by(f64::total_cmp);
+    let profile = if cfg!(debug_assertions) { "debug (test profile)" } else { "release" };
+    println!("GET /api/inbox: median {:.1} ms of 5 {ms:?}, {profile}", ms[2]);
+}
+
+fn k_of(kwants: &[Kwant], n: usize) -> Kwant {
+    kwants[n % kwants.len()].clone()
 }

@@ -4,6 +4,7 @@
 
 use super::spaces::SpaceId;
 use super::models::Message;
+use super::threads::Delegation;
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
@@ -227,7 +228,45 @@ const DONE_REPLIES: &str = "
     FROM messages
     WHERE instr(meta, '\"chain_done\"') > 0 AND created_at > ?1 AND sender_role = 'kwant'";
 
+/// The kinds of chat a message belongs to; each column has its partial index
+/// (`messages_by_channel`, `messages_by_direct`, `messages_by_thread`) on `(col, created_at)`.
+const CHAT_COLUMNS: [&str; 3] = ["channel_id", "direct_kwant_id", "thread_id"];
+
+const ROUTINE_RUN_RESULT: &str =
+    "SELECT r.message_id, rt.instructions, r.routine_id, r.trigger FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id WHERE r.id = ?";
+
+/// `?` = chat id, at.
+fn person_before_sql(col: &str) -> String {
+    format!("SELECT * FROM messages WHERE {col} = ? AND created_at <= ? AND sender_role = 'user' ORDER BY created_at DESC, rowid DESC LIMIT 1")
+}
+
+/// `?` = chat id, bot name, from, to.
+fn task_reply_after_sql(col: &str) -> String {
+    format!(
+        "SELECT * FROM messages WHERE {col} = ? AND sender_role = 'kwant' AND sender_id = ? AND created_at >= ? AND created_at <= ? \
+         ORDER BY created_at, rowid LIMIT 1"
+    )
+}
+
+/// `?` = chat id, bot name, before.
+fn task_reply_before_sql(col: &str) -> String {
+    format!(
+        "SELECT * FROM messages WHERE {col} = ? AND sender_role = 'kwant' AND sender_id = ? AND created_at < ? \
+         ORDER BY created_at DESC, rowid DESC LIMIT 1"
+    )
+}
+
+/// `?` = lead, from, to. `delegations_by_lead` is on `(lead_kwant_id, created_at)`.
+const LEAD_DELEGATIONS: &str =
+    "SELECT * FROM delegations WHERE lead_kwant_id = ? AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC, rowid DESC LIMIT 100";
+
 impl Database {
+    /// The hand-offs `lead` made between `from` and `to` (at most 100, newest first): a team
+    /// job's members.
+    pub async fn lead_delegations(&self, lead: &str, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<Delegation>, DbError> {
+        Ok(sqlx::query_as(LEAD_DELEGATIONS).bind(lead).bind(from).bind(to).fetch_all(&self.pool).await?)
+    }
+
     /// Lead replies that ended with `Done: …` after `since`, newest first (any space: the caller
     /// keeps the ones whose lead is in its space).
     pub async fn done_replies(&self, since: DateTime<Utc>, limit: i64) -> Result<Vec<DoneReplyRow>, DbError> {
@@ -241,9 +280,7 @@ impl Database {
     /// A routine run's result message, its routine's instructions, the routine's id and what
     /// started the run (`schedule`, `manual`, `event`).
     pub async fn routine_run_result(&self, run_id: &str) -> Result<Option<(Option<String>, String, String, String)>, DbError> {
-        Ok(sqlx::query_as(
-            "SELECT r.message_id, rt.instructions, r.routine_id, r.trigger FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id WHERE r.id = ?",
-        )
+        Ok(sqlx::query_as(ROUTINE_RUN_RESULT)
         .bind(run_id)
         .fetch_optional(&self.pool)
         .await?)
@@ -264,10 +301,8 @@ impl Database {
     /// where the request a lead's `Done:` closes started.
     pub async fn last_person_message_before(&self, context: &str, at: DateTime<Utc>) -> Result<Option<Message>, DbError> {
         // One indexed lookup per kind of chat; a context id is only ever one of them
-        for col in ["channel_id", "direct_kwant_id", "thread_id"] {
-            let row = sqlx::query_as::<_, Message>(&format!(
-                "SELECT * FROM messages WHERE {col} = ? AND created_at <= ? AND sender_role = 'user' ORDER BY created_at DESC, rowid DESC LIMIT 1"
-            ))
+        for col in CHAT_COLUMNS {
+            let row = sqlx::query_as::<_, Message>(&person_before_sql(col))
             .bind(context)
             .bind(at)
             .fetch_optional(&self.pool)
@@ -290,10 +325,7 @@ impl Database {
         slack: chrono::Duration,
     ) -> Result<Option<Message>, DbError> {
         for col in ["thread_id", "channel_id", "direct_kwant_id"] {
-            let after = sqlx::query_as::<_, Message>(&format!(
-                "SELECT * FROM messages WHERE {col} = ? AND sender_role = 'kwant' AND sender_id = ? AND created_at >= ? AND created_at <= ? \
-                 ORDER BY created_at, rowid LIMIT 1"
-            ))
+            let after = sqlx::query_as::<_, Message>(&task_reply_after_sql(col))
             .bind(context)
             .bind(bot_name)
             .bind(review_at)
@@ -303,10 +335,7 @@ impl Database {
             if after.is_some() {
                 return Ok(after);
             }
-            let before = sqlx::query_as::<_, Message>(&format!(
-                "SELECT * FROM messages WHERE {col} = ? AND sender_role = 'kwant' AND sender_id = ? AND created_at < ? \
-                 ORDER BY created_at DESC, rowid DESC LIMIT 1"
-            ))
+            let before = sqlx::query_as::<_, Message>(&task_reply_before_sql(col))
             .bind(context)
             .bind(bot_name)
             .bind(review_at)
@@ -371,5 +400,47 @@ mod tests {
         let detail: Vec<String> = rows.into_iter().map(|r| r.3).collect();
         assert!(!detail.iter().any(|d| d.starts_with("SCAN")), "full scan: {detail:?}");
         assert!(detail.iter().any(|d| d.contains("messages_chain_done")), "messages_chain_done unused: {detail:?}");
+    }
+
+    /// The plan with every `?` bound (to a string: the plan doesn't depend on the value).
+    async fn plan_of(db: &Database, sql: &str) -> Vec<String> {
+        let params = sql.matches('?').count();
+        let explain = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut q = sqlx::query_as::<_, (i64, i64, i64, String)>(&explain);
+        for _ in 0..params {
+            q = q.bind("x");
+        }
+        q.fetch_all(&db.pool).await.unwrap().into_iter().map(|r| r.3).collect()
+    }
+
+    /// The per-item lookups behind the Inbox's done items (0.9.5 B) reach messages,
+    /// turn_tool_calls and the rest through an index or a primary key, never by a full scan.
+    #[tokio::test]
+    async fn inbox_done_lookups_use_indexes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let index_of = |col: &str| match col {
+            "channel_id" => "messages_by_channel",
+            "direct_kwant_id" => "messages_by_direct",
+            _ => "messages_by_thread",
+        };
+        let mut cases: Vec<(String, &str)> = vec![
+            (ROUTINE_RUN_RESULT.to_string(), "sqlite_autoindex_routine_runs_1"),
+            (format!("{DONE_REPLIES} ORDER BY created_at DESC, rowid DESC LIMIT ?2"), "messages_chain_done"),
+            // tool_calls_of (db/checkpoints.rs)
+            ("SELECT * FROM turn_tool_calls WHERE task_id = ? ORDER BY id".to_string(), "turn_tool_calls_task"),
+            (LEAD_DELEGATIONS.to_string(), "delegations_by_lead"),
+        ];
+        for col in CHAT_COLUMNS {
+            cases.push((person_before_sql(col), index_of(col)));
+            cases.push((task_reply_after_sql(col), index_of(col)));
+            cases.push((task_reply_before_sql(col), index_of(col)));
+        }
+        for (sql, idx) in cases {
+            let detail = plan_of(&db, &sql).await;
+            println!("{idx}: {}", detail.join(" | "));
+            assert!(!detail.iter().any(|d| d.starts_with("SCAN")), "full scan: {detail:?}\n{sql}");
+            assert!(detail.iter().any(|d| d.contains(idx)), "{idx} unused: {detail:?}\n{sql}");
+        }
     }
 }
