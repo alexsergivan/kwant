@@ -61,6 +61,12 @@ export interface RowStatus {
   detail: string | null;
 }
 
+/** The built-in login's title: "Signed in" only when it's on and signed in, so it never sits beside "Needs sign-in". */
+export function systemTitle(p: Profile, status: RowStatus): string {
+  const signedIn = p.enabled && (status.label === 'Ready' || status.label === 'In use' || status.label.startsWith('Out until'));
+  return signedIn ? 'Signed in on this computer' : 'On this computer';
+}
+
 /** "This machine" is the engine's own login, so its state comes from the engine's check; Off wins either way. */
 export function accountStatus(p: Profile, engine: EngineInfo, now = Date.now()): RowStatus {
   if (engine.enabled === false || engine.status === 'disabled') return { tone: 'muted', label: 'Off', detail: `Not checked while ${engine.name} is off` };
@@ -557,7 +563,7 @@ const AccountRow: React.FC<{
   const off = status.label === 'Off';
   const isClaude = p.engine === 'claude';
   const kindText = isSystem
-    ? `The ${engine.name.replace(/ CLI$/, '')} login on this computer`
+    ? `Your ${engine.name.replace(/ CLI$/, '')} login`
     : isCustom
       ? customKindText(p)
       : p.kind === 'api_key'
@@ -605,7 +611,7 @@ const AccountRow: React.FC<{
             ) : (
               <span className="inline-flex items-center gap-1 min-w-0">
                 <span id={nameId} className={`text-xs font-semibold truncate max-w-[12rem] ${off ? 'text-zinc-400' : 'text-zinc-100'}`}>
-                  {isSystem ? KIND_LABELS.system : p.name}
+                  {isSystem ? systemTitle(p, status) : p.name}
                 </span>
                 {!isSystem && (
                   <button
@@ -658,7 +664,7 @@ const AccountRow: React.FC<{
         <Switch
           on={p.enabled}
           disabled={busy}
-          label={`Use ${isSystem ? KIND_LABELS.system : p.name} for bots`}
+          label={isSystem ? `Use ${engine.name.replace(/ CLI$/, '')} on this computer for bots` : `Use ${p.name} for bots`}
           onChange={(on) => run(() => profilesApi.update(p.id, { enabled: on }))}
         />
       </div>

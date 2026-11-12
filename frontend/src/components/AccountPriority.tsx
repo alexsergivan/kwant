@@ -19,12 +19,13 @@ import { listNames } from '../appsAccounts';
 import { StatusPill } from './EngineAccounts';
 
 const smallBtn =
-  'inline-flex items-center justify-center gap-1 min-h-[32px] sm:min-h-[28px] px-2.5 rounded-md border text-[11px] font-medium transition-colors disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400';
+  'inline-flex items-center justify-center gap-1 min-h-[44px] sm:min-h-[28px] px-2.5 rounded-md border text-[11px] font-medium transition-colors disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400';
 const plainBtn = `${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-100 hover:bg-zinc-700`;
 const iconBtn =
-  'inline-flex items-center justify-center w-8 h-8 sm:w-7 sm:h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400';
-const linkBtn = 'text-[11px] font-medium text-sky-300 hover:text-sky-200 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 rounded';
-const groupTitle = 'text-[11px] font-medium text-zinc-400';
+  'inline-flex items-center justify-center w-11 h-11 sm:w-7 sm:h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400';
+const linkBtn = 'inline-flex items-center min-h-[44px] sm:min-h-0 text-[11px] font-medium text-sky-300 hover:text-sky-200 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 rounded';
+const groupTitle = 'text-xs font-semibold text-zinc-200';
+const quietGroupTitle = 'text-xs font-semibold text-zinc-400';
 
 export interface AccountPriorityProps {
   profiles: Profile[];
@@ -89,9 +90,12 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
   }, [focusKey, used, profiles]);
 
   const nameOf = (p: Profile) => `${engineLabel(p)} (${p.kind === 'system' ? 'on this computer' : p.name})`;
-  const usedLine = (p: Profile) => {
+  /** "Used by Ann" on the first row and on Not used. On a backup row the bots there start on it (pinned), so "Cody uses it first". */
+  const usedLine = (p: Profile, backup = false) => {
     const names = usedBy?.(p.id) ?? [];
-    return names.length ? `Used by ${names.length > 3 ? `${names.slice(0, 2).join(', ')} and ${names.length - 2} more` : listNames(names)}` : null;
+    if (!names.length) return null;
+    const who = names.length > 3 ? `${names.slice(0, 2).join(', ')} and ${names.length - 2} more` : listNames(names);
+    return backup ? `${who} ${names.length === 1 ? 'uses' : 'use'} it first` : `Used by ${who}`;
   };
 
   const fail = (e: unknown, what: string) => {
@@ -173,7 +177,7 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
 
   const row = (p: Profile, i: number) => {
     const status = priorityStatus(p, engineOf(p), now);
-    const line = usedLine(p);
+    const line = usedLine(p, i > 0);
     return (
       <li key={p.id} data-account={p.id} data-used-index={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2.5">
         <div className="flex-1 min-w-0">
@@ -188,7 +192,7 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
             {line && <span className="text-zinc-300"> · {line}</span>}
           </p>
           {i === 0 && firstOut && (
-            <p className="mt-0.5 text-[11px] text-amber-200" data-step-in>
+            <p className={`mt-0.5 text-[11px] ${stepIn ? 'text-zinc-300' : 'text-amber-200'}`} data-step-in>
               {stepIn ? `Bots use ${engineLabel(stepIn)} until then.` : 'Bots wait until then.'}
             </p>
           )}
@@ -252,7 +256,11 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
       )}
 
       {first && backups.length === 0 && (
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-dashed border-zinc-800 px-3 py-2.5 text-[11px] text-zinc-400" data-no-backup>
+        <div data-group="backup">
+          <h4 id="account-group-backup" className={groupTitle}>
+            If it runs out
+          </h4>
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-dashed border-zinc-800 px-3 py-2.5 text-[11px] text-zinc-400" data-no-backup>
           <span>
             No backup yet. If {engineLabel(first)} runs out, your bots wait until it resets.
           </span>
@@ -273,12 +281,13 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
               </button>
             )
           )}
-        </p>
+          </p>
+        </div>
       )}
 
       {groups.notUsed.length > 0 && (
         <div data-group="not-used">
-          <h4 id="account-group-off" className={groupTitle}>
+          <h4 id="account-group-off" className={quietGroupTitle}>
             Not used
           </h4>
           <ul aria-labelledby="account-group-off" className="mt-1.5 space-y-1.5">
@@ -406,7 +415,7 @@ const RowMenu: React.FC<{
               type="button"
               role="menuitem"
               disabled={it.disabled}
-              className="block w-full rounded-md px-2.5 py-2 sm:py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-800 focus:bg-zinc-800 focus:outline-none disabled:opacity-40 disabled:hover:bg-transparent"
+              className="block w-full rounded-md px-2.5 py-2 sm:py-1.5 min-h-[44px] sm:min-h-0 text-left text-xs text-zinc-200 hover:bg-zinc-800 focus:bg-zinc-800 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400 disabled:opacity-40 disabled:hover:bg-transparent"
               onClick={() => {
                 close(false);
                 it.run();

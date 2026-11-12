@@ -42,7 +42,7 @@ const withCode = (text: string) =>
 const summaryAccounts = (accounts: Profile[], now: number) =>
   accounts.map((p) => {
     const limit = activeLimit(p.limited_until, now);
-    return { name: p.kind === 'system' ? 'This machine' : p.name, usable: accountUsable(p, now), is_default: p.is_default, priority: p.priority, outUntil: limit ? formatUntil(limit, now) : null };
+    return { name: p.kind === 'system' ? 'the sign-in on this computer' : p.name, usable: accountUsable(p, now), is_default: p.is_default, priority: p.priority, outUntil: limit ? formatUntil(limit, now) : null };
   });
 
 /** One engine: its status, switch and models up top, and the accounts it can run on underneath. */

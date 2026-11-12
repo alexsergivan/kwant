@@ -653,7 +653,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
                       <span className="block text-[11px] text-zinc-500 line-clamp-2" title={t.blurb}>{t.blurb}</span>
                     </span>
                   </span>
-                  <span className={`text-[11px] font-medium ${connected ? 'text-emerald-300' : unknowable ? 'text-zinc-300' : 'text-sky-300'}`} data-tile-state={connected ? 'connected' : unknowable ? 'unknown' : 'connect'}>
+                  <span className={`mt-auto text-[11px] font-medium ${connected ? 'text-emerald-300' : unknowable ? 'text-zinc-300' : 'text-sky-300'}`} data-tile-state={connected ? 'connected' : unknowable ? 'unknown' : 'connect'}>
                     {load.state === 'loading' ? 'Checking…' : connected ? '✓ Connected · Choose bots' : unknowable ? 'Sign in or choose bots' : 'Connect'}
                     <span className="sr-only"> {t.name}</span>
                   </span>
@@ -728,7 +728,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
           className="group rounded-xl border border-zinc-800 scroll-mt-4"
           data-manage-accounts
         >
-          <summary className="flex items-center gap-2 min-h-[40px] px-3 cursor-pointer list-none text-xs font-medium text-zinc-300 hover:text-zinc-100 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500">
+          <summary className="flex items-center gap-2 min-h-[44px] px-3 cursor-pointer list-none text-xs font-medium text-zinc-300 hover:text-zinc-100 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500">
             <ChevronRight size={14} className="transition-transform group-open:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
             Sign-ins and settings
             <span className="font-normal text-zinc-500">· add an account or an API key</span>

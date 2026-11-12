@@ -439,3 +439,11 @@ test('Sign-ins and settings has no account list of its own: no "What runs your k
   assert.doesNotMatch(here, /data-route-summary|What runs your/);
   assert.match(here, /Claude Code CLI/, 'sign-ins stay');
 });
+
+test('F16 and F13: tile labels sit on the tile’s bottom edge; the Sign-ins summary is 44 px', () => {
+  const html = m.renderToStaticMarkup(h(m.AppsAccounts, pageProps()));
+  const states = [...html.matchAll(/<span class="([^"]*)" data-tile-state=/g)].map((x) => x[1]);
+  assert.equal(states.length, 6);
+  for (const c of states) assert.match(c, /^mt-auto /);
+  assert.match(html, /<summary class="[^"]*min-h-\[44px\][^"]*"[^>]*>[\s\S]*?Sign-ins and settings/);
+});

@@ -74,7 +74,7 @@ test('Alex: one Claude card says bots use Personal, with This machine first and 
   assert.match(html, /data-engine="claude" data-status="ready"/);
   assert.equal(summary(html, 'claude'), 'Bots use Personal');
   const names = [...card(html, 'claude').matchAll(/id="account-[^"]+-name"[^>]*>([^<]+)</g)].map((x) => x[1]);
-  assert.deepEqual(names, ['This machine', 'Personal']);
+  assert.deepEqual(names, ['On this computer', 'Personal'], 'F11: signed out, so not "Signed in"');
   // This machine: not signed in, with the Batch 9 sign-in on its row; Personal is in use.
   const rows = card(html, 'claude').split('data-account=');
   assert.match(rows[1], /Needs sign-in/);
@@ -178,4 +178,28 @@ test('a new space with no keys still offers every engine an account can be added
   }
   assert.match(card(html, 'codex'), /> Add account</);
   assert.match(html, /Not available on this computer \(1\)/, 'only Ollama is folded away');
+});
+
+// ── F11 (design-check-r2): the sign-in cards never say "This machine" ────────────────────────────
+test('F11: the built-in login reads "Signed in on this computer" only when on and signed in, else "On this computer"', () => {
+  const signedIn = { ...machine, signed_in: true };
+  const ready = engine('claude', { uses: { profile_id: 'prf_system_claude', label: 'This machine' } });
+  const on = panel([ready], [signedIn, personal]);
+  const names = (html) => [...card(html, 'claude').matchAll(/id="account-[^"]+-name"[^>]*>([^<]+)</g)].map((x) => x[1]);
+  assert.equal(names(on)[0], 'Signed in on this computer');
+  assert.equal(summary(on, 'claude'), 'Bots use the sign-in on this computer', 'the server label is mapped here; Vega changes the server string');
+  assert.match(on, /Your Claude Code login/);
+  assert.match(on, /aria-label="Use Claude Code on this computer for bots"/);
+  assert.doesNotMatch(card(on, 'claude'), /This machine/, 'the route summary (routing.ts hostName) is a later follow-up and hidden on Apps & accounts');
+  // Signed out: never "Signed in" beside "Needs sign-in".
+  const out = panel([alexOn], [machine, personal]);
+  assert.equal(names(out)[0], 'On this computer');
+  assert.doesNotMatch(card(out, 'claude'), /Signed in on this computer/);
+  assert.doesNotMatch(card(out, 'claude'), /This machine/);
+  // Off: also "On this computer".
+  const off = panel([ready], [{ ...signedIn, enabled: false }, personal]);
+  assert.equal(names(off)[0], 'On this computer');
+  // Off engine with only the built-in login usable: the header names it the same way.
+  const offEngine = panel([engine('claude', { enabled: false, status: 'disabled', ready: false })], [signedIn]);
+  assert.equal(summary(offEngine, 'claude'), 'Off · Turn on to use the sign-in on this computer');
 });

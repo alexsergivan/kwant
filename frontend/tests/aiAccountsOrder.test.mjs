@@ -160,7 +160,8 @@ test('one ready account: "No backup yet" with Turn on for an off one, or Add an 
   const line = host.querySelector('[data-no-backup]');
   assert.match(text(line), /^No backup yet\. If Claude runs out, your bots wait until it resets\./);
   assert.equal(text(line.querySelector('[data-no-backup-action]')), 'Turn on Codex');
-  assert.equal(host.querySelector('[data-group="backup"]'), null);
+  assert.equal(host.querySelectorAll('[data-group="backup"] li').length, 0, 'no backup rows');
+  assert.ok(host.querySelector('[data-group="backup"] [data-no-backup]'), 'F14: the line sits under If it runs out');
   const alone = m.renderToStaticMarkup(h(m.AccountPriority, { profiles: [one[0]], engines: [engine('claude')], onChanged: async () => {}, onAddAccount: () => {}, now: NOW }));
   assert.match(alone, /No backup yet\./);
   assert.match(alone, /data-no-backup-action="true">Add an account</);
@@ -194,4 +195,68 @@ test('the More menu holds Move up, Move down and Turn off; arrows move in it and
   await settle();
   assert.equal(host.querySelector('[data-row-menu-list]'), null);
   assert.equal(document.activeElement, btn);
+});
+
+// ── Round 3 (design-check-r2 F12–F15) ────────────────────────────────────────────────────────────
+const render = (profs, extra = {}) => m.renderToStaticMarkup(h(m.AccountPriority, { profiles: profs, engines: oleksEngines, onChanged: async () => {}, now: NOW, ...extra }));
+const group = (html, name) => html.split(`data-group="${name}"`)[1]?.split('data-group=')[0] ?? '';
+
+test('F12: a bot pinned to a backup account "uses it first"; the first row keeps "Used by"', () => {
+  const users = { personal: ['Ann', 'Ben'], 'sys-grok': ['Cody'] };
+  let html = render(oleks(), { usedBy: (id) => users[id] ?? [] });
+  assert.match(group(html, 'first'), /Used by Ann and Ben/);
+  assert.match(group(html, 'backup'), /Cody uses it first/);
+  assert.doesNotMatch(group(html, 'backup'), /Used by/);
+  users['sys-grok'] = ['Cody', 'Dee'];
+  assert.match(group(render(oleks(), { usedBy: (id) => users[id] ?? [] }), 'backup'), /Cody and Dee use it first/);
+  users['sys-grok'] = ['Cody', 'Dee', 'Eve', 'Fay'];
+  assert.match(group(render(oleks(), { usedBy: (id) => users[id] ?? [] }), 'backup'), /Cody, Dee and 2 more use it first/);
+  // Not used, signed out: "Used by" explains why Sign in is amber.
+  const profs = oleks();
+  profs[3] = profile({ id: 'sys-codex', engine: 'codex', priority: 40, signed_in: false });
+  html = m.renderToStaticMarkup(h(m.AccountPriority, { profiles: profs, engines: [engine('claude'), engine('grok'), engine('codex', { status: 'signed_out', ready: false })], onChanged: async () => {}, now: NOW, usedBy: (id) => (id === 'sys-codex' ? ['Cody'] : []) }));
+  assert.match(group(html, 'not-used'), /Used by Cody/);
+});
+
+test('F13: Use first, Turn on, ⋯, links and menu items are 44 px on phones; menu items show keyboard focus', async () => {
+  const html = render(oleks(), { onAddAccount: () => {} });
+  const cls = (re) => [...html.matchAll(re)].map((x) => x[1]);
+  for (const c of cls(/<button[^>]*class="([^"]*)"[^>]*data-use-first/g)) assert.match(c, /min-h-\[44px\] sm:min-h-\[28px\]/);
+  for (const c of cls(/<button[^>]*class="([^"]*)"[^>]*data-turn-on/g)) assert.match(c, /min-h-\[44px\] sm:min-h-\[28px\]/);
+  const more = cls(/<button[^>]*class="([^"]*)"[^>]*data-row-menu/g);
+  assert.ok(more.length > 0);
+  for (const c of more) assert.match(c, /w-11 h-11 sm:w-7 sm:h-7/);
+  const alone = m.renderToStaticMarkup(h(m.AccountPriority, { profiles: [oleks()[0]], engines: [engine('claude')], onChanged: async () => {}, onAddAccount: () => {}, now: NOW }));
+  assert.match(alone, /class="inline-flex items-center min-h-\[44px\] sm:min-h-0[^"]*"[^>]*data-no-backup-action="true">Add an account/);
+  server(oleks());
+  const { host } = await mount(oleks(), oleksEngines.map((e) => ({ ...e })));
+  await click(host.querySelector('[data-account="sys-grok"] [data-row-menu]'));
+  for (const it of host.querySelectorAll('[role="menuitem"]')) {
+    assert.match(it.className, /min-h-\[44px\] sm:min-h-0/);
+    assert.match(it.className, /focus-visible:outline-2/);
+    assert.match(it.className, /focus-visible:outline-sky-400/);
+  }
+});
+
+test('F14: headings are text-xs semibold (Not used quieter), and one ready account still shows "If it runs out"', () => {
+  const html = render(oleks());
+  assert.match(html, /<h4 id="account-group-first" class="text-xs font-semibold text-zinc-200">Used first/);
+  assert.match(html, /<h4 id="account-group-backup" class="text-xs font-semibold text-zinc-200">If it runs out/);
+  assert.match(html, /<h4 id="account-group-off" class="text-xs font-semibold text-zinc-400">Not used/);
+  const one = [profile({ id: 'personal', name: 'Personal', kind: 'cli_home', priority: 10 }), profile({ id: 'sys-grok', engine: 'grok', priority: 20, enabled: false })];
+  const solo = m.renderToStaticMarkup(h(m.AccountPriority, { profiles: one, engines: [engine('claude'), engine('grok')], onChanged: async () => {}, now: NOW }));
+  const backup = group(solo, 'backup');
+  assert.match(backup, /If it runs out<\/h4>/);
+  assert.match(backup, /data-no-backup="true"[^>]*>|class="mt-1\.5[^"]*"[^>]*data-no-backup/);
+  assert.match(backup, /No backup yet\. If Claude runs out, your bots wait until it resets\./);
+  const at = (t) => solo.indexOf(`>${t}</h4>`);
+  assert.ok(at('Used first') > 0 && at('Used first') < at('If it runs out') && at('If it runs out') < at('Not used'), 'Used first → If it runs out → Not used');
+});
+
+test('F15: "Bots use Grok until then." is zinc-300; "Bots wait until then." stays amber', () => {
+  const profs = oleks();
+  profs[0].limited_until = '2026-11-13T03:00:00';
+  assert.match(render(profs), /class="mt-0\.5 text-\[11px\] text-zinc-300" data-step-in="true">Bots use Grok until then\./);
+  const alone = [{ ...profs[0] }];
+  assert.match(m.renderToStaticMarkup(h(m.AccountPriority, { profiles: alone, engines: [engine('claude')], onChanged: async () => {}, now: NOW })), /class="mt-0\.5 text-\[11px\] text-amber-200" data-step-in="true">Bots wait until then\./);
 });
