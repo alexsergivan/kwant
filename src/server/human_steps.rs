@@ -240,6 +240,8 @@ fn card_meta(s: &HumanStep) -> Value {
         "reason": s.reason,
         "url": s.url,
         "sandbox_target": s.sandbox_target,
+        // the page to show for this step (`?page=` on the live view)
+        "page_key": s.page(),
         "source": s.source,
         "status": s.status,
         "target": s.target.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok()),
@@ -283,7 +285,7 @@ async fn changed(state: &AppState, s: &HumanStep) {
     let _ = state.event_sender.send(RuntimeEvent::HumanStepUpdated { step: serde_json::to_value(s).unwrap_or(Value::Null) });
 }
 
-/// Holds the browser for the person, if it is running.
+/// Holds the browser page for the person, if it is running.
 async fn hold_browser(state: &AppState, target: Option<&str>) {
     let Some(target) = target else { return };
     let ctrl = state.browser_controllers.lock().await.get(target).cloned();
@@ -294,10 +296,10 @@ async fn hold_browser(state: &AppState, target: Option<&str>) {
     }
 }
 
-/// Hands the browser back once no step is open in it any more.
+/// Hands the browser page back once no step is open on it any more.
 async fn release_browser(state: &AppState, target: Option<&str>) {
     let Some(target) = target else { return };
-    if state.db.human_step_open_in(target).await.unwrap_or(false) {
+    if state.db.human_step_open_on(target).await.unwrap_or(false) {
         return;
     }
     let ctrl = state.browser_controllers.lock().await.get(target).cloned();
@@ -316,7 +318,7 @@ async fn close(state: &AppState, id: &str, status: &'static str) -> Option<Human
         return None;
     }
     let s = state.db.get_human_step(id).await.ok().flatten()?;
-    release_browser(state, s.sandbox_target.as_deref()).await;
+    release_browser(state, s.page()).await;
     if let Some(turn) = s.turn_id.as_deref().and_then(super::activity::TurnActivity::find) {
         turn.settle(&s.id, if status == "cancelled" { "stopped" } else { status });
     }
@@ -324,9 +326,10 @@ async fn close(state: &AppState, id: &str, status: &'static str) -> Option<Human
     Some(s)
 }
 
-/// Whether a human step holds this bot browser: bot actions wait until it closes.
-pub async fn browser_is_held(state: &AppState, target: &str) -> bool {
-    state.db.human_step_open_in(target).await.unwrap_or(false)
+/// Whether a human step holds this browser page (a job's page, or the team page): bot actions
+/// on it wait until it closes. Other pages of the team are not held.
+pub async fn browser_is_held(state: &AppState, page: &str) -> bool {
+    state.db.human_step_open_on(page).await.unwrap_or(false)
 }
 
 // Agent tool
@@ -410,7 +413,8 @@ pub async fn raise(
     target: Option<&CaptchaHit>,
     source: &str,
 ) -> Result<Option<Outcome>, String> {
-    raise_step(state, scope, kind, reason, url, target, source, true).await
+    let page = super::browser_pages::scope_page(scope);
+    raise_step(state, scope, page, kind, reason, url, target, source, true).await
 }
 
 /// [`raise`]; `wait: false` only asks (card, notification, held browser, CAPTCHA watcher) and
@@ -421,6 +425,7 @@ pub async fn raise(
 async fn raise_step(
     state: &AppState,
     scope: &SelfScope,
+    page: Option<String>,
     kind: &str,
     reason: &str,
     url: Option<&str>,
@@ -443,11 +448,13 @@ async fn raise_step(
         thread_id: origin.thread_id.clone(),
         turn_id: scope.turn_id.clone(),
         sandbox_target: scope.sandbox_target.clone(),
+        // only a page of this turn's own bot browser
+        page_key: page.filter(|p| scope.sandbox_target.as_deref() == Some(super::browser_pages::page_team(p))),
     };
     // The browser is the person's before anyone can see the step: a bot action that lands between
     // the two would otherwise run on a page the person was just asked to use (and a test reading
     // the open step could find the browser not yet held, as CI did once on 3bfe50e)
-    hold_browser(state, place.sandbox_target.as_deref()).await;
+    hold_browser(state, place.page_key.as_deref().or(place.sandbox_target.as_deref())).await;
     // Like ask_user, the step, its card and the waiter appear together
     let hub = &state.human_steps;
     let target_json = target.and_then(|t| serde_json::to_string(t).ok());
@@ -478,7 +485,7 @@ async fn raise_step(
                 hub.take(&id);
             }
             // No step after all: hand the browser back unless another step still holds it
-            release_browser(state, place.sandbox_target.as_deref()).await;
+            release_browser(state, place.page_key.as_deref().or(place.sandbox_target.as_deref())).await;
             return Err(match e {
                 HumanStepError::Db => "Could not save the step.".into(),
                 e => e.to_string(),
@@ -516,7 +523,7 @@ async fn raise_step(
     if is_new {
         // Again, in case another step in this browser closed (and handed it back) just before
         // this one was saved; a no-op when it is still held
-        hold_browser(state, step.sandbox_target.as_deref()).await;
+        hold_browser(state, step.page()).await;
         if step.kind == "captcha" && step.sandbox_target.is_some() {
             // a CAPTCHA kwnt saw is on the page already; one the bot named must show up first
             spawn_watch_captcha(state.clone(), step.id.clone(), source == "auto");
@@ -605,11 +612,11 @@ pub const ASKED_NOTE: &str = "A CAPTCHA / human check blocked the page, so kwnt 
 /// [`raise_for_bot_wall`] for a CAPTCHA no tool call can wait on: kwnt opened the page before
 /// the bot's turn, or the bot met it through the shell browser API. The person gets the card and
 /// the notification at once; the answer starts a new turn. `None` when there's no chat to ask in
-/// (the note for the bot otherwise).
-pub async fn ask_for_bot_wall(state: &AppState, scope: &SelfScope, page: &Value) -> Option<String> {
+/// (the note for the bot otherwise). `on`: the browser page that showed it, which the step holds.
+pub async fn ask_for_bot_wall(state: &AppState, scope: &SelfScope, on: &str, page: &Value) -> Option<String> {
     scope.origin.as_ref()?;
     let (reason, url, target) = wall_request(page);
-    match raise_step(state, scope, "captcha", &reason, url.as_deref(), target.as_ref(), "auto", false).await {
+    match raise_step(state, scope, Some(on.to_string()), "captcha", &reason, url.as_deref(), target.as_ref(), "auto", false).await {
         Ok(Some(outcome)) => Some(format!("A CAPTCHA blocked the page, so the person was asked to solve it. {}", outcome_text(Some(outcome), true))),
         Ok(None) => Some(ASKED_NOTE.to_string()),
         Err(e) => {
@@ -665,7 +672,7 @@ async fn watch_captcha(state: AppState, id: String, mut seen: bool) {
             settle(&state, &id, Outcome::TimedOut).await;
             return;
         }
-        let Some(target) = step.sandbox_target.as_deref() else { return };
+        let Some(target) = step.page() else { return };
         let ctrl = state.browser_controllers.lock().await.get(target).cloned();
         let Some(ctrl) = ctrl else { continue };
         match wall_on_page(&ctrl).await {

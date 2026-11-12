@@ -34,6 +34,7 @@ pub mod questions;
 pub mod activity;
 pub mod bot_status;
 pub mod human_steps;
+pub mod browser_pages;
 pub mod skills;
 pub mod spaces;
 pub mod asks;
@@ -335,6 +336,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/navigate", post(routes::navigate_sandbox_api))
         .route("/api/sandbox/:team_id/interact", post(routes::interact_sandbox))
         .route("/api/sandbox/:team_id/stream", get(browser_stream::upgrade))
+        .route("/api/sandbox/:team_id/pages", get(browser_pages::list_pages))
         .route("/api/sandbox/:team_id/page", get(routes::get_sandbox_page_api))
         .route("/api/sandbox/:team_id/act", post(routes::act_sandbox_api))
         .route("/api/sandbox/:team_id/cite", post(routes::cite_sandbox))

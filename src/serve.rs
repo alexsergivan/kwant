@@ -76,6 +76,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     // browser containers left by this or another kwant: remove orphans, stop idle ones
     let browser = state.browser_service.clone();
     browser.clone().spawn_reaper(cancel.clone());
+    // each job's own browser page: closed once idle past its limit (never one a step holds)
+    crate::server::browser_pages::spawn_sweeper(state.clone(), cancel.clone());
     // Claude's VM containers: remove ones a previous run left, then idle ones (Linux only)
     if crate::sandbox::agent_vm::supported_os().is_ok() {
         state.agent_vm.start_reaper();

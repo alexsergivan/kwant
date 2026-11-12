@@ -29,7 +29,7 @@ pub async fn apply_mode(state: &AppState) -> ComputerMode {
     if state.browser_service.mode() != mode {
         let mut controllers = state.browser_controllers.lock().await;
         if state.browser_service.set_mode(mode).await {
-            for team_id in controllers.drain().map(|(id, _)| id) {
+            for team_id in controllers.drain().map(|(id, _)| super::browser_pages::page_team(&id).to_string()).collect::<std::collections::BTreeSet<_>>() {
                 let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
                     team_id,
                     container_name: "browser-service".into(),
@@ -206,7 +206,7 @@ pub async fn put_window(
                 format!("Could not restart Chrome: {error}"),
             ));
         }
-        for team_id in controllers.drain().map(|(id, _)| id) {
+        for team_id in controllers.drain().map(|(id, _)| super::browser_pages::page_team(&id).to_string()).collect::<std::collections::BTreeSet<_>>() {
             let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
                 team_id,
                 container_name: "browser-service".into(),

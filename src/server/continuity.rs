@@ -734,9 +734,11 @@ pub const BROWSER_CITE: &str = "browser_cite";
 /// Same holds as the other browser tools: the person's sign-in/CAPTCHA step or their control.
 pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope, args: &Value) -> (Value, bool) {
     let text = |t: &str| json!([{"type": "text", "text": t}]);
-    let Some(target) = &scope.sandbox_target else {
+    // the turn's own page: its job page in a chat, else the team page
+    let Some(target) = super::browser_pages::scope_page(scope) else {
         return (text(&format!("Unknown tool {BROWSER_SCREENSHOT}.")), true);
     };
+    let target = &target;
     if super::human_steps::browser_is_held(state, target).await {
         return (
             text("The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions until they finish it."),
@@ -1290,8 +1292,10 @@ async fn call_tool(
                 }
             }
         }
-        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE => match &scope.sandbox_target {
-            Some(target) => call_browser_tool(state, scope, target, name, args).await,
+        // on the turn's own page (its job page in a chat), so a page held for another job's
+        // sign-in doesn't stop this one
+        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE => match super::browser_pages::scope_page(scope) {
+            Some(target) => call_browser_tool(state, scope, &target, name, args).await,
             None => (format!("Unknown tool {name}."), true),
         },
         super::rerouting::HAND_BACK => super::rerouting::tool_call(state, scope, args).await,
