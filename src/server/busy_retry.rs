@@ -417,7 +417,7 @@ mod tests {
                 if busy.get(n).copied().unwrap_or(false) {
                     slot.put(step.clone());
                 }
-                async move { Ok(format!("reply {n}")) }
+                async move { Ok::<String, String>(format!("reply {n}")) }
             },
             |s, attempt, after| {
                 assert_eq!(s, step, "the retry is for the same step");
@@ -449,10 +449,11 @@ mod tests {
         // The run fails, so it is recorded as failed and the Inbox gets today's routine_failed item
         let err = outcome.expect_err("the run fails once the retries are used up");
         assert_eq!(err, "the browser stayed busy after 2 automatic retries of `browser_act`");
+        let recorded = super::super::routes::routine_turn_error(&err);
         assert_eq!(
-            super::super::scheduler::failed_body("Morning prices", Some(&err)),
-            "The routine \"Morning prices\" did not finish: the browser stayed busy after 2 automatic retries of `browser_act`. \
-             Open the routine to see the run or run it again."
+            super::super::scheduler::failed_body("Morning prices", Some(&recorded)),
+            "The routine \"Morning prices\" did not finish: the bot's turn failed: the browser stayed busy after 2 automatic \
+             retries of `browser_act`. Open the routine to see the run or run it again."
         );
     }
 

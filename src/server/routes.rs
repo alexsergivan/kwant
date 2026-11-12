@@ -1124,8 +1124,13 @@ async fn run_turn_with(
         Err(_) if job.token.is_cancelled() => Err("stopped by the user".into()),
         // Today's spending stop held the turn: it never ran, so the caller records a skip
         Err(why) if super::spend_stop::is_stop_error(&why) => Err(why),
-        Err(why) => Err(format!("the bot's turn failed: {why}")),
+        Err(why) => Err(routine_turn_error(&why)),
     }
+}
+
+/// The error a routine run (or routed turn) records when its bot's turn failed with `why`.
+pub(super) fn routine_turn_error(why: &str) -> String {
+    format!("the bot's turn failed: {why}")
 }
 
 /// The prompt of the one automatic continuation a routine's or delegation's turn gets when it ran
