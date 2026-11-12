@@ -34,7 +34,9 @@ export function unreadLine(r: Pick<InboxResponse, 'items' | 'since' | 'last_seen
   const seen = Date.parse(r.last_seen ?? '');
   const widened = Number.isFinite(since) && Number.isFinite(seen) && since < seen - 60_000;
   if (!flagged && !widened) return null;
-  const n = r.items.filter(isUnread).length;
+  // Rows, not items: a routine run folded into its review is one row, so it counts once.
+  const { needs, done } = sectionItems(r);
+  const n = [...needs, ...done].filter(isUnread).length;
   const ago = r.last_seen ? relativeTime(r.last_seen, now) : '';
   const head = n ? `${n} new` : 'Nothing new';
   return ago ? `${head} since you last looked, ${ago}` : head;

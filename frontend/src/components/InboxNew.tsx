@@ -593,7 +593,9 @@ const ItemPane: React.FC<{
   if (isReview(item) && !doneLayout) return <ReviewItemView item={item} entry={entry} onDone={onDone} onHeldResolved={onHeldResolved} />;
   const target = d.target ?? servedTarget(item);
   const openChat = () => (target && onOpenMessage ? onOpenMessage(target) : onOpenItemChat(runItem ?? item));
-  const place = d.routine ? (placeName?.(d.routine.channel_id) ?? null) : null;
+  // Part B's result_link names where the answer is when the routine isn't loaded (and for team jobs).
+  const placeId = d.routine?.channel_id ?? item.result_link?.channel_id ?? null;
+  const place = placeId ? (placeName?.(placeId) ?? null) : null;
   const routineId = d.routine?.id;
   const edit = onEditRoutine && routineId ? () => onEditRoutine(routineId) : undefined;
   if (!isReview(item)) return <DoneItemView item={item} d={d} place={place} phone={phone} onOpenChat={openChat} onEditRoutine={onEditRoutine} />;
