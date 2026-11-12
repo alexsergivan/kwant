@@ -11,7 +11,7 @@ use tokio::{process::Command, sync::Mutex, time::{sleep, timeout}};
 /// The VM browser's image. Bump it whenever `docker/browser.Dockerfile` or
 /// `docker/browser-entrypoint.sh` change: kwant builds an image only when its tag is missing, and
 /// replaces a browser container made from another tag, so the bump is what ships the change.
-pub const BROWSER_IMAGE: &str = "kwnt-browser:v2";
+pub const BROWSER_IMAGE: &str = "kwnt-browser:v3";
 const BROWSER_DOCKERFILE: &str = include_str!("../../docker/browser.Dockerfile");
 const BROWSER_ENTRYPOINT: &str = include_str!("../../docker/browser-entrypoint.sh");
 
@@ -773,7 +773,7 @@ mod image_tests {
     use super::{BROWSER_DOCKERFILE, BROWSER_ENTRYPOINT, BROWSER_IMAGE};
     use sha2::{Digest, Sha256};
 
-    /// The browser files `kwnt-browser:v2` was built from. A change to them without a new
+    /// The browser files `kwnt-browser:v3` was built from. A change to them without a new
     /// [`BROWSER_IMAGE`] would never reach a computer that already has the old tag.
     #[test]
     fn the_browser_image_tag_moves_with_its_files() {
@@ -783,7 +783,7 @@ mod image_tests {
         let hash: String = files.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             (BROWSER_IMAGE, hash.as_str()),
-            ("kwnt-browser:v2", "52d86739629ce24f"),
+            ("kwnt-browser:v3", "8176b39255827329"),
             "docker/browser files changed: bump BROWSER_IMAGE, then record the new hash here"
         );
     }
