@@ -256,6 +256,65 @@ def wait_health(port, seconds):
     raise TimeoutError(f"/api/health did not answer in {seconds}s")
 
 
+def _read(path):
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return "n/a"
+
+
+def probe_chrome(browser, extra=(), seconds=20):
+    """Starts `browser` the way kwnt's local Chrome starts (same flags, a fresh profile) but with its stderr kept, and
+    says whether it opened a debugging port. Returns (opened, exit code or None, stderr tail). Never raises."""
+    root = Path(tempfile.mkdtemp(prefix="perf-chrome-probe-"))
+    err = root / "stderr.txt"
+    proc = None
+    try:
+        args = [browser, f"--user-data-dir={root / 'p'}", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
+                "--no-first-run", "--no-default-browser-check", "--headless=new", "--window-size=1280,800", *extra, "about:blank"]
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(err, "w"), start_new_session=True)
+        opened, code = False, None
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if (root / "p" / "DevToolsActivePort").exists():
+                opened = True
+                break
+            code = proc.poll()
+            if code is not None:
+                break
+            time.sleep(0.25)
+        tail = "\n".join(err.read_text(errors="replace").splitlines()[-12:])
+        return opened, code, tail
+    except Exception as e:  # a diagnosis must never turn a SKIP into a crash
+        return False, None, f"probe failed: {e}"
+    finally:
+        if proc:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def diagnose_chrome(browser):
+    """Why Chrome may not start here, for the log: the OS, the AppArmor switch for unprivileged user namespaces, and
+    Chrome's own stderr with kwnt's flags and again with --no-sandbox (kwnt throws Chrome's stderr away)."""
+    lines = [f"os: {next((l.split('=', 1)[1].strip(chr(34)) for l in _read('/etc/os-release').splitlines() if l.startswith('PRETTY_NAME=')), 'n/a')}",
+             f"kernel.apparmor_restrict_unprivileged_userns = {_read('/proc/sys/kernel/apparmor_restrict_unprivileged_userns')}",
+             f"kernel.unprivileged_userns_clone = {_read('/proc/sys/kernel/unprivileged_userns_clone')}",
+             f"user.max_user_namespaces = {_read('/proc/sys/user/max_user_namespaces')}",
+             f"chrome: {browser}"]
+    try:
+        lines.append("version: " + subprocess.run([browser, "--version"], capture_output=True, text=True, timeout=20).stdout.strip())
+    except Exception as e:
+        lines.append(f"version: failed ({e})")
+    for label, extra in (("kwnt's flags", ()), ("kwnt's flags plus --no-sandbox", ("--no-sandbox",))):
+        opened, code, tail = probe_chrome(browser, extra)
+        lines.append(f"with {label}: " + ("opened its debugging port" if opened else f"no debugging port (exit {code})"))
+        if tail and not opened:
+            lines.append("  stderr: " + tail.replace("\n", "\n          "))
+    return "\n".join(lines)
+
+
 def open_browser_page(port, kid, wait):
     """Time from asking the bot to open a page to the page being open (cold Chrome). kwnt answers 503 ("could not start
     kwant's Chrome ...") when Chrome never opens its debugging port; on that the call is repeated until `wait` seconds
@@ -369,6 +428,7 @@ def main():
     limits = json.loads(limits_path.read_text()).get("limits", {}) if limits_path.is_file() else {}
     browser = find_browser(args.browser)
     skipped = {}
+    diagnosis = None
     if not browser:
         skipped["browser_launch_s"] = "no browser"
         print("SKIP browser: no browser", flush=True)
@@ -382,6 +442,8 @@ def main():
         if runs[-1].get("browser_skip"):
             skipped["browser_launch_s"] = runs[-1]["browser_skip"]
             print(f"SKIP browser: {skipped['browser_launch_s']}", flush=True)
+            diagnosis = diagnose_chrome(browser)
+            print("---- why Chrome did not start (diagnosis) ----\n" + diagnosis, flush=True)
             browser = None  # Chrome cannot start here: the remaining runs do not try it again
 
     medians = {k: median([r.get(k) for r in runs]) for k in MEASURES}
@@ -391,7 +453,7 @@ def main():
     results = {
         "when": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "kwnt": str(kwnt), "runs": args.runs, "memory_runs": args.memory_runs, "idle_seconds": args.idle_seconds,
-        "browser": found_browser, "browser_skip": skipped.get("browser_launch_s"), "measures": rows, "samples": {k: [r.get(k) for r in runs] for k in MEASURES},
+        "browser": found_browser, "browser_skip": skipped.get("browser_launch_s"), "chrome_diagnosis": diagnosis, "measures": rows, "samples": {k: [r.get(k) for r in runs] for k in MEASURES},
     }
     Path(args.out).write_text(json.dumps(results, indent=2) + "\n")
     print(f"\nwrote {args.out}")
@@ -399,6 +461,8 @@ def main():
     if summary:
         with open(summary, "a") as f:
             f.write(summary_markdown(rows))
+            if diagnosis:
+                f.write("\n<details><summary>Why Chrome did not start</summary>\n\n```\n" + diagnosis + "\n```\n</details>\n")
 
     if args.update_baseline:
         baseline = {k: round(v, 3) for k, v in medians.items() if v is not None}
