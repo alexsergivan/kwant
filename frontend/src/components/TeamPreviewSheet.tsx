@@ -300,6 +300,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
 
   const close = useCallback(() => {
     if (phase === 'creating') return;
+    if (dPhase === 'reading' && readAbort.current && !readAbort.current.signal.aborted) teamsApi.cancelSuggest(space);
     readAbort.current?.abort();
     if (isN && again && dPhase === 'reading' && sugRef.current) {
       // Stop the second ask and keep the team that was here.
@@ -309,7 +310,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       return;
     }
     onClose();
-  }, [phase, onClose, isN, again, dPhase]);
+  }, [phase, onClose, isN, again, dPhase, space]);
   useEscapeLayer(rootRef, true, close, { modal: true });
 
   // Seed names and handle once the template is here (T9 clash rules).
@@ -477,7 +478,10 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   };
   const ticked = isD ? tickedCount(edits) : tBots.length;
   const anyNameBad = isD ? dRows.some((b) => edits[b.key]?.ticked && nameErr(b.key)) : tBots.some((b) => nameErr(b.key));
-  const handleBad = !manage && !cleanHandle(handle);
+  // Decisions 11-12 §4: a team from the person's words has no handle field; the server picks a free one
+  // (free_team_handle), which can be changed later in the team's settings.
+  const askHandle = !manage && !isN;
+  const handleBad = askHandle && !cleanHandle(handle);
   const minBots = manage ? 1 : MIN_BOTS;
   const dSizeBad = isD && (ticked < minBots || ticked > MAX_BOTS);
   const creating = phase === 'creating';
@@ -548,7 +552,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         space,
         suggestion_id: sug.suggestion_id,
         rows,
-        ...(manage && mode.kind === 'suggest' && mode.team ? { team_id: mode.team.id } : { handle: h }),
+        ...(manage && mode.kind === 'suggest' && mode.team ? { team_id: mode.team.id } : askHandle ? { handle: h } : {}),
       };
     } else {
       const ns: Record<string, string> = {};
@@ -558,8 +562,9 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     }
     try {
       const r = await teamsApi.create(body, idemKey.current);
-      setLive(`Created @${h}. Undo is available.`);
-      onCreated(r, t, h);
+      const made = askHandle ? h : r.team.name;
+      setLive(`Created @${made}. Undo is available.`);
+      onCreated(r, t, made);
     } catch (e) {
       if (e instanceof TeamsError && e.status === 410 && isD) {
         // A17: read again, keep the edits on rows that come back.
@@ -710,7 +715,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     </section>
   );
 
-  const handleSec = !manage && (
+  const handleSec = askHandle && (
     <section className={SEC} aria-labelledby={`${titleId}-handle`}>
       <h4 className={H} id={`${titleId}-handle`}>
         Team handle

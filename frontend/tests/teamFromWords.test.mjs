@@ -85,7 +85,8 @@ const use = (opts) => {
   m.setTeamsTransport(fx.fixtureTransport(opts, calls));
   return calls;
 };
-const asks = (calls) => calls.filter((c) => c.url.startsWith('/api/teams/suggest'));
+const asks = (calls) => calls.filter((c) => c.url.startsWith('/api/teams/suggest') && c.method !== 'DELETE');
+const stops = (calls) => calls.filter((c) => c.url.startsWith('/api/teams/suggest') && c.method === 'DELETE');
 const creates = (calls) => calls.filter((c) => c.url.startsWith('/api/teams/from-template'));
 const NEED = fx.BAKERY_NEED;
 
@@ -289,16 +290,19 @@ test('Escape or Cancel stops Suggesting…; the words stay; after 8 s it adds "U
   // The 8-second note: run that one timer at once.
   window.setTimeout = (fn, ms, ...a) => realST(fn, ms === 8000 ? 0 : ms, ...a);
   try {
-    use({ need: 'slow' });
+    const calls = use({ need: 'slow' });
     const { el } = card();
     const v = await mount(el);
     await typeArea(box(), NEED);
     await click(submitBtn());
+    assert.equal(stops(calls).length, 0);
     assert.equal(submitBtn().textContent, 'Suggesting…');
     assert.equal(submitBtn().getAttribute('aria-disabled'), 'true');
     assert.equal(box().readOnly, true, 'the box locks');
     assert.match(document.querySelector('#card').textContent, /Usually under a minute\./);
     await key(box(), 'Escape');
+    assert.deepEqual(stops(calls).map((c) => c.url), ['/api/teams/suggest?space=spc_demo'], 'Escape stops the server too; its 404 is ignored');
+    assert.equal(document.querySelector('#card [role="alert"]'), null, 'no error for the 404');
     assert.equal(submitBtn().textContent, 'Suggest a team');
     assert.equal(box().readOnly, false);
     assert.equal(box().value, NEED);
@@ -306,6 +310,7 @@ test('Escape or Cancel stops Suggesting…; the words stay; after 8 s it adds "U
     // Cancel does the same.
     await click(submitBtn());
     await click(byText(document.querySelector('#card'), 'button', /^Cancel$/));
+    assert.equal(stops(calls).length, 2, 'Cancel too');
     assert.equal(submitBtn().textContent, 'Suggest a team');
     assert.equal(box().value, NEED);
     v.unmount();
@@ -337,7 +342,7 @@ test('Try again sends the same words again and shows the new team; Escape while 
   let n = 0;
   const base = fx.fixtureTransport({}, calls2);
   m.setTeamsTransport(async (url, method, body, headers) => {
-    if (url.startsWith('/api/teams/suggest') && ++n > 1) {
+    if (url.startsWith('/api/teams/suggest') && method !== 'DELETE' && ++n > 1) {
       calls2.push({ url, method, body });
       return new Promise(() => {});
     }
@@ -349,10 +354,13 @@ test('Try again sends the same words again and shows the new team; Escape while 
   await click(submitBtn());
   await click(byText(theSheet(), 'button', /^Try again$/));
   assert.match(theSheet().textContent, /Suggesting…/);
+  assert.equal(stops(calls2).length, 0);
   await key(theSheet(), 'Escape');
+  assert.equal(stops(calls2).length, 1, 'Escape during Try again stops the server’s ask');
   assert.ok(theSheet(), 'the sheet stays');
   assert.equal(theSheet().querySelectorAll('[data-row]').length, 4, 'the last team is back');
   await key(theSheet(), 'Escape');
+  assert.equal(stops(calls2).length, 1, 'closing a ready sheet sends no stop');
   assert.equal(theSheet(), null, 'a second Escape closes it');
   assert.equal(box().value, NEED, 'the words are still in the box');
   window.setTimeout = realST;
@@ -376,6 +384,9 @@ test('Create sends suggestion_id + edits (untick, rename) to from-template; the 
     await typeArea(box(), NEED);
     await click(submitBtn());
     const s = theSheet();
+    // decisions-1112 §4: no Team handle field for a team from words; the project suggest flows keep it.
+    assert.equal(s.querySelector('[aria-label="Team handle"]'), null);
+    assert.equal(/Team handle/.test(s.textContent), false);
     // Untick the Instagram bot, rename the order keeper.
     await click(s.querySelector('[data-row="social"] [role="checkbox"]'));
     await click(s.querySelector('[aria-label="Rename OrderKeeper"]'));
@@ -394,9 +405,8 @@ test('Create sends suggestion_id + edits (untick, rename) to from-template; the 
       suggestion_id: 'sug_demo_bakery',
       edits: {
         rows: { lead: { on: true, name: 'ShopLead' }, inbox: { on: true, name: 'CustomerMail' }, social: { on: false }, orders: { on: true, name: 'Orders' } },
-        handle: 'bakery',
       },
-    });
+    }, 'no handle: the server picks a free one (decisions-1112 §4)');
     assert.ok(c[0].headers?.['Idempotency-Key'], 'one idempotency key per open');
     assert.equal(theSheet(), null);
     assert.equal(out.opened.length, 1);

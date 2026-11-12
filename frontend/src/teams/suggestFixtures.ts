@@ -184,7 +184,7 @@ export type Call = { url: string; method: string; body?: unknown; headers?: Reco
 
 /** A transport answering the T and D routes from fixtures. `calls` collects every request. */
 export function fixtureTransport(
-  opts: { suggest?: SuggestScenario; need?: NeedScenario; create?: 'ok' | 'fail' | 'clash' | 'clash-handle' | 'clash-many' | 'expired-once'; preview?: TemplatePreview | 'error'; templates?: 'ok' | 'error' | 'slow' } = {},
+  opts: { suggest?: SuggestScenario; need?: NeedScenario; create?: 'ok' | 'fail' | 'clash' | 'clash-handle' | 'clash-many' | 'expired-once'; preview?: TemplatePreview | 'error'; templates?: 'ok' | 'error' | 'slow'; cancel?: 'ok' } = {},
   calls: Call[] = [],
 ): TeamsTransport {
   let expired = opts.create === 'expired-once';
@@ -202,6 +202,10 @@ export function fixtureTransport(
       // Optional route (§0.10): by default answer 404 like a server without it, so the client's own guess stands.
       if (!opts.preview || opts.preview === 'error') return { status: 404, body: { error: 'not found' } };
       return { status: 200, body: opts.preview };
+    }
+    if (path === '/api/teams/suggest' && method === 'DELETE') {
+      // decisions-1112 §2: 204 once Juno's route lands; by default a 404 like today's server, which the client ignores.
+      return opts.cancel === 'ok' ? { status: 204, body: null } : { status: 404, body: { error: 'not found' } };
     }
     if (path === '/api/teams/suggest' && body && typeof (body as { need?: unknown }).need === 'string') {
       // `again`: the first ask gives the bakery team, every later one the second draft.
@@ -263,7 +267,8 @@ export function fixtureTransport(
         return {
           status: 201,
           body: {
-            team: { id: 'team_new', name: handle },
+            // No handle sent: the server picks a free one (free_team_handle), here the draft's own.
+            team: { id: 'team_new', name: b.handle ?? b.edits?.handle ?? needWire.handle ?? handle },
             channel_id: 'ch_team_new',
             action_id: 'act_demo',
             template_id: null,
