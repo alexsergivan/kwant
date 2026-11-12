@@ -1096,9 +1096,10 @@ async fn run_turn_with(
         super::busy_retry::unwatched(scope, &kwant.name, &prompt, |p, slot| {
             let mut o = opts();
             o.busy_slot = Some(slot.clone());
+            // boxed, so the retry loop around the turn adds no stack to it
             async move {
-                let reply = try_kwant_turn(scope, kwant, p, o).await;
-                continue_once_if_capped_into(scope, kwant, reply, false, Some(&slot)).await
+                let reply = Box::pin(try_kwant_turn(scope, kwant, p, o)).await;
+                Box::pin(continue_once_if_capped_into(scope, kwant, reply, false, Some(&slot))).await
             }
         })
         .await
@@ -3982,7 +3983,8 @@ async fn run_kwant_turn_inner(
             if let (Some(step), false, false, Some(slot)) = (&busy_step, continues, opts.no_tools, &opts.busy_slot) {
                 slot.put(step.clone());
             } else if let (Some(step), false, false, true) = (&busy_step, continues, opts.no_tools, stop_asks(scope, &opts)) {
-                super::busy_retry::after_turn(scope, target_kwant, &park_prompt, step, opts.busy_retries).await;
+                // boxed: inline, its state made this turn's future overflow a test thread's stack
+                Box::pin(super::busy_retry::after_turn(scope, target_kwant, &park_prompt, step, opts.busy_retries)).await;
             } else if !continues && !opts.no_tools && stop_asks(scope, &opts) {
                 let probe = super::human_steps::ask_for_sign_in_wall(state, &turn_scope, &turn_page);
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(10), probe).await;

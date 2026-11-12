@@ -568,9 +568,10 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
         opts.source = Some(super::bot_status::TurnSource::bot(&lead.name));
         opts.busy_slot = Some(slot.clone());
         let (scope, specialist) = (&scope, &specialist);
+        // boxed, so the retry loop around the turn adds no stack to it
         async move {
-            let outcome = try_kwant_turn(scope, specialist, p, opts).await;
-            continue_once_if_capped_into(scope, specialist, outcome, false, Some(&slot)).await
+            let outcome = Box::pin(try_kwant_turn(scope, specialist, p, opts)).await;
+            Box::pin(continue_once_if_capped_into(scope, specialist, outcome, false, Some(&slot))).await
         }
     })
     .await;
