@@ -5532,26 +5532,101 @@ pub fn detect_url_in_prompt(prompt: &str) -> Option<String> {
 
 /// The controller of one browser page: `team_id` is a page key, the team page (a sandbox target)
 /// or a job's own page ([`super::browser_pages`]). A new job page opens in its team's context,
-/// after room is made under the team's job-page cap; `None` when the browser is unavailable or
-/// every job page of the team is held.
+/// after room is made under the team's job-page cap; `None` at once when the browser is
+/// unavailable or every job page of the team is held or in use (see [`page_controller`] for a
+/// call that waits for room).
 pub async fn get_or_create_browser_controller(
     state: &AppState,
     team_id: &str,
 ) -> Option<crate::sandbox::BrowserController> {
+    open_page(state, team_id, std::time::Duration::ZERO).await.ok()
+}
+
+/// Why a page couldn't be had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageRefusal {
+    /// The browser didn't start or answer.
+    Unavailable,
+    /// Every job page of the team is held or in use, and none freed up in time.
+    PagesFull,
+}
+
+/// The page's controller for a bot's browser call: like [`get_or_create_browser_controller`],
+/// but a job page that finds its team's pages all in use waits up to
+/// [`super::browser_pages::PAGE_WAIT`] for one to free up, then gets a clear 503 saying so
+/// (nothing is wrong with the browser) instead of "browser unavailable".
+pub async fn page_controller(
+    state: &AppState,
+    key: &str,
+) -> Result<crate::sandbox::BrowserController, (StatusCode, Json<serde_json::Value>)> {
+    open_page(state, key, state.job_pages.wait()).await.map_err(|refusal| page_refused(state, refusal))
+}
+
+/// The answer to a call whose page couldn't be had.
+pub(crate) fn page_refused(state: &AppState, refusal: PageRefusal) -> (StatusCode, Json<serde_json::Value>) {
+    match refusal {
+        PageRefusal::Unavailable => browser_unavailable(state),
+        PageRefusal::PagesFull => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
+            "error": super::browser_pages::pages_full_message(),
+            "code": PAGES_FULL,
+            "is_running": true,
+        }))),
+    }
+}
+
+/// The `code` of a call refused because every job page of the team is in use.
+pub const PAGES_FULL: &str = "PAGES_FULL";
+
+/// Opens (or returns) a page's controller. A job page that isn't open yet is made room for and
+/// opened under its team's lock, so two jobs opening at once never pass the cap; with no room it
+/// tries again each second until `wait` has passed.
+pub async fn open_page(
+    state: &AppState,
+    key: &str,
+    wait: std::time::Duration,
+) -> Result<crate::sandbox::BrowserController, PageRefusal> {
     // follow a mode switch made elsewhere (another kwnt process sharing the data dir)
     super::computer::apply_mode(state).await;
     // keeps the browser container from being stopped as idle while bots use it
     state.browser_service.note_use();
-    state.browser_service.touch_page(team_id);
-    let team = super::browser_pages::page_team(team_id).to_string();
-    let job = super::browser_pages::is_job_page(team_id);
-    if job && !state.browser_controllers.lock().await.contains_key(team_id)
-        && !super::browser_pages::make_room(state, &team, team_id).await
-    {
-        tracing::warn!(page = %team_id, "every job page of this team is held or in use; no room for another");
-        state.browser_service.forget_page(team_id);
-        return None;
+    let team = super::browser_pages::page_team(key).to_string();
+    if !super::browser_pages::is_job_page(key) {
+        state.browser_service.touch_page(key);
+        return controller_for(state, key, &team).await.ok_or(PageRefusal::Unavailable);
     }
+    // An open job page that answers needs no lock; any page is only ever opened under it
+    let existing = state.browser_controllers.lock().await.get(key).cloned();
+    if let Some(ctrl) = existing {
+        state.browser_service.touch_page(key);
+        if !ctrl.is_managed_session() || ctrl.refresh_location().await.is_ok() {
+            return Ok(ctrl);
+        }
+    }
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        let lock = state.job_pages.team_lock(&team);
+        let opening = lock.lock().await;
+        let open = state.browser_controllers.lock().await.contains_key(key);
+        if open || super::browser_pages::make_room(state, &team, key).await {
+            state.browser_service.touch_page(key);
+            let ctrl = controller_for(state, key, &team).await;
+            drop(opening);
+            return ctrl.ok_or(PageRefusal::Unavailable);
+        }
+        drop(opening);
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            tracing::warn!(page = %key, "every job page of this team is held or in use; no room for another");
+            return Err(PageRefusal::PagesFull);
+        }
+        tokio::time::sleep((deadline - now).min(std::time::Duration::from_secs(1))).await;
+    }
+}
+
+/// The page's controller, opening the page when it isn't open (or no longer answers).
+async fn controller_for(state: &AppState, team_id: &str, team: &str) -> Option<crate::sandbox::BrowserController> {
+    let team = team.to_string();
+    let job = super::browser_pages::is_job_page(team_id);
     let mut controllers = state.browser_controllers.lock().await;
     let mut driver = None;
     if let Some(ctrl) = controllers.get(team_id) {
@@ -5661,8 +5736,7 @@ pub async fn get_browser_screenshot(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id).await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     // The user may have navigated in the live viewer; keep url/title (and other viewers) in sync
     let previous_url = ctrl.current_url.lock().await.clone();
     if let Some((new_url, new_title)) = ctrl.sync_location().await {
@@ -5722,8 +5796,7 @@ pub async fn navigate_sandbox(
     Path(team_id): Path<String>,
     Json(payload): Json<NavigatePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id).await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     guard_bot_action(&state, &ctrl, &team_id).await.map_err(browser_request_failed)?;
     let nav = ctrl.navigate(&payload.url).await.map_err(browser_request_failed)?;
 
@@ -5784,7 +5857,7 @@ pub async fn interact_sandbox(
         }))));
     }
 
-    let ctrl = get_or_create_browser_controller(&state, &team_id).await.ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
 
     let _permit = ctrl.control.try_read().map_err(|_| (StatusCode::CONFLICT, Json(json!({"error":"Browser is controlled by a person."}))))?;
     // The person's own input: their navigation is never held to a bot's site rules
@@ -6197,9 +6270,7 @@ pub async fn get_sandbox_page(
     Path(team_id): Path<String>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id)
-        .await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     let snap = ctrl.snapshot().await;
     let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default()).await;
     if query.wants_blocks() {
@@ -6232,9 +6303,7 @@ pub async fn cite_sandbox(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     use crate::sandbox::cite;
     let refuse = |msg: String| (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": msg })));
-    let ctrl = get_or_create_browser_controller(&state, &team_id)
-        .await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     let Some(frames) = ctrl.frame_texts().await else {
         return Err(refuse("Couldn't read the page to check the quote. Open a page first.".into()));
     };
@@ -6271,9 +6340,7 @@ pub async fn act_sandbox(
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id)
-        .await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     let args = json!({"action": payload.action, "text": payload.text, "key": payload.key, "ref": payload.ref_});
     if let Some(why) = super::continuity::browser_act_payment(&state, &team_id, &args).await {
         let mut page = sandbox_page_state(&ctrl).await;
@@ -6293,9 +6360,7 @@ pub async fn act_sandbox_allowed(
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let ctrl = get_or_create_browser_controller(&state, &team_id)
-        .await
-        .ok_or_else(|| browser_unavailable(&state))?;
+    let ctrl = page_controller(&state, &team_id).await?;
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
     guard_bot_action(&state, &ctrl, &team_id).await.map_err(browser_request_failed)?;
     let _ = ctrl.site_guard.take_refusal();

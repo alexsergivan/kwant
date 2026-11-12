@@ -168,6 +168,12 @@ impl HumanStepHub {
         }
     }
 
+    /// Whether `kwant` has a turn running in `chat` ([`chat_key`]) on the bot browser `target`:
+    /// that job still uses its page, even between two browser calls.
+    pub fn has_turn_in(&self, target: &str, kwant: &str, chat: &str) -> bool {
+        self.newest_on(target, |s| s.kwant_id == kwant && chat_key(s).as_deref() == Some(chat)).is_some()
+    }
+
     fn newest_on(&self, target: &str, pick: impl Fn(&SelfScope) -> bool) -> Option<SelfScope> {
         let turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
         turns.get(target)?.iter().rev().map(|(_, s)| s).find(|s| {
@@ -929,6 +935,23 @@ mod tests {
         assert_eq!(chat_key(&turn("ann")), None, "no thread, channel or DM: no chat to name");
         let dm = SelfScope { origin: Some(super::super::continuity::TurnOrigin { direct_kwant_id: Some("ann".into()), ..Default::default() }), ..turn("ann") };
         assert_eq!(chat_key(&dm).as_deref(), Some("ann"));
+    }
+
+    /// A job (bot and chat) with a turn running keeps its page; the turn ending frees it.
+    #[test]
+    fn a_job_with_a_live_turn_is_known_until_the_turn_ends() {
+        let hub = Arc::new(HumanStepHub::default());
+        let a = hub.track_turn("team", turn_in("ann", "thread-a"));
+        assert!(hub.has_turn_in("team", "ann", "thread-a"));
+        assert!(!hub.has_turn_in("team", "ann", "thread-b"), "another chat of the same bot");
+        assert!(!hub.has_turn_in("team", "bob", "thread-a"), "another bot");
+        assert!(!hub.has_turn_in("other-team", "ann", "thread-a"), "another team's browser");
+        drop(a);
+        assert!(!hub.has_turn_in("team", "ann", "thread-a"));
+        let stopped = tokio_util::sync::CancellationToken::new();
+        stopped.cancel();
+        let _s = hub.track_turn("team", SelfScope { cancel: Some(stopped), ..turn_in("ann", "thread-a") });
+        assert!(!hub.has_turn_in("team", "ann", "thread-a"), "a stopped turn uses no page");
     }
 
     #[test]

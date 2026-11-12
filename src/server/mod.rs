@@ -125,6 +125,8 @@ pub struct AppState {
     pub questions: Arc<questions::QuestionHub>,
     /// `request_human_step` calls waiting for the person to sign in or solve a CAPTCHA.
     pub human_steps: Arc<human_steps::HumanStepHub>,
+    /// Opening job pages: one lock per team and the wait for room (0.9.3).
+    pub job_pages: Arc<browser_pages::JobPages>,
     /// "Sign in with Claude" for the Claude engine.
     pub claude_login: Arc<engine_login::ClaudeLogin>,
     /// "Sign in with ChatGPT" (Codex device code) for the Codex engine.
@@ -194,6 +196,7 @@ impl AppState {
             scheduler_wake: Default::default(),
             questions: Default::default(),
             human_steps: Default::default(),
+            job_pages: Default::default(),
             claude_login: Default::default(),
             codex_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Codex)),
             grok_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Grok)),

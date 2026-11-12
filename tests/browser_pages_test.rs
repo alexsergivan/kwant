@@ -26,7 +26,7 @@ use kwnt::{
         browser_pages::{self, job_page_key, MAX_JOB_PAGES_PER_TEAM},
         continuity::{SelfScope, TurnOrigin},
         create_router, mcp_runtime,
-        routes::{get_or_create_browser_controller, HELD_FOR_BOT},
+        routes::{get_or_create_browser_controller, HELD_FOR_BOT, PAGES_FULL},
         AppState,
     },
     tools::ToolRunner,
@@ -241,8 +241,8 @@ async fn open_page(state: &AppState, team: &str, chat: &str) -> Option<BrowserCo
     get_or_create_browser_controller(state, &job_page_key(team, "k", chat).unwrap()).await
 }
 
-/// An open step on `page` (as a bot's sign-in there would leave it).
-async fn hold(state: &AppState, team: &str, page: &str, turn: &str) {
+/// An open step on `page` (as a bot's sign-in there would leave it); its id.
+async fn hold(state: &AppState, team: &str, page: &str, turn: &str) -> String {
     let place = HumanStepPlace {
         kwant_id: "k".into(),
         turn_id: Some(turn.into()),
@@ -250,7 +250,7 @@ async fn hold(state: &AppState, team: &str, page: &str, turn: &str) {
         page_key: Some(page.into()),
         ..Default::default()
     };
-    state.db.create_human_step_with_card(&place, "other", "a step", None, None, "bot", |_| None).await.unwrap();
+    state.db.create_human_step_with_card(&place, "other", "a step", None, None, "bot", |_| None).await.unwrap().0.id
 }
 
 async fn open_pages(state: &AppState) -> Vec<String> {
@@ -313,6 +313,131 @@ async fn an_idle_job_page_is_closed_but_never_one_with_an_open_step() {
     // A closed job page opens again on its next use
     open_page(&state, &team, "idle").await.expect("reopens");
     assert_eq!(open_pages(&state).await, vec![key("held"), key("idle")]);
+}
+
+/// A turn of bot `k` running in chat `chat` on `team`'s browser, until the guard drops.
+fn running_turn(state: &AppState, team: &str, chat: &str) -> impl Drop {
+    let scope = SelfScope {
+        kwant_id: "k".into(),
+        origin: Some(TurnOrigin { thread_id: Some(chat.into()), ..Default::default() }),
+        sandbox_target: Some(team.into()),
+        ..Default::default()
+    };
+    state.human_steps.track_turn(team, scope)
+}
+
+/// A job waiting minutes between two browser calls (a render) is the least recently used page,
+/// but while its turn runs neither the cap nor the idle sweep closes it; once the turn ends both do.
+#[tokio::test]
+async fn a_page_whose_job_still_has_a_turn_running_is_never_closed() {
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return };
+    let state = container_state(&tmp, endpoint).await;
+    let team = first_bot(&state).await.id;
+    let key = |c: &str| job_page_key(&team, "k", c).unwrap();
+
+    // The cap: "busy" is the oldest page, its turn still runs, so the next oldest makes room
+    let turn = running_turn(&state, &team, "busy");
+    for chat in ["busy", "c1", "c2", "c3"] {
+        open_page(&state, &team, chat).await.expect("a job page opens");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    open_page(&state, &team, "c4").await.expect("a fifth job opens a page");
+    assert_eq!(open_pages(&state).await, vec![key("busy"), key("c2"), key("c3"), key("c4")], "the running job's page is kept");
+    // The turn ends: its page is now the oldest one that can close
+    drop(turn);
+    open_page(&state, &team, "c5").await.unwrap();
+    assert_eq!(open_pages(&state).await, vec![key("c2"), key("c3"), key("c4"), key("c5")], "closed by the cap once its turn ended");
+
+    // The idle sweep: a running job's page stays however long it was unused
+    let turn = running_turn(&state, &team, "busy");
+    open_page(&state, &team, "busy").await.unwrap();
+    assert_eq!(browser_pages::sweep_idle(&state, Duration::ZERO).await, 3, "the other jobs' idle pages close");
+    assert_eq!(open_pages(&state).await, vec![key("busy")]);
+    drop(turn);
+    assert_eq!(browser_pages::sweep_idle(&state, Duration::ZERO).await, 1, "closed once its turn ended");
+    assert!(open_pages(&state).await.is_empty());
+}
+
+/// Every job page held: a fifth job's bot call waits for a page to free up, gets one as soon as
+/// a step ends, and when none frees up in time is told plainly that the pages are in use (not
+/// that the browser is broken), through the HTTP route and the bot's browser tool alike.
+#[tokio::test]
+async fn a_job_that_finds_every_page_in_use_waits_for_one_then_is_told_plainly() {
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return };
+    let state = container_state(&tmp, endpoint).await;
+    let app = create_router(state.clone());
+    let base = serve().await;
+    let bot = first_bot(&state).await;
+    let team = bot.id.clone();
+    let key = |c: &str| job_page_key(&team, "k", c).unwrap();
+    let mut steps = Vec::new();
+    for chat in ["c0", "c1", "c2", "c3"] {
+        open_page(&state, &team, chat).await.expect("a job page opens");
+        steps.push(hold(&state, &team, &key(chat), chat).await);
+    }
+    let navigate = format!("/api/sandbox/{}/navigate", key("c4").replace('#', "%23"));
+    let body = json!({"url": format!("{base}/plain")});
+
+    // No page frees up in time: a clear 503, after the wait
+    state.job_pages.set_wait(Duration::from_millis(1500));
+    let started = std::time::Instant::now();
+    let (status, v) = request(&app, "POST", &navigate, Some(body.clone())).await;
+    assert!(started.elapsed() >= Duration::from_millis(1400), "it waited for a page first");
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(v["code"], PAGES_FULL);
+    assert_eq!(v["error"], browser_pages::pages_full_message());
+    assert!(v["error"].as_str().unwrap().contains("nothing is wrong with the browser"));
+    assert_eq!(open_pages(&state).await.len(), MAX_JOB_PAGES_PER_TEAM, "nothing was closed");
+    assert!(state.browser_service.job_pages(&team).await.iter().all(|(k, _)| *k != key("c4")), "the refused page isn't counted");
+
+    // The bot's own browser tool says the same
+    let token = turn_in_thread(&state, &bot, "turn-9", "t9", &team).await;
+    let (text, is_error) = call(&app, &token, "browser_open", json!({"url": format!("{base}/plain")})).await.unwrap();
+    assert!(is_error);
+    assert_eq!(text, browser_pages::pages_full_message());
+
+    // A step ends while the call waits: the page that freed up makes room, and the call goes on
+    state.job_pages.set_wait(Duration::from_secs(20));
+    let waiting = {
+        let (app, navigate, body) = (app.clone(), navigate.clone(), body.clone());
+        tokio::spawn(async move { request(&app, "POST", &navigate, Some(body)).await })
+    };
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(!waiting.is_finished(), "still waiting while every page is held");
+    assert!(state.db.close_human_step(&steps[0], "done").await.unwrap());
+    let (status, v) = tokio::time::timeout(Duration::from_secs(10), waiting).await.expect("answers soon after").unwrap();
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(open_pages(&state).await, vec![key("c1"), key("c2"), key("c3"), key("c4")], "the freed page made room");
+}
+
+/// Six jobs opening pages at the same moment never leave more than four open: making room and
+/// opening are one step per team.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn jobs_opening_pages_at_once_never_pass_the_cap() {
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return };
+    let state = container_state(&tmp, endpoint.clone()).await;
+    let team = first_bot(&state).await.id;
+    get_or_create_browser_controller(&state, &team).await.expect("the team page opens");
+    let page_targets = || async {
+        let targets: Value = reqwest::get(format!("{endpoint}/json/list")).await.unwrap().json().await.unwrap();
+        targets.as_array().unwrap().iter().filter(|t| t["type"] == "page").count()
+    };
+    let before = page_targets().await;
+    let opens: Vec<_> = (0..6)
+        .map(|i| {
+            let (state, team) = (state.clone(), team.clone());
+            tokio::spawn(async move { open_page(&state, &team, &format!("j{i}")).await.is_some() })
+        })
+        .collect();
+    for open in opens {
+        assert!(open.await.unwrap(), "each job gets a page (an older idle one makes room)");
+    }
+    assert_eq!(open_pages(&state).await.len(), MAX_JOB_PAGES_PER_TEAM);
+    assert_eq!(state.browser_service.job_pages(&team).await.len(), MAX_JOB_PAGES_PER_TEAM);
+    assert_eq!(page_targets().await, before + MAX_JOB_PAGES_PER_TEAM, "four job pages in the browser, the others closed");
 }
 
 #[tokio::test]

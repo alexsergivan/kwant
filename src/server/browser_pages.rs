@@ -7,13 +7,23 @@
 //!
 //! Limits: at most [`MAX_JOB_PAGES_PER_TEAM`] job pages per team (the least recently used idle
 //! one is closed to make room) and a job page nobody used for [`JOB_PAGE_IDLE`] is closed. A
-//! page with an open step, or one the person is driving, is never closed.
+//! page with an open step, one the person is driving, or one whose job (bot and chat) still has
+//! a turn running is never closed. Room is made and a page opened under one lock per team
+//! ([`JobPages::team_lock`]), so jobs opening at once never pass the cap. A bot tool that finds
+//! no room waits up to [`PAGE_WAIT`] for a page to free up, then gets [`pages_full_message`].
 
 use super::continuity::SelfScope;
 use super::AppState;
 use axum::{extract::{Path, State}, Json};
 use serde_json::{json, Value};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 pub use crate::sandbox::service::{is_job_page, job_page_key, page_team, PAGE_SEP};
 
@@ -23,6 +33,54 @@ pub const MAX_JOB_PAGES_PER_TEAM: usize = 4;
 pub const JOB_PAGE_IDLE: Duration = Duration::from_secs(30 * 60);
 /// How often idle job pages are looked for.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(60);
+/// How long a bot's browser call waits for one of its team's pages to free up before it is
+/// told every page is in use.
+pub const PAGE_WAIT: Duration = Duration::from_secs(60);
+
+/// What a job is told when every job page of its team is in use and none freed up in time.
+pub fn pages_full_message() -> String {
+    format!(
+        "All {MAX_JOB_PAGES_PER_TEAM} of this team's browser pages are in use by other jobs. \
+         Try again in a minute; nothing is wrong with the browser."
+    )
+}
+
+/// Opening job pages: one lock per team, so making room and opening the page happen as one
+/// step, and how long a bot call waits for room.
+#[derive(Default)]
+pub struct JobPages {
+    opening: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Tests only: the wait for room in ms (0 = [`PAGE_WAIT`]).
+    wait_ms: AtomicU64,
+}
+
+impl JobPages {
+    /// The lock held while a page of `team` is made room for and opened, or closed.
+    pub fn team_lock(&self, team: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.opening.lock().unwrap_or_else(|e| e.into_inner()).entry(team.to_string()).or_default().clone()
+    }
+
+    /// Tests: a shorter wait for room than [`PAGE_WAIT`].
+    pub fn set_wait(&self, wait: Duration) {
+        self.wait_ms.store((wait.as_millis() as u64).max(1), Ordering::Relaxed);
+    }
+
+    pub fn wait(&self) -> Duration {
+        match self.wait_ms.load(Ordering::Relaxed) {
+            0 => PAGE_WAIT,
+            ms => Duration::from_millis(ms),
+        }
+    }
+}
+
+/// A job page's team, bot and chat; `None` for the team page.
+pub fn job_of(key: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = key.splitn(3, PAGE_SEP);
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(team), Some(kwant), Some(chat)) => Some((team, kwant, chat)),
+        _ => None,
+    }
+}
 
 /// The page a turn's browser calls use: the job's own page when the turn runs in a chat
 /// ([`super::human_steps::chat_key`], the same chat the bot's browser address names), else the
@@ -45,11 +103,17 @@ pub fn call_page(team: &str, kwant: Option<&str>, chat: Option<&str>) -> String 
     }
 }
 
-/// Whether a page may be closed now: no open step holds it and nobody (the person, or a bot's
-/// action) is using it.
+/// Whether a page may be closed now: no open step holds it, its job has no turn still running
+/// (a bot waiting minutes on a render between two calls comes back to its page, not a blank
+/// one), and nobody (the person, or a bot's action) is using it.
 async fn closable(state: &AppState, key: &str) -> bool {
     if state.db.human_step_open_on(key).await.unwrap_or(true) {
         return false;
+    }
+    if let Some((team, kwant, chat)) = job_of(key) {
+        if state.human_steps.has_turn_in(team, kwant, chat) {
+            return false;
+        }
     }
     match state.browser_controllers.lock().await.get(key) {
         Some(ctrl) => ctrl.control.try_write().is_ok() && !ctrl.is_held_for_person(),
@@ -71,6 +135,7 @@ pub async fn close_page(state: &AppState, key: &str) {
 
 /// Before a new job page opens in `team`: makes room under [`MAX_JOB_PAGES_PER_TEAM`] by closing
 /// the least recently used page that can be closed. `false` when every page is held or in use.
+/// The caller holds the team's [`JobPages::team_lock`] until the new page is open.
 pub async fn make_room(state: &AppState, team: &str, key: &str) -> bool {
     let pages = state.browser_service.job_pages(team).await;
     let open: Vec<_> = pages.into_iter().filter(|(k, _)| k != key).collect();
@@ -102,6 +167,8 @@ pub async fn sweep_idle(state: &AppState, idle: Duration) -> usize {
         .collect();
     let mut closed = 0;
     for team in teams {
+        let lock = state.job_pages.team_lock(&team);
+        let _opening = lock.lock().await;
         for (page, at) in state.browser_service.job_pages(&team).await {
             if now.duration_since(at) >= idle && closable(state, &page).await {
                 close_page(state, &page).await;
@@ -200,6 +267,19 @@ mod tests {
         assert_eq!(call_page("t", Some("k"), Some("c")), "t#k#c");
         assert_eq!(call_page("t", Some("k"), None), "t", "a bot route without a chat keeps the team page");
         assert_eq!(call_page("t", None, None), "t", "the person's panel keeps the team page");
+    }
+
+    #[test]
+    fn a_job_pages_parts_are_read_back_from_its_key() {
+        assert_eq!(job_of("t#k#c"), Some(("t", "k", "c")));
+        assert_eq!(job_of("t"), None);
+        assert!(pages_full_message().starts_with("All 4 of this team's browser pages are in use by other jobs."));
+        let pages = JobPages::default();
+        assert_eq!(pages.wait(), PAGE_WAIT);
+        pages.set_wait(Duration::from_millis(5));
+        assert_eq!(pages.wait(), Duration::from_millis(5));
+        assert!(Arc::ptr_eq(&pages.team_lock("t"), &pages.team_lock("t")));
+        assert!(!Arc::ptr_eq(&pages.team_lock("t"), &pages.team_lock("u")), "one lock per team");
     }
 
     #[test]
