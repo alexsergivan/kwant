@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { type InboxItem, type ReviewItem, type HeldAction, type HeldStatus, type InboxCriterion, BEING_CHECKED_LINE, InboxError, approveState, inboxApi, isBeingChecked, reviewWord } from '../api/inbox';
 import { AwayError } from '../away';
+import { LOOKS_GOOD, redoLabel, redoTitle, rollbackShown as rollbackFor } from '../doneAway';
 import { type Checkpoint, type RestorePreview, MissionError, RESTORE_ACTION_LABELS, conflictText, missionsApi, newIdempotencyKey, restoreErrorText } from '../missions';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { ImageViewer } from './Attachments';
@@ -103,6 +104,17 @@ export interface ReviewItemViewProps {
   onHeldResolved?: (approvalId: string, status: Exclude<HeldStatus, 'pending'>) => void;
   /** The phone page draws its own top bar with the title; the view then starts at the chips. */
   hideTitle?: boolean;
+  /**
+   * 0.9.5 F, a done item in the Inbox (a routine's review task): its own title and meta line, the chips, and
+   * the answer, trail and Why above the actions. The verdict box then shows only when there is a verdict.
+   */
+  done?: {
+    title: string;
+    meta: string;
+    chips: React.ReactNode;
+    body: React.ReactNode;
+    changed: boolean | null;
+  };
 }
 
 const BACK_LABEL: Record<ReviewEntry, string | null> = { inbox: null, board: 'Back to Mission board', dev: 'Back to Dev desk' };
@@ -174,6 +186,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   onOpenTask,
   onHeldResolved,
   hideTitle = false,
+  done: doneView,
 }) => {
   const phone = usePhoneLayout();
   const uid = useId();
@@ -362,7 +375,14 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   const since = clock(item.in_review_since);
   const back = BACK_LABEL[entry];
   const lockAll = done || busy !== null;
-  const rollbackShown = item.rollback_ok;
+  const changed = doneView ? doneView.changed : typeof item.changed === 'boolean' ? item.changed : null;
+  const rollbackShown = rollbackFor(item, changed);
+  const showVerdict = !doneView || checking || v.result !== 'none';
+  // The done layout (0.9.5 F) leaves out what has nothing to say: a low risk chip, no criteria, no evidence.
+  const showRisk = !!item.risk.level && !(doneView && item.risk.level === 'low');
+  const showCriteria = !doneView || item.criteria.length > 0;
+  const ev = item.evidence;
+  const showEvidence = !doneView || ev.checks.length > 0 || ev.screenshots.length > 0 || !!ev.pr;
 
   return (
     <section role="region" aria-labelledby={titleId} className="space-y-4 min-w-0" data-review-item={item.id} data-entry={entry}>
@@ -376,20 +396,25 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
         {!hideTitle && <ModernAvatar role={item.kwant_name} name={item.kwant_name} size={34} kwantId={item.kwant_id} />}
         <div className="min-w-0 flex-1 space-y-1">
           <h2 id={titleId} className={hideTitle ? 'sr-only' : 'text-[16px] leading-snug font-[650] text-zinc-50 break-words'}>
-            {item.title}
+            {doneView ? doneView.title : item.title}
           </h2>
-          <div className="flex flex-wrap items-center gap-1.5 text-meta text-zinc-400">
+          {doneView && (
+            <p className="text-meta text-zinc-400 break-words" data-done-meta>
+              {doneView.meta}
+            </p>
+          )}
+          <div className={doneView && item.round.n <= 1 && !showRisk ? 'hidden' : 'flex flex-wrap items-center gap-1.5 text-meta text-zinc-400'}>
             {item.round.n > 1 && (
               <span className="kw-chip border-violet-400/40 bg-violet-500/15 text-violet-200 !py-0" data-round-chip>
                 Round {item.round.n}
               </span>
             )}
-            {item.risk.level && (
+            {showRisk && item.risk.level && (
               <span className={`kw-chip !py-0 ${item.risk.level === 'high' ? 'kw-chip-warn' : ''}`} data-risk={item.risk.level}>
                 {RISK_WORD[item.risk.level]}
               </span>
             )}
-            <span className="min-w-0 break-words">
+            <span className={doneView ? 'hidden' : 'min-w-0 break-words'}>
               {[item.project, since ? `in Review since ${since}` : null, `round ${item.round.n} of ${item.round.max}`].filter(Boolean).join(' · ')}
             </span>
           </div>
@@ -410,21 +435,28 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
         )}
       </header>
 
+      {doneView?.chips}
+      {doneView?.body}
+
       {/* Verdict */}
-      <div className={`rounded-2xl border px-4 py-3 space-y-1 ${tone.box}`} data-verdict={checking ? 'being_checked' : v.result}>
-        <p className="text-[15px] font-semibold flex flex-wrap items-center gap-x-1.5">
-          <VIcon size={17} className={tone.text} aria-hidden="true" />
-          <span className={tone.text}>{reviewWord(item)}</span>
-          {conf && <span className="font-normal text-zinc-400">· {conf}</span>}
-        </p>
-        <p className="text-body text-zinc-100 break-words" data-verdict-line>{checking ? BEING_CHECKED_LINE : v.line}</p>
-        {meta && (
-          <p className="flex items-start gap-1.5 text-meta text-zinc-400" data-checker-meta>
-            <Eye size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
-            <span className="min-w-0">{meta}</span>
+      {showVerdict && (
+        <div className={`rounded-2xl border px-4 py-3 space-y-1 ${tone.box}`} data-verdict={checking ? 'being_checked' : v.result}>
+          <p className="text-[15px] font-semibold flex flex-wrap items-center gap-x-1.5">
+            <VIcon size={17} className={tone.text} aria-hidden="true" />
+            <span className={tone.text}>{reviewWord(item)}</span>
+            {conf && <span className="font-normal text-zinc-400">· {conf}</span>}
           </p>
-        )}
-      </div>
+          <p className="text-body text-zinc-100 break-words" data-verdict-line>
+            {checking ? BEING_CHECKED_LINE : v.line}
+          </p>
+          {meta && (
+            <p className="flex items-start gap-1.5 text-meta text-zinc-400" data-checker-meta>
+              <Eye size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0">{meta}</span>
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Stale and approve_error, from the server */}
       {stalePaths && (
@@ -476,7 +508,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
             data-approve
           >
             {busy === 'approve' ? <Loader2 size={14} className={spin} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
-            {busy === 'approve' ? 'Approving…' : 'Approve'}
+            {busy === 'approve' ? 'Saving…' : LOOKS_GOOD}
           </button>
           {phone && blocked && <BlockedLine id={`${uid}-blocked`} text={blocked} className="col-span-2" />}
           <button
@@ -489,7 +521,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
             className={btnQuiet}
             data-send-back
           >
-            <CornerUpLeft size={14} aria-hidden="true" /> Send back
+            <CornerUpLeft size={14} aria-hidden="true" /> {redoLabel(item.kwant_name)}
           </button>
           {rollbackShown && (
             <button ref={rollBtnRef} type="button" onClick={() => setRollOpen({})} disabled={lockAll} aria-haspopup="dialog" className={btnRose} data-roll-back>
@@ -499,15 +531,6 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
           {!phone && lastRound(item.round) && item.round.n > 1 && (
             <span className="text-meta text-zinc-400 max-w-[14rem]" data-last-round>
               Last round. Sending back again asks you how to go on.
-            </span>
-          )}
-          {!phone && (
-            <span className="ml-auto hidden lg:flex items-center gap-1" aria-hidden="true">
-              {['A', 'S', 'J', 'K'].map((k) => (
-                <kbd key={k} className="rounded border border-hairline-strong px-1 text-[10px] leading-4 text-zinc-400">
-                  {k}
-                </kbd>
-              ))}
             </span>
           )}
         </div>
@@ -549,13 +572,23 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
       {/* Send back: inline panel on desktop, sheet on phone */}
       {sendOpen &&
         (phone ? (
-          <Sheet title={`Send back to ${item.kwant_name}`} onClose={closeSend}>
-            <SendBackForm item={item} note={note} setNote={setNote} err={sendErr} busy={busy === 'send'} openHeld={openHeld.length} onSend={() => void sendBack()} onCancel={closeSend} phone />
+          <Sheet title={redoTitle(item.kwant_name)} onClose={closeSend}>
+            <SendBackForm
+              item={item}
+              note={note}
+              setNote={setNote}
+              err={sendErr}
+              busy={busy === 'send'}
+              openHeld={openHeld.length}
+              onSend={() => void sendBack()}
+              onCancel={closeSend}
+              phone
+            />
           </Sheet>
         ) : (
           <div className="rounded-2xl border border-violet-400/40 bg-surface-raised p-4 space-y-3 kw-fade-in" data-send-panel>
             <h3 className="flex items-center gap-2 text-body font-semibold text-zinc-100">
-              <CornerUpLeft size={15} aria-hidden="true" /> Send back to {item.kwant_name}
+              <CornerUpLeft size={15} aria-hidden="true" /> {redoTitle(item.kwant_name)}
             </h3>
             <SendBackForm item={item} note={note} setNote={setNote} err={sendErr} busy={busy === 'send'} openHeld={openHeld.length} onSend={() => void sendBack()} onCancel={closeSend} />
           </div>
@@ -603,28 +636,39 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
             </ul>
           </Fold>
         )}
-        <Fold
-          id={`${uid}-crit`}
-          icon={ListChecks}
-          label="What done looks like"
-          summary={criteriaSummaryText(item.criteria_summary)}
-          summaryBad={item.criteria_summary.not_met > 0}
-          open={folds.criteria}
-          onToggle={() => toggleFold('criteria')}
-        >
-          {item.criteria.length ? (
-            <ul className="rounded-xl border border-hairline divide-y divide-hairline">
-              {item.criteria.map((c) => (
-                <CriterionRow key={c.index} c={c} />
-              ))}
-            </ul>
-          ) : (
-            <p className="text-meta text-zinc-400">No criteria were set for this task.</p>
-          )}
-        </Fold>
-        <Fold id={`${uid}-ev`} icon={Terminal} label="Evidence" summary={evidenceSummaryText(item.evidence)} open={folds.evidence} onToggle={() => toggleFold('evidence')}>
-          <Evidence item={item} />
-        </Fold>
+        {showCriteria && (
+          <Fold
+            id={`${uid}-crit`}
+            icon={ListChecks}
+            label="What done looks like"
+            summary={criteriaSummaryText(item.criteria_summary)}
+            summaryBad={item.criteria_summary.not_met > 0}
+            open={folds.criteria}
+            onToggle={() => toggleFold('criteria')}
+          >
+            {item.criteria.length ? (
+              <ul className="rounded-xl border border-hairline divide-y divide-hairline">
+                {item.criteria.map((c) => (
+                  <CriterionRow key={c.index} c={c} />
+                ))}
+              </ul>
+            ) : (
+              <p className="text-meta text-zinc-400">No criteria were set for this task.</p>
+            )}
+          </Fold>
+        )}
+        {showEvidence && (
+          <Fold
+            id={`${uid}-ev`}
+            icon={Terminal}
+            label="Evidence"
+            summary={evidenceSummaryText(item.evidence)}
+            open={folds.evidence}
+            onToggle={() => toggleFold('evidence')}
+          >
+            <Evidence item={item} />
+          </Fold>
+        )}
       </div>
 
       {rollOpen && (

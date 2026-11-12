@@ -139,6 +139,15 @@ export const inboxSource: { get: (since?: string) => Promise<InboxResponse | { a
   },
 };
 
+/**
+ * 0.9.5 F: "Earlier this week". Done items stay 7 days: widen the window to the last 7 days and reload.
+ * Refreshes then keep that window.
+ */
+export async function showEarlier(now: number = Date.now()): Promise<InboxResponse | null> {
+  set({ since: new Date(now - 7 * 86400_000).toISOString() });
+  return loadInbox();
+}
+
 /** Loads (or refreshes) the list. Keeps the last good list on screen when it fails. */
 export async function loadInbox(): Promise<InboxResponse | null> {
   const seq = ++loadSeq;

@@ -132,6 +132,11 @@ export interface ReviewFields {
   one_tap: boolean;
   batchable: boolean;
   rollback_ok: boolean;
+  /**
+   * 0.9.5 B (Vega): whether the work changed anything (files, messages sent, settings). false draws
+   * "Read only · changed nothing" and hides Roll back. Missing reads as unknown.
+   */
+  changed?: boolean | null;
 }
 
 // `task_id` is a review's task (ReviewFields) or a watch item's (P1, null when none), so it takes both.
