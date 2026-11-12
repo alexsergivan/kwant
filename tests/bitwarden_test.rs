@@ -400,12 +400,12 @@ fn kwnt_is_not_dumpable() {
 // ---- 0.7.3 C1, C2, C4 (github-connect-073/spec.md): a mock Bitwarden on this machine ----
 
 mod mock {
-    use axum::{extract::State, routing::{get, post}, Form, Json, Router};
+    use axum::{extract::State, http::StatusCode, routing::{get, post}, Form, Json, Router};
     use kwnt::sandbox::bitwarden::{self, Kdf, SymKey};
     use ring::rand::SystemRandom;
     use serde_json::{json, Value};
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     pub const PASSWORD: &str = "DUMMY-master-pw-073";
     pub const EMAIL: &str = "dummy073@kwnt.test";
@@ -429,6 +429,24 @@ mod mock {
     /// Serves prelogin, token and sync for one account whose master-key salt is `salt`.
     /// `prelogin_salt`: what prelogin says about it (None: nothing, as older servers).
     pub async fn serve(salt: &str, prelogin_salt: Option<&str>, key_in: KeyIn) -> String {
+        let state = Arc::new(account(salt, prelogin_salt, key_in));
+        let app = Router::new()
+            .route("/identity/accounts/prelogin", post(|State(m): State<Arc<Mock>>| async move { Json(m.prelogin.clone()) }))
+            .route(
+                "/identity/connect/token",
+                post(|State(m): State<Arc<Mock>>, Form(f): Form<HashMap<String, String>>| async move {
+                    if f.get("password") == Some(&m.hash) {
+                        (StatusCode::OK, Json(m.token.clone()))
+                    } else {
+                        (StatusCode::BAD_REQUEST, Json(wrong_password()))
+                    }
+                }),
+            )
+            .with_state(state);
+        listen(app).await
+    }
+
+    fn account(salt: &str, prelogin_salt: Option<&str>, key_in: KeyIn) -> Mock {
         let rng = SystemRandom::new();
         let kdf = Kdf::Pbkdf2 { iterations: ITERATIONS };
         let mk = bitwarden::master_key_salted(PASSWORD, salt, kdf).unwrap();
@@ -452,27 +470,62 @@ mod mock {
                     "masterKeyEncryptedUserKey": user_key, "salt": salt}});
             }
         }
-        let state = Arc::new(Mock { prelogin, hash: bitwarden::auth_hash(&mk, PASSWORD).to_string(), token });
-        let app = Router::new()
-            .route("/identity/accounts/prelogin", post(|State(m): State<Arc<Mock>>| async move { Json(m.prelogin.clone()) }))
-            .route(
-                "/identity/connect/token",
-                post(|State(m): State<Arc<Mock>>, Form(f): Form<HashMap<String, String>>| async move {
-                    if f.get("password") == Some(&m.hash) {
-                        (axum::http::StatusCode::OK, Json(m.token.clone()))
-                    } else {
-                        let wrong = json!({"error": "invalid_grant", "error_description": "invalid_username_or_password",
-                            "ErrorModel": {"Message": "Username or password is incorrect. Try again."}});
-                        (axum::http::StatusCode::BAD_REQUEST, Json(wrong))
-                    }
-                }),
-            )
-            .route("/api/sync", get(|| async { Json(json!({"profile": {"id": "u-073"}, "folders": [], "ciphers": []})) }))
-            .with_state(state);
+        Mock { prelogin, hash: bitwarden::auth_hash(&mk, PASSWORD).to_string(), token }
+    }
+
+    fn wrong_password() -> Value {
+        json!({"error": "invalid_grant", "error_description": "invalid_username_or_password",
+            "ErrorModel": {"Message": "Username or password is incorrect. Try again."}})
+    }
+
+    /// Adds sync and serves `app` on a free local port.
+    async fn listen(app: Router) -> String {
+        let app = app.route("/api/sync", get(|| async { Json(json!({"profile": {"id": "u-073"}, "folders": [], "ciphers": []})) }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         format!("http://{addr}")
+    }
+
+    /// The authenticator code the two-step account takes.
+    pub const CODE: &str = "123456";
+    /// A code the two-step mock answers with 429, as a server that is rate limiting.
+    pub const CODE_429: &str = "429429";
+
+    #[derive(Clone)]
+    struct TwoStep {
+        mock: Arc<Mock>,
+        devices: Arc<Mutex<Vec<String>>>,
+    }
+
+    /// One account (email salt, key at the top level) with authenticator two-step login whose code
+    /// is `CODE`. Each `deviceIdentifier` the token endpoint sees is pushed onto `devices`.
+    pub async fn serve_two_step(devices: Arc<Mutex<Vec<String>>>) -> String {
+        let salt = bitwarden::email_salt(EMAIL);
+        let state = TwoStep { mock: Arc::new(account(&salt, Some(&salt), KeyIn::TopLevel)), devices };
+        let app = Router::new()
+            .route("/identity/accounts/prelogin", post(|State(t): State<TwoStep>| async move { Json(t.mock.prelogin.clone()) }))
+            .route(
+                "/identity/connect/token",
+                post(|State(t): State<TwoStep>, Form(f): Form<HashMap<String, String>>| async move {
+                    t.devices.lock().unwrap().push(f.get("deviceIdentifier").cloned().unwrap_or_default());
+                    if f.get("password") != Some(&t.mock.hash) {
+                        return (StatusCode::BAD_REQUEST, Json(wrong_password()));
+                    }
+                    // A refused code and a first try look the same, as Bitwarden's do: the same
+                    // 400, `invalid_grant` and list of methods
+                    let challenge = json!({"error": "invalid_grant", "error_description": "invalid_username_or_password",
+                        "TwoFactorProviders": ["0"], "TwoFactorProviders2": {"0": null},
+                        "ErrorModel": {"Message": "Two-step token is invalid. Try again."}});
+                    match (f.get("twoFactorProvider").map(String::as_str), f.get("twoFactorToken").map(String::as_str)) {
+                        (Some("0"), Some(CODE)) => (StatusCode::OK, Json(t.mock.token.clone())),
+                        (_, Some(CODE_429)) => (StatusCode::TOO_MANY_REQUESTS, Json(json!({"message": "Slow down."}))),
+                        _ => (StatusCode::BAD_REQUEST, Json(challenge)),
+                    }
+                }),
+            )
+            .with_state(state);
+        listen(app).await
     }
 }
 
@@ -549,4 +602,65 @@ async fn a_failed_connect_sets_nothing_up() {
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["store"], "bitwarden", "{v}");
     assert!(config.exists());
+}
+
+// ---- PR #527: a refused two-step code is not a wrong master password, and every try before the
+// account is set up comes from one device ----
+
+fn code_req(server: &str, provider: u32, code: &str) -> bitwarden::UnlockRequest {
+    let mut req = unlock_req(server, mock::PASSWORD);
+    req.two_factor_provider = Some(provider);
+    req.two_factor_token = Some(code.into());
+    req
+}
+
+#[tokio::test]
+async fn a_refused_two_step_code_is_not_a_wrong_password() {
+    let devices = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = mock::serve_two_step(devices.clone()).await;
+    let dir = tempdir().unwrap();
+    let store = bitwarden::BitwardenStore::open(dir.path());
+    let err = store.unlock(unlock_req(&server, mock::PASSWORD)).await.expect_err("asks for a code");
+    assert!(matches!(err, bitwarden::UnlockError::TwoFactor(ref p) if *p == ["0"]), "{err:?}");
+    let err = store.unlock(code_req(&server, 0, "000000")).await.expect_err("refused");
+    assert!(matches!(err, bitwarden::UnlockError::TwoFactorRejected(ref p) if *p == ["0"]), "{err:?}");
+    // A 429 says nothing about the code
+    let err = store.unlock(code_req(&server, 0, mock::CODE_429)).await.expect_err("rate limited");
+    assert_eq!(err.kind(), "server", "{err:?}");
+    // A wrong password without a code is still a wrong password
+    let err = store.unlock(unlock_req(&server, "DUMMY-wrong-pw")).await.expect_err("wrong");
+    assert_eq!(err.kind(), "wrong");
+    assert!(!dir.path().join(bitwarden::CONFIG_FILE).exists(), "nothing set up yet");
+    // The code as the app shows it, with its space
+    store.unlock(code_req(&server, 0, "123 456")).await.expect("the right code connects");
+    assert!(store.is_unlocked().await);
+    let id = store.config().expect("set up").device_id;
+    assert!(uuid::Uuid::parse_str(&id).is_ok(), "{id}");
+    let seen = devices.lock().unwrap().clone();
+    assert_eq!(seen.len(), 5, "{seen:?}");
+    assert!(seen.iter().all(|d| *d == id), "one device for every try: {seen:?}");
+
+    // Another kwnt with the same server and account is another device: the id is not worked out
+    // from them, or anyone could pass for a device the account already trusts
+    let dir2 = tempdir().unwrap();
+    let other = bitwarden::BitwardenStore::open(dir2.path());
+    other.unlock(unlock_req(&server, mock::PASSWORD)).await.expect_err("asks for a code");
+    let other_id = devices.lock().unwrap().last().cloned().unwrap();
+    assert!(uuid::Uuid::parse_str(&other_id).is_ok(), "{other_id}");
+    assert_ne!(other_id, id);
+}
+
+#[tokio::test]
+async fn a_refused_code_is_answered_as_one() {
+    let server = mock::serve_two_step(Default::default()).await;
+    let e = setup().await;
+    let body = json!({"server_url": server, "email": mock::EMAIL, "master_password": mock::PASSWORD,
+        "two_factor_provider": 0, "two_factor_token": "000000"});
+    let (s, v) = e.person("POST", "/api/passwords/bitwarden/unlock", Some(body)).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "{v}");
+    assert_eq!(v["needs"], "two_factor", "{v}");
+    assert_eq!(v["code_rejected"], true, "{v}");
+    assert_eq!(v["providers"], json!(["0"]), "{v}");
+    assert_ne!(v["wrong_password"], true, "{v}");
+    assert!(!v.to_string().contains("DUMMY"), "{v}");
 }

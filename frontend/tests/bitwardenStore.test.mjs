@@ -79,6 +79,13 @@ test('unlock answers: token, wrong password, two-step, new device, other account
   assert.deepEqual(m.unlockProblemFor(401, { person_only: true }), { kind: 'needs-token' });
   assert.deepEqual(m.unlockProblemFor(401, { wrong_password: true, error: 'x' }), { kind: 'wrong-password' });
   assert.equal(m.unlockProblemFor(401, { needs: 'two_factor', providers: ['0'] }).kind, 'two-factor');
+  // A refused code is its own problem, never the master password (PR #527)
+  const rejected = m.unlockProblemFor(401, { needs: 'two_factor', code_rejected: true, providers: ['0'] });
+  assert.equal(rejected.kind, 'code-rejected');
+  assert.deepEqual(rejected.providers.map((x) => x.id), [0]);
+  assert.match(m.unlockProblemText(rejected), /30 seconds/);
+  assert.doesNotMatch(m.unlockProblemText(m.unlockProblemFor(401, { needs: 'two_factor', code_rejected: true, providers: ['1'] })), /30 seconds/);
+  assert.doesNotMatch(m.unlockProblemText(rejected), /master password/i);
   assert.deepEqual(m.unlockProblemFor(401, { needs: 'new_device_otp' }), { kind: 'new-device-code' });
   assert.deepEqual(m.unlockProblemFor(409, {}), { kind: 'other-account' });
   assert.deepEqual(m.unlockProblemFor(400, { error: 'the Bitwarden server must be an https address' }), { kind: 'invalid', message: 'the Bitwarden server must be an https address' });
