@@ -40,8 +40,9 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
         body: (
           <div className="mt-2 space-y-2.5">
             <TeamNeedBox label="What should your bots do?" register />
-            <p className="text-[11.5px] leading-[18px] text-zinc-400" data-ready-made-line>
-              Or start from a ready-made team:{' '}
+            {/* flex-wrap: on a touch phone each link is a 44 px target, so wrapped rows stay even. */}
+            <p className="flex flex-wrap items-center gap-x-1 text-[11.5px] leading-[18px] text-zinc-400" data-ready-made-line>
+              <span>Or start from a ready-made team: </span>
               {picks.map((t) => (
                 <React.Fragment key={t.id}>
                   <button type="button" data-template={t.id} onClick={() => rt!.open({ kind: 'template', templateId: t.id })} className={quiet}>
@@ -50,7 +51,7 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
                   <span aria-hidden="true"> · </span>
                 </React.Fragment>
               ))}
-              or{' '}
+              <span>or </span>
               <button type="button" data-new-bot onClick={onNewBot} className={quiet}>
                 add one bot
               </button>

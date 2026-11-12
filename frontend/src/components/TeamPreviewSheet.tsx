@@ -1204,6 +1204,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   };
 
   // ---- footer
+  const phoneN = phone && isN;
   const nNew = isD ? newBotCount(edits) : tBots.length;
   // Manage with nothing new to suggest: the body says so; no "Pick at least" nag.
   const nothingNew = manage && dPhase === 'ready' && !!sug && sug.bots.length === 0 && sug.also_possible.length === 0;
@@ -1303,12 +1304,13 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         )}
         {isD ? dBody() : tBody()}
       </div>
+      {/* Phone, team from words: Cancel and Try again share a row; Create gets its own full-width row. */}
       <footer className={`flex ${phone ? 'flex-wrap' : 'items-center'} gap-2 ${phone ? 'px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]' : 'px-5 py-3.5'} border-t border-zinc-800 bg-zinc-900`}>
         <p className={`${phone ? 'w-full' : 'flex-1 min-w-0'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
           {!fallbackFooter && !sNote && footNote && <Undo2 size={13} aria-hidden="true" />}
           {fallbackFooter ? null : footNote}
         </p>
-        <button type="button" onClick={close} disabled={creating} className={`${btnH} px-3.5 rounded-lg text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}>
+        <button type="button" onClick={close} disabled={creating} className={`${btnH} ${phoneN ? 'flex-1' : ''} px-3.5 rounded-lg text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}>
           Cancel
         </button>
         {isN && dPhase === 'ready' && (
@@ -1319,7 +1321,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
               void read();
             }}
             disabled={creating || !online}
-            className={`${btnH} inline-flex items-center justify-center gap-1.5 px-3.5 rounded-lg border border-zinc-700 text-sm text-zinc-100 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}
+            className={`${btnH} ${phoneN ? 'flex-1' : ''} inline-flex items-center justify-center gap-1.5 px-3.5 rounded-lg border border-zinc-700 text-sm text-zinc-100 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}
           >
             <RefreshCw size={14} aria-hidden="true" />
             Try again
@@ -1336,7 +1338,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             type="button"
             onClick={onPrimary}
             disabled={primaryDisabled}
-            className={`${btnH} inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
+            className={`${btnH} ${phoneN ? 'w-full' : ''} whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
           >
             {creating && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             {pickOther && !creating && <FolderOpen size={14} aria-hidden="true" />}
