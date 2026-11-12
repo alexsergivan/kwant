@@ -950,6 +950,7 @@ mod tests {
         assert!(person_only(&get, "/api/team-templates/inbox/preview"));
         assert!(person_only(&post, "/api/teams/from-template"));
         assert!(person_only(&post, "/api/teams/suggest"));
+        assert!(person_only(&del, "/api/teams/suggest"));
         assert!(person_only(&get, "/api/teams/t1/template"));
         assert!(!person_only(&get, "/api/team-templates"));
         assert!(!person_only(&post, "/api/teams"));

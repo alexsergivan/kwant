@@ -6,6 +6,8 @@
 //!   (the last marker counts, and each marker runs once: later turns see it again in history).
 //! - `REPLYTAG:<tag>`: reply "answer <tag>" (after any tool call).
 //! - `REPLYTEXT:<base64 text>`: reply exactly that text (say, a markdown table), and nothing else.
+//! - `REPLYSEQ:<tag>`: reply the test's planned answers in turn: the files `seq-<tag>-1`, `seq-<tag>-2`, …
+//!   next to the prompts folder ([`plan_replies`]); the last one repeats.
 //! - `QUOTAONCE:<tag>` / `QUOTAALWAYS`: fail with Claude's usage-limit error, once / every time;
 //!   it resets in 2 s, or in `QUOTARESET:<secs>`.
 //! - A no-tools turn (`--tools ""`) first prints claude's init line with no tools.
@@ -109,6 +111,17 @@ if fs:
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 2,
         "result": "The render command was refused (" + tag + ").\n\n" + end}))
     sys.exit(0)
+# REPLYSEQ:<tag>: the next planned answer, seq-<tag>-1, seq-<tag>-2, ... (the last one repeats)
+sq = re.findall(r"REPLYSEQ:([A-Za-z0-9_]+)", prompt)
+if sq:
+    base = os.path.join(os.path.dirname(out_dir), "seq-" + sq[-1])
+    n = 1
+    while os.path.exists("%s-%d.used" % (base, n)) and os.path.exists("%s-%d" % (base, n + 1)):
+        n += 1
+    open("%s-%d.used" % (base, n), "w").close()
+    print(json.dumps({"type": "result", "is_error": False, "num_turns": 1,
+        "result": open("%s-%d" % (base, n)).read()}))
+    sys.exit(0)
 # REPLYTEXT:<base64>: reply exactly that text
 rt = re.findall(r"REPLYTEXT:([A-Za-z0-9+/=]+)", prompt)
 if rt:
@@ -168,6 +181,15 @@ pub fn prompts_dir() -> &'static PathBuf {
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
         prompts
     })
+}
+
+/// Plans the fake CLI's answers to prompts with `REPLYSEQ:<tag>`: the first call gets `answers[0]`,
+/// the next `answers[1]`, and so on; the last one repeats.
+pub fn plan_replies(tag: &str, answers: &[&str]) {
+    let root = prompts_dir().parent().unwrap();
+    for (i, a) in answers.iter().enumerate() {
+        std::fs::write(root.join(format!("seq-{tag}-{}", i + 1)), a).unwrap();
+    }
 }
 
 /// Every CLI invocation (all its arguments, one per line) whose text contains `marker`.
