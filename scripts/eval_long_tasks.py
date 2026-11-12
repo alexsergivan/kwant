@@ -17,8 +17,9 @@ from facts first and a judge second:
   silent-stop          everything else: ended on a promise, mid-work, or with no result
   timeout              the per-task cap (--task-timeout) hit first
 
-The eval plays the person: it approves every tool approval card, except on task 9 where it denies
-every shell command. Nobody answers questions: a question card ends the task.
+The eval plays the person: it approves every tool approval card, except on task 9, whose bot is
+set to approvals "ask" and gets every shell command denied. Nobody answers questions: a question
+card ends the task. Requests go to the team's lead (a team chat would route "Ask Bea…" to Bea).
 
 Usage:
   scripts/eval_long_tasks.py --bin /tmp/kwnt-093 --label v093 --port 18971 --out /tmp/lts
