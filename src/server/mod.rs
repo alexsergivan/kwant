@@ -63,6 +63,7 @@ pub mod push;
 pub mod waiting;
 pub mod stopped;
 pub mod restart_resume;
+pub mod busy_retry;
 pub mod decide;
 pub mod reactions;
 pub mod work_ahead;

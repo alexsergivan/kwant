@@ -142,8 +142,10 @@ async fn retry(state: &AppState, p: &ParkedTurn) -> bool {
     };
     let budget = p.reason == "bot_budget";
     let restart = p.reason == RESTART;
-    // A restart's continuation said so in the chat when it was parked
-    if !restart {
+    // 0.9.5: a busy-browser retry (see [`super::busy_retry`]); its count rides on the reason
+    let busy = super::busy_retry::retries_of(&p.reason);
+    // A restart's continuation and a busy-browser retry said so in the chat when they were parked
+    if !restart && busy.is_none() {
         let text = if budget {
             format!("{} can start new work again: running the message it held.", kwant.name)
         } else {
@@ -154,7 +156,7 @@ async fn retry(state: &AppState, p: &ParkedTurn) -> bool {
     }
     let prompt = if budget {
         budget_retry_prompt(&p.prompt)
-    } else if restart {
+    } else if restart || busy.is_some() {
         p.prompt.clone()
     } else {
         retry_prompt(&p.prompt)
@@ -165,6 +167,7 @@ async fn retry(state: &AppState, p: &ParkedTurn) -> bool {
         let mut opts = TurnOpts::default();
         opts.retried = true;
         opts.resumed_after_restart = restart;
+        opts.busy_retries = busy.unwrap_or(0);
         let _ = try_kwant_turn(&scope, &kwant, prompt, opts).await;
     });
     true

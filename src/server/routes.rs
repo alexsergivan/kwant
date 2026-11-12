@@ -1965,6 +1965,9 @@ pub(super) struct TurnOpts {
     /// The continuation of a reply a restart cut off (see [`super::restart_resume`]): a second
     /// restart asks the person instead of continuing it again.
     pub(super) resumed_after_restart: bool,
+    /// How many times kwnt already ran this message again because the browser was busy (see
+    /// [`super::busy_retry`]); at [`super::busy_retry::MAX_RETRIES`] the person is asked instead.
+    pub(super) busy_retries: u8,
     /// The delegation this turn works on; a parked retry restarts the delegation.
     pub(super) delegation_id: Option<String>,
     /// (agent, effort) to run on instead of asking Laya: a turn resumed after a late Allow
@@ -2624,6 +2627,8 @@ struct TurnEndedGuard {
 impl Drop for TurnEndedGuard {
     fn drop(&mut self) {
         self.turns.end_turn(&self.tag.turn_id);
+        // a busy browser step a failed or stopped turn left behind is never retried
+        let _ = super::busy_retry::take(&self.tag.turn_id);
         // However it ended (reply, error, stop, panic), the lead hears the hand-offs this turn started
         super::delegation::release_held(&self.state, &self.tag.turn_id, self.turns.end_hold(&self.tag.turn_id));
         if let (Some(db), Ok(rt)) = (self.running_row.take(), tokio::runtime::Handle::try_current()) {
@@ -3932,7 +3937,12 @@ async fn run_kwant_turn_inner(
             // 0.9.5 (#9): the reply ended with its page on a sign-in form it asked nobody about
             // (and no continuation of it is coming): the person gets one sign-in step for it
             let continues = opts.delivery_next.as_ref().is_some_and(|n| n.lock().is_ok_and(|n| n.is_some()));
-            if !continues && !opts.no_tools && stop_asks(scope, &opts) {
+            // 0.9.5: the reply ended with its last browser step refused because the browser was
+            // busy (by code): kwnt runs that step again by itself, bounded, or asks once
+            let busy_step = super::busy_retry::take(&tag.turn_id);
+            if let (Some(step), false, false, true) = (&busy_step, continues, opts.no_tools, stop_asks(scope, &opts)) {
+                super::busy_retry::after_turn(scope, target_kwant, &park_prompt, step, opts.busy_retries).await;
+            } else if !continues && !opts.no_tools && stop_asks(scope, &opts) {
                 let probe = super::human_steps::ask_for_sign_in_wall(state, &turn_scope, &turn_page);
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(10), probe).await;
             }
