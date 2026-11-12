@@ -547,6 +547,9 @@ async fn a_reply_cut_off_mid_step_by_a_restart_continues_by_itself_once() {
     // The scheduler's next tick runs it, and the bot is told to check before running it again
     assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 1);
     let events = wait_turn_end(&mut rx, &kid).await;
+    // The ended turn's own running record is removed in the background after TurnEnded; clear it
+    // now so the next "restart" sees only the record this test adds
+    let _ = env.state.db.take_running_turns().await;
     assert!(shown(&events).contains("RESUMED: checked first"), "{}", shown(&events));
     assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 0, "once");
 
@@ -609,6 +612,9 @@ async fn a_read_cut_off_by_a_restart_runs_again_and_a_waiting_card_is_left_to_th
     assert_eq!(routes::interrupt_running_turns(&env.state).await, 1);
     assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 1);
     let events = wait_turn_end(&mut rx, &kid).await;
+    // The ended turn's own running record is removed in the background after TurnEnded; clear it
+    // now so the next "restart" sees only the record this test adds
+    let _ = env.state.db.take_running_turns().await;
     assert!(shown(&events).contains("RESUMED: read again"), "{}", shown(&events));
 
     // A card of the cut-off turn is still waiting: not continued, the old notice and ask stand
