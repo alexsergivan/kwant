@@ -1,4 +1,4 @@
-// Failover order (Settings › This space › Accounts) and the switch notice in chat. Pure helpers, so the
+// Failover order (Settings › This space › Apps & accounts) and the switch notice in chat. Pure helpers, so the
 // components and the node tests share them. Every word and time shown comes from the server's data;
 // nothing here makes up a number.
 

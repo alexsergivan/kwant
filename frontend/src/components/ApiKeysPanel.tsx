@@ -1,5 +1,5 @@
 // API keys and the Ollama address: one per provider, shared by every space. They live in
-// Settings › This space › Accounts, next to the accounts that use them, and are saved on their
+// Settings › This space › Apps & accounts, next to the accounts that use them, and are saved on their
 // own: only these four fields are sent, so nothing else in App settings changes.
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Globe, Key, Loader2 } from 'lucide-react';

@@ -202,7 +202,9 @@ export const ComposioAppSearch: React.FC<{
   api?: ComposioSearchApi;
   /** Tests show results without searching. */
   initialApps?: ComposioApp[];
-}> = ({ entry, api = { search: connectionsApi.searchComposioApps, connect: connectionsApi.connectComposioApp }, initialApps }) => {
+  /** Apps & accounts: "Connect" opens the Connect sheet for this app instead of its sign-in. */
+  onPick?: (app: ComposioApp) => void;
+}> = ({ entry, api = { search: connectionsApi.searchComposioApps, connect: connectionsApi.connectComposioApp }, initialApps, onPick }) => {
   const id = useId();
   const [q, setQ] = useState('');
   const [apps, setApps] = useState<ComposioApp[] | null>(initialApps ?? null);
@@ -279,7 +281,7 @@ export const ComposioAppSearch: React.FC<{
           Find
         </button>
       </form>
-      {!canConnect && (
+      {!canConnect && !onPick && (
         <p className="text-[11px] text-zinc-400">
           Your Composio URL has no <code className="text-zinc-300">user_id</code>, so connect apps on composio.dev. If your Composio server lists fixed apps, add the app to it there too.
         </p>
@@ -308,7 +310,11 @@ export const ComposioAppSearch: React.FC<{
                   {a.no_auth ? 'No sign-in needed' : 'Sign-in kept on Composio'}
                 </p>
               </div>
-              {canConnect && !a.no_auth && (
+              {onPick ? (
+                <button type="button" className={quietBtn} onClick={() => onPick(a)} data-composio-pick={a.slug}>
+                  Connect<span className="sr-only"> {a.name}</span>
+                </button>
+              ) : canConnect && !a.no_auth && (
                 <button type="button" className={quietBtn} disabled={connecting !== null} onClick={() => connect(a)}>
                   {connecting === a.slug ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ExternalLink size={12} aria-hidden="true" />}
                   Connect<span className="sr-only"> {a.name} on Composio (opens in a new tab)</span>
@@ -328,6 +334,8 @@ export interface ComposioCardProps {
   initialOpen?: boolean;
   onAdd: (url: string, apiKey: string, enabled: boolean) => Promise<string | null>;
   onOpenTools?: () => void;
+  /** Apps & accounts: "Choose bots" opens the Connect sheet (picking bots turns it on). */
+  onChooseBots?: () => void;
   /** Tests: the search box's API and starting results. */
   searchApi?: ComposioSearchApi;
   initialApps?: ComposioApp[];
@@ -336,7 +344,7 @@ export interface ComposioCardProps {
 }
 
 /** The optional Composio connector: what it is, where it keeps sign-ins, and the add form. */
-export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen = false, onAdd, onOpenTools, searchApi, initialApps, openRequest = 0 }) => {
+export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen = false, onAdd, onOpenTools, onChooseBots, searchApi, initialApps, openRequest = 0 }) => {
   const id = useId();
   const [open, setOpen] = useState(initialOpen);
   const cardRef = useRef<HTMLLIElement>(null);
@@ -387,7 +395,12 @@ export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen =
             <Plus size={12} aria-hidden="true" /> Add {entry.name}
           </button>
         )}
-        {entry.added && onOpenTools && (
+        {entry.added && onChooseBots && (
+          <button type="button" className={quietBtn} onClick={onChooseBots} data-composio-choose-bots>
+            {entry.enabled ? 'Choose bots' : 'Choose bots to turn it on'}
+          </button>
+        )}
+        {entry.added && !onChooseBots && onOpenTools && (
           <button type="button" className={quietBtn} onClick={onOpenTools}>
             {entry.enabled ? 'Manage in Tools' : 'Turn on in Tools'}
           </button>
@@ -591,6 +604,10 @@ export interface ConnectionsViewProps extends ManageLinks {
   /** Tests and screenshots: the Notes from bots section's api and starting state. */
   notes?: Partial<ToolNotesSectionProps>;
   phone?: boolean;
+  /** Apps & accounts' Advanced: AI accounts have their own section there, so their group is left out. */
+  hideAccounts?: boolean;
+  /** Apps & accounts' Advanced: Composio's "Choose bots" (instead of "Turn on in Tools"). */
+  onChooseComposioBots?: () => void;
 }
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
@@ -617,6 +634,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   onOpenNoteWhere,
   notes: notesProps = {},
   phone,
+  hideAccounts = false,
+  onChooseComposioBots,
   ...links
 }) => {
   const phoneLayout = usePhoneLayout();
@@ -629,7 +648,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
       setNoteScroll((n) => n + 1);
     }
   };
-  const groups = data ? groupConnections(data.connections) : [];
+  const groups = data ? groupConnections(data.connections).filter((g) => !(hideAccounts && g.key === 'account')) : [];
   const vault = data?.vault;
   const [composioRequest, setComposioRequest] = useState(0);
   const hasComposio = !!data?.catalog.some((e) => e.id === 'composio');
@@ -789,6 +808,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     initialOpen={composioOpen}
                     onAdd={onAddComposio}
                     onOpenTools={links.onOpenTools}
+                    onChooseBots={entry.id === 'composio' ? onChooseComposioBots : undefined}
                     openRequest={entry.id === 'composio' ? composioRequest : 0}
                   />
                 ))}
@@ -809,9 +829,11 @@ export interface ConnectionsPageProps extends ManageLinks {
   focusNote?: string | null;
   onClearFocusNote?: () => void;
   onOpenNoteWhere?: ToolNotesSectionProps['onOpenWhere'];
+  hideAccounts?: boolean;
+  onChooseComposioBots?: () => void;
 }
 
-export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedded, focusNote, onClearFocusNote, onOpenNoteWhere, ...links }) => {
+export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedded, focusNote, onClearFocusNote, onOpenNoteWhere, hideAccounts, onChooseComposioBots, ...links }) => {
   const [data, setData] = useState<ConnectionsList | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -891,7 +913,14 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedd
   const addComposio = async (url: string, apiKey: string, enabled: boolean): Promise<string | null> => {
     try {
       await connectionsApi.addComposio(apiKey ? { url, api_key: apiKey, enabled } : { url, enabled });
-      setNotice({ text: enabled ? 'Composio is added and on.' : 'Composio is added and off. Turn it on in Tools when you want bots to use it.', error: false });
+      setNotice({
+        text: enabled
+          ? 'Composio is added and on.'
+          : onChooseComposioBots
+            ? 'Composio is added. Choose the bots that get it to turn it on.'
+            : 'Composio is added and off. Turn it on in Tools when you want bots to use it.',
+        error: false,
+      });
       load();
       return null;
     } catch (e) {
@@ -920,6 +949,8 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedd
         onClearFocusNote={onClearFocusNote}
         onOpenNoteWhere={onOpenNoteWhere}
         onNotesChanged={quietLoad}
+        hideAccounts={hideAccounts}
+        onChooseComposioBots={onChooseComposioBots}
         {...links}
       />
       {unlocking && (

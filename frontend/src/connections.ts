@@ -186,7 +186,8 @@ export const needsAttention = (status: string) => status === 'needs_sign_in' || 
 export function countsLine(list: Connection[]): string {
   if (list.length === 0) return 'Nothing connected yet';
   const connected = list.filter((c) => c.status === 'connected').length;
-  const attention = list.filter((c) => needsAttention(c.status)).length;
+  // An AI account no bot uses isn't something the person has to fix (Apps & accounts, 0.9.5).
+  const attention = list.filter((c) => needsAttention(c.status) && !(c.kind === 'account' && c.used_by.length === 0)).length;
   const off = list.filter((c) => c.status === 'off').length;
   const parts = [`${connected} connected`];
   if (attention) parts.push(`${attention} ${attention === 1 ? 'needs' : 'need'} you`);
