@@ -48,7 +48,10 @@ from pathlib import Path
 
 LIMITS_FILE = Path(__file__).with_name("perf_budget.json")
 FORBIDDEN_PORTS = {8799, 8800, 8810, 8852, 8931}
-SYSTEM_TOOLS = ["sh", "bash", "cat", "mkdir", "chmod", "sleep", "which", "env", "uname", "dirname", "rm", "cp", "mv", "ls"]
+# readlink and touch (and the rest of the second row) are what Google Chrome's /usr/bin/google-chrome launcher script calls:
+# without them it died with `readlink: command not found` (exit 127) on the CI runner, so Chrome never opened its port.
+SYSTEM_TOOLS = ["sh", "bash", "cat", "mkdir", "chmod", "sleep", "which", "env", "uname", "dirname", "rm", "cp", "mv", "ls",
+                "readlink", "touch", "basename", "grep", "sed", "tr", "head", "id"]
 
 CHROME_DOWN_MARKER = "could not start kwant's Chrome"  # what kwnt's 503 says when Chrome never opens its debugging port
 

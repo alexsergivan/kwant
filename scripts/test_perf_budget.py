@@ -151,5 +151,13 @@ class ShippedFiles(unittest.TestCase):
         self.assertNotIn("Performance budget", (ROOT / "scripts" / "release_required_checks.txt").read_text())
 
 
+class BarePathHasWhatChromesLauncherNeeds(unittest.TestCase):
+    def test_readlink_and_touch_are_on_the_bare_path(self):
+        # /usr/bin/google-chrome is a shell script: on the CI runner it died with "readlink: command not found" and
+        # "touch: command not found" under the run's bare PATH, and Chrome never opened its debugging port
+        for tool in ("readlink", "touch"):
+            self.assertIn(tool, pb.SYSTEM_TOOLS)
+
+
 if __name__ == "__main__":
     unittest.main()
