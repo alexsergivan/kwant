@@ -71,6 +71,8 @@ export const isWarn = (b: Pick<BotBudget, 'state'> | null | undefined): boolean 
 export const meterPercent = (b: Pick<BotBudget, 'percent'>): number => Math.max(0, Math.min(100, Math.round(b.percent)));
 
 export const PAUSED_LINE = 'Paused: monthly budget reached';
+/** The sidebar row's short form; the bar, Inbox and settings keep the full line (#536 Mira F6). */
+export const PAUSED_ROW_LINE = 'Paused: budget reached';
 
 function monthName(month: string): string {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
@@ -115,13 +117,13 @@ export function stateLine(b: BotBudget): string {
   const until = day ? ` until ${day}` : ' until next month';
   switch (b.state) {
     case 'off':
-      return 'No budget. This bot can use as much as it needs.';
+      return `No budget: ${b.kwant_name || 'This bot'} can use as much as it needs.`;
     case 'under':
-      return `Starts over${on}.`;
+      return `The count starts over${on}.`;
     case 'warn':
       return `${meterPercent(b)}% used. At 100% it finishes what it’s doing and starts nothing new${until}.`;
     case 'paused':
-      return `${PAUSED_LINE}. It starts nothing new until you raise the limit or continue this month. It starts over${on}.`;
+      return `${PAUSED_LINE}. ${b.kwant_name || 'This bot'} starts nothing new until you raise the limit, continue this month, or ${day ?? 'next month'}.`;
     case 'continued':
       return `Continued for ${monthName(b.month)}: the limit is ignored${until}.`;
   }

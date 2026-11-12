@@ -28,7 +28,7 @@ import type { Browsing } from '../watchLive';
 import { IdeaJarRow } from './IdeaJarRow';
 import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
 import { BudgetMeter, useBudgets } from './BotBudget';
-import { PAUSED_LINE } from '../botBudget';
+import { PAUSED_ROW_LINE } from '../botBudget';
 
 export interface Kwant {
   id: string;
@@ -581,7 +581,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       : needs > 0 && !busyKwants[k.id]?.startsWith('Needs you in the browser')
         ? 'Needs you in the browser'
         : budgetPaused && !busyKwants[k.id]
-          ? PAUSED_LINE
+          ? PAUSED_ROW_LINE
           : busyKwants[k.id];
     // A stuck or finished row opens where that happened (its thread or chat), like its Inbox card
     // A review row opens its item in the Inbox
@@ -659,7 +659,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ))}
             {/* W1: this bot's current work is in a browser; the click opens the chat that browser belongs to.
                 Last on the name line and pushed right, so every row's globe lines up in one column */}
-            {(budget?.state === 'warn' || budgetPaused) && <BudgetMeter budget={budget!} size="row" className="mt-1" />}
+            {budget?.state === 'warn' && <BudgetMeter budget={budget!} size="row" className="ml-0.5 self-center" />}
             {onWatchBrowser && <GlobeSlot browsing={botBrowsing} name={k.name} phone={phone} className="ml-auto mt-1" onWatch={onWatchBrowser} />}
             {/* Edit and Remove sit at the right end of the one-line status below the name, which makes room
                 for them on hover: the name keeps its width and the row its height */}

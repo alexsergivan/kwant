@@ -21,11 +21,11 @@ import {
 } from '../botBudget';
 
 const btnAmber =
-  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer disabled:cursor-default text-amber-100 bg-amber-500/15 border-amber-500/40 hover:bg-amber-500/25 disabled:opacity-70 disabled:hover:bg-amber-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400';
+  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer disabled:cursor-default text-amber-100 bg-amber-500/15 border-amber-500/40 hover:bg-amber-500/25 disabled:opacity-70 disabled:hover:bg-amber-500/15 aria-disabled:cursor-default aria-disabled:opacity-70 aria-disabled:hover:bg-amber-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400';
 const btnQuiet =
-  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-60 disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
+  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-60 disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const btnPrimary =
-  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium border border-sky-500/50 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25 disabled:opacity-50 disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
+  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium border border-sky-500/50 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25 disabled:opacity-50 disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
 
 /** The space's budgets, shared. The app loads and refreshes the list; this only reads it. */
 export function useBudgets() {
@@ -61,7 +61,7 @@ export const BudgetMeter: React.FC<{ budget: BotBudget; size?: 'row' | 'full'; c
 type Act = 'idle' | 'sending' | 'done' | 'error';
 
 /** Continue this month: one post however fast the clicks; the answer goes into the shared list. */
-function useContinueMonth(kwantId: string, send?: typeof fetch) {
+function useContinueMonth(kwantId: string, send?: typeof fetch, onContinued?: () => void) {
   const api = useRef(botBudgetApi(send)).current;
   const [state, setState] = useState<Act>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +72,10 @@ function useContinueMonth(kwantId: string, send?: typeof fetch) {
     setState('sending');
     setError(null);
     try {
-      budgetStore.put(await api.continueMonth(kwantId));
+      const next = await api.continueMonth(kwantId);
+      // Before the shared list changes, so a caller that keeps this row (Inbox) knows in the same render
+      onContinued?.();
+      budgetStore.put(next);
       setState('done');
     } catch (e) {
       lock.current = false;
@@ -83,14 +86,17 @@ function useContinueMonth(kwantId: string, send?: typeof fetch) {
   return { state, error, run };
 }
 
-/** The pause's two ways on: raise the limit (the bot's settings, at the budget) or continue this month. */
-export const PausedActions: React.FC<{ budget: BotBudget; onRaise?: (kwantId: string) => void; describedBy?: string; send?: typeof fetch }> = ({
-  budget,
-  onRaise,
-  describedBy,
-  send,
-}) => {
-  const { state, error, run } = useContinueMonth(budget.kwant_id, send);
+/** The pause's two ways on: raise the limit (the bot's settings, at the budget) or continue this month.
+ *  `onContinued` runs once the continue is saved, so the caller can move focus before this unmounts (#536 Mira F4).
+ *  The button is aria-disabled, never disabled, while it sends and once done, so focus stays on it. */
+export const PausedActions: React.FC<{
+  budget: BotBudget;
+  onRaise?: (kwantId: string) => void;
+  onContinued?: () => void;
+  describedBy?: string;
+  send?: typeof fetch;
+}> = ({ budget, onRaise, onContinued, describedBy, send }) => {
+  const { state, error, run } = useContinueMonth(budget.kwant_id, send, onContinued);
   const done = state === 'done' || budget.state === 'continued';
   return (
     <>
@@ -101,7 +107,16 @@ export const PausedActions: React.FC<{ budget: BotBudget; onRaise?: (kwantId: st
             <span>Raise the limit</span>
           </button>
         )}
-        <button type="button" onClick={run} disabled={state === 'sending' || done} className={btnAmber} data-budget-continue aria-describedby={describedBy}>
+        <button
+          type="button"
+          onClick={() => {
+            if (!done) void run();
+          }}
+          aria-disabled={state === 'sending' || done ? true : undefined}
+          className={btnAmber}
+          data-budget-continue
+          aria-describedby={describedBy}
+        >
           {state === 'sending' ? (
             <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
           ) : done ? (
@@ -126,6 +141,9 @@ export const PausedActions: React.FC<{ budget: BotBudget; onRaise?: (kwantId: st
 
 // ---------------------------------------------------------------- the chat
 
+/** After Continue in the bar: the bar goes away, so the person can type straight away (#536 Mira F4). */
+const focusComposer = () => document.querySelector<HTMLTextAreaElement>('[data-composer-form] textarea')?.focus();
+
 /** Above the composer in a paused bot's chat: why nothing new starts, and the way on. */
 export const BudgetPausedBanner: React.FC<{ budget: BotBudget; onRaise?: (kwantId: string) => void; send?: typeof fetch }> = ({ budget, onRaise, send }) => {
   const id = `budget-banner-${budget.kwant_id}`;
@@ -142,7 +160,7 @@ export const BudgetPausedBanner: React.FC<{ budget: BotBudget; onRaise?: (kwantI
         </p>
         <p className="mt-0.5 pl-[22px] text-[11px] text-amber-200/70">{usedLine(budget)}. Your message waits and goes through once it can start again.</p>
       </div>
-      <PausedActions budget={budget} onRaise={onRaise} describedBy={id} send={send} />
+      <PausedActions budget={budget} onRaise={onRaise} onContinued={focusComposer} describedBy={id} send={send} />
     </section>
   );
 };
@@ -201,10 +219,18 @@ export const BudgetNotice: React.FC<{
 /** Inbox › New, at the top: each bot paused at its budget, then each at 80% or more. Nothing when none. */
 export const BudgetNeedsYou: React.FC<{ onRaise?: (kwantId: string) => void; send?: typeof fetch }> = ({ onRaise, send }) => {
   const { list } = useBudgets();
-  const items = list ? budgetsNeedingYou(list.bots) : [];
+  // Continued during this visit: the row stays, done, so focus and the confirmation stay put (#536 Mira F4).
+  // It goes on the next visit to the Inbox. A ref, not state: the shared list's update renders synchronously,
+  // and a state update would land one render later, dropping the row (and its focused button) in between.
+  const continued = useRef<Set<string>>(new Set()).current;
+  const items = list
+    ? budgetsNeedingYou(list.bots.map((b) => (continued.has(b.kwant_id) && b.state === 'continued' ? { ...b, state: 'paused' as const } : b)))
+    : [];
   if (!items.length) return null;
+  // A block whose rows are all done drops data-needs-you, so the all-clear line can come back
+  const allDone = items.every((b) => continued.has(b.kwant_id));
   return (
-    <section aria-labelledby="needs-budget-h" data-needs-budget data-needs-you>
+    <section aria-labelledby="needs-budget-h" data-needs-budget data-needs-you={allDone ? undefined : ''}>
       <h3 id="needs-budget-h" className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
         <Gauge size={12} aria-hidden="true" />
         Needs you
@@ -213,29 +239,42 @@ export const BudgetNeedsYou: React.FC<{ onRaise?: (kwantId: string) => void; sen
         {items.map((b) => {
           const id = `needs-budget-${b.kwant_id}`;
           const paused = b.state === 'paused';
+          const done = continued.has(b.kwant_id);
+          const live = list?.bots.find((x) => x.kwant_id === b.kwant_id) ?? b;
           return (
-            <li key={b.kwant_id} data-needs-budget-item={b.state} className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-3.5 py-2.5 sm:px-4">
+            <li key={b.kwant_id} data-needs-budget-item={done ? 'continued' : b.state} className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-3.5 py-2.5 sm:px-4">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <div className="min-w-0 flex-1 basis-56">
-                  <p id={id} className="flex items-start gap-2 text-sm text-amber-200 break-words">
-                    {paused ? (
-                      <PauseCircle size={15} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
-                    ) : (
-                      <Gauge size={15} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
-                    )}
-                    <span className="min-w-0">
-                      {paused
-                        ? `${b.kwant_name} · ${PAUSED_LINE}`
-                        : `${b.kwant_name} has used ${meterPercent(b)}% of its monthly budget.`}
-                    </span>
-                  </p>
+                  {done ? (
+                    <p id={id} className="flex items-start gap-2 text-sm text-zinc-300 break-words">
+                      <Check size={15} className="mt-0.5 shrink-0 text-emerald-400" aria-hidden="true" />
+                      <span className="min-w-0">{`${b.kwant_name} can start new work again.`}</span>
+                    </p>
+                  ) : (
+                    <p id={id} className="flex items-start gap-2 text-sm text-amber-200 break-words">
+                      {paused ? (
+                        <PauseCircle size={15} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
+                      ) : (
+                        <Gauge size={15} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
+                      )}
+                      <span className="min-w-0">
+                        {paused ? `${b.kwant_name} · ${PAUSED_LINE}` : `${b.kwant_name} has used ${meterPercent(b)}% of its monthly budget.`}
+                      </span>
+                    </p>
+                  )}
                   <div className="mt-1.5 pl-[23px] flex flex-wrap items-center gap-x-2 gap-y-1">
                     <BudgetMeter budget={b} className="max-w-[160px]" />
                     <span className="min-w-0 break-words text-[11px] text-amber-200/60 font-mono">{usedLine(b)}</span>
                   </div>
                 </div>
                 {paused ? (
-                  <PausedActions budget={b} onRaise={onRaise} describedBy={id} send={send} />
+                  <PausedActions
+                    budget={live}
+                    onRaise={onRaise}
+                    onContinued={() => continued.add(b.kwant_id)}
+                    describedBy={id}
+                    send={send}
+                  />
                 ) : (
                   onRaise && (
                     <button type="button" onClick={() => onRaise(b.kwant_id)} className={btnQuiet} data-budget-raise aria-describedby={id}>
@@ -270,6 +309,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
   const [saved, setSaved] = useState<string | null>(null);
   const [undoing, setUndoing] = useState(false);
   const first = useRef<HTMLInputElement>(null);
+  const section = useRef<HTMLElement>(null);
 
   const load = React.useCallback(() => {
     setLoadError(null);
@@ -302,6 +342,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
   const save = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!body || saving) return;
+    const prev = b?.state;
     setSaving(true);
     setSaveError(null);
     setSaved(null);
@@ -310,7 +351,15 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
       setLoaded(next);
       setFields(fieldsFromBudget(next));
       budgetStore.put(next);
-      setSaved(next.state === 'off' ? 'Budget off.' : next.state === 'paused' ? 'Saved. It is still over this limit, so it stays paused.' : 'Saved.');
+      setSaved(
+        next.state === 'off'
+          ? 'Budget off.'
+          : next.state === 'paused'
+            ? 'Saved. It is still over this limit, so it stays paused.'
+            : prev === 'paused'
+              ? `Saved. ${kwantName} can start new work again.`
+              : 'Saved.',
+      );
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Couldn’t save the budget. Try again.');
     } finally {
@@ -334,7 +383,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
   };
 
   return (
-    <section aria-labelledby="bot-budget-h" data-bot-budget className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+    <section ref={section} aria-labelledby="bot-budget-h" data-bot-budget className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
       <div>
         <h3 id="bot-budget-h" className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
           <Gauge size={13} className="text-sky-300" aria-hidden="true" />
@@ -349,7 +398,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
       {loadError ? (
         <p role="alert" className="flex items-center gap-2 text-[11px] text-rose-300" data-budget-load-error>
           <span className="flex-1">{loadError}</span>
-          <button type="button" onClick={load} className="inline-flex items-center gap-1 text-zinc-300 hover:text-zinc-100 underline underline-offset-2">
+          <button type="button" onClick={load} className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-2 -mx-2 text-zinc-300 hover:text-zinc-100 underline underline-offset-2">
             <RotateCcw size={11} aria-hidden="true" /> Retry
           </button>
         </p>
@@ -362,7 +411,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
           <div role="status" aria-live="polite" className="space-y-1.5" data-budget-state={b.state}>
             {hasBudget(b) && <BudgetMeter budget={b} />}
             <p className="font-mono text-[11px] text-zinc-300">{usedLine(b)}</p>
-            <p className={`text-[11px] ${b.state === 'paused' || b.state === 'warn' ? 'text-amber-300' : 'text-zinc-500'}`}>{stateLine(b)}</p>
+            <p className={`text-[11px] ${b.state === 'paused' || b.state === 'warn' ? 'text-amber-300' : 'text-zinc-400'}`}>{stateLine(b)}</p>
             {b.cost_unreported && b.budget_usd > 0 && (
               <p className="text-[11px] text-zinc-500">This bot’s engine reports no cost, so the dollar limit can’t count its use. Set a token limit too.</p>
             )}
@@ -370,7 +419,14 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
 
           {b.state === 'paused' && (
             <div className="flex flex-wrap items-center gap-2">
-              <PausedActions budget={b} send={send} />
+              <PausedActions
+                budget={b}
+                send={send}
+                onContinued={() => {
+                  // The paused row swaps for Pause again once this renders: focus moves there, not to <body> (#536 Mira F4)
+                  requestAnimationFrame(() => section.current?.querySelector<HTMLButtonElement>('[data-budget-pause-again]')?.focus());
+                }}
+              />
               <span className="text-[11px] text-zinc-500">or raise a limit below.</span>
             </div>
           )}
@@ -466,7 +522,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
 const STATE_CHIP: Record<BotBudget['state'], { text: string; tone: string }> = {
   off: { text: 'No budget', tone: 'text-zinc-500 border-zinc-800' },
   under: { text: 'On track', tone: 'text-zinc-300 border-zinc-700' },
-  warn: { text: 'Over 80%', tone: 'text-amber-200 border-amber-500/40 bg-amber-500/10' },
+  warn: { text: '% used', tone: 'text-amber-200 border-amber-500/40 bg-amber-500/10' },
   paused: { text: 'Paused', tone: 'text-amber-100 border-amber-500/60 bg-amber-500/20' },
   continued: { text: 'Continued', tone: 'text-zinc-300 border-zinc-700' },
 };
@@ -489,7 +545,7 @@ export const BudgetOverview: React.FC<{ open: boolean; onOpenBot?: (kwantId: str
       {error && !list ? (
         <p role="alert" className="flex items-center gap-2 text-[11px] text-rose-300">
           <span className="flex-1">{error}</span>
-          <button type="button" onClick={() => void budgetStore.refresh()} className="inline-flex items-center gap-1 text-zinc-300 hover:text-zinc-100 underline underline-offset-2">
+          <button type="button" onClick={() => void budgetStore.refresh()} className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-2 -mx-2 text-zinc-300 hover:text-zinc-100 underline underline-offset-2">
             <RotateCcw size={11} aria-hidden="true" /> Retry
           </button>
         </p>
@@ -501,14 +557,14 @@ export const BudgetOverview: React.FC<{ open: boolean; onOpenBot?: (kwantId: str
         <p className="text-[11px] text-zinc-500">No bots in this space yet.</p>
       ) : (
         <>
-          {withBudget === 0 && <p className="text-[11px] text-zinc-500" data-budget-none>No bot has a budget yet, so none of them will pause.</p>}
+          {withBudget === 0 && <p className="text-[11px] text-zinc-400" data-budget-none>No bot has a budget yet, so none of them will pause.</p>}
           <ul className="divide-y divide-zinc-800/80 rounded-lg border border-zinc-800 bg-zinc-950/60" aria-label="Monthly budget per bot">
             {list.bots.map((b) => {
               const chip = STATE_CHIP[b.state];
               return (
                 <li key={b.kwant_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2" data-budget-row={b.state}>
                   <span className="min-w-0 flex-1 basis-32 truncate text-[11px] font-medium text-zinc-200">{b.kwant_name || 'Unnamed bot'}</span>
-                  <span className={`shrink-0 rounded-full border px-1.5 py-px text-[10px] ${chip.tone}`}>{chip.text}</span>
+                  <span className={`shrink-0 rounded-full border px-1.5 py-px text-[10px] ${chip.tone}`}>{b.state === 'warn' ? `${meterPercent(b)}% used` : chip.text}</span>
                   <span className="basis-full sm:basis-auto sm:w-80 flex items-center gap-2 min-w-0">
                     {hasBudget(b) && <BudgetMeter budget={b} className="max-w-[72px]" />}
                     <span className="min-w-0 break-words font-mono text-[11px] tabular-nums text-zinc-400">
@@ -519,7 +575,7 @@ export const BudgetOverview: React.FC<{ open: boolean; onOpenBot?: (kwantId: str
                     <button
                       type="button"
                       onClick={() => onOpenBot(b.kwant_id)}
-                      className="shrink-0 min-h-[32px] px-2 rounded-md text-[11px] text-sky-300 hover:text-sky-200 hover:bg-sky-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+                      className="shrink-0 min-h-[44px] sm:min-h-[32px] px-3 sm:px-2 rounded-md text-[11px] text-sky-300 hover:text-sky-200 hover:bg-sky-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
                       aria-label={`${hasBudget(b) ? 'Change' : 'Set'} ${b.kwant_name}’s budget`}
                     >
                       {hasBudget(b) ? 'Change' : 'Set'}

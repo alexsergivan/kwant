@@ -99,14 +99,14 @@ test('lines: used / limit and when it starts over, in plain words', () => {
   assert.equal(m.usedLine(b), '1.6M of 2M fresh tokens in November');
   assert.equal(m.resetDay(b), 'December 1');
   assert.equal(m.stateLine(b), '80% used. At 100% it finishes what it’s doing and starts nothing new until December 1.');
-  assert.equal(m.stateLine(m.parseBudget(B({ state: 'under', percent: 30 }))), 'Starts over on December 1.');
+  assert.equal(m.stateLine(m.parseBudget(B({ state: 'under', percent: 30 }))), 'The count starts over on December 1.');
   const p = m.parseBudget(PAUSED);
   assert.equal(m.meterPercent(p), 100, 'the meter stops at full');
-  assert.match(m.stateLine(p), /^Paused: monthly budget reached\. It starts nothing new until you raise the limit or continue this month\. It starts over on December 1\.$/);
+  assert.match(m.stateLine(p), /^Paused: monthly budget reached\. Juno starts nothing new until you raise the limit, continue this month, or December 1\.$/);
   assert.equal(m.usedLine(m.parseBudget(B({ budget_tokens: 0, budget_usd: 20, used_usd: 16.4, percent: 82 }))), '$16.40 of $20.00 in November');
   assert.equal(m.usedLine(m.parseBudget({ ...OFF })), '3k fresh tokens in November');
   assert.match(m.usedLine(m.parseBudget(B({ estimated: true }))), /^about /);
-  assert.equal(m.stateLine(m.parseBudget(OFF)), 'No budget. This bot can use as much as it needs.');
+  assert.equal(m.stateLine(m.parseBudget(OFF)), 'No budget: Lin can use as much as it needs.');
   assert.equal(m.parseBudget(B({ cost_reported: false })).cost_unreported, true);
   assert.equal(m.parseBudget({ kwant_id: 'x', state: 'nope' }), null);
 });
@@ -258,7 +258,8 @@ test('paused banner: the line, used / limit, Raise the limit and Continue this m
   await settle();
   assert.equal(posts, 1, 'a double click posts once');
   assert.match(go.textContent, /Continued this month/);
-  assert.equal(go.disabled, true);
+  assert.equal(go.getAttribute('aria-disabled'), 'true');
+  assert.equal(go.disabled, false, 'aria-disabled, never disabled, so focus stays on it (F4)');
   assert.equal(m.budgetStore.get().byBot.k1.state, 'continued');
   unmount();
 });
@@ -349,8 +350,15 @@ test('wiring: bot settings, chat, sidebar, Inbox, Settings › Usage and live re
   assert.match(chat, /<BudgetNotice/);
   assert.match(chat, /\{budgetBanner\}\s*\{workingStrip\}/);
   const side = src('components/Sidebar.tsx');
-  assert.match(side, /budgetPaused && !busyKwants\[k\.id\]\s*\? PAUSED_LINE/);
-  assert.match(side, /<BudgetMeter budget=\{budget!\} size="row"/);
+  assert.match(side, /budgetPaused && !busyKwants\[k\.id\]\s*\? PAUSED_ROW_LINE/);
+  // F7: the row meter shows only at 80%, centred on the name line
+  assert.match(side, /\{budget\?\.state === 'warn' && <BudgetMeter budget=\{budget!\} size="row" className="ml-0\.5 self-center" \/>\}/);
+  assert.equal(m.PAUSED_ROW_LINE, 'Paused: budget reached');
+  // F1: in a paused 1:1 the bar is the one place to act; the stop note is a record
+  assert.match(chat, /canAct=\{!\(budgetBotId === budgetNote\.kwant_id && chatBudget\?\.state === 'paused'\)\}/);
+  // F2: the composer's "New" sticker hides while the bar shows, at both call sites
+  assert.equal(chat.match(/\$\{layerPhase \|\| budgetBanner \? 'hidden' : ''\}/g)?.length, 2);
+  assert.doesNotMatch(chat, /\$\{layerPhase \? 'hidden' : ''\}/);
   const app = src('App.tsx');
   assert.match(app, /<BudgetNeedsYou onRaise=\{raiseBudget\} \/>/);
   assert.match(app, /isBudgetMessage\(m\)\) void budgetStore\.refresh\(\)/);
@@ -361,5 +369,97 @@ test('wiring: bot settings, chat, sidebar, Inbox, Settings › Usage and live re
 
 test('Inbox: the all-clear line hides while a Needs you block sits above it', () => {
   assert.match(src('components/InboxNew.tsx'), /\[\[data-needs-you\]~&\]:hidden[^>]*data-all-clear/);
-  for (const f of ['components/BotBudget.tsx', 'components/SpendStop.tsx', 'components/dev/PrepushThread.tsx']) assert.match(src(f), /data-needs-you>/, f);
+  for (const f of ['components/BotBudget.tsx', 'components/SpendStop.tsx', 'components/dev/PrepushThread.tsx']) assert.match(src(f), /data-needs-you(>|=\{)/, f);
+});
+
+// ---------------------------------------------------------------- Mira's fixes (#536 F3, F4, F6)
+
+test('F4 bar: after Continue this month, focus goes to the composer', async () => {
+  const { send } = fake({ 'POST /api/kwants/k1/budget/continue': [200, { ...PAUSED, state: 'continued' }] });
+  m.budgetStore.reset(send);
+  const form = document.createElement('form');
+  form.setAttribute('data-composer-form', '');
+  const box = document.createElement('textarea');
+  form.appendChild(box);
+  document.body.appendChild(form);
+  const { host, unmount } = await mount(h(m.BudgetPausedBanner, { budget: m.parseBudget(PAUSED), send }));
+  const go = host.querySelector('[data-budget-continue]');
+  go.focus();
+  await click(go);
+  assert.equal(document.activeElement, box, 'the person can type straight away');
+  unmount();
+  form.remove();
+});
+
+test('F4 Inbox: a continued row stays, says so, and keeps focus on an aria-disabled button', async () => {
+  const { send } = fake({
+    'GET /api/usage/budgets': [200, LIST([PAUSED])],
+    'POST /api/kwants/k1/budget/continue': [200, { ...PAUSED, state: 'continued', continued_month: '2026-11' }],
+  });
+  m.budgetStore.reset(send);
+  await m.budgetStore.refresh();
+  const { host, unmount } = await mount(h(m.BudgetNeedsYou, { onRaise: () => {}, send }));
+  const go = host.querySelector('[data-budget-continue]');
+  go.focus();
+  await click(go);
+  const row = host.querySelector('[data-needs-budget-item]');
+  assert.equal(row.dataset.needsBudgetItem, 'continued');
+  assert.match(row.textContent, /Juno can start new work again\./);
+  const done = row.querySelector('[data-budget-continue]');
+  assert.equal(done, go, 'the same button, still mounted');
+  assert.match(done.textContent, /Continued this month/);
+  assert.equal(done.getAttribute('aria-disabled'), 'true');
+  assert.equal(done.disabled, false);
+  assert.equal(document.activeElement, done, 'focus stays on it');
+  assert.equal(row.querySelector('[data-budget-raise]'), null);
+  assert.equal(host.querySelector('[data-needs-budget]').hasAttribute('data-needs-you'), false, 'all done: the all-clear can come back');
+  assert.match(host.querySelector('[role=status]').textContent, /Continued\. Juno can start new work again\./);
+  unmount();
+});
+
+test('F4 settings: after Continue, focus lands on Pause at the budget again', async () => {
+  const CONT = { ...PAUSED, state: 'continued', continued_month: '2026-11' };
+  const { send } = fake({
+    'GET /api/usage/budgets': [200, LIST([PAUSED])],
+    'GET /api/kwants/k1/budget': [200, PAUSED],
+    'POST /api/kwants/k1/budget/continue': [200, CONT],
+  });
+  m.budgetStore.reset(send);
+  const { host, unmount } = await mount(h(m.BotBudgetSection, { kwantId: 'k1', kwantName: 'Juno', send }));
+  await click(host.querySelector('[data-budget-continue]'));
+  await settle();
+  assert.equal(document.activeElement, host.querySelector('[data-budget-pause-again]'));
+  unmount();
+});
+
+test('F6 settings: a raise that un-pauses says the bot can start again; state lines are zinc-400', async () => {
+  const { send } = fake({
+    'GET /api/usage/budgets': [200, LIST([PAUSED])],
+    'GET /api/kwants/k1/budget': [200, PAUSED],
+    'POST /api/kwants/k1/budget': [200, B({ budget_tokens: 5_000_000, used_tokens: 2_100_000, percent: 42, state: 'under' })],
+  });
+  m.budgetStore.reset(send);
+  const { host, unmount } = await mount(h(m.BotBudgetSection, { kwantId: 'k1', kwantName: 'Juno', send }));
+  await type(host.querySelector('#bot-budget-tokens'), '5M');
+  host.querySelector('form').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  await settle();
+  assert.match(host.textContent, /Saved\. Juno can start new work again\./);
+  const line = [...host.querySelectorAll('[data-budget-state] p')].find((p) => /starts over/.test(p.textContent));
+  assert.match(line.className, /text-zinc-400/);
+  unmount();
+});
+
+test('F3 and F6 overview: 44 px phone targets, "N% used" chip, readable no-budget note', async () => {
+  const { send } = fake({ 'GET /api/usage/budgets': [200, LIST([B({ percent: 80 }), OFF])] });
+  m.budgetStore.reset(send);
+  const { host, unmount } = await mount(h(m.BudgetOverview, { open: true, onOpenBot: () => {} }));
+  const [warn] = host.querySelectorAll('[data-budget-row]');
+  assert.match(warn.textContent, /80% used/);
+  assert.doesNotMatch(warn.textContent, /Over 80%/);
+  assert.match(warn.querySelector('button').className, /min-h-\[44px\] sm:min-h-\[32px\] px-3 sm:px-2/);
+  unmount();
+  const src2 = src('components/BotBudget.tsx');
+  assert.equal(src2.match(/min-h-\[44px\] sm:min-h-\[36px\] px-3/g)?.length, 3, 'all three button styles');
+  assert.equal(src2.match(/min-h-\[44px\] sm:min-h-0 px-2 -mx-2/g)?.length, 2, 'both Retry buttons');
+  assert.match(src2, /text-\[11px\] text-zinc-400" data-budget-none/);
 });
