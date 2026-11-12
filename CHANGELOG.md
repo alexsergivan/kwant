@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.4] - 2026-11-12
+
+kwant 0.9.4: bots don't stop after a failed step. They try again or another way, and when nothing works they say what's blocked and what would unblock it.
+
+### Changed
+- **Bots try again after a failed step.** When a step fails or is refused, for example a command that errors or a terminal that's turned off, a bot tries it once more, then tries another way to get the same result. A step you declined isn't tried again. Before, a bot could end its turn on "I'll check the file sizes next" with nothing run after it.
+- **A clear ending when a bot is stuck.** If nothing works, the bot's last line starts with `Blocked:` and says what is blocked and what would unblock it, for example "Blocked: terminal commands are off for this bot on the shared Mac. Allow Terminal for this team on that computer, then say continue." When a team's lead ends this way, you get a question card with that line, and your answer lets the team carry on (#535).
+- **One more turn when a reply stops on a plan.** If a step failed and the reply still ends on "I'll…" or "Let me…", kwant gives the bot one more turn to do it or say what blocks it. If that turn only promises again, the reply ends with a short kwant note that it stopped after a failed step.
+
 ## [Mac 0.9.3] - 2026-11-12
 
 kwant 0.9.3: each bot job gets its own page in its team's browser, so a sign-in that one bot waits on no longer stops the team's other bots.
