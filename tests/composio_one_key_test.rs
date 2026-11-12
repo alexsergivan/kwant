@@ -1,7 +1,9 @@
 //! Composio with one key: the person pastes their Composio API key and kwant makes the Tool
 //! Router session itself. A refused key saves nothing, an old URL setup stays as it is until
 //! Switch (which keeps its Composio user), the key can be replaced, and the app search says which
-//! apps are connected with one account call. A fake Composio API stands in for the real one.
+//! apps are connected with one account call. A Composio Connect key (`ck_`) is checked and used
+//! through Composio Connect's MCP server. A fake Composio API, with a fake Composio Connect MCP
+//! server answering in SSE, stands in for the real ones.
 
 mod common;
 
@@ -15,12 +17,11 @@ use common::*;
 use kwnt::mcp::composio::ComposioApi;
 use kwnt::server::{continuity::SelfScope, mcp_runtime};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
-const REFUSED: &str = "Composio didn't accept this key. Copy the API key from your Composio dashboard, \
-    under Project settings › API keys. It starts with ak_.";
+const REFUSED: &str = "Composio didn't accept this key. Copy your key again from your Composio dashboard.";
 
 #[derive(Default)]
 struct Fake {
@@ -28,6 +29,8 @@ struct Fake {
     seen: Vec<(String, String, String, Value)>,
     /// session id → (project, user)
     sessions: HashMap<String, (String, String)>,
+    /// apps with a working account on Composio Connect
+    active: BTreeSet<String>,
 }
 type Shared = Arc<Mutex<Fake>>;
 
@@ -55,9 +58,65 @@ fn query_path(path: &str, q: &HashMap<String, String>) -> String {
     if pairs.is_empty() { path.to_string() } else { format!("{path}?{}", pairs.join("&")) }
 }
 
+/// Composio Connect's MCP server as Composio runs it: stateless, every answer one SSE event.
+/// `ck_good` and `ck_other` are accepted, `ck_down` gets 500, any other key 401. Calls are
+/// recorded as `/connect/mcp <method>` (and the action of a MANAGE_CONNECTIONS call) with the
+/// `x-consumer-api-key` and the call's arguments.
+async fn fake_connect(State(f): State<Shared>, h: HeaderMap, Json(body): Json<Value>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let key = h.get("x-consumer-api-key").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    assert!(h.get("x-api-key").is_none(), "a Composio Connect key goes only in x-consumer-api-key");
+    let method = body["method"].as_str().unwrap_or_default().to_string();
+    let args = body["params"]["arguments"].clone();
+    let what = match method.as_str() {
+        "tools/call" => format!("/connect/mcp tools/call {}", args["toolkits"][0]["action"].as_str().unwrap_or_default()),
+        m => format!("/connect/mcp {m}"),
+    };
+    let mut f = f.lock().unwrap();
+    f.seen.push(("POST".into(), what, key.clone(), args.clone()));
+    match key.as_str() {
+        "ck_good" | "ck_other" => {}
+        "ck_down" => return (StatusCode::INTERNAL_SERVER_ERROR, "boom").into_response(),
+        _ => return (StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid consumer api key"}))).into_response(),
+    }
+    let Some(id) = body.get("id").cloned() else {
+        return StatusCode::ACCEPTED.into_response();
+    };
+    let result = match method.as_str() {
+        "initialize" => json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "fake-composio-connect", "version": "1"},
+        }),
+        "tools/list" => json!({"tools": [
+            {"name": "COMPOSIO_SEARCH_TOOLS", "description": "search", "inputSchema": {"type": "object"}},
+            {"name": "COMPOSIO_MANAGE_CONNECTIONS", "description": "connections", "inputSchema": {"type": "object"}},
+            {"name": "COMPOSIO_MULTI_EXECUTE_TOOL", "description": "run", "inputSchema": {"type": "object"}},
+        ]}),
+        "tools/call" if body["params"]["name"] == "COMPOSIO_MANAGE_CONNECTIONS" => {
+            let mut results = serde_json::Map::new();
+            for t in args["toolkits"].as_array().cloned().unwrap_or_default() {
+                let slug = t["name"].as_str().unwrap_or_default().to_string();
+                let entry = match t["action"].as_str() {
+                    Some("add") => json!({"toolkit": slug, "status": "initiated", "redirect_url": format!("https://connect.composio.dev/link/lk_{slug}")}),
+                    _ if f.active.contains(&slug) => json!({"toolkit": slug, "status": "active", "accounts": [{"id": format!("ca_{slug}"), "status": "active"}]}),
+                    _ => json!({"toolkit": slug, "status": "not_connected", "accounts": []}),
+                };
+                results.insert(slug, entry);
+            }
+            let text = json!({"successful": true, "data": {"results": results}, "error": null}).to_string();
+            json!({"content": [{"type": "text", "text": text}], "isError": false})
+        }
+        _ => json!({"content": [{"type": "text", "text": "not in this fake"}], "isError": true}),
+    };
+    let event = format!("event: message\ndata: {}\n\n", json!({"jsonrpc": "2.0", "id": id, "result": result}));
+    ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], event).into_response()
+}
+
 async fn fake_composio() -> (String, Shared) {
     let fake: Shared = Arc::default();
     let app = Router::new()
+        .route("/connect/mcp", post(fake_connect))
         .route(
             "/api/v3.1/tool_router/session",
             post(|State(f): State<Shared>, h: HeaderMap, Json(body): Json<Value>| async move {
@@ -283,12 +342,14 @@ async fn a_refused_key_saves_nothing() {
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
     assert_eq!(v["error"], REFUSED, "{v}");
     assert_eq!(v["action"], "replace_key");
-    assert_eq!(v["key_url"], "https://dashboard.composio.dev/~/project/settings/api-keys");
+    assert_eq!(v["key_url"], "https://dashboard.composio.dev");
+    assert!(!v["error"].as_str().unwrap().contains("ak_"), "either kind of key is welcome: {v}");
 
+    // Neither kind: tried as a project key, then on Composio Connect.
     let (s, v) = add("uak_x").await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
     assert!(v["error"].as_str().unwrap().contains("That's a Composio user key"), "{v}");
-    assert!(v["error"].as_str().unwrap().contains("It starts with ak_."), "{v}");
+    assert!(v["error"].as_str().unwrap().contains("It starts with ck_ or ak_."), "{v}");
 
     let (s, v) = add("ak_scoped").await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
@@ -307,7 +368,8 @@ async fn a_refused_key_saves_nothing() {
     assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
 
     let c = calls(&fake);
-    assert_eq!(c.len(), 4, "the blank keys never reach Composio: {c:?}");
+    assert_eq!(c.len(), 5, "the blank keys never reach Composio: {c:?}");
+    assert_eq!((c[1].1.as_str(), c[2].1.as_str()), ("/api/v3.1/connected_accounts?limit=1", "/connect/mcp initialize"), "{c:?}");
     assert_eq!(servers(&env).await, json!([]), "nothing saved");
     let entry = composio_entry(&env).await;
     assert_eq!((entry["added"].clone(), entry["mode"].clone()), (json!(false), Value::Null));
@@ -584,9 +646,18 @@ async fn get_list(env: &Env, etag: Option<&str>) -> (StatusCode, Option<String>,
 #[tokio::test]
 async fn without_a_query_the_whole_catalogue_comes_back_for_autocomplete() {
     let (env, fake) = env_with_fake().await;
-    // Before setup there is no list: Composio needs the key even for its catalogue.
+    // Before setup: Composio's popular apps, bundled with kwant, no Composio call.
     let (s, _, v) = get_list(&env, None).await;
-    assert_eq!((s, v["action"].clone()), (StatusCode::CONFLICT, json!("add_composio")), "{v}");
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["source"].clone(), v["mode"].clone(), v["can_connect"].clone()), (json!("popular"), Value::Null, json!(false)), "{v}");
+    assert_eq!(v["count"], 120);
+    assert_eq!(v["apps"][0]["slug"], "gmail");
+    assert!(v["apps"].as_array().unwrap().iter().all(|a| a["connected"] == false), "{v}");
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=gma", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let slugs: Vec<&str> = v["apps"].as_array().unwrap().iter().map(|a| a["slug"].as_str().unwrap()).collect();
+    assert_eq!(slugs, vec!["gmail", "figma"], "{v}");
+    assert_eq!(v["source"], "popular");
     assert!(calls(&fake).is_empty());
 
     let (s, v) = call(&env.app, "POST", "/api/connections/composio", Some(json!({"api_key": "ak_good"}))).await;
@@ -609,6 +680,7 @@ async fn without_a_query_the_whole_catalogue_comes_back_for_autocomplete() {
     assert_eq!(v["count"], 3);
     assert_eq!(v["connected_checked"], true);
     assert_eq!(v["mode"], "session");
+    assert_eq!(v["source"], "all", "a project key lists Composio's whole catalogue");
     assert!(v["fetched_at"].is_string(), "{v}");
     let c: Vec<_> = calls(&fake).into_iter().map(|c| c.1).collect();
     assert_eq!(
@@ -684,4 +756,184 @@ async fn a_thousand_app_catalogue_is_small_and_served_from_memory() {
     assert!(warm_ms < 1000.0, "the warm list comes from memory: {warm_ms} ms");
     let toolkit_calls = calls(&fake).iter().filter(|c| c.1.starts_with("/api/v3.1/toolkits")).count();
     assert_eq!(toolkit_calls, 2, "two pages, fetched once");
+}
+
+/// The `/connect/mcp` calls since the last look, as (what, key).
+fn connect_calls(f: &Shared) -> Vec<(String, String)> {
+    calls(f).into_iter().map(|c| (c.1, c.2)).collect()
+}
+
+fn handshake(key: &str) -> Vec<(String, String)> {
+    ["initialize", "notifications/initialized"].iter().map(|m| (format!("/connect/mcp {m}"), key.to_string())).collect()
+}
+
+#[tokio::test]
+async fn a_composio_connect_key_is_checked_over_mcp_and_saved_for_composio_connect() {
+    let (env, fake) = env_with_fake().await;
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio", Some(json!({"api_key": " ck_good\n"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["mode"], "connect", "{v}");
+    assert_eq!(v["user_id"], Value::Null, "the key is the person's own Composio account");
+    assert_eq!(v["server"]["name"], "composio");
+    assert_eq!(v["server"]["url"], "https://connect.composio.dev/mcp", "bots use Composio Connect itself");
+    assert_eq!(v["server"]["enabled"], false, "off for bots until the person turns it on");
+    assert_eq!(v["tools"][1], "COMPOSIO_MANAGE_CONNECTIONS", "{v}");
+    assert!(v["warning"].as_str().unwrap().contains("Composio's servers"));
+    assert!(!v.to_string().contains("ck_good"), "the key is masked: {v}");
+
+    // The check is the MCP handshake and tools/list, with the key trimmed, and nothing else.
+    let mut want = handshake("ck_good");
+    want.push(("/connect/mcp tools/list".into(), "ck_good".into()));
+    assert_eq!(connect_calls(&fake), want);
+
+    let list = servers(&env).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["url"], "https://connect.composio.dev/mcp");
+    assert!(!list.to_string().contains("ck_good"), "the key is masked: {list}");
+    let saved = env.state.db.list_mcp_servers(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    assert_eq!(
+        saved[0].headers,
+        std::collections::BTreeMap::from([("x-consumer-api-key".to_string(), "ck_good".to_string())]),
+        "the key is saved in Composio Connect's header"
+    );
+
+    // The tile: one list call over the popular apps, kept a minute.
+    fake.lock().unwrap().active.insert("gmail".into());
+    let entry = composio_entry(&env).await;
+    assert_eq!(entry["mode"], "connect", "{entry}");
+    assert_eq!(entry["user_id"], Value::Null);
+    assert_eq!((entry["can_search"].clone(), entry["can_connect"].clone(), entry["can_switch"].clone()), (json!(true), json!(true), json!(false)));
+    assert_eq!(entry["problem"], Value::Null, "{entry}");
+    assert_eq!(entry["apps_connected"], json!([{"slug": "gmail", "name": "Gmail"}]), "{entry}");
+    let c = calls(&fake);
+    assert_eq!(c.iter().filter(|x| x.1 == "/connect/mcp tools/call list").count(), 1, "{c:?}");
+    let asked = c.iter().find(|x| x.1 == "/connect/mcp tools/call list").unwrap();
+    assert_eq!(asked.3["toolkits"].as_array().unwrap().len(), 120);
+    assert!(c.iter().all(|x| x.1.starts_with("/connect/mcp")), "never the project API: {c:?}");
+    composio_entry(&env).await;
+    assert!(calls(&fake).is_empty(), "kept a minute");
+
+    // The list: Composio's popular apps with connected, from the same minute.
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["source"].clone(), v["mode"].clone(), v["can_connect"].clone(), v["count"].clone()), (json!("popular"), json!("connect"), json!(true), json!(120)));
+    assert_eq!(v["apps"][0], json!({"slug": "gmail", "name": "Gmail", "rank": 0, "logo": v["apps"][0]["logo"], "connected": true}));
+    assert!(calls(&fake).is_empty(), "from the tile's minute");
+}
+
+#[tokio::test]
+async fn composio_connect_connects_and_checks_apps_through_manage_connections() {
+    let (env, fake) = env_with_fake().await;
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio", Some(json!({"api_key": "ck_good"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    calls(&fake);
+
+    // Connect: MANAGE_CONNECTIONS add, and Composio's sign-in link.
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio/apps/slack/connect", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["redirect_url"], "https://connect.composio.dev/link/lk_slack");
+    let c = calls(&fake);
+    let call_ = c.iter().find(|x| x.1.starts_with("/connect/mcp tools/call")).unwrap();
+    assert_eq!(call_.1, "/connect/mcp tools/call add");
+    assert_eq!(call_.3, json!({"toolkits": [{"name": "slack", "action": "add"}]}));
+    assert!(c.iter().all(|x| x.1 != "/connect/mcp tools/list"), "no tools/list, no search: {c:?}");
+
+    // Status: MANAGE_CONNECTIONS list for the one app; never SEARCH_TOOLS.
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps/slack/status", None).await;
+    assert_eq!((s, v), (StatusCode::OK, json!({"connected": false})));
+    fake.lock().unwrap().active.insert("slack".into());
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps/slack/status", None).await;
+    assert_eq!((s, v), (StatusCode::OK, json!({"connected": true})));
+    let c = calls(&fake);
+    let lists: Vec<&Value> = c.iter().filter(|x| x.1 == "/connect/mcp tools/call list").map(|x| &x.3).collect();
+    assert_eq!(lists, vec![&json!({"toolkits": [{"name": "slack", "action": "list"}]}); 2]);
+
+    // A search asks about its own apps only, in one call kept a minute.
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=sla", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["apps"][0]["slug"], "slack");
+    assert_eq!(v["apps"][0]["connected"], true, "{v}");
+    assert_eq!((v["source"].clone(), v["mode"].clone()), (json!("popular"), json!("connect")));
+    let c = calls(&fake);
+    let lists: Vec<&Value> = c.iter().filter(|x| x.1 == "/connect/mcp tools/call list").map(|x| &x.3).collect();
+    assert_eq!(lists.len(), 1, "{c:?}");
+    assert!(lists[0]["toolkits"].as_array().unwrap().len() <= 20);
+    call(&env.app, "GET", "/api/connections/composio/apps?q=sla", None).await;
+    assert!(calls(&fake).is_empty(), "the same search within the minute costs nothing");
+
+    // Composio Connect down: a 502 that says to try again, and the setup stays.
+    let (env2, fake2) = env_with_fake().await;
+    let (s, v) = call(&env2.app, "POST", "/api/connections/composio", Some(json!({"api_key": "ck_down"}))).await;
+    assert_eq!((s, v["action"].clone()), (StatusCode::BAD_GATEWAY, json!("try_again")), "{v}");
+    assert_eq!(servers(&env2).await, json!([]));
+    assert!(calls(&fake2).iter().all(|c| c.2 == "ck_down"));
+}
+
+#[tokio::test]
+async fn a_refused_composio_connect_key_saves_nothing() {
+    let (env, fake) = env_with_fake().await;
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio", Some(json!({"api_key": "ck_wrong"}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!((v["error"].clone(), v["action"].clone(), v["key_url"].clone()), (json!(REFUSED), json!("replace_key"), json!("https://dashboard.composio.dev")));
+    assert!(!v.to_string().contains("ck_wrong"), "{v}");
+    assert_eq!(connect_calls(&fake), vec![("/connect/mcp initialize".to_string(), "ck_wrong".to_string())], "a ck_ key is never sent to the project API");
+    assert_eq!(servers(&env).await, json!([]), "nothing saved");
+    let entry = composio_entry(&env).await;
+    assert_eq!(entry["added"], false);
+
+    // A good key then works at once.
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio", Some(json!({"api_key": "ck_good"}))).await;
+    assert_eq!((s, v["mode"].clone()), (StatusCode::OK, json!("connect")), "{v}");
+}
+
+#[tokio::test]
+async fn replacing_the_key_switches_between_project_and_composio_connect() {
+    let (env, fake) = env_with_fake().await;
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio", Some(json!({"api_key": "ak_good", "enabled": true}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let id = v["server"]["id"].clone();
+    let user = v["user_id"].clone();
+    calls(&fake);
+    let put = |key: &'static str| {
+        let app = env.app.clone();
+        async move { call(&app, "PUT", "/api/connections/composio/key", Some(json!({"api_key": key}))).await }
+    };
+
+    // A refused ck_ changes nothing.
+    let (s, v) = put("ck_wrong").await;
+    assert_eq!((s, v["action"].clone()), (StatusCode::CONFLICT, json!("replace_key")), "{v}");
+    assert_eq!(servers(&env).await[0]["url"], "https://backend.composio.dev/tool_router/trs_1/mcp");
+
+    // ak_ → ck_: the same server, now Composio Connect, its switch as it was.
+    let (s, v) = put("ck_good").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["mode"].clone(), v["user_id"].clone()), (json!("connect"), Value::Null), "{v}");
+    assert_eq!(v["server"]["id"], id);
+    assert_eq!(v["server"]["enabled"], true);
+    assert_eq!(v["server"]["url"], "https://connect.composio.dev/mcp");
+    assert!(!v.to_string().contains("ck_good"), "masked: {v}");
+    let saved = env.state.db.list_mcp_servers(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    assert_eq!(
+        saved[0].headers,
+        std::collections::BTreeMap::from([("x-consumer-api-key".to_string(), "ck_good".to_string())]),
+        "the project key is gone"
+    );
+    assert_eq!(composio_entry(&env).await["mode"], "connect");
+    calls(&fake);
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio/apps/notion/connect", None).await;
+    assert_eq!((s, v["redirect_url"].clone()), (StatusCode::OK, json!("https://connect.composio.dev/link/lk_notion")), "{v}");
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio/switch", None).await;
+    assert_eq!((s, v["switched"].clone(), v["mode"].clone()), (StatusCode::OK, json!(false), json!("connect")), "{v}");
+
+    // ck_ → ak_: a session for the space's own Composio user again.
+    calls(&fake);
+    let (s, v) = put("ak_other").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["mode"].clone(), v["user_id"].clone(), v["session_renewed"].clone()), (json!("session"), user.clone(), json!(true)), "{v}");
+    assert_eq!(v["server"]["id"], id);
+    assert_eq!(v["server"]["url"], "https://backend.composio.dev/tool_router/trs_2/mcp");
+    let saved = env.state.db.list_mcp_servers(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    assert_eq!(saved[0].headers, std::collections::BTreeMap::from([("x-api-key".to_string(), "ak_other".to_string())]));
+    let c = calls(&fake);
+    assert_eq!(c.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(), vec!["/api/v3.1/tool_router/session"], "{c:?}");
 }

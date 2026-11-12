@@ -131,14 +131,11 @@ async fn nothing_goes_to_composio_until_it_is_added_with_a_key() {
         None,
     )
     .await;
-    assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    assert!(
-        v["error"]
-            .as_str()
-            .unwrap()
-            .contains("Add Composio first"),
-        "{v}"
-    );
+    // Before Composio is added a search answers from Composio's popular apps, bundled with kwant.
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["source"].clone(), v["mode"].clone(), v["can_connect"].clone()), (json!("popular"), Value::Null, json!(false)), "{v}");
+    assert_eq!(v["apps"][0]["slug"], "gmail", "{v}");
+    assert_eq!(v["apps"][0]["connected"], false, "{v}");
     let (s, _) = call(
         &env.app,
         "POST",

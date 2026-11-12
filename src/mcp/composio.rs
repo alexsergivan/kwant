@@ -6,9 +6,18 @@
 //! <https://docs.composio.dev/reference/api-reference/tool-router/postToolRouterSession> and
 //! <https://docs.composio.dev/reference/api-reference/tool-router/postToolRouterSessionBySessionIdLink> and
 //! <https://docs.composio.dev/reference/api-reference/connected-accounts/getConnectedAccounts>.
+//!
+//! A Composio Connect key (`ck_…`, a consumer key) works on none of those: it works only on
+//! Composio Connect, an MCP server (<https://docs.composio.dev/docs/composio-connect>). kwnt
+//! checks such a key, starts sign-ins and reads which apps are connected through that server's
+//! own `COMPOSIO_MANAGE_CONNECTIONS` tool, with kwnt's MCP client.
 
-use serde::Serialize;
+use super::client::{McpClient, McpError};
+use crate::db::models::McpServer;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 pub const DEFAULT_API_URL: &str = "https://backend.composio.dev";
@@ -24,6 +33,135 @@ const PAGE: usize = 20;
 const LIST_PAGE: usize = 500;
 const MAX_LIST_PAGES: usize = 20;
 
+/// Composio Connect: the MCP server a consumer key (`ck_…`) works on, sent as
+/// [`CONNECT_KEY_HEADER`]. Stateless streamable HTTP that answers as an event stream.
+pub const CONNECT_MCP_URL: &str = "https://connect.composio.dev/mcp";
+/// Points kwnt's own Composio Connect calls at another address (tests).
+pub const CONNECT_URL_ENV: &str = "KWNT_COMPOSIO_CONNECT_URL";
+/// The header a project key (`ak_…`) goes in.
+pub const PROJECT_KEY_HEADER: &str = "x-api-key";
+/// The header a Composio Connect key (`ck_…`) goes in.
+pub const CONNECT_KEY_HEADER: &str = "x-consumer-api-key";
+/// The Composio Connect tool kwnt uses for sign-ins and status: `add` and `list`, never anything
+/// that runs an app's tools.
+pub const MANAGE_TOOL: &str = "COMPOSIO_MANAGE_CONNECTIONS";
+/// Composio Connect calls get this long (the MCP handshake and one call).
+const CONNECT_TIMEOUT_SECS: i64 = 15;
+/// Most apps one `list` call asks about.
+pub const MAX_STATUS_SLUGS: usize = 120;
+
+/// Which kind of Composio key, from its prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyKind {
+    /// `ak_…`: a project API key, for Composio's REST API (`x-api-key`).
+    Project,
+    /// `ck_…`: a Composio Connect key, for its MCP server only (`x-consumer-api-key`).
+    Connect,
+}
+
+/// The kind a key's prefix says it is; `None` for any other prefix (kwnt tries both).
+pub fn key_kind(key: &str) -> Option<KeyKind> {
+    if key.starts_with("ak_") {
+        Some(KeyKind::Project)
+    } else if key.starts_with("ck_") {
+        Some(KeyKind::Connect)
+    } else {
+        None
+    }
+}
+
+/// One of Composio's most popular apps, bundled with kwnt (`composio_popular.json`, made by
+/// `scripts/composio_popular_apps.py` from the public composio.dev/toolkits page at release).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PopularApp {
+    pub slug: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    pub rank: u32,
+}
+
+/// Composio's popular apps, most popular first: shown before Composio is added and with a
+/// Composio Connect key, which can't list the catalogue.
+pub fn popular_apps() -> &'static [PopularApp] {
+    static APPS: OnceLock<Vec<PopularApp>> = OnceLock::new();
+    APPS.get_or_init(|| {
+        let mut apps: Vec<PopularApp> = serde_json::from_str(include_str!("composio_popular.json"))
+            .expect("src/mcp/composio_popular.json is valid");
+        apps.retain(|a| valid_slug(&a.slug) && a.logo.as_deref().is_none_or(|l| l.starts_with("https://")));
+        apps.sort_by_key(|a| a.rank);
+        apps
+    })
+}
+
+/// Popular apps matching `query` (name or slug, any case): those starting with it first, then
+/// those containing it, each in popularity order; at most `limit`.
+pub fn search_popular(query: &str, limit: usize) -> Vec<&'static PopularApp> {
+    let q = query.trim().to_lowercase();
+    let words = |a: &PopularApp| (a.name.to_lowercase(), a.slug.clone());
+    let (mut first, mut then) = (Vec::new(), Vec::new());
+    for a in popular_apps() {
+        let (name, slug) = words(a);
+        if name.starts_with(&q) || slug.starts_with(&q) || name.split(' ').any(|w| w.starts_with(&q)) {
+            first.push(a);
+        } else if name.contains(&q) || slug.contains(&q) {
+            then.push(a);
+        }
+    }
+    first.extend(then);
+    first.truncate(limit);
+    first
+}
+
+/// The `results` of a `COMPOSIO_MANAGE_CONNECTIONS` answer (`{"successful", "data": {"results":
+/// {<slug>: …}}}`), or why there are none.
+pub fn manage_results(text: &str) -> Result<Value, ComposioError> {
+    let body: Value = serde_json::from_str(text.trim())
+        .map_err(|_| ComposioError::Upstream(200, "Composio Connect answered something kwant can't read".into()))?;
+    if body["successful"] == json!(false) {
+        let why = body["error"].as_str().or_else(|| body["data"]["message"].as_str()).unwrap_or_default();
+        return Err(ComposioError::Upstream(200, clip(why, 200)));
+    }
+    let results = body["data"]["results"].clone();
+    let results = if results.is_object() { results } else { body["results"].clone() };
+    if results.is_object() {
+        Ok(results)
+    } else {
+        Err(ComposioError::Upstream(200, "Composio Connect's answer has no results".into()))
+    }
+}
+
+/// Whether one app's `list` result has a working account: its `status` is `active`, or one of
+/// its accounts' is.
+pub fn result_active(entry: &Value) -> bool {
+    let active = |v: &Value| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("active"));
+    active(&entry["status"])
+        || entry["accounts"].as_array().is_some_and(|a| a.iter().any(|acc| active(&acc["status"])))
+}
+
+/// The HTTP status in an MCP client error ("HTTP 401 Unauthorized"), if it carries one.
+fn http_status(message: &str) -> Option<u16> {
+    let at = message.find("HTTP ")?;
+    message[at + 5..].get(..3)?.parse().ok()
+}
+
+/// A failed Composio Connect call, in [`ComposioError`] terms: 401 or 403 is the key.
+fn connect_error(e: McpError) -> ComposioError {
+    let message = match e {
+        McpError::Unauthorized { .. } => return ComposioError::KeyRefused,
+        McpError::Rpc { message, .. } | McpError::Protocol(message) => {
+            return ComposioError::Upstream(200, clip(&message, 200));
+        }
+        McpError::Startup { message, .. } | McpError::Transport(message) | McpError::Spawn(message) => message,
+        McpError::Timeout(..) | McpError::Closed => return ComposioError::Unreachable,
+    };
+    match http_status(&message) {
+        Some(401 | 403) => ComposioError::KeyRefused,
+        Some(status) => ComposioError::Upstream(status, String::new()),
+        None => ComposioError::Unreachable,
+    }
+}
+
 /// One app (Composio calls it a toolkit), as kwnt shows it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ComposioApp {
@@ -37,9 +175,10 @@ pub struct ComposioApp {
     pub no_auth: bool,
 }
 
-/// Where a person copies a Composio project API key (checked 2026-11-12: it sends a signed-out
-/// visitor to Composio's sign-in, then back here).
-pub const KEY_PAGE: &str = "https://dashboard.composio.dev/~/project/settings/api-keys";
+/// Where a person gets a Composio key. Composio documents no deep link for a Composio Connect key
+/// ("Copy your consumer API key from the AI Clients setup in the Composio dashboard"; checked
+/// 2026-11-12, signed out the dashboard sends a visitor to Composio's sign-in), so the dashboard.
+pub const KEY_PAGE: &str = "https://dashboard.composio.dev";
 
 /// Why a Composio call failed, in words for the person.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,9 +195,7 @@ pub enum ComposioError {
 impl ComposioError {
     pub fn message(&self) -> String {
         match self {
-            Self::KeyRefused => "Composio didn't accept this key. Copy the API key from your Composio dashboard, \
-                under Project settings › API keys. It starts with ak_."
-                .into(),
+            Self::KeyRefused => "Composio didn't accept this key. Copy your key again from your Composio dashboard.".into(),
             Self::KeyNoAccess => "This Composio key isn't allowed to do this. Copy a full-access API key from your \
                 Composio dashboard, under Project settings › API keys."
                 .into(),
@@ -150,6 +287,8 @@ pub fn active_apps(body: &Value, user_id: &str) -> std::collections::BTreeSet<St
 
 pub struct ComposioApi {
     base_url: String,
+    /// Composio Connect's MCP address, for `ck_` keys.
+    connect_url: String,
     client: reqwest::Client,
 }
 
@@ -231,9 +370,14 @@ pub fn has_active_account(body: &Value, user_id: &str, slug: &str) -> bool {
 }
 
 impl ComposioApi {
+    /// The Composio API at `base_url`. Composio Connect is Composio's own for Composio's API,
+    /// else `<base_url>/connect/mcp`, so a fake Composio serves both.
     pub fn new(base_url: &str) -> Self {
+        let base_url = base_url.trim_end_matches('/').to_string();
+        let connect_url = if base_url == DEFAULT_API_URL { CONNECT_MCP_URL.to_string() } else { format!("{base_url}/connect/mcp") };
         Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
+            connect_url,
+            base_url,
             client: reqwest::Client::builder()
                 .timeout(TIMEOUT)
                 // the key goes in a header: never follow a redirect to another host with it
@@ -244,12 +388,87 @@ impl ComposioApi {
         }
     }
 
-    /// [`API_URL_ENV`], else Composio's own API.
+    /// [`API_URL_ENV`], else Composio's own API; [`CONNECT_URL_ENV`] for Composio Connect.
     pub fn from_env() -> Self {
         let url = std::env::var(API_URL_ENV)
             .ok()
             .filter(|u| u.starts_with("http"));
-        Self::new(url.as_deref().unwrap_or(DEFAULT_API_URL))
+        let api = Self::new(url.as_deref().unwrap_or(DEFAULT_API_URL));
+        match std::env::var(CONNECT_URL_ENV).ok().filter(|u| u.starts_with("http")) {
+            Some(c) => api.with_connect_url(&c),
+            None => api,
+        }
+    }
+
+    /// The same API with Composio Connect at `url`.
+    pub fn with_connect_url(mut self, url: &str) -> Self {
+        self.connect_url = url.to_string();
+        self
+    }
+
+    /// Composio Connect as an MCP server with `key`, for kwnt's own calls (never saved).
+    fn connect_server(&self, key: &str) -> McpServer {
+        McpServer {
+            id: "composio-connect".into(),
+            name: "composio".into(),
+            transport: "http".into(),
+            command: None,
+            args: vec![],
+            url: Some(self.connect_url.clone()),
+            env: Default::default(),
+            headers: std::collections::BTreeMap::from([(CONNECT_KEY_HEADER.to_string(), key.to_string())]),
+            enabled: true,
+            timeout_secs: CONNECT_TIMEOUT_SECS,
+            created_at: None,
+        }
+    }
+
+    /// Checks a Composio Connect key: the MCP handshake and `tools/list`. Returns the tools a bot
+    /// gets; Composio Connect without [`MANAGE_TOOL`] isn't one kwnt can use.
+    pub async fn check_connect_key(&self, key: &str) -> Result<Vec<String>, ComposioError> {
+        let mut client = McpClient::connect(&self.connect_server(key), None).await.map_err(connect_error)?;
+        let tools = client.list_tools().await.map_err(connect_error);
+        client.shutdown().await;
+        let tools: Vec<String> = tools?.into_iter().map(|t| t.name).filter(|n| n.len() <= 128).take(64).collect();
+        if !tools.iter().any(|t| t == MANAGE_TOOL) {
+            return Err(ComposioError::Upstream(200, format!("Composio Connect has no {MANAGE_TOOL} tool")));
+        }
+        Ok(tools)
+    }
+
+    /// One `COMPOSIO_MANAGE_CONNECTIONS` call on Composio Connect; its `results`.
+    async fn manage(&self, key: &str, toolkits: Value) -> Result<Value, ComposioError> {
+        let mut client = McpClient::connect(&self.connect_server(key), None).await.map_err(connect_error)?;
+        let result = client.call_tool(MANAGE_TOOL, json!({"toolkits": toolkits})).await.map_err(connect_error);
+        client.shutdown().await;
+        let result = result?;
+        if result.is_error {
+            return Err(ComposioError::Upstream(200, clip(&result.text, 200)));
+        }
+        manage_results(&result.text)
+    }
+
+    /// Starts signing in to the app `slug` through Composio Connect (`add`): the address the
+    /// person opens, only ever https on composio.dev.
+    pub async fn connect_add_link(&self, key: &str, slug: &str) -> Result<String, ComposioError> {
+        let results = self.manage(key, json!([{"name": slug, "action": "add"}])).await?;
+        results[slug]["redirect_url"]
+            .as_str()
+            .filter(|u| u.len() <= 2048 && is_composio_https(u))
+            .map(str::to_string)
+            .ok_or_else(|| ComposioError::Upstream(200, "no https composio.dev sign-in link in the answer".into()))
+    }
+
+    /// Which of `slugs` have a working account on Composio Connect, in one `list` call (no side
+    /// effects). At most [`MAX_STATUS_SLUGS`]; slugs that aren't slugs are left out.
+    pub async fn connect_active(&self, key: &str, slugs: &[&str]) -> Result<BTreeSet<String>, ComposioError> {
+        let asked: Vec<&str> = slugs.iter().copied().filter(|s| valid_slug(s)).take(MAX_STATUS_SLUGS).collect();
+        if asked.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let toolkits: Vec<Value> = asked.iter().map(|s| json!({"name": s, "action": "list"})).collect();
+        let results = self.manage(key, Value::Array(toolkits)).await?;
+        Ok(asked.into_iter().filter(|s| result_active(&results[*s])).map(str::to_string).collect())
     }
 
     fn url(&self, segments: &[&str]) -> Result<reqwest::Url, ComposioError> {
@@ -540,12 +759,77 @@ mod tests {
 
     #[test]
     fn errors_say_what_to_do() {
-        assert!(ComposioError::KeyRefused.message().contains("It starts with ak_"));
+        assert_eq!(ComposioError::KeyRefused.message(), "Composio didn't accept this key. Copy your key again from your Composio dashboard.");
+        assert!(!ComposioError::KeyRefused.message().contains("ak_"), "either kind of key works");
         assert_eq!(ComposioError::KeyRefused.action(), "replace_key");
         assert_eq!(ComposioError::KeyNoAccess.action(), "replace_key");
         assert_eq!(ComposioError::Unreachable.message(), "Composio couldn't be reached; try again in a minute.");
         assert_eq!(ComposioError::Upstream(500, "boom".into()).action(), "try_again");
         assert!(!ComposioError::KeyRefused.message().contains("MCP server"));
+    }
+
+    #[test]
+    fn the_key_prefix_says_its_kind() {
+        assert_eq!(key_kind("ak_x"), Some(KeyKind::Project));
+        assert_eq!(key_kind("ck_x"), Some(KeyKind::Connect));
+        assert_eq!(key_kind("uak_x"), None);
+        assert_eq!(key_kind("x"), None);
+    }
+
+    #[test]
+    fn the_bundled_popular_apps_are_composios_top_120() {
+        let apps = popular_apps();
+        assert_eq!(apps.len(), 120);
+        assert_eq!((apps[0].slug.as_str(), apps[0].name.as_str()), ("gmail", "Gmail"));
+        assert!(apps.windows(2).all(|w| w[0].rank < w[1].rank), "most popular first");
+        assert!(apps.iter().all(|a| valid_slug(&a.slug) && a.logo.as_deref().is_some_and(|l| l.starts_with("https://"))));
+        let slugs: BTreeSet<_> = apps.iter().map(|a| &a.slug).collect();
+        assert_eq!(slugs.len(), 120, "no duplicates");
+    }
+
+    #[test]
+    fn popular_search_puts_names_that_start_with_the_query_first() {
+        let slugs = |q: &str, n| search_popular(q, n).into_iter().map(|a| a.slug.as_str()).collect::<Vec<_>>();
+        assert_eq!(slugs("gma", 20), ["gmail", "figma"], "starts with, then contains");
+        let google = slugs("google", 20);
+        assert_eq!(google[0], "googlecalendar", "popularity order among prefix matches: {google:?}");
+        assert!(google.len() > 3 && google.iter().all(|s| s.starts_with("google")), "{google:?}");
+        assert_eq!(slugs("CAL", 3).first(), Some(&"googlecalendar"), "a later word counts, any case");
+        assert_eq!(slugs("google", 2).len(), 2);
+        assert!(slugs("zzzz-not-an-app", 20).is_empty());
+    }
+
+    #[test]
+    fn manage_connections_answers_are_read_as_composio_sends_them() {
+        // As Composio answered a `list` on 2026-11-12.
+        let listed = r#"{"successful":true,"data":{"message":"…","results":{
+            "gmail":{"toolkit":"gmail","status":"active","accounts":[{"id":"ca_1","status":"ACTIVE"}]},
+            "slack":{"toolkit":"slack","status":"initiated","accounts":[]},
+            "notion":{"toolkit":"notion","status":"initiated","accounts":[{"id":"ca_2","status":"active"}]}},
+            "summary":{"total_toolkits":3}},"error":null,"log_id":"log_x"}"#;
+        let r = manage_results(listed).unwrap();
+        assert!(result_active(&r["gmail"]) && result_active(&r["notion"]) && !result_active(&r["slack"]));
+        assert!(!result_active(&r["github"]), "an app not in the answer");
+        assert!(manage_results(r#"{"results":{"gmail":{"status":"active"}}}"#).is_ok(), "results at the top");
+        assert_eq!(
+            manage_results(r#"{"successful":false,"error":"max accounts","data":{}}"#),
+            Err(ComposioError::Upstream(200, "max accounts".into()))
+        );
+        assert!(manage_results("not json").is_err());
+        assert!(manage_results(r#"{"successful":true,"data":{}}"#).is_err());
+    }
+
+    #[test]
+    fn connect_failures_name_the_key_only_for_401_and_403() {
+        let unauthorized = McpError::Unauthorized { www_authenticate: None };
+        assert_eq!(connect_error(unauthorized), ComposioError::KeyRefused);
+        let startup = |m: &str| McpError::Startup { message: m.into(), stderr_tail: String::new() };
+        assert_eq!(connect_error(startup("transport error: HTTP 403 Forbidden")), ComposioError::KeyRefused);
+        assert_eq!(connect_error(startup("transport error: HTTP 502 Bad Gateway")), ComposioError::Upstream(502, String::new()));
+        assert_eq!(connect_error(startup("transport error: error sending request")), ComposioError::Unreachable);
+        assert_eq!(connect_error(McpError::Timeout(15, "tools/call".into())), ComposioError::Unreachable);
+        assert_eq!(connect_error(McpError::Rpc { code: -32000, message: "nope".into() }), ComposioError::Upstream(200, "nope".into()));
+        assert_eq!(ComposioError::Upstream(502, String::new()).message(), "Composio couldn't be reached; try again in a minute.");
     }
 
     #[test]

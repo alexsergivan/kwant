@@ -364,12 +364,23 @@ async fn source_connections(state: &AppState, space: &SpaceId) -> Vec<Connection
         .collect()
 }
 
-/// The Composio API key saved with the connector (its `x-api-key` header), if any.
+fn is_key_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case(composio::PROJECT_KEY_HEADER) || name.eq_ignore_ascii_case(composio::CONNECT_KEY_HEADER)
+}
+
+/// Whether the connector is a Composio Connect setup: its key is a `ck_` key, sent as
+/// `x-consumer-api-key`.
+fn is_connect(server: &McpServer) -> bool {
+    server.headers.keys().any(|k| k.eq_ignore_ascii_case(composio::CONNECT_KEY_HEADER))
+}
+
+/// The Composio key saved with the connector (its `x-api-key` header, or `x-consumer-api-key`
+/// for a Composio Connect key), if any.
 pub(super) fn composio_key(server: &McpServer) -> Option<&str> {
     server
         .headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-api-key"))
+        .find(|(k, _)| is_key_header(k))
         .map(|(_, v)| v.trim())
         .filter(|v| !v.is_empty())
 }
@@ -399,35 +410,53 @@ async fn save_session(state: &AppState, space: &SpaceId, s: &composio::Session) 
     state.db.set_setting(&session_setting(space), &serde_json::to_string(&stored).unwrap_or_default()).await
 }
 
-/// How a space's Composio is set up: `session` (one key; kwant made the session) or `url` (an
-/// MCP URL pasted from composio.dev).
+/// How a space's Composio is set up: `session` (one `ak_` key; kwant made the session),
+/// `connect` (one `ck_` key on Composio Connect, whose apps belong to the key's own Composio
+/// account) or `url` (an MCP URL pasted from composio.dev).
 #[derive(Debug, Clone)]
 struct ComposioSetup {
     server: McpServer,
     key: Option<String>,
     session: Option<StoredSession>,
+    connect: bool,
 }
 
 impl ComposioSetup {
     fn mode(&self) -> &'static str {
-        if self.session.is_some() { "session" } else { "url" }
+        if self.connect {
+            "connect"
+        } else if self.session.is_some() {
+            "session"
+        } else {
+            "url"
+        }
     }
 
     /// The Composio user apps are connected for: the session's, else the URL's `user_id`.
+    /// Composio Connect has none: the key is the person's own account.
     fn user_id(&self) -> Option<String> {
+        if self.connect {
+            return None;
+        }
         match &self.session {
             Some(s) => Some(s.user_id.clone()),
             None => self.server.url.as_deref().and_then(composio::user_id_of),
         }
+    }
+
+    /// Apps can be connected from kwant: a key, and someone to connect them for.
+    fn can_connect(&self) -> bool {
+        self.key.is_some() && (self.connect || self.user_id().is_some())
     }
 }
 
 async fn composio_setup(state: &AppState, space: &SpaceId) -> Option<ComposioSetup> {
     let servers = state.db.list_mcp_servers(space).await.unwrap_or_default();
     let server = servers.into_iter().find(is_composio)?;
-    let session = stored_session(state, space, &server).await;
+    let connect = is_connect(&server);
+    let session = if connect { None } else { stored_session(state, space, &server).await };
     let key = composio_key(&server).map(str::to_string);
-    Some(ComposioSetup { server, key, session })
+    Some(ComposioSetup { server, key, session, connect })
 }
 
 // Apps connected on Composio, per space, kept a minute so the Connections list costs at most
@@ -470,10 +499,14 @@ fn learn_names(apps: &[composio::ComposioApp]) {
     }
 }
 
-/// An app's name: the catalogue's when kwant has seen it, else its slug in words (`google_drive` → `Google Drive`).
+/// An app's name: the catalogue's when kwant has seen it, else the popular list's, else its
+/// slug in words (`google_drive` → `Google Drive`).
 fn app_name(slug: &str) -> String {
     if let Some(n) = app_names().lock().unwrap_or_else(|e| e.into_inner()).get(slug) {
         return n.clone();
+    }
+    if let Some(a) = composio::popular_apps().iter().find(|a| a.slug == slug) {
+        return a.name.clone();
     }
     slug.split(['_', '-'])
         .filter(|w| !w.is_empty())
@@ -504,8 +537,36 @@ fn remember_apps(space: &str, fp: u64, result: &Result<std::collections::BTreeSe
     seen.insert(space.to_string(), entry);
 }
 
+/// Apps a status check found connected, per space and key fingerprint: with Composio Connect,
+/// what the tile lists when the full check is too slow.
+type ThroughKwant = HashMap<String, (u64, std::collections::BTreeSet<String>)>;
+
+fn through_kwant() -> &'static Mutex<ThroughKwant> {
+    static SEEN: OnceLock<Mutex<ThroughKwant>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
+fn apps_through_kwant(space: &str, fp: u64) -> std::collections::BTreeSet<String> {
+    through_kwant().lock().unwrap_or_else(|e| e.into_inner()).get(space).filter(|(f, _)| *f == fp).map(|(_, a)| a.clone()).unwrap_or_default()
+}
+
 /// One app's status, learned from a status check: updates the cache without a call.
 fn note_app(space: &str, fp: u64, slug: &str, connected: bool) {
+    {
+        let mut kept = through_kwant().lock().unwrap_or_else(|e| e.into_inner());
+        if kept.len() > 1000 {
+            kept.clear();
+        }
+        let entry = kept.entry(space.to_string()).or_default();
+        if entry.0 != fp {
+            *entry = (fp, Default::default());
+        }
+        if connected {
+            entry.1.insert(slug.to_string());
+        } else {
+            entry.1.remove(slug);
+        }
+    }
     let mut seen = apps_seen().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(s) = seen.get_mut(space).filter(|s| s.fingerprint == fp) {
         if connected {
@@ -520,10 +581,45 @@ fn forget_apps(state: &AppState, space: &SpaceId) {
     apps_seen().lock().unwrap_or_else(|e| e.into_inner()).remove(&cache_key(state, space));
 }
 
+/// With Composio Connect, a check of all the popular apps that took longer than this is too slow
+/// to repeat every minute: the tile then lists the apps connected through kwant for a while.
+const CONNECT_SLOW: std::time::Duration = std::time::Duration::from_secs(3);
+const CONNECT_SLOW_PAUSE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Spaces whose last full Composio Connect check was slow, until when.
+fn connect_slow() -> &'static Mutex<HashMap<String, std::time::Instant>> {
+    static SLOW: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
+    SLOW.get_or_init(Default::default)
+}
+
+/// The apps connected with Composio Connect: one `list` call over the popular apps, timed. Under
+/// [`CONNECT_SLOW`] it is the answer (with the apps connected through kwant); slower, the next
+/// ten minutes list only the apps connected through kwant, with no call.
+async fn connect_apps(api: &composio::ComposioApi, ck: &str, fp: u64, key: &str) -> Result<std::collections::BTreeSet<String>, composio::ComposioError> {
+    let mine = apps_through_kwant(ck, fp);
+    let paused = connect_slow().lock().unwrap_or_else(|e| e.into_inner()).get(ck).is_some_and(|until| std::time::Instant::now() < *until);
+    if paused {
+        return Ok(mine);
+    }
+    let slugs: Vec<&str> = composio::popular_apps().iter().map(|a| a.slug.as_str()).collect();
+    let started = std::time::Instant::now();
+    let result = api.connect_active(key, &slugs).await;
+    let took = started.elapsed();
+    tracing::info!(apps = slugs.len(), ms = took.as_millis() as u64, ok = result.is_ok(), "connections: Composio Connect status of the popular apps");
+    if result.is_ok() && took > CONNECT_SLOW {
+        connect_slow().lock().unwrap_or_else(|e| e.into_inner()).insert(ck.to_string(), std::time::Instant::now() + CONNECT_SLOW_PAUSE);
+    }
+    result.map(|mut apps| {
+        apps.extend(mine);
+        apps
+    })
+}
+
 /// The apps connected for the setup's user: cached for a minute, else one Composio call that
 /// may take up to 2 seconds here (it goes on in the background and fills the cache after).
 async fn connected_apps_cached(state: &AppState, space: &SpaceId, setup: &ComposioSetup) -> Option<AppsSeen> {
-    let (key, user) = (setup.key.clone()?, setup.user_id()?);
+    let key = setup.key.clone()?;
+    let user = if setup.connect { String::new() } else { setup.user_id()? };
     let fp = fingerprint(&key, &user);
     let ck = cache_key(state, space);
     if let Some(s) = apps_seen().lock().unwrap_or_else(|e| e.into_inner()).get(&ck) {
@@ -533,8 +629,9 @@ async fn connected_apps_cached(state: &AppState, space: &SpaceId, setup: &Compos
     }
     let api = state.composio_api.clone();
     let ck_job = ck.clone();
+    let connect = setup.connect;
     let job = tokio::spawn(async move {
-        let result = api.connected_apps(&key, &user).await;
+        let result = if connect { connect_apps(&api, &ck_job, fp, &key).await } else { api.connected_apps(&key, &user).await };
         remember_apps(&ck_job, fp, &result);
     });
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), job).await;
@@ -550,7 +647,7 @@ async fn catalog(state: &AppState, space: &SpaceId) -> Value {
     };
     let added = setup.as_ref().map(|s| &s.server);
     let has_key = setup.as_ref().is_some_and(|s| s.key.is_some());
-    let can_connect = setup.as_ref().is_some_and(|s| s.key.is_some() && s.user_id().is_some());
+    let can_connect = setup.as_ref().is_some_and(|s| s.can_connect());
     // Old setups get one way into the new one; a missing key or a refused one gets Replace key.
     let problem = match (&setup, &seen) {
         (None, _) => None,
@@ -566,7 +663,7 @@ async fn catalog(state: &AppState, space: &SpaceId) -> Value {
         "id": "composio",
         "kind": "mcp",
         "name": "Composio",
-        "description": "Gmail, Slack, Notion, Linear and hundreds more apps, with your free Composio API key. Your bots find the tools they need themselves.",
+        "description": "Gmail, Slack, Notion, Linear and hundreds more apps, with your free Composio key. Your bots find the tools they need themselves.",
         "optional": true,
         "added": added.is_some(),
         "connection_id": added.map(|s| format!("mcp:{}", s.id)),
@@ -575,7 +672,8 @@ async fn catalog(state: &AppState, space: &SpaceId) -> Value {
         "warning": COMPOSIO_WARNING,
         "add": "/api/connections/composio",
         "key_url": composio::KEY_PAGE,
-        // `session`: one key, kwant made the session; `url`: an MCP URL pasted from composio.dev
+        // `session`: one `ak_` key, kwant made the session; `connect`: one `ck_` key on Composio
+        // Connect; `url`: an MCP URL pasted from composio.dev
         "mode": setup.as_ref().map(|s| s.mode()),
         "user_id": setup.as_ref().and_then(|s| s.user_id()),
         "apps_connected": seen.as_ref().map(|s| s.apps.iter().map(|slug| json!({"slug": slug, "name": app_name(slug)})).collect::<Vec<_>>()).unwrap_or_default(),
@@ -716,15 +814,90 @@ fn key_failed(e: composio::ComposioError, key: &str) -> Response {
     if e == composio::ComposioError::KeyRefused && key.starts_with("uak_") {
         return error_with(
             StatusCode::CONFLICT,
-            "That's a Composio user key (it starts with uak_). kwant needs the project API key: copy it from your \
-             Composio dashboard, under Project settings › API keys. It starts with ak_.",
+            "That's a Composio user key (it starts with uak_). kwant needs your Composio key: copy it from your \
+             Composio dashboard. It starts with ck_ or ak_.",
             "replace_key",
         );
     }
     composio_failed(e)
 }
 
-/// `POST /api/connections/composio?space=`: adds Composio (off for bots by default). With only
+/// What a key turned out to be. A project key (`ak_`) is checked by the caller's own first call;
+/// a Composio Connect key has been checked already and comes with its tools.
+enum Checked {
+    Project,
+    Connect(Vec<String>),
+}
+
+/// Which kind `key` is. `ck_` is checked on Composio Connect (MCP `initialize` and `tools/list`);
+/// `ak_` is left to the caller; any other prefix is tried as a project key, then on Composio
+/// Connect. A key both refuse gets 409 `replace_key`; Composio out of reach gets 502.
+#[allow(clippy::result_large_err)]
+async fn check_kind(state: &AppState, key: &str) -> Result<Checked, Response> {
+    let api = &state.composio_api;
+    match composio::key_kind(key) {
+        Some(composio::KeyKind::Project) => Ok(Checked::Project),
+        Some(composio::KeyKind::Connect) => api.check_connect_key(key).await.map(Checked::Connect).map_err(|e| key_failed(e, key)),
+        None => match api.check_key(key).await {
+            Ok(()) => Ok(Checked::Project),
+            Err(refused) if refused.is_key() => match api.check_connect_key(key).await {
+                Ok(tools) => Ok(Checked::Connect(tools)),
+                Err(e) if e.is_key() => Err(key_failed(refused, key)),
+                Err(e) => Err(composio_failed(e)),
+            },
+            Err(e) => Err(composio_failed(e)),
+        },
+    }
+}
+
+/// `next` with `key` as its only Composio key, in the header its kind goes in.
+fn with_key(mut next: McpServer, header: &str, key: &str) -> McpServer {
+    next.headers.retain(|k, _| !is_key_header(k));
+    next.headers.insert(header.to_string(), key.to_string());
+    next
+}
+
+/// Adds Composio Connect with a checked `ck_` key: server `composio` at Composio Connect, the key
+/// in `x-consumer-api-key`, no Composio user (the key is the person's own account).
+async fn add_connect(state: &AppState, space: &SpaceId, key: &str, tools: Vec<String>, enabled: bool) -> Response {
+    let input = McpServerInput {
+        name: COMPOSIO_NAME.into(),
+        transport: "http".into(),
+        command: None,
+        args: None,
+        url: Some(composio::CONNECT_MCP_URL.into()),
+        env: None,
+        headers: Some(BTreeMap::from([(composio::CONNECT_KEY_HEADER.to_string(), key.to_string())])),
+        enabled: Some(enabled),
+        timeout_secs: None,
+    };
+    let server = match mcp::build_server(input, None) {
+        Ok(s) => s,
+        Err(m) => return error(StatusCode::BAD_REQUEST, &m),
+    };
+    match state.db.create_mcp_server(space, &server).await {
+        Ok(created) => {
+            forget_apps(state, space);
+            tracing::info!(space = %space.as_str(), mode = "connect", "connections: Composio added");
+            Json(json!({
+                "connection_id": format!("mcp:{}", created.id),
+                "server": mcp::McpServerView::from(&created),
+                "mode": "connect",
+                "user_id": Value::Null,
+                "tools": tools,
+                "warning": COMPOSIO_WARNING,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "connections: could not add Composio");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "could not add Composio")
+        }
+    }
+}
+
+/// `POST /api/connections/composio?space=`: adds Composio (off for bots by default). A `ck_`
+/// key alone is checked on Composio Connect and saved as `mode: "connect"`. With only
 /// `api_key`, kwant checks the key by making a Tool Router session for the space's own Composio
 /// user and saves the session's MCP server: `mode: "session"`. With `url` it saves that MCP URL as
 /// before: `mode: "url"`. A refused key saves nothing.
@@ -749,6 +922,13 @@ pub async fn add_composio(
     let servers = state.db.list_mcp_servers(&space).await.unwrap_or_default();
     if servers.iter().any(|s| is_composio(s) || s.name.eq_ignore_ascii_case(COMPOSIO_NAME)) {
         return error_with(StatusCode::CONFLICT, "Composio is already added. Replace its key on the Composio tile instead.", "replace_key");
+    }
+    if let (None, Some(k)) = (&url, &key) {
+        match check_kind(&state, k).await {
+            Ok(Checked::Connect(tools)) => return add_connect(&state, &space, k, tools, body.enabled).await,
+            Ok(Checked::Project) => {}
+            Err(r) => return r,
+        }
     }
     let session = match (&url, &key) {
         (None, Some(k)) => match state.composio_api.create_session(k, &composio::space_user_id(space.as_str())).await {
@@ -817,10 +997,8 @@ async fn move_to_session(
     key: &str,
     session: &composio::Session,
 ) -> Result<McpServer, Response> {
-    let mut next = server.clone();
+    let mut next = with_key(server.clone(), composio::PROJECT_KEY_HEADER, key);
     next.url = Some(session.mcp_url.clone());
-    next.headers.retain(|k, _| !k.eq_ignore_ascii_case("x-api-key"));
-    next.headers.insert("x-api-key".into(), key.to_string());
     let fail = |what: &str| {
         tracing::warn!(what, "connections: could not save the Composio session");
         error(StatusCode::INTERNAL_SERVER_ERROR, "could not save the new Composio setup")
@@ -847,12 +1025,12 @@ pub async fn switch_composio(
     let Some(setup) = composio_setup(&state, &space).await else {
         return error_with(StatusCode::CONFLICT, "Composio isn't added yet. Add it with your free Composio API key.", "add_composio");
     };
-    if let Some(s) = &setup.session {
+    if setup.session.is_some() || setup.connect {
         return Json(json!({
             "connection_id": format!("mcp:{}", setup.server.id),
             "server": mcp::McpServerView::from(&setup.server),
-            "mode": "session",
-            "user_id": s.user_id,
+            "mode": setup.mode(),
+            "user_id": setup.user_id(),
             "switched": false,
         }))
         .into_response();
@@ -883,10 +1061,12 @@ pub async fn switch_composio(
     }
 }
 
-/// `PUT /api/connections/composio/key?space=` `{api_key}`: replaces the Composio key. The new key
-/// is checked first, and a refused one changes nothing. In the one-key setup a key of the same
-/// Composio project keeps the session; a key of another project gets a new session for the same
-/// user. Replies `{connection_id, mode, user_id, session_renewed}`.
+/// `PUT /api/connections/composio/key?space=` `{api_key}`: replaces the Composio key with either
+/// kind. The new key is checked first, and a refused one changes nothing. A `ck_` key makes the
+/// setup Composio Connect; an `ak_` key in place of a `ck_` one gets a session for the space's
+/// own Composio user. In the one-key setup a key of the same Composio project keeps the session;
+/// a key of another project gets a new session for the same user. Replies `{connection_id, mode,
+/// user_id, session_renewed}`.
 pub async fn replace_composio_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -912,6 +1092,32 @@ pub async fn replace_composio_key(
         }))
         .into_response()
     };
+    match check_kind(&state, &key).await {
+        Err(r) => return r,
+        Ok(Checked::Connect(_)) => {
+            let mut next = with_key(setup.server.clone(), composio::CONNECT_KEY_HEADER, &key);
+            next.url = Some(composio::CONNECT_MCP_URL.into());
+            return match state.db.update_mcp_server(&next).await {
+                Ok(Some(saved)) => {
+                    forget_apps(&state, &space);
+                    tracing::info!(space = %space.as_str(), from = setup.mode(), "connections: Composio key replaced with a Composio Connect key");
+                    reply(&saved, "connect", None, false)
+                }
+                _ => error(StatusCode::INTERNAL_SERVER_ERROR, "could not save the key"),
+            };
+        }
+        Ok(Checked::Project) if setup.connect => {
+            let session = match state.composio_api.create_session(&key, &composio::space_user_id(space.as_str())).await {
+                Ok(s) => s,
+                Err(e) => return key_failed(e, &key),
+            };
+            return match move_to_session(&state, &space, &setup.server, &key, &session).await {
+                Ok(saved) => reply(&saved, "session", Some(session.user_id), true),
+                Err(r) => r,
+            };
+        }
+        Ok(Checked::Project) => {}
+    }
     match &setup.session {
         Some(stored) => {
             let same_project = match state.composio_api.session_user(&key, &stored.session_id).await {
@@ -919,9 +1125,7 @@ pub async fn replace_composio_key(
                 Err(e) => return key_failed(e, &key),
             };
             if same_project {
-                let mut next = setup.server.clone();
-                next.headers.retain(|k, _| !k.eq_ignore_ascii_case("x-api-key"));
-                next.headers.insert("x-api-key".into(), key);
+                let next = with_key(setup.server.clone(), composio::PROJECT_KEY_HEADER, &key);
                 return match state.db.update_mcp_server(&next).await {
                     Ok(Some(saved)) => {
                         forget_apps(&state, &space);
@@ -943,9 +1147,7 @@ pub async fn replace_composio_key(
             if let Err(e) = state.composio_api.check_key(&key).await {
                 return key_failed(e, &key);
             }
-            let mut next = setup.server.clone();
-            next.headers.retain(|k, _| !k.eq_ignore_ascii_case("x-api-key"));
-            next.headers.insert("x-api-key".into(), key);
+            let next = with_key(setup.server.clone(), composio::PROJECT_KEY_HEADER, &key);
             match state.db.update_mcp_server(&next).await {
                 Ok(Some(saved)) => {
                     forget_apps(&state, &space);
@@ -989,6 +1191,110 @@ fn user_or_switch(setup: &ComposioSetup) -> Result<String, Response> {
 fn composio_failed(e: composio::ComposioError) -> Response {
     let status = if e.is_key() { StatusCode::CONFLICT } else { StatusCode::BAD_GATEWAY };
     error_with(status, &e.message(), e.action())
+}
+
+/// Composio's popular apps as rows, each with `connected` from `connected` (false when unknown).
+fn popular_rows<'a>(apps: impl Iterator<Item = &'a composio::PopularApp>, connected: Option<&std::collections::BTreeSet<String>>) -> Vec<Value> {
+    apps.map(|a| {
+        let mut row = serde_json::to_value(a).unwrap_or(Value::Null);
+        row["connected"] = json!(connected.is_some_and(|c| c.contains(&a.slug)));
+        row
+    })
+    .collect()
+}
+
+/// Before Composio is added: Composio's popular apps from kwant itself, no Composio call.
+fn popular_before_setup(q: Option<&str>) -> Response {
+    let apps: Vec<&composio::PopularApp> = match q {
+        Some(q) => composio::search_popular(q, SEARCH_POPULAR_LIMIT),
+        None => composio::popular_apps().iter().collect(),
+    };
+    let count = apps.len();
+    Json(json!({
+        "apps": popular_rows(apps.into_iter(), None),
+        "count": count,
+        "connected_checked": false,
+        "mode": Value::Null,
+        "can_connect": false,
+        "source": "popular",
+        "warning": COMPOSIO_WARNING,
+    }))
+    .into_response()
+}
+
+/// At most this many popular apps answer a search; their status is one Composio call.
+const SEARCH_POPULAR_LIMIT: usize = 20;
+
+type SearchSeen = HashMap<(String, u64, String), (std::time::Instant, std::collections::BTreeSet<String>)>;
+
+fn connect_searches() -> &'static Mutex<SearchSeen> {
+    static SEEN: OnceLock<Mutex<SearchSeen>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
+/// Which of `slugs` are connected with Composio Connect: the one-minute tile cache when fresh,
+/// else one `list` call for just these apps, itself kept a minute. `None` when it can't be told.
+async fn connect_search_status(state: &AppState, space: &SpaceId, key: &str, slugs: &[&str]) -> Option<std::collections::BTreeSet<String>> {
+    let ck = cache_key(state, space);
+    let fp = fingerprint(key, "");
+    if let Some(s) = apps_seen().lock().unwrap_or_else(|e| e.into_inner()).get(&ck) {
+        if s.fingerprint == fp && s.at.elapsed() < APPS_TTL && s.problem.is_none() {
+            return Some(s.apps.clone());
+        }
+    }
+    if slugs.is_empty() {
+        return Some(Default::default());
+    }
+    let lk = (ck.clone(), fp, slugs.join(","));
+    {
+        let mut seen = connect_searches().lock().unwrap_or_else(|e| e.into_inner());
+        seen.retain(|_, (at, _)| at.elapsed() < APPS_TTL);
+        if seen.len() > 1000 {
+            seen.clear();
+        }
+        if let Some((_, apps)) = seen.get(&lk) {
+            return Some(apps.clone());
+        }
+    }
+    match state.composio_api.connect_active(key, slugs).await {
+        Ok(mut apps) => {
+            apps.extend(apps_through_kwant(&ck, fp).into_iter().filter(|a| slugs.contains(&a.as_str())));
+            connect_searches().lock().unwrap_or_else(|e| e.into_inner()).insert(lk, (std::time::Instant::now(), apps.clone()));
+            Some(apps)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e.message(), "connections: could not check Composio Connect apps");
+            None
+        }
+    }
+}
+
+/// With a Composio Connect key: Composio's popular apps (Composio Connect has no catalogue
+/// call), each with `connected`.
+async fn connect_popular(state: &AppState, space: &SpaceId, setup: &ComposioSetup, key: &str, q: Option<&str>) -> Response {
+    let (apps, connected) = match q {
+        None => {
+            let seen = connected_apps_cached(state, space, setup).await;
+            (composio::popular_apps().iter().collect::<Vec<_>>(), seen.filter(|s| s.problem.is_none()).map(|s| s.apps))
+        }
+        Some(q) => {
+            let apps = composio::search_popular(q, SEARCH_POPULAR_LIMIT);
+            let slugs: Vec<&str> = apps.iter().map(|a| a.slug.as_str()).collect();
+            let connected = connect_search_status(state, space, key, &slugs).await;
+            (apps, connected)
+        }
+    };
+    let count = apps.len();
+    Json(json!({
+        "apps": popular_rows(apps.into_iter(), connected.as_ref()),
+        "count": count,
+        "connected_checked": connected.is_some(),
+        "mode": "connect",
+        "can_connect": true,
+        "source": "popular",
+        "warning": COMPOSIO_WARNING,
+    }))
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1138,6 +1444,7 @@ async fn list_composio_apps(state: &AppState, headers: &HeaderMap, space: &Space
             "connected_checked": connected.is_some(),
             "mode": setup.mode(),
             "can_connect": user.is_some(),
+            "source": "all",
             "warning": COMPOSIO_WARNING,
         })),
     )
@@ -1147,7 +1454,10 @@ async fn list_composio_apps(state: &AppState, headers: &HeaderMap, space: &Space
 /// `GET /api/connections/composio/apps?space=&q=`: apps in Composio's catalogue matching `q`
 /// (without `q`, the whole catalogue: see `list_composio_apps`),
 /// searched with the person's own Composio key, each with `connected` for the space's Composio
-/// user (one account call per search). 409 when Composio isn't added or has no key.
+/// user (one account call per search). `source` says where the apps come from: `"all"` is
+/// Composio's catalogue (a project key); `"popular"` is Composio's top apps bundled with kwant,
+/// served before Composio is added (no Composio call, `mode: null`) and with a Composio Connect
+/// key. 409 when Composio is added without a key.
 pub async fn search_composio_apps(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1161,10 +1471,16 @@ pub async fn search_composio_apps(
     if q.is_some_and(|q| q.is_empty() || q.chars().count() > composio::MAX_QUERY_CHARS) {
         return error(StatusCode::BAD_REQUEST, "type an app name, up to 60 characters");
     }
+    if composio_setup(&state, &space).await.is_none() {
+        return popular_before_setup(q);
+    }
     let (setup, key) = match composio_with_key(&state, &space).await {
         Ok(found) => found,
         Err(r) => return r,
     };
+    if setup.connect {
+        return connect_popular(&state, &space, &setup, &key, q).await;
+    }
     let Some(q) = q else {
         return list_composio_apps(&state, &headers, &space, &setup, &key).await;
     };
@@ -1196,6 +1512,7 @@ pub async fn search_composio_apps(
         "connected_checked": connected.is_some(),
         "mode": setup.mode(),
         "can_connect": user.is_some(),
+        "source": "all",
         "warning": COMPOSIO_WARNING,
     }))
     .into_response()
@@ -1221,6 +1538,7 @@ pub async fn connect_composio_app(
         Err(r) => return r,
     };
     let link = match &setup.session {
+        _ if setup.connect => state.composio_api.connect_add_link(&key, &slug).await,
         Some(s) => state.composio_api.session_link(&key, &s.session_id, &slug).await,
         None => {
             let user_id = match user_or_switch(&setup) {
@@ -1255,6 +1573,16 @@ pub async fn composio_app_status(
         Ok(found) => found,
         Err(r) => return r,
     };
+    if setup.connect {
+        return match state.composio_api.connect_active(&key, &[slug.as_str()]).await {
+            Ok(active) => {
+                let connected = active.contains(&slug);
+                note_app(&cache_key(&state, &space), fingerprint(&key, ""), &slug, connected);
+                Json(json!({"connected": connected})).into_response()
+            }
+            Err(e) => composio_failed(e),
+        };
+    }
     let user_id = match user_or_switch(&setup) {
         Ok(u) => u,
         Err(r) => return r,
