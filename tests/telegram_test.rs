@@ -532,6 +532,35 @@ async fn a_changed_card_or_the_switch_going_off_makes_it_link_only() {
     assert!(edit.text().contains("Approve it in kwant."));
 }
 
+/// Regression (CI on cdfa2017, 2026-11-12): a card still on its way to Telegram when the switch goes
+/// off has no message id yet, so the switch-off sweep can't edit it. It used to keep its Allow once
+/// button (a dead one: the tap was refused); the sender now makes it link-only once its id is stored.
+#[tokio::test]
+async fn a_card_on_its_way_when_the_switch_goes_off_is_made_link_only_once_sent() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 45).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Telegram holds the card back for a second (429, retry_after 1): sent armed, no id yet
+    tg.fault(&bot, "sendMessage", 429, 1);
+    let (_, _rx) = approval(&env, json!({"source": "mcp", "tool": "third", "server": "files"})).await;
+    tg.wait_send(&bot, |c| c.text().contains("<code>third</code>") && c.body.get("__sent_id").is_none()).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": false}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>third</code>") && c.body.get("__sent_id").is_some()).await;
+    assert_eq!(card.callbacks().len(), 1, "it went out with Allow once: {:?}", card.buttons());
+    let edit = tg.wait_edit(&bot, |c| c.message_id() == card.message_id()).await;
+    assert!(edit.callbacks().is_empty(), "{:?}", edit.buttons());
+    assert!(edit.text().contains("Approve it in kwant."), "{}", edit.text());
+    // Edited once, whichever of the sweep and the sender saw the id
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let edits = tg.calls_of(&bot, "editMessageText").into_iter().filter(|c| c.message_id() == card.message_id()).count();
+    assert_eq!(edits, 1);
+}
+
 #[tokio::test]
 async fn bash_production_marks_and_crossed_taps_stay_link_only() {
     let env = setup().await;

@@ -55,7 +55,7 @@ async fn a_merged_pr_takes_its_reviewer_from_the_review_of_the_merged_head() {
 
     let patch = "@@ -1,2 +1,2 @@\n-let retries = 1;\n+let retries = 3;";
     let green = check_runs(&[("rust", "completed", Some("success"))]);
-    let direct = commit(&sha(1), "Fix the README", person, &[], "2026-11-05T01:00:00Z");
+    let direct = commit(&sha(1), "Fix the README", person, &[], &hours_ago(3));
     gh.json("/user", user("demo-person"))
         .json(R, repo(REPO, "main"))
         .json(&format!("{R}/branches/main"), json!({"name": "main"}))
@@ -73,7 +73,7 @@ async fn a_merged_pr_takes_its_reviewer_from_the_review_of_the_merged_head() {
     let open = [(5, "Retry the upload", sha(9)), (6, "Add a cache", sha(7)), (7, "Tidy the logs", sha(6))];
     for (n, title, head) in &open {
         gh.json(&format!("{R}/pulls/{n}/files"), json!([file(&format!("src/f{n}.rs"), "modified", patch)]))
-            .json(&format!("{R}/commits/{head}"), commit(head, title, person, &[&sha(1)], "2026-11-05T02:00:00Z"))
+            .json(&format!("{R}/commits/{head}"), commit(head, title, person, &[&sha(1)], &hours_ago(2)))
             .json(&format!("{R}/commits/{head}/check-runs"), green.clone());
     }
     gh.json(&format!("{R}/pulls"), Value::Array(open.iter().map(|(n, t, h)| pull(*n, t, ("topic", h), "main", "demo-person", None)).collect()));
@@ -102,11 +102,11 @@ async fn a_merged_pr_takes_its_reviewer_from_the_review_of_the_merged_head() {
     let mut list = vec![direct.clone()];
     for (n, merge, head) in &merges {
         let title = open.iter().find(|o| o.0 == *n).unwrap().1;
-        let c = commit(merge, &format!("{title} (#{n})"), person, &[&sha(1)], "2026-11-05T03:00:00Z");
+        let c = commit(merge, &format!("{title} (#{n})"), person, &[&sha(1)], &hours_ago(1));
         let mut full = c.clone();
         full["files"] = json!([file(&format!("src/f{n}.rs"), "modified", patch)]);
         gh.json(&format!("{R}/commits/{merge}"), full)
-            .json(&format!("{R}/commits/{merge}/pulls"), json!([pull(*n, title, ("topic", head), "main", "demo-person", Some((merge, "2026-11-05T03:00:00Z")))]))
+            .json(&format!("{R}/commits/{merge}/pulls"), json!([pull(*n, title, ("topic", head), "main", "demo-person", Some((merge, &hours_ago(1))))]))
             .json(&format!("{R}/commits/{merge}/check-runs"), green.clone());
         list.insert(0, c);
     }
