@@ -1,6 +1,6 @@
 //! One browser service per installation; isolated CDP contexts per bot/team.
 //! The private CDP endpoint is used only by the server, never by the web client.
-use super::browser::{BrowserController, BrowserError};
+use super::browser::{outage, BrowserController, BrowserError, Outage};
 use super::chrome_download::{self, ChromeSetup};
 use super::computer::{self, ComputerMode};
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,31 @@ use tokio::{process::Command, sync::Mutex, time::{sleep, timeout}};
 pub const BROWSER_IMAGE: &str = "kwnt-browser:v2";
 const BROWSER_DOCKERFILE: &str = include_str!("../../docker/browser.Dockerfile");
 const BROWSER_ENTRYPOINT: &str = include_str!("../../docker/browser-entrypoint.sh");
+
+/// What a bot (and the panel) is told when the VM browser didn't answer in time, even after
+/// retrying for about [`crate::server::browser_pages::RETRY_WINDOW`]: it is there but overloaded.
+/// It says the problem is temporary and what to do, so a bot retries the step instead of
+/// ending its work (0.9.4 follow-through, 0.9.5 no-silent-stops key on it). Calls that fail
+/// this way also carry `"code": "BROWSER_BUSY"` and `"retryable": true`.
+pub const BROWSER_BUSY: &str = "The browser isn't responding right now (it is overloaded, not gone). \
+This is temporary: retry the same step in a minute.";
+/// The `code` of a call that failed because the browser is busy (see [`BROWSER_BUSY`]).
+pub const BROWSER_BUSY_CODE: &str = "BROWSER_BUSY";
+/// What the live view shows while it reconnects to a browser that is busy.
+pub const BROWSER_RECONNECTING: &str = "The browser isn't responding. Reconnecting…";
+/// How long the status check waits for the browser's answer before calling it busy.
+const PING_WAIT: Duration = Duration::from_secs(5);
+/// What the live view shows when nothing answers at the browser's address.
+pub const BROWSER_UNREACHABLE_VIEW: &str = "Browser service unavailable. Check Docker or KWNT_BROWSER_CDP_URL.";
+
+/// How a page was put to rest by the idle sweep (see `browser_pages::rest_idle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rest {
+    /// Media paused and the page frozen; it wakes before its next use.
+    Frozen,
+    /// A team page idle for hours, sent to about:blank (its cookies stay in the jar).
+    Blank,
+}
 
 /// Joins a job page's key: `team#bot#chat` (see [`job_page_key`]).
 pub const PAGE_SEP: char = '#';
@@ -62,6 +87,10 @@ pub struct BrowserService {
     /// least recently used one, the idle sweep the ones past their limit, and the live view
     /// shows the newest. A page kept from an earlier run counts from when this run first saw it.
     page_use: std::sync::Mutex<HashMap<String, std::time::Instant>>,
+    /// Why the last [`Self::session`] failed, as far as what to do next goes (VM mode).
+    last_outage: std::sync::Mutex<Option<Outage>>,
+    /// Pages the idle sweep put to rest, until they are used again (see [`Self::touch_page`]).
+    rested: std::sync::Mutex<HashMap<String, Rest>>,
 }
 
 struct ServiceState {
@@ -79,6 +108,8 @@ impl BrowserService {
             last_error: std::sync::Mutex::new(None), last_use: std::sync::Mutex::new(None),
             chrome_setup: std::sync::Arc::new(ChromeSetup::system()),
             page_use: Default::default(),
+            last_outage: Default::default(),
+            rested: Default::default(),
         }
     }
 
@@ -236,9 +267,10 @@ impl BrowserService {
         let out = timeout(Duration::from_secs(seconds), Command::new("docker")
             .args(args).kill_on_drop(true).output()).await
             .map_err(|_| BrowserError::Timeout)?
-            .map_err(|e| BrowserError::Http(e.to_string()))?;
+            .map_err(|e| BrowserError::Http(format!("docker: {e}")))?;
+        // "docker:" marks it as Docker's failure, not the browser's (see [`outage`])
         if !out.status.success() {
-            return Err(BrowserError::Protocol(String::from_utf8_lossy(&out.stderr).trim().to_string()));
+            return Err(BrowserError::Protocol(format!("docker: {}", String::from_utf8_lossy(&out.stderr).trim())));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
@@ -389,8 +421,13 @@ impl BrowserService {
 
     /// What to tell the person when the browser could not be reached. In local mode that is the
     /// reason kwant's Chrome did not start, not Docker, which local mode does not use.
+    /// In VM mode a browser that is there but didn't answer gets [`BROWSER_BUSY`]; the Docker
+    /// advice is kept for one that can't be reached at all.
     pub fn unavailable_reason(&self) -> String {
         if self.mode() != ComputerMode::Local {
+            if self.last_outage() == Some(Outage::Busy) {
+                return BROWSER_BUSY.into();
+            }
             return "Sandbox browser is unavailable. Check that Docker is running, then restart the browser.".into();
         }
         let last = self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -423,7 +460,85 @@ impl BrowserService {
             BrowserError::Http(reason) => reason.clone(),
             other => other.to_string(),
         });
+        *self.last_outage.lock().unwrap_or_else(|e| e.into_inner()) = result.as_ref().err().map(outage);
         result
+    }
+
+    /// How the last attempt to open a page failed, if it did (see [`Outage`]).
+    pub fn last_outage(&self) -> Option<Outage> {
+        *self.last_outage.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Whether the browser answers, without opening a page: connects first if needed (in VM mode
+    /// that starts its container, as before). The panel's status uses it.
+    /// A browser that takes longer than [`PING_WAIT`] is reported busy, so a status poll never
+    /// waits out a whole command timeout.
+    pub async fn ping(&self) -> Result<(), BrowserError> {
+        // starting the container (Docker mode) isn't cut short; only the browser's answer is
+        self.ensure_private_browser().await?;
+        let result = match timeout(PING_WAIT, async {
+            let mut lock = self.state.lock().await;
+            if lock.is_none() { *lock = Some(self.connect().await?); }
+            let result = lock.as_ref().unwrap().browser.send_cdp_command("Browser.getVersion", json!({})).await;
+            if result.is_err() { *lock = None; }
+            result.map(|_| ())
+        }).await {
+            Ok(result) => result,
+            Err(_) => Err(BrowserError::Timeout),
+        };
+        if let Err(error) = &result {
+            *self.last_outage.lock().unwrap_or_else(|e| e.into_inner()) = Some(outage(error));
+        }
+        result
+    }
+
+    /// Whether this page (team or job page) is open, or kept from an earlier run, as far as
+    /// this kwant knows. Opens nothing.
+    pub async fn has_page(&self, key: &str) -> bool {
+        if let Some(state) = self.state.lock().await.as_ref() {
+            return state.sessions.contains_key(key);
+        }
+        tokio::fs::read(self.sessions_file()).await.ok()
+            .and_then(|bytes| serde_json::from_slice::<HashMap<String, SessionTarget>>(&bytes).ok())
+            .is_some_and(|sessions| sessions.contains_key(key))
+    }
+
+    /// VM mode: a controller for a page that is already open, never creating one (the idle sweep
+    /// rests pages no bot has a controller for this run). `None` when it isn't open, the browser
+    /// isn't connected, or in local mode.
+    pub async fn existing_page(&self, key: &str) -> Option<BrowserController> {
+        if self.mode() == ComputerMode::Local { return None; }
+        let lock = self.state.lock().await;
+        let state = lock.as_ref()?;
+        let session = state.sessions.get(key)?;
+        let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target.clone()), false);
+        ctrl.set_cookie_jar(Some(self.cookie_jar(page_team(key))));
+        ctrl.wake_before_use();
+        Some(ctrl)
+    }
+
+    /// Every open page (team and job pages) with when it was last used. A page kept from an
+    /// earlier run that this run hasn't used counts from when it was first seen here.
+    pub async fn open_pages(&self) -> Vec<(String, std::time::Instant)> {
+        let keys: Vec<String> = match self.state.lock().await.as_ref() {
+            Some(state) => state.sessions.keys().cloned().collect(),
+            None => return Vec::new(),
+        };
+        let now = std::time::Instant::now();
+        let mut use_ = self.page_use.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pages: Vec<_> = keys.into_iter().map(|k| { let at = *use_.entry(k.clone()).or_insert(now); (k, at) }).collect();
+        pages.sort_by_key(|(_, at)| *at);
+        pages
+    }
+
+    /// Records that the idle sweep put a page to rest.
+    pub fn mark_rested(&self, key: &str, rest: Rest) {
+        self.rested.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), rest);
+    }
+
+    /// How the page was put to rest, if it was and hasn't been used since.
+    pub fn rest_of(&self, key: &str) -> Option<Rest> {
+        self.rested.lock().unwrap_or_else(|e| e.into_inner()).get(key).copied()
     }
 
     async fn open_session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
@@ -493,6 +608,9 @@ impl BrowserService {
                 if restored > 0 { tracing::debug!("Restored {} browser cookies for {}", restored, id); }
             }
         }
+        // The page may have been frozen by the idle sweep through another controller, or by an
+        // earlier run of kwant: wake it before anything else is sent (a no-op for an awake page)
+        if !local { ctrl.wake_before_use(); }
         // A real window keeps its own size; a windowless browser gets the viewer's fixed viewport.
         if !local || !self.local_window() {
             ctrl.set_viewport(1280, 800).await?;
@@ -526,6 +644,8 @@ impl BrowserService {
     /// Records that a page was used now (see `page_use`).
     pub fn touch_page(&self, key: &str) {
         self.page_use.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), std::time::Instant::now());
+        // its controller wakes it before the first command
+        self.rested.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
     }
 
     /// Forgets a job page's use when it couldn't open (no room, or the browser failed), so it
@@ -570,6 +690,7 @@ impl BrowserService {
     pub async fn close_page(&self, key: &str) -> Result<(), BrowserError> {
         if !is_job_page(key) { return Ok(()); }
         self.page_use.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        self.rested.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
         let mut lock = self.state.lock().await;
         if let Some(state) = lock.as_mut() {
             if let Some(session) = state.sessions.remove(key) {
@@ -593,6 +714,7 @@ impl BrowserService {
         let _ = std::fs::remove_file(self.cookie_jar(id));
         let prefix = format!("{id}{PAGE_SEP}");
         self.page_use.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| !k.starts_with(&prefix));
+        self.rested.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| k != id && !k.starts_with(&prefix));
         let mut lock = self.state.lock().await;
         if lock.is_none() && self.sessions_file().exists() {
             *lock = Some(self.connect().await?);
@@ -760,5 +882,22 @@ mod image_tests {
             ("kwnt-browser:v2", "52d86739629ce24f"),
             "docker/browser files changed: bump BROWSER_IMAGE, then record the new hash here"
         );
+    }
+}
+
+#[cfg(test)]
+mod outage_reason_tests {
+    use super::{BrowserService, Outage, BROWSER_BUSY};
+
+    #[test]
+    fn a_busy_browser_says_retry_and_never_blames_docker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = BrowserService::new(tmp.path().into(), Some("http://127.0.0.1:9".into()));
+        assert!(service.unavailable_reason().contains("Docker"), "no answer yet: the old text");
+        *service.last_outage.lock().unwrap() = Some(Outage::Busy);
+        assert_eq!(service.unavailable_reason(), BROWSER_BUSY);
+        assert!(!BROWSER_BUSY.contains("Docker"));
+        *service.last_outage.lock().unwrap() = Some(Outage::Unreachable);
+        assert!(service.unavailable_reason().contains("Docker"));
     }
 }

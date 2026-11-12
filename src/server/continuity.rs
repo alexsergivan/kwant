@@ -757,7 +757,7 @@ pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope,
         Value::Bool(b) => *b,
         _ => return (text("share must be true or false"), true),
     };
-    let ctrl = match super::routes::open_page(state, target, state.job_pages.wait()).await {
+    let ctrl = match super::routes::open_page_steady(state, target, state.job_pages.wait()).await {
         Ok(ctrl) => ctrl,
         Err(refusal) => return (text(&page_refusal_text(state, refusal)), true),
     };
@@ -832,9 +832,13 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     // This bot drives the browser now, so its site rules are the ones that hold. Its job page
     // opens here (waiting for room when its team's pages are all in use), so the tool below
     // finds it open
-    match super::routes::open_page(state, target, state.job_pages.wait()).await {
+    // A browser that doesn't answer is retried here for up to a minute (VM mode), so the tool
+    // below doesn't wait all over again
+    match super::routes::open_page_steady(state, target, state.job_pages.wait()).await {
         Ok(ctrl) => ctrl.site_guard.set_driver(&scope.kwant_id),
-        Err(refusal @ super::routes::PageRefusal::PagesFull) => return (page_refusal_text(state, refusal), true),
+        Err(refusal @ (super::routes::PageRefusal::PagesFull | super::routes::PageRefusal::Busy)) => {
+            return (page_refusal_text(state, refusal), true)
+        }
         Err(super::routes::PageRefusal::Unavailable) => {}
     }
     let (text, is_error) = run_browser_tool(state, target, &reader, name, args).await;
@@ -876,6 +880,7 @@ fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> S
     match refusal {
         super::routes::PageRefusal::PagesFull => super::browser_pages::pages_full_message(),
         super::routes::PageRefusal::Unavailable => state.browser_service.unavailable_reason(),
+        super::routes::PageRefusal::Busy => crate::sandbox::service::BROWSER_BUSY.to_string(),
     }
 }
 
