@@ -188,7 +188,7 @@ pub fn trail_rows(meta: &Value, by: Option<&str>) -> (Vec<Value>, i64) {
             json!({
                 "at": s["started_at"],
                 "kind": kind,
-                "label": s["title"].as_str().map(|t| away::mask_words(t)).unwrap_or_default(),
+                "label": s["title"].as_str().map(away::mask_words).unwrap_or_default(),
                 "detail": s["detail"].as_str().map(away::mask_words),
                 "status": trail_status(s["status"].as_str()),
                 "by": by,
