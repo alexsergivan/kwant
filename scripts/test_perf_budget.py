@@ -150,6 +150,15 @@ class ShippedFiles(unittest.TestCase):
         self.assertIn("scripts/perf_budget.py", job.group(1))
         self.assertNotIn("Performance budget", (ROOT / "scripts" / "release_required_checks.txt").read_text())
 
+    def test_the_step_has_continue_on_error_while_fresh_machine_is_a_required_check(self):
+        # fresh-machine is in release_required_checks.txt; a budget FAIL on a slow runner must not block a release.
+        # Drop continue-on-error only on purpose, when the budget becomes required.
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        step = re.search(r"\n      - name: Performance budget\n(.*?)(?=\n      - name:|\Z)", ci, re.S)
+        self.assertTrue(step, "no Performance budget step in ci.yml")
+        self.assertRegex(step.group(1), r"(?m)^        continue-on-error: true$")
+        self.assertIn("fresh-machine", (ROOT / "scripts" / "release_required_checks.txt").read_text())
+
 
 class BarePathHasWhatChromesLauncherNeeds(unittest.TestCase):
     def test_readlink_and_touch_are_on_the_bare_path(self):
