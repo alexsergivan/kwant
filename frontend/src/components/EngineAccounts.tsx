@@ -7,7 +7,6 @@ import {
   CUSTOM_PRESETS,
   customKeyRequired,
   CustomProtocol,
-  KIND_LABELS,
   Login,
   NewAccountSpec,
   PROTOCOLS,
