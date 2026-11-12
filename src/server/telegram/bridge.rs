@@ -657,16 +657,35 @@ async fn approval_closed(state: &AppState, id: &str, line: &str) {
 /// stops counting at once, in the database (`telegram_set_allow(false)` disarms them all). Their
 /// messages are edited to link-only when kwant can reach Telegram; offline the edit is skipped, and
 /// a tap is refused either way (Lin's M1).
+///
+/// A card still on its way to Telegram has no message id yet, so it can't be edited here: the
+/// sender edits it as soon as its id is stored ([`ask_sent`]).
 pub async fn allow_off(state: &AppState, space: &str) {
-    let armed = state.db.telegram_open_asks(space, "approval", true).await.unwrap_or_default();
-    let _ = state.db.telegram_set_allow(space, false).await;
+    let disarmed = state.db.telegram_allow_off(space).await.map(|(_, d)| d).unwrap_or_default();
     let Some(r) = runner(state, space) else { return };
-    for ask in armed {
-        let details = match state.db.get_approval(&ask.ref_id).await.ok().flatten() {
-            Some(a) => serde_json::from_str(&a.parameters).unwrap_or(Value::Null),
-            None => Value::Null,
-        };
-        link_only(state, &r, &ask, &details).await;
+    for ask in disarmed {
+        if ask.kind == "approval" && ask.state == "open" && ask.message_id.is_some() {
+            link_only(state, &r, &ask, &approval_details(state, &ask).await).await;
+        }
+    }
+}
+
+/// An ask has just been sent and its Telegram id stored (`ask` is the row after that). If it went
+/// out with Allow once but the switch went off while it was on its way, nothing could edit it then,
+/// so it becomes link-only now.
+pub async fn ask_sent(state: &AppState, r: &Runner, ask: &TelegramAsk, markup: Option<&Value>) {
+    let sent_armed = markup
+        .and_then(|m| m["inline_keyboard"].as_array())
+        .is_some_and(|rows| rows.iter().filter_map(Value::as_array).flatten().any(|b| b["callback_data"].as_str().is_some_and(|d| d.starts_with("a:"))));
+    if sent_armed && ask.kind == "approval" && ask.state == "open" && !ask.allow {
+        link_only(state, r, ask, &approval_details(state, ask).await).await;
+    }
+}
+
+async fn approval_details(state: &AppState, ask: &TelegramAsk) -> Value {
+    match state.db.get_approval(&ask.ref_id).await.ok().flatten() {
+        Some(a) => serde_json::from_str(&a.parameters).unwrap_or(Value::Null),
+        None => Value::Null,
     }
 }
 
