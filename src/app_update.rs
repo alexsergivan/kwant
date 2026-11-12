@@ -316,11 +316,44 @@ fn now_rfc3339() -> String {
 /// How this install updates, from where and how it runs.
 pub fn how_here() -> How {
     let exe = std::env::current_exe().ok();
-    how_for(crate::doctor::Platform::detect(), std::env::consts::OS, std::env::consts::ARCH, exe.as_deref(), std::env::var_os("INVOCATION_ID").is_some())
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let unit = std::fs::read_to_string("/proc/self/cgroup").ok().and_then(|c| Unit::from_cgroup(&c));
+    how_for(crate::doctor::Platform::detect(), std::env::consts::OS, std::env::consts::ARCH, exe.as_deref(), home.as_deref(), unit)
 }
 
-/// [`how_here`] from its parts. `systemd`: started by a systemd unit (it sets `INVOCATION_ID`).
-pub fn how_for(platform: crate::doctor::Platform, os: &str, arch: &str, exe: Option<&std::path::Path>, systemd: bool) -> How {
+/// The systemd unit kwnt runs as, when it is `kwnt.service`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unit {
+    /// `systemctl --user` (what install.sh sets up).
+    User,
+    System,
+}
+
+impl Unit {
+    /// From `/proc/self/cgroup`: `…/user@1000.service/app.slice/kwnt.service` or `/system.slice/kwnt.service`.
+    pub fn from_cgroup(cgroup: &str) -> Option<Unit> {
+        cgroup.lines().find_map(|l| {
+            let path = l.rsplit(':').next()?;
+            if !path.split('/').any(|part| part == "kwnt.service") {
+                return None;
+            }
+            Some(if path.split('/').any(|part| part.starts_with("user@")) { Unit::User } else { Unit::System })
+        })
+    }
+}
+
+/// The one line kwant's own page gives for installing on Linux; run again, it upgrades in place.
+pub const INSTALL_SH: &str = "curl -fsSL https://kwant.si/install.sh | sh";
+
+/// [`how_here`] from its parts: `home` is `$HOME`, `unit` the systemd unit kwnt runs as, if any.
+pub fn how_for(
+    platform: crate::doctor::Platform,
+    os: &str,
+    arch: &str,
+    exe: Option<&std::path::Path>,
+    home: Option<&std::path::Path>,
+    unit: Option<Unit>,
+) -> How {
     use crate::doctor::Platform;
     if platform == Platform::Docker {
         return How { kind: "docker", command: Some("docker compose pull kwnt && docker compose up -d".into()) };
@@ -336,11 +369,17 @@ pub fn how_for(platform: crate::doctor::Platform, os: &str, arch: &str, exe: Opt
     };
     match (os, arch, exe.and_then(|p| p.parent())) {
         ("linux", Some(arch), Some(dir)) if !built_here => {
-            let get = format!(
-                "curl -fsSL {RELEASES}/latest/download/kwnt-linux-{arch}.tar.gz | sudo tar -xz -C {} kwnt",
-                dir.display()
-            );
-            let restart = if systemd { "sudo systemctl restart kwnt" } else { "# then stop kwnt serve and start it again" };
+            // install.sh's own place: running it again downloads, checks and restarts (never sudo).
+            if home.is_some_and(|h| dir == h.join(".local/bin")) {
+                return How { kind: "binary", command: Some(INSTALL_SH.into()) };
+            }
+            let sudo = if home.is_some_and(|h| dir.starts_with(h)) { "" } else { "sudo " };
+            let get = format!("curl -fsSL {RELEASES}/latest/download/kwnt-linux-{arch}.tar.gz | {sudo}tar -xz -C {} kwnt", dir.display());
+            let restart = match unit {
+                Some(Unit::User) => "systemctl --user restart kwnt",
+                Some(Unit::System) => "sudo systemctl restart kwnt",
+                None => "# then stop kwnt serve and start it again",
+            };
             How { kind: "binary", command: Some(format!("{get}\n{restart}")) }
         }
         _ => How { kind: "source", command: Some("git pull && make build".into()) },
@@ -739,21 +778,38 @@ mod tests {
     fn how_each_install_updates() {
         use crate::doctor::Platform;
         use std::path::Path;
-        let docker = how_for(Platform::Docker, "linux", "x86_64", Some(Path::new("/usr/local/bin/kwnt")), false);
+        let home = Some(Path::new("/home/me"));
+        let docker = how_for(Platform::Docker, "linux", "x86_64", Some(Path::new("/usr/local/bin/kwnt")), home, None);
         assert_eq!(docker.kind, "docker");
         assert_eq!(docker.command.as_deref(), Some("docker compose pull kwnt && docker compose up -d"));
-        let bin = how_for(Platform::Linux, "linux", "x86_64", Some(Path::new("/usr/local/bin/kwnt")), true);
+        // install.sh's place: run it again (it upgrades in place, restarts its user unit, never sudo)
+        let installed = how_for(Platform::Linux, "linux", "x86_64", Some(Path::new("/home/me/.local/bin/kwnt")), home, Some(Unit::User));
+        assert_eq!(installed, How { kind: "binary", command: Some(INSTALL_SH.into()) });
+        let bin = how_for(Platform::Linux, "linux", "x86_64", Some(Path::new("/usr/local/bin/kwnt")), home, Some(Unit::System));
         assert_eq!(bin.kind, "binary");
         assert_eq!(
             bin.command.as_deref(),
             Some("curl -fsSL https://github.com/alexsergivan/kwant/releases/latest/download/kwnt-linux-x86_64.tar.gz | sudo tar -xz -C /usr/local/bin kwnt\nsudo systemctl restart kwnt")
         );
-        let arm = how_for(Platform::Linux, "linux", "aarch64", Some(Path::new("/opt/kwnt/kwnt")), false);
+        let arm = how_for(Platform::Linux, "linux", "aarch64", Some(Path::new("/opt/kwnt/kwnt")), home, None);
         assert!(arm.command.as_deref().unwrap().contains("kwnt-linux-aarch64.tar.gz | sudo tar -xz -C /opt/kwnt kwnt\n# then stop kwnt serve"));
-        let src = how_for(Platform::Linux, "linux", "x86_64", Some(Path::new("/home/me/kwant/target/release/kwnt")), false);
+        // under the home folder: no sudo
+        let mine = how_for(Platform::Linux, "linux", "aarch64", Some(Path::new("/home/me/apps/kwnt")), home, Some(Unit::User));
+        assert!(mine.command.as_deref().unwrap().contains("| tar -xz -C /home/me/apps kwnt\nsystemctl --user restart kwnt"));
+        let src = how_for(Platform::Linux, "linux", "x86_64", Some(Path::new("/home/me/kwant/target/release/kwnt")), home, None);
         assert_eq!(src.kind, "source");
-        assert_eq!(how_for(Platform::Mac, "macos", "aarch64", Some(Path::new("/usr/local/bin/kwnt")), false).kind, "source");
-        assert_eq!(how_for(Platform::Linux, "windows", "x86_64", None, false), How { kind: "windows", command: None });
+        assert_eq!(how_for(Platform::Mac, "macos", "aarch64", Some(Path::new("/usr/local/bin/kwnt")), home, None).kind, "source");
+        assert_eq!(how_for(Platform::Linux, "windows", "x86_64", None, home, None), How { kind: "windows", command: None });
+    }
+
+    #[test]
+    fn systemd_unit_from_cgroup() {
+        assert_eq!(Unit::from_cgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/kwnt.service\n"), Some(Unit::User));
+        assert_eq!(Unit::from_cgroup("0::/system.slice/kwnt.service\n"), Some(Unit::System));
+        // another service's child (a shell in a bot host) is not kwnt's unit
+        assert_eq!(Unit::from_cgroup("0::/system.slice/openmausbot.service\n"), None);
+        assert_eq!(Unit::from_cgroup("0::/user.slice/user-1000.slice/session-3.scope\n"), None);
+        assert_eq!(Unit::from_cgroup(""), None);
     }
 
     #[test]
