@@ -257,7 +257,7 @@ async function errorText(res: Response): Promise<string | null> {
 
 function refusal(res: Response, fallback: string, canInstall: boolean): Promise<string> | string {
   if (res.status === 401 || res.status === 403) {
-    return canInstall ? 'Only you can update the app, from the Mac it runs on.' : 'Only the person who runs this kwant can check for updates.';
+    return canInstall ? 'Only you can update the app, from the Mac it runs on.' : 'Only the person who runs this kwant bots can check for updates.';
   }
   return errorText(res).then((e) => e ?? fallback);
 }

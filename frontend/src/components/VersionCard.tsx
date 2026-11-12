@@ -16,8 +16,8 @@ const ghost = `inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border b
 /** Where the How to update command runs, in plain words. */
 const HOW_WHERE: Record<HowToUpdate['kind'], string> = {
   docker: 'Run this in the folder with your docker-compose.yml:',
-  binary: 'Run this on the server kwant runs on:',
-  source: 'Run this in your kwant folder:',
+  binary: 'Run this on the server kwant bots runs on:',
+  source: 'Run this in your kwant bots folder:',
   windows: 'Download the new installer and run it. Your chats and bots stay as they are.',
 };
 
@@ -56,7 +56,7 @@ const HowToUpdatePanel: React.FC<{ id: string; how: HowToUpdate | null; version:
       )}
       {!command && (
         <a href={url} target="_blank" rel="noreferrer" className={`${primary} mt-2`}>
-          <ExternalLink size={13} aria-hidden="true" /> Download kwant {version}
+          <ExternalLink size={13} aria-hidden="true" /> Download kwant bots {version}
         </a>
       )}
       {command && <p className="mb-0 mt-2 text-[11px] text-zinc-500">Your chats and bots stay as they are.</p>}
@@ -131,7 +131,7 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
           <>
             <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 font-medium text-zinc-100">
               <ArrowUpCircle size={15} className="shrink-0 text-sky-300" aria-hidden="true" />
-              kwant {line.version} is available
+              kwant bots {line.version} is available
             </span>
             <button
               type="button"
@@ -159,11 +159,11 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
           <>
             <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 font-medium text-zinc-100">
               <Loader2 size={15} className="shrink-0 animate-spin text-sky-300 motion-reduce:animate-none" aria-hidden="true" />
-              Downloading kwant {line.version}…{line.progress != null && ` ${Math.round(line.progress * 100)}%`}
+              Downloading kwant bots {line.version}…{line.progress != null && ` ${Math.round(line.progress * 100)}%`}
             </span>
             <span
               role="progressbar"
-              aria-label={`Downloading kwant ${line.version}`}
+              aria-label={`Downloading kwant bots ${line.version}`}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={line.progress == null ? undefined : Math.round(line.progress * 100)}
@@ -189,7 +189,7 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
             <span className="inline-flex min-w-0 flex-1 items-start gap-1.5 text-zinc-200">
               <AlertTriangle size={15} className="mt-px shrink-0 text-amber-300" aria-hidden="true" />
               <span>
-                <span className="font-medium text-zinc-100">kwant {line.version} didn’t install.</span> {line.error} This version keeps working.
+                <span className="font-medium text-zinc-100">kwant bots {line.version} didn’t install.</span> {line.error} This version keeps working.
               </span>
             </span>
             <a href={line.url} target="_blank" rel="noreferrer" className={quiet}>
@@ -219,18 +219,18 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
         return (
           <span className="inline-flex items-center gap-1.5 font-medium text-zinc-100">
             <CheckCircle2 size={15} className="shrink-0 text-emerald-400" aria-hidden="true" />
-            Updated to kwant {line.version}
+            Updated to kwant bots {line.version}
           </span>
         );
       case 'off':
-        return <span className="text-zinc-400">This kwant doesn’t check for updates.</span>;
+        return <span className="text-zinc-400">This kwant bots doesn’t check for updates.</span>;
     }
   })();
 
   return (
     <section aria-labelledby="version-card-title" data-version-card={line.kind} className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
       <h3 id="version-card-title" className="m-0 text-sm font-semibold text-zinc-100">
-        kwant <span className="font-mono text-[13px] font-medium text-zinc-300">{current || 'version unknown'}</span>
+        kwant bots <span className="font-mono text-[13px] font-medium text-zinc-300">{current || 'version unknown'}</span>
       </h3>
       <div role="status" aria-live="polite" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" data-version-line>
         {status}
