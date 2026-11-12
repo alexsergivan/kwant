@@ -90,6 +90,90 @@ export const MANAGE_WIRE: WireSuggestion = {
   also_possible: [SHOP_WIRE.also_possible[1]],
 };
 
+// Team from your own words: the server contract's answer to `{ need }` (brief.md, "Server contract").
+// `facts` empty, `read` zeros, `partial` and `stack_line` null, `fallback` false; rows carry `owns`
+// ("Takes care of…"), `reason` (tied to the words) and `instructions` (the drafted soul). Example data.
+export const BAKERY_NEED = 'I run a small bakery: answer customer emails, post on Instagram, keep track of orders';
+const needRow = (key: string, preset: string, name: string, title: string, sprite: string, reason: string, owns: string[], instructions: string, lead = false): Row => ({
+  key,
+  preset,
+  lead,
+  name,
+  title,
+  avatar_sprite: sprite,
+  reason,
+  owns,
+  instructions,
+  existing: null,
+});
+export const BAKERY_WIRE: WireSuggestion = {
+  suggestion_id: 'sug_demo_bakery',
+  handle: 'bakery',
+  need: BAKERY_NEED,
+  facts: [],
+  bots: [
+    needRow(
+      'lead',
+      'custom',
+      'ShopLead',
+      'Bakery Lead',
+      'product',
+      'You run the bakery day to day, so one bot keeps the others on track and asks you before anything goes out.',
+      ['the day’s plan', 'questions for you'],
+      'You lead a small bakery’s team.\n\nEach morning, list what the team has to do today: emails waiting for an answer, posts to schedule and orders due.\nHand each job to the right teammate and check it is done.\nAsk the owner before anything is sent, posted or promised to a customer.\nKeep your notes short and plain.',
+      true,
+    ),
+    needRow(
+      'inbox',
+      'inbox',
+      'CustomerMail',
+      'Customer Email',
+      'writer',
+      'You asked for customer emails to be answered.',
+      ['customer emails', 'reply drafts'],
+      'You answer the bakery’s customer emails.\n\nRead new emails and sort them: orders, questions, complaints, other.\nDraft a friendly, short reply for each. Never send without the owner’s OK.\nWhen an email is an order, pass it to OrderKeeper with the date, items and name.',
+    ),
+    needRow(
+      'social',
+      'custom',
+      'InstaPoster',
+      'Instagram Poster',
+      'designer',
+      'You asked for posts on Instagram.',
+      ['Instagram posts', 'captions'],
+      'You plan the bakery’s Instagram posts.\n\nSuggest three posts a week: what is fresh, a behind-the-scenes moment, and a customer favourite.\nWrite the caption and say which photo to take.\nNever post without the owner’s OK.',
+    ),
+    needRow(
+      'orders',
+      'custom',
+      'OrderKeeper',
+      'Order Keeper',
+      'data',
+      'You asked to keep track of orders.',
+      ['the order list', 'pickup dates'],
+      'You keep the bakery’s order list.\n\nAdd each order with the customer’s name, items, pickup date and whether it is paid.\nEach evening, list tomorrow’s pickups for the owner.\nFlag any order with a missing date or item.',
+    ),
+  ],
+  also_possible: [],
+  read: { files: 0, manifests: 0, ms: 0 },
+  partial: null,
+  stack_line: null,
+  fallback: false,
+};
+/** Try again: the same words, a second draft (fewer bots, other names). */
+export const BAKERY_AGAIN_WIRE: WireSuggestion = {
+  ...BAKERY_WIRE,
+  suggestion_id: 'sug_demo_bakery_2',
+  bots: [
+    { ...BAKERY_WIRE.bots[0], name: 'Baker', title: 'Head of the Bakery Team' },
+    { ...BAKERY_WIRE.bots[1], name: 'MailHelper' },
+    { ...BAKERY_WIRE.bots[3], name: 'Orders' },
+  ],
+};
+export const BAKERY_SUGGESTION: Suggestion = normSuggestion(BAKERY_WIRE, 'need');
+
+export type NeedScenario = 'bakery' | 'again' | 'slow' | 'draft_failed' | 'no_ready_account' | 'limit' | 'busy' | 'offline' | 'too_short';
+
 export const SHOP_SUGGESTION: Suggestion = normSuggestion(SHOP_WIRE, '~/projects/shop');
 export const PARTIAL_SUGGESTION: Suggestion = normSuggestion(PARTIAL_WIRE, '~/projects/shop');
 export const UNKNOWN_SUGGESTION: Suggestion = normSuggestion(UNKNOWN_WIRE, '~/projects/notes');
@@ -100,10 +184,11 @@ export type Call = { url: string; method: string; body?: unknown; headers?: Reco
 
 /** A transport answering the T and D routes from fixtures. `calls` collects every request. */
 export function fixtureTransport(
-  opts: { suggest?: SuggestScenario; create?: 'ok' | 'fail' | 'clash' | 'clash-handle' | 'clash-many' | 'expired-once'; preview?: TemplatePreview | 'error'; templates?: 'ok' | 'error' | 'slow' } = {},
+  opts: { suggest?: SuggestScenario; need?: NeedScenario; create?: 'ok' | 'fail' | 'clash' | 'clash-handle' | 'clash-many' | 'expired-once'; preview?: TemplatePreview | 'error'; templates?: 'ok' | 'error' | 'slow' } = {},
   calls: Call[] = [],
 ): TeamsTransport {
   let expired = opts.create === 'expired-once';
+  let needCalls = 0;
   return async (url, method, body, headers) => {
     calls.push({ url, method, body, headers });
     const path = url.split('?')[0];
@@ -117,6 +202,21 @@ export function fixtureTransport(
       // Optional route (§0.10): by default answer 404 like a server without it, so the client's own guess stands.
       if (!opts.preview || opts.preview === 'error') return { status: 404, body: { error: 'not found' } };
       return { status: 200, body: opts.preview };
+    }
+    if (path === '/api/teams/suggest' && body && typeof (body as { need?: unknown }).need === 'string') {
+      // `again`: the first ask gives the bakery team, every later one the second draft.
+      const sc = opts.need ?? 'bakery';
+      needCalls++;
+      if (sc === 'offline') throw new TeamsError('Couldn’t reach the server.', 0, 'offline');
+      // unref: a test that cancels the ask doesn't wait the minute out (no-op in a browser).
+      if (sc === 'slow') await new Promise((r) => (setTimeout(r, 60_000) as unknown as { unref?: () => void }).unref?.());
+      if (sc === 'draft_failed') return { status: 502, body: { error: 'The draft came back unusable twice.', code: 'draft_failed' } };
+      if (sc === 'no_ready_account') return { status: 409, body: { error: 'No account in this space can run right now.', code: 'no_ready_account' } };
+      if (sc === 'limit') return { status: 429, body: { error: 'Claude is out until 21:10.', code: 'limited', account: 'Claude', until: '2026-11-12T21:10:00Z' } };
+      if (sc === 'busy') return { status: 409, body: { error: 'Already drafting a team for this space.', code: 'busy' } };
+      if (sc === 'too_short') return { status: 422, body: { error: 'need is too short', code: 'need_too_short' } };
+      const need = (body as { need: string }).need;
+      return { status: 200, body: { ...(sc === 'again' && needCalls > 1 ? BAKERY_AGAIN_WIRE : BAKERY_WIRE), need } };
     }
     if (path === '/api/teams/suggest') {
       const sc = opts.suggest ?? 'shop';
@@ -155,6 +255,25 @@ export function fixtureTransport(
       const b = body as { template_id?: string; handle?: string; names?: Record<string, string>; edits?: { handle?: string } };
       const handle = b.handle ?? b.edits?.handle ?? 'team';
       const t = TEMPLATES_WIRE.find((x) => x.id === b.template_id);
+      const sid = (body as { suggestion_id?: string }).suggestion_id;
+      const needWire = [BAKERY_WIRE, BAKERY_AGAIN_WIRE].find((w) => w.suggestion_id === sid);
+      if (needWire) {
+        const rows = (b.edits as { rows?: Record<string, { on?: boolean; name?: string }> } | undefined)?.rows ?? {};
+        const on = needWire.bots.filter((x) => rows[x.key]?.on !== false);
+        return {
+          status: 201,
+          body: {
+            team: { id: 'team_new', name: handle },
+            channel_id: 'ch_team_new',
+            action_id: 'act_demo',
+            template_id: null,
+            bots: on.map((x, i) => ({ slot: x.key, id: `kw_${i}`, name: rows[x.key]?.name ?? x.name, preset: x.preset, lead: x.lead, existing: false })),
+            skills: [],
+            routine: null,
+            undo_until: '2026-11-13T20:00:00Z',
+          },
+        };
+      }
       return {
         status: 201,
         body: {
