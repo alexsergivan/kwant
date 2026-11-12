@@ -52,7 +52,7 @@ export function errorWords(code: string | null, fallback: string | null, status:
     case 'stale_head':
       return 'The bot pushed again. The changes reloaded; your note is still here.';
     case 'no_author':
-      return 'This PR has no bot to send the notes to.';
+      return 'No bot wrote this PR and no team owns this repo. Add it to a team (Manage team › Git Repo), then send again.';
     case 'pr_merged':
       return 'This PR is merged. Notes are read-only.';
     case 'pr_closed':
