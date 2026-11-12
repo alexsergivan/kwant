@@ -3,6 +3,7 @@
 // Connecting an app is one sheet with three steps; the bots picked in step 3 get it, turned on.
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, Check, ChevronRight, ExternalLink, Loader2, RefreshCw, X } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { CatalogEntry, ComposioApp, Connection, ConnectionsError, ConnectionsList, composioBody, composioErrorText, connectionsApi } from '../connections';
@@ -121,7 +122,11 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneLayout = usePhoneLayout();
   const isPhone = phone ?? phoneLayout;
-  useEscapeLayer(rootRef, true, onClose, { modal: true });
+  // Rendered into <body> once mounted, so it sits above Settings' own layer and the phone install hint.
+  // The focus trap starts there too, on the element that stays.
+  const [inBody, setInBody] = useState(false);
+  useEffect(() => setInBody(true), []);
+  useEscapeLayer(rootRef, inBody, onClose, { modal: true });
 
   // Composio set up already (or just now, if giving it to bots failed after): skip to the app.
   const [serverId, setServerId] = useState<string | null>(composio.added ? serverIdOf(composio.connection_id) : null);
@@ -154,7 +159,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
   const title = app ? `Connect ${app.name}` : 'Set up Composio';
   const chosenBots = kwants.filter((k) => picked.includes(k.id));
   const approval = approvalLine(app?.acts ?? 'Send, post or change things', chosenBots, spaceMode);
-  const toggle = (kid: string) => setPicked((p) => (p.includes(kid) ? p.filter((x) => x !== kid) : [...p, kid]));
+  const toggle = (kid: string) => (setPicked((p) => (p.includes(kid) ? p.filter((x) => x !== kid) : [...p, kid])), setError((x) => (x?.step === 3 ? null : x)));
 
   const signIn = async () => {
     if (!app) return;
@@ -170,7 +175,16 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
       setSignInOpened(true);
     } catch (e) {
       tab?.close();
-      setError({ step: 1, text: `Couldn’t start the ${app.name} sign-in on Composio: ${errText(e).replace(/\.$/, '')}. Composio may be down; try again in a minute.` });
+      // 409: Composio refused the saved key. Anything else (502, no answer) is Composio being down or slow.
+      const keyRefused = (e as { status?: number } | null)?.status === 409;
+      setError({
+        step: 1,
+        text: keyRefused
+          ? `Composio refused your API key, so the ${app.name} sign-in can’t start here. Fix the key under Advanced › Manage tools, or sign in to ${app.name} on composio.dev.`
+          : `Couldn’t start the ${app.name} sign-in on Composio: ${errText(e)
+              .replace(/[;,.]?\s*try again later\.?$/i, '')
+              .replace(/\.$/, '')}. Composio may be down; try again in a minute.`,
+      });
     } finally {
       setSigningIn(false);
     }
@@ -220,8 +234,8 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
     ? 'absolute inset-x-0 bottom-0 max-h-[92vh] rounded-t-2xl border-t'
     : 'absolute right-0 top-0 h-full w-full max-w-[460px] border-l';
 
-  return (
-    <div className="fixed inset-0 z-50" data-connect-sheet={app?.slug ?? 'composio'}>
+  const sheet = (
+    <div className="fixed inset-0 z-[60]" data-connect-sheet={app?.slug ?? 'composio'}>
       <div className="absolute inset-0 bg-black/60" aria-hidden="true" onClick={onClose} />
       <div ref={rootRef} role="dialog" aria-modal="true" aria-labelledby={`${id}-t`} tabIndex={-1} className={`${panel} flex flex-col focus:outline-none bg-zinc-900 border-zinc-800 shadow-2xl`}>
         {isPhone && <span aria-hidden="true" className="mx-auto mt-2 h-1 w-10 rounded-full bg-zinc-700" />}
@@ -275,10 +289,13 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                     ) : (
                       <p className="text-[11px] text-zinc-400">
                         On{' '}
-                        <a href={COMPOSIO_HOME} target="_blank" rel="noopener noreferrer" className={linkBtn}>
+                        <a href={COMPOSIO_HOME} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 rounded">
                           composio.dev ↗
                         </a>
-                        , add {app.name} to the same MCP server you gave kwant bots and sign in there. kwant bots can’t start the sign-in for you because your Composio link has no user_id.
+                        , add {app.name} to the same MCP server you gave kwant bots and sign in there.{' '}
+                        {composio.can_search
+                          ? 'kwant bots can’t start the sign-in for you because your Composio link has no user_id.'
+                          : 'kwant bots can’t start the sign-in for you without your Composio API key (Advanced › Manage tools).'}
                       </p>
                     )}
                   </Step>
@@ -307,13 +324,13 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                       spellCheck={false}
                       placeholder="https://backend.composio.dev/v3/mcp/…"
                       value={url}
-                      onChange={(e) => setUrl(e.target.value)}
+                      onChange={(e) => (setUrl(e.target.value), setError((x) => (x?.step === 2 ? null : x)))}
                       aria-describedby={`${id}-url-h`}
                       aria-invalid={error?.step === 2 ? true : undefined}
                       disabled={!!serverId}
                     />
                     <p id={`${id}-url-h`} className="text-[11px] text-zinc-400">
-                      In Composio, open <span className="text-zinc-200">MCP</span> in the left menu, pick your server (or create one with {app ? app.name : 'your apps'}), and copy its URL. It starts with https:// and ends in composio.dev.
+                      In Composio, open <span className="text-zinc-200">MCP</span> in the left menu, pick your server (or create one with {app ? app.name : 'your apps'}), and copy its URL. It starts with https:// and is on composio.dev.
                     </p>
                     {showKey ? (
                       <div className="space-y-1">
@@ -380,6 +397,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
       </div>
     </div>
   );
+  return inBody ? createPortal(sheet, document.body) : sheet;
 };
 
 // ── The page ─────────────────────────────────────────────────────────────────────────────────
@@ -558,7 +576,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
                     <AppMark name={t.name} size={30} />
                     <span className="min-w-0">
                       <span className="block text-xs font-medium text-zinc-100 truncate">{t.name}</span>
-                      <span className="block text-[11px] text-zinc-500 truncate">{t.blurb}</span>
+                      <span className="block text-[11px] text-zinc-500 truncate" title={t.blurb}>{t.blurb}</span>
                     </span>
                   </span>
                   <span className={`text-[11px] font-medium ${connected ? 'text-emerald-300' : 'text-sky-300'}`}>

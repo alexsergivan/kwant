@@ -244,7 +244,7 @@ export interface ComposioBody {
 export function composioBody(url: string, apiKey: string, enabled: boolean): ComposioBody | { error: string } {
   const u = url.trim();
   if (!u) return { error: 'Paste the MCP URL from your Composio dashboard.' };
-  if (!isComposioUrl(u)) return { error: 'That isn’t a Composio address. It should start with https:// and end in composio.dev.' };
+  if (!isComposioUrl(u)) return { error: 'That isn’t a Composio address. It should start with https:// and be on composio.dev.' };
   const key = apiKey.trim();
   return key ? { url: u, api_key: key, enabled } : { url: u, enabled };
 }

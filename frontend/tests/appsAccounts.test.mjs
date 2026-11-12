@@ -67,7 +67,8 @@ const mount = async (C, props) => {
     host.remove();
   };
   mounted.add(u);
-  return host;
+  // The sheet renders into <body>, so look there.
+  return document.body;
 };
 const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
 const button = (host, t) => [...host.querySelectorAll('button')].find((b) => text(b).startsWith(t));
@@ -129,6 +130,19 @@ test('a bad link stops at step 2 with words, and no bot stops at step 3', async 
   assert.deepEqual(api.calls, [], 'nothing is sent until the form is whole');
 });
 
+test('fixing the link or ticking a bot clears that step’s error at once', async () => {
+  const host = await mount(m.ConnectSheet, sheetProps({ api: fakeApi() }));
+  await type(host.querySelector('input[type="url"]'), 'https://example.com/mcp');
+  await submit(host);
+  assert.ok(host.querySelector('[data-sheet-error="2"]'));
+  await type(host.querySelector('input[type="url"]'), 'https://backend.composio.dev/v3/mcp/abc');
+  assert.equal(host.querySelector('[data-sheet-error="2"]'), null, 'the old link error goes as soon as the link changes');
+  await submit(host);
+  assert.ok(host.querySelector('[data-sheet-error="3"]'));
+  await click(host.querySelector('[data-sheet-bot] input'));
+  assert.equal(host.querySelector('[data-sheet-error="3"]'), null, 'ticking a bot clears the bot error');
+});
+
 test('Composio refusing the link shows its reason at step 2', async () => {
   const { ConnectionsError } = await loadBundled(`export { ConnectionsError } from './src/connections';`);
   const api = fakeApi({ addComposio: async () => { throw new ConnectionsError('Composio didn’t answer.', 400); } });
@@ -165,11 +179,24 @@ test('with Composio set up the sheet starts at the app’s own sign-in and the b
 });
 
 test('Composio down while starting the app sign-in says so at step 1', async () => {
-  const api = fakeApi({ connect: async () => { throw new Error('Composio is unreachable.'); } });
+  const api = fakeApi({ connect: async () => { throw new Error("Composio couldn't be reached; try again later."); } });
   const host = await mount(m.ConnectSheet, sheetProps({ api, composio: composio({ added: true, enabled: true, connection_id: 'mcp:cmp1', can_connect: true }) }));
   g.window.open = () => null;
   await click(host.querySelector('[data-sheet-signin]'));
-  assert.match(text(host.querySelector('[data-sheet-error="1"]')), /Composio is unreachable.*may be down/);
+  const t = text(host.querySelector('[data-sheet-error="1"]'));
+  assert.match(t, /Composio couldn't be reached\. Composio may be down; try again in a minute\./);
+  assert.equal(t.match(/try again/g).length, 1, 'the server\'s own "try again later" isn\'t repeated');
+});
+
+test('a refused Composio key says so and doesn’t blame an outage', async () => {
+  const { ConnectionsError } = await loadBundled(`export { ConnectionsError } from './src/connections';`);
+  const api = fakeApi({ connect: async () => { throw new ConnectionsError('Composio refused the API key saved with the Composio connector.', 409); } });
+  const host = await mount(m.ConnectSheet, sheetProps({ api, composio: composio({ added: true, enabled: true, connection_id: 'mcp:cmp1', can_connect: true }) }));
+  g.window.open = () => null;
+  await click(host.querySelector('[data-sheet-signin]'));
+  const t = text(host.querySelector('[data-sheet-error="1"]'));
+  assert.match(t, /refused your API key.*Advanced › Manage tools/);
+  assert.doesNotMatch(t, /may be down/);
 });
 
 test('focus moves into the sheet (a modal: Tab is trapped by useEscapeLayer) and Escape closes it', async () => {
