@@ -22,10 +22,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, Message as WsMessage}};
 
 /// A page with a sign-in button over all of it that opens the sign-in in a popup window, and
-/// shows the popup's answer in its title.
+/// shows the popup's answer in its title a little later, as a real sign-in page does after its
+/// own requests: the view is back on the opener, and has its picture, before the answer shows.
 const OPENER: &str = "<!doctype html><html><head><title>opener</title></head><body style=margin:0>\
 <button onclick=\"window.open('/popup','signin','width=480,height=600')\" style='position:fixed;inset:0'>Continue with Google</button>\
-<script>addEventListener('message',function(e){document.title='signed in: '+e.data})</script></body></html>";
+<script>addEventListener('message',function(e){setTimeout(function(){document.title='signed in: '+e.data},700)})</script></body></html>";
 /// The sign-in: a button over all of it posts the answer to the opener and closes the popup.
 const POPUP: &str = "<!doctype html><html><head><title>popup</title></head><body style=margin:0>\
 <button onclick=\"opener.postMessage('ok','*');window.close()\" style='position:fixed;inset:0'>Choose account</button></body></html>";
@@ -160,9 +161,12 @@ async fn the_live_view_shows_a_popup_the_page_opens_and_comes_back_when_it_close
     assert!(next_message(&mut ws, "frame", |_| true).await.is_some(), "and shows it");
 
     ws.send(WsMessage::Text(json!({"action": "click", "x": 40, "y": 40, "id": 2}).to_string())).await.unwrap();
-    let back = next_message(&mut ws, "location", |l| l["url"].as_str().is_some_and(|u| u.ends_with("/opener")) && l["title"] == "signed in: ok").await;
-    assert!(back.is_some(), "once the popup closed, the live view is back on the opener, with the popup's answer");
+    let on_opener = |l: &Value| l["url"].as_str().is_some_and(|u| u.ends_with("/opener"));
+    assert!(next_message(&mut ws, "location", on_opener).await.is_some(), "once the popup closed, the live view is back on the opener");
+    // the stream sends the address before the new page's pictures, so this frame is the opener's
     assert!(next_message(&mut ws, "frame", |_| true).await.is_some(), "and shows it again");
+    let answered = next_message(&mut ws, "location", |l| on_opener(l) && l["title"] == "signed in: ok").await;
+    assert!(answered.is_some(), "with the popup's answer once the opener has it");
     ws.close(None).await.unwrap();
     server.abort();
 }
