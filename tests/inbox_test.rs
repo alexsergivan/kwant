@@ -147,10 +147,12 @@ async fn review_task(state: &AppState, owner: &str, title: &str, acceptance: &st
 }
 
 /// What 0.9.5 B adds to each done item.
-const DONE_KEYS: [&str; 10] = [
+const DONE_KEYS: [&str; 12] = [
     "result_message_id",
     "result_conversation_id",
+    "result_thread_id",
     "result_link",
+    "source",
     "answer_excerpt",
     "trail",
     "trail_dropped",
