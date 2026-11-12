@@ -523,7 +523,11 @@ mod tests {
         sqlx::query(&CREATE_HUMAN_STEPS.replace(",\n    page_key TEXT", "")).execute(&db.pool).await.unwrap();
         sqlx::query("INSERT INTO human_steps (id, kwant_id, kind, reason, sandbox_target, source, status, created_at) VALUES ('old', 'k', 'sign_in', 'Log in', 't', 'bot', 'open', ?)")
             .bind(Utc::now()).execute(&db.pool).await.unwrap();
-        db.migrate_human_steps().await.unwrap();
+        // Migrate the way kwnt starts: reopen, so the one-connection migration pool runs it. Changing
+        // the table under this test's runtime pool would leave another pooled connection with a
+        // `SELECT *` column list from before (sqlx's index-out-of-bounds panic, then None).
+        db.pool.close().await;
+        let db = Database::init(tmp.path()).await.unwrap();
         let old = db.get_human_step("old").await.unwrap().unwrap();
         assert_eq!(old.page_key, None);
         assert_eq!(old.page(), Some("t"), "an old step holds its team page");

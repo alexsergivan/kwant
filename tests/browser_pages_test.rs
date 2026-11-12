@@ -205,6 +205,15 @@ async fn a_sign_in_on_one_jobs_page_holds_only_that_page_and_the_teams_sign_ins_
     assert_eq!(title_becomes(&ctrl_b, "clicked").await, "clicked", "job B's click landed on its own page");
     assert_eq!(title_becomes(&ctrl_a, "sign in").await, "sign in", "job A's page is untouched");
     assert!(!kwnt::server::human_steps::browser_is_held(&state, &team).await, "the team page isn't held either");
+    // Each page is shown, none is a background tab Chrome doesn't paint: the team page, opened
+    // first, still answers screenshots and navigations (they hung, 502, before job pages got
+    // windows of their own in VM mode)
+    let (status, body) = request(&app, "POST", &format!("/api/sandbox/{team}/navigate"), Some(json!({"url": format!("{base}/plain")}))).await;
+    assert_eq!(status, StatusCode::OK, "the team page answers: {body}");
+    let ctrl_team = controller(&state, &team).await;
+    for (page, ctrl) in [("team", &ctrl_team), ("A", &ctrl_a), ("B", &ctrl_b)] {
+        assert_eq!(eval(ctrl, "document.visibilityState").await, json!("visible"), "{page}'s page is painted");
+    }
 
     // The live view and the tab strip show job A's page while the person has a step there
     let (status, pages) = request(&app, "GET", &format!("/api/sandbox/{team}/pages"), None).await;

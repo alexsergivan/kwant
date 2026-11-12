@@ -460,7 +460,9 @@ impl BrowserService {
                 .ok_or_else(|| BrowserError::Protocol("Browser page missing".into()))?.to_string() }
         } else if job {
             // A job page: a new page in the team's context (the team page's), never a context of
-            // its own, so a sign-in made on any page of the team holds on all of them
+            // its own, so a sign-in made on any page of the team holds on all of them. In a window
+            // of its own, as in local mode: a second tab would leave the page behind it unpainted,
+            // and its screenshots (so every navigation) would hang until the 15 s timeout.
             let team_session = state.sessions.get(team).filter(|s| alive(&s.target)).cloned();
             let context = match team_session {
                 Some(team_session) => { fresh_context = false; team_session.context }
@@ -471,7 +473,7 @@ impl BrowserService {
                 }
             };
             let target = state.browser.send_cdp_command("Target.createTarget", json!({
-                "url": "about:blank", "browserContextId": context
+                "url": "about:blank", "browserContextId": context, "newWindow": true
             })).await?;
             SessionTarget { context, target: target["targetId"].as_str()
                 .ok_or_else(|| BrowserError::Protocol("Browser page missing".into()))?.to_string() }
