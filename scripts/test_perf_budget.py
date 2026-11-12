@@ -11,6 +11,7 @@ import json
 import re
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -83,6 +84,54 @@ class Numbers(unittest.TestCase):
         self.assertEqual(limits["first_reply_s"], 0.3)
         self.assertEqual(limits["idle_rss_mb"], 117)  # 90 x 1.3 = 117, not 118
         self.assertEqual(limits["browser_launch_s"], 3.8)  # 3.75
+
+
+DOWN = {"error": "The bot browser could not start kwant's Chrome on this computer: Chrome started but did not open its debugging port in time.", "is_running": False}
+
+
+class ChromeThatWillNotStart(unittest.TestCase):
+    """A runner where Chrome cannot start is SKIP with the reason, never FAIL; a Chrome that starts is still held to its limit."""
+
+    def test_the_browser_row_is_skip_with_the_reason_and_the_run_passes(self):
+        medians = {k: v / 2 for k, v in LIMITS.items() if k != "browser_launch_s"}
+        rows = pb.judge(medians, LIMITS, {"browser_launch_s": "Chrome did not start"})
+        row = next(r for r in rows if r["id"] == "browser_launch_s")
+        self.assertEqual(row["status"], "SKIP")
+        self.assertEqual(row["reason"], "Chrome did not start")
+        self.assertEqual(pb.exit_code(rows), 0)
+
+    def test_the_reason_is_in_the_printed_table_and_the_job_summary(self):
+        rows = pb.judge({}, LIMITS, {"browser_launch_s": "Chrome did not start"})
+        self.assertIn("Chrome did not start", pb.table(rows))
+        self.assertIn("Chrome did not start", pb.summary_markdown(rows))
+        self.assertIn("| SKIP |", pb.summary_markdown(rows))
+
+    def test_a_slow_browser_that_did_start_still_fails(self):
+        medians = {k: v / 2 for k, v in LIMITS.items()}
+        medians["browser_launch_s"] = LIMITS["browser_launch_s"] + 0.1
+        rows = pb.judge(medians, LIMITS, {"browser_launch_s": "ignored: it was measured"})
+        self.assertEqual(status(rows, "browser_launch_s"), "FAIL")
+        self.assertIsNone(next(r for r in rows if r["id"] == "browser_launch_s")["reason"])
+        self.assertEqual(pb.exit_code(rows), 1)
+
+    def test_a_503_from_kwnt_about_chrome_that_lasts_past_the_wait_is_chrome_did_not_start(self):
+        with mock.patch.object(pb, "request", return_value=(503, DOWN)) as req, mock.patch.object(pb.time, "sleep"):
+            with self.assertRaises(pb.ChromeDidNotStart) as ctx:
+                pb.open_browser_page(1234, "kid", 0)
+        self.assertIn("debugging port", str(ctx.exception))
+        self.assertEqual(req.call_count, 1)  # the wait was already over after the first answer
+
+    def test_it_asks_again_inside_the_wait_and_times_the_whole_launch(self):
+        answers = [(503, DOWN), (200, {"status": "navigated"})]
+        with mock.patch.object(pb, "request", side_effect=answers), mock.patch.object(pb.time, "sleep"):
+            seconds = pb.open_browser_page(1234, "kid", 60)
+        self.assertGreaterEqual(seconds, 0)
+
+    def test_any_other_failure_is_a_real_failure_not_a_skip(self):
+        for answer in [(500, {"error": "boom"}), (503, {"error": "Sandbox browser is unavailable"}), (200, {"status": "failed"}), (404, "nope")]:
+            with mock.patch.object(pb, "request", return_value=answer):
+                with self.assertRaises(RuntimeError, msg=str(answer)):
+                    pb.open_browser_page(1234, "kid", 60)
 
 
 class ShippedFiles(unittest.TestCase):

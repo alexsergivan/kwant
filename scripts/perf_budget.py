@@ -11,7 +11,11 @@ timed is kwnt, not a model or the network. Per run it takes:
   idle_rss_mb       kwnt's VmRSS (/proc/<pid>/status) --idle-seconds after startup
   after_reply_rss_mb  the same, --idle-seconds after that first reply
   browser_launch_s  a bot opens its browser (local Chrome, launched cold) and loads a page; only when a Chrome or
-                    Chromium is found, otherwise `SKIP browser: no browser` (a missing browser never fails)
+                    Chromium is found, otherwise `SKIP browser: no browser` (a missing browser never fails). When a
+                    Chrome is found but does not come up (kwnt reports it could not start Chrome, and it still cannot
+                    within --browser-wait seconds, default 60), the row is `SKIP` with the reason and the run goes on
+                    (a runner where Chrome cannot start is not a performance regression, so the browser is dropped for
+                    the remaining runs). A Chrome that does start and is slower than its limit still FAILS.
 
 Memory is read in the first --memory-runs runs only (each costs 2 x --idle-seconds of waiting); the other measures
 are taken in all --runs. The median of the runs is compared with scripts/perf_budget.json. A median over its limit
@@ -45,6 +49,13 @@ from pathlib import Path
 LIMITS_FILE = Path(__file__).with_name("perf_budget.json")
 FORBIDDEN_PORTS = {8799, 8800, 8810, 8852, 8931}
 SYSTEM_TOOLS = ["sh", "bash", "cat", "mkdir", "chmod", "sleep", "which", "env", "uname", "dirname", "rm", "cp", "mv", "ls"]
+
+CHROME_DOWN_MARKER = "could not start kwant's Chrome"  # what kwnt's 503 says when Chrome never opens its debugging port
+
+
+class ChromeDidNotStart(Exception):
+    """kwnt's Chrome did not come up on this machine within the wait. Not a performance result: the row is skipped."""
+
 
 # measure id -> (what it is, unit, factor from baseline to limit, decimals the limit is rounded up to)
 MEASURES = {
@@ -87,19 +98,23 @@ def compute_limits(baseline):
     return {k: round_up(v * MEASURES[k][2], MEASURES[k][3]) for k, v in baseline.items() if k in MEASURES and v is not None}
 
 
-def judge(medians, limits):
-    """One row per measure: {id, median, limit, status}. Status is PASS (at or under the limit), FAIL (over), SKIP
-    (not measured, e.g. no browser) or NO LIMIT (measured, but perf_budget.json has no limit for it: not a failure)."""
+def judge(medians, limits, skipped=None):
+    """One row per measure: {id, median, limit, status, reason}. Status is PASS (at or under the limit), FAIL (over),
+    SKIP (not measured, e.g. no browser, or Chrome would not start; `skipped` maps a measure id to why) or NO LIMIT
+    (measured, but perf_budget.json has no limit for it: not a failure). `reason` is set on a SKIP row only."""
     rows = []
+    skipped = skipped or {}
     for key in MEASURES:
         med, limit = medians.get(key), limits.get(key)
+        reason = None
         if med is None:
             status = "SKIP"
+            reason = skipped.get(key)
         elif limit is None:
             status = "NO LIMIT"
         else:
             status = "PASS" if med <= limit else "FAIL"
-        rows.append({"id": key, "median": med, "limit": limit, "status": status})
+        rows.append({"id": key, "median": med, "limit": limit, "status": status, "reason": reason})
     return rows
 
 
@@ -111,7 +126,21 @@ def table(rows):
         med = "-" if r["median"] is None else f"{r['median']:.2f} {unit}"
         lim = "-" if r["limit"] is None else f"{r['limit']:g} {unit}"
         lines.append(f"{what:<46} {med:>9} {lim:>9}  {r['status']}")
+        if r.get("reason"):
+            lines.append(f"    {r['status']} {r['id']}: {r['reason']}")
     return "\n".join(lines)
+
+
+def summary_markdown(rows):
+    """The same table as Markdown, for the GitHub job summary ($GITHUB_STEP_SUMMARY); SKIP rows carry their reason."""
+    out = ["### Performance budget", "", "| measure | median | limit | result |", "|---|---|---|---|"]
+    for r in rows:
+        what, unit = MEASURES[r["id"]][0], MEASURES[r["id"]][1]
+        med = "-" if r["median"] is None else f"{r['median']:.2f} {unit}"
+        lim = "-" if r["limit"] is None else f"{r['limit']:g} {unit}"
+        out.append(f"| {what} | {med} | {lim} | {r['status']} |")
+    out += [f"\n**{r['status']} {r['id']}**: {r['reason']}" for r in rows if r.get("reason")]
+    return "\n".join(out) + "\n"
 
 
 def exit_code(rows):
@@ -227,8 +256,31 @@ def wait_health(port, seconds):
     raise TimeoutError(f"/api/health did not answer in {seconds}s")
 
 
-def one_run(kwnt, browser, idle_seconds, take_memory, log):
-    """One fresh kwnt: {measure id: value}. Raises on a failure of kwnt itself (not of a limit)."""
+def open_browser_page(port, kid, wait):
+    """Time from asking the bot to open a page to the page being open (cold Chrome). kwnt answers 503 ("could not start
+    kwant's Chrome ...") when Chrome never opens its debugging port; on that the call is repeated until `wait` seconds
+    have passed since the first ask, and if Chrome is still down raises ChromeDidNotStart with kwnt's reason. Any other
+    failure (another status, a page that did not open) is a real failure and raises RuntimeError."""
+    t_nav = time.perf_counter()
+    reason = None
+    while True:
+        code, page = request(port, "POST", f"/api/sandbox/{kid}/navigate", {"url": f"http://127.0.0.1:{port}/api/health"}, timeout=90)
+        if code == 200 and isinstance(page, dict) and page.get("status") == "navigated":
+            return time.perf_counter() - t_nav
+        error = page.get("error", "") if isinstance(page, dict) else str(page)
+        if code == 503 and CHROME_DOWN_MARKER in error:
+            reason = error
+            if time.perf_counter() - t_nav >= wait:
+                raise ChromeDidNotStart(f"{reason} (no debugging port after {time.perf_counter() - t_nav:.0f} s)")
+            time.sleep(1)
+            continue
+        raise RuntimeError(f"the bot browser did not open a page: {code} {str(page)[:200]}")
+
+
+def one_run(kwnt, browser, idle_seconds, take_memory, log, browser_wait=60):
+    """One fresh kwnt: {measure id: value}. Raises on a failure of kwnt itself (not of a limit). When the bot browser's
+    Chrome never comes up, the other measures are kept and the result carries "browser_skip": why (the caller then
+    drops the browser from the remaining runs)."""
     root = Path(tempfile.mkdtemp(prefix="perf-budget-"))
     home, binp, data = make_machine(root)
     port = free_port()
@@ -270,11 +322,10 @@ def one_run(kwnt, browser, idle_seconds, take_memory, log):
             out["after_reply_rss_mb"] = rss_mb(proc.pid)
 
         if browser:
-            t_nav = time.perf_counter()
-            code, page = request(port, "POST", f"/api/sandbox/{kid}/navigate", {"url": f"http://127.0.0.1:{port}/api/health"}, timeout=90)
-            if code != 200 or not isinstance(page, dict) or page.get("status") != "navigated":
-                raise RuntimeError(f"the bot browser did not open a page: {code} {str(page)[:200]}")
-            out["browser_launch_s"] = time.perf_counter() - t_nav
+            try:
+                out["browser_launch_s"] = open_browser_page(port, kid, browser_wait)
+            except ChromeDidNotStart as e:
+                out["browser_skip"] = str(e)
         return out
     except Exception:
         log(f"---- kwnt log (last 20 lines) ----\n" + "\n".join((root / "kwnt.log").read_text(errors="replace").splitlines()[-20:]))
@@ -303,6 +354,7 @@ def main():
     ap.add_argument("--runs", type=int, default=5, help="runs per measure (default 5)")
     ap.add_argument("--memory-runs", type=int, default=3, help="runs that also read memory (default 3; each waits 2 x idle-seconds)")
     ap.add_argument("--idle-seconds", type=float, default=30, help="how long kwnt idles before memory is read (default 30)")
+    ap.add_argument("--browser-wait", type=float, default=60, help="how long to wait for Chrome's debugging port before the browser row is skipped (default 60)")
     ap.add_argument("--limits", default=str(LIMITS_FILE), help="the limits file (default scripts/perf_budget.json)")
     ap.add_argument("--out", default="perf-results.json", help="where the results are written")
     ap.add_argument("--update-baseline", action="store_true", help="rewrite the limits file from this run (on purpose, not in CI)")
@@ -316,26 +368,37 @@ def main():
     limits_path = Path(args.limits)
     limits = json.loads(limits_path.read_text()).get("limits", {}) if limits_path.is_file() else {}
     browser = find_browser(args.browser)
+    skipped = {}
     if not browser:
+        skipped["browser_launch_s"] = "no browser"
         print("SKIP browser: no browser", flush=True)
+    found_browser = browser
 
     runs = []
     for i in range(args.runs):
         print(f"run {i + 1}/{args.runs} ...", flush=True)
-        runs.append(one_run(kwnt, browser, args.idle_seconds, i < args.memory_runs, lambda m: print(m, flush=True)))
-        print("  " + "  ".join(f"{k}={v:.3f}" for k, v in runs[-1].items() if v is not None), flush=True)
+        runs.append(one_run(kwnt, browser, args.idle_seconds, i < args.memory_runs, lambda m: print(m, flush=True), args.browser_wait))
+        print("  " + "  ".join(f"{k}={v:.3f}" for k, v in runs[-1].items() if isinstance(v, float)), flush=True)
+        if runs[-1].get("browser_skip"):
+            skipped["browser_launch_s"] = runs[-1]["browser_skip"]
+            print(f"SKIP browser: {skipped['browser_launch_s']}", flush=True)
+            browser = None  # Chrome cannot start here: the remaining runs do not try it again
 
     medians = {k: median([r.get(k) for r in runs]) for k in MEASURES}
-    rows = judge(medians, limits)
+    rows = judge(medians, limits, skipped)
     print("\n" + table(rows))
 
     results = {
         "when": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "kwnt": str(kwnt), "runs": args.runs, "memory_runs": args.memory_runs, "idle_seconds": args.idle_seconds,
-        "browser": browser, "measures": rows, "samples": {k: [r.get(k) for r in runs] for k in MEASURES},
+        "browser": found_browser, "browser_skip": skipped.get("browser_launch_s"), "measures": rows, "samples": {k: [r.get(k) for r in runs] for k in MEASURES},
     }
     Path(args.out).write_text(json.dumps(results, indent=2) + "\n")
     print(f"\nwrote {args.out}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as f:
+            f.write(summary_markdown(rows))
 
     if args.update_baseline:
         baseline = {k: round(v, 3) for k, v in medians.items() if v is not None}
