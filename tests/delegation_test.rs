@@ -1730,6 +1730,12 @@ async fn the_65th_hand_off_pauses_and_continue_sends_it_once() {
     assert_eq!(notice.text, "Paused after 64 hand-offs for one message: Builder not sent yet. Press Continue or say \"continue\" to carry on.");
     wait_for("part 1 to finish", || async { delegation_status(&env, &ds[0].id).await == "completed" }).await;
 
+    // Press Continue in a later second than the 64 hand-offs above, as a person does. A message
+    // keeps its time to the second (CURRENT_TIMESTAMP) and a hand-off to the nanosecond, so a
+    // "continue" saved in the same second as the seeded rounds counts them all in its fresh
+    // allowance and the correction below re-pauses (CI on 3a0274a9, 2026-11-12)
+    let into_second = u64::from(chrono::Utc::now().timestamp_subsec_millis().min(999));
+    tokio::time::sleep(Duration::from_millis(1050 - into_second)).await;
     let (s, v) = call(&env.app, "POST", &format!("/api/chains/{}/continue", notice.id), None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     wait_for("the 65th", || async { to_builder().await.len() >= 2 }).await;

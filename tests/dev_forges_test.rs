@@ -106,7 +106,7 @@ fn mr(iid: u64, title: &str, head: (&str, &str), base: &str, draft: bool) -> Val
         "iid": iid, "title": title, "description": "What it does.", "draft": draft, "state": "opened",
         "web_url": format!("https://gitlab.example.com/group/app/-/merge_requests/{iid}"),
         "author": {"username": "ana"}, "source_branch": head.0, "sha": head.1, "target_branch": base,
-        "updated_at": "2026-11-06T10:00:00Z", "merged_at": null, "merge_commit_sha": null,
+        "updated_at": hours_ago(1), "merged_at": null, "merge_commit_sha": null,
     })
 }
 
@@ -115,7 +115,7 @@ fn pr(number: u64, title: &str, head: (&str, &str), base: &str) -> Value {
         "number": number, "title": title, "body": "What it does.", "state": "open",
         "html_url": format!("https://codeberg.example.com/org/app/pulls/{number}"),
         "user": {"login": "ana"}, "head": {"ref": head.0, "sha": head.1}, "base": {"ref": base},
-        "merged": false, "merged_at": null, "merge_commit_sha": null, "updated_at": "2026-11-06T10:00:00Z",
+        "merged": false, "merged_at": null, "merge_commit_sha": null, "updated_at": hours_ago(1),
     })
 }
 
@@ -151,7 +151,7 @@ async fn gitlab_merge_requests_get_review_cards_with_pipelines() {
     // The root commit came from a merged MR
     let mut merged = mr(5, "Start the repo", ("start", &root), "main", false);
     merged["state"] = json!("merged");
-    merged["merged_at"] = json!("2026-11-05T09:00:00Z");
+    merged["merged_at"] = json!(hours_ago(26));
     merged["merge_commit_sha"] = json!(root);
     merged["merge_user"] = json!({"username": "lin"});
     mock.json(&format!("{p}/repository/commits/{root}/merge_requests"), json!([merged]));
@@ -238,7 +238,7 @@ async fn gitea_pull_requests_get_review_cards_with_statuses() {
     );
     let mut merged = pr(2, "Start the repo", ("start", &root), "main");
     merged["merged"] = json!(true);
-    merged["merged_at"] = json!("2026-11-05T09:00:00Z");
+    merged["merged_at"] = json!(hours_ago(26));
     merged["merge_commit_sha"] = json!(root);
     merged["merged_by"] = json!({"login": "lin"});
     mock.json(&format!("{r}/commits/{root}/pull"), merged);
