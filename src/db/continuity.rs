@@ -80,6 +80,10 @@ pub struct RunningTurn {
     pub direct_kwant_id: Option<String>,
     pub thread_id: Option<String>,
     pub started_at: DateTime<Utc>,
+    /// Whether a stop of this turn asks the person to resume it in Needs you (a person's own
+    /// chat, see `server::stopped`). `None`: written by a kwnt before 0.9.5.
+    #[sqlx(default)]
+    pub asks: Option<bool>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -285,6 +289,13 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+        // 0.9.5 (additive): whether a restart that cuts it off asks the person in Needs you
+        let has_asks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('running_turns') WHERE name = 'asks'")
+            .fetch_one(&self.pool)
+            .await?;
+        if has_asks == 0 {
+            sqlx::query("ALTER TABLE running_turns ADD COLUMN asks INTEGER").execute(&self.pool).await?;
+        }
 
         let had_index: Option<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'",
@@ -1000,8 +1011,8 @@ impl Database {
 
     pub async fn add_running_turn(&self, turn: &RunningTurn) -> Result<(), DbError> {
         sqlx::query(
-            "INSERT OR REPLACE INTO running_turns (turn_id, kwant_id, kwant_name, channel_id, direct_kwant_id, thread_id, started_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO running_turns (turn_id, kwant_id, kwant_name, channel_id, direct_kwant_id, thread_id, started_at, asks) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&turn.turn_id)
         .bind(&turn.kwant_id)
@@ -1010,6 +1021,7 @@ impl Database {
         .bind(&turn.direct_kwant_id)
         .bind(&turn.thread_id)
         .bind(turn.started_at)
+        .bind(turn.asks)
         .execute(&self.pool)
         .await?;
         Ok(())

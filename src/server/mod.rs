@@ -61,6 +61,7 @@ pub mod connections;
 pub mod setup_routes;
 pub mod push;
 pub mod waiting;
+pub mod stopped;
 pub mod decide;
 pub mod reactions;
 pub mod work_ahead;
@@ -296,6 +297,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/chat/cancel", post(routes::cancel_chat))
         .route("/api/approvals", get(approval_modes::list))
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
+        .route("/api/approvals/:id/retry", post(routes::retry_expired_approval))
         .route("/api/spaces/:id/approvals", get(approval_modes::get_space).put(approval_modes::put_space))
         .route("/api/spaces/:id/dev_mode", get(dev::routes::get_mode).put(dev::routes::put_mode))
         .route("/api/spaces/:id/dev_mode/check", post(dev::routes::check))

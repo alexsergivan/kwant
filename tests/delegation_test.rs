@@ -1808,6 +1808,7 @@ async fn a_result_reported_after_the_next_hand_off_started_still_reaches_the_lea
         direct_kwant_id: None,
         thread_id: None,
         started_at: chrono::Utc::now(),
+        asks: None,
     };
     delegation::release_cut_short(&env.state, &[turn]).await;
     wait_or_dump(&env, &channel, "the lead's turn with the first result", || async {

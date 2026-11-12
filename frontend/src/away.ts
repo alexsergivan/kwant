@@ -1,7 +1,7 @@
 // "While you were away" (batch 3): what agents need from you, finished and failed since you last
 // looked. Pure helpers, so the page and the node tests share them; the API calls are at the bottom.
 
-export type AwayKind = 'question' | 'approval' | 'delegation' | 'routine_run' | 'watch';
+export type AwayKind = 'question' | 'approval' | 'delegation' | 'routine_run' | 'watch' | 'stopped';
 export type AwaySection = 'waiting' | 'finished' | 'failed';
 export type ApprovalDecision = 'allow_once' | 'always_allow' | 'deny';
 
@@ -31,6 +31,11 @@ export interface AwayItem {
   /** 0.9.0 P1, watch items only: the watched mission and the first task that needs the person. */
   mission_id?: string | null;
   task_id?: string | null;
+  /** 0.9.5, stopped items only: the chat notice that carries Retry or Continue, what resumes the work
+   * (null: Retry in the chat resends the person's message), and the browser step it waits on. */
+  message_id?: string | null;
+  retry?: { type: 'continue' } | { type: 'approval'; approval_id: string } | null;
+  human_step_id?: string | null;
 }
 
 export interface AwayCounts {
@@ -112,6 +117,9 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: str
       return item.status === 'waiting' ? { label: 'Still open', tone: 'sky' } : { label: 'Needs approval', tone: 'amber' };
     case 'watch':
       return { label: 'Watch', tone: 'amber' };
+    case 'stopped':
+      // 0.9.5: a bot's work stopped and waits for the person; the title says why and what resumes it.
+      return { label: 'Stopped', tone: 'amber' };
     case 'routine_run':
       return item.status === 'ok' ? { label: 'Routine ran', tone: 'emerald' } : { label: 'Routine failed', tone: 'rose' };
     case 'delegation':
@@ -241,7 +249,21 @@ export const awayApi = {
   resolve: (id: string, decision: ApprovalDecision) => call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, { decision }),
   /** Approval records with this stored status, newest first (`answered_via` says where). */
   approvals: (status: string) => call<unknown>('GET', `/api/approvals?status=${enc(status)}`),
+  /** 0.9.5: ask again for an approval that expired unanswered (starts a new turn; grants nothing). */
+  retryApproval: (approvalId: string) => call<unknown>('POST', `/api/approvals/${enc(approvalId)}/retry`),
 };
+
+/**
+ * 0.9.5: the one action a stopped item offers in place. An expired approval is retried from the Inbox
+ * itself; every other stop resumes in its chat (the notice there has Retry or Continue, a browser step
+ * its Done), so the row opens the chat.
+ */
+export function stoppedAction(item: Pick<AwayItem, 'kind' | 'retry'>): { kind: 'retry_approval'; approvalId: string } | { kind: 'open_chat' } | null {
+  if (item.kind !== 'stopped') return null;
+  const r = item.retry;
+  if (r && r.type === 'approval' && r.approval_id) return { kind: 'retry_approval', approvalId: r.approval_id };
+  return { kind: 'open_chat' };
+}
 
 /** SSE events that can change what the page shows, so the badge re-counts. */
 const AWAY_EVENTS = new Set([

@@ -26,7 +26,7 @@ import { ModernApprovalCard } from './ModernApprovalCard';
 import { ReviewDone, VERDICT_STYLE } from './ReviewItemStub';
 import { ReviewItemView } from './ReviewItemView';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
-import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, windowLabel } from '../away';
+import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
 import { INBOX_GROUPS, InboxGroup, InboxItem, ReviewItem, groupItems, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
 import {
   BatchRow,
@@ -145,7 +145,7 @@ const AwaySubline: React.FC<{ item: InboxItem }> = ({ item }) => {
   const { label, tone } = itemLabel(item as AwayItem);
   const toneText = tone === 'amber' ? 'text-amber-300' : tone === 'rose' ? 'text-rose-300' : tone === 'emerald' ? 'text-teal-300' : tone === 'sky' ? 'text-sky-300' : 'text-zinc-400';
   const sum = awaySummary(item as AwayItem);
-  const showSum = sum && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length);
+  const showSum = sum && item.kind !== 'approval' && item.kind !== 'stopped' && !(item.kind === 'question' && item.choices?.length);
   return (
     <span className="flex items-center gap-1.5 min-w-0">
       <span className={`shrink-0 font-semibold ${toneText}`}>{label}</span>
@@ -163,9 +163,12 @@ interface RowProps {
   onPick: (i: InboxItem) => void;
   onAnswer: (i: InboxItem, choice: number) => void;
   onResolve: (i: InboxItem, d: ApprovalDecision) => void;
+  /** 0.9.5: Retry on a stopped item whose approval expired unanswered. */
+  onRetry?: (i: InboxItem, approvalId: string) => void;
 }
 
-const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve }) => {
+const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry }) => {
+  const stopped = isReview(item) ? null : stoppedAction(item as AwayItem);
   const review = isReview(item) ? item : null;
   const title = rowTitle(item);
   // The server decides one_tap; an item with no verdict (Not checked yet, Being checked) never gets inline Approve.
@@ -240,6 +243,21 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
               {c}
             </button>
           ))}
+        </div>
+      )}
+
+      {stopped?.kind === 'retry_approval' && onRetry && (
+        <div className="px-3 pb-3 pl-[54px]">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onRetry(item, stopped.approvalId)}
+            className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`}
+            data-stopped-retry={item.id}
+          >
+            <RotateCcw size={12} aria-hidden="true" />
+            Retry
+          </button>
         </div>
       )}
 
@@ -601,6 +619,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
   };
 
   const onAnswer = (item: InboxItem, choice: number) => act(item, () => awayApi.answer(item.id, choice));
+  const onRetry = (item: InboxItem, approvalId: string) => act(item, () => awayApi.retryApproval(approvalId));
   const onResolve = (item: InboxItem, decision: ApprovalDecision) =>
     act(
       item,
@@ -734,6 +753,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
                           onPick={pick}
                           onAnswer={onAnswer}
                           onResolve={onResolve}
+                          onRetry={onRetry}
                         />
                       ))}
                       {withBatch && <BatchCard items={bItems} selected={wide && selectedId === 'batch'} focusable={firstFocusable === 'batch'} wide={wide} onPick={() => select('batch')} />}

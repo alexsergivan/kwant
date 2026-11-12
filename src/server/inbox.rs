@@ -524,7 +524,8 @@ pub fn current_verdict(v: &TaskVerdict, in_review_since: DateTime<Utc>) -> Optio
     serde_json::to_value(v).ok()
 }
 
-/// A watcher's open item (`watch::waiting_items`) in Waiting on you, keyed like the away items.
+/// A watcher's open item (`watch::waiting_items`) or a stopped item (`away::stopped_items`) in
+/// Waiting on you, keyed like the away items.
 fn watch_item(mut v: Value, last_seen: Option<DateTime<Utc>>) -> Value {
     let at = v["timestamp"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&Utc));
     let at_ms = at.map(|t| t.timestamp_millis()).unwrap_or(0);
@@ -791,11 +792,14 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     };
     // What a mission watcher left for the person (P1), listed and counted as on /api/away
     let watch = super::missions::watch::waiting_items(&state, &space).await;
-    let unseen_total = unseen_total + watch.len() as i64;
+    // Work that stopped and waits for the person to resume it (0.9.5), as on /api/away
+    let stopped = away::stopped_items(&state, &space).await;
+    let unseen_total = unseen_total + watch.len() as i64 + stopped.len() as i64;
 
     let mut items: Vec<Value> = Vec::new();
     items.extend(waiting.into_iter().map(|r| away_item(r, Group::WaitingOnYou, seen)));
     items.extend(watch.into_iter().map(|v| watch_item(v, seen)));
+    items.extend(stopped.into_iter().map(|v| watch_item(v, seen)));
     items.extend(failed.into_iter().map(|r| away_item(r, Group::FailedOrStuck, seen)));
     items.extend(finished.into_iter().map(|r| away_item(r, Group::Finished, seen)));
     items.extend(reviews.iter().filter_map(|r| review_item(r, seen)).map(|(v, _)| v));

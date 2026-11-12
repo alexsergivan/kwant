@@ -93,7 +93,13 @@ pub(super) async fn pause_if_over(scope: &TurnScope, spoken: &[String], replies:
         "resumed": false,
     });
     let msg = scope.message("system", "kwant", text);
-    scope.save(&msg, Some(meta)).await;
+    let saved = scope.save(&msg, Some(meta)).await;
+    // …and in Needs you, with the same Continue (0.9.5). The chain is the last bot's that spoke
+    let by = replies.last().and_then(|(from, _)| scope.teammates.iter().find(|k| &k.name == from)).or(scope.teammates.first());
+    if let (Some(by), Some(m)) = (by, &saved) {
+        let line = format!("Paused before handing on to {}: over this request's token budget. Continue in the chat carries on.", waiting.join(", "));
+        super::stopped::ask(&scope.state, &super::stopped::Place::of_turn(scope, &by.id), Some(&m.id), &line, super::stopped::Resume::Continue).await;
+    }
     true
 }
 
@@ -120,6 +126,9 @@ pub(super) async fn pause_capped(scope: &TurnScope, lead: &Kwant, capped: &[&Kwa
     });
     if let Some(saved) = scope.save(&scope.message("system", "kwnt", line), Some(meta)).await {
         let _ = scope.state.event_sender.send(crate::drivers::events::RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
+        // …and in Needs you, with the same Continue (0.9.5)
+        let ask = format!("{} paused after {} hand-offs: {} not sent yet. Continue in the chat carries on.", lead.name, super::routes::MAX_DELEGATIONS_PER_REQUEST, names.join(", "));
+        super::stopped::ask(&scope.state, &super::stopped::Place::of_turn(scope, &lead.id), Some(&saved.id), &ask, super::stopped::Resume::Continue).await;
     }
 }
 
@@ -145,6 +154,8 @@ async fn resume(state: &AppState, notice_id: &str) -> Result<(), (StatusCode, &'
     if meta["resumed"] == true {
         return Err((StatusCode::CONFLICT, "this chain was already continued"));
     }
+    // Its Needs-you item is answered either way
+    let _ = state.db.close_waiting_for_message(notice_id).await;
     let channel_id = notice.channel_id.clone().ok_or((StatusCode::BAD_REQUEST, "not a channel message"))?;
     if meta["kind"] == CAPPED_KIND {
         return resume_capped(state, notice_id, meta, channel_id).await;

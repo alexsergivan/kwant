@@ -336,6 +336,28 @@ impl Database {
         .await?)
     }
 
+    /// Whether the turn asked the person for any step (open or answered).
+    pub async fn turn_asked_human_step(&self, turn_id: &str) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM human_steps WHERE turn_id = ?").bind(turn_id).fetch_one(&self.pool).await?;
+        Ok(n > 0)
+    }
+
+    /// Whether the person was already asked to sign in (or for a code) on `site` in this browser
+    /// page since `since`, whatever they answered: kwnt asks for a wall it finds once, not every turn.
+    pub async fn sign_in_asked_since(&self, page: &str, site: &str, since: DateTime<Utc>) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar(
+            // Numbered throughout: sqlx gives a bare `?` after `?2` the next unnumbered argument (the 2nd)
+            "SELECT COUNT(*) FROM human_steps WHERE kind IN ('sign_in', 'two_factor') AND COALESCE(page_key, sandbox_target) = ?1 \
+             AND substr(url, 1, length(?2)) = ?2 AND created_at >= ?3",
+        )
+        .bind(page)
+        .bind(site)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
+    }
+
     /// The open steps of one turn.
     pub async fn open_human_steps_for_turn(&self, turn_id: &str) -> Result<Vec<HumanStep>, DbError> {
         Ok(sqlx::query_as::<_, HumanStep>("SELECT * FROM human_steps WHERE status = 'open' AND turn_id = ?")
@@ -381,6 +403,37 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_sign_in_wall_is_asked_once_per_page_and_site() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let place = HumanStepPlace {
+            kwant_id: "k".into(),
+            direct_kwant_id: Some("k".into()),
+            turn_id: Some("t1".into()),
+            sandbox_target: Some("k".into()),
+            page_key: Some("k#job1".into()),
+            ..Default::default()
+        };
+        let hour_ago = Utc::now() - chrono::Duration::hours(1);
+        assert!(!db.turn_asked_human_step("t1").await.unwrap());
+        assert!(!db.sign_in_asked_since("k#job1", "https://www.tiktok.com/", hour_ago).await.unwrap());
+        let (s, _, _) = db
+            .create_human_step_with_card(&place, "sign_in", "Ben needs you to sign in", Some("https://www.tiktok.com/login"), None, "auto", |_| None)
+            .await
+            .unwrap();
+        assert!(db.turn_asked_human_step("t1").await.unwrap());
+        assert!(!db.turn_asked_human_step("t2").await.unwrap());
+        assert!(db.sign_in_asked_since("k#job1", "https://www.tiktok.com/", hour_ago).await.unwrap());
+        // Whatever they answered: a declined ask isn't repeated within the window either
+        assert!(db.close_human_step(&s.id, "declined").await.unwrap());
+        assert!(db.sign_in_asked_since("k#job1", "https://www.tiktok.com/", hour_ago).await.unwrap());
+        // Another page, another site, or outside the window: ask
+        assert!(!db.sign_in_asked_since("k", "https://www.tiktok.com/", hour_ago).await.unwrap());
+        assert!(!db.sign_in_asked_since("k#job1", "https://x.com/", hour_ago).await.unwrap());
+        assert!(!db.sign_in_asked_since("k#job1", "https://www.tiktok.com/", Utc::now() + chrono::Duration::hours(1)).await.unwrap());
+    }
 
     #[test]
     fn requests_are_checked_and_urls_lose_their_secrets() {

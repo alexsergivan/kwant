@@ -598,10 +598,7 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
                     kwant_name,
                     channel_id: routine.channel_id.clone(),
                     title: format!("Routine \"{}\" failed", routine.name),
-                    body: format!(
-                        "The routine \"{}\" did not finish. Open kwant bots to see its run history.",
-                        routine.name
-                    ),
+                    body: failed_body(&routine.name, err),
                     thread_id: None,
                     card_id: None,
                 },
@@ -610,6 +607,20 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
         }
     });
     Some(run)
+}
+
+/// The notification for a routine run that failed (0.9.5): what stopped, why (the error's first
+/// line, clipped) and what to do about it.
+pub fn failed_body(name: &str, err: Option<&str>) -> String {
+    let why = err.map(super::stopped::short_line).filter(|w| !w.is_empty());
+    let why: Option<String> = why.map(|w| {
+        let w = w.trim_end_matches('.');
+        if w.chars().count() > 160 { format!("{}…", w.chars().take(160).collect::<String>().trim_end()) } else { w.to_string() }
+    });
+    match why {
+        Some(why) => format!("The routine \"{name}\" did not finish: {why}. Open the routine to see the run or run it again."),
+        None => format!("The routine \"{name}\" did not finish. Open the routine to see the run or run it again."),
+    }
 }
 
 fn send_run_event(state: &AppState, run: &RoutineRun) {
@@ -838,6 +849,8 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             // G2: bots whose budget pause ended on its own (a new month) start what they held
             super::bot_budget::release_due(&state).await;
             super::parked::run_due(&state, Utc::now()).await;
+            // 0.9.5: an approval card nobody answered in time tells its chat, with Retry
+            super::mcp_runtime::expire_unanswered(&state).await;
             super::waiting::run_due(&state, Utc::now()).await;
             super::work_ahead::scan(&state, Utc::now(), false).await;
             super::idea_jar::scan(&state, Utc::now(), false).await;
@@ -884,4 +897,21 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::dev::tickets::pickup::spawn(state.clone(), shutdown.clone());
     super::telegram::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);
+}
+
+#[cfg(test)]
+mod no_silent_stop_tests {
+    use super::failed_body;
+
+    #[test]
+    fn a_failed_routine_says_why_and_what_to_do() {
+        assert_eq!(
+            failed_body("Daily digest", Some("⚠️ [Ben] The model sent nothing for 300 s, so this reply was stopped.\nmore")),
+            "The routine \"Daily digest\" did not finish: The model sent nothing for 300 s, so this reply was stopped. Open the routine to see the run or run it again."
+        );
+        assert_eq!(failed_body("D", None), "The routine \"D\" did not finish. Open the routine to see the run or run it again.");
+        assert_eq!(failed_body("D", Some("  \n ")), failed_body("D", None));
+        let long = failed_body("D", Some(&"x".repeat(500)));
+        assert!(long.contains(&format!("{}…", "x".repeat(160))) && !long.contains(&"x".repeat(161)), "{long}");
+    }
 }

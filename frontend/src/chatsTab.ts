@@ -55,6 +55,8 @@ export function needsYouRows(waiting: AwayItem[], openSteps: Record<string, numb
   for (const item of waiting) {
     if (item.kind === 'approval') put({ kwant_id: item.kwant_id, line: approvalLine(item.tool_name), item });
     else if (item.kind === 'question') put({ kwant_id: item.kwant_id, line: 'Asked you a question', item });
+    // 0.9.5: work that stopped and waits on the person, in its own words ("Ben needs you to sign in to …")
+    else if (item.kind === 'stopped') put({ kwant_id: item.kwant_id, line: item.title || 'Stopped: needs you to carry on', item });
   }
   for (const [id, n] of Object.entries(openSteps)) if (n > 0) put({ kwant_id: id, line: 'Needs you in the browser' });
   const last = Number.POSITIVE_INFINITY;

@@ -315,6 +315,58 @@ pub(super) async fn waiting_approvals(state: &AppState, space: &SpaceId) -> Resu
     Ok(rows)
 }
 
+/// The space's open stopped items, as Needs-you cards: `title` is what stopped and what resumes
+/// it, `message_id` the chat notice that carries Retry or Continue, `retry` set when Retry is
+/// `POST /api/waiting/:id/retry` rather than the chat's own.
+pub(super) async fn stopped_items(state: &AppState, space: &SpaceId) -> Vec<Value> {
+    let rows = state.db.list_waiting(Some(space)).await.unwrap_or_default();
+    let mut out = Vec::new();
+    for w in rows.into_iter().filter(|w| w.kind.as_deref() == Some(crate::db::waiting::STOPPED)) {
+        let name = state.db.get_kwant(&w.kwant_id).await.ok().flatten().map(|k| k.name);
+        out.push(json!({
+            "kind": "stopped",
+            "id": w.id,
+            "kwant_id": w.kwant_id,
+            "kwant_name": name.unwrap_or_else(|| "A bot".into()),
+            "title": clip_title(&w.question),
+            "summary": w.question,
+            "status": "open",
+            "timestamp": rfc3339(w.created_at),
+            "message_id": w.message_id,
+            "retry": w.retry.as_deref().and_then(|r| serde_json::from_str::<Value>(r).ok()),
+            "link": {
+                "thread_id": w.thread_id,
+                "channel_id": w.channel_id,
+                "direct_kwant_id": w.direct_kwant_id,
+            },
+        }));
+    }
+    // A sign-in, code or CAPTCHA step the person hasn't done: the bot's work waits on it (0.9.5,
+    // #9), so it is in Needs you too, not only a card in its chat
+    for s in state.db.list_human_steps(Some("open"), None, Some(space)).await.unwrap_or_default() {
+        let name = state.db.get_kwant(&s.kwant_id).await.ok().flatten().map(|k| k.name);
+        out.push(json!({
+            "kind": "stopped",
+            "id": s.id,
+            "human_step_id": s.id,
+            "kwant_id": s.kwant_id,
+            "kwant_name": name.unwrap_or_else(|| "A bot".into()),
+            "title": clip_title(&s.reason),
+            "summary": s.reason,
+            "status": "open",
+            "timestamp": rfc3339(s.created_at),
+            "message_id": s.message_id,
+            "retry": Value::Null,
+            "link": {
+                "thread_id": s.thread_id,
+                "channel_id": s.channel_id,
+                "direct_kwant_id": s.direct_kwant_id,
+            },
+        }));
+    }
+    out
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AwayQuery {
     pub since: Option<String>,
@@ -356,9 +408,12 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     };
     // What a mission watcher left for the person (P1)
     let watch = crate::server::missions::watch::waiting_items(&state, &space).await;
-    let waiting_count = waiting_count + watch.len() as i64;
+    // Work that stopped without finishing and waits for the person to resume it (0.9.5)
+    let stopped = stopped_items(&state, &space).await;
+    let waiting_count = waiting_count + watch.len() as i64 + stopped.len() as i64;
     let mut waiting: Vec<Value> = waiting.into_iter().map(item).collect();
     waiting.extend(watch);
+    waiting.extend(stopped);
     waiting.sort_by(|a, b| b["timestamp"].as_str().unwrap_or("").cmp(a["timestamp"].as_str().unwrap_or("")));
     waiting.truncate(MAX_ITEMS as usize);
     Json(json!({
