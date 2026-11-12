@@ -1,0 +1,23 @@
+{
+  "version": "0.9.1",
+  "date": "2026-11-12",
+  "highlights": [
+    {
+      "id": "handoffs-keep-going",
+      "title": "Hand-offs keep going without you",
+      "text": "A lead hands work on as often as it needs. Exact repeats and a teammate that failed 3 times in a row are skipped with the reason. You press Continue only after 64 hand-offs for one message.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "cards-catch-up",
+      "title": "Hand-off cards catch up",
+      "text": "After the app loses its connection, cards that said Waiting update on their own when it comes back.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "TikTok's QR sign-in no longer freezes the bot's browser."
+  ]
+}
