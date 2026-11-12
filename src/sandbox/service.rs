@@ -887,12 +887,14 @@ mod image_tests {
 
 #[cfg(test)]
 mod outage_reason_tests {
-    use super::{BrowserService, Outage, BROWSER_BUSY};
+    use super::{BrowserService, ComputerMode, Outage, BROWSER_BUSY};
 
     #[test]
     fn a_busy_browser_says_retry_and_never_blames_docker() {
         let tmp = tempfile::tempdir().unwrap();
         let service = BrowserService::new(tmp.path().into(), Some("http://127.0.0.1:9".into()));
+        // The VM browser, whatever this computer's default is (Windows defaults to local Chrome).
+        *service.mode.write().unwrap() = ComputerMode::Vm;
         assert!(service.unavailable_reason().contains("Docker"), "no answer yet: the old text");
         *service.last_outage.lock().unwrap() = Some(Outage::Busy);
         assert_eq!(service.unavailable_reason(), BROWSER_BUSY);
