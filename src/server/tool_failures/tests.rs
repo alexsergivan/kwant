@@ -25,10 +25,10 @@ fn down(key: &str) -> Failure {
 fn a_401_is_a_sign_in_with_a_fix_link() {
     let f = gh();
     assert_eq!(f.cause, Cause::SignIn);
-    assert_eq!(f.conn, Connection { key: "mcp:s-gh".into(), label: "github".into(), server_id: Some("s-gh".into()) });
+    assert_eq!(f.conn, Connection { key: "mcp:s-gh".into(), label: "GitHub".into(), server_id: Some("s-gh".into()) });
     assert_eq!(
         text(&f, "Ben"),
-        "github stopped working for Ben: its sign-in expired or was refused. Reconnect it in Settings › Connections."
+        "GitHub stopped working for Ben: it needs you to sign in again. Reconnect it in Settings › Connections."
     );
     let m = meta(&f, "k1", "Ben", "t1");
     assert_eq!(m["kind"], KIND);
@@ -71,6 +71,35 @@ fn composio_failures_are_per_app_and_need_a_reconnect() {
     assert_eq!((f.conn.key.as_str(), f.cause), ("mcp:s-co", Cause::Down));
 }
 
+/// Well-known apps are written as the working strip writes them (`toolLabel.ts` `SERVERS`),
+/// matched case-insensitively on the Composio app and the MCP server name; others as typed.
+#[test]
+fn well_known_apps_are_named_properly() {
+    for (slug, name) in [
+        ("GITHUB_LIST_ISSUES", "GitHub"),
+        ("GITLAB_GET_PROJECT", "GitLab"),
+        ("GOOGLECALENDAR_LIST_EVENTS", "Google Calendar"),
+        ("GOOGLEDRIVE_FIND_FILE", "Google Drive"),
+        ("GMAIL_SEND_EMAIL", "Gmail"),
+        ("TRELLO_GET_BOARD", "Trello"),
+    ] {
+        let f = classify(&format!("mcp__composio__{slug}"), &json!({}), "401 Unauthorized", &servers()).unwrap();
+        assert_eq!(f.conn.label, name, "{slug}");
+    }
+    let f = classify("mcp__composio__GOOGLECALENDAR_LIST_EVENTS", &json!({}), "Connected account not found", &servers()).unwrap();
+    assert_eq!(line(&f, "Ben"), "Google Calendar stopped working for Ben: it needs to be connected again.");
+    let servers = vec![
+        Server { id: "a".into(), name: "GitHub".into(), composio: false },
+        Server { id: "b".into(), name: "google_drive".into(), composio: false },
+        Server { id: "c".into(), name: "my-Wiki".into(), composio: false },
+    ];
+    let label = |n: &str| classify(&format!("mcp__{n}__x"), &json!({}), "503 Service Unavailable", &servers).unwrap().conn.label;
+    assert_eq!(label("GitHub"), "GitHub");
+    assert_eq!(label("google_drive"), "Google Drive");
+    assert_eq!(label("my-Wiki"), "my-Wiki", "any other server as the person typed it");
+    assert_eq!(not_started("google_drive: failed to start", &servers).unwrap().conn.label, "Google Drive");
+}
+
 /// kwant's own tools fetch the web for the bot: a page's 401 isn't kwant failing.
 #[test]
 fn kwants_own_tools_count_only_their_transport() {
@@ -86,7 +115,7 @@ fn kwants_own_tools_count_only_their_transport() {
 fn a_server_that_did_not_start() {
     let f = not_started("github: it failed to start", &servers()).unwrap();
     assert_eq!(f.cause, Cause::NotStarted);
-    assert_eq!(text(&f, "Ben"), "github didn't start for Ben, so its tools weren't available. Check it in Settings › Connections.");
+    assert_eq!(text(&f, "Ben"), "GitHub didn't start for Ben, so its tools weren't available. See Settings › Connections.");
     assert_eq!(not_started("github: authentication required", &servers()).unwrap().cause, Cause::SignIn);
     assert!(not_started("nobody: failed", &servers()).is_none());
 }
@@ -184,7 +213,7 @@ fn needs_you_lists_open_sign_in_lines() {
     assert_eq!(item["kwant_name"], "Ben");
     assert_eq!(item["direct_kwant_id"], "k1");
     assert_eq!(item["fix"]["opens"], "connections");
-    assert_eq!(item["text"], "github stopped working for Ben: its sign-in expired or was refused.");
+    assert_eq!(item["text"], "GitHub stopped working for Ben: it needs you to sign in again.");
 }
 
 /// A long reason is cut before it is kept.

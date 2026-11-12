@@ -1,8 +1,8 @@
 //! 0.9.5: a connection failing says so in the chat when it happens. When one of a bot's
-//! connections or tool servers fails during a turn (its sign-in expired or was refused, a
+//! connections or tool servers fails during a turn (it needs the person to sign in again, a
 //! Composio app needs connecting again, the server didn't start or stopped responding), kwnt
 //! posts one plain line in the chat the turn runs in, with a link to fix it:
-//! "Gmail stopped working for Ben: its sign-in expired or was refused. Reconnect".
+//! "Gmail stopped working for Ben: it needs you to sign in again. Reconnect".
 //!
 //! Rules:
 //! - one line per connection per turn, never one per tool call;
@@ -41,7 +41,7 @@ const MAX_KEYS: usize = 32;
 /// Why a connection failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cause {
-    /// Its sign-in expired or was refused (401/403, an expired or invalid token).
+    /// It needs the person to sign in again (401/403, an expired or invalid token).
     SignIn,
     /// A Composio app has no active connected account: it needs connecting again.
     Reconnect,
@@ -114,14 +114,43 @@ fn is_own(server: &str) -> bool {
     server == crate::mcp::SELF_SERVER_NAME || server == crate::mcp::RESERVED_SERVER_NAME
 }
 
-/// `Gmail` from `gmail`, `GMAIL`.
+/// How well-known apps are written, as in `frontend/src/toolLabel.ts` `SERVERS` (keep the two
+/// in step): matched case-insensitively on a Composio toolkit slug or an MCP server name.
+const KNOWN_NAMES: [(&str, &str); 12] = [
+    ("github", "GitHub"),
+    ("gitlab", "GitLab"),
+    ("linear", "Linear"),
+    ("slack", "Slack"),
+    ("notion", "Notion"),
+    ("jira", "Jira"),
+    ("stripe", "Stripe"),
+    ("gmail", "Gmail"),
+    ("googlecalendar", "Google Calendar"),
+    ("google_calendar", "Google Calendar"),
+    ("googledrive", "Google Drive"),
+    ("google_drive", "Google Drive"),
+];
+
+fn known_name(name: &str) -> Option<&'static str> {
+    KNOWN_NAMES.iter().find(|(k, _)| k.eq_ignore_ascii_case(name.trim())).map(|(_, v)| *v)
+}
+
+/// A Composio app's name: `GitHub` from `github`, else `Gmail` from `gmail`, `GMAIL`.
 fn title(word: &str) -> String {
+    if let Some(known) = known_name(word) {
+        return known.to_string();
+    }
     let lower = word.to_lowercase();
     let mut chars = lower.chars();
     match chars.next() {
         Some(c) => c.to_uppercase().chain(chars).collect(),
         None => String::new(),
     }
+}
+
+/// An MCP server's name for the person: a well-known one written properly, any other as typed.
+fn server_label(name: &str) -> String {
+    known_name(name).map(str::to_string).unwrap_or_else(|| name.to_string())
 }
 
 /// The Composio app a call used: the prefix of its tool slug (`GMAIL_SEND_EMAIL` → `gmail`), or
@@ -153,7 +182,7 @@ pub fn connection_of(name: &str, args: &Value, servers: &[Server]) -> Option<Con
             return Some(Connection { key: format!("composio:{kit}"), label: title(&kit), server_id: Some(s.id.clone()) });
         }
     }
-    Some(Connection { key: format!("mcp:{}", s.id), label: s.name.clone(), server_id: Some(s.id.clone()) })
+    Some(Connection { key: format!("mcp:{}", s.id), label: server_label(&s.name), server_id: Some(s.id.clone()) })
 }
 
 /// `code` appears in `text` as a number of its own (`401`, not `14012`).
@@ -258,7 +287,7 @@ pub fn not_started(problem: &str, servers: &[Server]) -> Option<Failure> {
         Connection { key: "kwnt".into(), label: "kwant's own tools".into(), server_id: None }
     } else {
         let s = servers.iter().find(|s| s.name == server)?;
-        Connection { key: format!("mcp:{}", s.id), label: s.name.clone(), server_id: Some(s.id.clone()) }
+        Connection { key: format!("mcp:{}", s.id), label: server_label(&s.name), server_id: Some(s.id.clone()) }
     };
     let lower = why.to_lowercase();
     let cause = if conn.server_id.is_some() && sign_in_text(&lower) { Cause::SignIn } else { Cause::NotStarted };
@@ -274,7 +303,7 @@ pub fn line(f: &Failure, bot: &str) -> String {
     let c = &f.conn.label;
     match f.cause {
         Cause::SignIn => {
-            format!("{c} stopped working for {bot}: its sign-in expired or was refused.")
+            format!("{c} stopped working for {bot}: it needs you to sign in again.")
         }
         Cause::Reconnect => {
             format!("{c} stopped working for {bot}: it needs to be connected again.")
@@ -284,12 +313,17 @@ pub fn line(f: &Failure, bot: &str) -> String {
     }
 }
 
+/// The Inbox row's title for a connection only the person can fix: "Gmail needs you to sign in
+/// again for Ben".
+pub fn inbox_title(connection: &str, bot: &str) -> String {
+    format!("{connection} needs you to sign in again for {bot}")
+}
+
 /// The saved message's text: the line plus where to fix it, for clients that show text only.
 pub fn text(f: &Failure, bot: &str) -> String {
     let mut out = line(f, bot);
     if f.conn.server_id.is_some() {
-        let verb = if f.cause.needs_you() { "Reconnect it" } else { "Check it" };
-        out.push_str(&format!(" {verb} in Settings › Connections."));
+        out.push_str(if f.cause.needs_you() { " Reconnect it in Settings › Connections." } else { " See Settings › Connections." });
     }
     out
 }

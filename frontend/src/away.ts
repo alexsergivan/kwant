@@ -1,7 +1,7 @@
 // "While you were away" (batch 3): what agents need from you, finished and failed since you last
 // looked. Pure helpers, so the page and the node tests share them; the API calls are at the bottom.
 
-export type AwayKind = 'question' | 'approval' | 'delegation' | 'routine_run' | 'watch';
+export type AwayKind = 'question' | 'approval' | 'delegation' | 'routine_run' | 'watch' | 'connection';
 export type AwaySection = 'waiting' | 'finished' | 'failed';
 export type ApprovalDecision = 'allow_once' | 'always_allow' | 'deny';
 
@@ -31,6 +31,9 @@ export interface AwayItem {
   /** 0.9.0 P1, watch items only: the watched mission and the first task that needs the person. */
   mission_id?: string | null;
   task_id?: string | null;
+  /** 0.9.5, connection items only (Inbox): a sign-in only the person can redo, and its fix button. */
+  connection?: string;
+  fix?: { label: string; opens?: string } | null;
 }
 
 export interface AwayCounts {
@@ -112,6 +115,8 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: str
       return item.status === 'waiting' ? { label: 'Still open', tone: 'sky' } : { label: 'Needs approval', tone: 'amber' };
     case 'watch':
       return { label: 'Watch', tone: 'amber' };
+    case 'connection':
+      return { label: 'Sign in again', tone: 'amber' };
     case 'routine_run':
       return item.status === 'ok' ? { label: 'Routine ran', tone: 'emerald' } : { label: 'Routine failed', tone: 'rose' };
     case 'delegation':

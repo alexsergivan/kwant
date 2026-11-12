@@ -40,6 +40,45 @@ test('the line says what broke and has a fix button that opens Connections', () 
   assert.match(html, /<button[^>]*>Reconnect<\/button>/);
   assert.match(html, /data-tool-failure-line="reconnect"/);
   assert.match(html, /text-amber-400/);
+  // F2: an MCP server that refused its sign-in says who acts.
+  const signIn = meta({ connection: 'Notion', key: 'mcp:s1', cause: 'sign_in', tool: 'Notion · search', detail: '401 Unauthorized', line: 'Notion stopped working for Ben: it needs you to sign in again.' });
+  const html2 = ui.line({ meta: m.parseToolFailureMeta(signIn), messageId: 'm2', onFix: () => {} });
+  assert.match(html2, /Notion stopped working for Ben: it needs you to sign in again\./);
+  assert.match(html2, /data-tool-failure-line="sign_in"/);
+  assert.match(html2, /<button[^>]*>Reconnect<\/button>/);
+});
+
+test('F3: a needs-you line is brighter, its button amber, and a screen reader hears "Needs you"', () => {
+  const urgent = ui.line({ meta: m.parseToolFailureMeta(meta()), onFix: () => {} });
+  assert.match(urgent, /^<div[^>]*text-zinc-300/);
+  assert.match(urgent, /<p[^>]*><span class="sr-only">Needs you: <\/span>Gmail stopped/);
+  assert.match(urgent, /<button[^>]*text-amber-200[^>]*>Reconnect<\/button>/);
+  assert.match(urgent, /<button[^>]*font-medium/);
+  assert.match(urgent, /<button[^>]*focus-visible:outline-sky-500/);
+  const grey = ui.line({
+    meta: m.parseToolFailureMeta(meta({ cause: 'down', needs_you: false, fix: { label: 'Check it', connection_id: 'mcp:s1' }, line: 'GitHub stopped responding for Ben.' })),
+    onFix: () => {},
+  });
+  assert.match(grey, /^<div[^>]*text-zinc-400/);
+  assert.doesNotMatch(grey, /sr-only|text-amber/);
+  assert.match(grey, /<button[^>]*text-zinc-200[^>]*>Check it<\/button>/);
+});
+
+test('F4: a resolved line ends in a green "It works again." with a plugged icon, never amber', () => {
+  const fixed = ui.line({ meta: m.parseToolFailureMeta(meta({ resolved_at: '2026-11-12T18:00:00Z' })), onFix: () => {} });
+  assert.match(fixed, /^<div[^>]*text-zinc-400/);
+  assert.match(fixed, /<span class="text-emerald-400"> It works again\.<\/span>/);
+  assert.match(fixed, /lucide-plug[^-]/);
+  assert.doesNotMatch(fixed, /lucide-unplug/);
+  assert.match(fixed, /<svg[^>]*text-zinc-500/);
+  assert.doesNotMatch(fixed, /amber|sr-only/);
+});
+
+test('F5 and F6: a line under another sits 4 px close; the button has an invisible 44 px hit area', () => {
+  const props = { meta: m.parseToolFailureMeta(meta()), onFix: () => {} };
+  assert.match(ui.line({ ...props, tight: true }), /^<div[^>]*!mt-1/);
+  assert.doesNotMatch(ui.line(props), /!mt-1/);
+  assert.match(ui.line(props), /<button[^>]*relative before:absolute before:content-\[(?:''|&#x27;&#x27;)\] before:-inset-x-2 before:-inset-y-\[14px\]/);
 });
 
 test('no button without a place to fix it; a fixed connection says it works again', () => {

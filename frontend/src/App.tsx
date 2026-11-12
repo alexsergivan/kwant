@@ -3953,6 +3953,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpen={openAwayItem}
       onCounts={setAwayCount}
       onApprovalResolved={dropApproval}
+      onOpenConnections={openConnections}
       onCrumb={(c) => showPage(c === 'board' ? 'board' : 'dev')}
       top={
         <>

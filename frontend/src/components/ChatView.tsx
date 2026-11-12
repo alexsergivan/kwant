@@ -1252,7 +1252,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => onContinuity('trial_ended', (t) => setEndedTrials((prev) => (prev.has(t.skill_id) ? prev : new Set(prev).add(t.skill_id)))), []);
   const trialCards = useMemo(() => trialCardsAfter(messages, endedTrials), [messages, endedTrials]);
 
-  const renderMessage = (msg: ChatMessage) => {
+  // `prev`: the message shown just above, so a kwant line under another sits close to it (0.9.5 F5)
+  const renderMessage = (msg: ChatMessage, prev?: ChatMessage) => {
     const interruption = parseInterruption(msg);
     if (interruption)
       return (
@@ -1314,7 +1315,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
     const toolFailure = msg.meta ? parseToolFailureMeta(msg.meta) : null;
     if (toolFailure)
-      return <ToolFailureLine key={msg.id} meta={toolFailure} messageId={msg.id} flash={flashId === msg.id} onFix={onOpenConnections} />;
+      return (
+        <ToolFailureLine
+          key={msg.id}
+          meta={toolFailure}
+          messageId={msg.id}
+          flash={flashId === msg.id}
+          tight={!!prev?.meta && !!(parseToolFailureMeta(prev.meta) || parseToolNoteMeta(prev.meta))}
+          onFix={onOpenConnections}
+        />
+      );
     const toolNote = msg.meta ? parseToolNoteMeta(msg.meta) : null;
     if (toolNote)
       return (
@@ -2021,13 +2031,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
           </div>
         )}
-        {groupDiscussionThreads(arranged.messages).map((item) => {
+        {groupDiscussionThreads(arranged.messages).map((item, n, items) => {
           if (item.kind === 'message') {
             const trial = trialCards.get(item.message.id);
-            if (!trial) return renderMessage(item.message);
+            const above = items[n - 1];
+            const prev = above?.kind === 'message' && !trialCards.has(above.message.id) ? above.message : undefined;
+            if (!trial) return renderMessage(item.message, prev);
             return (
               <Fragment key={item.message.id}>
-                {renderMessage(item.message)}
+                {renderMessage(item.message, prev)}
                 <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
               </Fragment>
             );
@@ -2053,7 +2065,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </button>
               {isThreadOpen && (
                 <div className="mt-4 ml-2 pl-3 sm:ml-[30px] sm:pl-4 border-l border-zinc-800 space-y-6">
-                  {item.turns.map(renderMessage)}
+                  {item.turns.map((t, i, all) => renderMessage(t, all[i - 1]))}
                 </div>
               )}
             </div>
@@ -2166,7 +2178,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* P4: the running bot's shares, already in the place its saved reply will give them */}
-        {liveRowShown && arranged.live.map(renderMessage)}
+        {liveRowShown && arranged.live.map((m) => renderMessage(m))}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
         {settledApprovals.map((approval) => (

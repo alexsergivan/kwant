@@ -73,6 +73,13 @@ async fn waiting(env: &Env) -> Vec<Value> {
     v["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "connection").cloned().collect()
 }
 
+/// The Inbox's Waiting-on-you rows for a connection.
+async fn inbox_rows(env: &Env) -> Vec<Value> {
+    let (s, v) = common::call(&env.app, "GET", "/api/inbox", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    v["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "connection").cloned().collect()
+}
+
 async fn status_of(env: &Env, kwant: &str) -> Value {
     let (s, v) = common::call(&env.app, "GET", "/api/bots/status", None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
@@ -94,7 +101,7 @@ async fn a_401_posts_one_line_with_a_fix_link_and_needs_you_until_it_works() {
     assert_eq!(m.sender_role, "kwant");
     assert_eq!(
         m.text,
-        format!("github stopped working for {bot}: its sign-in expired or was refused. Reconnect it in Settings › Connections.")
+        format!("GitHub stopped working for {bot}: it needs you to sign in again. Reconnect it in Settings › Connections.")
     );
     assert_eq!(v["cause"], "sign_in");
     assert_eq!(v["needs_you"], true);
@@ -114,12 +121,21 @@ async fn a_401_posts_one_line_with_a_fix_link_and_needs_you_until_it_works() {
     assert_eq!(items[0]["fix"]["connection_id"], format!("mcp:{}", gh.id));
     let st = status_of(&env, &env.a).await;
     assert_eq!((st["status"].as_str(), st["reason_code"].as_str()), (Some("needs_you"), Some("needs_sign_in")), "{st}");
-    assert_eq!(st["waits_on"]["label"], "github");
+    assert_eq!(st["waits_on"]["label"], "GitHub");
     assert_eq!(status_of(&env, &env.b).await["status"], "available");
+    // F8: the Inbox lists it in Waiting on you, with Reconnect to Settings › Connections
+    let rows = inbox_rows(&env).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["title"], format!("GitHub needs you to sign in again for {bot}"));
+    assert_eq!(rows[0]["group"], "waiting_on_you");
+    assert_eq!(rows[0]["id"], m.id.as_str());
+    assert_eq!(rows[0]["fix"]["opens"], "connections");
+    assert_eq!(rows[0]["link"]["direct_kwant_id"], env.a.as_str());
 
     // Connected again: the next call through github works, and it no longer needs the person
     turn(&env, "tf401ok", &call("tf401_2", "mcp__github__list_issues", None)).await;
     assert!(waiting(&env).await.is_empty());
+    assert!(inbox_rows(&env).await.is_empty(), "the Inbox row goes once it works");
     assert_eq!(status_of(&env, &env.a).await["status"], "available");
     let lines = failure_lines(&env).await;
     assert_eq!(lines.len(), 1, "a working call posts nothing");
@@ -141,7 +157,7 @@ async fn two_failures_of_one_connection_give_one_line() {
     turn(&env, "tf2", &lines).await;
     let lines = failure_lines(&env).await;
     assert_eq!(lines.len(), 1, "{lines:?}");
-    assert_eq!(lines[0].1["connection"], "github");
+    assert_eq!(lines[0].1["connection"], "GitHub");
     assert_eq!(waiting(&env).await.len(), 1);
 }
 
@@ -174,9 +190,9 @@ async fn servers_that_did_not_start_say_so() {
     let causes: Vec<(String, String)> =
         lines.iter().map(|(_, v)| (v["connection"].as_str().unwrap().into(), v["cause"].as_str().unwrap().into())).collect();
     assert_eq!(causes.len(), 2, "{causes:?}");
-    assert!(causes.contains(&("github".into(), "sign_in".into())), "{causes:?}");
-    assert!(causes.contains(&("notion".into(), "not_started".into())), "{causes:?}");
+    assert!(causes.contains(&("GitHub".into(), "sign_in".into())), "{causes:?}");
+    assert!(causes.contains(&("Notion".into(), "not_started".into())), "{causes:?}");
     let items = waiting(&env).await;
     assert_eq!(items.len(), 1, "{items:?}");
-    assert_eq!(items[0]["connection"], "github");
+    assert_eq!(items[0]["connection"], "GitHub");
 }
