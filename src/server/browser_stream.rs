@@ -212,27 +212,46 @@ type Reply = oneshot::Receiver<Result<Value, BrowserError>>;
 type Waiters = Arc<std::sync::Mutex<HashMap<u64, oneshot::Sender<Result<Value, BrowserError>>>>>;
 
 /// A DevTools socket shared by the stream's tasks: one writer keeps commands in order, one reader
-/// routes replies to whoever waits and events to the stream.
+/// routes replies to whoever waits and events to the stream. [`Cdp::attach`] moves every clone to
+/// another page's socket (a popup the page opened, and back).
 #[derive(Clone)]
 struct Cdp {
-    out: mpsc::UnboundedSender<String>,
+    out: Arc<std::sync::Mutex<mpsc::UnboundedSender<String>>>,
     pending: Waiters,
     next: Arc<AtomicU64>,
+    tasks: Arc<std::sync::Mutex<CdpTasks>>,
+}
+
+/// The reader of the socket in use, and the writers of every socket not yet closed.
+#[derive(Default)]
+struct CdpTasks {
+    reader: Option<JoinHandle<()>>,
+    writers: Vec<JoinHandle<()>>,
 }
 
 impl Cdp {
-    fn open(ws: crate::sandbox::browser::WsStream) -> (Self, mpsc::Receiver<Value>, [JoinHandle<()>; 2]) {
+    fn open(ws: crate::sandbox::browser::WsStream) -> (Self, mpsc::Receiver<Value>) {
+        let cdp = Cdp { out: Arc::new(std::sync::Mutex::new(mpsc::unbounded_channel().0)), pending: Arc::default(), next: Arc::new(AtomicU64::new(1)), tasks: Arc::default() };
+        let events = cdp.attach(ws);
+        (cdp, events)
+    }
+
+    /// Sends from now on to `ws`, and returns its events. The old socket gets what was already
+    /// sent to it, then closes; replies still owed on it are dropped.
+    fn attach(&self, ws: crate::sandbox::browser::WsStream) -> mpsc::Receiver<Value> {
         let (mut sink, mut stream) = ws.split();
         let (out, mut out_rx) = mpsc::unbounded_channel::<String>();
         let (event_tx, events) = mpsc::channel::<Value>(64);
-        let cdp = Cdp { out, pending: Arc::default(), next: Arc::new(AtomicU64::new(1)) };
+        // what the old socket still owes is never read now: its waiters fail at once
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        *self.out.lock().unwrap_or_else(|e| e.into_inner()) = out;
         let writer = tokio::spawn(async move {
             while let Some(text) = out_rx.recv().await {
                 if sink.send(CdpMessage::Text(text)).await.is_err() { break; }
             }
             let _ = sink.close().await;
         });
-        let pending = cdp.pending.clone();
+        let pending = self.pending.clone();
         let reader = tokio::spawn(async move {
             while let Some(message) = stream.next().await {
                 let text = match message {
@@ -256,11 +275,21 @@ impl Cdp {
             // waiters see a closed channel; the stream sees its events end
             pending.lock().unwrap_or_else(|e| e.into_inner()).clear();
         });
-        (cdp, events, [writer, reader])
+        let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        // the old writer ends by itself once what was sent to it is out; its reader goes now
+        if let Some(old) = tasks.reader.replace(reader) { old.abort(); }
+        tasks.writers.retain(|task| !task.is_finished());
+        tasks.writers.push(writer);
+        events
+    }
+
+    fn close(&self) {
+        let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        for task in tasks.reader.take().into_iter().chain(tasks.writers.drain(..)) { task.abort(); }
     }
 
     fn send(&self, id: u64, method: &str, params: Value) {
-        let _ = self.out.send(json!({"id":id,"method":method,"params":params}).to_string());
+        let _ = self.out.lock().unwrap_or_else(|e| e.into_inner()).send(json!({"id":id,"method":method,"params":params}).to_string());
     }
 
     /// Sends without waiting; the reply is dropped.
@@ -296,10 +325,17 @@ fn wanted(event: &Value) -> bool {
     }
 }
 
+/// A reply that never came because the page's socket closed with the command out.
+const PAGE_CLOSED: &str = "Browser connection closed";
+
+fn page_closed(e: &BrowserError) -> bool {
+    matches!(e, BrowserError::Ws(m) if m == PAGE_CLOSED)
+}
+
 async fn settle(reply: Reply, wait: Duration) -> Result<Value, BrowserError> {
     match timeout(wait, reply).await {
         Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err(BrowserError::Ws("Browser connection closed".into())),
+        Ok(Err(_)) => Err(BrowserError::Ws(PAGE_CLOSED.into())),
         Err(_) => Err(BrowserError::Timeout),
     }
 }
@@ -481,12 +517,19 @@ fn refresh_location(cdp: &Cdp, ctrl: &BrowserController, shared: &Arc<Shared>, c
     tokio::spawn(async move {
         while shared.location.next().is_some() {
             // blocks while a dialog is open, so never on the stream loop
-            let Ok(result) = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await else { continue };
-            if let Some(url) = result["result"]["value"]["url"].as_str() { *ctrl.current_url.lock().await = Some(url.to_string()); }
-            if let Some(title) = result["result"]["value"]["title"].as_str() { *ctrl.current_title.lock().await = Some(title.to_string()); }
-            let _ = client.send(json!({"type":"location","url":ctrl.current_url.lock().await.clone(),"title":ctrl.current_title.lock().await.clone()}));
+            let Some(location) = read_location(&cdp, &ctrl).await else { continue };
+            let _ = client.send(location);
         }
     });
+}
+
+/// The `location` message for the page `cdp` is on (its address and title, also kept on the
+/// controller); `None` when the page doesn't answer within `PROBE_WAIT` (a dialog is open).
+async fn read_location(cdp: &Cdp, ctrl: &BrowserController) -> Option<Value> {
+    let result = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await.ok()?;
+    if let Some(url) = result["result"]["value"]["url"].as_str() { *ctrl.current_url.lock().await = Some(url.to_string()); }
+    if let Some(title) = result["result"]["value"]["title"].as_str() { *ctrl.current_title.lock().await = Some(title.to_string()); }
+    Some(json!({"type":"location","url":ctrl.current_url.lock().await.clone(),"title":ctrl.current_title.lock().await.clone()}))
 }
 
 impl Shared {
@@ -783,13 +826,21 @@ impl Worker {
     fn finish(&self, id: Value, replies: Vec<Reply>, editable: bool) {
         let (client, cdp) = (self.client.clone(), self.cdp.clone());
         tokio::spawn(async move {
+            let mut closed = false;
             for reply in replies {
-                if let Err(e) = settle(reply, ACTION_WAIT).await {
-                    let _ = client.send(error(&id, e));
-                    return;
+                match settle(reply, ACTION_WAIT).await {
+                    Ok(_) => {}
+                    // the page closed with the input out: a popup the click itself closed
+                    // ("Continue" on a sign-in). The view goes back to its opener, and a browser
+                    // that went away ends the stream, so the person sees no error for it.
+                    Err(e) if page_closed(&e) => { closed = true; break; }
+                    Err(e) => {
+                        let _ = client.send(error(&id, e));
+                        return;
+                    }
                 }
             }
-            let extra = if editable { json!({"editable": focused_editable(&cdp).await}) } else { json!({}) };
+            let extra = if editable { json!({"editable": !closed && focused_editable(&cdp).await}) } else { json!({}) };
             let _ = client.send(ack(&id, extra));
         });
     }
@@ -1151,6 +1202,62 @@ pub async fn upgrade(State(state): State<AppState>, Path(id): Path<String>, head
     }))
 }
 
+/// The page the live view shows: its DevTools address, and the controller's news of the page in
+/// front changing (a popup the page opened, or its close).
+struct Page {
+    ws_url: String,
+    changes: tokio::sync::watch::Receiver<u64>,
+}
+
+/// Turns on what the live view needs on the page `cdp` is on: its events, focus, the app-link
+/// guard and the screencast.
+async fn watch_page(cdp: &Cdp, shared: &Shared) -> Result<(), BrowserError> {
+    cdp.call("Page.enable", json!({}), Duration::from_secs(10)).await?;
+    // A Chrome window behind other apps on a Mac doesn't have the OS's focus, so its page
+    // can act unfocused and drop typed keys. While anyone watches or controls it, the page
+    // behaves as focused (as Playwright does for every page). It ends with this connection.
+    let _ = cdp.call("Emulation.setFocusEmulationEnabled", json!({"enabled": true}), PROBE_WAIT).await;
+    guard_app_links(cdp).await;
+    let (w, h) = shared.view();
+    cdp.call("Page.startScreencast", screencast_params(w as u32, h as u32), Duration::from_secs(10)).await?;
+    Ok(())
+}
+
+/// Moves the view to the page in front when that changed: a popup the page opened ("Continue
+/// with Google"), or the opener once the popup closed. The new page's events, or `None` when
+/// it is the page already shown or can't be reached.
+async fn follow_page(ctrl: &BrowserController, cdp: &Cdp, page: &mut Page, shared: &Shared) -> Option<mpsc::Receiver<Value>> {
+    let ws_url = ctrl.get_ws_url().await.ok()?;
+    if ws_url == page.ws_url {
+        return None;
+    }
+    let ws = crate::sandbox::browser::connect_cdp(&ws_url).await.ok()?;
+    cdp.fire("Page.stopScreencast", json!({}));
+    let events = cdp.attach(ws);
+    tracing::info!("the live view follows the page in front");
+    page.ws_url = ws_url;
+    if let Err(e) = watch_page(cdp, shared).await {
+        // a popup that closed at once: its socket ends and the view comes back from it
+        tracing::debug!("the live view couldn't watch the page in front: {}", e);
+    }
+    Some(events)
+}
+
+/// The shown page's socket closed. When that page was a popup, its close reaches the controller
+/// a moment later and the view goes back to the page that opened it; `None` when no other page
+/// comes to the front within a few seconds (the browser itself went away).
+async fn back_from_closed_page(ctrl: &BrowserController, cdp: &Cdp, page: &mut Page, shared: &Shared) -> Option<mpsc::Receiver<Value>> {
+    let back = async {
+        loop {
+            if let Some(events) = follow_page(ctrl, cdp, page, shared).await {
+                return events;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    };
+    timeout(Duration::from_secs(4), back).await.ok()
+}
+
 async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(), BrowserError> {
     let ctrl = match get_or_create_browser_controller(&state, &id).await {
         Some(ctrl) => ctrl,
@@ -1159,8 +1266,12 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
             return Ok(());
         }
     };
-    let ws = crate::sandbox::browser::connect_cdp(&ctrl.get_ws_url().await?).await?;
-    let (cdp, mut events, tasks) = Cdp::open(ws);
+    // subscribed first, so a popup opening while this connects is still followed
+    let changes = ctrl.page_changes();
+    let ws_url = ctrl.get_ws_url().await?;
+    let ws = crate::sandbox::browser::connect_cdp(&ws_url).await?;
+    let (cdp, mut events) = Cdp::open(ws);
+    let mut page = Page { ws_url, changes };
     let (w, h) = ctrl.fixed_viewport().unwrap_or(DEFAULT_VIEW);
     let shared = Arc::new(Shared {
         socket: NEXT_SOCKET.fetch_add(1, Ordering::Relaxed),
@@ -1179,7 +1290,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
     let worker = tokio::spawn(worker.run(jobs_rx));
     let mut rec = StageRecorder::new(state.clone(), id.clone(), shared.socket);
     let pointer = Pointer::new(state.clone(), cdp.clone(), client_tx.clone());
-    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &shared, &client_tx, &mut client_rx, &jobs, &mut rec, &pointer).await;
+    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &mut page, &shared, &client_tx, &mut client_rx, &jobs, &mut rec, &pointer).await;
     // a recording live on this socket stops here (Show it once: `closed`), its steps kept, after
     // the edit still pending in the page, if the page can still be reached
     if rec.is_live() {
@@ -1194,7 +1305,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
     release_on(&cdp, held).await;
     restore_viewport(&ctrl, &cdp, &shared).await;
     drop(result.1);
-    for task in tasks { task.abort(); }
+    cdp.close();
     result.0
 }
 
@@ -1204,6 +1315,7 @@ async fn stream(
     ctrl: &BrowserController,
     cdp: &Cdp,
     events: &mut mpsc::Receiver<Value>,
+    page: &mut Page,
     shared: &Arc<Shared>,
     client_tx: &mpsc::UnboundedSender<Value>,
     client_rx: &mut mpsc::UnboundedReceiver<Value>,
@@ -1215,14 +1327,7 @@ async fn stream(
     // the Show it once recorder's script on new documents, while a recording is live
     let mut recorder_script: Option<String> = None;
     let result = async {
-        cdp.call("Page.enable", json!({}), Duration::from_secs(10)).await?;
-        // A Chrome window behind other apps on a Mac doesn't have the OS's focus, so its page
-        // can act unfocused and drop typed keys. While anyone watches or controls it, the page
-        // behaves as focused (as Playwright does for every page). It ends with this connection.
-        let _ = cdp.call("Emulation.setFocusEmulationEnabled", json!({"enabled": true}), PROBE_WAIT).await;
-        guard_app_links(cdp).await;
-        let (w, h) = shared.view();
-        cdp.call("Page.startScreencast", screencast_params(w as u32, h as u32), Duration::from_secs(10)).await?;
+        watch_page(cdp, shared).await?;
         // a link to another app may have fired before the view opened, with nobody to close
         // Chrome's prompt: check the page still gets input, off the loop. Not while a button is
         // held, where a move would be part of someone's drag.
@@ -1235,9 +1340,35 @@ async fn stream(
         let mut moves = RateLimit::new(bi::MOVES_PER_SECOND, 10.0, std::time::Instant::now());
         let mut dialog_open = false;
         let mut app_links = AppLinkWatch::default();
+        // the events of the page the view moved to: a popup the page opened, or back from it
+        let mut moved: Option<mpsc::Receiver<Value>> = None;
         loop {
+            if let Some(next) = moved.take() {
+                *events = next;
+                frames = FrameGate::default();
+                app_links = AppLinkWatch::default();
+                dialog_open = false;
+                pointer.forget_world();
+                // Show it once records on the page in front too
+                if rec.is_live() {
+                    recorder_script = None;
+                    recorder_acts(socket, ctrl, cdp, shared, rec, vec![Act::Install], &mut recorder_script).await?;
+                }
+                // the address bar moves before the new page's first picture is shown: a still
+                // page (the opener once its popup closed) draws that picture once, and a client
+                // must know whose it is. Its frames wait in `events` until the loop reads them.
+                match read_location(cdp, ctrl).await {
+                    Some(location) => send(socket, location).await?,
+                    // a dialog open on the new page: the address follows when it answers
+                    None => refresh_location(cdp, ctrl, shared, client_tx),
+                }
+            }
             let app_link_due = app_links.deadline();
             tokio::select! {
+                // a popup the page opened came to the front, or closed
+                _ = async { if page.changes.changed().await.is_err() { std::future::pending::<()>().await } } => {
+                    moved = follow_page(ctrl, cdp, page, shared).await;
+                }
                 _ = async { match app_link_due { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => {
                     if let Some(verdict) = app_links.due(Instant::now()) { act_on_app_link(cdp, client_tx, verdict); }
                 }
@@ -1277,7 +1408,12 @@ async fn stream(
                 }
                 Some(value) = client_rx.recv() => send(socket, value).await?,
                 event = events.recv() => {
-                    let Some(event) = event else { break };
+                    let Some(event) = event else {
+                        // the page's socket closed: a popup that closed, with its opener in front again
+                        moved = back_from_closed_page(ctrl, cdp, page, shared).await;
+                        if moved.is_none() { break }
+                        continue;
+                    };
                     let params = &event["params"];
                     let method = event["method"].as_str().unwrap_or_default();
                     // the person's own clicks, back/forward/reload and a bot's navigate all land

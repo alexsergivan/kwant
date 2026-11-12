@@ -7,6 +7,7 @@ pub mod chrome_download;
 pub mod computer;
 pub mod credentials;
 pub mod manager;
+pub mod popups;
 pub mod cite;
 pub mod progress;
 pub mod reads;

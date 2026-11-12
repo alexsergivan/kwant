@@ -1147,6 +1147,12 @@ pub struct BrowserController {
     pub reads: Arc<std::sync::Mutex<super::reads::Reads>>,
     /// The driving bot's site rules and the task enforcing them (see [`super::site_guard`]).
     pub site_guard: Arc<super::site_guard::SiteGuard>,
+    /// The popups the bot's page opened: the newest still open is the page commands go to (see
+    /// [`super::popups`]).
+    popups: Arc<super::popups::Popups>,
+    /// [`super::popups::Popups::generation`] when `ws_conn` was opened: a newer one means the
+    /// page in front changed and the next command reconnects to it.
+    ws_generation: Arc<AtomicU64>,
 }
 
 /// Widest screenshot a bot gets, in pixels, and the narrowest width it may ask for.
@@ -1212,6 +1218,8 @@ impl BrowserController {
             progress: Arc::default(),
             reads: Arc::default(),
             site_guard: Arc::default(),
+            popups: Arc::default(),
+            ws_generation: Arc::default(),
         }
     }
 
@@ -1311,6 +1319,11 @@ impl BrowserController {
         Ok(url.to_string())
     }
 
+    /// Bumped each time the page in front changes: a popup the bot's page opened, or its close.
+    pub fn page_changes(&self) -> tokio::sync::watch::Receiver<u64> { self.popups.changes() }
+
+    /// The DevTools address of the page commands go to: the bot's page, or the newest popup it
+    /// opened that is still open (see [`super::popups`]).
     pub async fn get_ws_url(&self) -> Result<String, BrowserError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
@@ -1322,10 +1335,31 @@ impl BrowserController {
         if !self.browser_level {
         if let Ok(resp) = client.get(&list_url).header(reqwest::header::HOST, "localhost").send().await {
             if let Ok(targets) = resp.json::<Vec<Value>>().await {
-                if let Some(page) = targets.into_iter().find(|t| t["type"] == "page" &&
-                    self.target_id.as_ref().is_none_or(|id| t["id"] == *id)) {
+                let pages: Vec<&Value> = targets.iter().filter(|t| t["type"] == "page").collect();
+                let chain = self.popups.chain();
+                let listed = |id: &str| pages.iter().copied().find(|t| t["id"] == id);
+                // the bot's page: its session's page, else the one it had while it is open, else
+                // the first page that isn't a popup it opened
+                let home = match &self.target_id {
+                    Some(id) => listed(id),
+                    None => chain.home().and_then(listed).or_else(|| {
+                        pages.iter().copied().find(|t| !chain.is_popup(t["id"].as_str().unwrap_or_default()))
+                    }),
+                };
+                if let Some(page) = home {
                     if let Some(ws) = page["webSocketDebuggerUrl"].as_str() {
-                        return self.reachable_ws_url(ws);
+                        let ws = self.reachable_ws_url(ws)?;
+                        // a DevTools endpoint that names no page ids (a proxy, a test double):
+                        // its page as before, with no popups to follow
+                        let Some(id) = page["id"].as_str() else { return Ok(ws) };
+                        self.popups.set_home(id);
+                        self.follow_popups().await;
+                        // a popup that just closed may still be in front until its close arrives
+                        let chain = self.popups.chain();
+                        if let Some(popup) = chain.active().filter(|a| Some(*a) != chain.home() && listed(a).is_some()) {
+                            return Ok(super::popups::page_ws_url(&ws, popup));
+                        }
+                        return Ok(ws);
                     }
                 }
             }
@@ -1364,10 +1398,25 @@ impl BrowserController {
         resp.json().await.map_err(|e| BrowserError::Http(e.to_string()))
     }
 
-    /// The DevTools target id of this controller's page.
+    /// Starts following the popups the bot's page opens, unless that is already running.
+    async fn follow_popups(&self) {
+        if self.popups.is_watching() {
+            return;
+        }
+        let Ok(version) = self.devtools_json("/json/version").await else { return };
+        let Some(advertised) = version["webSocketDebuggerUrl"].as_str() else { return };
+        let Ok(browser_ws) = self.reachable_ws_url(advertised) else { return };
+        self.popups.watch(browser_ws).await;
+    }
+
+    /// The DevTools target id of this controller's page (the bot's page, never a popup it opened:
+    /// the site guard follows those from it).
     async fn page_target_id(&self) -> Result<String, BrowserError> {
         if let Some(id) = &self.target_id {
             return Ok(id.clone());
+        }
+        if let Some(home) = self.popups.chain().home() {
+            return Ok(home.to_string());
         }
         let targets = self.devtools_json("/json/list").await?;
         targets
@@ -1404,8 +1453,20 @@ impl BrowserController {
         &self,
         guard: &mut tokio::sync::MutexGuard<'_, Option<WsStream>>,
     ) -> Result<(), BrowserError> {
+        // a popup came to the front or closed since this connection opened: go to the page in front
+        let generation = self.popups.generation();
+        if guard.is_some() && generation != self.ws_generation.load(Ordering::SeqCst) {
+            tracing::debug!("the page in front changed; reconnecting to it");
+            **guard = None;
+            // kwnt's isolated world belonged to the other page
+            if let Ok(mut world) = self.capture_world.try_lock() {
+                *world = None;
+            }
+        }
         if guard.is_none() {
             let ws_url = self.get_ws_url().await?;
+            // after: finding the page may itself have announced the bot's page or a popup
+            self.ws_generation.store(self.popups.generation(), Ordering::SeqCst);
             let mut ws = connect_cdp(&ws_url).await?;
             tracing::debug!(target_id = ?self.target_id, "opened a DevTools connection");
             self.reapply_viewport(&mut ws).await;
