@@ -809,6 +809,7 @@ pub struct KeyBody {
 
 /// Points the space's Composio server at `session` with `key`, keeping its id, its switch and
 /// which bots have it, so nothing the person picked changes.
+#[allow(clippy::result_large_err)]
 async fn move_to_session(
     state: &AppState,
     space: &SpaceId,
