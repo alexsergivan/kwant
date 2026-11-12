@@ -27,6 +27,8 @@ import { GlobeSlot, WatchGlobe, useFadeOut, useLingeringIds } from './WatchLive'
 import type { Browsing } from '../watchLive';
 import { IdeaJarRow } from './IdeaJarRow';
 import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
+import { BudgetMeter, useBudgets } from './BotBudget';
+import { PAUSED_LINE } from '../botBudget';
 
 export interface Kwant {
   id: string;
@@ -424,6 +426,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const chatsTab = phone && section === 'chats';
   const needsRows = chatsTab ? needsYouRows.filter((r) => kwants.some((k) => k.id === r.kwant_id)) : [];
   const needsIds = new Set(needsRows.map((r) => r.kwant_id));
+  const { byBot: budgetsByBot } = useBudgets();
   const busyNow = chatsTab ? workingIds(kwants, busyKwants, needsIds) : [];
   // A bot whose turn just ended stays in Working for its globe's fade-out, instead of jumping to Direct
   // chats (a new row, with no globe) in the same frame (QA F2 on phone)
@@ -567,14 +570,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // An open browser step: the status line says so in words while it is open (the name line only has the hand)
     const needs = needsYou[k.id] ?? 0;
     const needsTip = `${k.name} needs you in the browser`;
-    const warn = needs > 0 || status === 'needs_you';
+    // 0.9.5: a bot paused at its monthly budget says so where its status goes; at 80% a small amber meter
+    const budget = budgetsByBot[k.id];
+    const budgetPaused = budget?.state === 'paused';
+    const warn = needs > 0 || status === 'needs_you' || budgetPaused;
     const busyLine = asked
       ? asked.line
       : attLine
         ? attLine
       : needs > 0 && !busyKwants[k.id]?.startsWith('Needs you in the browser')
         ? 'Needs you in the browser'
-        : busyKwants[k.id];
+        : budgetPaused && !busyKwants[k.id]
+          ? PAUSED_LINE
+          : busyKwants[k.id];
     // A stuck or finished row opens where that happened (its thread or chat), like its Inbox card
     // A review row opens its item in the Inbox
     const open = asked && onOpenNeedsYou
@@ -651,6 +659,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ))}
             {/* W1: this bot's current work is in a browser; the click opens the chat that browser belongs to.
                 Last on the name line and pushed right, so every row's globe lines up in one column */}
+            {(budget?.state === 'warn' || budgetPaused) && <BudgetMeter budget={budget!} size="row" className="mt-1" />}
             {onWatchBrowser && <GlobeSlot browsing={botBrowsing} name={k.name} phone={phone} className="ml-auto mt-1" onWatch={onWatchBrowser} />}
             {/* Edit and Remove sit at the right end of the one-line status below the name, which makes room
                 for them on hover: the name keeps its width and the row its height */}

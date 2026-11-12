@@ -153,6 +153,8 @@ import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
 import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
+import { BudgetNeedsYou } from './components/BotBudget';
+import { budgetStore, isBudgetMessage, requestBudgetFocus } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
@@ -474,6 +476,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpendStopSeq((n) => n + 1);
     showPage('inbox', 'new');
   };
+  // 0.9.5 monthly budgets: one shared list, re-read on a space switch and every minute (and on a budget notice, below)
+  useEffect(() => {
+    budgetStore.reset();
+    void budgetStore.refresh();
+    const t = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') void budgetStore.refresh();
+    }, 60_000);
+    return () => window.clearInterval(t);
+  }, [space.id]);
+  // Raise the limit: the bot's settings at Usage, the budget's first field focused
+  const raiseBudgetRef = useRef<(kwantId: string) => void>(() => {});
+  const raiseBudget = useCallback((kwantId: string) => raiseBudgetRef.current(kwantId), []);
   // Home: the chat list on a phone, the open chat elsewhere, with nothing on top.
   const openHome = () => {
     if (spaceSettingsTab) closeSpaceSettings();
@@ -1229,6 +1243,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'message_added':
           case 'MessageAdded': {
             const m: ChatMessage | undefined = event.data?.message;
+            if (m && isBudgetMessage(m)) void budgetStore.refresh();
             const ctx = m ? messageContextId(m) : null;
             if (!m?.id || !ctx) break;
             if (m.thread_id) knownThreadsRef.current.add(m.thread_id);
@@ -2065,6 +2080,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setEditingTab(tab);
     setEditingKwant(kwant);
     playSfx('click');
+  };
+  raiseBudgetRef.current = (kwantId: string) => {
+    const k = kwants.find((x) => x.id === kwantId);
+    if (!k) return;
+    requestBudgetFocus(kwantId);
+    openAgentSettings(k, 'usage');
   };
   openQuestionRef.current = (kwantId: string) => {
     const q = latestOpenQuestion(questionsRef.current, kwantId);
@@ -3958,6 +3979,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         <>
           <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
           <SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />
+          <BudgetNeedsYou onRaise={raiseBudget} />
         </>
       }
     />
@@ -4143,6 +4165,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           welcome={getStartedCard && messages.length === 0 ? getStartedCard : undefined}
           onOpenAccounts={openSettings}
           onOpenUsage={openUsageSettings}
+          budgetBotId={!isChannel ? currentKwant?.id ?? null : null}
+          onRaiseBudget={raiseBudget}
           onOpenComputerSettings={openComputerSettings}
           onChangeTeamFolder={(teamId) => {
             const t = teams.find((x) => x.id === teamId);
@@ -4515,6 +4539,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 tokensUsed={tokensUsed}
                 onOpenApiKeys={() => openSpaceSettings('accounts')}
                 focusRow={settingsFocusRow}
+                onOpenBotBudget={raiseBudget}
               />
             </Suspense>
           }
