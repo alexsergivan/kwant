@@ -1,0 +1,25 @@
+{
+  "version": "0.9.2",
+  "date": "2026-11-12",
+  "highlights": [
+    {
+      "id": "teams-keep-going",
+      "title": "Teams keep going until the job is done",
+      "text": "No more typing \"continue\" when a lead stops halfway. A lead that stops after a teammate reports back gets up to 2 more turns, then one Keep going? card. A question on its last line becomes a card.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "signin-popups",
+      "title": "Sign-in popups open in the live view",
+      "text": "\"Continue with Google\" and other sign-in popups now open in the bot's live browser view, and it goes back to the page when the popup closes.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A lead no longer misses a teammate's result when another hand-off starts at the same moment.",
+    "Bitwarden accounts with two-step login connect, and a refused code says so instead of blaming your master password.",
+    "A Telegram approval card sent as you switch off Allow approvals from Telegram no longer keeps a dead Allow once button."
+  ]
+}

@@ -149,6 +149,7 @@ card_art: avatar:tech_lead
 <p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. With the <a href="mission-board.html#lead-review">Mission board</a> on, each hand-off gets a card, and the bot that handed it out reviews the result.</p>
 <ul>
   <li><strong>Guards that stop loops:</strong> a bot can be asked as often as the work needs. The same task sent to the same teammate word for word is skipped ("already asked X exactly this"), and so is a teammate whose last 3 tasks for this message failed. The lead sees why and carries on. Only after 64 hand-offs for one message does the chat show a notice with a <strong>Continue</strong> button, or type "continue".</li>
+  <li><strong>Keeps going until the job is done:</strong> after a teammate reports back, the lead's turn ends by handing the next step on, by asking you with a question card, or with a last line that starts with <code>Done:</code>. A lead that stops without one of these gets up to 2 more turns for each message you send, then one <strong>Keep going?</strong> card. Writing in the chat or pressing Stop always wins.</li>
   <li><strong>No token limit by default:</strong> set one in <strong>Settings → All spaces → Usage → Hand-offs per request</strong> if you want a request to pause after that many tokens. See <a href="mission-board.html#limits">Token limits</a>.</li>
 </ul>
 <figure>

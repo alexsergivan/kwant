@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "kwnt"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "aes",
  "argon2",

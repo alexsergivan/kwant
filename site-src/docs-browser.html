@@ -65,6 +65,7 @@ card_art: avatar:user
 <p>Ask a bot to log in to one of your accounts and it opens the site's sign-in page in its browser. If you're already signed in, it carries on. Otherwise it posts a sign-in card: <strong>Open browser</strong> takes you straight to the page with control, you sign in yourself, and <strong>Done</strong> lets the bot look again. Bots never ask for a password or one-time code in chat.</p>
 <ul>
   <li><strong>One card per site:</strong> while a sign-in for a site is open, another turn of the same bot in that chat waits on the same card instead of posting a second one.</li>
+  <li><strong>Sign-in popups:</strong> when a page opens a popup, such as "Continue with Google", the live view and the bot's browser tools move to the popup, so you or the bot can sign in there. When it closes, both go back to the page that opened it. Only popups from the bot's own page are followed.</li>
   <li><strong>Decline stays declined:</strong> after you decline, the bot says what it couldn't do and doesn't ask again for that request.</li>
 </ul>
 <figure>

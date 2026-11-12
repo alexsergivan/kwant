@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.2] - 2026-11-12
+
+kwant 0.9.2: teams keep going until the job is done, "Continue with Google" and other sign-in popups open in the bot's live browser view, and Bitwarden accounts with two-step login connect.
+
+### Changed
+- **Teams keep going until the job is done.** You no longer have to type "continue" when a lead stops halfway through a job. After a teammate reports back, each turn of the lead now ends in one of three ways: it hands the next step on (or does it itself), it asks you with a question card, or its last line starts with `Done:` and says what it checked. If a lead stops without any of these, kwant gives it another turn that quotes your request, at most 2 for each message you send. After that you get one card, "<Lead> stopped before the job was done: … Keep going?", with **Keep going** and **That's enough for now**. A question on the last line of a lead's reply becomes a question card straight away. Writing in the chat or pressing Stop always wins. There is no switch in Settings for this yet: a `keep_going_turns` row in kwant's settings table changes the number of extra turns (0 turns them off, at most 5). The 64 hand-off **Continue**, the loop guards, budgets and approvals for sending, paying and signing in work as before. (#526)
+
+### Fixed
+- **"Continue with Google" and other sign-in popups open in the live view.** When a page opens a popup window, such as "Continue with Google" on TikTok, the bot's live browser view and its browser tools now move to the popup, so you or the bot can sign in there. When the popup closes, both go back to the page that opened it. Before, the popup opened out of sight and the button seemed to do nothing. Pages opened by anything other than the bot's own page are never followed. (#524)
+- **A lead no longer misses a teammate's result.** If a new hand-off started just before an earlier teammate's result was reported, the lead could wait for the new one and never hear about the earlier one. (#526)
+- **Bitwarden accounts with two-step login connect.** kwant now uses the same device for every try while you connect, so the code Bitwarden emails to confirm a new device is accepted. A two-step code that Bitwarden refuses now says the code wasn't accepted and keeps your master password, instead of reporting a wrong master password. Thanks to skullsdev. (#527)
+- **A Telegram approval card no longer keeps an Allow once button that does nothing.** Before, if you switched off Allow approvals from Telegram while a card was still on its way, the card kept its Allow once button, and a tap was refused. Now the button is removed as soon as the card arrives. (#529)
+
 ## [Mac 0.9.1] - 2026-11-12
 
 kwant 0.9.1: bots hand work to each other without stopping to ask you, hand-off cards catch up after a lost connection, and TikTok's QR sign-in no longer freezes the bot's browser.

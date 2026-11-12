@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Browser: A bot browser shown live in the app: your own Chrome, or isolated in Docker.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-11-07">
+<meta property="article:modified_time" content="2026-11-12">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@kwantbot">
 <meta name="twitter:title" content="AI agent browser: your Chrome or Docker · kwant">
@@ -116,6 +116,7 @@
 <p>Ask a bot to log in to one of your accounts and it opens the site's sign-in page in its browser. If you're already signed in, it carries on. Otherwise it posts a sign-in card: <strong>Open browser</strong> takes you straight to the page with control, you sign in yourself, and <strong>Done</strong> lets the bot look again. Bots never ask for a password or one-time code in chat.</p>
 <ul>
   <li><strong>One card per site:</strong> while a sign-in for a site is open, another turn of the same bot in that chat waits on the same card instead of posting a second one.</li>
+  <li><strong>Sign-in popups:</strong> when a page opens a popup, such as "Continue with Google", the live view and the bot's browser tools move to the popup, so you or the bot can sign in there. When it closes, both go back to the page that opened it. Only popups from the bot's own page are followed.</li>
   <li><strong>Decline stays declined:</strong> after you decline, the bot says what it couldn't do and doesn't ask again for that request.</li>
 </ul>
 <figure>
@@ -260,7 +261,7 @@ docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker</code></pr
 </footer>
 <script src="../assets/js/site.js?v=6d3de1ef56" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/browser#article","headline":"AI agent browser: your Chrome or Docker","description":"Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.","url":"https://kwant.si/docs/browser","mainEntityOfPage":"https://kwant.si/docs/browser","image":"https://kwant.si/assets/og/docs-browser.png?v=7175e8f75c","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Browser","item":"https://kwant.si/docs/browser"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/browser#article","headline":"AI agent browser: your Chrome or Docker","description":"Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.","url":"https://kwant.si/docs/browser","mainEntityOfPage":"https://kwant.si/docs/browser","image":"https://kwant.si/assets/og/docs-browser.png?v=7175e8f75c","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-12","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Browser","item":"https://kwant.si/docs/browser"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

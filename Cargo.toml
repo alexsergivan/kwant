@@ -1,6 +1,6 @@
 [package]
 name = "kwnt"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 description = "A self-hosted team of AI bots: spaces, multiple accounts, handoffs, approvals and routines, in one binary"
 license = "AGPL-3.0-only"
