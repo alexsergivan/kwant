@@ -28,6 +28,8 @@ use tower::ServiceExt;
 async fn setup() -> (Router, AppState, TempDir) {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
+    // These chains predate keep-going turns; a stalled lead isn't nudged here.
+    db.set_setting("keep_going_turns", "0").await.unwrap();
     let config = Config {
         data_dir: tmp.path().to_path_buf(),
         ..Config::default()

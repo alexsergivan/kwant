@@ -128,7 +128,15 @@ async fn save_message(state: &AppState, q: &Question, role: &str, sender: &str, 
 /// Sends `question_updated` and refreshes the question's card in the chat.
 async fn changed(state: &AppState, q: &Question) {
     if let Some(mid) = &q.message_id {
-        let _ = state.db.set_message_meta(mid, &card_meta(q)).await;
+        let mut meta = card_meta(q);
+        // Keys kwnt added to the card (a keep-going card's marker) outlive its answer
+        let old = state.db.get_message(mid).await.ok().flatten().and_then(|m| serde_json::from_str::<Value>(m.meta.as_deref()?).ok());
+        if let (Some(Value::Object(old)), Some(new)) = (old, meta.as_object_mut()) {
+            for (k, v) in old {
+                new.entry(k).or_insert(v);
+            }
+        }
+        let _ = state.db.set_message_meta(mid, &meta).await;
     }
     let _ = state.event_sender.send(RuntimeEvent::QuestionUpdated { question: serde_json::to_value(q).unwrap_or(Value::Null) });
 }
@@ -439,8 +447,12 @@ pub async fn answer_via(state: &AppState, id: &str, text: &str, via: Option<&str
         Some(tx) => tx.send(Reply::Answer(text.clone())).is_ok(),
         None => false,
     };
-    // A Dev mode brief's question has no turn behind it: the brief takes the answer instead
-    if !live && !super::dev::tickets::hooks::on_question(state, &q, Some(&text), "card").await {
+    // A Dev mode brief's question has no turn behind it: the brief takes the answer instead; the
+    // "Keep going?" card starts a keep-going turn (or ends the chain)
+    if !live
+        && !super::keep_going::on_card_answer(state, &q, &text).await
+        && !super::dev::tickets::hooks::on_question(state, &q, Some(&text), "card").await
+    {
         resume(state, &q, &text).await;
     }
     Some((q, live))
@@ -483,13 +495,29 @@ async fn resume(state: &AppState, q: &Question, answer: &str) {
         }
     }
     let depth = delegation.map(|d| d.depth).unwrap_or(0);
+    // A card kwant made from a lead's prose question: the lead's chain goes on from the answer
+    let in_chat = q.thread_id.is_none();
+    let chain = in_chat && super::keep_going::card_has(state, q, super::keep_going::ASK_KEY).await;
     let job = state.turns.start_job([q.context_id(), q.id.clone()]);
     let Ok(scope) = scope_for(state, &kwant, q.channel_id.clone(), q.thread_id.clone(), &job, depth).await else {
         return;
     };
+    let answer = answer.to_string();
     tokio::spawn(async move {
         let _job = job;
-        let _ = try_kwant_turn(&scope, &kwant, prompt, TurnOpts::default()).await;
+        let snap = super::keep_going::snapshot(&scope.state, &scope.context_id(&kwant), &kwant).await;
+        let Ok(reply) = try_kwant_turn(&scope, &kwant, prompt, TurnOpts::default()).await else {
+            return;
+        };
+        // Like any reply in a person's chat: an @mention hands on (a late answer used to end
+        // there, so a lead's "@Writer, go ahead" after it did nothing)
+        if in_chat {
+            super::routes::run_handoffs_boxed(&scope, std::slice::from_ref(&kwant.id), &[(kwant.clone(), reply.clone())], &answer).await;
+            super::asks::consolidate(&scope).await;
+        }
+        if chain {
+            super::keep_going::after_lead_turn(&scope, &kwant, snap, reply).await;
+        }
     });
 }
 

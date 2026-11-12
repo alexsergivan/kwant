@@ -31,6 +31,8 @@ const SECRET: &str = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
 async fn setup() -> (Router, AppState, TempDir) {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
+    // These chains predate keep-going turns; a stalled lead isn't nudged here.
+    db.set_setting("keep_going_turns", "0").await.unwrap();
     // Start from an asking install (a fresh one asks only when risky)
     db.set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask").await.unwrap();
     let config = Config {
