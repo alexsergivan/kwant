@@ -227,7 +227,9 @@ test('a team job opens in the pane: led-by meta, the lead’s answer, the team�
   assert.equal(rows[3].querySelector('[aria-label="Failed"]'), null, 'skipped: no icon');
   assert.match(rows[3].lastElementChild.className, /text-zinc-400/);
   assert.match(rows[4].textContent, /Wrote the answer in @Spring launch/);
-  assert.equal(q('[data-done-why]').textContent.replace(/\s+/g, ' ').trim(), 'Why You asked on Nov 11: Plan a spring sale for the house blend and draft the email.');
+  assert.match(q('[data-done-why]').textContent.replace(/\s+/g, ' '), /You asked on Nov 11: Plan a spring sale for the house blend and draft the email\.$/);
+  assert.equal(q('[data-done-why]').getAttribute('data-done-why'), 'request');
+  assert.equal(q('[data-why-quote]').textContent, 'Plan a spring sale for the house blend and draft the email.');
   assert.equal(q('[data-redo]').textContent.trim(), 'Ask Ann to redo in chat');
   await click(q('[data-redo]'));
   assert.deepEqual(opened, [{ message_id: 'm-spring', channel_id: 'c-spring', kwant_id: 'k-ann', thread_id: null }], 'opens the lead’s answer');
