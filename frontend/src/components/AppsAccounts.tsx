@@ -25,7 +25,7 @@ import { inDesktopApp } from '../externalLinks';
 import { useEscapeLayer } from '../escape';
 import { ProfilesState, useProfiles } from '../useProfiles';
 import { EnginesApi, useEngines } from '../useEngines';
-import type { EngineInfo } from '../engines';
+import { parsePick, type EngineInfo } from '../engines';
 import { AccountPriority } from './AccountPriority';
 import { Profile, cardOf } from '../profiles';
 import type { Kwant } from './Sidebar';
@@ -535,7 +535,14 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
     };
   }, [fixed, composio?.added, composio?.can_connect]);
 
-  const usedByOf = (profileId: string) => data?.connections.find((c) => c.id === `account:${profileId}`)?.used_by.map((u) => u.name) ?? [];
+  // The server names bots on auto on every engine's main account; `pinnedOnly` keeps the bots pinned to an engine.
+  const usedByOf = (profileId: string, pinnedOnly = false) =>
+    (data?.connections.find((c) => c.id === `account:${profileId}`)?.used_by ?? [])
+      .filter((u) => {
+        const bot = p.kwants.find((k) => k.id === u.id);
+        return !pinnedOnly || !bot || parsePick(bot.preferred_model).family !== 'auto';
+      })
+      .map((u) => u.name);
   const needs = data ? data.connections.filter((c) => accountNeedsYou(c)).length : 0;
   /** Opens "Sign-ins and settings", at one AI's card when given: its existing sign-in or set-up. */
   const openManage = (engineCard?: string) => {
@@ -718,6 +725,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
               onSetUp={(a) => openManage(cardOf(a))}
               onAddAccount={() => openManage()}
               onEngineOn={(id) => enginesState.setEnabled(id, true)}
+              onEngineOff={(id) => enginesState.setEnabled(id, false)}
             />
           </div>
         )}

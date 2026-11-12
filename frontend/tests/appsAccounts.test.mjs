@@ -447,3 +447,37 @@ test('F16 and F13: tile labels sit on the tile’s bottom edge; the Sign-ins sum
   for (const c of states) assert.match(c, /^mt-auto /);
   assert.match(html, /<summary class="[^"]*min-h-\[44px\][^"]*"[^>]*>[\s\S]*?Sign-ins and settings/);
 });
+
+test('round 5 (qa item 3): the page names bots on auto only on "Used first"; backups name bots pinned there', () => {
+  // Rigel's space: Ann and Ben on Auto, Cody pinned to Codex, Gus pinned to Grok, and Grok put first.
+  // The server lists auto bots on every engine's main account; the page keeps them to the first row.
+  const kwants = [
+    { id: 'k1', name: 'Ann', approvals_effective: 'ask', preferred_model: 'auto' },
+    { id: 'k2', name: 'Ben', approvals_effective: 'ask', preferred_model: '' },
+    { id: 'k3', name: 'Cody', approvals_effective: 'ask', preferred_model: 'codex' },
+    { id: 'k4', name: 'Gus', approvals_effective: 'ask', preferred_model: 'grok/grok-4' },
+  ];
+  const [ann, ben, cody, gus] = kwants.map(({ id, name }) => ({ id, name }));
+  const html = m.renderToStaticMarkup(
+    h(
+      m.AppsAccounts,
+      pageProps({
+        kwants,
+        profiles: [profile('grok', 'grok', { is_default: true, priority: 10 }), profile('claude', 'claude', { is_default: true, priority: 20 }), profile('codex', 'codex', { is_default: true, priority: 30 })],
+        engines: ['grok', 'claude', 'codex'].map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind: 'cli', status: 'ready', enabled: true, ready: true, models: [] })),
+        data: data({
+          connections: [
+            acct('grok', { detail: 'grok', used_by: [ann, ben, gus] }),
+            acct('claude', { detail: 'claude', used_by: [ann, ben] }),
+            acct('codex', { detail: 'codex', used_by: [ann, ben, cody] }),
+          ],
+        }),
+      }),
+    ),
+  );
+  const part = (name) => html.split(`data-group="${name}"`)[1]?.split('data-group=')[0] ?? '';
+  assert.match(part('first'), /Used by Ann, Ben and Gus/);
+  const backup = part('backup');
+  assert.match(backup, /Cody uses it first/);
+  assert.doesNotMatch(backup, /Ann|Ben/, 'was "Ann, Ben and Cody use it first" and "Ann and Ben use it first"');
+});

@@ -33,14 +33,17 @@ export interface AccountPriorityProps {
   onChanged: () => Promise<void>;
   /** The space, for the intro line. */
   spaceName?: string;
-  /** Bot names per account id ("Used by Ann, Ben"). */
-  usedBy?: (profileId: string) => string[];
+  /** Bot names per account id ("Used by Ann, Ben"). With `pinnedOnly`, only bots pinned to the account's
+   * engine: bots on auto start on the "Used first" account, so backups and off accounts don't name them. */
+  usedBy?: (profileId: string, pinnedOnly?: boolean) => string[];
   /** The existing sign-in and set-up paths (the engine's card under "Sign-ins and settings"). */
   onSignIn?: (p: Profile) => void;
   onSetUp?: (p: Profile) => void;
   onAddAccount?: () => void;
   /** Turns a whole engine back on (the engine's own switch). */
   onEngineOn?: (engine: EngineInfo['id']) => Promise<void>;
+  /** Turns a whole engine off: "Turn off" on the only account its engine has on. */
+  onEngineOff?: (engine: EngineInfo['id']) => Promise<void>;
   now?: number;
 }
 
@@ -60,6 +63,7 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
   onSetUp,
   onAddAccount,
   onEngineOn,
+  onEngineOff,
   now = Date.now(),
 }) => {
   // The order shown while a save is in flight; null means "what the server last said".
@@ -91,16 +95,20 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
 
   const nameOf = (p: Profile) => `${engineLabel(p)} (${p.kind === 'system' ? 'on this computer' : p.name})`;
   /** "Used by Ann" on the first row and on Not used. On a backup row the bots there start on it (pinned), so "Cody uses it first". */
-  const usedLine = (p: Profile, backup = false) => {
-    const names = usedBy?.(p.id) ?? [];
+  const usedLine = (p: Profile, place: 'first' | 'backup' | 'off' = 'first') => {
+    const backup = place === 'backup';
+    // Bots on auto start on the "Used first" account; a backup or an off account names only bots pinned to it.
+    const names = usedBy?.(p.id, place !== 'first') ?? [];
     if (!names.length) return null;
     const who = names.length > 3 ? `${names.slice(0, 2).join(', ')} and ${names.length - 2} more` : listNames(names);
     return backup ? `${who} ${names.length === 1 ? 'uses' : 'use'} it first` : `Used by ${who}`;
   };
 
-  const fail = (e: unknown, what: string) => {
-    setError(e instanceof Error ? e.message : what);
-    setAnnounce(`${what} It is back as it was.`);
+  // The server's own words never reach the person: say what didn't happen, and that nothing changed.
+  const fail = (_e: unknown, what: string) => {
+    // The alert is read out; the polite status stays quiet so it isn't said twice.
+    setError(`${what} It is back as it was.`);
+    setAnnounce('');
   };
 
   const saveOrder = async (next: Profile[], moved: Profile, to: number) => {
@@ -153,16 +161,43 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
     }
   };
 
+  /**
+   * Turn off. The server keeps one main (default) account per engine on, so for the main account:
+   * another account of that engine that's on becomes the main one first (the next in the failover
+   * order); with none, the engine's own switch turns the whole engine off.
+   */
   const turnOff = async (p: Profile) => {
     setError(null);
     setBusy(p.id);
+    const engine = cardOf(p);
+    const next = p.is_default ? failoverOrder(profiles).find((x) => x.id !== p.id && x.enabled && cardOf(x) === engine) : undefined;
+    let moved = false;
     try {
-      await profilesApi.update(p.id, { enabled: false });
-      await onChanged();
-      setAnnounce(`${nameOf(p)} is off. Your bots skip it.`);
+      if (p.is_default && !next) {
+        if (!onEngineOff) throw new Error('no engine switch');
+        await onEngineOff(engine);
+        await onChanged();
+        setAnnounce(`${nameOf(p)} is off. Your bots skip ${engineLabel(p)}.`);
+      } else {
+        if (next) {
+          await profilesApi.update(next.id, { is_default: true });
+          moved = true;
+        }
+        await profilesApi.update(p.id, { enabled: false });
+        await onChanged();
+        setAnnounce(
+          next
+            ? `${nameOf(p)} is off. ${next.kind === 'system' ? 'The sign-in on this computer' : next.name} is now ${engineLabel(p)}’s main account.`
+            : `${nameOf(p)} is off. Your bots skip it.`,
+        );
+      }
       setFocusKey(`${p.id}:on`);
     } catch (e) {
-      fail(e, `Could not turn off ${engineLabel(p)}.`);
+      // Half done (the main account moved, this one stayed on): put the main account back.
+      if (moved) await profilesApi.update(p.id, { is_default: true }).catch(() => undefined);
+      fail(e, `Couldn’t turn off ${nameOf(p)}.`);
+      await onChanged().catch(() => undefined);
+      setFocusKey(`${p.id}:more`);
     } finally {
       setBusy(null);
     }
@@ -177,7 +212,7 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
 
   const row = (p: Profile, i: number) => {
     const status = priorityStatus(p, engineOf(p), now);
-    const line = usedLine(p, i > 0);
+    const line = usedLine(p, i > 0 ? 'backup' : 'first');
     return (
       <li key={p.id} data-account={p.id} data-used-index={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2.5">
         <div className="flex-1 min-w-0">
@@ -305,7 +340,7 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
                   <p className="mt-0.5 text-[11px] text-zinc-500 break-words">
                     {p.kind === 'system' ? 'On this computer' : p.name} ·{' '}
                     {reason === 'off' ? 'Turned off' : reason === 'signed_out' ? 'Signed out' : 'Not installed'}
-                    {usedLine(p) && <span> · {usedLine(p)}</span>}
+                    {usedLine(p, 'off') && <span> · {usedLine(p, 'off')}</span>}
                   </p>
                 </div>
                 {reason === 'off' ? (
@@ -322,9 +357,9 @@ export const AccountPriority: React.FC<AccountPriorityProps> = ({
                 ) : reason === 'signed_out' ? (
                   <button
                     type="button"
-                    className={usedLine(p) ? `${smallBtn} border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20` : linkBtn}
+                    className={usedLine(p, 'off') ? `${smallBtn} border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20` : linkBtn}
                     data-sign-in
-                    data-quiet-sign-in={usedLine(p) ? undefined : ''}
+                    data-quiet-sign-in={usedLine(p, 'off') ? undefined : ''}
                     onClick={() => onSignIn?.(p)}
                     disabled={!onSignIn}
                   >

@@ -260,3 +260,110 @@ test('F15: "Bots use Grok until then." is zinc-300; "Bots wait until then." stay
   const alone = [{ ...profs[0] }];
   assert.match(m.renderToStaticMarkup(h(m.AccountPriority, { profiles: alone, engines: [engine('claude')], onChanged: async () => {}, now: NOW })), /class="mt-0\.5 text-\[11px\] text-amber-200" data-step-in="true">Bots wait until then\./);
 });
+
+// ── Round 5 (Rigel's qa.md item 1): Turn off on an engine's main (default) account ─────────────
+const statusText = (host) => text(host.querySelector('[role="status"]'));
+const turnOffRow = async (host, id) => {
+  await click(host.querySelector(`[data-account="${id}"] [data-row-menu]`));
+  const item = [...host.querySelectorAll('[data-row-menu-list] [role="menuitem"]')].find((x) => text(x) === 'Turn off');
+  await click(item);
+};
+
+test('Turn off, not the main account: only enabled:false is saved', async () => {
+  const profs = oleks();
+  const calls = server(profs);
+  const { host } = await mount(profs, oleksEngines.map((e) => ({ ...e })));
+  await turnOffRow(host, 'sys-grok');
+  assert.deepEqual(calls.filter((c) => c[0] === 'PATCH').map((c) => [c[1], c[2]]), [['/api/profiles/sys-grok', { enabled: false }]]);
+  assert.match(statusText(host), /Grok \(on this computer\) is off/);
+  assert.equal(host.querySelector('[data-order-error]'), null);
+});
+
+test('Turn off, the main account with another on: the next one becomes main first, then this one goes off', async () => {
+  const profs = oleks();
+  profs[0].is_default = true; // Personal is Claude's main account
+  profs[2].enabled = true; // Claude on this computer is on, further down the order
+  const calls = server(profs);
+  const { host } = await mount(profs, oleksEngines.map((e) => ({ ...e })));
+  await turnOffRow(host, 'personal');
+  assert.deepEqual(
+    calls.filter((c) => c[0] === 'PATCH').map((c) => [c[1], c[2]]),
+    [
+      ['/api/profiles/sys-claude', { is_default: true }],
+      ['/api/profiles/personal', { enabled: false }],
+    ],
+  );
+  assert.equal(statusText(host), 'Claude (Personal) is off. The sign-in on this computer is now Claude’s main account.');
+  assert.equal(host.querySelector('[data-order-error]'), null);
+  assert.ok(host.querySelector('[data-group="not-used"] [data-account="personal"]'), 'Personal moved to Not used');
+});
+
+test('Turn off, the only account its engine has on: the engine’s own switch, no PATCH', async () => {
+  const profs = oleks();
+  profs[1].is_default = true; // Grok on this computer: Grok's main and only account
+  const calls = server(profs);
+  const engines = oleksEngines.map((e) => ({ ...e }));
+  const engineOff = [];
+  const { host } = await mount(profs, engines, {
+    onEngineOff: async (id) => {
+      engineOff.push(id);
+      Object.assign(engines.find((x) => x.id === id), { enabled: false, status: 'disabled' });
+    },
+  });
+  await turnOffRow(host, 'sys-grok');
+  assert.deepEqual(engineOff, ['grok']);
+  assert.equal(calls.filter((c) => c[0] === 'PATCH').length, 0);
+  assert.ok(host.querySelector('[data-group="not-used"] [data-account="sys-grok"]'), 'the row lands in Not used');
+  assert.equal(host.querySelector('[data-order-error]'), null);
+});
+
+test('Turn off that fails says so in plain words, never the server’s text, and focus goes back to More', async () => {
+  const profs = oleks();
+  profs[1].is_default = true;
+  profs.push(profile({ id: 'grok-work', engine: 'grok', name: 'Work', kind: 'cli_home', priority: 25 }));
+  const calls = server(profs);
+  const ok = g.fetch;
+  g.fetch = async (url, init = {}) => {
+    if (init.method === 'PATCH' && url.endsWith('/sys-grok')) {
+      calls.push(['PATCH', url, JSON.parse(init.body)]);
+      return { ok: false, status: 400, json: async () => ({ error: "the default profile can't be disabled" }) };
+    }
+    return ok(url, init);
+  };
+  const { host } = await mount(profs, oleksEngines.map((e) => ({ ...e })));
+  await turnOffRow(host, 'sys-grok');
+  const err = text(host.querySelector('[data-order-error]'));
+  assert.equal(err, 'Couldn’t turn off Grok (on this computer). It is back as it was.');
+  assert.equal(host.innerHTML.includes('default profile'), false, 'no server text anywhere');
+  // The main account moved to Work first, so it is put back on this one.
+  assert.deepEqual(
+    calls.filter((c) => c[0] === 'PATCH').map((c) => [c[1], c[2]]),
+    [
+      ['/api/profiles/grok-work', { is_default: true }],
+      ['/api/profiles/sys-grok', { enabled: false }],
+      ['/api/profiles/sys-grok', { is_default: true }],
+    ],
+  );
+  const more = host.querySelector('[data-account="sys-grok"] [data-row-menu]');
+  assert.equal(document.activeElement === more, true, 'focus is on the row’s More button');
+});
+
+// ── Round 5 (qa.md item 3): bots on auto are named only on "Used first" ─────────────────────────
+test('auto bots only on Used first: backup and Not used rows name pinned bots (usedBy pinnedOnly)', () => {
+  // Rigel's space: Ann and Ben on auto, Cody pinned to Codex, Gus pinned to Grok; Grok first.
+  const profs = [
+    profile({ id: 'grok', engine: 'grok', is_default: true, priority: 10 }),
+    profile({ id: 'claude', engine: 'claude', is_default: true, priority: 20 }),
+    profile({ id: 'codex', engine: 'codex', is_default: true, priority: 30 }),
+  ];
+  const server = { grok: ['Ann', 'Ben', 'Gus'], claude: ['Ann', 'Ben'], codex: ['Ann', 'Ben', 'Cody'] };
+  const auto = new Set(['Ann', 'Ben']);
+  const usedBy = (id, pinnedOnly) => (server[id] ?? []).filter((n) => !pinnedOnly || !auto.has(n));
+  const engines = [engine('claude'), engine('grok'), engine('codex')];
+  const html = m.renderToStaticMarkup(h(m.AccountPriority, { profiles: profs, engines, onChanged: async () => {}, now: NOW, usedBy }));
+  assert.match(group(html, 'first'), /Used by Ann, Ben and Gus/);
+  const backup = group(html, 'backup');
+  assert.match(backup, /Cody uses it first/);
+  assert.doesNotMatch(backup, /Ann|Ben/);
+  assert.doesNotMatch(backup, /Ann and Ben use it first/);
+});
