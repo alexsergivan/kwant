@@ -6,7 +6,7 @@
 import { PersonCancelledError, personFetch } from '../auth';
 import type { AwayItem, AwayKind } from '../away';
 
-export type InboxKind = AwayKind | 'review';
+export type InboxKind = AwayKind | 'review' | 'team_job';
 export type InboxGroup = 'waiting_on_you' | 'failed_or_stuck' | 'to_review' | 'finished';
 
 export type VerdictResult = 'pass' | 'fail' | 'needs_you' | 'none';
@@ -139,13 +139,59 @@ export interface ReviewFields {
   changed?: boolean | null;
 }
 
+/** 0.9.5 part B (Vega #543): one step of what the bot did, saved on its result message. */
+export interface DoneTrailStep {
+  at: string;
+  kind: 'page' | 'message' | 'write' | 'tool';
+  label: string;
+  detail: string | null;
+  status: 'ok' | 'error' | 'skipped';
+  /** Set only on a team job's member steps: the member's name. */
+  by: string | null;
+}
+
+export type DoneSource =
+  | { kind: 'routine'; routine_id: string; run_id: string; trigger: string; task_id?: string }
+  | { kind: 'task'; task_id: string }
+  | { kind: 'delegation'; delegation_id: string }
+  | { kind: 'team_job'; delegation_id: string | null };
+
+/** A bot named in a team job. */
+export interface TeamMember {
+  kwant_id: string;
+  kwant_name: string;
+}
+
+/**
+ * 0.9.5 part B (Vega #543, impl-b.md "Iris's part F"): the done fields on finished, failed and review items
+ * and on team jobs, plus `unread` on every item. All optional: an older server sends none, and the UI keeps
+ * its own fallbacks (the routine's run and message).
+ */
+export interface DoneFields {
+  unread?: boolean;
+  result_message_id?: string | null;
+  result_conversation_id?: string | null;
+  result_thread_id?: string | null;
+  result_link?: { thread_id: string | null; channel_id: string | null; direct_kwant_id: string | null } | null;
+  answer_excerpt?: string | null;
+  trail?: DoneTrailStep[];
+  trail_dropped?: number;
+  why?: string | null;
+  why_kind?: 'routine' | 'task' | 'ask' | 'request' | null;
+  source?: DoneSource | null;
+  /** Team jobs only: who led it and whom it handed work to. */
+  lead?: TeamMember;
+  members?: TeamMember[];
+}
+
 // `task_id` is a review's task (ReviewFields) or a watch item's (P1, null when none), so it takes both.
 export type InboxItem = Omit<AwayItem, 'kind' | 'task_id'> & {
   kind: InboxKind;
   group: InboxGroup;
   sort_key: (string | number)[];
   task_id?: string | null;
-} & Partial<Omit<ReviewFields, 'task_id'>>;
+} & Partial<Omit<ReviewFields, 'task_id'>> &
+  DoneFields;
 
 /** A review item, with every review field present. */
 export type ReviewItem = Omit<InboxItem, keyof ReviewFields> & ReviewFields & { kind: 'review' };

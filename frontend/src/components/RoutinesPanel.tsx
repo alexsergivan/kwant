@@ -410,6 +410,7 @@ const RunHistory: React.FC<{ routine: Routine; tick: number; onOpenRunResult?: (
                 onClick={() => onOpenRunResult!(t)}
                 className="kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-violet-300 hover:text-violet-200"
                 aria-label={`Open the result of the run on ${formatWhen(r.started_at)}`}
+                data-compact
                 data-run-result={r.id}
               >
                 Open result <ChevronRight size={11} aria-hidden="true" />

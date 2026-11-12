@@ -5,20 +5,40 @@
 // lacks are listed in release-095/inbox-away/impl.md for Vega's part B; nothing here invents a number.
 
 import { parseActivityMeta, plainTitle } from './activity';
-import type { InboxGroup, InboxItem, InboxResponse, ReviewItem } from './api/inbox';
+import type { DoneTrailStep, InboxGroup, InboxItem, InboxResponse, ReviewItem, TeamMember } from './api/inbox';
 import { isReview } from './api/inbox';
 import { type Routine, type RoutineRun, type Schedule, WEEKDAYS, monthDaysText } from './continuity';
 import { parseMetaObject } from './questions';
+import { relativeTime } from './away';
 
 export const NEEDS_GROUPS: InboxGroup[] = ['waiting_on_you', 'failed_or_stuck'];
 export const DONE_GROUPS: InboxGroup[] = ['to_review', 'finished'];
 
-/** How long done items stay; the footer says so and "Earlier this week" loads this window. */
+/** How long done items stay (part B keeps them 7 days, seen or not); the footer says so. */
 export const DONE_DAYS = 7;
 export const DONE_FOOTER = `Done items stay here for ${DONE_DAYS} days.`;
-export const EARLIER_LABEL = 'Earlier this week';
+export const DONE_EMPTY = `Nothing finished in the last ${DONE_DAYS} days.`;
 
-export const doneSince = (now: number = Date.now()): string => new Date(now - DONE_DAYS * 86400_000).toISOString();
+/** Part B's `unread`: true only when the server says so. */
+export const isUnread = (i: Pick<InboxItem, 'unread'>): boolean => i.unread === true;
+
+/**
+ * The header's subtitle (Mira's Needs B 1). Once the list holds 7 days, "Since you last looked" no longer
+ * describes it, so it counts what is new: "3 new since you last looked, 2 h ago", or "Nothing new since …".
+ * Null when the server is older than part B (no item carries `unread` and the window starts at the last
+ * visit); the caller keeps today's window line then.
+ */
+export function unreadLine(r: Pick<InboxResponse, 'items' | 'since' | 'last_seen'>, now: number = Date.now()): string | null {
+  const flagged = r.items.some((i) => typeof i.unread === 'boolean');
+  const since = Date.parse(r.since);
+  const seen = Date.parse(r.last_seen ?? '');
+  const widened = Number.isFinite(since) && Number.isFinite(seen) && since < seen - 60_000;
+  if (!flagged && !widened) return null;
+  const n = r.items.filter(isUnread).length;
+  const ago = r.last_seen ? relativeTime(r.last_seen, now) : '';
+  const head = n ? `${n} new` : 'Nothing new';
+  return ago ? `${head} since you last looked, ${ago}` : head;
+}
 
 export const isDoneGroup = (g: InboxGroup | undefined): boolean => !!g && DONE_GROUPS.includes(g);
 
@@ -79,6 +99,36 @@ export function sectionItems(r: Pick<InboxResponse, 'items'>): Sections {
 
 /** The row's first line before the bot's name: "Routine" for a routine's work, else nothing. */
 export const rowKicker = (i: InboxItem): string | null => (isRoutineItem(i) ? 'Routine' : null);
+
+// ---------- Team jobs (part B) ----------
+
+export const isTeamJob = (i: InboxItem | null | undefined): boolean => !!i && i.kind === 'team_job';
+
+/** The bot that led a team job: `lead`, else the item's own bot (the server sends the lead there too). */
+export const teamLead = (i: InboxItem): TeamMember => i.lead ?? { kwant_id: i.kwant_id, kwant_name: i.kwant_name };
+
+/** The bots it handed work to, without the lead. */
+export const teamMembers = (i: InboxItem): TeamMember[] => {
+  const lead = teamLead(i).kwant_id;
+  return (Array.isArray(i.members) ? i.members : []).filter((m) => m && m.kwant_id !== lead);
+};
+
+/** "3 bots": the members and the lead. Null when the server named no members. */
+export function teamSize(i: InboxItem): string | null {
+  if (!Array.isArray(i.members)) return null;
+  const n = teamMembers(i).length + 1;
+  return `${n} ${n === 1 ? 'bot' : 'bots'}`;
+}
+
+/** "Ann led Ben and Cody", "Ann led Ben, Cody and 2 more"; just "Ann" when nobody was handed work. */
+export function ledLine(i: InboxItem): string {
+  const lead = teamLead(i).kwant_name;
+  const m = teamMembers(i).map((x) => x.kwant_name);
+  if (!m.length) return lead;
+  if (m.length === 1) return `${lead} led ${m[0]}`;
+  if (m.length === 2) return `${lead} led ${m[0]} and ${m[1]}`;
+  return `${lead} led ${m[0]}, ${m[1]} and ${m.length - 2} more`;
+}
 
 /** The row's title: a routine's own name, without the `Routine: ` its review task carries. */
 export const doneTitle = (i: InboxItem): string => (isRoutineItem(i) ? routineName(i) : i.title);
@@ -143,7 +193,7 @@ export function scheduleShort(s: Schedule | null | undefined): string {
  * the item says ("Ben · finished 22:45"); without the run it leaves the why out rather than guess it.
  */
 export function metaLine(item: InboxItem, routine: Routine | null, run: RoutineRun | null): string {
-  const bot = item.kwant_name;
+  const bot = isTeamJob(item) ? ledLine(item) : item.kwant_name;
   if (!isRoutineItem(item)) {
     const at = hm(item.timestamp);
     return at ? `${bot} · finished ${at}` : bot;
@@ -151,11 +201,19 @@ export function metaLine(item: InboxItem, routine: Routine | null, run: RoutineR
   const sched = routine ? scheduleShort(routine.schedule) : '';
   const parts = [bot, sched ? `routine, ${sched}` : 'routine'];
   const ranAt = hm(run?.started_at ?? null) || hm(item.timestamp);
-  if (ranAt) {
-    const why = run ? (run.trigger === 'manual' ? ' because you pressed Run now' : ' on schedule') : '';
-    parts.push(`ran ${ranAt}${why}`);
-  }
+  if (ranAt) parts.push(`ran ${ranAt}${triggerWords(run?.trigger ?? servedTrigger(item))}`);
   return parts.join(' · ');
+}
+
+/** The run's trigger as part B sends it on `source`, when the routine's run isn't loaded. */
+const servedTrigger = (item: InboxItem): string | null => (item.source?.kind === 'routine' ? item.source.trigger : null);
+
+/** " because you pressed Run now", " on an app event", " on schedule"; '' when unknown, rather than guess. */
+export function triggerWords(trigger: string | null | undefined): string {
+  if (!trigger) return '';
+  if (trigger === 'manual') return ' because you pressed Run now';
+  if (trigger === 'event') return ' on an app event';
+  return ' on schedule';
 }
 
 // ---------- The result message ----------
@@ -175,6 +233,70 @@ export interface TrailRow {
   what: string;
   detail: string | null;
   failed: boolean;
+  /** Declined, stopped, or still waiting when saved (part B `status: 'skipped'`). */
+  skipped?: boolean;
+  /** A team job's member who did it. */
+  by?: string | null;
+}
+
+/**
+ * Part B's served trail, when the item has one (Vega reads the same `meta.activity` steps on the server,
+ * keeps the last 30 and adds `by` on team jobs), then the answer itself. Null when the server sent none,
+ * so the caller falls back to the loaded message.
+ */
+export function trailFromServed(item: InboxItem, place: string | null): TrailRow[] | null {
+  if (!Array.isArray(item.trail)) return null;
+  const rows: TrailRow[] = item.trail
+    .filter((s): s is DoneTrailStep => !!s && typeof s.label === 'string')
+    .map((s) => ({
+      at: hms(s.at),
+      what: plainTitle(s.label),
+      detail: s.detail ? plainTitle(s.detail) : null,
+      failed: s.status === 'error',
+      skipped: s.status === 'skipped',
+      by: typeof s.by === 'string' && s.by ? s.by : null,
+    }));
+  if (!rows.length) return [];
+  rows.push({
+    at: hms(item.timestamp),
+    what: place ? `Wrote the answer in ${place}` : 'Wrote the answer',
+    detail: null,
+    failed: false,
+  });
+  return rows;
+}
+
+/** Part B's `trail_dropped`: a non-negative whole count, else null (unknown). */
+export function servedDropped(item: InboxItem): number | null {
+  const n = item.trail_dropped;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+/** The trail's heading: "What the team did" for a team job, else "What Ben did". */
+export const trailHeading = (item: InboxItem): string => (isTeamJob(item) ? 'What the team did' : `What ${item.kwant_name} did`);
+
+/** "Ann’s answer": a team job's answer is its lead's. */
+export const answerHeading = (item: InboxItem): string => `${isTeamJob(item) ? teamLead(item).kwant_name : item.kwant_name}’s answer`;
+
+/**
+ * Why, from part B's `why` and `why_kind` (Mira's Needs B 2 and 3). The routine case keeps today's copy,
+ * drawn from the routine itself. Null when there is nothing to quote.
+ */
+export function whyLead(item: InboxItem): string | null {
+  const why = typeof item.why === 'string' ? item.why.trim() : '';
+  if (!why) return null;
+  switch (item.why_kind) {
+    case 'task':
+      return 'The task said:';
+    case 'ask':
+      return `You asked ${item.kwant_name}:`;
+    case 'request': {
+      const day = monthDay(item.timestamp);
+      return day ? `You asked on ${day}:` : 'You asked:';
+    }
+    default:
+      return null;
+  }
 }
 
 /**
@@ -242,6 +364,8 @@ export function noChecksSet(item: InboxItem): boolean {
 /** The send-back button and its panel's title. */
 export const redoLabel = (bot: string): string => `Ask ${bot} to redo…`;
 export const redoTitle = (bot: string): string => `Ask ${bot} to redo`;
+/** F7: a finished item with no review task; the button opens the chat, so it says so and has no ellipsis. */
+export const redoInChatLabel = (bot: string): string => `Ask ${bot} to redo in chat`;
 export const LOOKS_GOOD = 'Looks good';
 
 // ---------- Finding the routine and its run ----------

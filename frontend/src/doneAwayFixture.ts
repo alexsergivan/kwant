@@ -1,5 +1,6 @@
-// 0.9.5 F demo data: mockup 2 ("While you were away") as today's API would send it, for tests and the
-// screenshots. Not imported by the app. Names, shops and prices are the mockup's made-up ones.
+// 0.9.5 F demo data: mockup 2 ("While you were away") as the API sends it with Vega's part B (#543: unread,
+// 7 days kept, the done fields, a team_job item), for tests and the screenshots. Not imported by the app.
+// Names, shops and prices are the mockup's made-up ones.
 
 import type { InboxItem, InboxResponse, ReviewItem } from './api/inbox';
 import type { Routine, RoutineRun } from './continuity';
@@ -27,6 +28,7 @@ const approval: InboxItem = {
   details: { to: 'list@beanline.example.com', subject: 'Spring sale: 15% off' },
   group: 'waiting_on_you',
   sort_key: [1, 0, 0, 'Ann', 'ap-1'],
+  unread: true,
 };
 
 /** The review task the routine's run made (`Routine: <name>`); nothing to check, nothing changed. */
@@ -71,6 +73,21 @@ export const AWAY_ROUTINE_REVIEW: ReviewItem = {
   batchable: false,
   rollback_ok: true,
   changed: false,
+  unread: true,
+  result_message_id: 'm-prices',
+  result_conversation_id: AWAY_CHANNEL.id,
+  result_thread_id: null,
+  result_link: { thread_id: null, channel_id: AWAY_CHANNEL.id, direct_kwant_id: null },
+  answer_excerpt: 'No change since last week. Beanline is still the cheapest at $24.00 per kg.',
+  trail: [
+    { at: at('22:51:02'), kind: 'page', label: 'Opened beanline.example.com', detail: 'found House Blend 1 kg $24.00, 15% off until Mar 31', status: 'ok', by: null },
+    { at: at('22:51:05'), kind: 'page', label: 'Opened roastco.example.com', detail: 'found 1 kg $27.00, free shipping over $40', status: 'ok', by: null },
+    { at: at('22:51:09'), kind: 'tool', label: 'Compared with last Monday’s run', detail: 'nothing changed', status: 'ok', by: null },
+  ],
+  trail_dropped: 0,
+  why: 'Check Beanline and RoastCo prices and tell me what changed since last week.',
+  why_kind: 'routine',
+  source: { kind: 'routine', routine_id: 'rt-prices', run_id: 'run-1', trigger: 'manual', task_id: 't-prices' },
 } as unknown as ReviewItem;
 
 /** The run's own row (folded into the review above). */
@@ -86,25 +103,49 @@ const runRow: InboxItem = {
   link: { thread_id: null, channel_id: null, direct_kwant_id: 'k-ben' },
   group: 'finished',
   sort_key: [4, 0, 0, 'Ben', 'run-1'],
+  unread: true,
 };
 
-const teamJob: InboxItem = {
-  kind: 'delegation',
-  id: 'd-spring',
-  kwant_id: 'k-cody',
-  kwant_name: 'Cody',
+/** A lead's `Done:` reply after a team job (part B `team_job`): Ann led Ben and Cody. */
+export const AWAY_TEAM_JOB: InboxItem = {
+  kind: 'team_job',
+  id: 'tj-spring',
+  kwant_id: 'k-ann',
+  kwant_name: 'Ann',
+  lead: { kwant_id: 'k-ann', kwant_name: 'Ann' },
+  members: [
+    { kwant_id: 'k-ben', kwant_name: 'Ben' },
+    { kwant_id: 'k-cody', kwant_name: 'Cody' },
+  ],
   title: 'Spring sale plan',
   summary: 'Ben checked 2 shops, Cody drafted the email, you picked 15%',
   status: 'completed',
   timestamp: at('22:45:00'),
   link: { thread_id: null, channel_id: AWAY_CHANNEL.id, direct_kwant_id: null },
   group: 'finished',
-  sort_key: [4, 0, 1, 'Cody', 'd-spring'],
+  sort_key: [4, 0, 1, 'Ann', 'tj-spring'],
+  unread: false,
+  changed: true,
+  result_message_id: 'm-spring',
+  result_conversation_id: AWAY_CHANNEL.id,
+  result_thread_id: null,
+  result_link: { thread_id: null, channel_id: AWAY_CHANNEL.id, direct_kwant_id: null },
+  answer_excerpt: 'Done: Ben checked 2 shops, Cody drafted the sale email, and you picked 15% off. The draft is in the channel.',
+  trail: [
+    { at: at('22:31:04'), kind: 'page', label: 'Opened beanline.example.com', detail: 'House Blend 1 kg $24.00', status: 'ok', by: 'Ben' },
+    { at: at('22:33:40'), kind: 'page', label: 'Opened roastco.example.com', detail: null, status: 'error', by: 'Ben' },
+    { at: at('22:38:12'), kind: 'write', label: 'Drafted the sale email', detail: 'Spring sale: 15% off', status: 'ok', by: 'Cody' },
+    { at: at('22:41:30'), kind: 'message', label: 'Sent the draft to the list', detail: null, status: 'skipped', by: 'Cody' },
+  ],
+  trail_dropped: 3,
+  why: 'Plan a spring sale for the house blend and draft the email.',
+  why_kind: 'request',
+  source: { kind: 'team_job', delegation_id: 'dl-1' },
 };
 
 export const AWAY_INBOX: InboxResponse = {
   now: NOW,
-  since: at('22:50:00'),
+  since: at('00:50:00', '2026-11-05'),
   last_seen: at('22:50:00'),
   counts: {
     waiting_on_you: 1,
@@ -113,7 +154,7 @@ export const AWAY_INBOX: InboxResponse = {
     finished: 2,
     badge: 2,
   },
-  items: [approval, AWAY_ROUTINE_REVIEW, runRow, teamJob],
+  items: [approval, AWAY_ROUTINE_REVIEW, runRow, AWAY_TEAM_JOB],
   batch: null,
 } as InboxResponse;
 
@@ -141,6 +182,21 @@ export const AWAY_RUN: RoutineRun = {
   status: 'ok',
   error: null,
   message_id: 'm-prices',
+};
+
+/** A finished hand-off with no review task and none of part B's fields (an older server). */
+export const AWAY_HANDOFF: InboxItem = {
+  kind: 'delegation',
+  id: 'd-spring',
+  kwant_id: 'k-cody',
+  kwant_name: 'Cody',
+  title: 'Spring sale email',
+  summary: 'Drafted the sale email for the list.',
+  status: 'completed',
+  timestamp: at('22:45:00'),
+  link: { thread_id: null, channel_id: AWAY_CHANNEL.id, direct_kwant_id: null },
+  group: 'finished',
+  sort_key: [4, 0, 2, 'Cody', 'd-spring'],
 };
 
 const step = (id: string, t: string, title: string, detail: string, kind = 'tool') => ({

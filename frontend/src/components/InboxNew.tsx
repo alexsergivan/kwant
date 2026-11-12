@@ -8,7 +8,6 @@ import {
   Check,
   CheckCircle2,
   ChevronLeft,
-  ChevronRight,
   CircleDashed,
   Eye,
   Hand,
@@ -27,7 +26,7 @@ import { ModernApprovalCard } from './ModernApprovalCard';
 import { ReviewDone, VERDICT_STYLE } from './ReviewItemStub';
 import { ReviewItemView } from './ReviewItemView';
 import { type DoneApi, type DoneDetailData, type MessageTarget, DoneChips, DoneItemView, DoneSections, defaultDoneApi, useDoneDetail } from './DoneDetail';
-import { DONE_FOOTER, EARLIER_LABEL, changedState, doneTitle, isDoneGroup, isRoutineItem, metaLine, rowKicker, sectionItems } from '../doneAway';
+import { DONE_EMPTY, DONE_FOOTER, changedState, doneTitle, isDoneGroup, isRoutineItem, isUnread, metaLine, rowKicker, sectionItems, teamSize, unreadLine } from '../doneAway';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, windowLabel } from '../away';
@@ -49,7 +48,6 @@ import {
   markHeld,
   findItem,
   setNotice,
-  showEarlier,
   stopAfterThisOne,
   useInbox,
   inboxStore,
@@ -95,7 +93,7 @@ const SECTION: Record<
     short: 'Done',
     head: 'text-teal-300',
     icon: <CheckCircle2 size={13} aria-hidden="true" />,
-    empty: 'Nothing finished since you last looked.',
+    empty: DONE_EMPTY,
   },
 };
 
@@ -133,7 +131,7 @@ export function rowTitle(i: InboxItem): string {
 
 /** 0.9.5 F: a finished item that opens in the pane (what ran, the answer, the trail) instead of its chat. */
 export const opensInPane = (i: InboxItem | null | undefined): boolean =>
-  !!i && (isReview(i) || (i.group === 'finished' && (i.kind === 'routine_run' || i.kind === 'delegation')));
+  !!i && (isReview(i) || i.kind === 'team_job' || (i.group === 'finished' && (i.kind === 'routine_run' || i.kind === 'delegation')));
 
 export function staleLine(paths: string[]): string {
   if (!paths.length) return 'Its files changed after its check';
@@ -188,10 +186,18 @@ const AwaySubline: React.FC<{ item: InboxItem }> = ({ item }) => {
   const toneText = tone === 'amber' ? 'text-amber-300' : tone === 'rose' ? 'text-rose-300' : tone === 'emerald' ? 'text-teal-300' : tone === 'sky' ? 'text-sky-300' : 'text-zinc-400';
   const sum = awaySummary(item as AwayItem);
   const showSum = sum && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length);
+  // F6: an approval titled with its own question still says what the bot wants to use: "Needs approval · use gmail".
+  const asked = item.kind === 'approval' && typeof item.question === 'string' && !!item.question.trim();
+  const use = asked ? awayTitle(item as AwayItem) : '';
   return (
     <span className="flex items-center gap-1.5 min-w-0">
       <span className={`shrink-0 font-semibold ${toneText}`}>{label}</span>
       {showSum && <span className="min-w-0 truncate text-zinc-400">{sum}</span>}
+      {use && (
+        <span className="min-w-0 truncate text-zinc-400" data-approval-use>
+          · {use.charAt(0).toLowerCase() + use.slice(1)}
+        </span>
+      )}
     </span>
   );
 };
@@ -220,6 +226,9 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
   const disabled = busy !== null;
   const tint = selected ? 'border-violet-400/70 bg-violet-500/10' : GROUP_STYLE[item.group].row;
   const kicker = (isDoneGroup(item.group) ? rowKicker(item) : null) ?? place ?? null;
+  // A team job names the team's size where a row names its bot: "@Spring launch · 3 bots" (Needs B 2).
+  const who = (item.kind === 'team_job' ? teamSize(item) : null) ?? item.kwant_name;
+  const unread = isUnread(item);
   const doneRow = !review && isDoneGroup(item.group) && opensInPane(item);
   return (
     <li role="presentation" className={`relative rounded-xl border transition-colors ${tint}`} data-row={item.id} data-group={item.group}>
@@ -249,9 +258,15 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
                   {kicker} ·{' '}
                 </span>
               )}
-              {item.kwant_name}
+              {who}
             </span>
-            <time dateTime={item.timestamp} className="ml-auto shrink-0 tabular-nums text-zinc-400">
+            {unread && (
+              <span className="ml-auto shrink-0 inline-flex items-center" data-unread>
+                <span className="block w-2 h-2 rounded-full bg-violet-400" aria-hidden="true" />
+                <span className="sr-only">New</span>
+              </span>
+            )}
+            <time dateTime={item.timestamp} className={`${unread ? '' : 'ml-auto '}shrink-0 tabular-nums text-zinc-400`}>
               {clock(item.timestamp)}
             </time>
           </span>
@@ -576,7 +591,8 @@ const ItemPane: React.FC<{
   const d = useDoneDetail(item, runItem, api ?? defaultDoneApi, initial);
   const doneLayout = isDoneGroup(item.group) && (!isReview(item) || isRoutineItem(item));
   if (isReview(item) && !doneLayout) return <ReviewItemView item={item} entry={entry} onDone={onDone} onHeldResolved={onHeldResolved} />;
-  const openChat = () => (d.target && onOpenMessage ? onOpenMessage(d.target) : onOpenItemChat(runItem ?? item));
+  const target = d.target ?? servedTarget(item);
+  const openChat = () => (target && onOpenMessage ? onOpenMessage(target) : onOpenItemChat(runItem ?? item));
   const place = d.routine ? (placeName?.(d.routine.channel_id) ?? null) : null;
   const routineId = d.routine?.id;
   const edit = onEditRoutine && routineId ? () => onEditRoutine(routineId) : undefined;
@@ -597,6 +613,19 @@ const ItemPane: React.FC<{
     />
   );
 };
+
+/** Part B: where the answer is, from the item's own result fields, when the pane loaded no routine run. */
+export function servedTarget(item: InboxItem): MessageTarget | null {
+  const id = item.result_message_id;
+  if (typeof id !== 'string' || !id) return null;
+  const l = item.result_link;
+  return {
+    message_id: id,
+    channel_id: l?.channel_id ?? null,
+    kwant_id: l?.direct_kwant_id ?? item.kwant_id,
+    thread_id: l?.thread_id ?? item.result_thread_id ?? null,
+  };
+}
 
 // ---------- Page ----------
 
@@ -797,8 +826,6 @@ export const InboxNew: React.FC<InboxNewProps> = ({
 
   const firstRow = sections ? [...sections.needs, ...sections.done][0]?.id : undefined;
   const firstFocusable = selectable.includes(selectedId ?? '') ? selectedId : (firstRow ?? (showBatch ? 'batch' : null));
-  const sinceAt = data ? Date.parse(data.since) : NaN;
-  const weekShown = Number.isFinite(sinceAt) && now - sinceAt >= 7 * 86400_000 - 60_000;
   const empty = !!data && data.items.length === 0 && !showBatch;
   const header = (
     <div className={`h-14 shrink-0 border-b border-zinc-800/80 ${onBack && !wide ? 'px-2' : 'px-4'} flex items-center justify-between gap-3 select-none`}>
@@ -809,7 +836,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       )}
       <div className="min-w-0 flex-1">
         <h2 className="text-sm font-semibold text-zinc-100 truncate">Inbox</h2>
-        <p className="text-[11px] text-zinc-400 truncate mt-0.5">{data ? windowLabel(data.since, now) : 'What your bots need, finished and failed'}</p>
+        <p className="text-[11px] text-zinc-400 truncate mt-0.5">{data ? (unreadLine(data, now) ?? windowLabel(data.since, now)) : 'What your bots need, finished and failed'}</p>
       </div>
       <button
         type="button"
@@ -909,19 +936,8 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                     <p className="px-1 text-xs text-zinc-400">{sec.empty}</p>
                   )}
                   {key === 'done' && (
-                    <p className="mt-3 px-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400" data-done-footer>
-                      <span>{DONE_FOOTER}</span>
-                      {!weekShown && (
-                        <button
-                          type="button"
-                          onClick={() => void showEarlier(now)}
-                          disabled={loading}
-                          className="kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-violet-300 hover:text-violet-200 disabled:opacity-60"
-                          data-earlier
-                        >
-                          {EARLIER_LABEL} <ChevronRight size={13} aria-hidden="true" />
-                        </button>
-                      )}
+                    <p className="mt-3 px-1 text-xs text-zinc-400" data-done-footer>
+                      {DONE_FOOTER}
                     </p>
                   )}
                 </div>

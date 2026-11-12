@@ -9,18 +9,25 @@ import type { InboxItem } from '../api/inbox';
 import { type Routine, type RoutineRun, continuityApi } from '../continuity';
 import {
   type DoneMessage,
+  answerHeading,
   answerText,
   changedState,
   doneTitle,
   findRoutine,
   findRun,
   isRoutineItem,
+  isTeamJob,
   metaLine,
   monthDay,
   noChecksSet,
-  redoLabel,
+  redoInChatLabel,
+  servedDropped,
+  teamLead,
   trailDropped,
   trailFrom,
+  trailFromServed,
+  trailHeading,
+  whyLead,
 } from '../doneAway';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModernAvatar } from './ModernAvatar';
@@ -123,6 +130,8 @@ export function useDoneDetail(item: InboxItem, runItem: InboxItem | null, api: D
 }
 
 const label = 'text-[11px] font-semibold uppercase tracking-[0.06em] text-zinc-400';
+// F1: data-compact keeps the coarse-pointer 44 px min-height off these inline links; kw-hit's ::before keeps the
+// 44×44 tap area, so the chip and the Why line keep their own height.
 const linkBtn = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded text-meta font-semibold text-violet-300 hover:text-violet-200';
 
 /** "Read only · changed nothing" and "No checks set · Add one". */
@@ -142,7 +151,7 @@ export const DoneChips: React.FC<{
         </span>
       )}
       {noChecks && (
-        <span className="kw-chip !py-0 border-amber-300/30 bg-amber-300/[0.08] text-amber-200" data-chip="no-checks">
+        <span className="kw-chip !py-0" data-chip="no-checks">
           No checks set
           {onAddCheck && (
             <>
@@ -150,7 +159,8 @@ export const DoneChips: React.FC<{
               <button
                 type="button"
                 onClick={onAddCheck}
-                className="kw-focus rounded font-semibold underline underline-offset-2 hover:text-amber-100"
+                className="kw-focus kw-hit rounded font-semibold text-violet-300 hover:text-violet-200"
+                data-compact
                 data-add-check
               >
                 Add one
@@ -173,17 +183,22 @@ export const DoneSections: React.FC<{
 }> = ({ item, d, place, onOpenChat, onEditRoutine }) => {
   const uid = useId();
   const bot = item.kwant_name;
-  const text = answerText(d.message) ?? (item.summary?.trim() ? item.summary : null);
+  const excerpt = typeof item.answer_excerpt === 'string' && item.answer_excerpt.trim() ? item.answer_excerpt : null;
+  const text = answerText(d.message) ?? excerpt ?? (item.summary?.trim() ? item.summary : null);
   const fromMessage = !!answerText(d.message);
-  const trail = trailFrom(d.message, place);
-  const dropped = trailDropped(d.message);
+  // Part B serves the trail on the item (with skipped steps and a team member's name); else the loaded message.
+  const served = trailFromServed(item, place);
+  const trail = served ?? trailFrom(d.message, place);
+  const dropped = served ? (servedDropped(item) ?? 0) : trailDropped(d.message);
   const routine = d.routine;
   const routineLike = isRoutineItem(item);
+  const why = typeof item.why === 'string' ? item.why.trim() : '';
+  const lead = whyLead(item);
   return (
     <>
       <section aria-labelledby={`${uid}-ans`} className="rounded-2xl border border-hairline bg-surface-raised p-4 space-y-2 min-w-0" data-done-answer>
         <h3 id={`${uid}-ans`} className={label}>
-          {bot}’s answer
+          {answerHeading(item)}
         </h3>
         {d.loading && !text ? (
           <p className="inline-flex items-center gap-1.5 text-meta text-zinc-400" role="status">
@@ -191,7 +206,15 @@ export const DoneSections: React.FC<{
           </p>
         ) : text ? (
           fromMessage ? (
-            <div className="min-w-0 overflow-x-auto [&_.markdown-content]:text-body" data-answer-text>
+            // F5: on a phone the answer's table keeps each cell on one line and scrolls sideways as a whole;
+            // the scroller is a focusable, named region so a keyboard can reach it.
+            <div
+              tabIndex={0}
+              role="region"
+              aria-label={`${bot}’s answer`}
+              className="kw-focus rounded min-w-0 overflow-x-auto [&_.markdown-content]:text-body max-sm:[&_th]:whitespace-nowrap max-sm:[&_td]:whitespace-nowrap"
+              data-answer-text
+            >
               <MarkdownRenderer content={text} />
             </div>
           ) : (
@@ -203,30 +226,42 @@ export const DoneSections: React.FC<{
           <p className="text-meta text-zinc-400">The answer isn’t here any more. Open the chat to see what is.</p>
         )}
         {onOpenChat && (
-          <button type="button" onClick={onOpenChat} className={linkBtn} data-open-in-chat>
+          <button type="button" onClick={onOpenChat} className={linkBtn} data-compact data-open-in-chat>
             Open in chat <ChevronRight size={14} aria-hidden="true" />
           </button>
         )}
       </section>
 
-      {routineLike && (
+      {(routineLike || served !== null) && (
         <section aria-labelledby={`${uid}-did`} className="space-y-2 min-w-0" data-done-trail>
           <h3 id={`${uid}-did`} className={label}>
-            What {bot} did
+            {trailHeading(item)}
           </h3>
           {trail.length ? (
             <ol className="space-y-1.5">
               {dropped > 0 && (
-                <li className="text-meta text-zinc-400">
-                  {dropped} earlier {dropped === 1 ? 'step' : 'steps'} not kept
+                <li className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 text-meta text-zinc-400" data-trail-dropped>
+                  <span aria-hidden="true" />
+                  <span>
+                    {dropped} more {dropped === 1 ? 'step' : 'steps'} before these
+                  </span>
                 </li>
               )}
               {trail.map((r, i) => (
-                <li key={i} className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 text-body" data-trail-row>
+                <li key={i} className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 text-body" data-trail-row data-status={r.failed ? 'error' : r.skipped ? 'skipped' : 'ok'}>
                   <time className="tabular-nums text-meta text-zinc-400 pt-px">{r.at}</time>
-                  <span className={`min-w-0 break-words ${r.failed ? 'text-rose-200' : 'text-zinc-100'}`}>
+                  <span className={`min-w-0 break-words ${r.failed ? 'text-rose-200' : r.skipped ? 'text-zinc-400' : 'text-zinc-100'}`}>
                     {r.failed && <AlertTriangle size={13} className="inline -mt-0.5 mr-1" aria-label="Failed" />}
+                    {r.by && (
+                      <>
+                        <span className="font-semibold text-zinc-100" data-trail-by>
+                          {r.by}
+                        </span>
+                        {' · '}
+                      </>
+                    )}
                     {r.what}
+                    {r.skipped && ' · skipped'}
                     {r.detail && <span className="text-zinc-400"> · {r.detail}</span>}
                   </span>
                 </li>
@@ -240,7 +275,7 @@ export const DoneSections: React.FC<{
         </section>
       )}
 
-      {routine && (
+      {routine ? (
         <section aria-labelledby={`${uid}-why`} className="space-y-2 min-w-0" data-done-why>
           <h3 id={`${uid}-why`} className={label}>
             Why
@@ -252,12 +287,27 @@ export const DoneSections: React.FC<{
               {routine.instructions}
             </q>{' '}
             {onEditRoutine && (
-              <button type="button" onClick={() => onEditRoutine(routine.id)} className={linkBtn} data-edit-routine>
+              <button type="button" onClick={() => onEditRoutine(routine.id)} className={linkBtn} data-compact data-edit-routine>
                 Edit routine
               </button>
             )}
           </p>
         </section>
+      ) : (
+        why &&
+        (lead || (routineLike && item.why_kind === 'routine')) && (
+          <section aria-labelledby={`${uid}-why`} className="space-y-2 min-w-0" data-done-why={item.why_kind ?? ''}>
+            <h3 id={`${uid}-why`} className={label}>
+              Why
+            </h3>
+            <p className="text-body text-zinc-300 break-words">
+              {lead ?? 'You set up this routine:'}{' '}
+              <q className="text-zinc-100 [quotes:'“'_'”']" data-why-quote>
+                {why}
+              </q>
+            </p>
+          </section>
+        )
       )}
       {d.error && (
         <p className="text-meta text-zinc-400" role="status" data-done-error>
@@ -303,7 +353,7 @@ export const DoneItemView: React.FC<{
             className="kw-focus inline-flex items-center justify-center gap-1.5 rounded-xl px-3.5 min-h-[36px] max-md:min-h-[44px] text-meta font-semibold border border-hairline-strong bg-white/[0.03] text-zinc-200 hover:bg-white/[0.08]"
             data-redo
           >
-            <CornerUpLeft size={14} aria-hidden="true" /> {redoLabel(item.kwant_name)}
+            <CornerUpLeft size={14} aria-hidden="true" /> {redoInChatLabel(isTeamJob(item) ? teamLead(item).kwant_name : item.kwant_name)}
           </button>
         </div>
       )}

@@ -271,14 +271,22 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
     setNotice(null);
     try {
       await api.verify(item.task_id, item.verdict.id);
-      finish({ kind: 'approved', text: `Approved: “${item.title}”.`, task_id: item.task_id }, 'ok');
+      // 0.9.5 F3: the done layout says what its button said, with the routine's own name.
+      const okText = doneView ? `Looks good: “${doneView.title}”.` : `Approved: “${item.title}”.`;
+      finish({ kind: 'approved', text: okText, task_id: item.task_id }, 'ok');
     } catch (e) {
       if (e instanceof InboxError && e.stale) {
         // The paths go in the stale box and the list row, not in this text (the Inbox status line), V1-4.
-        finish({ kind: 'stale', text: `Couldn’t approve “${item.title}”. It’s back in Failed or stuck, and nothing was approved.`, task_id: item.task_id, paths: e.paths }, 'bad');
+        const text = doneView
+          ? `Couldn’t save “${doneView.title}”. It’s back in Failed or stuck, and nothing was saved.`
+          : `Couldn’t approve “${item.title}”. It’s back in Failed or stuck, and nothing was approved.`;
+        finish({ kind: 'stale', text, task_id: item.task_id, paths: e.paths }, 'bad');
       } else {
         const why = e instanceof Error ? e.message.replace(/\.$/, '') : 'Something went wrong';
-        setNotice({ text: `Couldn’t approve “${item.title}”. ${why}. Nothing was approved.`, tone: 'bad' });
+        setNotice({
+          text: doneView ? `Couldn’t save “${doneView.title}”. ${why}. Nothing was saved.` : `Couldn’t approve “${item.title}”. ${why}. Nothing was approved.`,
+          tone: 'bad',
+        });
       }
     } finally {
       inFlight.current = false;
@@ -518,7 +526,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
             disabled={lockAll}
             aria-expanded={sendOpen}
             aria-keyshortcuts={phone ? undefined : 'S'}
-            className={btnQuiet}
+            className={`${btnQuiet} ${phone && !rollbackShown ? 'col-span-2' : ''}`}
             data-send-back
           >
             <CornerUpLeft size={14} aria-hidden="true" /> {redoLabel(item.kwant_name)}
