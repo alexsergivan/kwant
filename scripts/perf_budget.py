@@ -263,7 +263,7 @@ def _read(path):
         return "n/a"
 
 
-def probe_chrome(browser, extra=(), seconds=20):
+def probe_chrome(browser, extra=(), seconds=20, env=None):
     """Starts `browser` the way kwnt's local Chrome starts (same flags, a fresh profile) but with its stderr kept, and
     says whether it opened a debugging port. Returns (opened, exit code or None, stderr tail). Never raises."""
     root = Path(tempfile.mkdtemp(prefix="perf-chrome-probe-"))
@@ -272,7 +272,7 @@ def probe_chrome(browser, extra=(), seconds=20):
     try:
         args = [browser, f"--user-data-dir={root / 'p'}", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
                 "--no-first-run", "--no-default-browser-check", "--headless=new", "--window-size=1280,800", *extra, "about:blank"]
-        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(err, "w"), start_new_session=True)
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(err, "w"), start_new_session=True, env=env)
         opened, code = False, None
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
@@ -307,9 +307,15 @@ def diagnose_chrome(browser):
         lines.append("version: " + subprocess.run([browser, "--version"], capture_output=True, text=True, timeout=20).stdout.strip())
     except Exception as e:
         lines.append(f"version: failed ({e})")
-    for label, extra in (("kwnt's flags", ()), ("kwnt's flags plus --no-sandbox", ("--no-sandbox",))):
-        opened, code, tail = probe_chrome(browser, extra)
-        lines.append(f"with {label}: " + ("opened its debugging port" if opened else f"no debugging port (exit {code})"))
+    machine = Path(tempfile.mkdtemp(prefix="perf-chrome-env-"))
+    home, binp, _ = make_machine(machine)
+    bare = {"HOME": str(home), "PATH": str(binp)}  # exactly what kwnt (and so the Chrome it starts) ran with
+    lines.append(f"bare PATH holds: {' '.join(sorted(p.name for p in binp.iterdir()))}")
+    for label, extra, env in (("kwnt's flags, the runner's own environment", (), None),
+                              ("kwnt's flags, the bare environment of the run (HOME and PATH only)", (), bare),
+                              ("kwnt's flags plus --no-sandbox, the bare environment", ("--no-sandbox",), bare)):
+        opened, code, tail = probe_chrome(browser, extra, env=env)
+        lines.append(f"{label}: " + ("opened its debugging port" if opened else f"NO debugging port (exit {code})"))
         if tail and not opened:
             lines.append("  stderr: " + tail.replace("\n", "\n          "))
     return "\n".join(lines)
