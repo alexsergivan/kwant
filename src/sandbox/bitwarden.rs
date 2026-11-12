@@ -328,25 +328,6 @@ pub fn endpoints(server: &str) -> Result<(String, Endpoints), UnlockError> {
     Ok((base.clone(), Endpoints { api: format!("{base}/api"), identity: format!("{base}/identity") }))
 }
 
-/// A device id that stays the same for one (server, account). Bitwarden treats every unseen id
-/// as a brand-new device and answers a first login from it with an emailed code; a fresh random
-/// id on each retry means the code the person types can never match the device it was sent for.
-fn device_id_for(server: &str, email: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(b"kwnt-device:");
-    h.update(server.as_bytes());
-    h.update(b":");
-    h.update(email.as_bytes());
-    let d = h.finalize();
-    let mut b = [0u8; 16];
-    b.copy_from_slice(&d[..16]);
-    b[6] = (b[6] & 0x0f) | 0x50;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15])
-}
-
 /// The settings kwnt keeps on disk. Nothing here unlocks anything.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BitwardenConfig {
@@ -443,6 +424,11 @@ pub struct BitwardenStore {
     session: tokio::sync::Mutex<Option<Session>>,
     http: reqwest::Client,
     rng: SystemRandom,
+    /// The device id sent before any account is set up: random, and the same on every try while
+    /// kwnt runs, so the code Bitwarden emails for a new device matches the device that types it.
+    /// Saved with the settings once a connect succeeds. Never derived from the server or email:
+    /// anyone could work that out and pass for a device the account already trusts.
+    pending_device_id: String,
 }
 
 impl std::fmt::Debug for BitwardenStore {
@@ -486,6 +472,7 @@ impl BitwardenStore {
                 .build()
                 .unwrap_or_default(),
             rng: SystemRandom::new(),
+            pending_device_id: uuid::Uuid::new_v4().to_string(),
         }
     }
 
@@ -572,7 +559,7 @@ impl BitwardenStore {
             server_url: base.clone(),
             email: email.clone(),
             client_id: client_id.clone(),
-            device_id: existing.as_ref().map(|c| c.device_id.clone()).unwrap_or_else(|| device_id_for(&base, &email)),
+            device_id: existing.as_ref().map(|c| c.device_id.clone()).unwrap_or_else(|| self.pending_device_id.clone()),
         };
 
         let (kdf, salt) = self.prelogin(&ep, &email, status).await?;
@@ -802,14 +789,10 @@ impl BitwardenStore {
         // wrong code as "a code is needed", handing the person the same empty box back for as long as
         // they kept trying, with nothing to say their code had been looked at and refused. Whether a
         // code was sent is the only thing that separates the two cases, so that is what decides now.
-        if sent_code {
-            tracing::warn!(
-                http_status = %status,
-                error = %error,
-                reason = %message,
-                provider = sent_provider.as_deref().unwrap_or("-"),
-                "Bitwarden refused a two-step login code"
-            );
+        // Only a refusal (4xx) is about the code; a 429 or a 5xx says nothing about it. No log line
+        // here: unlock() already logs the kind and status, and the server's text can quote the
+        // person's IP address (spec C3).
+        if sent_code && status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS {
             return Err(UnlockError::TwoFactorRejected(sent_provider.into_iter().collect()));
         }
         if lower.contains("new device") {

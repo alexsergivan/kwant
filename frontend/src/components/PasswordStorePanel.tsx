@@ -182,7 +182,8 @@ export const BitwardenLoginForm: React.FC<{
       setTriedServer(server);
       if (p.kind === 'code-rejected') {
         // Keep the master password: it was never the problem, and re-typing it hides the real one.
-        setStep({ kind: 'two-factor', providers: p.providers });
+        // Keep the list already shown: the server names only the method that was tried.
+        setStep((s) => (s?.kind === 'two-factor' ? s : { kind: 'two-factor', providers: p.providers }));
         setCode('');
         codeRef.current?.focus();
       } else if (p.kind === 'two-factor') {

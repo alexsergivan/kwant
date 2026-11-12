@@ -175,7 +175,10 @@ export function unlockProblemText(p: UnlockProblem): string {
         ? 'Your account uses two-step login. Enter the code to continue.'
         : `Your account’s two-step login (${p.providers.map((x) => x.name).join(', ') || 'unknown'}) can’t be done here. Use an API key instead.`;
     case 'code-rejected':
-      return 'That code wasn’t accepted. Codes change every 30 seconds — enter the one showing now, and check the clock on your phone.';
+      // An authenticator code (0) goes stale every 30 seconds; an emailed one (1) or a key's (3) doesn't
+      return p.providers.some((x) => x.id === 0)
+        ? 'That code wasn’t accepted. Codes change every 30 seconds — enter the one showing now, and check the clock on your phone.'
+        : 'That code wasn’t accepted. Check it and try again, or ask for a new one.';
     case 'new-device-code':
       return 'Bitwarden emailed you a code to confirm this new device. Enter it to continue.';
     case 'other-account':
