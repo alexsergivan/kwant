@@ -1,19 +1,21 @@
 {
-  "note": "Limits are the baseline x 1.5 (memory x 1.3), rounded up. The baseline is the highest median of 3 CI runs of the fresh-machine job on ubuntu-latest (Nov 12, 2026): runner speed varies a lot between jobs (cold start median 0.30 s in one job, 0.57-0.58 s in two others). browser_launch_s has no limit until a CI run has measured it. Rewrite with `perf_budget.py --update-baseline` on purpose.",
+  "note": "Limits are the baseline x 1.5 (memory x 1.3), rounded up. The baseline is the highest median of 3 CI runs of the fresh-machine job on ubuntu-latest (Nov 12, 2026): runner speed varies a lot between jobs (cold start median 0.30 s in one job, 0.57-0.58 s in two others). browser_launch_s (1.53 s) comes from the one CI run where Chrome could start (5fbde03f); the next run on this file checks it. Rewrite with `perf_budget.py --update-baseline` on purpose.",
   "baseline": {
     "cold_start_s": 0.58,
     "first_reply_s": 0.08,
     "idle_rss_mb": 108.82,
-    "after_reply_rss_mb": 108.93
+    "after_reply_rss_mb": 108.93,
+    "browser_launch_s": 1.53
   },
   "baseline_from": {
-    "runs": "fresh-machine on 1b2052c4, aff15db5, ff7279c5 (5 runs each, memory in 3)",
+    "runs": "fresh-machine on 1b2052c4, aff15db5, ff7279c5 (cold start, first reply, memory) and 5fbde03f (also the browser); 5 runs each, memory in 3",
     "kwnt": "target/debug/kwnt (CI debug build)"
   },
   "limits": {
     "cold_start_s": 0.9,
     "first_reply_s": 0.2,
     "idle_rss_mb": 142.0,
-    "after_reply_rss_mb": 142.0
+    "after_reply_rss_mb": 142.0,
+    "browser_launch_s": 2.3
   }
 }
