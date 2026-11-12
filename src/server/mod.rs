@@ -62,6 +62,7 @@ pub mod setup_routes;
 pub mod push;
 pub mod waiting;
 pub mod stopped;
+pub mod restart_resume;
 pub mod decide;
 pub mod reactions;
 pub mod work_ahead;

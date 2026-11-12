@@ -125,6 +125,7 @@ async fn a_card_with_no_chat_resumes_where_its_turn_was_running() {
         thread_id: Some(thread.id.clone()),
         started_at: chrono::Utc::now(),
         asks: None,
+        ..Default::default()
     };
     env.state.db.add_running_turn(&turn).await.unwrap();
     // And one from a turn nobody recorded lands in the bot's direct chat

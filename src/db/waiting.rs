@@ -212,6 +212,7 @@ impl Database {
 
     /// Records that a bot's work stopped in one chat: its earlier stopped item and its "waiting
     /// on a reply" item there close (this says more), and one new item opens. Never reminded.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_stopped(
         &self,
         kwant_id: &str,

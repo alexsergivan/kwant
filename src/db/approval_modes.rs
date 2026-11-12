@@ -268,6 +268,15 @@ impl Database {
         Ok(done.rows_affected())
     }
 
+    /// Whether a card of that turn is still `waiting` for an answer (its Allow resumes the work).
+    pub async fn turn_has_waiting_approval(&self, turn_id: &str) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM approvals WHERE turn_id = ?1 AND status = 'waiting'")
+            .bind(turn_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n > 0)
+    }
+
     /// Answers a `waiting` card once: sets `status` and returns the ticket with its chat. `None`
     /// when it isn't waiting (answered, or never parked) or is older than [`WAITING_APPROVAL_HOURS`]
     /// (it stays `waiting` until [`Self::expire_waiting_approvals`] marks it `expired` and the

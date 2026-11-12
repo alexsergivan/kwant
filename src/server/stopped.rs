@@ -81,12 +81,36 @@ pub fn short_line(text: &str) -> String {
 /// the why is there) and what resumes it.
 pub fn reply_line(notice: &str) -> String {
     let what = short_line(notice);
+    // The notice's own "send it again" advice is replaced by the one action below, not repeated
+    let what = what.trim_end().strip_suffix(OWN_RETRY_ADVICE).unwrap_or(what.trim_end()).trim_end();
     let what = what.trim_end_matches('.');
     if what.is_empty() {
         "The reply stopped before it finished. Retry in the chat sends your message again.".into()
     } else {
         format!("{what}. Retry in the chat sends your message again.")
     }
+}
+
+/// The advice a stall notice ends with (`turns::stall_stop_line`), which the item's action replaces.
+const OWN_RETRY_ADVICE: &str = "Send your message again to retry.";
+
+/// An item's one-row title, at most `max` characters: when it's too long, what stopped is clipped
+/// and its last sentence (the action that resumes it) is kept whole.
+pub fn title(text: &str, max: usize) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= max {
+        return line;
+    }
+    if let Some(i) = line.trim_end_matches('.').rfind(". ") {
+        let action = &line[i + 2..];
+        let room = max.saturating_sub(action.chars().count() + 2);
+        if room >= 24 {
+            let what: String = line[..i].chars().take(room).collect();
+            return format!("{}… {action}", what.trim_end());
+        }
+    }
+    let cut: String = line.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", cut.trim_end())
 }
 
 /// Records the ask (clients refresh Needs you on the notice's message, posted with it).
@@ -155,6 +179,24 @@ mod tests {
             "The model sent nothing for 300 s, so this reply was stopped. Retry in the chat sends your message again."
         );
         assert!(reply_line("").starts_with("The reply stopped before it finished."));
+        // A stall notice's own advice isn't repeated next to the action
+        assert_eq!(
+            reply_line(&super::super::turns::stall_stop_line("Ben", 2, true)),
+            "The model sent nothing for 2 s, twice (it was retried once), so this reply was stopped. Retry in the chat sends your message again."
+        );
+    }
+
+    #[test]
+    fn a_long_title_keeps_the_action_that_resumes_it() {
+        let action = "Retry in the chat sends your message again.";
+        let long = format!("Couldn't finish this reply: {}. {action}", "the driver failed with a long error ".repeat(5));
+        let t = title(&long, 120);
+        assert!(t.chars().count() <= 120 && t.ends_with(&format!("… {action}")) && t.starts_with("Couldn't finish this reply:"), "{t}");
+        assert_eq!(title("  Short.   Retry here. ", 120), "Short. Retry here.");
+        // No sentence to keep: plain clip
+        let one = "x".repeat(300);
+        assert_eq!(title(&one, 120).chars().count(), 120);
+        assert!(title(&one, 120).ends_with('…'));
     }
 
     #[test]

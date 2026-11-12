@@ -83,6 +83,10 @@ pub(super) async fn park_for(
     Some(retry_line(at, Utc::now()))
 }
 
+/// The reason a reply a restart cut off waits to run again (see [`super::restart_resume`]); its
+/// parked prompt already says what was cut off.
+pub const RESTART: &str = "restart";
+
 /// The prompt a held turn gets once its bot can start new work again (G2).
 pub fn budget_retry_prompt(original: &str) -> String {
     format!(
@@ -137,19 +141,30 @@ async fn retry(state: &AppState, p: &ParkedTurn) -> bool {
         return false;
     };
     let budget = p.reason == "bot_budget";
-    let text = if budget {
-        format!("{} can start new work again: running the message it held.", kwant.name)
+    let restart = p.reason == RESTART;
+    // A restart's continuation said so in the chat when it was parked
+    if !restart {
+        let text = if budget {
+            format!("{} can start new work again: running the message it held.", kwant.name)
+        } else {
+            format!("The usage limit has reset: retrying {}'s turn once.", kwant.name)
+        };
+        let note = scope.message("system", "kwnt", text);
+        scope.save(&note, None).await;
+    }
+    let prompt = if budget {
+        budget_retry_prompt(&p.prompt)
+    } else if restart {
+        p.prompt.clone()
     } else {
-        format!("The usage limit has reset: retrying {}'s turn once.", kwant.name)
+        retry_prompt(&p.prompt)
     };
-    let note = scope.message("system", "kwnt", text);
-    scope.save(&note, None).await;
-    let prompt = if budget { budget_retry_prompt(&p.prompt) } else { retry_prompt(&p.prompt) };
-    tracing::info!(kwant = %kwant.id, parked = %p.id, "retrying a parked turn");
+    tracing::info!(kwant = %kwant.id, parked = %p.id, reason = %p.reason, "retrying a parked turn");
     tokio::spawn(async move {
         let _job = job;
         let mut opts = TurnOpts::default();
         opts.retried = true;
+        opts.resumed_after_restart = restart;
         let _ = try_kwant_turn(&scope, &kwant, prompt, opts).await;
     });
     true

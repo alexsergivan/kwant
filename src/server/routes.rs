@@ -1962,6 +1962,9 @@ pub(super) struct TurnOpts {
     pub(super) on_started: Option<futures::future::BoxFuture<'static, ()>>,
     /// The retry of a turn a usage limit stopped (see [`super::parked`]): it never parks again.
     pub(super) retried: bool,
+    /// The continuation of a reply a restart cut off (see [`super::restart_resume`]): a second
+    /// restart asks the person instead of continuing it again.
+    pub(super) resumed_after_restart: bool,
     /// The delegation this turn works on; a parked retry restarts the delegation.
     pub(super) delegation_id: Option<String>,
     /// (agent, effort) to run on instead of asking Laya: a turn resumed after a late Allow
@@ -2401,6 +2404,10 @@ pub(super) async fn turn_once(
         thread_id: scope.thread_id.clone(),
         started_at: chrono::Utc::now(),
         asks: Some(stop_asks(scope, &opts)),
+        // What a restart needs to continue it (0.9.5); steps are added as they run
+        prompt: Some(truncate_chars(&prompt, 64 * 1024).to_string()),
+        steps: None,
+        resumed: Some(opts.resumed_after_restart),
     };
     if scope.state.db.add_running_turn(&running).await.is_ok() {
         ended.running_row = Some(scope.state.db.clone());
@@ -2453,6 +2460,10 @@ pub async fn interrupt_running_turns(state: &AppState) -> usize {
         return 0;
     };
     for t in &turns {
+        // A reply in a person's own chat continues by itself, once (0.9.5)
+        if continue_after_restart(state, t).await {
+            continue;
+        }
         let msg = NewMessage {
             channel_id: t.channel_id.clone(),
             direct_kwant_id: t.direct_kwant_id.clone(),
@@ -2475,14 +2486,8 @@ pub async fn interrupt_running_turns(state: &AppState) -> usize {
         if let Some(tid) = &t.thread_id {
             let _ = state.db.touch_thread(tid).await;
         }
-        // …and in Needs you, for a person's own chat (0.9.5). A row from an older kwnt doesn't
-        // say: every chat but a hand-off's thread, which the Inbox reports.
-        let asks = match (t.asks, &t.thread_id) {
-            (Some(a), _) => a,
-            (None, Some(tid)) => state.db.delegation_for_thread(tid).await.ok().flatten().is_none(),
-            (None, None) => true,
-        };
-        if asks {
+        // …and in Needs you, for a person's own chat (0.9.5)
+        if restart_asks(state, t).await {
             let place = super::stopped::Place {
                 kwant_id: t.kwant_id.clone(),
                 channel_id: t.channel_id.clone(),
@@ -2499,6 +2504,70 @@ pub async fn interrupt_running_turns(state: &AppState) -> usize {
     // Their hand-offs waited for them to end, and they won't now
     super::delegation::release_cut_short(state, &turns).await;
     turns.len()
+}
+
+/// Whether a turn a restart cut off asks the person in Needs you: a person's own chat. A row from
+/// an older kwnt doesn't say: every chat but a hand-off's thread, which the Inbox reports.
+async fn restart_asks(state: &AppState, t: &crate::db::continuity::RunningTurn) -> bool {
+    match (t.asks, &t.thread_id) {
+        (Some(a), _) => a,
+        (None, Some(tid)) => state.db.delegation_for_thread(tid).await.ok().flatten().is_none(),
+        (None, None) => true,
+    }
+}
+
+/// Continues a reply in a person's own chat that a restart cut off, once, by parking it to run
+/// right away with a note on what was cut off (see [`super::restart_resume`]). False when it
+/// isn't continued: not a person's chat, already a continuation, no message recorded, or a card
+/// or browser step of that turn still waits on the person (answering it resumes the work).
+async fn continue_after_restart(state: &AppState, t: &crate::db::continuity::RunningTurn) -> bool {
+    if !restart_asks(state, t).await {
+        return false;
+    }
+    let Some(prompt) = super::restart_resume::prompt(t) else {
+        return false;
+    };
+    if state.db.turn_has_waiting_approval(&t.turn_id).await.unwrap_or(true)
+        || !state.db.open_human_steps_for_turn(&t.turn_id).await.map(|s| s.is_empty()).unwrap_or(false)
+    {
+        return false;
+    }
+    let parked = state
+        .db
+        .park_turn(&crate::db::parked::NewParkedTurn {
+            kwant_id: t.kwant_id.clone(),
+            channel_id: t.channel_id.clone(),
+            direct_kwant_id: t.direct_kwant_id.clone(),
+            thread_id: t.thread_id.clone(),
+            delegation_id: None,
+            depth: 0,
+            prompt,
+            retry_at: chrono::Utc::now(),
+            reason: super::parked::RESTART,
+        })
+        .await;
+    // One already waits in that chat (a usage-limit retry): the person is asked instead
+    let Ok(Some(_)) = parked else {
+        return false;
+    };
+    let msg = NewMessage {
+        channel_id: t.channel_id.clone(),
+        direct_kwant_id: t.direct_kwant_id.clone(),
+        sender_role: "system".into(),
+        sender_id: "kwnt".into(),
+        text: super::restart_resume::note_text(t),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    let extra = MessageExtra { thread_id: t.thread_id.clone(), meta: Some(super::restart_resume::note_meta(t)) };
+    let _ = state.db.insert_message_with(&msg, &extra).await;
+    if let Some(tid) = &t.thread_id {
+        let _ = state.db.touch_thread(tid).await;
+    }
+    tracing::info!(kwant = %t.kwant_id, turn = %t.turn_id, "continuing a reply a restart cut off");
+    state.scheduler_wake.notify_one();
+    true
 }
 
 /// `text` with every URL cut to scheme and host, so a failure reason that names a custom
@@ -3178,6 +3247,8 @@ async fn run_kwant_turn_inner(
         }
         // A stalled attempt is run once more as it was (P7, 2026-11-09): `Some(secs)` once it was
         let mut stall_retried: Option<u64> = None;
+        // Its tool steps, kept with its running record so a restart knows what it cut off (0.9.5)
+        let mut restart_steps = super::restart_resume::Steps::default();
         let mut next_attempt = 0;
         while next_attempt < attempts.len() {
             let i = next_attempt;
@@ -3367,6 +3438,9 @@ async fn run_kwant_turn_inner(
                         if let Some(e) = &event_opt {
                             stall_clock.saw(e, tokio::time::Instant::now());
                             state.turns.saw_step(&tag.turn_id, e);
+                            if restart_steps.saw(e) {
+                                let _ = state.db.set_running_steps(&tag.turn_id, &restart_steps.json()).await;
+                            }
                         }
                         match event_opt {
                             Some(RuntimeEvent::TurnComplete { tokens, duration_ms, .. }) => {
