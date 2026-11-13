@@ -1,0 +1,758 @@
+//! The public MCP directory as people search it ("Find a tool", mcp-finder): a local copy of the
+//! official MCP Registry's latest versions, synced in the background, and the matching and
+//! ranking that turn a few typed letters into up to 12 rows in well under 50 ms.
+//!
+//! The first sync pages through the whole registry; after that kwnt asks only for what changed
+//! (`updated_since`) every 6 hours. Until the first sync has finished, a search goes to the
+//! registry's own (name-only) search instead. Only entries kwnt can set up in one click are kept.
+//!
+//! Ranking: entries from Smithery's proxy or with a `{placeholder}` address go last; then a
+//! publisher whose proven name is the query (`stripe` → stripe.com, `github` → github.com/github);
+//! then how well the name matches (starts with > a word starts with > alias > a part of the
+//! registry name > contains > typo); then a publisher a typo away (`strpie` → stripe.com), which
+//! only orders entries within one of those tiers; then an exact name or title; then remote before
+//! stdio; then registry order. Typos are only looked for when closer matches leave room.
+
+use super::registry::{publisher_name, McpRegistry, RegistryEntry, GENERIC_SERVER_PARTS};
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, SystemTime};
+use tokio_util::sync::CancellationToken;
+use unicode_normalization::UnicodeNormalization;
+
+/// Most entries one search answers.
+pub const MAX_RESULTS: usize = 12;
+/// Shorter queries answer nothing (the UI asks from 2 letters).
+pub const MIN_QUERY_CHARS: usize = 2;
+const SYNC_EVERY: Duration = Duration::from_secs(6 * 3600);
+/// After a failed sync: first retry, doubling up to [`RETRY_MAX`].
+const RETRY_FIRST: Duration = Duration::from_secs(120);
+const RETRY_MAX: Duration = Duration::from_secs(3600);
+/// A pause between pages, to be gentle with a free service.
+const PAGE_PAUSE: Duration = Duration::from_millis(150);
+/// Safety stops for a registry that never ends.
+const MAX_PAGES: usize = 1000;
+const MAX_ENTRIES: usize = 60_000;
+/// `updated_since` starts this much before the last sync began, so nothing falls in a gap.
+const OVERLAP: Duration = Duration::from_secs(600);
+
+/// The publisher line: what the registry's namespace check proves about who published it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Publisher {
+    /// "stripe.com" or "github.com/alice".
+    pub label: String,
+    /// "domain" or "github".
+    pub kind: &'static str,
+}
+
+/// `com.stripe/mcp` → stripe.com; `io.github.alice/x` → github.com/alice.
+pub fn publisher_of(registry_name: &str) -> Publisher {
+    let ns = registry_name.split('/').next().unwrap_or(registry_name).to_ascii_lowercase();
+    match ns.strip_prefix("io.github.") {
+        Some(user) => Publisher { label: format!("github.com/{user}"), kind: "github" },
+        None => Publisher { label: ns.rsplit('.').collect::<Vec<_>>().join("."), kind: "domain" },
+    }
+}
+
+/// Lower case, no accents, letters and digits only: "Google Sheets" = "google-sheets" = "googlesheets".
+pub fn normalize(text: &str) -> String {
+    text.nfd().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric()).map(normalize).filter(|w| !w.is_empty()).collect()
+}
+
+/// Other names people type (autocomplete.md §4); the value is matched like a typed query.
+const ALIASES: [(&str, &str); 13] = [
+    ("googlemail", "gmail"),
+    ("gcal", "google calendar"),
+    ("calendar", "google calendar"),
+    ("sheets", "google sheets"),
+    ("docs", "google docs"),
+    ("drive", "google drive"),
+    ("11labs", "elevenlabs"),
+    ("eleven", "elevenlabs"),
+    ("teams", "microsoft teams"),
+    ("twitter", "x"),
+    ("postgres", "postgresql"),
+    ("pg", "postgresql"),
+    ("gdrive", "google drive"),
+];
+
+/// How well a name matches; lower is better.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Match {
+    Prefix,
+    WordPrefix,
+    Alias,
+    NamePart,
+    Contains,
+    /// A whole word, the title or the name is a typo away.
+    Typo,
+    /// Only the start of a word is a typo away.
+    TypoStart,
+}
+
+/// One entry of the copy, with what matching needs worked out once.
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub entry: RegistryEntry,
+    pub publisher: Publisher,
+    /// The registry's title, else a name made from its registry name.
+    pub title: String,
+    title_norm: String,
+    slug_norm: String,
+    name_norm: String,
+    words: Vec<String>,
+    /// Dot and slash separated parts of the registry name.
+    parts: Vec<String>,
+    /// The publisher's own name: `stripe` for stripe.com (two-label domains only, so a subdomain
+    /// such as pg.ddx.io or stripecheckup.vercel.app isn't taken for its owner), `getsentry` for
+    /// github.com/getsentry.
+    publisher_key: Option<String>,
+    /// The publisher label normalised (`stripecom`).
+    publisher_norm: String,
+    /// `title_norm` NUL `name_norm`: every closer match is a piece of it, so one search of it
+    /// rules most entries out.
+    hay: String,
+    demoted: bool,
+}
+
+/// The title to show: the registry's own, else the part after the slash, else for a generic
+/// part (`com.stripe/mcp`) the publisher's name, capitalised ("Stripe").
+fn display_title(e: &RegistryEntry) -> String {
+    if e.title != e.name && !e.title.trim().is_empty() {
+        return e.title.clone();
+    }
+    let part = e.name.rsplit('/').next().unwrap_or(&e.name);
+    if !GENERIC_SERVER_PARTS.contains(&part.to_ascii_lowercase().as_str()) {
+        return part.to_string();
+    }
+    let p = publisher_name(&e.name);
+    let mut c = p.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_else(|| e.name.clone())
+}
+
+impl DirEntry {
+    /// `None` for an entry kwnt can't set up in one click: the directory doesn't show those.
+    pub fn new(entry: RegistryEntry) -> Option<Self> {
+        entry.plan.as_ref().ok()?;
+        let publisher = publisher_of(&entry.name);
+        let title = display_title(&entry);
+        let slug = entry.name.rsplit('/').next().unwrap_or(&entry.name);
+        let mut ws = words(&title);
+        for w in words(slug) {
+            if !ws.contains(&w) {
+                ws.push(w);
+            }
+        }
+        let publisher_key = publisher_key(&publisher);
+        let (title_norm, name_norm) = (normalize(&title), normalize(&entry.name));
+        Some(Self {
+            hay: format!("{title_norm}\0{name_norm}"),
+            title_norm,
+            slug_norm: normalize(slug),
+            name_norm,
+            words: ws,
+            parts: entry.name.split(['.', '/']).map(normalize).filter(|p| !p.is_empty()).collect(),
+            demoted: entry.name.to_ascii_lowercase().starts_with("ai.smithery/") || entry.placeholder_url,
+            publisher_key,
+            publisher_norm: normalize(&publisher.label),
+            publisher,
+            title,
+            entry,
+        })
+    }
+
+    fn is_remote(&self) -> bool {
+        self.entry.plan.as_ref().is_ok_and(|p| p.transport == "http")
+    }
+
+    /// The publisher is the query itself (`stripe` → stripe.com).
+    fn publisher_is(&self, q: &str) -> bool {
+        self.publisher_key.as_deref() == Some(q) || self.publisher_norm == q
+    }
+
+    fn direct_match(&self, q: &str) -> Option<Match> {
+        if self.title_norm.starts_with(q) || self.slug_norm.starts_with(q) || self.publisher_is(q) {
+            Some(Match::Prefix)
+        } else if self.words.iter().any(|w| w.starts_with(q)) {
+            Some(Match::WordPrefix)
+        } else {
+            None
+        }
+    }
+
+    /// Every match but a typo.
+    fn close_match(&self, q: &Query) -> Option<Match> {
+        // The title, its words, the registry name, its parts and the publisher's name are all
+        // pieces of `hay`; only the publisher label (`stripecom`) isn't.
+        let may = |t: &str| self.hay.contains(t) || self.publisher_norm == t;
+        if !may(&q.text) && !q.alias.as_deref().is_some_and(may) {
+            return None;
+        }
+        if let Some(m) = self.direct_match(&q.text) {
+            return Some(m);
+        }
+        if q.alias.as_deref().is_some_and(|a| self.direct_match(a).is_some()) {
+            return Some(Match::Alias);
+        }
+        if self.parts.iter().any(|p| p.starts_with(q.text.as_str())) {
+            return Some(Match::NamePart);
+        }
+        if self.title_norm.contains(q.text.as_str()) || self.name_norm.contains(q.text.as_str()) {
+            return Some(Match::Contains);
+        }
+        None
+    }
+
+    fn typo_match(&self, q: &Query) -> Option<Match> {
+        if q.budget == 0 {
+            return None;
+        }
+        let all = || self.words.iter().chain([&self.title_norm, &self.slug_norm]).map(String::as_str);
+        let whole = |w: &str| within(&q.text, q.chars, w, q.budget);
+        if all().any(whole) {
+            return Some(Match::Typo);
+        }
+        let start = |w: &str| match w.char_indices().nth(q.chars) {
+            Some((end, _)) if q.budget == 1 => one_edit_same_length(&q.text, &w[..end]),
+            Some((end, _)) => osa_within(&q.text, &w[..end], q.budget),
+            None => false,
+        };
+        all().any(start).then_some(Match::TypoStart)
+    }
+
+    /// How `q` matches this entry, if at all.
+    pub fn matches(&self, q: &str) -> Option<Match> {
+        let q = Query::new(q)?;
+        self.close_match(&q).or_else(|| self.typo_match(&q))
+    }
+
+    fn exact(&self, q: &str) -> bool {
+        self.title_norm == q || self.slug_norm == q
+    }
+
+    /// The sort key; lower comes first.
+    fn key(&self, q: &Query, m: Match, order: usize) -> SortKey {
+        let publisher = self.publisher_is(&q.text);
+        let publisher_typo = !publisher && q.budget > 0 && self.publisher_key.as_deref().is_some_and(|k| within(&q.text, q.chars, k, q.budget));
+        // Among typo matches, the name or title itself a typo away (`gmial` → gmail) first
+        let exact = self.exact(&q.text) || (m == Match::Typo && [&self.title_norm, &self.slug_norm].iter().any(|t| within(&q.text, q.chars, t, q.budget)));
+        (self.demoted, !publisher, m, !publisher_typo, !exact, !self.is_remote(), order)
+    }
+}
+
+/// `stripe` for stripe.com, `getsentry` for github.com/getsentry; none for a longer domain.
+fn publisher_key(p: &Publisher) -> Option<String> {
+    let key = match p.kind {
+        "github" => normalize(p.label.strip_prefix("github.com/")?),
+        _ => match p.label.split('.').collect::<Vec<_>>()[..] {
+            [name, _tld] => normalize(name),
+            _ => return None,
+        },
+    };
+    (!key.is_empty()).then_some(key)
+}
+
+/// Demoted, not the publisher, match, no publisher a typo away, not exact, not remote, order.
+type SortKey = (bool, bool, Match, bool, bool, bool, usize);
+
+/// A typed query, worked out once per search.
+struct Query {
+    /// Normalised.
+    text: String,
+    chars: usize,
+    /// What an alias stands for, normalised (`pg` → `postgresql`).
+    alias: Option<String>,
+    budget: usize,
+}
+
+impl Query {
+    /// `None` below [`MIN_QUERY_CHARS`].
+    fn new(typed: &str) -> Option<Self> {
+        let text = normalize(typed);
+        let chars = text.chars().count();
+        if chars < MIN_QUERY_CHARS {
+            return None;
+        }
+        let alias = ALIASES.iter().find(|(a, _)| *a == text).map(|(_, canonical)| normalize(canonical));
+        Some(Self { budget: typo_budget(chars), text, chars, alias })
+    }
+}
+
+/// 1 edit from 4 letters, 2 from 8 (autocomplete.md §4); none past [`OSA_MAX`] letters.
+fn typo_budget(chars: usize) -> usize {
+    match chars {
+        0..=3 => 0,
+        4..=7 => 1,
+        8..=OSA_MAX => 2,
+        _ => 0,
+    }
+}
+
+fn char_count(s: &str) -> usize {
+    if s.is_ascii() {
+        s.len()
+    } else {
+        s.chars().count()
+    }
+}
+
+/// Two strings of the same length one substitution or one swap of neighbours apart (or equal):
+/// [`osa_bounded`] ≤ 1 for them, without the table.
+fn one_edit_same_length(a: &str, b: &str) -> bool {
+    let (mut a, mut b) = (a.chars(), b.chars());
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if x == y => {}
+            (Some(x), Some(y)) => {
+                if a.clone().eq(b.clone()) {
+                    return true;
+                }
+                return matches!((a.next(), b.next()), (Some(x2), Some(y2)) if x2 == y && y2 == x) && a.eq(b);
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// `w` at most `max` edits from `q` (`q_chars` characters long). One edit, the common case, is
+/// checked without the table.
+fn within(q: &str, q_chars: usize, w: &str, max: usize) -> bool {
+    let w_chars = char_count(w);
+    if w_chars.abs_diff(q_chars) > max {
+        return false;
+    }
+    match (max, w_chars.cmp(&q_chars)) {
+        (0, _) => q == w,
+        (1, std::cmp::Ordering::Equal) => one_edit_same_length(q, w),
+        (1, std::cmp::Ordering::Less) => one_insert(w, q),
+        (1, std::cmp::Ordering::Greater) => one_insert(q, w),
+        _ => osa_within(q, w, max),
+    }
+}
+
+/// `long` is `short` with one character added.
+fn one_insert(short: &str, long: &str) -> bool {
+    let (mut s, mut l) = (short.chars(), long.chars());
+    loop {
+        match (s.clone().next(), l.next()) {
+            (Some(x), Some(y)) if x == y => {
+                s.next();
+            }
+            (_, Some(_)) => return s.eq(l),
+            (_, None) => return false,
+        }
+    }
+}
+
+/// The longest strings [`osa_bounded`] compares.
+const OSA_MAX: usize = 40;
+
+fn osa_within(a: &str, b: &str, max: usize) -> bool {
+    osa_bounded(a, b, max) <= max
+}
+
+/// Edits (insert, delete, substitute, swap two neighbours) between two short strings, without
+/// allocating; anything over `max`, or a string longer than [`OSA_MAX`], answers `max + 1`.
+fn osa_bounded(a: &str, b: &str, max: usize) -> usize {
+    fn fill(s: &str, buf: &mut [char; OSA_MAX]) -> Option<usize> {
+        let mut n = 0;
+        for c in s.chars() {
+            *buf.get_mut(n)? = c;
+            n += 1;
+        }
+        Some(n)
+    }
+    let (mut ab, mut bb) = (['\0'; OSA_MAX], ['\0'; OSA_MAX]);
+    let (Some(n), Some(m)) = (fill(a, &mut ab), fill(b, &mut bb)) else { return max + 1 };
+    if n.abs_diff(m) > max {
+        return max + 1;
+    }
+    let (a, b) = (&ab[..n], &bb[..m]);
+    let (mut before, mut prev, mut cur) = ([0usize; OSA_MAX + 1], [0usize; OSA_MAX + 1], [0usize; OSA_MAX + 1]);
+    for (j, cell) in prev.iter_mut().enumerate().take(m + 1) {
+        *cell = j;
+    }
+    for i in 1..=n {
+        cur[0] = i;
+        let mut row_min = i;
+        for j in 1..=m {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut d = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d = d.min(before[j - 2] + 1);
+            }
+            cur[j] = d;
+            row_min = row_min.min(d);
+        }
+        // A row's minimum never drops by more than one per row, so this can't come back under.
+        if row_min > max {
+            return max + 1;
+        }
+        std::mem::swap(&mut before, &mut prev);
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[m].min(max + 1)
+}
+
+/// The best `limit` entries for `query`, in order. `entries` is in registry order.
+pub fn rank<'a>(query: &str, entries: impl IntoIterator<Item = &'a DirEntry>, limit: usize) -> Vec<&'a DirEntry> {
+    let Some(q) = Query::new(query) else { return Vec::new() };
+    let mut hits = Vec::new();
+    let mut rest = Vec::new();
+    let mut shown = 0usize;
+    for (order, e) in entries.into_iter().enumerate() {
+        match e.close_match(&q) {
+            Some(m) => {
+                shown += usize::from(!e.demoted);
+                hits.push((e.key(&q, m, order), e));
+            }
+            None if q.budget > 0 => rest.push((order, e)),
+            None => {}
+        }
+    }
+    // A typo match ranks below every closer match that isn't demoted, so typos are only
+    // looked for when those leave room.
+    if shown < limit {
+        hits.extend(rest.into_iter().filter_map(|(order, e)| e.typo_match(&q).map(|m| (e.key(&q, m, order), e))));
+    }
+    hits.sort_unstable_by_key(|h| h.0);
+    hits.into_iter().take(limit).map(|(_, e)| e).collect()
+}
+
+/// The copy itself: every one-click entry's latest version, by registry name.
+#[derive(Debug, Default)]
+pub struct Copy {
+    pub entries: BTreeMap<String, DirEntry>,
+    /// When the sync that made this copy started (the next `updated_since`).
+    pub synced_from: Option<SystemTime>,
+}
+
+/// The directory: the copy, once the first sync finished. The registry it syncs from is passed
+/// in (`AppState::mcp_registry`, which `KWNT_MCP_REGISTRY_URL` and tests point elsewhere).
+#[derive(Default)]
+pub struct Directory {
+    copy: RwLock<Option<Arc<Copy>>>,
+}
+
+/// Where a search answer came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    Copy,
+    Live,
+}
+
+pub struct SearchAnswer {
+    pub entries: Vec<DirEntry>,
+    pub source: Source,
+    /// Neither a copy nor the registry could answer.
+    pub unavailable: bool,
+}
+
+impl Directory {
+    /// The current copy, if the first sync has finished.
+    pub fn copy(&self) -> Option<Arc<Copy>> {
+        self.copy.read().ok().and_then(|c| c.clone())
+    }
+
+    fn set(&self, copy: Copy) {
+        if let Ok(mut c) = self.copy.write() {
+            *c = Some(Arc::new(copy));
+        }
+    }
+
+    /// Answers from the copy; before the first sync, from the registry's own search.
+    pub async fn search(&self, registry: &McpRegistry, query: &str) -> SearchAnswer {
+        if let Some(copy) = self.copy() {
+            let entries = rank(query, copy.entries.values(), MAX_RESULTS).into_iter().cloned().collect();
+            return SearchAnswer { entries, source: Source::Copy, unavailable: false };
+        }
+        if normalize(query).chars().count() < MIN_QUERY_CHARS {
+            return SearchAnswer { entries: Vec::new(), source: Source::Live, unavailable: false };
+        }
+        match registry.search(query).await {
+            Ok(hits) => {
+                let all: Vec<DirEntry> = hits.into_iter().filter_map(DirEntry::new).collect();
+                let entries = rank(query, all.iter(), MAX_RESULTS).into_iter().cloned().collect();
+                SearchAnswer { entries, source: Source::Live, unavailable: false }
+            }
+            Err(e) => {
+                tracing::info!(error = %e, "MCP directory: no copy yet and the registry search failed");
+                SearchAnswer { entries: Vec::new(), source: Source::Live, unavailable: true }
+            }
+        }
+    }
+
+    /// One sync: the whole registry when there's no copy yet, else what changed since the last
+    /// one. The copy is replaced only when every page arrived.
+    pub async fn sync_once(&self, registry: &McpRegistry) -> Result<usize, String> {
+        let started = SystemTime::now();
+        let previous = self.copy();
+        let since = previous.as_ref().and_then(|c| c.synced_from).map(|t| {
+            let t = t.checked_sub(OVERLAP).unwrap_or(t);
+            chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        });
+        let mut entries = match (&previous, &since) {
+            (Some(c), Some(_)) => c.entries.clone(),
+            _ => BTreeMap::new(),
+        };
+        let mut cursor: Option<String> = None;
+        let mut seen = 0usize;
+        for page_no in 0..MAX_PAGES {
+            if page_no > 0 {
+                tokio::time::sleep(PAGE_PAUSE).await;
+            }
+            let page = registry.page(cursor.as_deref(), since.as_deref()).await?;
+            seen += page.items.len();
+            for (name, entry) in page.items {
+                match entry.and_then(DirEntry::new) {
+                    Some(e) if entries.len() < MAX_ENTRIES || entries.contains_key(&name) => {
+                        entries.insert(name, e);
+                    }
+                    Some(_) => {}
+                    None => {
+                        entries.remove(&name);
+                    }
+                }
+            }
+            match page.next_cursor {
+                Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
+                _ => break,
+            }
+        }
+        let kept = entries.len();
+        self.set(Copy { entries, synced_from: Some(started) });
+        tracing::info!(listed = seen, kept, full = since.is_none(), "MCP directory synced");
+        Ok(kept)
+    }
+
+    /// Syncs now and then every 6 hours, retrying failures with a growing pause, until shutdown.
+    pub fn spawn(self: Arc<Self>, registry: Arc<McpRegistry>, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut retry = RETRY_FIRST;
+            loop {
+                let wait = match self.sync_once(&registry).await {
+                    Ok(_) => {
+                        retry = RETRY_FIRST;
+                        SYNC_EVERY
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "MCP directory sync failed; trying again later");
+                        let w = retry;
+                        retry = (retry * 2).min(RETRY_MAX);
+                        w
+                    }
+                };
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = tokio::time::sleep(wait) => {}
+                }
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::registry::parse_list;
+
+    const STRIPE: &str = include_str!("../../tests/fixtures/mcp_registry/stripe.json");
+    const NOTION: &str = include_str!("../../tests/fixtures/mcp_registry/notion.json");
+
+    fn fixture(body: &str) -> Vec<DirEntry> {
+        parse_list(body.as_bytes()).unwrap().into_iter().filter_map(DirEntry::new).collect()
+    }
+
+    fn names(query: &str, list: &[DirEntry]) -> Vec<String> {
+        rank(query, list.iter(), 50).into_iter().map(|e| e.entry.name.clone()).collect()
+    }
+
+    #[test]
+    fn stripe_ranks_stripe_first_and_drops_refused_plans() {
+        let list = fixture(STRIPE);
+        let ranked = names("stripe", &list);
+        assert_eq!(ranked[0], "com.stripe/mcp", "{ranked:?}");
+        let top = &rank("stripe", list.iter(), 1)[0];
+        assert_eq!(top.publisher, Publisher { label: "stripe.com".into(), kind: "domain" });
+        assert_eq!(top.title, "Stripe");
+        // eu.nordicmcp/stripe's only address is https://nordicmcp.eu/mcp/stripe/{token}: not one-click
+        assert!(!ranked.iter().any(|n| n == "eu.nordicmcp/stripe"), "{ranked:?}");
+        // mcpb packages aren't installable either
+        assert!(!ranked.iter().any(|n| n == "io.github.theluckystrike/stripe-billing"));
+        // Look-alikes come after, and an exact name ("stripe") before the rest
+        assert_eq!(ranked[1], "com.insightfulpipe/stripe", "{ranked:?}");
+        assert!(ranked.len() >= 8, "{ranked:?}");
+        // Upper case, spaces and typos
+        assert_eq!(names("STRIPE ", &list)[0], "com.stripe/mcp");
+        assert_eq!(names("strpie", &list)[0], "com.stripe/mcp");
+    }
+
+    #[test]
+    fn notion_ranks_notion_first_and_smithery_last() {
+        let list = fixture(NOTION);
+        let ranked = names("notion", &list);
+        assert_eq!(ranked[0], "com.notion/mcp", "{ranked:?}");
+        assert_eq!(ranked.last().map(String::as_str), Some("ai.smithery/smithery-notion"), "{ranked:?}");
+        assert_eq!(names("notoin", &list)[0], "com.notion/mcp");
+        // Remote before stdio among equal matches
+        let remote_at = ranked.iter().position(|n| n == "com.insightfulpipe/notion").unwrap();
+        let stdio_at = ranked.iter().position(|n| n == "com.foreverworks/notion").unwrap();
+        assert!(remote_at < stdio_at, "{ranked:?}");
+    }
+
+    #[test]
+    fn placeholder_addresses_go_last_even_with_a_package() {
+        let body = serde_json::json!({"servers": [
+            {"server": {"name": "io.github.a/weather-tenant", "title": "Weather", "description": "d", "version": "1",
+                "remotes": [{"type": "streamable-http", "url": "https://{tenant}.weather.example/mcp"}],
+                "packages": [{"registryType": "npm", "identifier": "weather-mcp", "version": "1.0.0", "transport": {"type": "stdio"}}]}},
+            {"server": {"name": "io.github.b/weather-x", "description": "d", "version": "1",
+                "packages": [{"registryType": "npm", "identifier": "weather-x", "version": "1.0.0", "transport": {"type": "stdio"}}]}},
+        ]});
+        let list = fixture(&body.to_string());
+        assert_eq!(names("weather", &list), ["io.github.b/weather-x", "io.github.a/weather-tenant"]);
+    }
+
+    #[test]
+    fn short_queries_aliases_and_publishers() {
+        let list = fixture(STRIPE);
+        assert!(names("s", &list).is_empty());
+        assert!(names("--", &list).is_empty());
+        assert_eq!(publisher_of("io.github.Alice/x"), Publisher { label: "github.com/alice".into(), kind: "github" });
+        assert_eq!(publisher_of("app.vercel.stripecheckup/x").label, "stripecheckup.vercel.app");
+        assert_eq!(normalize("Google-Sheets É"), "googlesheetse");
+        assert_eq!(osa_bounded("notoin", "notion", 2), 1);
+        assert_eq!(osa_bounded("gmial", "gmail", 2), 1);
+        assert_eq!(osa_bounded("kitten", "sitting", 5), 3);
+        assert_eq!(osa_bounded("ab", "ba", 2), 1);
+        assert_eq!(osa_bounded("abc", "abcdefgh", 2), 3);
+        assert_eq!(osa_bounded("abcdef", "uvwxyz", 1), 2, "stops early, past the limit");
+        assert_eq!(osa_bounded("café", "cafe", 2), 1);
+        assert_eq!(osa_bounded(&"a".repeat(41), &"a".repeat(41), 2), 3, "too long to compare");
+        assert_eq!((typo_budget(3), typo_budget(4), typo_budget(8), typo_budget(41)), (0, 1, 2, 0));
+        for (a, b) in [("abcd", "abcd"), ("abcd", "abxd"), ("abcd", "bacd"), ("abcd", "abdc"), ("strpie", "stripe"), ("cafe", "café"), ("abcd", "abcde"), ("abcd", "xbcy"), ("abcd", "badc"), ("abcd", "acdb"), ("abcd", "dbca")] {
+            assert_eq!(one_edit_same_length(a, b), osa_bounded(a, b, 1) <= 1 && char_count(a) == char_count(b), "{a} {b}");
+        }
+        assert_eq!((char_count("café"), char_count("cafe")), (4, 4));
+        for (a, b) in [("gmail", "gmial"), ("gmail", "gmai"), ("gmail", "gmaill"), ("gmail", "xgmail"), ("gmail", "gmal"), ("gmail", "gmali"), ("gmail", "mail"), ("gmail", "gmailxx"), ("gmail", "gamil"), ("gmail", "gnail"), ("abcd", "acbd"), ("abcd", "abc"), ("abc", "ab")] {
+            for (x, y) in [(a, b), (b, a)] {
+                assert_eq!(within(x, char_count(x), y, 1), osa_bounded(x, y, 1) <= 1, "{x} {y}");
+                assert_eq!(within(x, char_count(x), y, 2), osa_bounded(x, y, 2) <= 2, "{x} {y}");
+            }
+        }
+        assert!(within("abc", 3, "abc", 0) && !within("abc", 3, "abd", 0));
+        let pg = fixture(
+            &serde_json::json!({"servers": [{"server": {"name": "io.github.x/postgresql-tools", "description": "d", "version": "1",
+                "remotes": [{"type": "streamable-http", "url": "https://pg.example/mcp"}]}}]})
+            .to_string(),
+        );
+        assert_eq!(rank("pg", pg.iter(), 5).len(), 1);
+        assert_eq!(rank("pg", pg.iter(), 5)[0].matches("pg"), Some(Match::Alias));
+    }
+
+    /// Remote entries named like the real registry's: `(registry name, title)`.
+    fn remotes(list: &[(&str, &str)]) -> Vec<DirEntry> {
+        let servers: Vec<_> = list
+            .iter()
+            .enumerate()
+            .map(|(i, (name, title))| {
+                serde_json::json!({"server": {"name": name, "title": title, "description": "d", "version": "1",
+                    "remotes": [{"type": "streamable-http", "url": format!("https://mcp{i}.example.com/mcp")}]}})
+            })
+            .collect();
+        fixture(&serde_json::json!({ "servers": servers }).to_string())
+    }
+
+    #[test]
+    fn a_publisher_a_typo_away_never_beats_a_closer_match() {
+        // From the real registry (Nov 13): stride.info and scripe.io are one letter from stripe
+        let list = remotes(&[
+            ("info.stride/stride", "Stride"),
+            ("io.scripe/mcp", "Scripe"),
+            ("com.insightfulpipe/stripe", "Stripe"),
+            ("com.stripe/mcp", "Stripe"),
+            ("io.github.someone/stripe-billing", "Stripe billing"),
+        ]);
+        let ranked = names("stripe", &list);
+        assert_eq!(&ranked[..3], ["com.stripe/mcp", "com.insightfulpipe/stripe", "io.github.someone/stripe-billing"], "{ranked:?}");
+        // A typo in the query: the publisher a typo away goes first among the typo matches
+        assert_eq!(names("strpie", &list)[0], "com.stripe/mcp");
+
+        let list = remotes(&[
+            ("fr.gentry/logement", "Gentry logement"),
+            ("fyi.entry/entry", "Entry"),
+            ("io.github.getsentry/sentry-mcp", "Sentry"),
+        ]);
+        assert_eq!(names("sentry", &list)[0], "io.github.getsentry/sentry-mcp");
+
+        // Among typo matches, the name itself a typo away comes before a word in a longer title
+        let list = remotes(&[("ai.fgac/fgac", "Fgac for gmail and drive"), ("ai.waystation/gmail", "Gmail")]);
+        assert_eq!(names("gmial", &list), ["ai.waystation/gmail", "ai.fgac/fgac"]);
+    }
+
+    #[test]
+    fn github_publishers_and_subdomains() {
+        let list = remotes(&[
+            ("com.robinsonaisystems/github", "GitHub"),
+            ("io.github.github/github-mcp-server", "GitHub"),
+            ("io.ddx.pg/archive", "Archive"),
+            ("io.github.x/postgresql-tools", "Postgres tools"),
+            ("app.vercel.stripecheckup/x", "Checkup"),
+        ]);
+        assert_eq!(names("github", &list)[0], "io.github.github/github-mcp-server");
+        assert_eq!(names("getsentry", &remotes(&[("io.github.getsentry/sentry-mcp", "Sentry")])).len(), 1);
+        // pg.ddx.io's owner is ddx.io, not "pg": the alias for PostgreSQL comes first
+        assert_eq!(names("pg", &list), ["io.github.x/postgresql-tools", "io.ddx.pg/archive"]);
+        // stripecheckup.vercel.app isn't Vercel's own
+        assert_eq!(list[4].publisher_key, None);
+        assert_eq!(list[1].publisher_key.as_deref(), Some("github"));
+        assert_eq!(list[0].publisher_key.as_deref(), Some("robinsonaisystems"));
+    }
+
+    #[test]
+    fn typos_are_skipped_when_closer_matches_fill_the_list() {
+        let mut named: Vec<(String, String)> = (0..20).map(|i| (format!("com.acme{i}/stripe-tools"), format!("Stripe tools {i}"))).collect();
+        named.push(("info.stride/stride".into(), "Stride".into()));
+        let list = remotes(&named.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect::<Vec<_>>());
+        let top = rank("stripe", list.iter(), MAX_RESULTS);
+        assert_eq!(top.len(), MAX_RESULTS);
+        assert!(top.iter().all(|e| e.entry.name.starts_with("com.acme")));
+        let ranked = names("stripe", &list);
+        assert_eq!((ranked.len(), ranked.last().map(String::as_str)), (21, Some("info.stride/stride")), "{ranked:?}");
+        // With room left, the typo match is there, last
+        assert_eq!(names("stride", &list)[0], "info.stride/stride");
+        assert_eq!(rank("stripe", list[15..].iter(), MAX_RESULTS).last().map(|e| e.entry.name.as_str()), Some("info.stride/stride"));
+    }
+
+    #[test]
+    fn ten_thousand_entries_answer_fast() {
+        // Varied names, like the real copy (about 6,000 one-click entries on Nov 13)
+        let mut seed = 7u64;
+        let mut word = |len: usize| -> String {
+            (0..len)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    char::from(b'a' + ((seed >> 33) % 26) as u8)
+                })
+                .collect()
+        };
+        let named: Vec<(String, String)> =
+            (0..12_000).map(|i| (format!("io.github.{}/{}-mcp", word(8), word(3 + i % 9)), format!("{} {} tools", word(6), word(7)))).collect();
+        let list = remotes(&named.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect::<Vec<_>>());
+        assert_eq!(list.len(), 12_000);
+        let started = std::time::Instant::now();
+        for q in ["st", "stripe", "strpie", "zqxw", "zzzzzzzz", "billing tools", "pg"] {
+            rank(q, list.iter(), MAX_RESULTS);
+        }
+        // Seven searches; a release build takes a few ms each. Debug builds are many times slower,
+        // so this only guards against something going badly wrong.
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    }
+}
