@@ -458,11 +458,11 @@ mod tests {
             assert_eq!(p.matches("You hold task t1").count(), 1, "the brief once");
         }
         assert_eq!(ran.waits, vec![(1, Duration::from_secs(60)), (2, Duration::from_secs(120))]);
-        // The turn's error, which `after_turn` records like any failed runner turn: AutoFix's
-        // `unknown` (one retry_same per task), never a class of its own
+        // The turn's error, which `after_turn` records like any failed runner turn: a temporary
+        // error AutoFix doesn't run again (0.9.7, see autofix's `busy_give_up_is_never_run_again`)
         let err = ran.outcome.expect_err("the task fails once the retries are used up");
         assert_eq!(err, "the browser stayed busy after 2 automatic retries of `browser_act`");
-        assert_eq!(super::super::autofix::classify("turn", "error", &err), "unknown");
+        assert_eq!(super::super::autofix::classify("turn", "error", &err), "transient");
     }
 
     #[tokio::test]

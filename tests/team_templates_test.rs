@@ -99,36 +99,48 @@ async fn bot_token(e: &Env, bot: &Kwant) -> String {
     mcp_runtime::prepare_turn_with_self(&e.state, bot, Some("t-teams".into()), None, Some(scope)).await.unwrap().1
 }
 
+/// An Inbox team, renaming its Researcher: a fresh install's own Researcher (from @helpers) has
+/// that name. The clash itself is tested in `a_second_create_gets_free_names_and_a_clash_says_what_to_use`.
+fn inbox() -> Value {
+    json!({"template_id": "inbox", "names": {"Researcher": "Finder"}})
+}
+
 async fn undo(e: &Env, action_id: &str) -> (StatusCode, Value) {
     call(&e.app, "POST", &format!("/api/bot-actions/{action_id}/undo"), &[], None).await
 }
 
 #[tokio::test]
-async fn catalogue_lists_the_three_templates_and_preview_names_free_slots() {
+async fn catalogue_lists_the_four_templates_and_preview_names_free_slots() {
     let e = setup().await;
     let (s, v) = call(&e.app, "GET", "/api/team-templates", &[], None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let ids: Vec<&str> = v["templates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["inbox", "sales", "coding"]);
+    assert_eq!(ids, ["helpers", "inbox", "sales", "coding"]);
 
-    let (s, p) = call(&e.app, "GET", "/api/team-templates/coding/preview", &[], None).await;
-    assert_eq!(s, StatusCode::OK, "{p}");
-    assert_eq!(p["handle"], "coding");
-    assert_eq!(p["names"].as_object().unwrap().len(), 4);
-    // The seeded space already has a TechLead: the preview names a free one and says why
-    let clashes = p["clashes"].as_array().unwrap();
-    assert_eq!(clashes.len(), 1, "{p}");
-    assert_eq!(clashes[0]["field"], "names.TechLead");
-    assert_eq!(clashes[0]["wanted"], "TechLead");
-    assert_eq!(clashes[0]["suggestion"], p["names"]["TechLead"]);
-    assert_ne!(p["names"]["TechLead"], "TechLead");
-    assert_eq!(p["names"]["Frontend"], "Frontend");
-
-    // Inbox clashes with nothing
     let (s, p) = call(&e.app, "GET", "/api/team-templates/inbox/preview", &[], None).await;
     assert_eq!(s, StatusCode::OK, "{p}");
-    assert!(p["clashes"].as_array().unwrap().is_empty(), "{p}");
+    assert_eq!(p["handle"], "inbox");
+    assert_eq!(p["names"].as_object().unwrap().len(), 3);
+    // The seeded space already has a Researcher: the preview names a free one and says why
+    let clashes = p["clashes"].as_array().unwrap();
+    assert_eq!(clashes.len(), 1, "{p}");
+    assert_eq!(clashes[0]["field"], "names.Researcher");
+    assert_eq!(clashes[0]["wanted"], "Researcher");
+    assert_eq!(clashes[0]["suggestion"], p["names"]["Researcher"]);
+    assert_ne!(p["names"]["Researcher"], "Researcher");
     assert_eq!(p["names"]["InboxManager"], "InboxManager");
+
+    // Coding clashes with nothing
+    let (s, p) = call(&e.app, "GET", "/api/team-templates/coding/preview", &[], None).await;
+    assert_eq!(s, StatusCode::OK, "{p}");
+    assert!(p["clashes"].as_array().unwrap().is_empty(), "{p}");
+    assert_eq!(p["names"]["TechLead"], "TechLead");
+
+    // Helpers is the seeded team itself: its handle and every name are taken
+    let (s, p) = call(&e.app, "GET", "/api/team-templates/helpers/preview", &[], None).await;
+    assert_eq!(s, StatusCode::OK, "{p}");
+    let fields: HashSet<&str> = p["clashes"].as_array().unwrap().iter().map(|c| c["field"].as_str().unwrap()).collect();
+    assert_eq!(fields, HashSet::from(["handle", "names.Assistant", "names.Researcher", "names.Writer"]), "{p}");
 
     let (s, v) = call(&e.app, "GET", "/api/team-templates/nope/preview", &[], None).await;
     assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("unknown_template")));
@@ -138,7 +150,7 @@ async fn catalogue_lists_the_three_templates_and_preview_names_free_slots() {
 async fn one_create_makes_everything_and_one_undo_removes_it() {
     let e = setup().await;
     let before = counts(&e).await;
-    let (s, v) = create(&e, json!({"template_id": "inbox"})).await;
+    let (s, v) = create(&e, inbox()).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let bots = v["bots"].as_array().unwrap();
     assert_eq!(bots.len(), 3);
@@ -279,10 +291,10 @@ async fn the_undo_preview_names_the_archived_chat_the_undo_leaves() {
 #[tokio::test]
 async fn a_second_create_gets_free_names_and_a_clash_says_what_to_use() {
     let e = setup().await;
-    // Ignoring the preview's names refuses with the seeded TechLead clash, and makes nothing
+    // Ignoring the preview's names refuses with the seeded Researcher clash, and makes nothing
     let before = counts(&e).await;
-    let (s, v) = create(&e, json!({"template_id": "coding"})).await;
-    assert_eq!((s, v["code"].as_str(), v["field"].as_str()), (StatusCode::CONFLICT, Some("name_taken"), Some("names.TechLead")), "{v}");
+    let (s, v) = create(&e, json!({"template_id": "inbox"})).await;
+    assert_eq!((s, v["code"].as_str(), v["field"].as_str()), (StatusCode::CONFLICT, Some("name_taken"), Some("names.Researcher")), "{v}");
     assert_eq!(v["clashes"].as_array().unwrap().len(), 1, "{v}");
     assert_eq!(counts(&e).await, before);
 
@@ -354,10 +366,10 @@ async fn bad_requests_are_refused_with_a_code_and_make_nothing() {
 async fn the_same_idempotency_key_replays_the_first_create() {
     let e = setup().await;
     let key = [("idempotency-key", "tap-7f3a")];
-    let (s1, a) = call(&e.app, "POST", "/api/teams/from-template", &key, Some(json!({"template_id": "inbox"}))).await;
+    let (s1, a) = call(&e.app, "POST", "/api/teams/from-template", &key, Some(inbox())).await;
     assert_eq!(s1, StatusCode::CREATED, "{a}");
     let after_first = counts(&e).await;
-    let (s2, b) = call(&e.app, "POST", "/api/teams/from-template", &key, Some(json!({"template_id": "inbox"}))).await;
+    let (s2, b) = call(&e.app, "POST", "/api/teams/from-template", &key, Some(inbox())).await;
     assert!(s2.is_success(), "{s2} {b}");
     assert_eq!(a["team"]["id"], b["team"]["id"]);
     assert_eq!(a["action_id"], b["action_id"]);
@@ -399,7 +411,7 @@ async fn the_same_idempotency_key_replays_the_first_create() {
 #[tokio::test]
 async fn undo_is_not_blocked_by_an_archived_chat_of_a_deleted_team() {
     let e = setup().await;
-    let (s, inbox) = create(&e, json!({"template_id": "inbox"})).await;
+    let (s, inbox) = create(&e, inbox()).await;
     assert_eq!(s, StatusCode::CREATED, "{inbox}");
     let researcher = inbox["bots"].as_array().unwrap().iter().find(|b| b["slot"] == "Researcher").unwrap()["id"].as_str().unwrap().to_string();
     let (s, lab) = call(
@@ -450,7 +462,7 @@ async fn a_bot_token_cannot_preview_create_suggest_or_read_a_template() {
     let auth = format!("Bearer {token}");
     let fake_agent = "Bearer kag_00000000000000000000000000000000000000000";
     let before = counts(&e).await;
-    let (_, made) = create(&e, json!({"template_id": "inbox"})).await;
+    let (_, made) = create(&e, inbox()).await;
     let team_id = made["team"]["id"].as_str().unwrap().to_string();
     let after = counts(&e).await;
     for h in [auth.as_str(), fake_agent] {

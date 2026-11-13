@@ -295,3 +295,18 @@ test('turn_runs_on for a turn whose start went unseen still lets go when it ends
   assert.equal(m.liveRunOf('k9'), undefined);
   assert.equal(m.lastRunOf('k9').model, 'haiku');
 });
+
+test('0.9.8 #7: a bot pinned to a signed-out engine with failover off gets no green dot; failover on keeps it', () => {
+  const gout = ENGINES.map((e) => (e.id === 'grok' ? { ...e, status: 'signed_out', ready: false } : e));
+  const grokBot = { preferred_model: 'grok/grok-4' };
+  assert.equal(m.pinnedCantRun({ ...grokBot, profile_failover: false }, gout), 'Runs on Grok · Grok 4 · signed out', 'the badge’s own tip');
+  assert.equal(m.pinnedCantRun({ ...grokBot, profile_failover: true }, gout), null, 'failover on: its turn moves on and runs');
+  assert.equal(m.pinnedCantRun(grokBot, gout), null, 'unknown failover is the server default (on)');
+  assert.equal(m.pinnedCantRun({ ...grokBot, profile_failover: false }, ENGINES), null, 'Grok signed in');
+  assert.equal(m.pinnedCantRun({ preferred_model: 'auto', profile_failover: false }, gout), null, 'Laya picks: never pinned');
+  assert.equal(m.pinnedCantRun({ ...grokBot, profile_failover: false }, null), null, 'engines not loaded yet: no claim');
+  // The sidebar row passes it to the dot: can't run (grey) with the badge's tip instead of the green Available
+  const side = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
+  assert.match(side, /const pinnedTip = pinnedCantRun\(k, engines\.engines\);\n\s+const status = asked \? 'needs_you' : statusOf\(k\.id, botStatus, pinnedTip \? false : canRun\);/);
+  assert.match(side, /title=\{status === 'cant_run' \? pinnedTip \?\? "Can't run yet: no account works here"/);
+});

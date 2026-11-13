@@ -145,6 +145,7 @@ export const PausedActions: React.FC<{
 const focusComposer = () => document.querySelector<HTMLTextAreaElement>('[data-composer-form] textarea')?.focus();
 
 /** Above the composer in a paused bot's chat: why nothing new starts, and the way on. */
+// The second line is balanced so "again." never sits alone on a line at 1280 (Mira, 0.9.5 follow-up 4)
 export const BudgetPausedBanner: React.FC<{ budget: BotBudget; onRaise?: (kwantId: string) => void; send?: typeof fetch }> = ({ budget, onRaise, send }) => {
   const id = `budget-banner-${budget.kwant_id}`;
   return (
@@ -158,7 +159,7 @@ export const BudgetPausedBanner: React.FC<{ budget: BotBudget; onRaise?: (kwantI
           <PauseCircle size={14} className="shrink-0 text-amber-400" aria-hidden="true" />
           {PAUSED_LINE}
         </p>
-        <p className="mt-0.5 pl-[22px] text-[11px] text-amber-200/70">{usedLine(budget)}. Your message waits and goes through once it can start again.</p>
+        <p className="mt-0.5 pl-[22px] text-[11px] text-amber-200/70 text-balance" data-budget-banner-detail>{usedLine(budget)}. Your message waits and goes through once it can start again.</p>
       </div>
       <PausedActions budget={budget} onRaise={onRaise} onContinued={focusComposer} describedBy={id} send={send} />
     </section>
@@ -181,6 +182,9 @@ export const BudgetNotice: React.FC<{
   // Only this month's line still has a way on; an older one stays as a record
   const current = !!live && live.month === meta.month;
   const stopped = meta.kind === 'bot_budget_stopped';
+  // The 80% line is a record of the crossing: its numbers are the ones it was posted with, never the live count
+  // (0.9.5 QA F2). The stop notice keeps the live count while it still has Continue on it.
+  const usage = !stopped ? (meta.at ? usedLine(meta.at) : meta.detail) : current ? usedLine(live) : meta.detail;
   return (
     <section
       data-message-id={messageId}
@@ -198,7 +202,7 @@ export const BudgetNotice: React.FC<{
             )}
             <span className="min-w-0">{text}</span>
           </p>
-          {(current || meta.detail) && <p className="mt-1 pl-[23px] text-[11px] text-amber-200/60 font-mono">{current ? usedLine(live) : meta.detail}</p>}
+          {usage && <p className="mt-1 pl-[23px] text-[11px] text-amber-200/60 font-mono">{usage}</p>}
         </div>
         {canAct && current && stopped && (live.state === 'paused' || live.state === 'continued') && (
           <PausedActions budget={live} onRaise={onRaise} describedBy={headingId} send={send} />
@@ -242,7 +246,11 @@ export const BudgetNeedsYou: React.FC<{ onRaise?: (kwantId: string) => void; sen
           const done = continued.has(b.kwant_id);
           const live = list?.bots.find((x) => x.kwant_id === b.kwant_id) ?? b;
           return (
-            <li key={b.kwant_id} data-needs-budget-item={done ? 'continued' : b.state} className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-3.5 py-2.5 sm:px-4">
+            <li
+              key={b.kwant_id}
+              data-needs-budget-item={done ? 'continued' : b.state}
+              className={`rounded-xl border px-3.5 py-2.5 sm:px-4 ${done ? 'border-zinc-800 bg-zinc-900/40' : 'border-amber-500/30 bg-amber-950/20'}`}
+            >
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <div className="min-w-0 flex-1 basis-56">
                   {done ? (
@@ -262,9 +270,10 @@ export const BudgetNeedsYou: React.FC<{ onRaise?: (kwantId: string) => void; sen
                       </span>
                     </p>
                   )}
+                  {/* Done after Continue: no amber and no meter, just what was used (Mira, 0.9.5 follow-up 1) */}
                   <div className="mt-1.5 pl-[23px] flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <BudgetMeter budget={b} className="max-w-[160px]" />
-                    <span className="min-w-0 break-words text-[11px] text-amber-200/60 font-mono">{usedLine(b)}</span>
+                    {!done && <BudgetMeter budget={b} className="max-w-[160px]" />}
+                    <span className={`min-w-0 break-words text-[11px] font-mono ${done ? 'text-zinc-500' : 'text-amber-200/60'}`}>{usedLine(b)}</span>
                   </div>
                 </div>
                 {paused ? (
@@ -519,12 +528,13 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
 
 // ---------------------------------------------------------------- Settings › Usage
 
-const STATE_CHIP: Record<BotBudget['state'], { text: string; tone: string }> = {
-  off: { text: 'No budget', tone: 'text-zinc-500 border-zinc-800' },
-  under: { text: 'On track', tone: 'text-zinc-300 border-zinc-700' },
-  warn: { text: '% used', tone: 'text-amber-200 border-amber-500/40 bg-amber-500/10' },
-  paused: { text: 'Paused', tone: 'text-amber-100 border-amber-500/60 bg-amber-500/20' },
-  continued: { text: 'Continued', tone: 'text-zinc-300 border-zinc-700' },
+/** The chip on each bot's row: its words follow the budget (the 80% one says how much is used). */
+const STATE_CHIP: Record<BotBudget['state'], { text: (b: BotBudget) => string; tone: string }> = {
+  off: { text: () => 'No budget', tone: 'text-zinc-500 border-zinc-800' },
+  under: { text: () => 'On track', tone: 'text-zinc-300 border-zinc-700' },
+  warn: { text: (b) => `${meterPercent(b)}% used`, tone: 'text-amber-200 border-amber-500/40 bg-amber-500/10' },
+  paused: { text: () => 'Paused', tone: 'text-amber-100 border-amber-500/60 bg-amber-500/20' },
+  continued: { text: () => 'Continued', tone: 'text-zinc-300 border-zinc-700' },
 };
 
 /** Every bot in this space with its budget and this month's use. */
@@ -564,7 +574,7 @@ export const BudgetOverview: React.FC<{ open: boolean; onOpenBot?: (kwantId: str
               return (
                 <li key={b.kwant_id} className="flex flex-wrap lg:flex-nowrap items-center gap-x-3 gap-y-1 px-3 py-2" data-budget-row={b.state}>
                   <span className="min-w-0 flex-1 basis-32 truncate text-[11px] font-medium text-zinc-200">{b.kwant_name || 'Unnamed bot'}</span>
-                  <span className={`shrink-0 rounded-full border px-1.5 py-px text-[10px] ${chip.tone}`}>{b.state === 'warn' ? `${meterPercent(b)}% used` : chip.text}</span>
+                  <span className={`shrink-0 rounded-full border px-1.5 py-px text-[10px] ${chip.tone}`}>{chip.text(b)}</span>
                   <span className="basis-full sm:order-last lg:order-none lg:basis-auto lg:w-80 flex items-center gap-2 min-w-0">
                     {hasBudget(b) && <BudgetMeter budget={b} className="max-w-[72px]" />}
                     <span className="min-w-0 break-words font-mono text-[11px] tabular-nums text-zinc-400">

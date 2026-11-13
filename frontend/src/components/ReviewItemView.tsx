@@ -105,6 +105,11 @@ export interface ReviewItemViewProps {
   /** The phone page draws its own top bar with the title; the view then starts at the chips. */
   hideTitle?: boolean;
   /**
+   * done-check: the "How it was checked" box for a to-review task in Done that opens in this full layout
+   * (the done layout passes it inside `done.chips` instead). Drawn where the chips go, above the verdict.
+   */
+  checkBox?: React.ReactNode;
+  /**
    * 0.9.5 F, a done item in the Inbox (a routine's review task): its own title and meta line, the chips, and
    * the answer, trail and Why above the actions. The verdict box then shows only when there is a verdict.
    */
@@ -114,6 +119,8 @@ export interface ReviewItemViewProps {
     chips: React.ReactNode;
     body: React.ReactNode;
     changed: boolean | null;
+    /** done-check: the check box above already lists each task criterion and its evidence. */
+    hideCriteria?: boolean;
   };
 }
 
@@ -187,6 +194,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   onHeldResolved,
   hideTitle = false,
   done: doneView,
+  checkBox,
 }) => {
   const phone = usePhoneLayout();
   const uid = useId();
@@ -386,10 +394,10 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   const lockAll = done || busy !== null;
   const changed = doneView ? doneView.changed : typeof item.changed === 'boolean' ? item.changed : null;
   const rollbackShown = rollbackFor(item, changed);
-  const showVerdict = !doneView || checking || v.result !== 'none';
+  const showVerdict = checking || v.result !== 'none' || (!doneView && !checkBox);
   // The done layout (0.9.5 F) leaves out what has nothing to say: a low risk chip, no criteria, no evidence.
   const showRisk = !!item.risk.level && !(doneView && item.risk.level === 'low');
-  const showCriteria = !doneView || item.criteria.length > 0;
+  const showCriteria = !doneView || (item.criteria.length > 0 && !doneView.hideCriteria);
   const ev = item.evidence;
   const showEvidence = !doneView || ev.checks.length > 0 || ev.screenshots.length > 0 || !!ev.pr;
 
@@ -445,6 +453,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
       </header>
 
       {doneView?.chips}
+      {!doneView && checkBox}
       {doneView?.body}
 
       {/* Verdict */}

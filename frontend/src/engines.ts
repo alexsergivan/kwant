@@ -501,6 +501,20 @@ export function modelBadgeFor(
   };
 }
 
+/**
+ * Why a bot pinned to one engine can't run now, or null when it can (or it isn't pinned). Only with failover
+ * off: with failover on, a signed-out engine's turn moves on and really runs, so the dot stays green.
+ * The words are the badge's own tip, "Runs on Grok · signed out" (0.9.7 model-badge QA).
+ */
+export function pinnedCantRun(
+  kwant: { preferred_model?: string | null; profile_failover?: boolean } | null | undefined,
+  engines: EngineInfo[] | null | undefined,
+): string | null {
+  if (!kwant || kwant.profile_failover !== false) return null;
+  const badge = modelBadgeFor({ preferred_model: kwant.preferred_model }, null, engines ?? null);
+  return badge && !badge.auto && badge.cantRun ? badge.label : null;
+}
+
 /** The badge's diameter for an avatar of `size` px: none under 24, 14 at 28–34, larger on big avatars. */
 export function modelBadgeSize(size: number): number | null {
   if (size < 24) return null;
