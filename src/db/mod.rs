@@ -61,6 +61,7 @@ pub mod isolated_folders;
 pub mod tool_notes;
 pub mod mission_watch;
 pub mod verifier;
+pub mod last_ran_on;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -282,6 +283,9 @@ impl Database {
         db.migrate_isolated_folders().await?;
         // 0.9.0 wave 3: task contracts and verifier verdicts (add-only)
         db.migrate_verifier().await?;
+        // 0.9.6: the model badge's resting value (add-only). Last, after every step that can
+        // rebuild `kwants`
+        db.migrate_last_ran_on().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal
