@@ -10,16 +10,21 @@ import {
   RunStatus,
   ScheduleForm,
   WEEKDAYS,
+  WORK_WEEK,
   channelLabel,
   continuityApi,
   defaultTimeZone,
   emptyScheduleForm,
+  firstLine,
   formFromSchedule,
   formatWhen,
   sortMonthDays,
   onContinuity,
+  sameDays,
   scheduleFromForm,
   timeZoneOptions,
+  zoneLabel,
+  zoneOffset,
 } from '../continuity';
 import { asSchedule, scheduleWords } from '../botActions';
 import type { Channel, Kwant } from './Sidebar';
@@ -31,6 +36,8 @@ import type { MessageTarget } from './DoneDetail';
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-200 hover:bg-zinc-700`;
+const rowSmallBtn = smallBtn.replace('text-[11px]', 'text-xs sm:text-[11px]');
+const rowQuietBtn = quietBtn.replace('text-[11px]', 'text-xs sm:text-[11px]');
 const inputClass =
   'w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors';
 const labelClass = 'block text-xs font-medium text-zinc-400 mb-1';
@@ -129,6 +136,13 @@ export const RoutineForm: React.FC<{
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const s = f.schedule;
+  // Routines setup D: the zone shows as a city with Change; a zone Intl doesn't know starts open, so what's saved shows.
+  const [tzOpen, setTzOpen] = useState(() => !s.tz.trim() || zoneOffset(s.tz) === null);
+  const tzRef = useRef<HTMLInputElement>(null);
+  const openTz = () => {
+    setTzOpen(true);
+    requestAnimationFrame(() => tzRef.current?.focus());
+  };
   const setS = (patch: Partial<ScheduleForm>) => setF((prev) => ({ ...prev, schedule: { ...prev.schedule, ...patch } }));
 
   const submit = async (e: React.FormEvent) => {
@@ -171,7 +185,7 @@ export const RoutineForm: React.FC<{
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label htmlFor={id('name')} className={labelClass}>Name</label>
-          <input id={id('name')} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Morning digest" className={inputClass} autoFocus />
+          <input id={id('name')} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Competitor prices" className={inputClass} autoFocus />
         </div>
         {!fixedKwantId && (
           <div>
@@ -202,7 +216,7 @@ export const RoutineForm: React.FC<{
           rows={3}
           value={f.instructions}
           onChange={(e) => setF({ ...f, instructions: e.target.value })}
-          placeholder="Summarise yesterday's open pull requests and flag anything blocked."
+          placeholder="Check our 3 competitors' prices and tell me what changed since last time."
           className={`${inputClass} resize-y`}
         />
       </div>
@@ -217,7 +231,7 @@ export const RoutineForm: React.FC<{
               role="radio"
               aria-checked={s.type === t.id}
               onClick={() => setS({ type: t.id })}
-              className={`py-1.5 sm:py-1 rounded-md text-[11px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${s.type === t.id ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`min-h-10 sm:min-h-0 py-1.5 sm:py-1 rounded-md text-[11px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${s.type === t.id ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               {t.label}
             </button>
@@ -228,7 +242,7 @@ export const RoutineForm: React.FC<{
           <div>
             <label htmlFor={id('at')} className="sr-only">Date and time</label>
             <input id={id('at')} type="datetime-local" value={s.onceAt} onChange={(e) => setS({ onceAt: e.target.value })} className={inputClass} />
-            <p className="mt-1 text-[11px] text-zinc-500">In your browser's time zone ({defaultTimeZone()}). Turns itself off after it runs.</p>
+            <p className="mt-1 text-[11px] text-zinc-500">In your time zone ({zoneLabel(defaultTimeZone())}). Turns itself off after it runs.</p>
           </div>
         )}
 
@@ -260,36 +274,75 @@ export const RoutineForm: React.FC<{
                 <input id={id('time')} type="time" value={s.time} onChange={(e) => setS({ time: e.target.value })} className={inputClass} />
               </div>
             )}
-            <div>
-              <label htmlFor={id('tz')} className="text-[11px] text-zinc-500">Time zone</label>
-              <input id={id('tz')} list={id('tzs')} value={s.tz} onChange={(e) => setS({ tz: e.target.value })} className={inputClass} spellCheck={false} />
-              <datalist id={id('tzs')}>
-                {timeZoneOptions(s.tz).map((z) => (
-                  <option key={z} value={z} />
-                ))}
-              </datalist>
-            </div>
+            {tzOpen ? (
+              <div>
+                <label htmlFor={id('tz')} className="text-[11px] text-zinc-500">Time zone</label>
+                <input ref={tzRef} id={id('tz')} list={id('tzs')} value={s.tz} onChange={(e) => setS({ tz: e.target.value })} className={inputClass} spellCheck={false} />
+                <datalist id={id('tzs')}>
+                  {timeZoneOptions(s.tz).map((z) => (
+                    <option key={z} value={z} />
+                  ))}
+                </datalist>
+              </div>
+            ) : (
+              <div>
+                <span id={id('tz-label')} className="text-[11px] text-zinc-500">Time zone</span>
+                <div className="min-h-11 sm:min-h-[34px] flex items-center gap-2 text-sm sm:text-xs" title={s.tz} role="group" aria-labelledby={id('tz-label')} data-tz-row>
+                  <span className="text-zinc-100">{zoneLabel(s.tz)}</span>
+                  {zoneOffset(s.tz) && <span className="text-zinc-400">{zoneOffset(s.tz)}</span>}
+                  <button
+                    type="button"
+                    onClick={openTz}
+                    aria-label={`Change time zone, now ${zoneLabel(s.tz)}`}
+                    className="ml-auto rounded font-medium text-sky-300 hover:text-sky-200 kw-focus kw-hit"
+                    data-tz-change
+                  >
+                    Change
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {s.type === 'weekly' && (
-          <div className="flex flex-wrap gap-1" role="group" aria-label="Days">
-            {WEEKDAYS.map((d) => {
-              const on = s.weekdays.includes(d.id);
+          <div className="flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-center" role="group" aria-label="Days">
+            <div className="grid grid-cols-7 gap-1 sm:flex sm:flex-wrap">
+              {WEEKDAYS.map((d) => {
+                const on = s.weekdays.includes(d.id);
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setS({ weekdays: on ? s.weekdays.filter((w) => w !== d.id) : [...s.weekdays, d.id] })}
+                    className={`min-h-11 sm:min-h-0 px-1 sm:px-2 py-1 rounded-md text-[11px] font-medium border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                      on ? 'border-sky-500/50 bg-sky-500/15 text-sky-200' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="hidden sm:block w-px h-[18px] mx-1 bg-white/[0.14]" aria-hidden="true" />
+            {(() => {
+              const on = sameDays(s.weekdays, WORK_WEEK);
               return (
                 <button
-                  key={d.id}
                   type="button"
                   aria-pressed={on}
-                  onClick={() => setS({ weekdays: on ? s.weekdays.filter((w) => w !== d.id) : [...s.weekdays, d.id] })}
-                  className={`px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${
-                    on ? 'border-sky-500/50 bg-sky-500/15 text-sky-200' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'
+                  aria-label="Weekdays, Monday to Friday"
+                  onClick={() => !on && setS({ weekdays: [...WORK_WEEK] })}
+                  className={`self-start min-h-11 sm:min-h-0 px-3.5 sm:px-2 py-1 rounded-md text-[11px] font-medium border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                    on ? 'border-sky-500/50 bg-sky-500/15 text-sky-200' : 'border-dashed border-zinc-700 text-zinc-300 hover:text-zinc-100'
                   }`}
+                  data-weekdays-chip
                 >
-                  {d.label}
+                  Weekdays<span className="sm:hidden"> (Mon–Fri)</span>
                 </button>
               );
-            })}
+            })()}
           </div>
         )}
 
@@ -371,6 +424,16 @@ export const RoutineForm: React.FC<{
       </div>
     </form>
   );
+};
+
+/** Phone: 44 px, centred, so the four buttons share one row at 390 px. */
+const rowBtn = 'min-h-11 sm:min-h-0 justify-center';
+
+/** "Mon, Nov 9": the card's last run, date only; the time is in History. */
+const lastRanDate = (iso: string | null | undefined): string | null => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 };
 
 /** 0.9.5 F: where a run's result message lives, for its History row's link. */
@@ -483,6 +546,9 @@ export const RoutineRow: React.FC<{
       playSfx('click');
     });
 
+  const what = firstLine(routine.instructions);
+  const lastRan = lastRanDate(routine.last_run_at);
+
   if (removal.pending) return <UndoNotice as="li" text={`Deleted “${routine.name}”. It won’t run again.`} onUndo={removal.undo} />;
 
   return (
@@ -504,41 +570,56 @@ export const RoutineRow: React.FC<{
         </label>
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-xs font-medium text-zinc-100 break-words">{routine.name}</span>
+            <span className={`text-xs font-medium break-words ${routine.enabled ? 'text-zinc-100' : 'text-zinc-400'}`}>{routine.name}</span>
             {routine.origin === 'discovery' && <SuggestedBadge />}
             {routine.last_status && <StatusBadge status={routine.last_status} />}
           </div>
-          <p className="text-[11px] text-zinc-500 break-words">
-            {kwantName ? `${kwantName} · ` : ''}
-            {placeLabel} · <span title={routine.schedule_text || undefined}>{scheduleWords(routine.schedule, routine.schedule_text)}</span>
+          {/* Routines setup F: what it does, then when it runs next, then the schedule, bot and place. */}
+          {what.line && (
+            <p className={`text-xs leading-[18px] truncate ${routine.enabled ? 'text-zinc-200' : 'text-zinc-400'}`} title={routine.instructions} data-routine-what>
+              {what.line}
+              {what.more ? ' …' : ''}
+            </p>
+          )}
+          <p className="text-[11px] text-zinc-400" data-routine-next>
+            {routine.enabled ? (
+              <>
+                Next <span className="text-zinc-100 font-medium">{formatWhen(routine.next_run_at)}</span>
+              </>
+            ) : (
+              <span className="text-zinc-300 font-medium">Paused</span>
+            )}
+            {lastRan && <span className="hidden sm:inline"> · last ran {lastRan}</span>}
           </p>
-          <p className="text-[11px] text-zinc-400">
-            Next run: <span className="text-zinc-200">{routine.enabled ? formatWhen(routine.next_run_at) : 'off'}</span>
-            {routine.last_run_at && <span className="text-zinc-500"> · last {formatWhen(routine.last_run_at)}</span>}
+          <p className="text-[11px] text-zinc-500 break-words">
+            <span title={routine.schedule_text || undefined}>{scheduleWords(routine.schedule, routine.schedule_text)}</span>
+            {kwantName ? ` · ${kwantName}` : ''} · {placeLabel}
+            {lastRan && <span className="sm:hidden"> · last ran {lastRan}</span>}
           </p>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5 pl-9">
-        <button type="button" onClick={runNow} disabled={busy} className={`${smallBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
-          <Play size={11} /> Run now
+      {/* Phone: four 44 px buttons in one row, no indent, so Delete never wraps. Desktop is as before. */}
+      <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:pl-9">
+        <button type="button" onClick={runNow} disabled={busy} className={`${rowSmallBtn} ${rowBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
+          <Play size={11} aria-hidden="true" /> Run now
         </button>
-        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={quietBtn}>
-          {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />} <History size={11} /> History
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={`${rowQuietBtn} ${rowBtn}`}>
+          <span className="hidden sm:inline-flex" aria-hidden="true">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span> <History size={11} aria-hidden="true" /> History
         </button>
-        <button type="button" onClick={onEdit} className={quietBtn} data-routine-edit={routine.id}>
-          <Pencil size={11} /> Edit
+        <button type="button" onClick={onEdit} className={`${rowQuietBtn} ${rowBtn}`} data-routine-edit={routine.id}>
+          <Pencil size={11} aria-hidden="true" /> Edit
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => removal.start(() => continuityApi.removeRoutine(routine.id))}
-          className={`${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-300 hover:text-rose-200`}
+          className={`${rowSmallBtn} ${rowBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-300 hover:text-rose-200`}
         >
-          <Trash2 size={11} /> Delete
+          <Trash2 size={11} aria-hidden="true" /> Delete
         </button>
-        {notice && <span className="text-[11px] text-zinc-400" role="status">{notice}</span>}
+        {notice && <span className="col-span-4 text-[11px] text-zinc-400" role="status">{notice}</span>}
         {highlight && routine.enabled && !notice && (
-          <span className="text-[11px] text-sky-200" role="status">Turn the switch off to pause it.</span>
+          <span className="col-span-4 text-[11px] text-sky-200" role="status">Turn the switch off to pause it.</span>
         )}
       </div>
       {(error ?? removal.error) && <p className="pl-9 text-[11px] text-rose-400" role="alert">{error ?? `Couldn’t delete it: ${removal.error}`}</p>}
@@ -621,26 +702,30 @@ export const RoutinesPanel: React.FC<{
     wrapRef.current?.querySelector<HTMLElement>(was === 'new' ? '[data-routine-new]' : `[data-routine-edit="${was.id}"]`)?.focus();
   }, [editing]);
 
+  // The empty card only once routines loaded; a load error keeps today's rose box instead.
+  const empty = !!routines && routines.length === 0 && !loadError;
+  // Over a list, or after a load error (so New routine stays reachable); not while loading, so it never flickers away.
+  const showTop = (!!routines && routines.length > 0) || !!loadError;
+
   return (
     <div ref={wrapRef} className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-zinc-500 leading-relaxed">
-          A routine posts its instructions to the bot on a schedule, then the bot answers as usual.
-        </p>
-        {editing !== 'new' && (
-          <button
-            type="button"
-            onClick={() => setEditing('new')}
-            disabled={kwants.length === 0}
-            data-routine-new
-            className={`${smallBtn} shrink-0 border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
-          >
-            <Plus size={11} /> New routine
-          </button>
-        )}
-      </div>
-
-      {!kwantId && <SuggestedRoutines kwants={kwants} channels={channels} onAccepted={reload} onOpenSettings={onOpenSettings} />}
+      {/* Routines setup B: with nothing saved, the empty card below leads; the top row only shows over a list. */}
+      {showTop && (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-[11px] text-zinc-500 leading-relaxed">A routine has a bot do something on a schedule. Its answer lands where you chose.</p>
+          {editing !== 'new' && (
+            <button
+              type="button"
+              onClick={() => setEditing('new')}
+              disabled={kwants.length === 0}
+              data-routine-new
+              className={`${smallBtn} shrink-0 justify-center min-h-11 sm:min-h-0 border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
+            >
+              <Plus size={11} aria-hidden="true" /> New routine
+            </button>
+          )}
+        </div>
+      )}
 
       {editing === 'new' && (
         <RoutineForm fixedKwantId={kwantId} kwants={kwants} channels={channels} onCancel={() => setEditing(null)} onSaved={saved} />
@@ -664,10 +749,23 @@ export const RoutinesPanel: React.FC<{
           That routine no longer exists. It may have been undone or deleted.
         </p>
       )}
-      {routines && routines.length === 0 && editing !== 'new' && (
-        <div className="text-xs text-zinc-500 border border-dashed border-zinc-800 rounded-lg p-4 text-center space-y-1">
-          <CalendarClock size={18} className="mx-auto text-zinc-600" aria-hidden="true" />
-          <p>No routines yet.</p>
+      {empty && editing !== 'new' && (
+        <div className="rounded-2xl border border-dashed border-white/[0.12] px-6 py-7 flex flex-col items-center text-center gap-3" data-routines-empty>
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-sky-200" aria-hidden="true">
+            <CalendarClock size={20} />
+          </span>
+          <p className="text-sm leading-[21px] text-zinc-200 max-w-[420px]">
+            A routine has a bot do something for you on a schedule, like checking competitors' prices every Monday.
+          </p>
+          <button
+            type="button"
+            onClick={() => setEditing('new')}
+            disabled={kwants.length === 0}
+            data-routine-new
+            className="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-b from-[#7a62f0] to-[#5b47d6] px-4 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120e26] sm:h-9 sm:w-auto"
+          >
+            <Plus size={15} aria-hidden="true" /> New routine
+          </button>
         </div>
       )}
       {routines && routines.length > 0 && (
@@ -692,6 +790,13 @@ export const RoutinesPanel: React.FC<{
             ),
           )}
         </ul>
+      )}
+
+      {/* Suggestions come after what's saved (B3). */}
+      {!kwantId && (
+        <div className="mt-3">
+          <SuggestedRoutines kwants={kwants} channels={channels} onAccepted={reload} onOpenSettings={onOpenSettings} />
+        </div>
       )}
     </div>
   );

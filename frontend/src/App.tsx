@@ -3951,6 +3951,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         showPage('board');
         playSfx('click');
       }}
+      onOpenRoutines={() => {
+        // From the sidebar, no card's Edit or Pause focus carries over.
+        setRoutineFocus(null);
+        openSpaceSettings('routines');
+      }}
       devDeskActive={page === 'dev'}
       onOpenDevDesk={() => {
         showPage('dev');
