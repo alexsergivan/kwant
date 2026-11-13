@@ -6,6 +6,7 @@ import { Kwant, Team } from './Sidebar';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { playSfx } from '../audio/chiptune';
 import { ReadyTeamsTiles, SuggestMembersButton } from './ReadyTeamsEntry';
+import { TeamNeedBox } from './TeamNeedBox';
 
 export interface NewTeamModalProps {
   isOpen: boolean;
@@ -219,6 +220,17 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
             <span>{error}</span>
           </div>
         )}
+
+        <TeamNeedBox
+          label="Describe what this team should do"
+          onHide={() => setHidden(true)}
+          onShow={() => setHidden(false)}
+          onDone={() => {
+            setHidden(false);
+            onClose();
+          }}
+          onLeave={onClose}
+        />
 
         <ReadyTeamsTiles
           source={{

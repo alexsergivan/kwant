@@ -1,7 +1,7 @@
 // "What's new in kwant X.Y.Z" (spec: next-076/whats-new, design: Mira's whatsnew.html).
-// WhatsNewSheetView draws one version; WhatsNewHost decides when it opens; WhatsNewAbout is the Settings › About card.
+// WhatsNewSheetView draws one version; WhatsNewHost decides when it opens. Settings opens it from the kwant card (VersionCard).
 import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
-import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, List, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronLeft, ExternalLink, List, X } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { useEscapeLayer } from '../escape';
 import { useMedia } from '../useMedia';
@@ -10,24 +10,21 @@ import type { SpaceView } from '../nav';
 import {
   FIXES_FOLD_OVER,
   FIXES_SHOWN,
-  RELEASES_URL,
   type WhatsNewEntry,
   decideOnLoad,
-  entrySummary,
   highlightView,
   markSeen,
   openRequest,
-  openWhatsNew,
   otherDialogOpen,
   releaseUrl,
   seenVersion,
   shortDate,
   subscribeOpen,
 } from '../whatsNewSheet';
-import { WHATS_NEW, changelogFor, latestWhatsNew, whatsNewFor } from '../whatsNewContent';
+import { changelogFor, latestWhatsNew, whatsNewFor } from '../whatsNewContent';
 
 /** kwant's own pixel bot with a teal hat: the sheet's and the Settings row's mark. */
-const Mark: React.FC<{ size: number }> = ({ size }) => {
+export const WhatsNewMark: React.FC<{ size: number }> = ({ size }) => {
   const r = (x: number, y: number, w = 1, h = 1, f = '#b8adff') => <rect x={x} y={y} width={w} height={h} fill={f} />;
   const eye = '#120e26';
   return (
@@ -59,11 +56,13 @@ export interface SheetProps {
   onOpen: (view: SpaceView) => void;
   /** Start on the All changes view (screenshots). */
   initialPage?: 'main' | 'all';
+  /** Only the release notes (`changelog`), for a version this app has no sheet for yet. */
+  notesOnly?: boolean;
 }
 
 /** The sheet itself, without deciding when: what tests and screenshots render. */
-export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phone, updatedFrom, onClose, onOpen, initialPage = 'main' }) => {
-  const [page, setPage] = useState<'main' | 'all'>(initialPage === 'all' && changelog ? 'all' : 'main');
+export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phone, updatedFrom, onClose, onOpen, initialPage = 'main', notesOnly = false }) => {
+  const [page, setPage] = useState<'main' | 'all'>(notesOnly || (initialPage === 'all' && changelog) ? 'all' : 'main');
   const [fixesOpen, setFixesOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -109,7 +108,7 @@ export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phon
     <>
       <div className={`flex shrink-0 items-center ${phone ? 'gap-3 py-3 pl-[18px] pr-[52px]' : 'gap-3.5 pb-3.5 pl-6 pr-14 pt-5'}`}>
         <span className={`grid shrink-0 place-items-center rounded-xl bg-surface-overlay shadow-[inset_0_0_0_1px_rgb(255_255_255/.14)] ${phone ? 'h-10 w-10' : 'h-11 w-11'}`}>
-          <Mark size={phone ? 26 : 30} />
+          <WhatsNewMark size={phone ? 26 : 30} />
         </span>
         <div className="min-w-0">
           <p className="m-0 text-xs leading-[18px] text-zinc-400" data-whats-new-eyebrow>
@@ -217,6 +216,11 @@ export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phon
   const all = (
     <>
       <div className={`flex shrink-0 flex-col items-start gap-1 ${phone ? 'py-3 pl-[18px] pr-[52px]' : 'pb-3.5 pl-6 pr-14 pt-5'}`}>
+        {notesOnly ? (
+          <p className="m-0 text-xs leading-[18px] text-zinc-400" data-whats-new-eyebrow>
+            {date ? `Released ${date}` : 'New version'}
+          </p>
+        ) : (
         <button
           type="button"
           onClick={() => setPage('main')}
@@ -224,8 +228,9 @@ export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phon
         >
           <ChevronLeft size={15} aria-hidden="true" /> What’s new
         </button>
+        )}
         <h2 ref={titleRef} id={titleId} tabIndex={-1} className={`m-0 font-semibold text-zinc-50 outline-none ${phone ? 'text-[17px] leading-6' : 'text-lg leading-[26px]'}`}>
-          All changes in {entry.version}
+          {notesOnly ? `What’s new in kwant bots ${entry.version}` : `All changes in ${entry.version}`}
         </h2>
       </div>
       {close}
@@ -271,7 +276,17 @@ export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phon
 interface Open {
   entry: WhatsNewEntry;
   updatedFrom: string | null | undefined;
+  /** Release notes only: a version with no sheet in this app (the one an update offers). */
+  notes?: string;
 }
+
+/** A sheet for a version this app doesn't bundle: its release notes, nothing else. */
+const notesEntry = (version: string, date: string | null | undefined): WhatsNewEntry => ({
+  version,
+  date: date && /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(0, 10) : '',
+  highlights: [],
+  fixes: [],
+});
 
 /**
  * Opens the sheet once per device after an update, and whenever the update banner or Settings › About asks.
@@ -316,7 +331,10 @@ export const WhatsNewHost: React.FC<{ established: boolean | null; onOpen: (view
     if (!req || req.seq === handled.current) return;
     handled.current = req.seq;
     const entry = whatsNewFor(req.version);
-    if (!entry) return;
+    if (!entry) {
+      if (req.notes?.trim()) setOpen({ entry: notesEntry(req.version, req.date), updatedFrom: null, notes: req.notes });
+      return;
+    }
     markSeen(entry.version);
     setOpen({ entry, updatedFrom: null });
   }, [req]);
@@ -326,7 +344,8 @@ export const WhatsNewHost: React.FC<{ established: boolean | null; onOpen: (view
     <WhatsNewSheetView
       key={open.entry.version}
       entry={open.entry}
-      changelog={changelogFor(open.entry.version)}
+      changelog={open.notes ?? changelogFor(open.entry.version)}
+      notesOnly={open.notes !== undefined}
       phone={phone}
       updatedFrom={open.updatedFrom}
       onClose={() => setOpen(null)}
@@ -337,65 +356,6 @@ export const WhatsNewHost: React.FC<{ established: boolean | null; onOpen: (view
     />
   );
 };
-
-/** Settings › About: "What's new in X" and the earlier versions. Shown everywhere (the update card is Mac-only). */
-export const WhatsNewAboutView: React.FC<{ entries: WhatsNewEntry[]; onPick: (version: string) => void }> = ({ entries, onPick }) => {
-  const [latest, ...earlier] = entries;
-  if (!latest) return null;
-  return (
-    <section aria-labelledby="whats-new-about-title" data-whats-new-about className="space-y-0 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-      <h3 id="whats-new-about-title" className="flex items-center gap-2 text-xs font-medium text-zinc-300">
-        <List size={15} className="text-sky-400" aria-hidden="true" />
-        <span>What’s new</span>
-      </h3>
-      <button
-        type="button"
-        onClick={() => onPick(latest.version)}
-        className={`mt-3 flex min-h-[56px] w-full items-center gap-3 rounded-[10px] bg-sky-500/10 py-2 pl-2.5 pr-3 text-left shadow-[inset_0_0_0_1px_rgb(157_143_255/.25)] hover:bg-sky-500/[0.16] max-md:min-h-[60px] ${focus}`}
-      >
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-surface-overlay shadow-[inset_0_0_0_1px_rgb(255_255_255/.14)]">
-          <Mark size={24} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <b className="block text-[13.5px] font-semibold leading-5 text-zinc-100">What’s new in {latest.version}</b>
-          <span className="block text-xs leading-[18px] text-zinc-400">
-            {shortDate(latest.date)} · {entrySummary(latest)}
-          </span>
-        </span>
-        <ChevronRight size={15} className="shrink-0 text-sky-300" aria-hidden="true" />
-      </button>
-      {earlier.length > 0 && (
-        <>
-          <p className="mb-1 mt-3.5 text-[11px] font-semibold uppercase tracking-[.08em] text-zinc-400">Earlier versions</p>
-          <ul className="m-0 list-none p-0">
-            {earlier.map((e, i) => (
-              <li key={e.version} className={i ? 'border-t border-white/[0.07]' : ''}>
-                <button
-                  type="button"
-                  onClick={() => onPick(e.version)}
-                  aria-label={`What’s new in ${e.version}`}
-                  className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-2.5 py-1.5 text-left hover:bg-white/[0.04] ${focus}`}
-                >
-                  <span className="w-[54px] shrink-0 font-mono text-[13px] font-semibold text-zinc-200">{e.version}</span>
-                  <span className="w-[52px] shrink-0 text-xs text-zinc-400">{shortDate(e.date)}</span>
-                  <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-300">{entrySummary(e)}</span>
-                  <ChevronRight size={15} className="shrink-0 text-zinc-500" aria-hidden="true" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      <a href={RELEASES_URL} target="_blank" rel="noreferrer" className={`mt-2 inline-flex items-center gap-1.5 py-1 text-xs text-sky-300 hover:underline ${focus}`}>
-        Older releases on GitHub <ExternalLink size={13} aria-hidden="true" />
-      </a>
-    </section>
-  );
-};
-
-export const WhatsNewAbout: React.FC<{ onPick?: (version: string) => void }> = ({ onPick }) => (
-  <WhatsNewAboutView entries={WHATS_NEW} onPick={onPick ?? openWhatsNew} />
-);
 
 /** Whether the banner's "See what's new" has something to open for `version`. */
 export const hasWhatsNew = (version: string) => !!whatsNewFor(version);

@@ -724,7 +724,7 @@ pub struct SendChatPayload {
     pub message_id: Option<String>,
 }
 
-async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
+pub(super) async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
     if target_model.contains("claude") {
         db.get_setting("anthropic_api_key").await.ok().flatten()
     } else if target_model.contains("grok") {
@@ -736,7 +736,7 @@ async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Opt
     }
 }
 
-async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -> Option<String> {
+pub(super) async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -> Option<String> {
     if target_model == "local_ollama" {
         db.get_setting("ollama_url").await.ok().flatten()
     } else {

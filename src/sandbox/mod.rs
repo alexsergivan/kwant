@@ -6,6 +6,7 @@ pub mod browser_history;
 pub mod chrome_download;
 pub mod computer;
 pub mod credentials;
+pub mod identity;
 pub mod manager;
 pub mod popups;
 pub mod cite;
@@ -13,6 +14,7 @@ pub mod progress;
 pub mod reads;
 pub mod safe_fs;
 pub mod service;
+pub mod signin_gate;
 pub mod site_guard;
 pub mod vault;
 

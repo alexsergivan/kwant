@@ -7,7 +7,7 @@ globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 
 const m = await loadBundled(`
   export * from './src/computerMode';
-  export { ComputerModeControl, ComputerModeChip, LocalBrowserNote, OpenWindowButton } from './src/components/ComputerModeSwitch';
+  export { ComputerModeControl, ComputerModeChip, LocalBrowserNote, OpenWindowButton, SignInLine } from './src/components/ComputerModeSwitch';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createElement } from 'react';
 `);
@@ -203,4 +203,23 @@ test('the note offers to bring the browser back, and saveLocalWindow sends the f
     globalThis.fetch = realFetch;
   }
   assert.equal(asked, null, 'rendering alone does not switch');
+});
+
+test('a sign-in Google refuses gets one line, and on the desktop one button that opens Chrome until signed in', async () => {
+  const line = (signIn) => m.renderToStaticMarkup(m.createElement(m.SignInLine, { signIn, api: api(ready(settings('local'))) }));
+  assert.equal(line(null), '');
+  const desktop = line({ text: 'Google only allows sign-in in a normal Chrome window.', action: 'Sign in in Chrome' });
+  assert.match(desktop, /Google only allows sign-in in a normal Chrome window\./);
+  assert.match(desktop, /<button[^>]*>.*Sign in in Chrome<\/button>/);
+  const server = line({ text: "Google doesn't allow sign-in from a browser on a server. Sign in on this site with email instead, or connect Google in Apps &amp; accounts.", action: null });
+  assert.doesNotMatch(server, /<button/);
+  const realFetch = globalThis.fetch;
+  try {
+    let body;
+    globalThis.fetch = async (_url, init) => { body = init.body; return new Response(JSON.stringify(settings('local', true, true, {}, { visible: true, available: true })), { status: 200 }); };
+    assert.equal((await m.saveLocalWindow(true, true)).ok, true);
+    assert.equal(body, '{"visible":true,"until_signed_in":true}');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

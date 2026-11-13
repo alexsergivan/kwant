@@ -1,7 +1,8 @@
-// In-app updates for the Mac app. The Mac shell checks GitHub for a newer signed release and hands
-// the result to the in-process server; this module polls GET /api/app/update and drives the banner
-// and the About row in App settings. Off the Mac app (VPS, Docker, dev) the endpoint answers 404 or
-// supported=false, and then nothing renders and nothing polls again.
+// Updates. The Mac shell checks GitHub for a newer signed release and installs it; elsewhere (VPS,
+// Docker, Windows) the server checks GitHub's latest release itself and only reports it
+// (can_install=false, with `how`: the command that updates this install). This module polls
+// GET /api/app/update and drives the Mac banner and the kwant card in App settings. With the check
+// off (404 or supported=false) nothing polls again and the card shows the version alone.
 
 export type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error';
 
@@ -14,8 +15,19 @@ export interface AvailableUpdate {
   url: string;
 }
 
+/** How this install updates when the app can't do it: one command (none on Windows: a new installer). */
+export interface HowToUpdate {
+  kind: 'docker' | 'binary' | 'windows' | 'source';
+  command: string | null;
+}
+
 export interface UpdateStatus {
   current: string;
+  /** The Mac app installs; elsewhere Update opens How to update. */
+  canInstall: boolean;
+  /** When the server last heard back from GitHub (ms), null before the first answer. */
+  lastChecked: number | null;
+  how: HowToUpdate | null;
   state: UpdateState;
   available: AvailableUpdate | null;
   progress: number | null;
@@ -37,6 +49,8 @@ export interface UpdateModel {
   /** null until the first answer, and forever when unsupported. */
   status: UpdateStatus | null;
   unsupported: boolean;
+  /** The running version, also when updates are unsupported (null when the server never said). */
+  current: string | null;
   phase: UpdatePhase;
   /** The version being installed, or the one just installed. */
   target: string | null;
@@ -51,6 +65,8 @@ export const UPDATE_DISMISSED_KEY = 'kwnt_update_dismissed';
 export const UPDATE_PENDING_KEY = 'kwnt_update_pending';
 
 export const IDLE_POLL_MS = 30 * 60 * 1000;
+/** Opening the kwant card checks again when the last answer is older than this. */
+export const STALE_CHECK_MS = 60 * 60 * 1000;
 export const FAST_POLL_MS = 1000;
 /** After this long without the app coming back, say so instead of spinning forever. */
 export const RESTART_GIVE_UP_MS = 3 * 60 * 1000;
@@ -73,15 +89,29 @@ function parseAvailable(raw: unknown): AvailableUpdate | null {
   };
 }
 
-/** The server's answer, or null when it isn't the Mac app (or isn't an answer at all). */
+const HOW_KINDS: HowToUpdate['kind'][] = ['docker', 'binary', 'windows', 'source'];
+
+function parseHow(raw: unknown): HowToUpdate | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const h = raw as Record<string, unknown>;
+  if (!HOW_KINDS.includes(h.kind as HowToUpdate['kind'])) return null;
+  return { kind: h.kind as HowToUpdate['kind'], command: str(h.command) };
+}
+
+/** The server's answer, or null when updates are off there (or it isn't an answer at all). */
 export function parseUpdateStatus(raw: unknown): UpdateStatus | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   if (r.supported !== true) return null;
+  const checked = typeof r.checked_at === 'string' ? Date.parse(r.checked_at) : NaN;
   const state = STATES.includes(r.state as UpdateState) ? (r.state as UpdateState) : 'idle';
   const progress = typeof r.progress === 'number' && Number.isFinite(r.progress) ? Math.min(1, Math.max(0, r.progress)) : null;
   return {
     current: str(r.current) ?? '',
+    // A Mac app from before can_install only ever answered supported=true from the app itself
+    canInstall: r.can_install !== false,
+    lastChecked: Number.isFinite(checked) ? checked : null,
+    how: parseHow(r.how),
     state,
     available: parseAvailable(r.available),
     progress,
@@ -120,8 +150,9 @@ function write(key: string, value: string | null, store: Store | undefined) {
 export const dismissedVersion = (store = defaultStore()) => read(UPDATE_DISMISSED_KEY, store);
 export const dismissVersion = (version: string, store = defaultStore()) => write(UPDATE_DISMISSED_KEY, version, store);
 
+/** The Mac app's bar. Elsewhere the update can't run from the app, so the kwant card says it. */
 export function bannerView(m: UpdateModel, dismissed: string | null): BannerView | null {
-  if (m.unsupported || !m.status) return null;
+  if (m.unsupported || !m.status || !m.status.canInstall) return null;
   if (m.phase === 'updated' && m.target) return { kind: 'updated', version: m.target };
   if (m.phase === 'restarting' && m.target) return { kind: 'restarting', version: m.target };
   if (m.phase === 'stalled' && m.target) {
@@ -153,26 +184,66 @@ export function nextPollMs(m: UpdateModel): number {
   return s === 'checking' || s === 'downloading' || s === 'ready' ? FAST_POLL_MS : IDLE_POLL_MS;
 }
 
-/** The About row's one-line result. */
-export function aboutLine(m: UpdateModel): string {
+/** A failed check (not a failed install): the Mac app and the server both start it so. */
+export const isCheckError = (error: string | null) => !!error && /^Couldn[’']t check/i.test(error);
+
+/** Line 2 of the kwant card: exactly one of these. */
+export type VersionLine =
+  | { kind: 'loading' }
+  | { kind: 'off' }
+  | { kind: 'checking' }
+  | { kind: 'latest'; checkedAt: number | null }
+  | { kind: 'available'; version: string; notes: string; date: string | null; url: string; canInstall: boolean }
+  | { kind: 'downloading'; version: string; progress: number | null }
+  | { kind: 'restarting'; version: string }
+  | { kind: 'install-error'; version: string; error: string; url: string; notes: string; date: string | null }
+  | { kind: 'check-error'; error: string }
+  | { kind: 'updated'; version: string };
+
+/** Never says "latest" without a check that said so. */
+export function versionLine(m: UpdateModel): VersionLine {
+  if (m.unsupported) return { kind: 'off' };
   const s = m.status;
-  if (!s) return '';
-  if (m.actionError) return m.actionError;
-  if (m.phase === 'updated' && m.target) return `Updated to ${m.target}.`;
-  switch (s.state) {
-    case 'checking':
-      return 'Checking for updates…';
-    case 'available':
-      return s.available ? `kwant bots ${s.available.version} is ready.` : 'You’re up to date.';
-    case 'downloading':
-      return s.progress == null ? 'Downloading the update…' : `Downloading the update… ${Math.round(s.progress * 100)}%`;
-    case 'ready':
-      return 'Restarting the app…';
-    case 'error':
-      return s.error ?? 'The last check failed.';
-    default:
-      return m.checkedAt != null ? 'You’re up to date.' : '';
+  if (!s) return { kind: 'loading' };
+  if (m.phase === 'updated' && m.target) return { kind: 'updated', version: m.target };
+  if (m.phase === 'restarting' && m.target) return { kind: 'restarting', version: m.target };
+  const a = s.available;
+  if (m.phase === 'stalled' && m.target) {
+    return {
+      kind: 'install-error',
+      version: m.target,
+      error: 'The app didn’t come back after the update. Open kwant bots again from Applications.',
+      url: a?.url ?? `https://github.com/alexsergivan/kwant/releases/tag/mac-v${m.target}`,
+      notes: a?.notes ?? '',
+      date: a?.date ?? null,
+    };
   }
+  if (s.state === 'checking') return { kind: 'checking' };
+  if (a && s.state === 'ready') return { kind: 'restarting', version: a.version };
+  if (a && (s.state === 'downloading' || m.phase === 'installing')) return { kind: 'downloading', version: a.version, progress: s.progress };
+  const failed = m.installError ?? (s.state === 'error' ? s.error ?? 'The update failed.' : null);
+  if (a && failed && !isCheckError(failed)) {
+    return { kind: 'install-error', version: a.version, error: failed, url: a.url, notes: a.notes, date: a.date };
+  }
+  // A version found earlier is still there after a failed re-check: offering it isn't wrong
+  if (a) return { kind: 'available', version: a.version, notes: a.notes, date: a.date, url: a.url, canInstall: s.canInstall };
+  if (s.state === 'error') return { kind: 'check-error', error: s.error ?? 'Couldn’t check for updates.' };
+  if (m.actionError) return { kind: 'check-error', error: m.actionError };
+  // No answer from GitHub yet (the first check runs seconds after start)
+  if (s.lastChecked == null) return { kind: 'checking' };
+  return { kind: 'latest', checkedAt: s.lastChecked };
+}
+
+/** "Checked just now", "Checked 2 min ago", "Checked 3 h ago", "Checked 2 days ago". */
+export function checkedAgo(at: number | null, now: number): string {
+  if (at == null) return '';
+  const min = Math.floor(Math.max(0, now - at) / 60000);
+  if (min < 1) return 'Checked just now';
+  if (min < 60) return `Checked ${min} min ago`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `Checked ${h} h ago`;
+  const d = Math.floor(h / 24);
+  return `Checked ${d} day${d === 1 ? '' : 's'} ago`;
 }
 
 async function errorText(res: Response): Promise<string | null> {
@@ -184,8 +255,10 @@ async function errorText(res: Response): Promise<string | null> {
   }
 }
 
-function refusal(res: Response, fallback: string): Promise<string> | string {
-  if (res.status === 401 || res.status === 403) return 'Only you can update the app, from the Mac it runs on.';
+function refusal(res: Response, fallback: string, canInstall: boolean): Promise<string> | string {
+  if (res.status === 401 || res.status === 403) {
+    return canInstall ? 'Only you can update the app, from the Mac it runs on.' : 'Only the person who runs this kwant bots can check for updates.';
+  }
   return errorText(res).then((e) => e ?? fallback);
 }
 
@@ -203,13 +276,15 @@ export interface UpdateController {
   start: () => void;
   stop: () => void;
   check: () => Promise<void>;
+  /** Checks quietly when the last answer is older than STALE_CHECK_MS (the kwant card opening). */
+  checkIfStale: () => Promise<void>;
   install: () => Promise<void>;
   /** Hide the "Updated to …" note. */
   clearUpdated: () => void;
 }
 
 export function createUpdateController(env: ControllerEnv): UpdateController {
-  let model: UpdateModel = { status: null, unsupported: false, phase: 'idle', target: null, actionError: null, installError: null, checkedAt: null };
+  let model: UpdateModel = { status: null, unsupported: false, current: null, phase: 'idle', target: null, actionError: null, installError: null, checkedAt: null };
   const listeners = new Set<() => void>();
   let timer: unknown = null;
   let running = false;
@@ -231,7 +306,7 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
   };
 
   const apply = (status: UpdateStatus) => {
-    const patch: Partial<UpdateModel> = { status, checkedAt: status.state === 'checking' ? model.checkedAt : env.now() };
+    const patch: Partial<UpdateModel> = { status, current: status.current || model.current, checkedAt: status.state === 'checking' ? model.checkedAt : env.now() };
     const pending = read(UPDATE_PENDING_KEY, env.store);
     if (pending && status.current === pending) {
       // Back on the new version: in this page after the relaunch, or in the fresh window.
@@ -282,14 +357,15 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
     }
     const status = parseUpdateStatus(body);
     if (!status) {
-      set({ unsupported: true });
+      const current = body && typeof body === 'object' ? str((body as Record<string, unknown>).current) : null;
+      set({ unsupported: true, current: current ?? model.current });
       return schedule();
     }
     apply(status);
     schedule();
   }
 
-  async function post(path: string, fallback: string): Promise<boolean> {
+  async function post(path: string, fallback: string, quiet = false): Promise<boolean> {
     try {
       const res = await env.fetch(path, { method: 'POST', headers: { Accept: 'application/json' } });
       if (res.ok) {
@@ -298,9 +374,10 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
         set({ actionError: null });
         return true;
       }
-      set({ actionError: await refusal(res, fallback) });
+      const why = await refusal(res, fallback, model.status?.canInstall ?? true);
+      if (!quiet) set({ actionError: why });
     } catch {
-      set({ actionError: 'The app didn’t answer. Try again in a moment.' });
+      if (!quiet) set({ actionError: 'The app didn’t answer. Try again in a moment.' });
     }
     return false;
   }
@@ -325,6 +402,14 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
       if (model.unsupported) return;
       set({ actionError: null, installError: null, phase: model.phase === 'updated' ? 'idle' : model.phase });
       await post('/api/app/update/check', 'Couldn’t check for updates.');
+      schedule();
+    },
+    async checkIfStale() {
+      const s = model.status;
+      if (model.unsupported || !s || model.phase !== 'idle') return;
+      if (s.state === 'checking' || s.state === 'downloading' || s.state === 'ready') return;
+      if (s.lastChecked != null && env.now() - s.lastChecked < STALE_CHECK_MS) return;
+      await post('/api/app/update/check', 'Couldn’t check for updates.', true);
       schedule();
     },
     async install() {

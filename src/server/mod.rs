@@ -51,6 +51,7 @@ pub mod concierge;
 pub mod rerouting;
 pub mod import_routes;
 pub mod inbox;
+pub mod inbox_done;
 pub mod isolated_folders_routes;
 pub mod approval_modes;
 pub mod passwords;
@@ -290,7 +291,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/team-templates", get(teams::catalogue))
         .route("/api/team-templates/:id/preview", get(teams::preview))
         .route("/api/teams/from-template", post(teams::from_template))
-        .route("/api/teams/suggest", post(teams::suggest))
+        .route("/api/teams/suggest", post(teams::suggest).delete(teams::cancel_suggest))
         .route("/api/teams/:id/template", get(teams::team_template))
         .route(
             "/api/teams/:id",

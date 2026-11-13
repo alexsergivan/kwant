@@ -75,6 +75,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     crate::server::engine_routes::spawn_startup_check(state.clone());
     crate::server::parallel_routes::spawn_startup_sweep(state.clone());
     crate::server::app_update_routes::spawn_notifier(state.clone());
+    // Off the desktop app: look for a newer release, so Settings can say "latest" or how to update
+    crate::app_update::start_release_check(state.app_update.clone());
     // browser containers left by this or another kwant: remove orphans, stop idle ones
     let browser = state.browser_service.clone();
     browser.clone().spawn_reaper(cancel.clone());

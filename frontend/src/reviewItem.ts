@@ -119,11 +119,16 @@ export const changePrefill = (question: string): string => `Change: ${question} 
 export const lastRound = (r: ReviewItem['round']): boolean => r.n >= r.max;
 
 /** The Send back panel's "what happens" list (Mira §6), in order. */
-export function sendBackSteps(i: Pick<ReviewItem, 'kwant_name' | 'round' | 'held_actions' | 'evidence'>, openHeld: number): string[] {
+export function sendBackSteps(i: Pick<ReviewItem, 'kwant_name' | 'round' | 'held_actions' | 'evidence'>, openHeld: number, noChecks = false): string[] {
   const out: string[] = [];
   if (openHeld > 0) out.push(heldDeniedFirst(i, openHeld));
-  out.push(`${i.kwant_name} starts round ${i.round.n + 1} with your note, the checker’s findings and the work so far.`);
-  out.push('The checker then checks everything again, including what passed.');
+  if (noChecks) {
+    // A run with no checks has no checker: the note and the work so far are all the next round gets.
+    out.push(`${i.kwant_name} starts round ${i.round.n + 1} with your note and the work so far.`);
+  } else {
+    out.push(`${i.kwant_name} starts round ${i.round.n + 1} with your note, the checker’s findings and the work so far.`);
+    out.push('The checker then checks everything again, including what passed.');
+  }
   out.push(`This is round ${i.round.n} of ${i.round.max}. After round ${i.round.max} it comes back to you, whatever the verdict.`);
   return out;
 }

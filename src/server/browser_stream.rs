@@ -1323,7 +1323,13 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
     // Show it once records on the team's stage, whichever of its pages is shown
     let mut rec = StageRecorder::new(state.clone(), super::browser_pages::page_team(&id).to_string(), shared.socket);
     let pointer = Pointer::new(state.clone(), cdp.clone(), client_tx.clone());
-    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &mut page, &shared, &client_tx, &mut client_rx, &jobs, &mut rec, &pointer).await;
+    // a sign-in page that refuses a windowless browser: a real window on the desktop apps, the
+    // ways that work on a server, nothing when Chrome already is a window
+    let service = &state.browser_service;
+    let local = service.mode() == crate::sandbox::computer::ComputerMode::Local;
+    let window = if local && service.local_window() { None } else { Some(local && crate::sandbox::computer::window_reason().is_none()) };
+    let mut signin = crate::sandbox::signin_gate::LiveNotice::new(window);
+    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &mut page, &shared, &client_tx, &mut client_rx, &jobs, &mut rec, &pointer, &mut signin).await;
     // a recording live on this socket stops here (Show it once: `closed`), its steps kept, after
     // the edit still pending in the page, if the page can still be reached
     if rec.is_live() {
@@ -1355,12 +1361,16 @@ async fn stream(
     jobs: &mpsc::UnboundedSender<Job>,
     rec: &mut StageRecorder,
     pointer: &Arc<Pointer>,
+    signin: &mut crate::sandbox::signin_gate::LiveNotice,
 ) -> (Result<(), BrowserError>, Option<PersonLease>) {
     let mut lease: Option<PersonLease> = None;
     // the Show it once recorder's script on new documents, while a recording is live
     let mut recorder_script: Option<String> = None;
     let result = async {
         watch_page(cdp, shared).await?;
+        // the view may open on a sign-in that was already refused
+        let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
+        if let Some(notice) = signin.update(&url, ctrl.is_held_for_person()) { send(socket, notice).await?; }
         // a link to another app may have fired before the view opened, with nobody to close
         // Chrome's prompt: check the page still gets input, off the loop. Not while a button is
         // held, where a move would be part of someone's drag.
@@ -1391,7 +1401,12 @@ async fn stream(
                 // page (the opener once its popup closed) draws that picture once, and a client
                 // must know whose it is. Its frames wait in `events` until the loop reads them.
                 match read_location(cdp, ctrl).await {
-                    Some(location) => send(socket, location).await?,
+                    Some(location) => {
+                        // a "Continue with Google" popup in front
+                        let url = location["url"].as_str().unwrap_or_default().to_string();
+                        send(socket, location).await?;
+                        if let Some(notice) = signin.update(&url, lease.is_some() || ctrl.is_held_for_person()) { send(socket, notice).await?; }
+                    }
                     // a dialog open on the new page: the address follows when it answers
                     None => refresh_location(cdp, ctrl, shared, client_tx),
                 }
@@ -1455,6 +1470,9 @@ async fn stream(
                     if let Some(url) = navigated_to(method, params) {
                         pointer.forget_world();
                         let _ = client_tx.send(json!({"type":"location","url":url,"title":""}));
+                        if let Some(notice) = signin.update(&url, lease.is_some() || ctrl.is_held_for_person()) {
+                            let _ = client_tx.send(notice);
+                        }
                         if rec.is_live() {
                             let acts = rec.on_navigated(&url).await;
                             recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
@@ -1535,6 +1553,9 @@ async fn stream(
                             }
                             let (vw, vh) = shared.view();
                             send(socket, json!({"type":"control","active":true,"viewport":{"width":vw,"height":vh}})).await?;
+                            // taking control of a sign-in page: the person is about to sign in
+                            let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
+                            if let Some(notice) = signin.update(&url, true) { send(socket, notice).await?; }
                         }
                         "release_control" => {
                             // Show it once: the edit still pending in the page is a step first

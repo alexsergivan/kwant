@@ -3,6 +3,7 @@ import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
+import type { MessageTarget } from './components/DoneDetail';
 import { AppsSection, InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
 import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
@@ -63,12 +64,13 @@ import { ideasApi, takeArrivedText } from './ideas';
 import { JarIcon } from './components/JarIcon';
 import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToast';
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
-import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
+import { Bot, HelpCircle, Inbox, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
 import { ChatApproval, OpenChat, addSettled, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
+import { SpaceReadyCard } from './components/SpaceReadyCard';
 import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -2763,6 +2765,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  /** 0.9.5 F: a done item's Open in chat, and a routine run's History row: the chat, at the answer. */
+  const openRunResult = (t: MessageTarget) => {
+    if (spaceSettingsTab) closeSpaceSettings();
+    if (t.thread_id) {
+      openThread(t.kwant_id, t.thread_id);
+      return;
+    }
+    setPage('chat');
+    void handleJump({ message_id: t.message_id, channel_id: t.channel_id, channel_name: null, kwant_id: t.kwant_id, author: '', snippet: '', created_at: null });
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
@@ -3734,6 +3747,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     generalMessages: messages.length,
     teams: teams.length,
     started: getStartedWasStarted(space.id),
+    mainSpace: space.is_default,
   });
   // New bots, teams and their team chats after an import (Space settings or Get started).
   const reloadAfterImport = () => {
@@ -3753,84 +3767,22 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         onDismissed={() => undefined}
         spaceName={space.name}
         onImported={reloadAfterImport}
+        mainSpace={space.is_default}
       />
     ) : null;
   const setupChecklist = (
-    <main className="flex-1 min-w-0 overflow-y-auto flex items-start sm:items-center justify-center p-4 sm:p-8" data-space-checklist>
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 sm:p-6 space-y-4">
-        <div className="flex items-center gap-3">
-          <SpaceTile space={space} size={40} />
-          <div className="min-w-0">
-            <h1 className="text-base font-semibold text-zinc-100 truncate">Get {space.name} ready</h1>
-            <p className="text-xs text-zinc-400">Bots, teams and accounts here stay in {space.name}.</p>
-          </div>
-        </div>
-        <ol className="space-y-2">
-          {[
-            readyAccounts > 0
-              ? {
-                  done: true,
-                  // Still offered once This machine is ready: more accounts and API keys go here too.
-                  keepAction: true,
-                  title: readyAccounts === 1 ? '1 account ready' : `${readyAccounts} accounts ready`,
-                  detail: 'Add another Claude, Codex or Grok sign-in, or an API key.',
-                  action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('apps', 'accounts') },
-                }
-              : {
-                  done: false,
-                  title: 'Add an account',
-                  detail: 'Sign in with Claude, Codex or Grok, add an API key, or use this machine.',
-                  action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('apps', 'accounts') },
-                },
-            {
-              done: kwants.length > 0,
-              title: 'Add your first bot',
-              detail: `${space.name}'s #general opens with it.`,
-              action: {
-                label: 'New bot',
-                icon: <Bot size={13} />,
-                onClick: () => {
-                  setNewAgentTeam(null);
-                  setIsNewAgentOpen(true);
-                  playSfx('click');
-                },
-              },
-            },
-            { done: false, title: 'Message #general', detail: `Laya picks who answers, only from ${space.name}'s bots.` },
-          ].map((step: { done: boolean; keepAction?: boolean; title: string; detail: string; action?: { label: string; icon: React.ReactNode; onClick: () => void } }, i) => (
-            <li key={step.title} className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
-              <span
-                className={`mt-0.5 w-5 h-5 shrink-0 rounded-full flex items-center justify-center text-[11px] font-semibold ${
-                  step.done ? 'bg-emerald-500 text-zinc-950' : 'bg-zinc-800 text-zinc-300'
-                }`}
-                aria-hidden="true"
-              >
-                {step.done ? <Check size={12} /> : i + 1}
-              </span>
-              <span className="flex-1 min-w-0">
-                <span className={`block text-xs font-medium ${step.done ? (step.keepAction ? 'text-zinc-300' : 'text-zinc-400 line-through') : 'text-zinc-100'}`}>
-                  {step.title}
-                  {step.done && <span className="sr-only"> (done)</span>}
-                </span>
-                <span className="block text-[11px] text-zinc-500">{step.detail}</span>
-              </span>
-              {step.action && (!step.done || step.keepAction) && (
-                <button
-                  type="button"
-                  onClick={step.action.onClick}
-                  className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-300 ${
-                    step.done ? 'text-zinc-200 border border-zinc-700 hover:border-sky-500/50 hover:text-sky-200' : 'text-white bg-sky-600 hover:bg-sky-500'
-                  }`}
-                >
-                  {step.action.icon}
-                  {step.action.label}
-                </button>
-              )}
-            </li>
-          ))}
-        </ol>
-      </div>
-    </main>
+    <SpaceReadyCard
+      spaceName={space.name}
+      tile={<SpaceTile space={space} size={40} />}
+      readyAccounts={readyAccounts}
+      botCount={kwants.length}
+      onAddAccount={() => openSpaceSettings('apps', 'accounts')}
+      onNewBot={() => {
+        setNewAgentTeam(null);
+        setIsNewAgentOpen(true);
+        playSfx('click');
+      }}
+    />
   );
 
   // H5: every bot in the one attention order. Not computed until the Inbox's first fetch lands, so the
@@ -3982,6 +3934,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onApprovalResolved={dropApproval}
       onOpenConnections={openConnections}
       onCrumb={(c) => showPage(c === 'board' ? 'board' : 'dev')}
+      onOpenMessage={openRunResult}
+      onEditRoutine={(id) => handleOpenRoutine(id, 'edit')}
+      placeName={(id) => {
+        const c = id ? channels.find((x) => x.id === id) : null;
+        return c ? channelLabel(c.name) : null;
+      }}
       top={
         <>
           <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
@@ -4331,6 +4289,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onChanged={refreshRoster}
       onOpenTeam={(t, channelId) => void openNewTeamChat(t, channelId)}
       onUndone={handleTeamUndone}
+      readyAccounts={readyAccounts}
+      onOpenAccounts={() => openSpaceSettings('apps', 'accounts')}
     >
     {/* overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
         once slid the whole chat under its header (P1-7). Browsers without clip keep hidden. */}
@@ -4557,6 +4517,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             </Suspense>
           }
           routineFocus={routineFocus}
+          onOpenRunResult={openRunResult}
           isPhone={isPhone}
           onApprovalsChanged={refreshRoster}
           onImported={reloadAfterImport}

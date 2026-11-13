@@ -28,6 +28,11 @@ export interface AwayItem {
   details?: Record<string, unknown>;
   /** Approvals only: set when the payment floor asked, also on servers that send no details. */
   payment_reason?: string;
+  /**
+   * 0.9.5 part B, approvals only: the card's own question built from what the call names, e.g.
+   * `Approve “Spring sale: 15% off”?`. Absent when the call names nothing; `title` is always sent.
+   */
+  question?: string;
   /** 0.9.0 P1, watch items only: the watched mission and the first task that needs the person. */
   mission_id?: string | null;
   task_id?: string | null;

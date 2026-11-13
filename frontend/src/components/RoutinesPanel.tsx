@@ -26,6 +26,7 @@ import type { Channel, Kwant } from './Sidebar';
 import { playSfx } from '../audio/chiptune';
 import { SuggestedRoutines } from './SuggestedRoutines';
 import { editorProps } from '../escape';
+import type { MessageTarget } from './DoneDetail';
 
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
@@ -372,7 +373,12 @@ export const RoutineForm: React.FC<{
   );
 };
 
-const RunHistory: React.FC<{ routineId: string; tick: number }> = ({ routineId, tick }) => {
+/** 0.9.5 F: where a run's result message lives, for its History row's link. */
+export const runResultTarget = (routine: Routine, run: RoutineRun): MessageTarget | null =>
+  run.message_id ? { message_id: run.message_id, channel_id: routine.channel_id, kwant_id: routine.kwant_id, thread_id: routine.thread_id ?? null } : null;
+
+const RunHistory: React.FC<{ routine: Routine; tick: number; onOpenRunResult?: (t: MessageTarget) => void }> = ({ routine, tick, onOpenRunResult }) => {
+  const routineId = routine.id;
   const [runs, setRuns] = useState<RoutineRun[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -394,7 +400,27 @@ const RunHistory: React.FC<{ routineId: string; tick: number }> = ({ routineId, 
         <li key={r.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400">
           <StatusBadge status={r.status} />
           <span>{formatWhen(r.started_at)}</span>
-          <span className="text-zinc-600">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
+          <span className="text-zinc-400">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
+          {(() => {
+            const t = onOpenRunResult ? runResultTarget(routine, r) : null;
+            if (!t) return null;
+            return (
+              <>
+                {/* Mira re-check 6: on a phone Open result always sits on its own line under the badge. */}
+                <span className="basis-full h-0 sm:hidden" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={() => onOpenRunResult!(t)}
+                  className="kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-violet-300 hover:text-violet-200"
+                  aria-label={`Open the result of the run on ${formatWhen(r.started_at)}`}
+                  data-compact
+                  data-run-result={r.id}
+                >
+                  Open result <ChevronRight size={11} aria-hidden="true" />
+                </button>
+              </>
+            );
+          })()}
           {(() => {
             const note = routineRunNote(r);
             if (!note) return null;
@@ -414,10 +440,12 @@ export const RoutineRow: React.FC<{
   /** Opened from a card's Pause: scrolls here, focuses the switch and says how to pause. */
   focusPause?: number;
   onEdit: () => void;
+  /** 0.9.5 F: History rows link to each run's result message. */
+  onOpenRunResult?: (t: MessageTarget) => void;
   onChanged: () => void;
   /** Tests: start in the Undo window. */
   initialPending?: boolean;
-}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onChanged, initialPending = false }) => {
+}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onOpenRunResult, onChanged, initialPending = false }) => {
   const rowRef = useRef<HTMLLIElement>(null);
   const switchRef = useRef<HTMLInputElement>(null);
   const [highlight, setHighlight] = useState(false);
@@ -516,7 +544,7 @@ export const RoutineRow: React.FC<{
       {(error ?? removal.error) && <p className="pl-9 text-[11px] text-rose-400" role="alert">{error ?? `Couldn’t delete it: ${removal.error}`}</p>}
       {open && (
         <div id={historyId} className="pl-9 pt-1">
-          <RunHistory routineId={routine.id} tick={tick} />
+          <RunHistory routine={routine} tick={tick} onOpenRunResult={onOpenRunResult} />
         </div>
       )}
     </li>
@@ -534,7 +562,9 @@ export const RoutinesPanel: React.FC<{
   focus?: RoutineFocus | null;
   /** Opens app Settings, where suggestions are turned on. */
   onOpenSettings?: () => void;
-}> = ({ kwantId, kwants, channels, focus, onOpenSettings }) => {
+  /** 0.9.5 F: a History row's Open result. */
+  onOpenRunResult?: (t: MessageTarget) => void;
+}> = ({ kwantId, kwants, channels, focus, onOpenSettings, onOpenRunResult }) => {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Routine | 'new' | null>(null);
@@ -656,6 +686,7 @@ export const RoutinesPanel: React.FC<{
                 tick={tick}
                 focusPause={focus?.mode === 'pause' && focus.id === r.id ? focus.nonce : undefined}
                 onEdit={() => setEditing(r)}
+                onOpenRunResult={onOpenRunResult}
                 onChanged={reload}
               />
             ),

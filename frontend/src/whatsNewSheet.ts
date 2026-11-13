@@ -189,6 +189,10 @@ export function otherDialogOpen(doc: Document | null = typeof document === 'unde
 export interface OpenRequest {
   version: string;
   seq: number;
+  /** A version this app has no sheet for (one not installed yet): its release notes, markdown. */
+  notes?: string;
+  /** That release's date, YYYY-MM-DD or RFC 3339. */
+  date?: string | null;
 }
 let request: OpenRequest | null = null;
 let seq = 0;
@@ -199,7 +203,7 @@ export const subscribeOpen = (l: () => void) => {
 };
 export const openRequest = () => request;
 /** Ask the mounted sheet host to open `version`'s sheet. */
-export function openWhatsNew(version: string): void {
-  request = { version, seq: ++seq };
+export function openWhatsNew(version: string, notes?: { notes: string; date?: string | null }): void {
+  request = { version, seq: ++seq, ...(notes ? { notes: notes.notes, date: notes.date ?? null } : {}) };
   listeners.forEach((l) => l());
 }

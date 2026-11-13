@@ -172,18 +172,24 @@ pub async fn put_computer(
 #[derive(Deserialize)]
 pub struct WindowPayload {
     pub visible: bool,
+    /// With `visible`: the window is for a sign-in that refuses windowless browsers (the live
+    /// view's "Sign in in Chrome"), so kwant puts Chrome back in the app once the pages have left
+    /// the sign-in.
+    #[serde(default)]
+    pub until_signed_in: bool,
 }
 
 /// `PUT /api/settings/computer/window` with `{"visible":bool}`: in local mode, shows the bots'
 /// Chrome as a real window (for a sign-in or CAPTCHA) or puts it back in the app. Each bot's open
 /// page is reopened in the other form. 400 outside local mode or with no display for a window;
-/// 502 if Chrome could not be restarted (the previous form is kept).
+/// 502 if Chrome could not be restarted (the previous form is kept). `until_signed_in` puts it
+/// back by itself when the sign-in is over (see [`back_after_signin`]).
 pub async fn put_window(
     State(state): State<AppState>,
     payload: Result<Json<WindowPayload>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let fail = |status, m: String| (status, Json(json!({ "error": m })));
-    let Json(WindowPayload { visible }) = payload
+    let Json(WindowPayload { visible, until_signed_in }) = payload
         .map_err(|_| fail(StatusCode::BAD_REQUEST, "visible must be true or false".into()))?;
     if apply_mode(&state).await != ComputerMode::Local {
         return Err(fail(
@@ -196,25 +202,62 @@ pub async fn put_window(
             return Err(fail(StatusCode::BAD_REQUEST, reason));
         }
     }
-    {
-        // the restarted Chrome has new pages: every controller must reconnect
-        let mut controllers = state.browser_controllers.lock().await;
-        if let Err(error) = state.browser_service.set_local_window(visible).await {
-            tracing::warn!("Could not restart local Chrome: {}", error);
-            return Err(fail(
-                StatusCode::BAD_GATEWAY,
-                format!("Could not restart Chrome: {error}"),
-            ));
-        }
-        for team_id in controllers.drain().map(|(id, _)| super::browser_pages::page_team(&id).to_string()).collect::<std::collections::BTreeSet<_>>() {
-            let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
-                team_id,
-                container_name: "browser-service".into(),
-                is_running: false,
-            });
-        }
+    // a newer switch, either way, ends the wait of an earlier sign-in
+    let generation = WINDOW_SWITCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if let Err(error) = switch_window(&state, visible).await {
+        tracing::warn!("Could not restart local Chrome: {}", error);
+        return Err(fail(StatusCode::BAD_GATEWAY, format!("Could not restart Chrome: {error}")));
+    }
+    if visible && until_signed_in {
+        tokio::spawn(back_after_signin(state.clone(), generation));
     }
     Ok(Json(view(&state).await))
+}
+
+/// Counts window switches, so a sign-in wait can tell a newer switch happened.
+static WINDOW_SWITCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Restarts the local Chrome with or without a window. The restarted Chrome has new pages: every
+/// controller must reconnect, and each live view is told.
+async fn switch_window(state: &AppState, visible: bool) -> Result<(), crate::sandbox::browser::BrowserError> {
+    let mut controllers = state.browser_controllers.lock().await;
+    state.browser_service.set_local_window(visible).await?;
+    for team_id in controllers.drain().map(|(id, _)| super::browser_pages::page_team(&id).to_string()).collect::<std::collections::BTreeSet<_>>() {
+        let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
+            team_id,
+            container_name: "browser-service".into(),
+            is_running: false,
+        });
+    }
+    Ok(())
+}
+
+/// After "Sign in in Chrome": puts Chrome back in the app once no page is on a sign-in host any
+/// more (two checks 2 s apart, after one was seen there). Stops waiting when the person put it
+/// back themselves, another switch happened, Chrome closed, or after 30 minutes.
+async fn back_after_signin(state: AppState, generation: u64) {
+    use crate::sandbox::signin_gate;
+    let current = || WINDOW_SWITCHES.load(std::sync::atomic::Ordering::SeqCst) == generation;
+    let started = std::time::Instant::now();
+    let mut seen = false;
+    let mut gone = 0;
+    while started.elapsed() < std::time::Duration::from_secs(30 * 60) {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if !current() || !state.browser_service.local_window() { return; }
+        let Some(urls) = state.browser_service.local_page_urls().await else { return };
+        let on_signin = urls.iter().any(|url| signin_gate::provider(url).is_some());
+        seen |= on_signin;
+        gone = if seen && !on_signin { gone + 1 } else { 0 };
+        if gone >= 2 {
+            if !current() { return; }
+            WINDOW_SWITCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match switch_window(&state, false).await {
+                Ok(()) => tracing::info!("the sign-in in the Chrome window is over: back in the app"),
+                Err(error) => tracing::warn!("Could not put Chrome back in the app after a sign-in: {}", error),
+            }
+            return;
+        }
+    }
 }
 
 /// The approvals the person set for the bot or team a local command runs for: a bot's own

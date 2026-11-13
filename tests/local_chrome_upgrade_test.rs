@@ -1,6 +1,6 @@
-//! Upgrading kwant with its windowless Chrome still running: that Chrome was started without
-//! kwant's user agent and tells sites it is "HeadlessChrome", so kwant restarts it once, and never
-//! again after. Skipped when no Chrome is installed.
+//! Upgrading kwant with its windowless Chrome still running: kwant 0.9.4 started it with a made-up
+//! `--user-agent` and marked automated (`navigator.webdriver`), which Google refuses to sign in,
+//! so kwant restarts it once as Chrome, and never again after. Skipped when no Chrome is installed.
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use chrome_guard::ChromeGuard;
@@ -9,11 +9,6 @@ use kwnt::sandbox::{
     service::BrowserService,
 };
 use std::time::Duration;
-
-async fn page_agent(endpoint: &str) -> String {
-    let version: serde_json::Value = reqwest::get(format!("{endpoint}/json/version")).await.unwrap().json().await.unwrap();
-    version["User-Agent"].as_str().unwrap_or_default().to_string()
-}
 
 #[tokio::test]
 async fn an_older_kwants_headless_chrome_is_restarted_once() {
@@ -28,9 +23,19 @@ async fn an_older_kwants_headless_chrome_is_restarted_once() {
     std::fs::create_dir_all(&profile).unwrap();
     let _chrome = ChromeGuard(profile.clone());
 
-    // what an older kwant left running: windowless, its own user agent, no launch record
+    // what kwant 0.9.4 left running: windowless, a made-up user agent, no launch record
+    let old_args = [
+        format!("--user-data-dir={}", profile.display()),
+        "--remote-debugging-port=0".into(),
+        "--remote-debugging-address=127.0.0.1".into(),
+        "--no-first-run".into(),
+        "--no-default-browser-check".into(),
+        "--headless=new".into(),
+        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36".into(),
+        "about:blank".into(),
+    ];
     let mut old = std::process::Command::new(&chrome)
-        .args(computer::chrome_args(&profile, true, None))
+        .args(old_args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -42,18 +47,18 @@ async fn an_older_kwants_headless_chrome_is_restarted_once() {
         if let Some((e, _)) = computer::running_local_chrome(&profile).await { endpoint = Some(e); break; }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let endpoint = endpoint.expect("the older Chrome answers");
-    assert!(page_agent(&endpoint).await.contains("HeadlessChrome"));
+    assert!(endpoint.is_some(), "the older Chrome answers");
     assert_eq!(computer::launched_headless(&profile), None);
+    assert!(computer::started_by_older_kwant(&profile));
 
     let service = BrowserService::new(tmp.path().to_path_buf(), None);
     service.set_mode(ComputerMode::Local).await;
     service.session("bot", tmp.path()).await.expect("local session");
     let new_pid = computer::profile_owner(&profile).expect("a Chrome holds the profile");
     assert_ne!(new_pid, old_pid, "the older Chrome is restarted");
-    let (endpoint, headless) = computer::running_local_chrome(&profile).await.expect("chrome running");
+    let (_, headless) = computer::running_local_chrome(&profile).await.expect("chrome running");
     assert!(headless);
-    assert!(!page_agent(&endpoint).await.contains("Headless"));
+    assert!(!computer::started_by_older_kwant(&profile), "started as Chrome now");
     assert_eq!(computer::launched_headless(&profile), Some(true));
 
     // later calls keep it
