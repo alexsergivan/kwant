@@ -5,6 +5,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadBundled } from './bundle.mjs';
 
+// The servers screen's module reads saved statuses when it loads.
+globalThis.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+
 const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
