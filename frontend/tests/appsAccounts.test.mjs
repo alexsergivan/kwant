@@ -197,7 +197,7 @@ test('a refused Composio key says so and doesn’t blame an outage', async () =>
   g.window.open = () => null;
   await click(host.querySelector('[data-sheet-signin]'));
   const t = text(host.querySelector('[data-sheet-error="1"]'));
-  assert.match(t, /refused your API key.*Advanced › Manage tools/);
+  assert.match(t, /Composio didn’t accept your saved key, so the Gmail sign-in can’t start\. Replace the key on the Composio tile under Advanced\./);
   assert.doesNotMatch(t, /may be down/);
 });
 
@@ -321,8 +321,10 @@ test('the page puts app tiles first, then Find a tool, AI accounts, and a closed
   const tints = [...html.matchAll(/data-app-mark-tint="([^"]+)"/g)].map((x) => x[1]);
   assert.equal(new Set(tints).size, 6, `six tints: ${tints}`);
   assert.equal((html.match(/line-clamp-2/g) ?? []).length, 6);
-  // F8: phone-sized targets on the page's buttons.
-  assert.match(html, /min-h-\[44px\] sm:min-h-\[32px\]/);
+  // F8: phone-sized targets on the page's buttons, and Find a tool's field is 44 px on a phone (40 px from sm, design §1).
+  assert.match(html, /min-h-\[44px\]/);
+  const search = html.slice(html.indexOf('data-apps-search'), html.indexOf('data-ai-accounts'));
+  assert.match(search, /<input[^>]*class="[^"]*h-11 sm:h-10[^"]*"[^>]*data-find-input/);
 });
 
 test('a tile opens the Connect sheet and Escape closes it', async () => {

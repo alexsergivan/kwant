@@ -118,7 +118,7 @@ test('the three groups come in order and say where the tool comes from', async (
   const groups = [...host.querySelectorAll('[data-group]')].map((s) => s.dataset.group);
   assert.deepEqual(groups, ['composio', 'directory']);
   assert.match(text(host.querySelector('[data-group="composio"]')), /Through Composio.*Sign-ins stay on Composio’s servers/);
-  assert.match(text(host.querySelector('[data-group="directory"]')), /From the public directory.*Listed by their makers, not checked by kwant/);
+  assert.match(text(host.querySelector('[data-group="directory"]')), /From the public directory.*Listed by their makers, not checked by us/);
   assert.match(text(host.querySelector('[data-group="directory"] [data-row]')), /by example\.io.*Runs on this computer.*API key/);
   assert.doesNotMatch(text(host), PLUMBING);
 });
@@ -321,10 +321,12 @@ test('a directory entry that is a built-in tool is listed once, as built in', ()
 
 test('more than five in a group: a Show more row that is itself an option', () => {
   const composioApps = Array.from({ length: 8 }, (_, i) => ({ slug: `g${i}`, name: `Gapp ${i}`, description: '', tools: null, connected: false }));
-  const [, c] = m.buildGroups({ query: 'gapp', composioApps, composioAdded: true, directory: null, connections: [], expanded: new Set() });
+  // No built-in tool matches "gapp", so Built in is left out and the group is found by its key.
+  const c = m.buildGroups({ query: 'gapp', composioApps, composioAdded: true, directory: null, connections: [], expanded: new Set() }).find((g) => g.key === 'composio');
+  assert.ok(c, 'a Through Composio group');
   assert.equal(c.rows.length, 6);
   assert.equal(c.rows[5].name, 'Show 3 more through Composio');
-  const [, all] = m.buildGroups({ query: 'gapp', composioApps, composioAdded: true, directory: null, connections: [], expanded: new Set(['composio']) });
+  const all = m.buildGroups({ query: 'gapp', composioApps, composioAdded: true, directory: null, connections: [], expanded: new Set(['composio']) }).find((g) => g.key === 'composio');
   assert.equal(all.rows.length, 8);
 });
 

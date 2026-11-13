@@ -104,7 +104,7 @@ test('the page groups rows, counts them, and offers Composio with where it keeps
     assert.ok(html.includes(t), `page shows "${t}"`);
   }
   assert.ok(html.includes('data-composio-tile="new"'), 'Composio is the one-key tile (design.md §3)');
-  assert.ok(html.includes('Your app sign-ins stay on Composio’s servers, not in kwant’s vault.'), 'the footer says where sign-ins live');
+  assert.ok(html.includes('Your app sign-ins stay on Composio’s servers, not in this app’s vault.'), 'the footer says where sign-ins live');
 });
 
 test('the add form is off by default and repeats nothing secret', () => {

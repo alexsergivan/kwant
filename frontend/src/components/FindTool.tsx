@@ -581,7 +581,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
     setAppState((m) => ({ ...m, [slug]: { s: 'waiting', url: null, since: Date.now() } }));
     try {
       const { redirect_url } = await api.connect(slug);
-      if (!/^https:\/\//.test(redirect_url)) throw new Error('Composio sent an address kwant can’t open.');
+      if (!/^https:\/\//.test(redirect_url)) throw new Error('Composio sent an address we can’t open.');
       if (tab && !tab.closed) tab.location.href = redirect_url;
       else window.open(redirect_url, '_blank', 'noopener,noreferrer');
       if (alive.current) setAppState((m) => ({ ...m, [slug]: { s: 'waiting', url: redirect_url, since: Date.now() } }));
@@ -941,7 +941,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
           <Lock size={12} aria-hidden="true" /> Sign-ins stay on Composio’s servers
         </span>
       )}
-      {g.key === 'directory' && <span className="text-xs text-zinc-400">Listed by their makers, not checked by kwant</span>}
+      {g.key === 'directory' && <span className="text-xs text-zinc-400">Listed by their makers, not checked by us</span>}
     </div>
   );
 
@@ -1073,7 +1073,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
             const t = e.currentTarget;
             setCaretAtEnd(t.selectionStart === t.value.length && t.selectionEnd === t.value.length);
           }}
-          className={`relative w-full ${phone ? 'h-11 text-base' : 'h-10 text-sm'} pl-[38px] pr-20 rounded-[10px] bg-transparent border border-zinc-700 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-sky-400 focus:ring-[3px] focus:ring-sky-400/25`}
+          className={`relative w-full ${phone ? 'h-11 text-base' : 'h-11 sm:h-10 text-base sm:text-sm'} pl-[38px] pr-20 rounded-[10px] bg-transparent border border-zinc-700 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-sky-400 focus:ring-[3px] focus:ring-sky-400/25`}
           style={{ backgroundColor: ghost ? 'transparent' : undefined }}
           data-find-input
         />
@@ -1088,7 +1088,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
               type="button"
               aria-label="Clear"
               onClick={() => (change(''), inputRef.current?.focus())}
-              className={`inline-flex items-center justify-center ${phone ? 'w-11 h-11' : 'w-7 h-7'} rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
+              className={`inline-flex items-center justify-center ${phone ? 'w-11 h-11' : 'w-11 h-11 sm:w-7 sm:h-7'} rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
               data-find-clear
             >
               <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-zinc-700 text-zinc-200">

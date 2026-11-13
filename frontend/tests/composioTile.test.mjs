@@ -226,6 +226,6 @@ test('the old link setup offers the switch; with no saved key it asks for one ri
 test('the footer always says where sign-ins live', async () => {
   for (const e of [entry(), added(), added({ enabled: false })]) {
     const host = await mount({ entry: e, api: stubApi().api });
-    assert.equal(text(host.querySelector('[data-composio-footer]')), 'Your app sign-ins stay on Composio’s servers, not in kwant’s vault.');
+    assert.equal(text(host.querySelector('[data-composio-footer]')), 'Your app sign-ins stay on Composio’s servers, not in this app’s vault.');
   }
 });

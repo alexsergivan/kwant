@@ -473,7 +473,7 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
 
       <p className="flex items-start gap-2 text-[11px] text-zinc-400" data-composio-footer>
         <Lock size={12} className="mt-px shrink-0" aria-hidden="true" />
-        Your app sign-ins stay on Composio’s servers, not in kwant’s vault.
+        Your app sign-ins stay on Composio’s servers, not in this app’s vault.
       </p>
     </li>
   );
