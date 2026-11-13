@@ -242,7 +242,7 @@ Ranking, best first: entries whose publisher is what was typed (`stripe` → `co
 user, so `io.ddx.pg` isn't `pg`); then how the name or title matches (starts with it, a word starts
 with it, a known alias such as `pg` → postgres, a name part, contains it, one or two typos); within
 each of those, a publisher one or two typos from what was typed (`strpie` → stripe.com); an exact
-name or title; remotes before packages; then registry order. Typos are only looked for when closer
+name or title (for typo matches, a whole name or title a typo away: `gmial` → Gmail); remotes before packages; then registry order. Typos are only looked for when closer
 matches leave fewer than 12 rows. `ai.smithery/*` mirrors and entries whose address is a
 `{placeholder}` always come last. Case and accents don't matter. The answer carries
 `Server-Timing: directory;dur=<ms>`.

@@ -213,7 +213,7 @@ impl DirEntry {
             return None;
         }
         let all = || self.words.iter().chain([&self.title_norm, &self.slug_norm]).map(String::as_str);
-        let whole = |w: &str| char_count(w).abs_diff(q.chars) <= q.budget && osa_within(&q.text, w, q.budget);
+        let whole = |w: &str| within(&q.text, q.chars, w, q.budget);
         if all().any(whole) {
             return Some(Match::Typo);
         }
@@ -238,8 +238,10 @@ impl DirEntry {
     /// The sort key; lower comes first.
     fn key(&self, q: &Query, m: Match, order: usize) -> SortKey {
         let publisher = self.publisher_is(&q.text);
-        let publisher_typo = !publisher && q.budget > 0 && self.publisher_key.as_deref().is_some_and(|k| osa_within(&q.text, k, q.budget));
-        (self.demoted, !publisher, m, !publisher_typo, !self.exact(&q.text), !self.is_remote(), order)
+        let publisher_typo = !publisher && q.budget > 0 && self.publisher_key.as_deref().is_some_and(|k| within(&q.text, q.chars, k, q.budget));
+        // Among typo matches, the name or title itself a typo away (`gmial` → gmail) first
+        let exact = self.exact(&q.text) || (m == Match::Typo && [&self.title_norm, &self.slug_norm].iter().any(|t| within(&q.text, q.chars, t, q.budget)));
+        (self.demoted, !publisher, m, !publisher_typo, !exact, !self.is_remote(), order)
     }
 }
 
@@ -314,6 +316,36 @@ fn one_edit_same_length(a: &str, b: &str) -> bool {
                 return matches!((a.next(), b.next()), (Some(x2), Some(y2)) if x2 == y && y2 == x) && a.eq(b);
             }
             _ => return false,
+        }
+    }
+}
+
+/// `w` at most `max` edits from `q` (`q_chars` characters long). One edit, the common case, is
+/// checked without the table.
+fn within(q: &str, q_chars: usize, w: &str, max: usize) -> bool {
+    let w_chars = char_count(w);
+    if w_chars.abs_diff(q_chars) > max {
+        return false;
+    }
+    match (max, w_chars.cmp(&q_chars)) {
+        (0, _) => q == w,
+        (1, std::cmp::Ordering::Equal) => one_edit_same_length(q, w),
+        (1, std::cmp::Ordering::Less) => one_insert(w, q),
+        (1, std::cmp::Ordering::Greater) => one_insert(q, w),
+        _ => osa_within(q, w, max),
+    }
+}
+
+/// `long` is `short` with one character added.
+fn one_insert(short: &str, long: &str) -> bool {
+    let (mut s, mut l) = (short.chars(), long.chars());
+    loop {
+        match (s.clone().next(), l.next()) {
+            (Some(x), Some(y)) if x == y => {
+                s.next();
+            }
+            (_, Some(_)) => return s.eq(l),
+            (_, None) => return false,
         }
     }
 }
@@ -609,6 +641,13 @@ mod tests {
             assert_eq!(one_edit_same_length(a, b), osa_bounded(a, b, 1) <= 1 && char_count(a) == char_count(b), "{a} {b}");
         }
         assert_eq!((char_count("café"), char_count("cafe")), (4, 4));
+        for (a, b) in [("gmail", "gmial"), ("gmail", "gmai"), ("gmail", "gmaill"), ("gmail", "xgmail"), ("gmail", "gmal"), ("gmail", "gmali"), ("gmail", "mail"), ("gmail", "gmailxx"), ("gmail", "gamil"), ("gmail", "gnail"), ("abcd", "acbd"), ("abcd", "abc"), ("abc", "ab")] {
+            for (x, y) in [(a, b), (b, a)] {
+                assert_eq!(within(x, char_count(x), y, 1), osa_bounded(x, y, 1) <= 1, "{x} {y}");
+                assert_eq!(within(x, char_count(x), y, 2), osa_bounded(x, y, 2) <= 2, "{x} {y}");
+            }
+        }
+        assert!(within("abc", 3, "abc", 0) && !within("abc", 3, "abd", 0));
         let pg = fixture(
             &serde_json::json!({"servers": [{"server": {"name": "io.github.x/postgresql-tools", "description": "d", "version": "1",
                 "remotes": [{"type": "streamable-http", "url": "https://pg.example/mcp"}]}}]})
@@ -652,6 +691,10 @@ mod tests {
             ("io.github.getsentry/sentry-mcp", "Sentry"),
         ]);
         assert_eq!(names("sentry", &list)[0], "io.github.getsentry/sentry-mcp");
+
+        // Among typo matches, the name itself a typo away comes before a word in a longer title
+        let list = remotes(&[("ai.fgac/fgac", "Fgac for gmail and drive"), ("ai.waystation/gmail", "Gmail")]);
+        assert_eq!(names("gmial", &list), ["ai.waystation/gmail", "ai.fgac/fgac"]);
     }
 
     #[test]
