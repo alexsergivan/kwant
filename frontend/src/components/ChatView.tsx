@@ -1476,6 +1476,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               size={36}
               kwantId={replyKwantId}
+              modelBadge={false}
             />
           </span>
         </span>

@@ -49,6 +49,20 @@ test('pinned, not working: that engine\'s mark, "Runs on …"', () => {
   assert.equal(b.label, 'Runs on Claude · Sonnet');
 });
 
+test('pinned: the model is named like the reply\'s ran-on line, with the server\'s real labels', () => {
+  const real = [ready('claude', { models: [{ id: 'sonnet', label: 'Claude Sonnet (latest)', default: true }] }), ready('codex', { models: [{ id: 'gpt-5.5', label: 'GPT-5.5', default: true }] })];
+  assert.equal(m.modelBadgeFor({ preferred_model: 'claude/sonnet' }, null, real).label, 'Runs on Claude · Sonnet');
+  assert.equal(m.modelBadgeFor({ preferred_model: 'codex/gpt-5.5' }, null, real).label, 'Runs on Codex · GPT-5.5');
+  assert.equal(m.modelBadgeFor({ preferred_model: 'claude' }, null, real).label, 'Runs on Claude');
+});
+
+test('pinned, signed in but out of usage for now: not greyed (failover still runs it), and a bare model id reads as a name', () => {
+  const out = [{ ...ready('claude'), ready: false, models: [] }, ready('codex')];
+  const b = m.modelBadgeFor({ preferred_model: 'claude/sonnet' }, null, out);
+  assert.equal(b.cantRun, null);
+  assert.equal(b.label, 'Runs on Claude · Sonnet');
+});
+
 test('pinned, working: the same mark; on failover the mark it moved to', () => {
   const k = { preferred_model: 'claude/sonnet' };
   const live = m.modelBadgeFor(k, run('claude', 'sonnet', 'Sonnet', 'pinned'), ENGINES);
@@ -212,6 +226,10 @@ test('hidden under 24 px, and on reply avatars in the chat', () => {
   assert.equal(badge(), null, 'no bot, no badge');
   const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   assert.match(chat, /size=\{20\} kwantId=\{replyKwantId\} modelBadge=\{false\}/);
+  // Every reply avatar with a bot id (the 36 px one beside each message too) opts out: the ran-on line names the model.
+  const replyAvatars = chat.match(/kwantId=\{replyKwantId\}[^/>]*/g) ?? [];
+  assert.ok(replyAvatars.length >= 2);
+  for (const a of replyAvatars) assert.match(a, /modelBadge=\{false\}/);
 });
 
 test('dev mode: the hard hat (top-left) and the badge (bottom-left) never overlap', () => {

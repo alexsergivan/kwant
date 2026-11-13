@@ -410,10 +410,22 @@ function familyCantRun(family: Family, engines: EngineInfo[] | null): ModelBadge
   const mine = engines.filter((e) => FAMILY_OF[e.id] === family);
   if (!mine.length || mine.some(isUsable)) return null;
   if (mine.some((e) => e.enabled !== false && e.status === 'checking')) return null;
+  // Signed in but not ready right now (out of usage until it resets): failover still runs the bot, so it isn't greyed.
+  if (mine.some((e) => e.enabled !== false && e.status === 'ready')) return null;
   // Off when every one that's here at all is switched off; otherwise it needs a sign-in (or a key).
   const here = mine.filter((e) => e.status !== 'not_installed' || e.enabled === false);
   if (!here.length) return 'not_set_up';
   return here.every((e) => e.enabled === false || e.status === 'disabled') ? 'off' : 'signed_out';
+}
+
+/** pickLabel, with the model named the way a reply's ran-on line names it: "Claude · Sonnet", not "Claude · Claude Sonnet (latest)". */
+function shortPickLabel(value: string, engines: EngineInfo[] | null): string {
+  const full = pickLabel(value, engines);
+  const at = full.indexOf(' · ');
+  if (at < 0) return full;
+  const model = shortModelLabel(full.slice(at + 3), full.slice(0, at));
+  // A bare id the engine list doesn't know yet ("sonnet") reads as a name.
+  return `${full.slice(0, at)} · ${/^[a-z]+$/.test(model) ? model[0].toUpperCase() + model.slice(1) : model}`;
 }
 
 /**
@@ -462,7 +474,7 @@ export function modelBadgeFor(
     resting: false,
     auto,
     cantRun,
-    label: `Runs on ${pickLabel(kwant.preferred_model ?? '', engines)}${suffix}`,
+    label: `Runs on ${shortPickLabel(kwant.preferred_model ?? '', engines)}${suffix}`,
     key: `${family}:${pick.model ?? ''}`,
   };
 }
