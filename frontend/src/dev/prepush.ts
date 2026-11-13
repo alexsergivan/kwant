@@ -423,10 +423,14 @@ export function clearedLine(c: PrepushCard): string {
   return `${p.before}${p.branch}${p.after}`;
 }
 
-export function overriddenLine(c: PrepushCard, bot: string): string {
+// The override's first sentence on its own: what the person did, with no promise about the next push.
+export function overriddenHead(c: PrepushCard): string {
   const at = hhmm(c.override?.at ?? null);
-  const n = openCount(c);
-  const head = `You let this push go${at ? ` at ${at}` : ''} with ${plural(n, 'finding')} open.`;
+  return `You let this push go${at ? ` at ${at}` : ''} with ${plural(openCount(c), 'finding')} open.`;
+}
+
+export function overriddenLine(c: PrepushCard, bot: string): string {
+  const head = overriddenHead(c);
   // Mira FIX 2: with a grant, the press was the OK, and the card says so.
   if (c.grant) return `${head} That was your OK: ${bot}'s push of this commit goes without asking you.`;
   return `${head} It covers this commit only.`;
@@ -535,7 +539,8 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
     if (at !== null || c.status === 'pushed') return { step: 'pushed', lead, now: pushedLine(at), next: null, at, approval: null };
     const exp = c.grant?.expires_at ?? null;
     if (c.grant && c.grant.used_at === null && exp !== null && now >= exp)
-      return { step: 'expired', lead, now: `${bot} didn't push within 2 hours, so your OK ran out. Its push asks you as usual.`, next: null, at: null, approval: null };
+      // Ada (Nov 13), Mira's FIX 7 rule: in an expired step the lead drops its promise.
+      return { step: 'expired', lead: overriddenHead(c), now: `${bot} didn't push within 2 hours, so your OK ran out. Its push asks you as usual.`, next: null, at: null, approval: null };
     if (approval) return { step: 'asks', lead, now: asksLine(bot, approval), next: null, at: null, approval };
     return { step: 'pushing', lead, now: `${bot} can push it now.`, next: null, at: null, approval: null };
   }

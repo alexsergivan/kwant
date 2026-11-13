@@ -203,6 +203,7 @@ test('story after a retry: fixing → checking the new push → Pushed · HH:MM,
   const sx = m.storyOf(r, [r], 'Quant', null, fx.PP_RETRIED_GRANT.grant.expires_at + 1);
   assert.equal(sx.step, 'expired', 'a window that ran out says so');
   assert.equal(sx.lead, 'You asked Quant to fix this and push again.', 'the lead stops promising (Mira FIX 7)');
+  assert.doesNotMatch(sx.lead, /without asking/);
   assert.equal(sx.now, "No fixed push came within 2 hours, so your OK ran out. Quant's next push asks you as usual.");
   const replacedNext = card({ ...fx.PP_NEXT_BLOCKED, status: 'superseded', needs_you: false });
   const rp = m.storyOf(r, [r, replacedNext], 'Quant', null, at);
@@ -225,6 +226,10 @@ test('story after Push anyway: pushing → Pushed · HH:MM', () => {
   // Mira FIX 2: an override grant runs out too; the card says so instead of "can push it now" for ever.
   const sx = m.storyOf(o, [o], 'Quant', null, fx.PP_OVERRIDDEN_GRANT.grant.expires_at);
   assert.equal(sx.step, 'expired');
+  assert.equal(sx.lead, `You let this push go at ${HM(fx.PP_OVERRIDDEN_GRANT.override.at)} with 1 finding open.`, 'an expired override drops the promise from the lead');
+  assert.doesNotMatch(sx.lead, /without asking/);
+  const outX = html(m.PrepushCard, { card: o, bot: 'Quant', story: sx });
+  assert.doesNotMatch(outX, /without asking/, 'the expired override card promises nothing anywhere');
   assert.equal(sx.now, "Quant didn't push within 2 hours, so your OK ran out. Its push asks you as usual.");
   const p = card(fx.PP_PUSHED);
   const sp = m.storyOf(p, [p], 'Quant');

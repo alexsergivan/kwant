@@ -601,7 +601,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({
 
       {phase === 'P6' && (
         <div className="mt-3 text-meta text-zinc-300">
-          <p>{overriddenLine(card, bot)}</p>
+          <p>{story ? story.lead : overriddenLine(card, bot)}</p>
           {story && <StoryLine story={story} card={card} bot={bot} onOpenCard={onOpenCard} onOpenApproval={onOpenApproval} />}
           {card.override?.reason && (
             <blockquote className="mt-1.5 border-l-2 border-zinc-600 pl-2 italic text-zinc-300 [overflow-wrap:anywhere]">
