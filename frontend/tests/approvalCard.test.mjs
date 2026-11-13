@@ -142,7 +142,7 @@ test('a card from a turn kwant started says why it asks, in one line', () => {
     details: { source: 'claude_builtin', tool: 'Bash', arguments: { command: 'touch x' }, kwant_name: 'Lin', always_ask: true, ...extra },
   });
   const html = render(ticket({ started_by: 'Loose ends' }));
-  assert.match(html, /data-started-by[^>]*>kwant started this turn on its own \(Loose ends\), so changes ask you\.<\/p>/);
+  assert.match(html, /data-started-by[^>]*>This turn started on its own \(Loose ends\), so changes ask you\.<\/p>/);
   assert.doesNotMatch(render(ticket()), /data-started-by/, 'no label, no line');
   assert.equal(m.startedByNote(ticket({ started_by: '  ' })), null);
   assert.equal(m.startedByNote({ id: 'x', tool_name: 'Bash', details: { started_by: 3 } }), null);

@@ -142,7 +142,7 @@ export const paymentReason = (approval: PendingApproval) => {
 export const startedByNote = (approval: PendingApproval) => {
   const label = approval.details?.started_by;
   if (typeof label !== 'string' || !label.trim()) return null;
-  return `kwant started this turn on its own (${label.trim()}), so changes ask you.`;
+  return `This turn started on its own (${label.trim()}), so changes ask you.`;
 };
 
 /** The line under a still-open card's heading. */
