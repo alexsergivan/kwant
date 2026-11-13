@@ -120,3 +120,80 @@ test('the pane picks the page by choosePage and streams it; the card\'s Sign in 
   const hook = await readFile(new URL('../src/useBrowserStream.ts', import.meta.url), 'utf8');
   assert.match(hook, /\}, \[id, visible, page\]\);/, 'a new page reconnects the stream');
 });
+
+// ---------- 0.9.8 browser panel: the chip and the page trail ----------
+const bp = await load('../src/browserPages.ts');
+const step = (tool, detail, at, extra = {}) => ({ kind: 'tool', status: 'done', tool, detail, started_at: at, ...extra });
+
+test('pagesOfReply: counts the bot browser\'s own open/navigate tools, MCP-prefixed too', () => {
+  bp.clearTitles();
+  const pages = bp.pagesOfReply([
+    step('mcp__kwnt__browser_open', 'https://www.roastco.example.com/shop/coffee/1kg', '2026-11-13T10:44:00Z'),
+    step('browser_navigate', 'https://roastco.example.com/cart', '2026-11-13T10:45:00Z'),
+    step('mcp__kwnt__open_url', 'https://beans.example.org/', '2026-11-13T10:46:00Z'),
+  ]);
+  assert.deepEqual(pages.map((p) => p.url), ['https://beans.example.org/', 'https://roastco.example.com/cart', 'https://www.roastco.example.com/shop/coffee/1kg']);
+  assert.deepEqual(pages.map((p) => p.host), ['beans.example.org', 'roastco.example.com', 'roastco.example.com']);
+});
+
+test('pagesOfReply: WebFetch, fetch, failed steps, non-tool steps and non-http details don\'t count', () => {
+  assert.deepEqual(
+    bp.pagesOfReply([
+      step('WebFetch', 'https://a.example.com/', 't1'),
+      step('mcp__kwnt__webfetch', 'https://a.example.com/', 't1'),
+      step('fetch', 'https://a.example.com/', 't1'),
+      step('browser_open', 'https://a.example.com/', 't1', { status: 'failed' }),
+      step('browser_open', 'Timed out loading the page', 't1'),
+      step('browser_open', 'file:///etc/hosts', 't1'),
+      { kind: 'thinking', detail: 'https://a.example.com/', started_at: 't1' },
+      step('browser_click', 'https://a.example.com/', 't1'),
+    ]),
+    [],
+  );
+  assert.deepEqual(bp.pagesOfReply(null), []);
+});
+
+test('pagesOfReply: distinct addresses with the hash stripped; a later visit moves the page up', () => {
+  const pages = bp.pagesOfReply([
+    step('browser_open', 'https://a.example.com/x#top', '2026-11-13T10:00:00Z'),
+    step('browser_open', 'https://a.example.com/y', '2026-11-13T10:01:00Z'),
+    step('browser_open', 'https://a.example.com/x#reviews', '2026-11-13T10:02:00Z'),
+  ]);
+  assert.deepEqual(pages.map((p) => [p.url, p.at]), [
+    ['https://a.example.com/x', '2026-11-13T10:02:00Z'],
+    ['https://a.example.com/y', '2026-11-13T10:01:00Z'],
+  ]);
+});
+
+test('page titles: the step\'s page_title, then one seen live, then the path; "/" reads as the host', () => {
+  bp.clearTitles();
+  bp.noteTitle('https://roastco.example.com/cart#x', 'Your cart · RoastCo');
+  const pages = bp.pagesOfReply([
+    step('browser_open', 'https://roastco.example.com/', 't1'),
+    step('browser_open', 'https://roastco.example.com/shop/coffee/1kg', 't2'),
+    step('browser_open', 'https://roastco.example.com/cart', 't3'),
+    step('browser_open', 'https://roastco.example.com/about', 't4', { page_title: 'About RoastCo' }),
+  ]);
+  assert.deepEqual(pages.map((p) => p.title), ['About RoastCo', 'Your cart · RoastCo', '/shop/coffee/1kg', 'roastco.example.com']);
+});
+
+test('noteTitle keeps the newest 200 addresses and ignores blank titles', () => {
+  bp.clearTitles();
+  for (let i = 0; i < 205; i++) bp.noteTitle(`https://a.example.com/${i}`, `Page ${i}`);
+  assert.equal(bp.titleFor('https://a.example.com/0'), null);
+  assert.equal(bp.titleFor('https://a.example.com/204'), 'Page 204');
+  bp.noteTitle('https://b.example.com/', '  ');
+  bp.noteTitle('about:blank', 'Blank');
+  assert.equal(bp.titleFor('https://b.example.com/'), null);
+});
+
+test('the chip\'s words: "1 page" / "2 pages" after, the host and a count from 2 while browsing', () => {
+  const one = bp.pagesOfReply([step('browser_open', 'https://roastco.example.com/', 't1')]);
+  const two = bp.pagesOfReply([step('browser_open', 'https://roastco.example.com/', 't1'), step('browser_open', 'https://www.beans.example.org/a', 't2')]);
+  assert.equal(bp.browsedChipText('Ben', one, false).lead, 'Ben opened 1 page');
+  assert.equal(bp.browsedChipText('Ben', one, false).label, 'Show the page Ben opened');
+  assert.equal(bp.browsedChipText('Ben', two, false).lead, 'Ben opened 2 pages');
+  assert.equal(bp.browsedChipText('Ben', two, false).label, 'Show the 2 pages Ben opened');
+  assert.deepEqual(bp.browsedChipText('Ben', one, true), { lead: 'Ben is on', host: 'roastco.example.com', count: null, label: "Watch Ben's browser" });
+  assert.deepEqual(bp.browsedChipText('Ben', two, true), { lead: 'Ben is on', host: 'beans.example.org', count: '2 pages', label: "Watch Ben's browser" });
+});

@@ -154,3 +154,126 @@ export function parsePageList(raw: unknown): BrowserPageList | null {
     pages,
   };
 }
+
+// ---------- Browser panel (0.9.8, design browser-panel/design.md A, B) ----------
+
+/** The bot browser's own open/navigate tools. WebFetch and fetch never touch it, so they don't count. */
+export const BROWSER_PAGE_TOOLS: readonly string[] = ['browser_open', 'browser_navigate', 'navigate', 'open_url'];
+
+/** A tool's own name: `mcp__kwnt__browser_open` → `browser_open`. */
+export function ownToolName(tool: string | null | undefined): string {
+  if (!tool) return '';
+  const i = tool.lastIndexOf('__');
+  return (i >= 0 ? tool.slice(i + 2) : tool).toLowerCase();
+}
+
+/** The fields of an activity step the trail reads (a saved reply's or a running turn's). */
+export interface PageStep {
+  kind: string;
+  status?: string;
+  tool?: string;
+  detail?: string;
+  /** The title the browser reported once the page loaded (server 0.9.8+, optional). */
+  page_title?: string;
+  started_at: string;
+}
+
+/** One row of the trail: a page the bot opened in its browser. */
+export interface ReplyPage {
+  /** When the bot opened it (the newest visit), ISO time from the step. */
+  at: string;
+  url: string;
+  host: string;
+  title: string;
+}
+
+/** An http(s) address without its #hash, or null when it isn't one. */
+function pageAddress(raw: string | null | undefined): URL | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    u.hash = '';
+    return u;
+  } catch {
+    return null;
+  }
+}
+
+// Titles the app saw live (`browser_navigated` carries one), per address, for a session.
+const TITLE_MAX = 200;
+const titles = new Map<string, string>();
+
+/** Remembers a page's title (the newest 200 addresses). */
+export function noteTitle(url: string | null | undefined, title: string | null | undefined): void {
+  const u = pageAddress(url);
+  const t = title?.trim();
+  if (!u || !t || t.startsWith('about:')) return;
+  const key = u.href;
+  titles.delete(key);
+  titles.set(key, t);
+  while (titles.size > TITLE_MAX) titles.delete(titles.keys().next().value as string);
+}
+
+/** A title the app saw for this address, if any. */
+export function titleFor(url: string | null | undefined): string | null {
+  const u = pageAddress(url);
+  return (u && titles.get(u.href)) || null;
+}
+
+/** For tests: forget every title. */
+export function clearTitles(): void {
+  titles.clear();
+}
+
+/** The trail's line 1: the step's page title, else one seen live, else the path ("/" reads as the host). */
+export function pageTitleOf(url: string, stepTitle?: string | null): string {
+  const t = stepTitle?.trim();
+  if (t) return t;
+  const seen = titleFor(url);
+  if (seen) return seen;
+  const u = pageAddress(url);
+  if (!u) return url;
+  const path = decodeURI(u.pathname).replace(/\/+$/, '');
+  return path ? path + u.search : pageHost(u.href) ?? u.host;
+}
+
+/** Whether a step opened a page in the bot's browser: an own open/navigate tool with an address that didn't fail. */
+export function isPageStep(s: PageStep): boolean {
+  return s.kind === 'tool' && s.status !== 'failed' && BROWSER_PAGE_TOOLS.includes(ownToolName(s.tool)) && !!pageAddress(s.detail);
+}
+
+/** The pages a reply opened in the bot's browser: distinct addresses (hash stripped), newest first. */
+export function pagesOfReply(steps: readonly PageStep[] | null | undefined): ReplyPage[] {
+  const out = new Map<string, { at: string; url: string; host: string; stepTitle: string | null }>();
+  for (const s of steps ?? []) {
+    if (!isPageStep(s)) continue;
+    const u = pageAddress(s.detail)!;
+    const key = u.href;
+    // A later visit moves the page up; the newest reported title wins
+    const prev = out.get(key);
+    out.delete(key);
+    out.set(key, { at: s.started_at, url: key, host: pageHost(key) ?? u.host, stepTitle: s.page_title?.trim() || prev?.stepTitle || null });
+  }
+  return [...out.values()].reverse().map(p => ({ at: p.at, url: p.url, host: p.host, title: pageTitleOf(p.url, p.stepTitle) }));
+}
+
+/** The chip's words: "Ben opened 2 pages", or while browsing the host and the count from 2 up. */
+export function browsedChipText(botName: string, pages: readonly ReplyPage[], live: boolean): { lead: string; host: string | null; count: string | null; label: string } {
+  const n = pages.length;
+  if (live) {
+    const host = pages[0]?.host ?? null;
+    return { lead: `${botName} is on`, host, count: n >= 2 ? `${n} pages` : null, label: `Watch ${botName}'s browser` };
+  }
+  return { lead: `${botName} opened ${n} ${n === 1 ? 'page' : 'pages'}`, host: null, count: null, label: `Show the ${n === 1 ? 'page' : `${n} pages`} ${botName} opened` };
+}
+
+/** "10:45" in the person's locale, without AM/PM (the panel header has the full time). */
+export function trailTime(iso: string, locale?: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d
+    .toLocaleTimeString(locale ?? [], { hour: 'numeric', minute: '2-digit' })
+    .replace(/\s?[AaPp]\.?\s?[Mm]\.?$/, '')
+    .trim();
+}

@@ -196,7 +196,7 @@ const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: nu
  * one 44 px row, "Steps · 2 ▸", that opens to the same list; the engine's note (what it can't show of
  * its thinking) moves behind an ⓘ in that row, since the working strip already says the bot works.
  */
-export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; compact?: boolean }> = ({ live, idBase, compact = false }) => {
+export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; compact?: boolean; lead?: React.ReactNode }> = ({ live, idBase, compact = false, lead }) => {
   const { steps } = live;
   const [open, setOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -216,6 +216,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
     const noteId = `${idBase}-note`;
     return (
       <section aria-label="What the bot is doing" data-steps-compact="" className="mb-2 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden">
+        {lead && <div className="flex items-center min-h-[44px] px-2.5 border-b border-zinc-700/40">{lead}</div>}
         <div className="flex items-center">
           <button
             type="button"
@@ -270,6 +271,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
           · {work} {work === 1 ? 'step' : 'steps'}
         </span>
       </p>
+      {lead && <div className="px-3 pt-1 pb-2">{lead}</div>}
       {announce}
       <div className="max-h-[22rem] overflow-y-auto">
         <Steps steps={steps} live={live} id={`${idBase}-live`} />

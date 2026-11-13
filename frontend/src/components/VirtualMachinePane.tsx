@@ -12,14 +12,16 @@ import {
   Laptop,
   Puzzle,
   CheckCircle2,
-  Eye,
   Hand,
   Crosshair,
+  Maximize2,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { BOT_BUSY_TEXT, HELD_BY_PERSON_TEXT, useBrowserStream } from '../useBrowserStream';
 import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, SignInLine, useComputerMode } from './ComputerModeSwitch';
-import { browserFooterLabel, isBlankPage, showsLocalWindow } from '../computerMode';
+import { browserFooterLabel, browserOwnerWord, isBlankPage, showsLocalWindow } from '../computerMode';
+import { paneStatus } from '../browserPanel';
+import { ModernAvatar } from './ModernAvatar';
 import { loginMatchesPage } from '../savedPasswords';
 import { PendingLoginPrompt, SavedPasswordsPanel, useSavedPasswords } from './SavedPasswordsPanel';
 import { usePasswordStore } from './PasswordStorePanel';
@@ -32,7 +34,7 @@ import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 import { PointLayer, PointSink } from './PointLayer';
 import { POINT_COPY, footerText } from '../point';
-import { choosePage, pageTeam, shownPage, stepPage } from '../browserPages';
+import { choosePage, pageTeam, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
 
@@ -111,6 +113,20 @@ export interface VirtualMachinePaneProps {
   pagePick?: { page: string; n: number } | null;
   /** Bot names by id, for the page strip. */
   botNames?: Record<string, string>;
+  /** 0.9.8: the browser's owner has a turn running now (header "Browsing now", pill "Live"). */
+  running?: boolean;
+  /** 0.9.8: when that turn ended, for "Finished 10:46 PM"; null with no run since the app opened (Idle). */
+  finishedAt?: string | null;
+  /** 0.9.8: the bot browsing ("Ben's browser") when the page on screen isn't a bot's job page. */
+  browsingBot?: string | null;
+  /** 0.9.8: the pages the reply opened (the tapped chip's, else the running turn's), newest first. */
+  trail?: ReplyPage[];
+  /** 0.9.8: the person used the panel (a tab, Point, Take over, the trail, Enlarge, the address bar). */
+  onTouch?: () => void;
+  /** 0.9.8: what keeps a bot-opened panel open after the turn: control, Point picks waiting to be sent. */
+  onUsage?: (u: { control: boolean; pointPending: boolean }) => void;
+  /** 0.9.8: playing the close animation (the panel closes itself in a moment). */
+  closing?: boolean;
 }
 
 type PaneTab = 'browser' | 'terminal' | 'vault';
@@ -160,6 +176,13 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   showOnceBot,
   pagePick = null,
   botNames,
+  running = false,
+  finishedAt = null,
+  browsingBot = null,
+  trail = [],
+  onTouch,
+  onUsage,
+  closing = false,
 }) => {
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
@@ -217,6 +240,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const botName = useCallback((id: string) => botNames?.[id], [botNames]);
   // Who the page on screen belongs to: its bot on a job page, else the team ("Architect needs you to sign in")
   const pageBot = (pageInfo?.job && pageInfo.kwant_id && botNames?.[pageInfo.kwant_id]) || teamName;
+  // 0.9.8 header and footer: "Ben's browser", or "The team's browser" when no bot owns the page on screen
+  const whoBrowses = (pageInfo?.job && pageInfo.kwant_id && botNames?.[pageInfo.kwant_id]) || browsingBot || null;
+  const whose = browserOwnerWord(whoBrowses);
+  const paneTitle = `${whose.charAt(0).toUpperCase()}${whose.slice(1)} browser`;
+  const touch = useCallback(() => onTouch?.(), [onTouch]);
 
   // Interactive Remote Control State
   const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending, chosenPage);
@@ -423,33 +451,149 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     pointButton.current?.focus();
   }, []);
 
+  // 0.9.8 D: a panel the bot opened stays open while the person controls it or has picks to send
+  const pointPending = (point?.picks ?? 0) > 0;
+  useEffect(() => onUsage?.({ control: isControlMode, pointPending }), [onUsage, isControlMode, pointPending]);
+
+  // 0.9.8 C: Enlarge shows the same frame big, view only
+  const [enlarged, setEnlarged] = useState(false);
+  const enlargeClose = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!enlarged) return;
+    enlargeClose.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setEnlarged(false);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [enlarged]);
+  useEffect(() => {
+    if (enlarged && !frameSrc) setEnlarged(false);
+  }, [enlarged, frameSrc]);
+
+  // 0.9.8 E: the phone sheet takes focus to its ✕ and gives it back (to the chip) when it closes
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!isOpen || !narrow) return;
+    const before = document.activeElement as HTMLElement | null;
+    closeButton.current?.focus();
+    return () => {
+      if (before && before.isConnected && before !== document.body) before.focus();
+    };
+  }, [isOpen, narrow]);
+  // Dragging the grabber down more than 96 px closes the sheet; a tap does nothing
+  const [drag, setDrag] = useState<{ y0: number; dy: number } | null>(null);
+  const dragging = drag && drag.dy > 0 ? drag.dy : 0;
+
   if (!isOpen) return null;
   const switching = !!switcher && switcher.entries.length >= 2;
+  const status = paneStatus({ running, finishedAt });
+  const live = status.kind === 'browsing';
+  const finished = status.kind === 'finished';
+  const close = () => {
+    playSfx('click');
+    onClose();
+  };
+  const statusLine = (
+    <p className="text-[11px] text-zinc-400 truncate flex items-center gap-1" aria-live="polite" data-pane-status={status.kind}>
+      {live && <span aria-hidden="true" className="shrink-0 w-[7px] h-[7px] rounded-full bg-emerald-400" />}
+      <span className="truncate">
+        {status.text} · @{teamName}
+      </span>
+    </p>
+  );
+  const pointButtonEl =
+    pointShown || (point && takeover && !isWindow) ? (
+      <button
+        ref={pointButton}
+        type="button"
+        data-point-button=""
+        aria-pressed={pointOn}
+        aria-label={POINT_COPY.buttonName}
+        title={takeover ? POINT_COPY.handBack : POINT_COPY.buttonName}
+        disabled={takeover}
+        onClick={() => {
+          playSfx('click');
+          touch();
+          setPointing((p) => !p);
+        }}
+        className={`${narrow ? 'h-11 flex-1 justify-center' : 'h-8'} px-3 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 border ${
+          pointOn ? 'bg-violet-600 border-violet-400 text-white ring-[3px] ring-violet-500/25' : 'border-[#3f3868] text-zinc-200 hover:bg-white/5'
+        }`}
+      >
+        <Crosshair size={14} aria-hidden="true" />
+        {POINT_COPY.button}
+      </button>
+    ) : null;
 
   return (
-    // On a phone the panel is the whole screen (0.7.7 nice-to-have 5): a 384 px column beside the chat left the chat a sliver.
+    // 0.9.8 E: on a phone the panel is a 70 % bottom sheet over a scrim; the chat stays readable above it.
+    <>
+    {narrow && (
+      <div
+        aria-hidden="true"
+        data-vm-scrim=""
+        onClick={close}
+        className={`fixed inset-0 z-[59] bg-[rgb(5_3_14/0.42)] transition-opacity duration-150 motion-reduce:transition-none ${closing ? 'opacity-0' : 'opacity-100'}`}
+      />
+    )}
     <div
       data-vm-pane=""
-      className={`${narrow ? 'fixed inset-0 z-[60] w-full h-[100dvh] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]' : 'w-96 border-l border-zinc-800 h-full z-30'} bg-zinc-950 flex flex-col shadow-2xl select-none animate-in slide-in-from-right duration-200`}
+      data-pane-closing={closing || undefined}
+      role={narrow ? 'dialog' : undefined}
+      aria-modal={narrow ? true : undefined}
+      aria-label={narrow ? paneTitle : undefined}
+      style={dragging ? { transform: `translateY(${dragging}px)`, transition: 'none' } : undefined}
+      className={`${
+        narrow
+          ? `fixed inset-x-0 bottom-0 z-[60] h-[70dvh] rounded-t-[20px] border-t border-[#3a3266] bg-[#0d0a1d] shadow-[0_-12px_40px_rgba(0,0,0,.5)] pb-[env(safe-area-inset-bottom)] overflow-hidden animate-in slide-in-from-bottom duration-200 ${closing ? 'translate-y-full opacity-0' : ''}`
+          : `w-96 border-l border-zinc-800 h-full z-30 bg-zinc-950 shadow-2xl animate-in slide-in-from-right duration-200 ${closing ? 'translate-x-4 opacity-0' : ''}`
+      } flex flex-col select-none transition-[transform,opacity] ease-out duration-150 motion-reduce:transition-none motion-reduce:animate-none`}
     >
-      {/* Top Header */}
-      <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between gap-2 bg-zinc-900/60">
+      {narrow && (
+        <div
+          data-vm-grabber=""
+          aria-hidden="true"
+          className="shrink-0 pt-2 pb-1 touch-none cursor-grab"
+          onPointerDown={(e) => {
+            (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+            setDrag({ y0: e.clientY, dy: 0 });
+          }}
+          onPointerMove={(e) => drag && setDrag({ y0: drag.y0, dy: e.clientY - drag.y0 })}
+          onPointerUp={() => {
+            const far = !!drag && drag.dy > 96;
+            setDrag(null);
+            if (far) close();
+          }}
+          onPointerCancel={() => setDrag(null)}
+        >
+          <div className="mx-auto w-9 h-1 rounded-full bg-[#4b4478]" />
+        </div>
+      )}
+      {/* Header: whose browser it is and whether it's browsing now (0.9.8 C) */}
+      <div className={`${narrow ? 'h-[52px]' : 'h-14 bg-zinc-900/60'} border-b border-zinc-800 px-4 flex items-center justify-between gap-2`}>
         <div className="flex items-center gap-2 min-w-0">
-          <div className={`shrink-0 w-2.5 h-2.5 rounded-full ${browserReady ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
+          <ModernAvatar role={whoBrowses ?? teamName} name={whoBrowses ?? teamName} size={24} modelBadge={false} />
           <div className="min-w-0">
             {switching && !narrow ? (
               <BrowserSwitcherMenu
                 entries={switcher!.entries}
                 current={switcher!.current}
-                onPick={switcher!.onPick}
+                onPick={(owner) => {
+                  touch();
+                  switcher!.onPick(owner);
+                }}
                 disabled={isControlMode}
-                title={`@${teamName}`}
-                sub={<p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>}
+                title={paneTitle}
+                sub={statusLine}
               />
             ) : (
               <>
-                <div className="text-xs font-semibold text-zinc-100 truncate" title={`@${teamName}`}>@{teamName}</div>
-                <p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>
+                <div className="text-[13px] font-semibold text-zinc-100 truncate" data-pane-title="">{paneTitle}</div>
+                {statusLine}
               </>
             )}
           </div>
@@ -458,98 +602,19 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
         <div className="flex items-center gap-1 shrink-0">
           <ComputerModeChip api={computer} />
           <OpenWindowButton api={computer} />
-
-          {pointShown || (point && takeover && !isWindow) ? (
-            <button
-              ref={pointButton}
-              type="button"
-              data-point-button=""
-              aria-pressed={pointOn}
-              aria-label={POINT_COPY.buttonName}
-              title={takeover ? POINT_COPY.handBack : POINT_COPY.buttonName}
-              disabled={takeover}
-              onClick={() => {
-                playSfx('click');
-                setPointing((p) => !p);
-              }}
-              className={`${narrow ? 'h-11' : 'h-[30px]'} px-2.5 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 border ${
-                pointOn ? 'bg-violet-600 border-violet-400 text-white ring-[3px] ring-violet-500/25' : 'border-[#3f3868] text-zinc-200 hover:bg-[#2c2552]'
-              }`}
-            >
-              <Crosshair size={14} aria-hidden="true" />
-              {POINT_COPY.button}
-            </button>
-          ) : null}
-
-          {/* Take over: always there while a browser exists, so keyboard users have a way in.
-              On a phone with Point showing, the view's own Take over is the way in (no room for both). */}
-          {!isWindow && !(narrow && pointShown && !isControlMode) && (
-            <button
-              type="button"
-              onClick={() => (isControlMode ? handBack() : takeOver())}
-              disabled={!stream.connected || waitingForBot}
-              title={isControlMode ? 'Hand the browser back to the bot' : `Take over @${teamName}'s browser`}
-              data-takeover-button
-              className={`h-[30px] px-2.5 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${
-                isControlMode ? 'border border-[#3f3868] bg-[rgb(44_37_82/0.8)] text-zinc-100' : 'bg-control text-control-ink hover:brightness-110'
-              }`}
-            >
-              {isControlMode ? <Hand size={14} aria-hidden="true" /> : <MousePointerClick size={14} aria-hidden="true" />}
-              {isControlMode ? 'Hand back' : 'Take over'}
-            </button>
-          )}
-
           <button
+            ref={closeButton}
             type="button"
-            onClick={() => {
-              playSfx('click');
-              setActiveTab((curr) => (curr === 'vault' ? 'browser' : 'vault'));
-            }}
-            title={`Saved logins (${savedCount})`}
-            aria-label={`Saved logins (${savedCount})`}
-            className={`p-1.5 rounded-md transition-colors cursor-pointer relative ${
-              activeTab === 'vault'
-                ? 'text-sky-400 bg-sky-500/10'
-                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
-            }`}
+            onClick={close}
+            aria-label="Close"
+            title="Close"
+            className={`${narrow ? 'w-11 h-11' : 'w-[30px] h-[30px]'} inline-flex items-center justify-center rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300`}
           >
-            <Key size={13} />
-            {savedCount > 0 && (
-              <span className="absolute -top-1 -right-1 min-w-3.5 h-3.5 px-0.5 bg-sky-500 text-[9px] font-bold text-zinc-950 rounded-full flex items-center justify-center">
-                {savedCount}
-              </span>
-            )}
-          </button>
-
-          {onRefresh && (
-            <button
-              type="button"
-              onClick={() => {
-                playSfx('click');
-                onRefresh();
-                passwords.reload();
-              }}
-              title="Refresh Screenshot & Passwords"
-              className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
-            >
-              <RefreshCw size={13} />
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => {
-              playSfx('click');
-              onClose();
-            }}
-            title="Close VM Pane"
-            className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
-          >
-            <X size={15} />
+            <X size={narrow ? 18 : 15} aria-hidden="true" />
           </button>
         </div>
       </div>
-      {switching && narrow && <BrowserSwitcherRow entries={switcher!.entries} current={switcher!.current} onPick={switcher!.onPick} disabled={isControlMode} />}
+      {switching && narrow && <BrowserSwitcherRow entries={switcher!.entries} current={switcher!.current} onPick={(owner) => { touch(); switcher!.onPick(owner); }} disabled={isControlMode} />}
 
       {computer.state.error && (
         <div className="px-3 pt-2">
@@ -558,11 +623,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-zinc-800 bg-zinc-900/30 text-xs font-medium">
+      <div className={`flex border-b border-zinc-800 bg-zinc-900/30 text-xs font-medium ${narrow ? 'h-10 shrink-0' : ''}`}>
         <button
           type="button"
           onClick={() => {
             playSfx('click');
+            touch();
             setActiveTab('browser');
           }}
           aria-pressed={activeTab === 'browser'}
@@ -579,6 +645,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           type="button"
           onClick={() => {
             playSfx('click');
+            touch();
             setActiveTab('terminal');
           }}
           aria-pressed={activeTab === 'terminal'}
@@ -595,6 +662,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           type="button"
           onClick={() => {
             playSfx('click');
+            touch();
             setActiveTab('vault');
           }}
           aria-pressed={activeTab === 'vault'}
@@ -623,7 +691,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             <LocalBrowserNote api={computer} />
           </div>
         ) : activeTab === 'browser' ? (
-          <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden">
+          <div className="flex-1 min-h-0 flex flex-col p-3 gap-2 overflow-y-auto" onScroll={touch} data-pane-body="">
             {pages.list && (
               <BrowserPageStrip
                 pages={pages.list.pages}
@@ -633,18 +701,23 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 narrow={narrow}
                 onPick={(page) => {
                   playSfx('click');
+                  touch();
                   setPicked(page);
                 }}
               />
             )}
-            {/* Browser Address Bar */}
+            {/* Browser Address Bar (not on a phone: the trail's host says where it is, typing a URL is a Take over job) */}
+            {!narrow && (
             <div className="flex items-center gap-1.5 p-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs">
               <Globe size={13} className="text-zinc-400 flex-shrink-0" />
               <input
                 type="text"
                 readOnly={!onNavigate}
                 value={inputUrl}
-                onChange={(e) => setInputUrl(e.target.value)}
+                onChange={(e) => {
+                  touch();
+                  setInputUrl(e.target.value);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && onNavigate && inputUrl.trim()) {
                     let target = inputUrl.trim();
@@ -686,8 +759,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 </a>
               )}
             </div>
+            )}
 
-            {shownTitle && (
+            {shownTitle && !narrow && (
               <div className="text-[11px] text-zinc-400 truncate px-1 font-medium">
                 {shownTitle}
               </div>
@@ -803,7 +877,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     onLoad={() => { if (paneFrameId.current !== null) stream.acknowledgeFrame(paneFrameId.current); }}
                     onError={() => { if (paneFrameId.current !== null) stream.acknowledgeFrame(paneFrameId.current); }}
                     draggable={false}
-                    className="w-full h-full object-contain"
+                    data-frame-finished={finished || undefined}
+                    className={`w-full h-full object-contain ${finished ? 'saturate-[.6] brightness-[.82]' : ''}`}
                   />
                   {pointOn && point && (
                     <PointLayer
@@ -820,9 +895,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                       }}
                     />
                   )}
-                  {!pointOn && !needsYou && !waitingForBot && !waitBot?.gaveUp && (
-                    <span className="absolute top-2 left-2 h-[22px] px-2 inline-flex items-center gap-1 rounded-full bg-[rgb(14_10_33/0.88)] text-[11px] text-zinc-200 pointer-events-none group-hover:opacity-0 group-focus-within:opacity-0 kw-veil-in">
-                      <Eye size={12} aria-hidden="true" /> Watching
+                  {!pointOn && !needsYou && !waitingForBot && !waitBot?.gaveUp && (live || finished) && (
+                    <span data-pane-pill={live ? 'live' : 'finished'} className="absolute top-2 left-2 h-[22px] px-2 inline-flex items-center gap-1.5 rounded-full bg-[rgb(14_10_33/0.88)] text-[11px] text-zinc-200 pointer-events-none group-hover:opacity-0 group-focus-within:opacity-0 kw-veil-in">
+                      {live && <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
+                      {live ? 'Live' : 'Finished'}
                     </span>
                   )}
                   {!pointOn && !isWindow && stream.connected && (
@@ -861,15 +937,96 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                       {!needsYou && !waitingForBot && !waitBot?.gaveUp && <span className="text-xs text-zinc-200">Click anywhere to take over. @{pageBot} pauses.</span>}
                     </button>
                   )}
+                  {!pointOn && !isInteracting && (
+                    <button
+                      type="button"
+                      aria-label="Enlarge"
+                      title="Enlarge"
+                      data-pane-enlarge=""
+                      onClick={() => {
+                        playSfx('click');
+                        touch();
+                        setEnlarged(true);
+                      }}
+                      className="absolute top-2 right-2 z-10 w-7 h-7 inline-flex items-center justify-center rounded-lg bg-[rgb(14_10_33/0.88)] text-zinc-200 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                    >
+                      <Maximize2 size={14} aria-hidden="true" />
+                    </button>
+                  )}
                 </>
               ) : (
                 <div className="text-center p-6 text-zinc-500 text-xs">
                   <Globe size={32} className="mx-auto mb-2 opacity-40 text-zinc-500" />
                   <p>{browserReady ? 'Browser idle' : 'Browser unavailable'}</p>
-                  <p className="text-[10px] text-zinc-500 mt-1">{browserReady ? 'Enter a URL above to open a page' : isLocal ? 'Check that Chrome is installed, then use Restart Browser below' : 'Start Docker, then use Restart Browser below'}</p>
+                  <p className="text-[10px] text-zinc-500 mt-1">{browserReady ? 'Enter a URL above to open a page' : isLocal ? 'Check that Chrome is installed, then use Restart browser below' : 'Start Docker, then use Restart browser below'}</p>
                 </div>
               )}
             </div>
+
+            {/* 0.9.8 C: Point at it and Take over under the preview, both secondary; Hand back as today */}
+            {!isWindow && (pointButtonEl || stream.connected || isControlMode) && (
+              <div className="flex gap-2 shrink-0" data-pane-actions="">
+                {pointButtonEl}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isControlMode) handBack();
+                    else {
+                      touch();
+                      takeOver();
+                    }
+                  }}
+                  disabled={!stream.connected || waitingForBot}
+                  title={isControlMode ? 'Hand the browser back to the bot' : `Take over ${whose} browser`}
+                  data-takeover-button
+                  className={`${narrow ? 'h-11 flex-1 justify-center' : 'h-8'} px-3 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 border border-[#3f3868] ${
+                    isControlMode ? 'bg-[rgb(44_37_82/0.8)] text-zinc-100' : 'text-zinc-200 hover:bg-white/5'
+                  }`}
+                >
+                  {isControlMode ? <Hand size={14} aria-hidden="true" /> : <MousePointerClick size={14} aria-hidden="true" />}
+                  {isControlMode ? 'Hand back' : 'Take over'}
+                </button>
+              </div>
+            )}
+
+            {/* 0.9.8 B: the pages this reply opened, newest first; a row opens the page in a new tab */}
+            {trail.length > 0 && (
+              <section aria-labelledby="pane-trail-head" data-pane-trail="" className="shrink-0">
+                <h3 id="pane-trail-head" className="mt-1 mb-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-zinc-400">
+                  Pages this reply · {trail.length}
+                </h3>
+                <ol className="rounded-xl border border-[#2c2552] overflow-hidden">
+                  {trail.map((p, i) => {
+                    const now = live && i === 0;
+                    return (
+                      <li key={p.url} className={i > 0 ? 'border-t border-[#2c2552]' : ''}>
+                        <a
+                          href={p.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={touch}
+                          title={p.url}
+                          className={`grid grid-cols-[44px_1fr_auto] items-center gap-2.5 px-2.5 py-2 ${narrow ? 'min-h-11' : 'min-h-12'} hover:bg-white/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-300 ${now ? 'bg-emerald-400/5' : ''}`}
+                        >
+                          <span className="text-xs text-zinc-400 tabular-nums">{trailTime(p.at)}</span>
+                          <span className="min-w-0">
+                            <span className="block text-[13px] text-zinc-100 truncate">{p.title}</span>
+                            <span className="block text-xs text-zinc-400 truncate">{p.host}</span>
+                          </span>
+                          {now ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
+                              <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Now
+                            </span>
+                          ) : (
+                            <ExternalLink size={14} aria-hidden="true" className="text-zinc-500" />
+                          )}
+                        </a>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </section>
+            )}
           </div>
         ) : activeTab === 'terminal' ? (
           /* Terminal Tab */
@@ -919,6 +1076,30 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           )
         )}
       </div>
+
+      {enlarged && frameSrc && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${paneTitle}, enlarged`}
+          data-pane-enlarged=""
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-[rgb(5_3_14/0.78)]"
+          onClick={() => setEnlarged(false)}
+        >
+          <div className="relative max-w-[1024px] w-[calc(100vw-48px)]" onClick={(e) => e.stopPropagation()}>
+            <img src={frameSrc} alt={`${paneTitle}, enlarged`} draggable={false} className={`w-full h-auto rounded-xl border border-white/10 ${finished ? 'saturate-[.6] brightness-[.82]' : ''}`} />
+            <button
+              ref={enlargeClose}
+              type="button"
+              aria-label="Close"
+              onClick={() => setEnlarged(false)}
+              className="absolute top-2 right-2 w-9 h-9 inline-flex items-center justify-center rounded-lg bg-[rgb(14_10_33/0.88)] text-zinc-200 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {showFullScreen && (
         <BrowserControlOverlay
@@ -977,14 +1158,14 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
       )}
 
       {/* Footer Status */}
-      <div className="p-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] text-zinc-400">
-        <div className="flex items-center gap-1.5 shrink-0" data-browser-footer>
+      <div className="h-10 shrink-0 px-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between gap-2 text-xs text-zinc-400">
+        <div className="flex items-center gap-1.5 min-w-0" data-browser-footer>
           {isLocal ? (
             <Laptop size={12} className={browserReady || isWindow ? 'text-amber-300/80' : 'text-zinc-500'} />
           ) : (
             <Cpu size={12} className={browserReady ? 'text-emerald-400' : 'text-zinc-500'} />
           )}
-          <span>{browserFooterLabel(computer.state.settings, browserReady)}</span>
+          <span className="truncate">{browserFooterLabel(computer.state.settings, browserReady, { botName: whoBrowses, browsing: live })}</span>
         </div>
         {pointOn && point ? (
           <span data-point-footer="" className="min-w-0 flex-1 px-2 text-center leading-snug text-zinc-300 [overflow-wrap:anywhere]">
@@ -1002,20 +1183,37 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
         ) : point && takeover && !isWindow ? (
           <span data-point-footer="" className="min-w-0 flex-1 px-2 text-center leading-snug text-zinc-400">{POINT_COPY.handBack}</span>
         ) : null}
-        {onRestartVm && !isWindow && (
-          <button
-            type="button"
-            onClick={() => {
-              playSfx('click');
-              onRestartVm();
-            }}
-            className="hover:text-zinc-200 text-zinc-400 flex items-center gap-1 transition-colors cursor-pointer"
-          >
-            <RefreshCw size={11} />
-            <span>Restart Browser</span>
-          </button>
-        )}
+        <div className="flex items-center gap-3 shrink-0">
+          {onRefresh && !narrow && (
+            <button
+              type="button"
+              onClick={() => {
+                playSfx('click');
+                onRefresh();
+                passwords.reload();
+              }}
+              title="Refresh the picture and saved logins"
+              className="hover:text-zinc-200 text-zinc-400 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 rounded"
+            >
+              Refresh
+            </button>
+          )}
+          {onRestartVm && !isWindow && (
+            <button
+              type="button"
+              onClick={() => {
+                playSfx('click');
+                onRestartVm();
+              }}
+              className={`hover:text-zinc-200 text-zinc-400 flex items-center gap-1 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 rounded ${narrow ? 'min-h-11' : ''}`}
+            >
+              <RefreshCw size={11} aria-hidden="true" />
+              <span>Restart browser</span>
+            </button>
+          )}
+        </div>
       </div>
     </div>
+    </>
   );
 };
