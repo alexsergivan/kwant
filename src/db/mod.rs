@@ -3,6 +3,7 @@ pub mod profiles;
 pub mod browser_sites;
 pub mod continuity;
 pub mod threads;
+pub mod tool_failures;
 pub mod zombie;
 pub mod parallel;
 pub mod documents;
@@ -229,6 +230,8 @@ impl Database {
         db.migrate_tool_notes().await?;
         // 0.9.0 P1: mission watches and their checks (add-only)
         db.migrate_mission_watch().await?;
+        // 0.9.5: an index for the chat's connection-failure lines (add-only)
+        db.migrate_tool_failures().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;

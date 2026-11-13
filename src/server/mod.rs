@@ -42,6 +42,7 @@ pub mod away;
 pub mod computer;
 pub mod mcp_suggest;
 pub mod page_source;
+pub mod tool_failures;
 pub mod tool_notes;
 pub mod connection_suggest;
 pub mod bot_actions;

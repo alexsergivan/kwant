@@ -139,7 +139,7 @@ card_art: avatar:devops
 <ul>
   <li><strong>No "always allow".</strong> Allowing a floor card covers that one call, and the next one asks again.</li>
   <li><strong>Back up first.</strong> A step that can change production data can't be allowed until the space has a backup from the last 10 minutes. The card's <strong>Back up first</strong> runs the space's backup command, and kwant checks that it wrote a new backup file.</li>
-  <li><strong>Mark a connection production</strong> in Connections to make every one of its tools ask, such as a GitHub app that could write to main directly.</li>
+  <li><strong>Mark a connection production</strong> in Apps &amp; accounts › Advanced to make every one of its tools ask, such as a GitHub app that could write to main directly.</li>
 </ul>
 <p>The floor reads commands and tool calls, never what a bot says about them. It can't see inside a script with a harmless name, a command built from variables, or a deploy done through a provider's API from code. When a connection can reach production, mark it production.</p>
 
