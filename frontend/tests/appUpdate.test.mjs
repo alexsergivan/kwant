@@ -141,24 +141,96 @@ test('dismiss hides that version only, and storage that throws is fine', () => {
   assert.doesNotThrow(() => u.dismissVersion('0.1.3', blocked));
 });
 
-test('unsupported (404 or supported=false) shows the version alone and never polls again', async () => {
+test('off (404 or supported=false) shows the version, Check again and the latest release, and is never final', async () => {
   for (const answer of [json({ error: 'not found' }, 404), json({ ...status(), supported: false })]) {
     const h = harness(() => answer);
     h.ctrl.start();
     await flush();
     assert.equal(h.ctrl.get().unsupported, true);
-    assert.equal(h.live().length, 0, 'no timer left');
     assert.deepEqual(h.calls, ['GET /api/app/update']);
     assert.equal(u.bannerView(h.ctrl.get(), null), null);
     assert.equal(u.versionLine(h.ctrl.get()).kind, 'off');
     const html = ui.card({ model: h.ctrl.get() });
+    assert.match(html, /data-version-card="off"/);
     assert.match(html, /Update checks are turned off here\./);
-    assert.doesNotMatch(html, /latest version/);
+    assert.match(html, /data-version-recheck[^>]*>Check again<\/button>/);
+    assert.match(html, /href="https:\/\/github\.com\/alexsergivan\/kwant\/releases\/latest"[^>]*>Get the latest version/);
+    assert.doesNotMatch(html, /latest version<\/span>|Update<\/button>/);
     if (answer.status === 200) assert.match(html, /kwant bots <span[^>]*>0\.1\.2<\/span>/, 'the version from the answer');
-    await h.ctrl.check();
+    // Asked again after 10 s, 60 s, then every 30 minutes
+    assert.deepEqual(h.live().map((t) => t.ms), [10_000]);
+    await h.tick(10_000);
+    assert.deepEqual(h.live().map((t) => t.ms), [60_000]);
+    await h.tick(60_000);
+    assert.deepEqual(h.live().map((t) => t.ms), [30 * 60 * 1000]);
+    await h.tick();
+    assert.deepEqual(h.live().map((t) => t.ms), [30 * 60 * 1000]);
+    assert.equal(h.calls.length, 4);
     await h.ctrl.install();
-    assert.deepEqual(h.calls, ['GET /api/app/update'], 'check/install do nothing off the Mac app');
+    assert.ok(!h.calls.some((c) => c.startsWith('POST')), 'no install or check POST while off');
   }
+});
+
+test('off, then supported: the card and the banner come back (the Mac updater registers late)', async () => {
+  for (const off of [json({ error: 'not found' }, 404), json({ supported: false, current: '0.1.2' })]) {
+    let n = 0;
+    const h = harness(() => (++n === 1 ? off : json(status())));
+    h.ctrl.start();
+    await flush();
+    assert.equal(u.versionLine(h.ctrl.get()).kind, 'off');
+    await h.tick(10_000);
+    const m = h.ctrl.get();
+    assert.equal(m.unsupported, false);
+    assert.equal(u.versionLine(m).kind, 'available');
+    assert.equal(u.bannerView(m, null)?.kind, 'available');
+    assert.match(ui.card({ model: m }), /kwant bots 0\.1\.3 is available/);
+    assert.deepEqual(h.live().map((t) => t.ms), [30 * 60 * 1000], 'back on the normal poll');
+    // Off again later starts the short retries over
+    n = 0;
+    await h.tick();
+    assert.equal(h.ctrl.get().unsupported, true);
+    assert.deepEqual(h.live().map((t) => t.ms), [10_000]);
+  }
+});
+
+test('Check again while off asks now (a GET, no POST) and says Checking… meanwhile', async () => {
+  let answer = json({ supported: false });
+  let release;
+  const h = harness(() => answer);
+  h.ctrl.start();
+  await flush();
+  const gate = new Promise((r) => (release = r));
+  answer = gate.then(() => json(status({ state: 'idle', available: null })));
+  const pressed = h.ctrl.check();
+  assert.equal(h.ctrl.get().rechecking, true);
+  assert.deepEqual(u.versionLine(h.ctrl.get()), { kind: 'off', rechecking: true });
+  const busy = ui.card({ model: h.ctrl.get() });
+  assert.match(busy, /aria-disabled="true"[^>]*data-version-recheck[^>]*>.*Checking…<\/button>/s);
+  release();
+  await pressed;
+  assert.equal(h.ctrl.get().rechecking, false);
+  assert.deepEqual(h.calls, ['GET /api/app/update', 'GET /api/app/update']);
+  assert.equal(u.versionLine(h.ctrl.get()).kind, 'latest');
+  assert.equal(h.live().length, 1, 'one poll scheduled, not two');
+});
+
+test('opening Settings asks again when the last answer was off', async () => {
+  let n = 0;
+  const h = harness(() => (++n === 1 ? json({ supported: false }) : json(status())));
+  h.ctrl.start();
+  await flush();
+  await h.ctrl.checkIfStale();
+  assert.deepEqual(h.calls, ['GET /api/app/update', 'GET /api/app/update']);
+  assert.equal(u.versionLine(h.ctrl.get()).kind, 'available');
+  assert.match(src('components/VersionCard.tsx'), /if \(known \|\| ctrl\.get\(\)\.unsupported\) void ctrl\.checkIfStale\(\);/);
+});
+
+test('an off answer while the app relaunches after an install keeps asking every second', () => {
+  assert.equal(u.offRetryMs(1, 'restarting'), 1000);
+  assert.equal(u.offRetryMs(5, 'installing'), 1000);
+  assert.equal(u.offRetryMs(1), 10_000);
+  assert.equal(u.offRetryMs(2), 60_000);
+  assert.equal(u.offRetryMs(3), 30 * 60 * 1000);
 });
 
 test('polls on load and every 30 minutes; 1 s while something moves', async () => {

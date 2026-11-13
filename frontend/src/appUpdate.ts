@@ -1,8 +1,10 @@
 // Updates. The Mac shell checks GitHub for a newer signed release and installs it; elsewhere (VPS,
 // Docker, Windows) the server checks GitHub's latest release itself and only reports it
 // (can_install=false, with `how`: the command that updates this install). This module polls
-// GET /api/app/update and drives the Mac banner and the kwant card in App settings. With the check
-// off (404 or supported=false) nothing polls again and the card shows the version alone.
+// GET /api/app/update and drives the Mac banner and the kwant card in App settings. An off answer
+// (404 or supported=false) is never final: the Mac app registers its updater a few seconds after the
+// window first asks, so off asks again after 10 s, 60 s, then every 30 minutes, and a later supported
+// answer turns everything back on.
 
 export type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error';
 
@@ -46,9 +48,12 @@ export type BannerView =
 export type UpdatePhase = 'idle' | 'installing' | 'restarting' | 'updated' | 'stalled';
 
 export interface UpdateModel {
-  /** null until the first answer, and forever when unsupported. */
+  /** null until the first supported answer. */
   status: UpdateStatus | null;
+  /** The last answer was off (404 or supported=false). Asked again later; a supported answer clears it. */
   unsupported: boolean;
+  /** Check again pressed while off: the ask is out. */
+  rechecking?: boolean;
   /** The running version, also when updates are unsupported (null when the server never said). */
   current: string | null;
   phase: UpdatePhase;
@@ -65,6 +70,10 @@ export const UPDATE_DISMISSED_KEY = 'kwnt_update_dismissed';
 export const UPDATE_PENDING_KEY = 'kwnt_update_pending';
 
 export const IDLE_POLL_MS = 30 * 60 * 1000;
+/** After an off answer: ask again after 10 s, then 60 s, then every IDLE_POLL_MS. */
+export const OFF_RETRY_MS = [10_000, 60_000];
+/** Where "Get the latest version" goes when this app can't check by itself. */
+export const LATEST_RELEASE_URL = 'https://github.com/alexsergivan/kwant/releases/latest';
 /** Opening the kwant card checks again when the last answer is older than this. */
 export const STALE_CHECK_MS = 60 * 60 * 1000;
 export const FAST_POLL_MS = 1000;
@@ -184,13 +193,20 @@ export function nextPollMs(m: UpdateModel): number {
   return s === 'checking' || s === 'downloading' || s === 'ready' ? FAST_POLL_MS : IDLE_POLL_MS;
 }
 
+/** The wait before asking again after `offAnswers` off answers in a row (1 = the first). */
+export function offRetryMs(offAnswers: number, phase: UpdatePhase = 'idle'): number {
+  // A relaunch after an install: the new app's updater registers seconds later, keep asking fast
+  if (phase === 'installing' || phase === 'restarting') return FAST_POLL_MS;
+  return OFF_RETRY_MS[offAnswers - 1] ?? IDLE_POLL_MS;
+}
+
 /** A failed check (not a failed install): the Mac app and the server both start it so. */
 export const isCheckError = (error: string | null) => !!error && /^Couldn[’']t check/i.test(error);
 
 /** Line 2 of the kwant card: exactly one of these. */
 export type VersionLine =
   | { kind: 'loading' }
-  | { kind: 'off' }
+  | { kind: 'off'; rechecking: boolean }
   | { kind: 'checking' }
   | { kind: 'latest'; checkedAt: number | null }
   | { kind: 'available'; version: string; notes: string; date: string | null; url: string; canInstall: boolean }
@@ -202,7 +218,7 @@ export type VersionLine =
 
 /** Never says "latest" without a check that said so. */
 export function versionLine(m: UpdateModel): VersionLine {
-  if (m.unsupported) return { kind: 'off' };
+  if (m.unsupported) return { kind: 'off', rechecking: !!m.rechecking };
   const s = m.status;
   if (!s) return { kind: 'loading' };
   if (m.phase === 'updated' && m.target) return { kind: 'updated', version: m.target };
@@ -276,7 +292,7 @@ export interface UpdateController {
   start: () => void;
   stop: () => void;
   check: () => Promise<void>;
-  /** Checks quietly when the last answer is older than STALE_CHECK_MS (the kwant card opening). */
+  /** Checks quietly when the last answer is older than STALE_CHECK_MS (the kwant card opening); asks again when off. */
   checkIfStale: () => Promise<void>;
   install: () => Promise<void>;
   /** Hide the "Updated to …" note. */
@@ -289,24 +305,32 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
   let timer: unknown = null;
   let running = false;
   let restartSince: number | null = null;
+  /** Off answers in a row: picks the next wait (OFF_RETRY_MS). */
+  let offAnswers = 0;
 
   const set = (patch: Partial<UpdateModel>) => {
     model = { ...model, ...patch };
     listeners.forEach((fn) => fn());
   };
 
-  const schedule = (ms = nextPollMs(model)) => {
+  const schedule = (ms = model.unsupported ? offRetryMs(offAnswers, model.phase) : nextPollMs(model)) => {
     if (timer !== null) env.clearTimeout(timer);
     timer = null;
-    if (!running || model.unsupported) return;
+    if (!running) return;
     timer = env.setTimeout(() => {
       timer = null;
       void load();
     }, ms);
   };
 
+  const off = (current: string | null) => {
+    offAnswers++;
+    set({ unsupported: true, current: current ?? model.current });
+  };
+
   const apply = (status: UpdateStatus) => {
-    const patch: Partial<UpdateModel> = { status, current: status.current || model.current, checkedAt: status.state === 'checking' ? model.checkedAt : env.now() };
+    offAnswers = 0;
+    const patch: Partial<UpdateModel> = { status, unsupported: false, current: status.current || model.current, checkedAt: status.state === 'checking' ? model.checkedAt : env.now() };
     const pending = read(UPDATE_PENDING_KEY, env.store);
     if (pending && status.current === pending) {
       // Back on the new version: in this page after the relaunch, or in the fresh window.
@@ -345,7 +369,7 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
       return schedule();
     }
     if (res.status === 404) {
-      set({ unsupported: true });
+      off(null);
       return schedule();
     }
     if (!res.ok) return schedule(model.phase === 'restarting' ? FAST_POLL_MS : IDLE_POLL_MS);
@@ -357,8 +381,7 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
     }
     const status = parseUpdateStatus(body);
     if (!status) {
-      const current = body && typeof body === 'object' ? str((body as Record<string, unknown>).current) : null;
-      set({ unsupported: true, current: current ?? model.current });
+      off(body && typeof body === 'object' ? str((body as Record<string, unknown>).current) : null);
       return schedule();
     }
     apply(status);
@@ -399,14 +422,25 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
       timer = null;
     },
     async check() {
-      if (model.unsupported) return;
+      if (model.unsupported) {
+        // Off here (so far): ask again now; a supported answer brings the card back
+        set({ rechecking: true });
+        try {
+          await load();
+        } finally {
+          set({ rechecking: false });
+        }
+        return;
+      }
       set({ actionError: null, installError: null, phase: model.phase === 'updated' ? 'idle' : model.phase });
       await post('/api/app/update/check', 'Couldn’t check for updates.');
       schedule();
     },
     async checkIfStale() {
+      // Off is never final: opening Settings asks again
+      if (model.unsupported) return load();
       const s = model.status;
-      if (model.unsupported || !s || model.phase !== 'idle') return;
+      if (!s || model.phase !== 'idle') return;
       if (s.state === 'checking' || s.state === 'downloading' || s.state === 'ready') return;
       if (s.lastChecked != null && env.now() - s.lastChecked < STALE_CHECK_MS) return;
       await post('/api/app/update/check', 'Couldn’t check for updates.', true);
