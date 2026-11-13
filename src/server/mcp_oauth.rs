@@ -247,7 +247,13 @@ pub async fn client_document(headers: HeaderMap) -> Response {
     match document {
         Some(doc) => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "public, max-age=300")],
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "public, max-age=300"),
+                // Built from the request's host, so a shared cache must not hand one name's
+                // document to another
+                (header::VARY, "Host, X-Forwarded-Host"),
+            ],
             doc.to_string(),
         )
             .into_response(),

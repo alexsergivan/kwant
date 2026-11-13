@@ -482,7 +482,11 @@ async fn client_document_endpoint() {
             }
             let resp = app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
             let status = resp.status();
-            let ctype = resp.headers().get("content-type").map(|v| v.to_str().unwrap().to_string());
+            let header = |name: &str| resp.headers().get(name).map(|v| v.to_str().unwrap().to_string());
+            let ctype = header("content-type");
+            if status == StatusCode::OK {
+                assert_eq!(header("vary").as_deref(), Some("Host, X-Forwarded-Host"));
+            }
             let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
             (status, ctype, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
         }
