@@ -3,7 +3,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Check, Code } from 'lucide-react';
-import { DevModeState, DevTeamRef, approvalsWord, devApi, devStore, normaliseRepo } from '../devMode';
+import { DevModeState, DevTeamRef, devApi, devStore, normaliseRepo } from '../devMode';
 import { JiraSettings } from './JiraSettings';
 import { useDevMode } from './DevModeSwitch';
 
@@ -13,7 +13,7 @@ const rowBtn =
 const primaryBtn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50';
 const input = 'w-full bg-zinc-950 border rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 focus:outline-none border-zinc-800 focus:border-sky-500';
 
-export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; approvals?: string; save?: typeof devApi.put; teams?: DevTeamRef[] }> = ({ spaceId, spaceName, approvals, save = devApi.put, teams }) => {
+export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; approvals?: string; save?: typeof devApi.put; teams?: DevTeamRef[] }> = ({ spaceId, spaceName, save = devApi.put, teams }) => {
   const state = useDevMode(spaceId);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('');
@@ -74,7 +74,7 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
       <p className="text-[11px] text-zinc-500">
         {state.on
           ? `${spaceName} reads this repo to show what landed, review PRs and guard deploys. Only you can change it.`
-          : `Off. Reviews, the ship gate and the production floor are stopped; approvals stay on ${approvalsWord(approvals)}.`}
+          : 'Off. Reviews, the ship gate and the production floor are stopped. Approvals stay as you set them above.'}
       </p>
       <div>
         <label htmlFor="dv-set-repo" className="block text-xs font-medium text-zinc-300 mb-1">

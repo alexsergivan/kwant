@@ -192,9 +192,11 @@ test('E: the card says what to connect, lists the four ways and opens Accounts; 
   const asleep = m.botHome({ home, team: [], prompts: ['Plan my week'], canRun: false, onPick() {}, accountCard: true });
   assert.match(asleep, /data-account-card/);
   assert.doesNotMatch(text(asleep), /Plan my week/, 'no asks to tap while nothing can run');
+  assert.doesNotMatch(text(asleep), /Type @ to ask one bot yourself\./, 'no @ footer while nothing can run');
   const awake = m.botHome({ home, team: [], prompts: ['Plan my week'], canRun: true, onPick() {} });
   assert.doesNotMatch(awake, /data-account-card/);
   assert.match(text(awake), /What do you want done\?/);
+  assert.match(text(awake), /Type @ to ask one bot yourself\./);
 });
 
 // ------------------------------------------------------------------ D: Get started step 3

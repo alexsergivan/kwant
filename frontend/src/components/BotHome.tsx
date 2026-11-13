@@ -187,10 +187,12 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
         </div>
       )}
 
-      <p className="mt-8 flex items-center gap-1.5 text-meta text-zinc-400">
-        <AtSign size={13} aria-hidden="true" />
-        {general ? 'Type @ to ask one bot yourself.' : 'Type @ to bring another bot into the conversation.'}
-      </p>
+      {!accountCard && (
+        <p className="mt-8 flex items-center gap-1.5 text-meta text-zinc-400">
+          <AtSign size={13} aria-hidden="true" />
+          {general ? 'Type @ to ask one bot yourself.' : 'Type @ to bring another bot into the conversation.'}
+        </p>
+      )}
     </section>
   );
 };

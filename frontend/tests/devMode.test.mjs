@@ -651,7 +651,8 @@ test('Settings › Dev mode: shown before the first switch-on with Turn on (0.9.
   await click(form.querySelector('[data-dev-turn-off]'));
   assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').at(-1)[2], { on: false });
   assert.equal(m.devStore.isOn('spc_demo'), false);
-  assert.match(form.textContent, /Off\. Reviews, the ship gate and the production floor are stopped/);
+  assert.match(form.textContent, /Off\. Reviews, the ship gate and the production floor are stopped\. Approvals stay as you set them above\./);
+  assert.doesNotMatch(form.textContent, /approvals stay on/);
   v.root.unmount();
 });
 
