@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-097">New in 0.9.7</a></li>
         <li><a href="#new-096">New in 0.9.6</a></li>
         <li><a href="#new-095">New in 0.9.5</a></li>
         <li><a href="#new-09">New in 0.9.4</a></li>
@@ -55,6 +56,22 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-097" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.7</p>
+      <h2>Your bot at work while a reply is coming, and which AI each bot runs on</h2>
+      <p>While a reply is coming, you see the bot itself at work instead of grey lines. Each bot's avatar shows the AI it runs on, live while it works. One search box finds a tool, built in, through Composio or from the public directory.</p>
+    </div>
+    <ul class="flist">
+      <li id="working-avatar" class="span3"><h3>Your bot at work while a reply is coming</h3><p>Before the first words of a reply arrive, the bubble shows the bot's own avatar at a small pixel laptop: it types, the screen fills and clears, and the line next to it says <strong>Ben is working on it</strong>. In a team chat it's the bot that is speaking. The first words fade in where the picture was, at the same height, so nothing jumps. With reduced motion on, the picture stands still, and screen readers hear "Ben is working on the answer".</p></li>
+      <li id="model-badge" class="span3"><h3>Each bot's AI on its avatar</h3><p>A small mark at the bottom left of a bot's avatar shows the AI it runs on: Anthropic, OpenAI, xAI, Ollama, a chip for a custom engine, or ✦ when Laya picks the model. While a bot works, the mark shows what it runs on right now and changes if the bot moves to another engine. A resting bot that Laya picks for shows its last reply's mark, faded, with a small ✦. A pinned bot whose engine is signed out, off or not set up is greyed, and the tooltip says why: <strong>Runs on Claude · Sonnet · signed out</strong>. Running out of usage doesn't grey it.</p></li>
+      <li id="find-a-tool" class="span3"><h3>Find a tool in one search box</h3><p>One search box finds a tool to add, in <strong>Add a tool</strong> and on <strong>Apps &amp; accounts</strong>. Suggestions start from the first letter and forgive typos and short names ("gmial", "11labs", "pg"). Results come in three groups: <strong>Built in</strong>, <strong>Through Composio</strong>, and <strong>From the public directory</strong>, a copy of the official MCP Registry that kwant refreshes every 6 hours. <strong>Add &amp; test</strong> installs a tool from there in one step. Connecting a Composio app before Composio is set up asks for the key right there.</p></li>
+      <li id="fixes-097" class="span3"><h3>Smaller changes in 0.9.7</h3><p>Through Composio finds any Composio app. Signing in to tool servers like ElevenLabs works.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-096" class="fgroup">
   <div class="wrap">
