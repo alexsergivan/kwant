@@ -3,7 +3,7 @@
 // Server text (line, what, how, evidence) is drawn as text only, never as links or HTML.
 
 import React, { useId, useState } from 'react';
-import { AlertTriangle, Check, ChevronDown, CircleDashed, Clock, Shield, ShieldCheck, ShieldHalf, ShieldX, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, CircleDashed, Clock, Shield, ShieldCheck, ShieldHalf, ShieldX, X, type LucideIcon } from 'lucide-react';
 import {
   ADD_A_CHECK,
   type Checked,
@@ -25,14 +25,14 @@ import { Sticker } from './Sticker';
 
 const linkBtn = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded text-meta font-semibold text-violet-300 hover:text-violet-200';
 
-const STATE_ICON: Record<CheckState, React.FC<{ size?: number; className?: string; 'aria-hidden'?: boolean | 'true' }>> = {
+const STATE_ICON: Record<CheckState, LucideIcon> = {
   checked: ShieldCheck,
   partly: ShieldHalf,
   failed: ShieldX,
   not_checked: Shield,
 };
 
-const ITEM_ICON: Record<ItemKind, { Icon: React.FC<{ size?: number; className?: string; 'aria-hidden'?: boolean | 'true' }>; cls: string }> = {
+const ITEM_ICON: Record<ItemKind, { Icon: LucideIcon; cls: string }> = {
   passed: { Icon: Check, cls: 'text-ok' },
   failed: { Icon: X, cls: 'text-bad' },
   waiting: { Icon: Clock, cls: 'text-zinc-300' },
