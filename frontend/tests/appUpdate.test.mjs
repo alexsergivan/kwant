@@ -225,6 +225,44 @@ test('opening Settings asks again when the last answer was off', async () => {
   assert.match(src('components/VersionCard.tsx'), /if \(known \|\| ctrl\.get\(\)\.unsupported\) void ctrl\.checkIfStale\(\);/);
 });
 
+test('opening Settings 3 s after an off answer keeps the 10 s retry (N1)', async () => {
+  let answer = json({ supported: false, current: '0.1.2' });
+  const h = harness(() => answer);
+  h.ctrl.start();
+  await flush();
+  const [retry] = h.live();
+  assert.equal(retry.ms, 10_000);
+  h.advance(3_000);
+  await h.ctrl.checkIfStale(); // Settings opened: asks now, still off
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.ctrl.get().unsupported, true);
+  assert.deepEqual(h.live(), [retry], 'the pending 10 s retry is kept, not replaced by a later one');
+  // The Mac updater is up by now: the retry at 10 s brings the card back
+  answer = json(status());
+  await h.tick(7_000);
+  assert.equal(h.ctrl.get().unsupported, false);
+  assert.equal(u.versionLine(h.ctrl.get()).kind, 'available');
+});
+
+test('Check again three times while off leaves the next automatic retry where it was (N1)', async () => {
+  const h = harness(() => json({ supported: false }));
+  h.ctrl.start();
+  await flush();
+  await h.tick(10_000); // the scheduled retry, still off: next one in 60 s
+  const [retry] = h.live();
+  assert.equal(retry.ms, 60_000);
+  for (let i = 0; i < 3; i++) {
+    h.advance(1_000);
+    await h.ctrl.check();
+  }
+  assert.equal(h.calls.length, 5);
+  assert.ok(!h.calls.some((c) => c.startsWith('POST')));
+  assert.deepEqual(h.live(), [retry], 'still the 60 s retry, not pushed to 30 min');
+  // Only scheduled polls advance the waits: the 60 s retry, still off, goes to 30 min
+  await h.tick(57_000);
+  assert.deepEqual(h.live().map((t) => t.ms), [30 * 60 * 1000]);
+});
+
 test('an off answer while the app relaunches after an install keeps asking every second', () => {
   assert.equal(u.offRetryMs(1, 'restarting'), 1000);
   assert.equal(u.offRetryMs(5, 'installing'), 1000);

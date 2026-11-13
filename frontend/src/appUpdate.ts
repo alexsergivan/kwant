@@ -305,7 +305,7 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
   let timer: unknown = null;
   let running = false;
   let restartSince: number | null = null;
-  /** Off answers in a row: picks the next wait (OFF_RETRY_MS). */
+  /** Off answers to scheduled polls in a row: picks the next wait (OFF_RETRY_MS). Asks the person triggers don't count. */
   let offAnswers = 0;
 
   const set = (patch: Partial<UpdateModel>) => {
@@ -323,8 +323,9 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
     }, ms);
   };
 
-  const off = (current: string | null) => {
-    offAnswers++;
+  const off = (current: string | null, asked: boolean) => {
+    // A person's ask (Settings opened, Check again) doesn't push the next retry later; only the first off answer counts
+    if (!asked || offAnswers === 0) offAnswers++;
     set({ unsupported: true, current: current ?? model.current });
   };
 
@@ -352,7 +353,9 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
     set(patch);
   };
 
-  async function load() {
+  /** asked: the person triggered this ask. While still off it keeps the pending retry instead of a later one. */
+  async function load(asked = false) {
+    const next = (ms?: number) => (asked && model.unsupported && timer !== null ? undefined : schedule(ms));
     let res: Response;
     try {
       res = await env.fetch('/api/app/update', { headers: { Accept: 'application/json' } });
@@ -364,28 +367,28 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
       }
       if (model.phase === 'restarting' && restartSince !== null && env.now() - restartSince > RESTART_GIVE_UP_MS) {
         set({ phase: 'stalled' });
-        return schedule(IDLE_POLL_MS);
+        return next(IDLE_POLL_MS);
       }
-      return schedule();
+      return next();
     }
     if (res.status === 404) {
-      off(null);
-      return schedule();
+      off(null, asked);
+      return next();
     }
-    if (!res.ok) return schedule(model.phase === 'restarting' ? FAST_POLL_MS : IDLE_POLL_MS);
+    if (!res.ok) return next(model.phase === 'restarting' ? FAST_POLL_MS : IDLE_POLL_MS);
     let body: unknown = null;
     try {
       body = await res.json();
     } catch {
-      return schedule();
+      return next();
     }
     const status = parseUpdateStatus(body);
     if (!status) {
-      off(body && typeof body === 'object' ? str((body as Record<string, unknown>).current) : null);
-      return schedule();
+      off(body && typeof body === 'object' ? str((body as Record<string, unknown>).current) : null, asked);
+      return next();
     }
     apply(status);
-    schedule();
+    next();
   }
 
   async function post(path: string, fallback: string, quiet = false): Promise<boolean> {
@@ -426,7 +429,7 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
         // Off here (so far): ask again now; a supported answer brings the card back
         set({ rechecking: true });
         try {
-          await load();
+          await load(true);
         } finally {
           set({ rechecking: false });
         }
@@ -438,7 +441,7 @@ export function createUpdateController(env: ControllerEnv): UpdateController {
     },
     async checkIfStale() {
       // Off is never final: opening Settings asks again
-      if (model.unsupported) return load();
+      if (model.unsupported) return load(true);
       const s = model.status;
       if (!s || model.phase !== 'idle') return;
       if (s.state === 'checking' || s.state === 'downloading' || s.state === 'ready') return;
