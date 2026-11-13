@@ -243,6 +243,48 @@ async fn cancelling_the_sheet_gets_no_reply_and_leaves_the_page_untouched() {
     server.abort();
 }
 
+/// Rigel's finding 1: `chooser.take()` used to run before the answer was validated, so a recoverable
+/// failure (here, an unknown attachment id) consumed the chooser and "Try again" always got `gone`.
+/// Answering the same id again after a `failed` reply must now actually reach the page.
+#[tokio::test]
+async fn retrying_the_same_chooser_after_a_failed_answer_still_delivers_the_file() {
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let e = setup().await;
+    let _chrome = ChromeGuard(e.tmp.path().join("local-chrome"));
+    let base = serve().await;
+    let ctrl = get_or_create_browser_controller(&e.state, &e.bot.id).await.expect("local Chrome session");
+    ctrl.navigate(&format!("{base}/visible")).await.unwrap();
+    assert_eq!(title_becomes(&ctrl, "visible").await, "visible");
+
+    let attachment_id = upload(&e.state, "retry.mp4", b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2mp41 the one that should land on retry").await;
+    let (mut ws, server) = connect(&e.state, &e.bot.id).await;
+    assert!(next_message(&mut ws, "frame", |_| true).await.is_some());
+    take_control(&mut ws).await;
+
+    ws.send(WsMessage::Text(json!({"action": "click", "x": 40, "y": 40, "id": 1}).to_string())).await.unwrap();
+    let opened = next_message(&mut ws, "file_chooser", |_| true).await.expect("chooser opened");
+    let chooser_id = opened["id"].clone();
+
+    // First answer: an unknown attachment id, a recoverable failure (not "gone").
+    ws.send(WsMessage::Text(json!({"action": "file_chooser", "id": chooser_id, "attachment_ids": ["00000000-0000-4000-8000-000000000000"]}).to_string())).await.unwrap();
+    let failed = next_message(&mut ws, "file_chooser_error", |_| true).await.expect("an unknown id is refused");
+    assert_eq!(failed["code"], "failed");
+    assert_eq!(failed["id"], chooser_id);
+
+    // Retry with the same chooser id and a real attachment: it must be delivered, not "gone".
+    ws.send(WsMessage::Text(json!({"action": "file_chooser", "id": chooser_id, "attachment_ids": [attachment_id]}).to_string())).await.unwrap();
+    let done = next_message(&mut ws, "file_chooser_done", |_| true).await.expect("the retry is answered, not left as gone");
+    assert_eq!(done["id"], chooser_id);
+    assert_eq!(done["names"], json!(["retry.mp4"]));
+    assert_eq!(title_becomes(&ctrl, "picked:retry.mp4").await, "picked:retry.mp4", "the page actually got the file on retry");
+
+    ws.close(None).await.unwrap();
+    server.abort();
+}
+
 #[tokio::test]
 async fn navigating_away_while_the_sheet_is_open_clears_it() {
     if computer::local_chrome_path().is_none() {

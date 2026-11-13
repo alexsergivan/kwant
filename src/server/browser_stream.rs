@@ -808,6 +808,7 @@ struct Worker {
 /// A page's file picker, intercepted instead of letting Chrome draw its own natively. Lives in
 /// `stream()`'s locals next to `dialog_open` — per-connection, latest wins, cleared on navigation
 /// and Hand back, never a bot's concern (nothing is sent to the client during a bot's turn).
+#[derive(Clone)]
 struct OpenChooser {
     /// This connection's own counter, not a CDP id: lets the client tell which sheet a
     /// `file_chooser_done`/error belongs to even if it raced a newer chooser.
@@ -836,6 +837,12 @@ fn error(id: &Value, error: impl std::fmt::Display) -> Value {
 /// into an unrelated pending action or G3 Point wait by sheer numeric coincidence.
 fn chooser_error(id: &Value, code: &str, message: impl std::fmt::Display) -> Value {
     json!({"type":"file_chooser_error","id":id,"code":code,"error":message.to_string()})
+}
+
+/// The one thing people ever see for a server-side file-chooser failure (a copy/CDP/lookup error):
+/// never the raw OS or CDP error text, which goes to the server's own log instead.
+fn file_chooser_failed() -> (&'static str, String) {
+    ("failed", "Couldn’t send that file to the page.".to_string())
 }
 
 fn protocol(message: &str) -> BrowserError {
@@ -1424,6 +1431,11 @@ async fn stream(
         // the page's file picker, intercepted instead of Chrome drawing its own; latest wins
         let mut chooser: Option<OpenChooser> = None;
         let mut chooser_seq: u64 = 0;
+        // the validate/inject work for an answer runs off this loop, in `tokio::spawn`; it reports
+        // back a reply to forward plus, for a recoverable (not "gone") failure, the chooser to put
+        // back so Try again can reuse the same id — one message, so the restore and the reply the
+        // client reacts to can never be seen out of order
+        let (chooser_reply_tx, mut chooser_reply_rx) = mpsc::unbounded_channel::<(Option<OpenChooser>, Value)>();
         let mut app_links = AppLinkWatch::default();
         // the events of the page the view moved to: a popup the page opened, or back from it
         let mut moved: Option<mpsc::Receiver<Value>> = None;
@@ -1498,6 +1510,12 @@ async fn stream(
                     }
                 }
                 Some(value) = client_rx.recv() => send(socket, value).await?,
+                Some((restore, value)) = chooser_reply_rx.recv() => {
+                    // a newer chooser (a fresh pick, a navigation) already took the slot: never
+                    // clobber it with a stale one
+                    if let Some(open) = restore { if chooser.is_none() { chooser = Some(open); } }
+                    send(socket, value).await?;
+                }
                 event = events.recv() => {
                     let Some(event) = event else {
                         // the page's socket closed: a popup that closed, with its opener in front again
@@ -1656,13 +1674,20 @@ async fn stream(
                             }
                             let ids: Vec<String> = value["attachment_ids"].as_array().cloned().unwrap_or_default()
                                 .into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-                            let (state, cdp, client) = (state.clone(), cdp.clone(), client_tx.clone());
+                            let (state, cdp, reply_tx) = (state.clone(), cdp.clone(), chooser_reply_tx.clone());
                             tokio::spawn(async move {
-                                let reply = match answer_file_chooser(&state, &cdp, local, &open, ids).await {
-                                    Ok(names) => json!({"type":"file_chooser_done","id":open.id,"names":names}),
-                                    Err((code, message)) => chooser_error(&json!(open.id), code, message),
+                                let (restore, reply) = match answer_file_chooser(&state, &cdp, local, &open, ids).await {
+                                    Ok(names) => (None, json!({"type":"file_chooser_done","id":open.id,"names":names})),
+                                    Err((code, message)) => {
+                                        // "gone" means the picker itself is really gone (the page
+                                        // navigated, or CDP lost the node); anything else is a
+                                        // failure the same picker can still answer, so Try again
+                                        // needs its id to still mean something
+                                        let restore = (code != "gone").then(|| open.clone());
+                                        (restore, chooser_error(&json!(open.id), code, message))
+                                    }
                                 };
-                                let _ = client.send(reply);
+                                let _ = reply_tx.send((restore, reply));
                             });
                         }
                         _ => {
@@ -1741,13 +1766,14 @@ async fn answer_file_chooser(
         return Err(("failed", "No file was chosen.".to_string()));
     }
     let ids: Vec<String> = if open.multiple { ids } else { ids.into_iter().take(1).collect() };
-    let attachments = super::attachments::check_uploads(state, &ids)
-        .await
-        .map_err(|_| ("failed", "That file couldn't be sent.".to_string()))?;
+    let attachments = super::attachments::check_uploads(state, &ids).await.map_err(|e| {
+        tracing::warn!("file chooser: check_uploads refused the answer: {}", e);
+        file_chooser_failed()
+    })?;
     if !local {
         let total: i64 = attachments.iter().map(|a| a.size).sum();
         if total < 0 || total as u64 > REMOTE_UPLOAD_CAP_BYTES {
-            return Err(("too_big", "That's bigger than kwnt can send here (100 MB).".to_string()));
+            return Err(("too_big", "That’s more than this browser can take: 100 MB in all. Pick a smaller file.".to_string()));
         }
     }
     let names = attachments.iter().map(|a| a.name.clone()).collect();
@@ -1776,14 +1802,21 @@ async fn set_file_input_files_local(
     let tmp_root = root.join("chooser-tmp");
     sweep_chooser_tmp(&tmp_root).await;
     let dir = tmp_root.join(uuid::Uuid::new_v4().to_string());
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| ("failed", e.to_string()))?;
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| {
+        tracing::warn!("file chooser: couldn't create {}: {}", dir.display(), e);
+        file_chooser_failed()
+    })?;
     let mut paths = Vec::with_capacity(attachments.len());
     for a in attachments {
         let Some(blob) = super::attachments::blob_path(&root, &a.sha256) else {
-            return Err(("failed", "That file couldn't be sent.".to_string()));
+            tracing::warn!("file chooser: no blob for attachment {}", a.id);
+            return Err(file_chooser_failed());
         };
         let dest = dir.join(super::attachments::clean_name(&a.name));
-        tokio::fs::copy(&blob, &dest).await.map_err(|e| ("failed", e.to_string()))?;
+        tokio::fs::copy(&blob, &dest).await.map_err(|e| {
+            tracing::warn!("file chooser: couldn't copy {} to {}: {}", blob.display(), dest.display(), e);
+            file_chooser_failed()
+        })?;
         paths.push(dest);
     }
     let result = cdp
@@ -1827,7 +1860,7 @@ async fn inject_files_remote(
 ) -> Result<(), (&'static str, String)> {
     use base64::Engine;
     let gone = || ("gone", "The page moved on.".to_string());
-    let failed = || ("failed", "That file couldn't be sent.".to_string());
+    let failed = file_chooser_failed;
     let world = cdp
         .call("Page.createIsolatedWorld", json!({"frameId": open.frame_id, "worldName": recorder::WORLD}), PROBE_WAIT)
         .await
