@@ -31,7 +31,7 @@ fn check_schema() -> Value {
         "type": "object",
         "properties": {
             "kind": {"type": "string", "enum": ["command", "http", "file_exists", "file_contains", "file_sha256"]},
-            "spec": {"type": "object", "description": "command: {command, timeout_secs?}; http: {url, expect_status?, contains?}; file_exists: {path}; file_contains: {path, text}; file_sha256: {path, sha256}. Paths are relative to the mission's folder."},
+            "spec": {"type": "object", "description": "command: {command, timeout_secs?, recheck_mins?, wait_hours?}; http: {url, expect_status?, contains?, waiting_status?, waiting_contains?, recheck_mins?, wait_hours?}; file_exists: {path}; file_contains: {path, text}; file_sha256: {path, sha256}. Paths are relative to the mission's folder. A command that exits 75, or an http answer with waiting_status or containing waiting_contains, means not ready yet: kwant runs it again every recheck_mins (5–1440, default 15) for up to wait_hours (1–336, default 72), and the task stays in review meanwhile."},
             "required": {"type": "boolean"},
         },
         "required": ["kind", "spec"],
@@ -130,7 +130,7 @@ pub fn tools() -> Vec<Value> {
                     "task_id": {"type": "string"},
                     "check_id": {"type": "string"},
                     "kind": {"type": "string", "enum": ["command", "http", "file_exists", "file_contains", "file_sha256"]},
-                    "spec": {"type": "object"},
+                    "spec": {"type": "object", "description": "As in mission_plan's checks: command {command, timeout_secs?, recheck_mins?, wait_hours?} (exit 75 = not ready yet, run again later); http {url, expect_status?, contains?, waiting_status?, waiting_contains?, recheck_mins?, wait_hours?}."},
                     "required": {"type": "boolean"},
                 },
                 "required": ["task_id"],

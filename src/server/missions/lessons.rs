@@ -631,6 +631,12 @@ mod tests {
             created_at: now(),
             started_at: None,
             finished_at: None,
+            waiting_since: None,
+            next_run_at: None,
+            wait_until: None,
+            runs: 0,
+            wait_round: 0,
+            timed_out_at: None,
         };
         let f = |c: &OutcomeCheck| FailureOfBot {
             id: "f1".into(),

@@ -65,6 +65,8 @@ pub async fn tick(state: &AppState) {
     super::sweep_leases(state).await;
     // AutoFix retries whose time has come, before tasks are picked (Phase B3)
     super::autofix::run_due(state).await;
+    // Waiting checks whose re-run is due; in the background, as a command may take minutes
+    super::checks::spawn_due(state);
     for m in state.db.active_missions().await.unwrap_or_default() {
         // Evidence drift, at most every 10 minutes per mission (Phase B1)
         super::graph::scan_if_due(state, &m).await;
