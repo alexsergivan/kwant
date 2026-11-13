@@ -125,6 +125,23 @@ jobs:
           name: native-drop
           path: ${{ runner.temp }}/native-drop
           retention-days: 7
+      # P3: a performance budget on the same debug kwnt (no new build). Cold start, first reply (fake claude), idle memory
+      # and the bot browser launch, each the median of 5 runs against scripts/perf_budget.json. Over a limit fails the step.
+      # Not a required check yet: fresh-machine IS required for a release, so this step has continue-on-error: true. A FAIL stays
+      # visible (the step, the job summary table, perf-results.json) but does not fail the job. Remove continue-on-error when
+      # Ada makes the budget required (after a few days of numbers in the perf-results artifact).
+      - name: Performance budget
+        continue-on-error: true
+        timeout-minutes: 10
+        run: python3 scripts/perf_budget.py --kwnt target/debug/kwnt --browser "$(command -v google-chrome || command -v chromium)" --out "$RUNNER_TEMP/perf-results.json"
+      - name: Performance budget results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: ${{ runner.temp }}/perf-results.json
+          if-no-files-found: ignore
+          retention-days: 30
 
   rust:
     name: rust

@@ -90,15 +90,15 @@ test('1: on phones Settings is still a full-screen dialog', () => {
 });
 
 test('1: picking another space keeps Settings open: This space follows the new space, All spaces stays', () => {
-  const accounts = { kind: 'settings', scope: 'space', tab: 'accounts' };
+  const accounts = { kind: 'settings', scope: 'space', tab: 'apps' };
   const app = { kind: 'settings', scope: 'app' };
   assert.deepEqual(m.viewAfterSpaceSwitch(accounts), accounts);
   assert.deepEqual(m.viewAfterSpaceSwitch(app), app);
   // Anything else lands in a chat, as before.
   for (const v of [null, undefined, { kind: 'inbox', tab: 'new' }, { kind: 'board' }, { kind: 'parallel' }]) assert.equal(m.viewAfterSpaceSwitch(v), null);
   // The new space opens on that view: its address names the new space and the same Settings tab.
-  assert.equal(m.spacePath('spc_b', null, accounts), '/s/spc_b/settings/accounts');
-  const r = m.parseSpacePath('/s/spc_b/settings/accounts');
+  assert.equal(m.spacePath('spc_b', null, accounts), '/s/spc_b/settings/apps');
+  const r = m.parseSpacePath('/s/spc_b/settings/apps');
   assert.equal(r.spaceId, 'spc_b');
   assert.ok(m.sameView(r.view, accounts));
 });
@@ -116,7 +116,7 @@ test('2: the rail and Ctrl/⌘ 1–9 both go through the one switch, which carri
 });
 
 test('2: Back after a switch inside Settings steps back to the old space, then out of Settings, without looping', () => {
-  const view = { kind: 'settings', scope: 'space', tab: 'accounts' };
+  const view = { kind: 'settings', scope: 'space', tab: 'apps' };
   // History: chat in A → Settings in A → (Ctrl+2) Settings in B.
   const stack = ['/s/spc_a/c/ch1', m.spacePath('spc_a', null, view), m.spacePath('spc_b', null, m.viewAfterSpaceSwitch(view))];
   assert.equal(new Set(stack).size, 3, 'three distinct entries: Back always moves');

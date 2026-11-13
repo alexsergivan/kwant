@@ -27,7 +27,6 @@ use crate::drivers::events::RuntimeEvent;
 use super::routes::REFUSAL;
 use crate::db::dev_line_notes::{LineNoteRow, LineNoteSendRow, DRAFT, OPEN, RESOLVED, SEND_ID_HOURS, SENT};
 use crate::db::dev_mode::{DevCardRow, LANDED, REVIEW, STALE};
-use crate::db::models::Kwant;
 use crate::db::spaces::SpaceId;
 use crate::server::spaces::active_space;
 use crate::server::AppState;
@@ -312,6 +311,19 @@ pub fn message_text(pr: Option<u64>, branch: Option<&str>, head: &str, notes: &[
     out
 }
 
+/// What the notes' message adds when they go to a team's lead because a person wrote the PR:
+/// the same rules as a Fix it task for a lead (no force-push; a draft PR when the branch can't
+/// take a push).
+pub fn lead_note(team: &str, repo: &str, pr: Option<u64>) -> String {
+    let owner = if repo.trim().is_empty() { "this repo" } else { repo.trim() };
+    let link = pr.map(|p| format!("links PR #{p}")).unwrap_or_else(|| "names the branch".into());
+    format!(
+        "\n\nA person wrote this PR, not you. You're getting these notes as the lead of {team}, the team that owns {owner}. Do it yourself or hand it to a member. \
+         Push as a new commit on the PR's branch; never force-push or rewrite their commits. \
+         If you can't push there (the PR comes from a fork, or the push is refused): put the change on a new branch from the PR's head and open a draft PR that {link}, and say so in your reply."
+    )
+}
+
 /// A note as the routes return it. `current` is the PR's newest head and its files (when known).
 pub fn note_json(row: &LineNoteRow, current: Option<(&str, &HashMap<String, Vec<DHunk>>)>) -> Value {
     let code: Vec<DLine> = serde_json::from_str(&row.code).unwrap_or_default();
@@ -428,20 +440,6 @@ async fn pr_state(state: &AppState, pr: &Pr) -> &'static str {
     }
 }
 
-/// The bot the notes go to: the review's author bot, else the bot the head branch names
-/// (`pixel/…`), when it is a bot of the space now.
-fn author_bot<'a>(facts: &DevFacts, kwants: &'a [Kwant]) -> Option<&'a Kwant> {
-    if let Some(b) = &facts.author.bot {
-        if let Some(k) = kwants.iter().find(|k| k.id == b.id) {
-            return Some(k);
-        }
-    }
-    let (prefix, _) = facts.head_branch.as_deref()?.split_once('/')?;
-    let prefix = prefix.to_lowercase();
-    let slug = |n: &str| n.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join("-");
-    kwants.iter().find(|k| !k.name.trim().is_empty() && slug(&k.name) == prefix)
-}
-
 fn card_lock(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
     let mut map = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
@@ -485,8 +483,8 @@ pub async fn changes(State(state): State<AppState>, headers: HeaderMap, Path(car
         Ok(n) => n,
         Err(e) => return internal(e),
     };
-    let kwants = state.db.list_kwants(&pr.space).await.unwrap_or_default();
-    let author = author_bot(&pr.facts, &kwants);
+    // The bot the notes go to: the author bot, else the lead of the team that owns the repo
+    let to = super::recipient::pick(&state, &pr.space, &pr.current.repo, Some(&pr.facts)).await;
     let files: Vec<Value> = pr.facts.files.iter().map(|f| file_json(f, notes.iter().filter(|n| n.path == f.path).count())).collect();
     let unread = pr.facts.files.iter().filter(|f| omitted(f) == Some("too_large")).count();
     let cut = pr.facts.cut.as_ref().map(|_| json!({"files_not_read": unread}));
@@ -497,7 +495,9 @@ pub async fn changes(State(state): State<AppState>, headers: HeaderMap, Path(car
         "head_sha": pr.current.head_sha,
         "pr_url": pr.facts.links.pr,
         "pr_state": pr_state(&state, &pr).await,
-        "author_bot": author.map(|k| json!({"id": k.id, "name": k.name})),
+        "author_bot": to.as_ref().map(|r| json!({"id": r.bot.id, "name": r.bot.name})),
+        "notes_via": to.as_ref().map(|r| r.via.as_str()),
+        "notes_team": to.as_ref().and_then(|r| r.team.clone()),
         "author_login": pr.facts.author.login,
         "files": files,
         "cut": cut,
@@ -787,10 +787,12 @@ pub async fn send(State(state): State<AppState>, headers: HeaderMap, Path(card_i
     if let Err(r) = writable(&state, &pr).await {
         return r;
     }
-    let kwants = state.db.list_kwants(&pr.space).await.unwrap_or_default();
-    let Some(bot) = author_bot(&pr.facts, &kwants).cloned() else {
-        return err(StatusCode::CONFLICT, "no_author", "Notes go to bots in this space, and this PR isn't by one");
+    // The author bot, else the lead of the team that owns the repo (fix-it-any-pr)
+    let Some(to) = super::recipient::pick(&state, &pr.space, &pr.current.repo, Some(&pr.facts)).await else {
+        return err(StatusCode::CONFLICT, "no_author", &super::recipient::nobody_for_notes(&pr.facts.repo));
     };
+    let bot = to.bot.clone();
+    let lead_of = to.team.as_deref().filter(|_| to.via == super::recipient::Via::TeamLead);
     let rows = match state.db.line_notes_of_pr(&pr.current.space_id, &pr.current.repo, &pr.current.ref_).await {
         Ok(r) => r,
         Err(e) => return internal(e),
@@ -817,7 +819,10 @@ pub async fn send(State(state): State<AppState>, headers: HeaderMap, Path(card_i
     }
     let outgoing: Vec<Outgoing> =
         drafts.iter().map(|r| Outgoing { path: r.path.clone(), code: serde_json::from_str(&r.code).unwrap_or_default(), text: r.text.clone() }).collect();
-    let text = message_text(pr.facts.pr, pr.facts.head_branch.as_deref(), &pr.current.head_sha, &outgoing);
+    let mut text = message_text(pr.facts.pr, pr.facts.head_branch.as_deref(), &pr.current.head_sha, &outgoing);
+    if let Some(team) = lead_of {
+        text.push_str(&lead_note(team, &pr.facts.repo, pr.facts.pr));
+    }
     let meta_notes: Vec<Value> = drafts
         .iter()
         .zip(&outgoing)
@@ -839,6 +844,8 @@ pub async fn send(State(state): State<AppState>, headers: HeaderMap, Path(card_i
         "card_id": pr.current.id,
         "pr_url": pr.facts.links.pr,
         "author_bot_id": bot.id,
+        "sent_via": to.via.as_str(),
+        "sent_team": lead_of,
     });
     let payload = crate::server::routes::SendChatPayload {
         channel_id: None,
@@ -875,6 +882,8 @@ pub async fn send(State(state): State<AppState>, headers: HeaderMap, Path(card_i
         "message_id": message_id,
         "kwant_id": bot.id,
         "kwant_name": bot.name,
+        "sent_via": to.via.as_str(),
+        "sent_team": lead_of,
         "sent_at": Utc.timestamp_millis_opt(sent_at).single(),
         "notes": notes,
     });

@@ -35,7 +35,7 @@
       "title": "Your bots on Telegram",
       "text": "Pair a Telegram chat to write to your bots and get their replies, questions and approvals on your phone.",
       "image": null,
-      "open": "settings/connections"
+      "open": "settings/apps"
     },
     {
       "id": "show-once",

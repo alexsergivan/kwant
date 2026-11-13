@@ -1,0 +1,23 @@
+{
+  "version": "0.9.4",
+  "date": "2026-11-12",
+  "highlights": [
+    {
+      "id": "try-again",
+      "title": "Bots don't give up after a failed step",
+      "text": "When a step fails or is refused, a bot tries it again, then tries another way. A step you declined isn't tried again.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "blocked-line",
+      "title": "A stuck bot says what would unblock it",
+      "text": "When nothing works, a bot ends with a line that starts with Blocked: and names what would unblock it. From a team's lead, it comes to you as a question, and your answer lets the team carry on.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "If a reply still ends on \"I'll…\" after a failed step, the bot gets one more turn. If it only promises again, a short note says it stopped."
+  ]
+}

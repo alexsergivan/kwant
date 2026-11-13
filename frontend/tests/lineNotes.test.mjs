@@ -600,7 +600,7 @@ test('read-only: a merged PR and a PR not by a bot have no + and no bar', async 
 
   const other = fakeApi({ changes: rawChanges({ author_bot: null, author_login: 'oleks' }) });
   await mount({ api: other.api, defaultOpen: true });
-  assert.equal($('[data-ln-banner]').textContent, 'Notes go to bots in this space. This PR is by oleks, so there’s nothing to send them to.');
+  assert.equal($('[data-ln-banner]').textContent, 'Notes go to bots in this space. This PR is by oleks and no team owns this repo. Add it to a team (Manage team › Git Repo) and its lead gets the notes.');
   assert.equal($('[data-ln-banner] strong').textContent, 'oleks');
   assert.equal($$('[data-ln-grid] button').length, 0);
 });
