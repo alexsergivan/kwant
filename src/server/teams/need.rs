@@ -68,28 +68,34 @@ fn running() -> &'static Mutex<HashMap<String, Running>> {
 
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 
+/// A slot's key: the server's data folder and the space, so two servers in one process (tests)
+/// never share a slot.
+fn slot_key(state: &AppState, space: &SpaceId) -> String {
+    format!("{}\u{0}{}", state.config.data_dir.display(), space.as_str())
+}
+
 /// Holds a space's draft slot; dropping it (the answer went out, or the person's request went
 /// away) stops that draft and frees the slot, unless a `DELETE` already did.
 struct Slot {
-    space: String,
+    key: String,
     token: u64,
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
         let mut m = running().lock().unwrap_or_else(|e| e.into_inner());
-        if m.get(&self.space).is_some_and(|r| r.token == self.token) {
-            if let Some(r) = m.remove(&self.space) {
+        if m.get(&self.key).is_some_and(|r| r.token == self.token) {
+            if let Some(r) = m.remove(&self.key) {
                 r.abort.abort();
             }
         }
     }
 }
 
-/// Stops `space`'s draft, if one runs. True when one did.
-fn stop(space: &str) -> bool {
+/// Stops the draft under `key` ([`slot_key`]), if one runs. True when one did.
+fn stop(key: &str) -> bool {
     let mut m = running().lock().unwrap_or_else(|e| e.into_inner());
-    match m.remove(space) {
+    match m.remove(key) {
         Some(r) => {
             r.abort.abort();
             true
@@ -104,7 +110,7 @@ pub async fn cancel(State(state): State<AppState>, headers: HeaderMap, Scope(spa
     if let Err(r) = person(&state, &headers).await {
         return r;
     }
-    if stop(space.as_str()) {
+    if stop(&slot_key(&state, &space)) {
         tracing::info!(space = %space.as_str(), "the person stopped a team draft");
     }
     StatusCode::NO_CONTENT.into_response()
@@ -165,17 +171,18 @@ pub(super) async fn suggest(state: &AppState, space: &SpaceId, raw: &Value) -> R
     }
 
     let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+    let key = slot_key(state, space);
     let task = {
         let mut m = running().lock().unwrap_or_else(|e| e.into_inner());
-        if m.contains_key(space.as_str()) {
+        if m.contains_key(&key) {
             return fail(StatusCode::CONFLICT, "busy", "a team is already being suggested in this space; wait for it or cancel it");
         }
         let (st, w, profiles) = (state.clone(), words.clone(), accounts.ready);
         let task = tokio::spawn(async move { draft(&st, &w, &profiles).await });
-        m.insert(space.as_str().to_string(), Running { token, abort: task.abort_handle() });
+        m.insert(key.clone(), Running { token, abort: task.abort_handle() });
         task
     };
-    let _slot = Slot { space: space.as_str().to_string(), token };
+    let _slot = Slot { key, token };
     let started = Instant::now();
     let outcome = match task.await {
         Ok(o) => o,
@@ -473,7 +480,7 @@ mod tests {
             running().lock().unwrap().insert("spc_slot_test".into(), Running { token: 7, abort: task.abort_handle() });
             {
                 // Another request's slot doesn't free this one
-                let _other = Slot { space: "spc_slot_test".into(), token: 8 };
+                let _other = Slot { key: "spc_slot_test".into(), token: 8 };
             }
             assert!(running().lock().unwrap().contains_key("spc_slot_test"));
             assert!(stop("spc_slot_test"));
@@ -482,7 +489,7 @@ mod tests {
             // The answer going out frees its own slot
             let task = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await });
             running().lock().unwrap().insert("spc_slot_test".into(), Running { token: 9, abort: task.abort_handle() });
-            drop(Slot { space: "spc_slot_test".into(), token: 9 });
+            drop(Slot { key: "spc_slot_test".into(), token: 9 });
             assert!(!running().lock().unwrap().contains_key("spc_slot_test"));
             assert!(task.await.unwrap_err().is_cancelled());
         });
