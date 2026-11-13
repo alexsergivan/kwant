@@ -3,9 +3,9 @@
 //! mouse is over the tile (Google Flow's clip grid). The list names the tiles as cards and the ⋮
 //! buttons as "More" (on hover) with their tile; a click on one, by label or by ref, hovers the
 //! tile first and then opens its menu, whose Download item is clicked next. The hover action says
-//! what appeared. Cards and hover controls are capped at 40 each, icon-only buttons are named by
-//! their icon word, and the payment check still judges the same element and label. Skipped when
-//! no Chrome is installed.
+//! what appeared. Ordinary controls are listed before hover controls and cards, which are capped
+//! at 40 each, icon-only buttons are named by their icon word, and the payment check still judges
+//! the same element and label. Skipped when no Chrome is installed.
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -19,7 +19,11 @@ use kwnt::{
     config::Config,
     db::{models::Kwant, spaces::SpaceId, Database},
     router::LayaRouter,
-    sandbox::{computer, BrowserError},
+    sandbox::{
+        computer,
+        reads::{pick_controls, SHOWN_CONTROLS},
+        BrowserError,
+    },
     server::{continuity::browser_act_payment, create_router, routes::get_or_create_browser_controller, AppState},
     tools::ToolRunner,
 };
@@ -88,12 +92,14 @@ const LABELS_PAGE: &str = r##"<!doctype html><title>labels</title>
 const CARD_PAGE: &str = "<!doctype html><title>card</title><form onsubmit=\"return false\">\
 <input autocomplete=cc-number placeholder='Card number'><button type=submit>Continue</button></form>";
 
-/// 60 clickable cards, of which the list shows 40.
+/// 60 clickable cards, of which the list shows 40, and after them in the page 10 buttons, which
+/// the list puts before the cards.
 fn many_page() -> String {
     let cards: String = (0..60)
         .map(|i| format!("<div style='cursor:pointer;display:inline-block;width:120px;height:40px;margin:2px'>Card {i}</div>"))
         .collect();
-    format!("<!doctype html><title>many</title>{cards}")
+    let buttons: String = (0..10).map(|i| format!("<button>Button {i}</button>")).collect();
+    format!("<!doctype html><title>many</title>{cards}{buttons}")
 }
 
 /// A small HTTP server for the pages above on 127.0.0.1, so the test needs no network.
@@ -305,6 +311,11 @@ async fn cards_are_capped_and_icon_buttons_are_named() {
     let ctrl = open(&e, &format!("{base}/many")).await;
     let all = ctrl.list_clickables(400).await;
     assert_eq!(all.iter().filter(|l| l.contains("] card \"Card ")).count(), 40, "{all:#?}");
+    // 60 cards and 10 buttons: the 40 lines a bot is shown hold all 10 buttons, first
+    let (shown, _) = pick_controls(&all, "", SHOWN_CONTROLS);
+    let buttons: Vec<&String> = shown.iter().filter(|l| l.contains("] button \"Button ")).collect();
+    assert_eq!(buttons.len(), 10, "{shown:#?}");
+    assert!(shown[..10].iter().all(|l| l.contains("] button \"Button ")), "{shown:#?}");
 
     open(&e, &format!("{base}/labels")).await;
     let all: Vec<String> = ctrl.list_clickables(400).await;
@@ -320,9 +331,9 @@ async fn cards_are_capped_and_icon_buttons_are_named() {
             r#"link "Share""#,
             r#"button "photo_camera""#,
             r#"button "close""#,
+            r#"button "Big""#,
             r#"card "Open project""#,
             r#"card "Sunset clip""#,
-            r#"button "Big""#,
         ],
         "{all:#?}"
     );

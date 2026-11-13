@@ -146,10 +146,11 @@ async fn await_reply(ws: &mut WsStream, id: u64) -> Result<Result<Value, Browser
 }
 
 /// `function(needle, probe)` evaluated in the page. Collects visible interactive elements (incl.
-/// open shadow roots and same-origin iframes), topmost first. Also lists, at most 40 of each,
-/// clickable cards (the outermost element with a pointer cursor whose parent has none: a tile
-/// with a JS click listener) and controls that show only on hover (opacity 0 or visibility
-/// hidden inside a shown card: a tile's ⋮ button), with the card to hover. An icon-only control
+/// open shadow roots and same-origin iframes), topmost first. After them it lists, at most 40 of
+/// each, controls that show only on hover (opacity 0 or visibility hidden inside a shown card: a
+/// tile's ⋮ button), with the card to hover, and then clickable cards (the outermost element with
+/// a pointer cursor whose parent has none: a tile with a JS click listener), so tiles never push
+/// ordinary controls out of a capped list. An icon-only control
 /// is named by its aria-label or title, else by its icon word (`more_vert` reads "More").
 /// With a needle, picks the best label match (controls listed before cards and hover controls
 /// existed first) and either returns its viewport center (when nothing covers it), clicks it
@@ -160,7 +161,7 @@ async fn await_reply(ws: &mut WsStream, id: u64) -> Result<Result<Value, Browser
 const CLICKABLES_JS: &str = r#"function (needle, probe) {
   var SEL = 'button,a[href],[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=option],input,textarea,select,summary,label,[onclick]';
   // Clickable cards (a div with a JS click listener) and controls shown only on hover are listed
-  // at most this many each, topmost and in view first, so a busy page doesn't flood the list
+  // at most this many each, after the ordinary controls, so a busy page doesn't flood the list
   var CARD_CAP = 40, HOVER_CAP = 40;
   // The word a person reads for an icon-only control's icon-font word (Material icons and symbols)
   var ICONS = { more_vert: 'More', more_horiz: 'More', download: 'Download', file_download: 'Download',
@@ -346,9 +347,10 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
     }
   }
   walk(document, 0, 0);
-  function order(a, b) { return (b.onTop - a.onTop) || (b.inView - a.inView); }
-  items = items.concat(cards.sort(order).slice(0, CARD_CAP), hovers.sort(order).slice(0, HOVER_CAP));
-  items.sort(function (a, b) { return order(a, b) || (a.seq - b.seq); });
+  // Each kind topmost first, then in page order. Ordinary controls come first, then the ones shown
+  // on hover, then cards, so a page of many tiles never pushes its buttons out of a capped list
+  function order(a, b) { return (b.onTop - a.onTop) || (b.inView - a.inView) || (a.seq - b.seq); }
+  items = items.sort(order).concat(hovers.sort(order).slice(0, HOVER_CAP), cards.sort(order).slice(0, CARD_CAP));
   function registry() {
     var reg = window[Symbol.for('kwnt.refs')];
     if (!reg) {
@@ -386,6 +388,13 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
         match = { label: match.label, x: match.x, y: match.y, clicked: false };
       }
     }
+  }
+  if (!needle) {
+    // Listed, a control inside a see-through wrapper (shown on hover too, but matched with the
+    // ordinary controls, as before cards existed) joins the other hover controls
+    var plain = [], onHover = [], tiles = [];
+    items.forEach(function (i) { (i.kind === 'card' ? tiles : i.card ? onHover : plain).push(i); });
+    items = plain.concat(onHover.sort(order), tiles);
   }
   // A peek (no needle, probe): the items with their elements, without numbering them
   if (!needle && probe) return items;
