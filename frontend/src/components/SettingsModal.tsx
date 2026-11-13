@@ -811,7 +811,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </fieldset>
           )}
 
-          <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
+          <fieldset className="min-w-0 space-y-3 pt-2 border-t border-zinc-800">
             <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
               <Gauge size={14} className="text-sky-300" aria-hidden="true" />
               <span>Usage</span>

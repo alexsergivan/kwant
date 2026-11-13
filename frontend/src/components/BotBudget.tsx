@@ -562,10 +562,10 @@ export const BudgetOverview: React.FC<{ open: boolean; onOpenBot?: (kwantId: str
             {list.bots.map((b) => {
               const chip = STATE_CHIP[b.state];
               return (
-                <li key={b.kwant_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2" data-budget-row={b.state}>
+                <li key={b.kwant_id} className="flex flex-wrap lg:flex-nowrap items-center gap-x-3 gap-y-1 px-3 py-2" data-budget-row={b.state}>
                   <span className="min-w-0 flex-1 basis-32 truncate text-[11px] font-medium text-zinc-200">{b.kwant_name || 'Unnamed bot'}</span>
                   <span className={`shrink-0 rounded-full border px-1.5 py-px text-[10px] ${chip.tone}`}>{b.state === 'warn' ? `${meterPercent(b)}% used` : chip.text}</span>
-                  <span className="basis-full sm:basis-auto sm:w-80 flex items-center gap-2 min-w-0">
+                  <span className="basis-full sm:order-last lg:order-none lg:basis-auto lg:w-80 flex items-center gap-2 min-w-0">
                     {hasBudget(b) && <BudgetMeter budget={b} className="max-w-[72px]" />}
                     <span className="min-w-0 break-words font-mono text-[11px] tabular-nums text-zinc-400">
                       {usedLine(b)}
