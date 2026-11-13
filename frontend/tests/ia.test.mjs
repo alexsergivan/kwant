@@ -46,7 +46,7 @@ test('every canonical address round-trips', () => {
     assert.ok(nav.sameView(back.view, v), seg);
   }
   assert.equal(nav.viewSegment({ kind: 'inbox', tab: 'loose' }), 'inbox/loose-ends');
-  assert.equal(nav.viewSegment({ kind: 'settings', scope: 'space', tab: 'accounts' }), 'settings/accounts');
+  assert.equal(nav.viewSegment({ kind: 'settings', scope: 'space', tab: 'apps' }), 'settings/apps');
 });
 
 test('old addresses resolve to the new place and are flagged for rewriting', () => {
@@ -54,7 +54,7 @@ test('old addresses resolve to the new place and are flagged for rewriting', () 
     away: 'inbox',
     'while-you-were-away': 'inbox',
     'loose-ends': 'inbox/loose-ends',
-    connections: 'settings/connections',
+    connections: 'settings/apps',
     routines: 'settings/routines',
     'mission-board': 'board',
     missions: 'board',
@@ -79,9 +79,12 @@ test('space paths carry the view, and a view wins over a chat', () => {
   assert.equal(r.spaceId, 'spc_a');
   assert.equal(nav.viewSegment(r.view), 'inbox');
   assert.equal(r.legacy, true);
-  const s = nav.parseSpacePath('/s/spc_a/settings/accounts');
-  assert.equal(nav.viewSegment(s.view), 'settings/accounts');
+  const s = nav.parseSpacePath('/s/spc_a/settings/apps');
+  assert.equal(nav.viewSegment(s.view), 'settings/apps');
   assert.ok(!s.legacy);
+  const old = nav.parseSpacePath('/s/spc_a/settings/accounts');
+  assert.equal(nav.viewSegment(old.view), 'settings/apps');
+  assert.ok(old.legacy, 'the old Accounts address is rewritten');
   assert.equal(nav.spacePath('spc_a', null, { kind: 'inbox', tab: 'loose' }), '/s/spc_a/inbox/loose-ends');
   assert.equal(nav.spacePath('spc_a', { channelId: 'c1' }, { kind: 'board' }), '/s/spc_a/board');
   assert.ok(!nav.spacePath('spc_a', { channelId: 'c1' }).includes('board'));
@@ -176,19 +179,20 @@ test('phones keep exactly one switcher', () => {
 // Item 11: one Settings
 
 const settingsProps = (over = {}) => ({
-  space, scope: 'space', onScope: noop, tab: 'connections', onTab: noop, onClose: noop,
-  connections: 'CONNECTIONS-HERE', appSettings: 'APP-SETTINGS-HERE', onOpenArchived: noop, kwants, channels: [], teams,
+  space, scope: 'space', onScope: noop, tab: 'apps', appsSection: { section: 'advanced', seq: 1 }, onTab: noop, onClose: noop,
+  connections: () => 'CONNECTIONS-HERE', appSettings: 'APP-SETTINGS-HERE', onOpenArchived: noop, kwants, channels: [], teams,
   onSpaceSaved: noop, onArchived: noop, onNewBot: noop, onEditBot: noop, onOpenSkills: noop, onNewTeam: noop, onManageTeam: noop, onOpenTools: noop,
   ...over,
 });
 
-test('Settings has This space and All spaces, and Connections is a section of This space', () => {
+test('Settings has This space and All spaces, and Connections live in Apps & accounts › Advanced', () => {
   const html = ui.settings(settingsProps());
   assert.match(html, /data-settings-scope="space"[^>]*>|aria-selected="true"[^>]*data-settings-scope="space"/);
   assert.match(html, /This space/);
   assert.match(html, /All spaces/);
   assert.match(html, /data-settings-connections[^>]*>CONNECTIONS-HERE/);
-  for (const t of ['General', 'Accounts', 'Connections', 'Routines']) assert.match(html, new RegExp(`>${t}<`), t);
+  for (const t of ['General', 'Apps &amp; accounts', 'Routines']) assert.match(html, new RegExp(`>${t}<`), t);
+  for (const t of ['Accounts', 'Connections', 'Tools']) assert.doesNotMatch(html, new RegExp(`>${t}</`), `${t} is no longer its own tab`);
   assert.doesNotMatch(html, /APP-SETTINGS-HERE/);
 });
 
@@ -200,7 +204,7 @@ test('All spaces shows the app settings, archived spaces and install, not the sp
   assert.doesNotMatch(html, /aria-label="Default settings"/);
 });
 
-test('API keys live only in This space › Accounts; App settings links there', () => {
+test('API keys live only in This space › Apps & accounts; App settings links there', () => {
   const keys = ui.apiKeys({ defaultOpen: false });
   assert.match(keys, /API keys and Ollama/);
   assert.match(keys, /data-api-keys/);
@@ -208,9 +212,9 @@ test('API keys live only in This space › Accounts; App settings links there', 
   const app = src('components/SettingsModal.tsx');
   assert.match(app, /data-api-keys-link/);
   assert.match(app, /onClick=\{onOpenApiKeys\}|onOpenApiKeys\(\)/);
-  assert.match(app, /Settings › This space › Accounts/);
+  assert.match(app, /Settings › This space › Apps & accounts/);
   assert.doesNotMatch(app, /Anthropic API Key|placeholder="sk-ant/, 'no key fields left in App settings');
-  assert.match(src('App.tsx'), /onOpenApiKeys=\{\(\) => openSpaceSettings\('accounts'\)\}/);
+  assert.match(src('App.tsx'), /onOpenApiKeys=\{\(\) => openSpaceSettings\('apps', 'accounts'\)\}/);
 });
 
 test('the rail gear opens Settings › All spaces and the header entry opens This space', () => {

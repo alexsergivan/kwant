@@ -38,6 +38,7 @@ import {
   installable,
   isImported,
   isKept,
+  keepOwnBotsLine,
   isLive,
   isSignInUrl,
   loginApi as defaultLoginApi,
@@ -756,13 +757,17 @@ const KeyPanel: React.FC<{ phone: boolean; onAdded: () => void }> = ({ phone, on
 const TeamStep: React.FC<{
   phone: boolean;
   spaceName: string;
+  /** False outside the main space: Keep names this space's own bots, not the main space's starters. */
+  mainSpace: boolean;
+  /** The space's bots, for that line. */
+  botNames: string[];
   onKeep: () => void;
   onPicked: () => void;
   /** After the import dialog closes with at least one import done: step 3 is done. */
   onImported: () => void;
   /** Each Import or Undo inside the dialog, so the sidebar loads the new bots. */
   onImportChanged?: () => void;
-}> = ({ phone, spaceName, onKeep, onPicked, onImported, onImportChanged }) => {
+}> = ({ phone, spaceName, mainSpace, botNames, onKeep, onPicked, onImported, onImportChanged }) => {
   const rt = useReadyTeams();
   const [importing, setImporting] = useState(false);
   const imported = useRef(false);
@@ -813,8 +818,8 @@ const TeamStep: React.FC<{
         ))}
         <li>
           <button type="button" data-keep-starter onClick={onKeep} className={`${tile} h-full flex flex-col gap-1 border-dashed border-zinc-600 bg-transparent hover:border-zinc-500`}>
-            <span className="text-sm font-semibold text-zinc-100">Keep the starter bots</span>
-            <span className="text-[12.5px] leading-[18px] text-zinc-300">Architect, TechLead and DevOps, in #general.</span>
+            <span className="text-sm font-semibold text-zinc-100">{mainSpace ? 'Keep the starter bots' : 'Keep the bots you have'}</span>
+            <span className="text-[12.5px] leading-[18px] text-zinc-300">{mainSpace ? 'Architect, TechLead and DevOps, in #general.' : keepOwnBotsLine(botNames, spaceName)}</span>
             <span className="mt-auto text-right text-xs text-sky-300" aria-hidden="true">
               Use ›
             </span>
@@ -879,9 +884,11 @@ export interface GetStartedProps {
   spaceName?: string;
   /** After an Import or Undo from "Bring your bots": new bots, teams and team chats. */
   onImported?: () => void;
+  /** The space's `is_default`. Only the main space has the starter bots; left out counts as main. */
+  mainSpace?: boolean;
 }
 
-export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, reloadEngines, onDismissed, loginApiOverride, hostOverride, spaceName, onImported }) => {
+export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, reloadEngines, onDismissed, loginApiOverride, hostOverride, spaceName, onImported, mainSpace = true }) => {
   const api = loginApiOverride ?? defaultLoginApi;
   const phone = useMedia(PHONE_QUERY);
   useStartVersion();
@@ -1109,7 +1116,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
             3,
             'Pick a team',
             v.open === 3 && !done3 ? 'open' : done3 ? 'done' : 'todo',
-            done3 ? (importedHere ? 'Your imported bots' : 'Starter bots') : undefined,
+            done3 ? (importedHere ? 'Your imported bots' : mainSpace ? 'Starter bots' : 'Your bots') : undefined,
             v.open === 2 && slow && !done3 ? (
               <Btn phone={phone} kind="link" className="ml-auto shrink-0" onClick={() => setTeamEarly(true)}>
                 Open
@@ -1118,7 +1125,16 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
           )}
           {v.open === 3 && !done3 ? (
             <div className={`${body} gs-open`}>
-              <TeamStep phone={phone} spaceName={spaceName ?? 'this space'} onKeep={keep} onPicked={() => undefined} onImported={importedBots} onImportChanged={onImported} />
+              <TeamStep
+                phone={phone}
+                spaceName={spaceName ?? 'this space'}
+                mainSpace={mainSpace}
+                botNames={bots.map((b) => b.name)}
+                onKeep={keep}
+                onPicked={() => undefined}
+                onImported={importedBots}
+                onImportChanged={onImported}
+              />
             </div>
           ) : null}
         </div>

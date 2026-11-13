@@ -2,8 +2,13 @@
 // preview sheet from any entry point (welcome, New team, sidebar, Manage team), shows the Created toast
 // and runs Undo. `TeamNeedsTop` is the Needs card at the top of a template team's chat (Q-T5: a client
 // overlay built from live state, not a message). Design: next-077/design/design.md §T, §D. API: api.md.
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Sparkles, X } from 'lucide-react';
 import { TeamPreviewSheet, type SheetMode } from './TeamPreviewSheet';
+import { TeamNeedBox } from './TeamNeedBox';
+import { useEscapeLayer } from '../escape';
+import { useMedia } from '../useMedia';
+import { PHONE_QUERY } from '../layout';
 import { TeamCreatedLine, TeamCreatedToast, TeamNeedsCard, UndoTeamConfirm } from './TeamNeedsCard';
 import { openForgeConnect, openGitHubConnect } from './GitHubConnect';
 import { FolderBrowserModal } from './FolderBrowserModal';
@@ -119,6 +124,16 @@ interface ReadyTeamsValue {
   open: (mode: SheetMode, opts?: OpenOpts) => void;
   made: (teamId: string) => MadeTeam | null;
   undo: (team: ReadyTeam) => void;
+  /** Accounts in this space that can run now (`space.counts.ready_accounts`); 0 turns Suggest a team into "Add an AI account first". */
+  readyAccounts: number;
+  openAccounts?: () => void;
+  /** The words typed into any "Describe your own" box, kept across entry points, cancels and errors. */
+  needDraft: string;
+  setNeedDraft: (v: string) => void;
+  /** "Describe your own": focus the Get ready card's box, or open the box in a small sheet. */
+  describe: () => void;
+  /** The Get ready card's box registers its focus; returns the unregister. */
+  registerNeedBox: (focus: () => void) => () => void;
 }
 
 const Ctx = createContext<ReadyTeamsValue | null>(null);
@@ -136,11 +151,15 @@ export interface ReadyTeamsProviderProps {
   onOpenTeam: (team: CreatedTeam['team'], channelId: string) => void;
   /** Undo answered 200: the team and its chat are gone on the server; drop them from the lists now. */
   onUndone?: (team: ReadyTeam) => void;
+  /** Accounts that can run now; undefined is read as "some" (an older caller). */
+  readyAccounts?: number;
+  /** Opens Space settings › Accounts. */
+  onOpenAccounts?: () => void;
   /** Message count of a team's chat, for the Undo confirm; the server's count wins when it answers. */
   children: React.ReactNode;
 }
 
-export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, bots, teams, onChanged, onOpenTeam, onUndone, children }) => {
+export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, bots, teams, onChanged, onOpenTeam, onUndone, readyAccounts, onOpenAccounts, children }) => {
   const [templates, setTemplates] = useState<TeamTemplate[] | null>(() => cache.get(space) ?? null);
   const [templatesError, setTemplatesError] = useState(false);
   const [available, setAvailable] = useState(true);
@@ -280,7 +299,7 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
     [made, runUndo, templates, space],
   );
 
-  const onCreated = (r: CreatedTeam, _t: TeamTemplate, handle: string) => {
+  const onCreated = (r: CreatedTeam, _t: TeamTemplate | null, handle: string) => {
     const m: MadeTeam = { templateId: r.template_id, handle, createdAt: Date.now(), actionId: r.action_id, undoUntil: Date.parse(r.undo_until) || Date.now() + 86_400_000 };
     remember(r.team.id, m);
     setMade((x) => ({ ...x, [r.team.id]: m }));
@@ -297,7 +316,27 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
     setToast((x) => ({ text, team: { id: r.team.id, name: handle }, n: (x?.n ?? 0) + 1 }));
   };
 
-  const value = useMemo<ReadyTeamsValue>(() => ({ space, templates, available, open, made: madeOf, undo }), [space, templates, available, open, madeOf, undo]);
+  // ---- a team from your own words
+  const [needDraft, setNeedDraft] = useState('');
+  const [needSheet, setNeedSheet] = useState(false);
+  const needBox = useRef<(() => void) | null>(null);
+  useEffect(() => setNeedDraft(''), [space]);
+  const registerNeedBox = useCallback((focus: () => void) => {
+    needBox.current = focus;
+    return () => {
+      if (needBox.current === focus) needBox.current = null;
+    };
+  }, []);
+  const describe = useCallback(() => {
+    if (needBox.current) needBox.current();
+    else setNeedSheet(true);
+  }, []);
+  const ready = readyAccounts ?? 1;
+
+  const value = useMemo<ReadyTeamsValue>(
+    () => ({ space, templates, available, open, made: madeOf, undo, readyAccounts: ready, openAccounts: onOpenAccounts, needDraft, setNeedDraft, describe, registerNeedBox }),
+    [space, templates, available, open, madeOf, undo, ready, onOpenAccounts, needDraft, describe, registerNeedBox],
+  );
 
   return (
     <Ctx.Provider value={value}>
@@ -320,12 +359,26 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
             cb?.();
           }}
           onCreated={onCreated}
+          onOpenAccounts={
+            onOpenAccounts &&
+            (() => {
+              setSheet(null);
+              onOpenAccounts();
+            })
+          }
           onPickFolder={() => void pickFolder()}
           onUseCoding={() => setSheet((s) => s && { mode: { kind: 'template', templateId: 'coding' }, opts: s.opts, n: s.n + 1 })}
           onConnectForge={(url, forge) => {
             if (forge === 'GitHub') openGitHubConnect({ space });
             else openForgeConnect({ space, forge: { forge: 'gitlab', url: `https://${url.replace(/^https?:\/\//, '').split('/')[0]}` } });
           }}
+        />
+      )}
+      {needSheet && (
+        <NeedSheet
+          onClose={() => setNeedSheet(false)}
+          onHide={() => setNeedSheet(false)}
+          onShow={() => setNeedSheet(true)}
         />
       )}
       {/* Above the sheet (z-70): FolderBrowserModal is z-50 on its own. */}
@@ -363,6 +416,53 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
         />
       )}
     </Ctx.Provider>
+  );
+};
+
+// ---------------------------------------------------------------------------------------------------
+// "Describe your own" when the Get ready card isn't on screen: the same box in a small dialog
+// (desktop) or bottom sheet (phone). It hides while the preview is open and comes back on Cancel.
+
+const NeedSheet: React.FC<{ onClose: () => void; onHide: () => void; onShow: () => void }> = ({ onClose, onHide, onShow }) => {
+  const phone = useMedia(PHONE_QUERY);
+  const root = useRef<HTMLDivElement>(null);
+  const titleId = React.useId();
+  useEscapeLayer(root, true, onClose, { modal: true });
+  return (
+    <div className={`fixed inset-0 z-[70] ${phone ? '' : 'grid place-items-center p-6'} bg-[rgb(6_3_20/.62)]`} onClick={onClose} data-need-sheet-scrim>
+      <div
+        ref={root}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        data-need-sheet
+        onClick={(e) => e.stopPropagation()}
+        className={
+          phone
+            ? 'absolute inset-x-0 bottom-0 max-h-[92%] overflow-y-auto rounded-t-2xl bg-zinc-900 border-t border-zinc-800 px-4 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] outline-none animate-[t-sheet_200ms_ease-out] motion-reduce:animate-none'
+            : 'w-[480px] max-w-[calc(100vw-32px)] rounded-2xl bg-zinc-900 border border-zinc-800 p-5 shadow-[0_25px_50px_-12px_rgb(0_0_0/.6)] outline-none animate-[t-rise_180ms_ease-out] motion-reduce:animate-none'
+        }
+      >
+        <div className="flex items-center gap-3 mb-3">
+          <span aria-hidden="true" className="w-8 h-8 rounded-[9px] shrink-0 grid place-items-center bg-sky-400/15 text-sky-400 ring-1 ring-inset ring-sky-300/20">
+            <Sparkles size={16} />
+          </span>
+          <h3 id={titleId} className="flex-1 min-w-0 text-[15px] font-semibold text-zinc-50">
+            Describe your own team
+          </h3>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className={`${phone ? 'w-11 h-11' : 'w-8 h-8'} shrink-0 grid place-items-center rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+        <TeamNeedBox label="What should your bots do?" autoFocus onHide={onHide} onShow={onShow} onLeave={onClose} />
+      </div>
+    </div>
   );
 };
 

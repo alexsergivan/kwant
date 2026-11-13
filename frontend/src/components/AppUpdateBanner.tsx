@@ -1,8 +1,7 @@
 import React, { useEffect, useId, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, ArrowUpCircle, CheckCircle2, ExternalLink, Info, Loader2, RotateCw, X } from 'lucide-react';
-import { BannerView, UpdateController, UpdateModel, aboutLine, appUpdateController, bannerView, dismissVersion, dismissedVersion } from '../appUpdate';
+import { AlertTriangle, ArrowUpCircle, CheckCircle2, ExternalLink, Loader2, RotateCw, X } from 'lucide-react';
+import { BannerView, UpdateController, appUpdateController, bannerView, dismissVersion, dismissedVersion } from '../appUpdate';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { desktopAppOs } from '../externalLinks';
 import { hasWhatsNew } from './WhatsNewSheet';
 import { openWhatsNew } from '../whatsNewSheet';
 
@@ -146,7 +145,7 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
 };
 
 /** "kwant X.Y.Z is ready" across the top of the Mac app. Renders nothing off the Mac app and on
- * phone-sized screens (the update runs on the Mac, so a phone gets the About row only). */
+ * phone-sized screens (the update runs on the Mac, so a phone gets the kwant card in Settings only). */
 export const AppUpdateBanner: React.FC = () => {
   const { model, ctrl } = useAppUpdate();
   const [dismissed, setDismissed] = useState(dismissedVersion);
@@ -181,67 +180,4 @@ export const AppUpdateBanner: React.FC = () => {
       }}
     />
   );
-};
-
-interface AboutProps {
-  model: UpdateModel;
-  onCheck: () => void;
-  onUpdate: () => void;
-}
-
-/** Settings → About: the running version, Check for updates and the latest result. */
-export const AppUpdateAboutView: React.FC<AboutProps> = ({ model, onCheck, onUpdate }) => {
-  const s = model.status;
-  if (model.unsupported || !s) return null;
-  const busy = s.state === 'checking' || s.state === 'downloading' || s.state === 'ready' || model.phase === 'installing' || model.phase === 'restarting';
-  const line = aboutLine(model);
-  const offer = s.available && (s.state === 'available' || s.state === 'error') && model.phase !== 'installing';
-  const failed = !!model.actionError || s.state === 'error';
-  return (
-    <section aria-labelledby="about-title" data-update-about={s.state} className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex-1 min-w-0">
-          <h3 id="about-title" className="flex items-center gap-2 text-xs font-medium text-zinc-300">
-            <Info size={15} className="text-sky-400" aria-hidden="true" />
-            <span>About</span>
-          </h3>
-          <p className="mt-1 text-xs text-zinc-200">
-            kwant bots for {desktopAppOs()} <span className="font-mono text-zinc-300">{s.current || 'unknown version'}</span>
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onCheck}
-          disabled={busy}
-          className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-zinc-700 px-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
-        >
-          {s.state === 'checking' ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <RotateCw size={13} aria-hidden="true" />}
-          Check for updates
-        </button>
-      </div>
-      <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-2 text-[11px]">
-        {line && <span className={failed ? 'text-amber-300' : 'text-zinc-400'}>{line}</span>}
-        {offer && (
-          <button
-            type="button"
-            onClick={onUpdate}
-            className="inline-flex min-h-[28px] items-center gap-1.5 rounded-lg bg-sky-600 px-2.5 text-[11px] font-medium text-white hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
-          >
-            <ArrowUpCircle size={12} aria-hidden="true" />
-            {s.state === 'error' ? 'Try again' : `Update to ${s.available!.version} and restart`}
-          </button>
-        )}
-        {offer && s.state === 'error' && (
-          <a href={s.available!.url} target="_blank" rel="noreferrer" className="text-sky-300 underline-offset-2 hover:underline">
-            Download manually
-          </a>
-        )}
-      </div>
-    </section>
-  );
-};
-
-export const AppUpdateAbout: React.FC = () => {
-  const { model, ctrl } = useAppUpdate();
-  return <AppUpdateAboutView model={model} onCheck={() => void ctrl.check()} onUpdate={() => void ctrl.install()} />;
 };

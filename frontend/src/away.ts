@@ -1,7 +1,7 @@
 // "While you were away" (batch 3): what agents need from you, finished and failed since you last
 // looked. Pure helpers, so the page and the node tests share them; the API calls are at the bottom.
 
-export type AwayKind = 'question' | 'approval' | 'delegation' | 'routine_run' | 'watch';
+export type AwayKind = 'question' | 'approval' | 'delegation' | 'routine_run' | 'watch' | 'connection';
 export type AwaySection = 'waiting' | 'finished' | 'failed';
 export type ApprovalDecision = 'allow_once' | 'always_allow' | 'deny';
 
@@ -28,9 +28,19 @@ export interface AwayItem {
   details?: Record<string, unknown>;
   /** Approvals only: set when the payment floor asked, also on servers that send no details. */
   payment_reason?: string;
+  /**
+   * 0.9.5 part B, approvals only: the card's own question built from what the call names, e.g.
+   * `Approve “Spring sale: 15% off”?`. Absent when the call names nothing; `title` is always sent.
+   */
+  question?: string;
   /** 0.9.0 P1, watch items only: the watched mission and the first task that needs the person. */
   mission_id?: string | null;
   task_id?: string | null;
+  /** 0.9.5, connection items only (Inbox): a sign-in only the person can redo, and its fix button. */
+  connection?: string;
+  /** "sign_in" or "reconnect" (an app to connect again); older servers may leave it out. */
+  cause?: string;
+  fix?: { label: string; opens?: string } | null;
 }
 
 export interface AwayCounts {
@@ -103,7 +113,7 @@ export function windowLabel(since: string, now: number = Date.now()): string {
 export type Tone = 'amber' | 'emerald' | 'rose' | 'sky' | 'zinc';
 
 /** Short label and colour for an item's kind and status. */
-export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: string; tone: Tone } {
+export function itemLabel(item: Pick<AwayItem, 'kind' | 'status' | 'cause'>): { label: string; tone: Tone } {
   switch (item.kind) {
     case 'question':
       return { label: 'Question', tone: 'amber' };
@@ -112,6 +122,9 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: str
       return item.status === 'waiting' ? { label: 'Still open', tone: 'sky' } : { label: 'Needs approval', tone: 'amber' };
     case 'watch':
       return { label: 'Watch', tone: 'amber' };
+    case 'connection':
+      // The chat line's cause: an app to connect again (Composio, no active account), else a sign-in.
+      return item.cause === 'reconnect' ? { label: 'Connect again', tone: 'amber' } : { label: 'Sign in again', tone: 'amber' };
     case 'routine_run':
       return item.status === 'ok' ? { label: 'Routine ran', tone: 'emerald' } : { label: 'Routine failed', tone: 'rose' };
     case 'delegation':

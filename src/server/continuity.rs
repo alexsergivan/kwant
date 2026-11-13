@@ -242,7 +242,8 @@ pub fn offers_browser_sign_in(scope: &SelfScope) -> bool {
 /// A connection card is an extra only when the space's Composio is `ready`. Ends in a newline.
 pub fn browser_sign_in_rule(composio: super::connection_suggest::ComposioReady) -> String {
     let extra = if composio == super::connection_suggest::ComposioReady::Ready {
-        "If the app also has a Composio integration, you may add a `connection_suggest` card as an extra, after the sign-in step."
+        "If the app also has a Composio integration, you may add a `connection_suggest` card as an extra, after the sign-in step. \
+        When a Composio tool gives you a sign-in link, post a `connection_suggest` card instead of pasting the link."
     } else {
         "Composio isn't set up in this space, so don't post a `connection_suggest` card or Composio setup steps for a website you can open in the browser."
     };
@@ -757,7 +758,7 @@ pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope,
         Value::Bool(b) => *b,
         _ => return (text("share must be true or false"), true),
     };
-    let ctrl = match super::routes::open_page(state, target, state.job_pages.wait()).await {
+    let ctrl = match super::routes::open_page_steady(state, target, state.job_pages.wait()).await {
         Ok(ctrl) => ctrl,
         Err(refusal) => return (text(&page_refusal_text(state, refusal)), true),
     };
@@ -832,9 +833,13 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     // This bot drives the browser now, so its site rules are the ones that hold. Its job page
     // opens here (waiting for room when its team's pages are all in use), so the tool below
     // finds it open
-    match super::routes::open_page(state, target, state.job_pages.wait()).await {
+    // A browser that doesn't answer is retried here for up to a minute (VM mode), so the tool
+    // below doesn't wait all over again
+    match super::routes::open_page_steady(state, target, state.job_pages.wait()).await {
         Ok(ctrl) => ctrl.site_guard.set_driver(&scope.kwant_id),
-        Err(refusal @ super::routes::PageRefusal::PagesFull) => return (page_refusal_text(state, refusal), true),
+        Err(refusal @ (super::routes::PageRefusal::PagesFull | super::routes::PageRefusal::Busy)) => {
+            return (page_refusal_text(state, refusal), true)
+        }
         Err(super::routes::PageRefusal::Unavailable) => {}
     }
     let (text, is_error) = run_browser_tool(state, target, &reader, name, args).await;
@@ -876,6 +881,7 @@ fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> S
     match refusal {
         super::routes::PageRefusal::PagesFull => super::browser_pages::pages_full_message(),
         super::routes::PageRefusal::Unavailable => state.browser_service.unavailable_reason(),
+        super::routes::PageRefusal::Busy => crate::sandbox::service::BROWSER_BUSY.to_string(),
     }
 }
 
@@ -1710,7 +1716,7 @@ pub fn effective_kinds(saved: &[String], known: &[String]) -> Vec<String> {
 /// Kinds this server can't raise, so its settings page doesn't offer them: the web app leaves
 /// them out of a save, which must not read as the person turning them off.
 fn unavailable_kinds(state: &AppState) -> Vec<&'static str> {
-    if state.app_update.status().supported {
+    if state.app_update.status().can_install {
         Vec::new()
     } else {
         vec!["app_update"]
@@ -2254,6 +2260,7 @@ mod tests {
         }
         // A connection card is only an extra, and only when Composio can start a sign-in
         assert!(browser_sign_in_rule(ComposioReady::Ready).contains("may add a `connection_suggest` card as an extra, after the sign-in step"));
+        assert!(browser_sign_in_rule(ComposioReady::Ready).contains("instead of pasting the link"));
         for ready in [ComposioReady::NotAdded, ComposioReady::NeedsKey, ComposioReady::Off] {
             let rule = browser_sign_in_rule(ready);
             assert!(rule.contains("don't post a `connection_suggest` card or Composio setup steps"), "{rule}");

@@ -1,0 +1,39 @@
+{
+  "version": "0.9.5",
+  "date": "2026-11-13",
+  "highlights": [
+    {
+      "id": "apps-accounts",
+      "title": "Apps and AI accounts on one page",
+      "text": "Connections, Tools and Accounts are now Apps & accounts. Connect an app in 3 steps: open Composio, paste your link, pick the bots that may use it.",
+      "image": null,
+      "open": "settings/apps"
+    },
+    {
+      "id": "bot-budgets",
+      "title": "A monthly budget for each bot",
+      "text": "Set a token or dollar limit in a bot's settings under Usage. At 80% you get a heads-up; at 100% the bot pauses until you raise the limit or continue this month.",
+      "image": null,
+      "open": "settings/app"
+    },
+    {
+      "id": "tool-failure-line",
+      "title": "One line when a connection stops working",
+      "text": "When a bot's app or server fails, its chat says which one and why, with Reconnect when only you can fix it. The line says when it works again.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "browser-recovery",
+      "title": "The team browser recovers when it's busy",
+      "text": "Idle pages pause and free memory. When the browser is busy, kwant tries again for up to 45 seconds and tells the bot to retry, instead of a Docker error.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Dev mode has no daily cap of 30 model calls. Cards the old cap stopped are written again.",
+    "Fix it and line notes on a PR a person wrote go to the lead of the team that owns the repo.",
+    "A bot that needs you to connect an app posts a card instead of a sign-in link."
+  ]
+}

@@ -7,7 +7,7 @@
 //! wait behind a bot's command.
 use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit};
 use super::point;
-use super::{routes::get_or_create_browser_controller, AppState};
+use super::{routes::PageRefusal, AppState};
 use super::show_once::{capture as recorder, stage::{Act, StageRecorder}};
 use crate::sandbox::app_links::{self, AppLinkWatch, Verdict};
 use crate::sandbox::browser::{web_address, BrowserController, BrowserError, HeldPointer, PersonLease, ViewClaim, ViewRelease, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
@@ -1216,8 +1216,10 @@ pub async fn upgrade(
         None => super::browser_pages::live_page(&state, &id).await,
     };
     Ok(ws.max_message_size(32 * 1024).on_upgrade(move |socket| async move {
-        let result = serve(socket, state, id).await;
+        let result = serve(socket, state.clone(), id.clone()).await;
         if let Err(error) = result { tracing::debug!("Browser stream ended: {}", error); }
+        // the page's idle time counts from when the person stopped watching it
+        if state.browser_service.page_used_at(&id).is_some() { state.browser_service.touch_page(&id); }
     }))
 }
 
@@ -1278,13 +1280,24 @@ async fn back_from_closed_page(ctrl: &BrowserController, cdp: &Cdp, page: &mut P
 }
 
 async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(), BrowserError> {
-    let ctrl = match get_or_create_browser_controller(&state, &id).await {
-        Some(ctrl) => ctrl,
-        None => {
-            let _ = socket.send(Message::Text(json!({"type":"error","error":"Browser service unavailable. Check Docker or KWNT_BROWSER_CDP_URL."}).to_string())).await;
+    let ctrl = match super::routes::open_page(&state, &id, Duration::ZERO).await {
+        Ok(ctrl) => ctrl,
+        Err(refusal) => {
+            // The view closes after this, and the app reconnects with backoff: a busy browser
+            // says so and is tried again; the Docker advice is only for one that isn't there
+            let error = match refusal {
+                PageRefusal::Busy => crate::sandbox::service::BROWSER_RECONNECTING.to_string(),
+                PageRefusal::PagesFull => super::browser_pages::pages_full_message(),
+                PageRefusal::Unavailable => crate::sandbox::service::BROWSER_UNREACHABLE_VIEW.to_string(),
+            };
+            let _ = socket.send(Message::Text(json!({"type":"error","error":error}).to_string())).await;
             return Ok(());
         }
     };
+    // a watched page is never put to rest; one put to rest before is woken for the view, which
+    // talks to it on a connection of its own
+    let _watching = ctrl.watch();
+    let _woken = ctrl.wake().await;
     // subscribed first, so a popup opening while this connects is still followed
     let changes = ctrl.page_changes();
     let ws_url = ctrl.get_ws_url().await?;

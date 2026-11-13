@@ -6,6 +6,8 @@
 //!   (the last marker counts, and each marker runs once: later turns see it again in history).
 //! - `REPLYTAG:<tag>`: reply "answer <tag>" (after any tool call).
 //! - `REPLYTEXT:<base64 text>`: reply exactly that text (say, a markdown table), and nothing else.
+//! - `REPLYSEQ:<tag>`: reply the test's planned answers in turn: the files `seq-<tag>-1`, `seq-<tag>-2`, …
+//!   next to the prompts folder ([`plan_replies`]); the last one repeats.
 //! - `QUOTAONCE:<tag>` / `QUOTAALWAYS`: fail with Claude's usage-limit error, once / every time;
 //!   it resets in 2 s, or in `QUOTARESET:<secs>`.
 //! - A no-tools turn (`--tools ""`) first prints claude's init line with no tools.
@@ -16,6 +18,8 @@
 //!   500 test stub" as claude's error result / as plain text, once per tag.
 //! - `FAILSTEP:<tag>` / `BLOCKSTEP:<tag>` in the current request (not the history): run a Bash
 //!   tool step that fails, then end on a plan ("I'll retry the render…") / on a `Blocked:` line.
+//! - `STREAMLINES:<base64 text>`: print that text (claude `stream-json` lines: an init line, tool
+//!   calls and their results) before the reply; once per marker.
 //!
 //! Each test file that uses it is its own binary, because it changes PATH.
 #![allow(dead_code)]
@@ -109,6 +113,26 @@ if fs:
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 2,
         "result": "The render command was refused (" + tag + ").\n\n" + end}))
     sys.exit(0)
+# STREAMLINES:<base64>: print those stream-json lines first (tool calls and results), once per marker
+sl = re.findall(r"STREAMLINES:([A-Za-z0-9+/=]+)", prompt)
+if sl:
+    import hashlib
+    sl_flag = os.path.join(os.path.dirname(out_dir), "streamed-" + hashlib.sha1(sl[-1].encode()).hexdigest())
+    if not os.path.exists(sl_flag):
+        open(sl_flag, "w").close()
+        sys.stdout.write(base64.b64decode(sl[-1]).decode())
+        sys.stdout.flush()
+# REPLYSEQ:<tag>: the next planned answer, seq-<tag>-1, seq-<tag>-2, ... (the last one repeats)
+sq = re.findall(r"REPLYSEQ:([A-Za-z0-9_]+)", prompt)
+if sq:
+    base = os.path.join(os.path.dirname(out_dir), "seq-" + sq[-1])
+    n = 1
+    while os.path.exists("%s-%d.used" % (base, n)) and os.path.exists("%s-%d" % (base, n + 1)):
+        n += 1
+    open("%s-%d.used" % (base, n), "w").close()
+    print(json.dumps({"type": "result", "is_error": False, "num_turns": 1,
+        "result": open("%s-%d" % (base, n)).read()}))
+    sys.exit(0)
 # REPLYTEXT:<base64>: reply exactly that text
 rt = re.findall(r"REPLYTEXT:([A-Za-z0-9+/=]+)", prompt)
 if rt:
@@ -170,6 +194,15 @@ pub fn prompts_dir() -> &'static PathBuf {
     })
 }
 
+/// Plans the fake CLI's answers to prompts with `REPLYSEQ:<tag>`: the first call gets `answers[0]`,
+/// the next `answers[1]`, and so on; the last one repeats.
+pub fn plan_replies(tag: &str, answers: &[&str]) {
+    let root = prompts_dir().parent().unwrap();
+    for (i, a) in answers.iter().enumerate() {
+        std::fs::write(root.join(format!("seq-{tag}-{}", i + 1)), a).unwrap();
+    }
+}
+
 /// Every CLI invocation (all its arguments, one per line) whose text contains `marker`.
 pub fn invocations_with(marker: &str) -> Vec<String> {
     std::fs::read_dir(prompts_dir())
@@ -183,6 +216,13 @@ pub fn invocations_with(marker: &str) -> Vec<String> {
 pub fn call_tool_marker(tool: &str, args: Value) -> String {
     use base64::Engine;
     format!("CALLTOOL:{tool}:{}", base64::engine::general_purpose::STANDARD.encode(args.to_string()))
+}
+
+/// A prompt marker that makes the fake CLI print these `stream-json` lines before its reply.
+pub fn stream_lines_marker(lines: &[Value]) -> String {
+    use base64::Engine;
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    format!("STREAMLINES:{}", base64::engine::general_purpose::STANDARD.encode(text))
 }
 
 pub async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {

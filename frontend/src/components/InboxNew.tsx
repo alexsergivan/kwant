@@ -16,6 +16,7 @@ import {
   List,
   Loader2,
   MinusCircle,
+  Plug,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
@@ -25,9 +26,12 @@ import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard } from './ModernApprovalCard';
 import { ReviewDone, VERDICT_STYLE } from './ReviewItemStub';
 import { ReviewItemView } from './ReviewItemView';
+import { type DoneApi, type DoneDetailData, type MessageTarget, DoneChips, DoneItemView, DoneSections, defaultDoneApi, useDoneDetail } from './DoneDetail';
+import { DONE_EMPTY, DONE_FOOTER, changedState, doneTitle, isDoneGroup, isRoutineItem, isUnread, metaLine, rowKicker, sectionItems, teamSize, unreadLine } from '../doneAway';
+import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, windowLabel } from '../away';
-import { INBOX_GROUPS, InboxGroup, InboxItem, ReviewItem, groupItems, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
+import { InboxGroup, InboxItem, ReviewItem, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
 import {
   BatchRow,
   Crumb,
@@ -67,6 +71,33 @@ export function useWide(): boolean {
 
 const CRUMB_LABEL: Record<'board' | 'dev', string> = { board: 'Mission board', dev: 'Dev desk' };
 
+/** 0.9.5 F: the queue's two sections (Mira's mockup 2). Rows keep their own group's tint. */
+const SECTION: Record<
+  'needs' | 'done',
+  {
+    label: string;
+    short: string;
+    head: string;
+    icon: React.ReactNode;
+    empty: string;
+  }
+> = {
+  needs: {
+    label: 'Needs you',
+    short: 'Needs you',
+    head: 'text-amber-300',
+    icon: <Hand size={13} aria-hidden="true" />,
+    empty: 'Nothing needs you right now.',
+  },
+  done: {
+    label: 'Done while you were away',
+    short: 'Done',
+    head: 'text-teal-300',
+    icon: <CheckCircle2 size={13} aria-hidden="true" />,
+    empty: DONE_EMPTY,
+  },
+};
+
 const GROUP_STYLE: Record<InboxGroup, { head: string; icon: React.ReactNode; row: string }> = {
   waiting_on_you: { head: 'text-amber-300', icon: <Hand size={13} aria-hidden="true" />, row: 'border-amber-500/30 bg-amber-950/20' },
   failed_or_stuck: { head: 'text-rose-300', icon: <AlertTriangle size={13} aria-hidden="true" />, row: 'border-rose-500/25 bg-rose-950/20' },
@@ -87,11 +118,21 @@ export function clock(ts: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** A row's title: an approve that came back says so. */
+/**
+ * A row's title: an approve that came back says so. An approval shows its own question when the
+ * server sent one (0.9.5 part B), else the card's action in words; `title` is always present, so
+ * it is never the test.
+ */
 export function rowTitle(i: InboxItem): string {
   if (isReview(i) && (i.stale || i.approve_error)) return `Couldn’t approve: ${i.title}`;
+  if (isDoneGroup(i.group) && isRoutineItem(i)) return doneTitle(i);
+  if (i.kind === 'approval' && typeof i.question === 'string' && i.question.trim()) return i.question;
   return isReview(i) ? i.title : awayTitle(i as AwayItem);
 }
+
+/** 0.9.5 F: a finished item that opens in the pane (what ran, the answer, the trail) instead of its chat. */
+export const opensInPane = (i: InboxItem | null | undefined): boolean =>
+  !!i && (isReview(i) || i.kind === 'team_job' || (i.group === 'finished' && (i.kind === 'routine_run' || i.kind === 'delegation')));
 
 export function staleLine(paths: string[]): string {
   if (!paths.length) return 'Its files changed after its check';
@@ -146,10 +187,18 @@ const AwaySubline: React.FC<{ item: InboxItem }> = ({ item }) => {
   const toneText = tone === 'amber' ? 'text-amber-300' : tone === 'rose' ? 'text-rose-300' : tone === 'emerald' ? 'text-teal-300' : tone === 'sky' ? 'text-sky-300' : 'text-zinc-400';
   const sum = awaySummary(item as AwayItem);
   const showSum = sum && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length);
+  // F6: an approval titled with its own question still says what the bot wants to use: "Needs approval · use gmail".
+  const asked = item.kind === 'approval' && typeof item.question === 'string' && !!item.question.trim();
+  const use = asked ? awayTitle(item as AwayItem) : '';
   return (
     <span className="flex items-center gap-1.5 min-w-0">
       <span className={`shrink-0 font-semibold ${toneText}`}>{label}</span>
       {showSum && <span className="min-w-0 truncate text-zinc-400">{sum}</span>}
+      {use && (
+        <span className="min-w-0 truncate text-zinc-400" data-approval-use>
+          · {use.charAt(0).toLowerCase() + use.slice(1)}
+        </span>
+      )}
     </span>
   );
 };
@@ -163,9 +212,15 @@ interface RowProps {
   onPick: (i: InboxItem) => void;
   onAnswer: (i: InboxItem, choice: number) => void;
   onResolve: (i: InboxItem, d: ApprovalDecision) => void;
+  /** A routine's review task in Done: its run's first line, as the run's own row would show it. */
+  doneSummary?: string | null;
+  /** The conversation it happened in ("@Spring launch"), said before the bot's name like the mockup. */
+  place?: string | null;
+  /** 0.9.5: a connection row's Reconnect opens Settings › Connections. */
+  onOpenConnections?: () => void;
 }
 
-const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve }) => {
+const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, doneSummary, place, onOpenConnections }) => {
   const review = isReview(item) ? item : null;
   const title = rowTitle(item);
   // The server decides one_tap; an item with no verdict (Not checked yet, Being checked) never gets inline Approve.
@@ -173,6 +228,11 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
   const stale = !!review?.stale;
   const disabled = busy !== null;
   const tint = selected ? 'border-violet-400/70 bg-violet-500/10' : GROUP_STYLE[item.group].row;
+  const kicker = (isDoneGroup(item.group) ? rowKicker(item) : null) ?? place ?? null;
+  // A team job names the team's size where a row names its bot: "@Spring launch · 3 bots" (Needs B 2).
+  const who = (item.kind === 'team_job' ? teamSize(item) : null) ?? item.kwant_name;
+  const unread = isUnread(item);
+  const doneRow = !review && isDoneGroup(item.group) && opensInPane(item);
   return (
     <li role="presentation" className={`relative rounded-xl border transition-colors ${tint}`} data-row={item.id} data-group={item.group}>
       <div
@@ -182,6 +242,7 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
         tabIndex={focusable ? 0 : -1}
         data-option={item.id}
         data-review={review ? '' : undefined}
+        data-done={doneRow ? '' : undefined}
         onClick={() => onPick(item)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -194,13 +255,40 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
         <ModernAvatar role={item.kwant_name} name={item.kwant_name} size={30} kwantId={item.kwant_id} />
         <span className="flex-1 min-w-0">
           <span className="flex items-center gap-2 text-[11px]">
-            <span className="font-semibold text-zinc-300 truncate">{item.kwant_name}</span>
-            <time dateTime={item.timestamp} className="ml-auto shrink-0 tabular-nums text-zinc-400">
+            <span className="font-semibold text-zinc-300 truncate">
+              {kicker && (
+                <span className="font-normal text-zinc-400" data-kicker>
+                  {kicker} ·{' '}
+                </span>
+              )}
+              {who}
+            </span>
+            {unread && (
+              <span className="ml-auto shrink-0 inline-flex items-center" data-unread>
+                <span className="block w-2 h-2 rounded-full bg-violet-400" aria-hidden="true" />
+                <span className="sr-only">New</span>
+              </span>
+            )}
+            <time dateTime={item.timestamp} className={`${unread ? '' : 'ml-auto '}shrink-0 tabular-nums text-zinc-400`}>
               {clock(item.timestamp)}
             </time>
           </span>
           <span className="block mt-0.5 text-sm font-semibold text-zinc-100 break-words max-md:line-clamp-3 md:truncate">{title}</span>
-          <span className="block mt-1 text-xs">{review ? <ReviewSubline item={review} /> : <AwaySubline item={item} />}</span>
+          <span className="block mt-1 text-xs">
+            {review && doneSummary ? (
+              <span className="block text-zinc-400 max-md:line-clamp-2 md:truncate" data-done-summary>
+                {doneSummary}
+              </span>
+            ) : review ? (
+              <ReviewSubline item={review} />
+            ) : doneRow && item.summary ? (
+              <span className="block text-zinc-400 max-md:line-clamp-2 md:truncate" data-done-summary>
+                {item.summary}
+              </span>
+            ) : (
+              <AwaySubline item={item} />
+            )}
+          </span>
         </span>
       </div>
 
@@ -246,6 +334,15 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
       {item.kind === 'approval' && (
         <div className="px-3 pb-1 pl-[54px] [&>div]:my-0 [&>div]:mb-2">
           <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} onResolve={(_, d) => onResolve(item, d)} />
+        </div>
+      )}
+
+      {item.kind === 'connection' && onOpenConnections && (
+        <div className="px-3 pb-3 pl-[54px]">
+          <button type="button" onClick={onOpenConnections} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-reconnect={item.id}>
+            <Plug size={12} aria-hidden="true" />
+            {item.fix?.label || 'Reconnect'}
+          </button>
         </div>
       )}
 
@@ -467,7 +564,7 @@ export const BatchPane: React.FC<{ wide: boolean; onOpenItem: (id: string) => vo
 };
 
 const EmptyQueue: React.FC = () => (
-  <div className="py-16 flex flex-col items-center text-center gap-2" data-all-clear>
+  <div className="py-16 flex flex-col items-center text-center gap-2 [[data-needs-you]~&]:hidden" data-all-clear>
     <CheckCircle2 size={30} className="text-teal-300" aria-hidden="true" />
     <p className="text-sm font-semibold text-zinc-100">You’re all caught up</p>
     <p className="text-xs text-zinc-400 max-w-xs">Nothing waits on you and nothing is left to review. Questions, approvals and finished work will show up here.</p>
@@ -482,6 +579,68 @@ const Skeleton: React.FC = () => (
   </ul>
 );
 
+// ---------- The item pane ----------
+
+/**
+ * A review opens in ReviewItemView. A routine's review task in Done gets the done layout inside it (meta line,
+ * chips, answer, trail, Why above Looks good and Ask to redo); a finished item with no review task opens in
+ * DoneItemView.
+ */
+const ItemPane: React.FC<{
+  item: InboxItem;
+  runItem: InboxItem | null;
+  entry: Exclude<Crumb, null> | 'inbox';
+  onDone: (r: ReviewDone) => void;
+  onHeldResolved: (approvalId: string, status: 'allowed' | 'denied' | 'expired') => void;
+  onOpenItemChat: (i: InboxItem) => void;
+  onOpenMessage?: (t: MessageTarget) => void;
+  onEditRoutine?: (routineId: string) => void;
+  placeName?: (channelId: string | null) => string | null;
+  api?: DoneApi;
+  initial?: DoneDetailData;
+}> = ({ item, runItem, entry, onDone, onHeldResolved, onOpenItemChat, onOpenMessage, onEditRoutine, placeName, api, initial }) => {
+  const phone = usePhoneLayout();
+  const d = useDoneDetail(item, runItem, api ?? defaultDoneApi, initial);
+  const doneLayout = isDoneGroup(item.group) && (!isReview(item) || isRoutineItem(item));
+  if (isReview(item) && !doneLayout) return <ReviewItemView item={item} entry={entry} onDone={onDone} onHeldResolved={onHeldResolved} />;
+  const target = d.target ?? servedTarget(item);
+  const openChat = () => (target && onOpenMessage ? onOpenMessage(target) : onOpenItemChat(runItem ?? item));
+  // Part B's result_link names where the answer is when the routine isn't loaded (and for team jobs).
+  const placeId = d.routine?.channel_id ?? item.result_link?.channel_id ?? null;
+  const place = placeId ? (placeName?.(placeId) ?? null) : null;
+  const routineId = d.routine?.id;
+  const edit = onEditRoutine && routineId ? () => onEditRoutine(routineId) : undefined;
+  if (!isReview(item)) return <DoneItemView item={item} d={d} place={place} phone={phone} onOpenChat={openChat} onEditRoutine={onEditRoutine} />;
+  return (
+    <ReviewItemView
+      item={item}
+      entry={entry}
+      onDone={onDone}
+      onHeldResolved={onHeldResolved}
+      done={{
+        title: doneTitle(item),
+        meta: metaLine(item, d.routine, d.run),
+        chips: <DoneChips item={item} d={d} onAddCheck={edit} />,
+        body: <DoneSections item={item} d={d} place={place} onOpenChat={openChat} onEditRoutine={onEditRoutine} />,
+        changed: changedState(item, d.message),
+      }}
+    />
+  );
+};
+
+/** Part B: where the answer is, from the item's own result fields, when the pane loaded no routine run. */
+export function servedTarget(item: InboxItem): MessageTarget | null {
+  const id = item.result_message_id;
+  if (typeof id !== 'string' || !id) return null;
+  const l = item.result_link;
+  return {
+    message_id: id,
+    channel_id: l?.channel_id ?? null,
+    kwant_id: l?.direct_kwant_id ?? item.kwant_id,
+    thread_id: l?.thread_id ?? item.result_thread_id ?? null,
+  };
+}
+
 // ---------- Page ----------
 
 export interface InboxNewProps {
@@ -492,6 +651,8 @@ export interface InboxNewProps {
   onApprovalResolved?: (id: string) => void;
   /** Phone: back to the chat list. */
   onBack?: () => void;
+  /** 0.9.5: a connection row's Reconnect opens Settings › Connections. */
+  onOpenConnections?: () => void;
   /** The back crumb: return to the page the item was opened from. */
   onCrumb?: (c: Exclude<Crumb, null>) => void;
   top?: React.ReactNode;
@@ -500,6 +661,16 @@ export interface InboxNewProps {
   noLoad?: boolean;
   /** Tests: force the layout. */
   wide?: boolean;
+  /** 0.9.5 F: Open in chat at the answer itself; without it, the item's chat opens. */
+  onOpenMessage?: (t: MessageTarget) => void;
+  /** Edit routine / Add one: open the routine in Routines. */
+  onEditRoutine?: (routineId: string) => void;
+  /** A channel's name for "Wrote the answer in …" (null: the bot's direct chat). */
+  placeName?: (channelId: string | null) => string | null;
+  /** Tests: where a done item's routine, run and answer come from. */
+  doneApi?: DoneApi;
+  /** Tests and screenshots: a done item's details by item id, instead of loading them. */
+  doneDetails?: Record<string, DoneDetailData>;
 }
 
 /** Writes `?item=` for the open item; the Shell sets the path first, so this waits a tick. */
@@ -515,7 +686,23 @@ function writeItemParam(id: string | null) {
   }, 0);
 }
 
-export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApprovalResolved, onBack, onCrumb, top, now = Date.now(), noLoad = false, wide: forceWide }) => {
+export const InboxNew: React.FC<InboxNewProps> = ({
+  onOpen,
+  onCounts,
+  onApprovalResolved,
+  onBack,
+  onOpenConnections,
+  onCrumb,
+  top,
+  now = Date.now(),
+  noLoad = false,
+  wide: forceWide,
+  onOpenMessage,
+  onEditRoutine,
+  placeName,
+  doneApi,
+  doneDetails,
+}) => {
   const st = useInbox();
   const mqWide = useWide();
   const wide = forceWide ?? mqWide;
@@ -550,19 +737,25 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
     if (st.pendingKey && data) resolvePending();
   }, [st.pendingKey, data]);
 
-  const groups = data ? groupItems(data) : null;
+  const sections = data ? sectionItems(data) : null;
   const bItems = batchItems(data);
   const showBatch = !!data?.batch && (bItems.length >= 2 || !!st.batch?.running);
-  const selectable = data ? [...data.items.filter(isReview).map((i) => i.id), ...(showBatch ? ['batch'] : [])] : [];
-  const selItem = selectedId && selectedId !== 'batch' ? data?.items.find((i) => i.id === selectedId) ?? bItems.find((i) => i.id === selectedId) ?? null : null;
-  const selValid = selectedId === 'batch' ? showBatch || !!st.batch : !!selItem && isReview(selItem);
+  const folded = new Set(Object.values(sections?.runFor ?? {}).map((r) => r.id));
+  const selectable = data ? [...data.items.filter((i) => opensInPane(i) && !folded.has(i.id)).map((i) => i.id), ...(showBatch ? ['batch'] : [])] : [];
+  const selItem =
+    selectedId && selectedId !== 'batch' ? (data?.items.find((i) => i.id === selectedId) ?? bItems.find((i) => i.id === selectedId) ?? null) : null;
+  const selValid = selectedId === 'batch' ? showBatch || !!st.batch : !!selItem && opensInPane(selItem);
 
   // Desktop: something is always open. The first item (in queue order) on load, the next one after.
   useEffect(() => {
     if (!wide || !data || st.pendingKey) return;
     if (selValid) return;
-    const first = data.items.find(isReview)?.id ?? (showBatch ? 'batch' : null);
+    // Needs you first, then Done: the first item that opens here, in the order the queue draws them.
+    const order = sections ? [...sections.needs, ...sections.done] : data.items;
+    const first = order.find((i) => opensInPane(i) && !folded.has(i.id))?.id ?? (showBatch ? 'batch' : null);
     if (first !== selectedId) select(first);
+    // sections and folded come from data
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wide, data, selValid, selectedId, showBatch, st.pendingKey]);
 
   // The address carries the open item, so a reload or a shared link opens it again.
@@ -572,7 +765,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
 
   const pick = useCallback(
     (i: InboxItem) => {
-      if (isReview(i)) {
+      if (opensInPane(i)) {
         select(i.id);
         setCrumb(null);
         return;
@@ -631,7 +824,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
     if (!next) return;
     next.focus();
     const id = next.dataset.option!;
-    if (wide && (id === 'batch' || next.dataset.review !== undefined)) select(id);
+    if (wide && (id === 'batch' || next.dataset.review !== undefined || next.dataset.done !== undefined)) select(id);
   };
 
   const onDone = (r: ReviewDone) => {
@@ -648,7 +841,8 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
     void loadInbox();
   };
 
-  const firstFocusable = selectable.includes(selectedId ?? '') ? selectedId : data?.items[0]?.id ?? (showBatch ? 'batch' : null);
+  const firstRow = sections ? [...sections.needs, ...sections.done][0]?.id : undefined;
+  const firstFocusable = selectable.includes(selectedId ?? '') ? selectedId : (firstRow ?? (showBatch ? 'batch' : null));
   const empty = !!data && data.items.length === 0 && !showBatch;
   const header = (
     <div className={`h-14 shrink-0 border-b border-zinc-800/80 ${onBack && !wide ? 'px-2' : 'px-4'} flex items-center justify-between gap-3 select-none`}>
@@ -659,7 +853,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
       )}
       <div className="min-w-0 flex-1">
         <h2 className="text-sm font-semibold text-zinc-100 truncate">Inbox</h2>
-        <p className="text-[11px] text-zinc-400 truncate mt-0.5">{data ? windowLabel(data.since, now) : 'What your bots need, finished and failed'}</p>
+        <p className="text-[11px] text-zinc-400 truncate mt-0.5">{data ? (unreadLine(data, now) ?? windowLabel(data.since, now)) : 'What your bots need, finished and failed'}</p>
       </div>
       <button
         type="button"
@@ -702,44 +896,67 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
         {status}
         {!data && loading && <Skeleton />}
         {empty && <EmptyQueue />}
-        {data && !empty && groups && (
-          <div ref={listRef} role="listbox" aria-label="Inbox" aria-activedescendant={undefined} onKeyDown={onListKey} className={`space-y-5 ${error ? 'opacity-50' : ''}`}>
-            {INBOX_GROUPS.map(({ key, label, hint, empty: none }) => {
-              const rows = groups[key];
-              const withBatch = key === 'to_review' && showBatch;
+        {data && !empty && sections && (
+          <div
+            ref={listRef}
+            role="listbox"
+            aria-label="Inbox"
+            aria-activedescendant={undefined}
+            onKeyDown={onListKey}
+            className={`space-y-5 ${error ? 'opacity-50' : ''}`}
+          >
+            {(['needs', 'done'] as const).map((key) => {
+              const rows = sections[key];
+              const reviewsEnd = key === 'done' ? rows.filter((i) => i.group === 'to_review').length : 0;
+              const withBatch = key === 'done' && showBatch;
               const count = rows.length;
-              const g = GROUP_STYLE[key];
+              const sec = SECTION[key];
+              const row = (i: InboxItem) => (
+                <QueueRow
+                  key={`${i.kind}:${i.id}`}
+                  item={i}
+                  selected={selectedId === i.id && opensInPane(i)}
+                  focusable={firstFocusable === i.id}
+                  wide={wide}
+                  busy={busy}
+                  onPick={pick}
+                  onAnswer={onAnswer}
+                  onResolve={onResolve}
+                  doneSummary={sections.runFor[i.id]?.summary || null}
+                  place={i.link?.channel_id ? (placeName?.(i.link.channel_id) ?? null) : null}
+                  onOpenConnections={onOpenConnections}
+                />
+              );
               return (
                 <div key={key} role="group" aria-labelledby={`inbox-${key}`} data-section={key}>
                   <h3 id={`inbox-${key}`} className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider">
-                    <span className={`inline-flex items-center gap-1.5 ${g.head}`}>
-                      {g.icon}
-                      {label}
-                    </span>
-                    <span className="normal-case tracking-normal font-normal text-zinc-400">
-                      {count}
-                      {wide && count > 1 && <span data-inbox-hint={key}> · {hint}</span>}
-                    </span>
+                    <span className={`inline-flex items-center gap-1.5 ${sec.head}`}>
+                      {sec.icon}
+                      {sec.label}
+                    </span>{' '}
+                    <span className="normal-case tracking-normal font-normal text-zinc-400">· {count}</span>
                   </h3>
                   {count > 0 || withBatch ? (
                     <ul role="presentation" className="space-y-2">
-                      {rows.map((i) => (
-                        <QueueRow
-                          key={`${i.kind}:${i.id}`}
-                          item={i}
-                          selected={selectedId === i.id && isReview(i)}
-                          focusable={firstFocusable === i.id}
+                      {rows.slice(0, key === 'done' ? reviewsEnd : rows.length).map(row)}
+                      {withBatch && (
+                        <BatchCard
+                          items={bItems}
+                          selected={wide && selectedId === 'batch'}
+                          focusable={firstFocusable === 'batch'}
                           wide={wide}
-                          busy={busy}
-                          onPick={pick}
-                          onAnswer={onAnswer}
-                          onResolve={onResolve}
+                          onPick={() => select('batch')}
                         />
-                      ))}
-                      {withBatch && <BatchCard items={bItems} selected={wide && selectedId === 'batch'} focusable={firstFocusable === 'batch'} wide={wide} onPick={() => select('batch')} />}
+                      )}
+                      {key === 'done' && rows.slice(reviewsEnd).map(row)}
                     </ul>
                   ) : (
-                    <p className="px-1 text-xs text-zinc-400">{none}</p>
+                    <p className="px-1 text-xs text-zinc-400">{sec.empty}</p>
+                  )}
+                  {key === 'done' && count > 0 && (
+                    <p className="mt-3 px-1 text-xs text-zinc-400" data-done-footer>
+                      {DONE_FOOTER}
+                    </p>
                   )}
                 </div>
               );
@@ -772,8 +989,21 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
   const paneBody =
     selectedId === 'batch' && selValid ? (
       <BatchPane wide={wide} onOpenItem={openFromBatch} />
-    ) : selItem && isReview(selItem) ? (
-      <ReviewItemView item={selItem} entry={crumb ?? 'inbox'} onDone={onDone} onHeldResolved={(approvalId, status) => markHeld(selItem.id, approvalId, status)} />
+    ) : selItem && opensInPane(selItem) ? (
+      <ItemPane
+        key={selItem.id}
+        item={selItem}
+        runItem={sections?.runFor[selItem.id] ?? null}
+        entry={crumb ?? 'inbox'}
+        onDone={onDone}
+        onHeldResolved={(approvalId, status) => markHeld(selItem.id, approvalId, status)}
+        onOpenItemChat={(i) => onOpen(i as AwayItem)}
+        onOpenMessage={onOpenMessage}
+        onEditRoutine={onEditRoutine}
+        placeName={placeName}
+        api={doneApi}
+        initial={doneDetails?.[selItem.id]}
+      />
     ) : empty ? (
       <div className="h-full grid place-items-center text-center" data-pane-empty>
         <div className="space-y-1.5">
@@ -805,6 +1035,15 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
 
   // Phone and narrow windows: the queue, or the open item as a full page.
   const open = selValid && selectedId && (selectedId === 'batch' || selItem);
+  const position = (() => {
+    if (!sections || !selItem || crumb) return null;
+    for (const key of ['needs', 'done'] as const) {
+      const rows = sections[key].filter((i) => opensInPane(i));
+      const at = rows.findIndex((i) => i.id === selItem.id);
+      if (at >= 0) return `${SECTION[key].short} · ${at + 1} of ${rows.length}`;
+    }
+    return null;
+  })();
   if (open) {
     const back = () => {
       if (crumb) {
@@ -819,6 +1058,11 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
           <button type="button" onClick={back} className="kw-focus inline-flex items-center gap-1 min-h-[44px] px-2 rounded-lg text-sm text-zinc-200 hover:bg-zinc-800" data-item-back>
             <ChevronLeft size={18} aria-hidden="true" /> {crumb ? CRUMB_LABEL[crumb] : 'Inbox'}
           </button>
+          {position && (
+            <span className="ml-auto pr-2 text-xs text-zinc-400 tabular-nums" data-item-position>
+              {position}
+            </span>
+          )}
         </div>
         <div role="region" aria-label={paneLabel} className="flex-1 overflow-y-auto px-4 pt-4 flex flex-col" data-item-pane>
           <div className="flex-1 flex flex-col pb-4">

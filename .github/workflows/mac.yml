@@ -91,8 +91,10 @@ jobs:
     # runs on PRs and manual runs (version skipped), and on tags only after the version check passed
     if: ${{ !failure() && !cancelled() }}
     runs-on: macos-15
-    # the build step alone has taken 21-30 min (0.6.6's tag build: 29 min; #268's first run hit 30)
-    timeout-minutes: 75
+    # the build step alone has taken 21-30 min (0.6.6's tag build: 29 min; #268's first run hit 30),
+    # and 38-42 min by Nov 12-13 (0.9.4's tag build: 41 min), when 3 of 6 runs hit its 45-min cap,
+    # 0.9.5's tag build among them. windows-release.yml waits 120 min for this release.
+    timeout-minutes: 105
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -139,7 +141,7 @@ jobs:
         run: python3 -c 'import json; print(json.load(open("apps/mac/tauri.conf.json"))["plugins"]["updater"]["pubkey"])' > "$RUNNER_TEMP/updater.pub"
       - name: Build the universal app and .dmg
         working-directory: apps/mac
-        timeout-minutes: 45
+        timeout-minutes: 65
         env:
           # Tauri skips the Finder AppleScript that lays out the install window (background,
           # icon positions, hidden files moved out of view) when CI=true; run it anyway

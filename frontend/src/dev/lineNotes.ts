@@ -348,7 +348,7 @@ export const TOO_MANY = 'Up to 20 notes per send';
 export const LOAD_FAILED = 'Couldn’t load the changes.';
 export const NO_DIFF = 'No changes to show: GitHub sent no diff for these files.';
 export const notBotLine = (login: string | null) =>
-  `Notes go to bots in this space. This PR is by ${login ?? 'someone outside this space'}, so there’s nothing to send them to.`;
+  `Notes go to bots in this space. This PR is by ${login ?? 'someone outside this space'} and no team owns this repo. Add it to a team (Manage team › Git Repo) and its lead gets the notes.`;
 export const readOnlyLine = (s: PrState) => (s === 'merged' ? 'This PR is merged. Notes are read-only.' : 'This PR is closed. Notes are read-only.');
 export const sentNoteLine = (at: string | null, bot: string) => `Sent${at ? ` ${at}` : ''} · waiting for ${bot}’s next push`;
 export const changedIn = (sha: string | null) => `Changed in ${sha7(sha)}`.trimEnd();

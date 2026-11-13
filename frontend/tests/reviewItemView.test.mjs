@@ -98,6 +98,12 @@ test('helpers: summaries come from the server numbers, tail keeps 12 lines', () 
   assert.equal(m.notUndoneTitle({ effects_known: true, external_not_undone: [] }), null);
   assert.equal(m.sendBackSteps(FX.needsYou, 1)[0], 'The held merge of #512 is denied first, so nothing runs.');
   assert.equal(m.sendBackSteps(FX.heldDenied, 0).some((s) => /denied first/.test(s)), false);
+  const withChecks = m.sendBackSteps(FX.heldDenied, 0);
+  const noChecks = m.sendBackSteps(FX.heldDenied, 0, true);
+  assert.equal(noChecks.length, withChecks.length - 1, 'no-checks drops the checker line');
+  assert.equal(noChecks.some((s) => /checker/.test(s)), false);
+  assert.match(noChecks[0], /starts round \d+ with your note and the work so far\.$/);
+  assert.equal(noChecks.at(-1), withChecks.at(-1), 'the round line stays');
 });
 
 test('invalid data falls back to the plain card with the title and summary as text', async () => {

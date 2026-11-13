@@ -20,6 +20,7 @@ pub mod landed;
 pub mod line_notes;
 pub mod notes;
 pub mod poller;
+pub mod recipient;
 pub mod post;
 pub mod prepush;
 pub mod repo;
@@ -34,7 +35,7 @@ pub mod worktrees;
 
 pub use generate::generate;
 
-use crate::db::dev_mode::{DevCardRow, CALLS_CAP};
+use crate::db::dev_mode::{DevCardRow, NO_CALL_CAP};
 use crate::drivers::events::RuntimeEvent;
 use crate::server::AppState;
 
@@ -64,10 +65,16 @@ pub fn poll_every() -> std::time::Duration {
     std::time::Duration::from_secs(*SECS.get_or_init(|| env_num("KWANT_DEV_POLL_SECS", 5, 86_400).unwrap_or(poller::EVERY.as_secs())))
 }
 
-/// Most model calls Dev mode makes per space per UTC day: `KWANT_DEV_CALL_CAP` (0–1000), else 30.
+/// Most model calls Dev mode makes per space per UTC day: `KWANT_DEV_CALL_CAP` (0–1000) when set,
+/// else no cap ([`NO_CALL_CAP`]); the daily spending stop and each bot's budget hold the cost.
 pub fn call_cap() -> i64 {
     static CAP: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
-    *CAP.get_or_init(|| env_num("KWANT_DEV_CALL_CAP", 0, 1000).map_or(CALLS_CAP, |v| v as i64))
+    *CAP.get_or_init(|| env_num("KWANT_DEV_CALL_CAP", 0, 1000).map_or(NO_CALL_CAP, |v| v as i64))
+}
+
+/// The cap to show: `None` when there is none.
+pub fn shown_cap() -> Option<i64> {
+    Some(call_cap()).filter(|&c| c != NO_CALL_CAP)
 }
 
 /// How many days a pushed branch or open PR counts as fresh, so it gets a review card:
@@ -174,7 +181,8 @@ mod tests {
     fn unset_seams_keep_the_defaults() {
         // CI sets neither variable
         assert_eq!(poll_every(), std::time::Duration::from_secs(300));
-        assert_eq!(call_cap(), 30);
+        assert_eq!(call_cap(), NO_CALL_CAP, "no daily cap unless KWANT_DEV_CALL_CAP sets one");
+        assert_eq!(shown_cap(), None);
         assert_eq!(review_days(), 7);
         assert!((now() - Utc::now()).num_seconds().abs() <= 1);
     }

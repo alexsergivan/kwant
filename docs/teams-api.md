@@ -15,6 +15,7 @@ Conventions (same as the rest of `/api`):
 | `GET /api/team-templates/:id/preview` | person only |
 | `POST /api/teams/from-template` | person only |
 | `POST /api/teams/suggest` | person only |
+| `DELETE /api/teams/suggest` | person only (0.9.5: stops a draft from words) |
 | `GET /api/teams/:id/template` | person only |
 | `POST /api/bot-actions/:action_id/undo` | person only (unchanged route; Undo for a template team goes through it) |
 
@@ -172,7 +173,7 @@ Reads the project. No model call. Nothing is made, and nothing stays on disk.
 {"team_id": "…"}
 ```
 
-Exactly one of the three (400 `bad_request` otherwise, and on unknown fields). `team_id` reads that team's folder or repo and only proposes roles the team doesn't have yet.
+Exactly one of the three, or `need` (§4b) (400 `bad_request` otherwise, and on unknown fields). `team_id` reads that team's folder or repo and only proposes roles the team doesn't have yet.
 
 A `workspace_path` that overlaps a folder another space already uses (its work folder or one of its teams' folders) is refused **before anything is read**, with the same **400 `folder_in_use`** (`field: "workspace_path"`) the create would give, so the person learns it before ticking anyone. Spaces never share a folder; teams in one space may. Suggest from Manage team (`team_id`) reads the team's own folder and never gets this.
 
@@ -240,6 +241,38 @@ Errors:
 | 409 | `team_has_no_project` | that team has no folder or repo |
 | 422 | `cant_read` | a private repo it can't read; body adds `"forge": "github" \| "gitlab" \| null` for **Connect GitHub** |
 | 502 | `read_failed` | the mirror or walk failed for another reason, or the repo's host didn't answer within the 10 s |
+
+## 4b. `POST /api/teams/suggest?space=` with `need` (0.9.5, team from words)
+
+```json
+{"need": "I run a small bakery and drown in orders and emails."}
+```
+
+Drafts a team from the person's own words in **one model call**, on the first ready account of the space in the Accounts order failover uses (`priority`, then oldest). The call has no tools, sees no chat history, runs in an empty scratch folder that is removed afterwards, and must answer one JSON object within about 90 s. An answer that can't be used (no JSON object, no `bots`, fewer than 2 usable bots) is asked for **once more** with the reason; a second bad answer is 502 `draft_failed`. An account that refuses (usage limit, signed out) is recorded like a failed turn and the next ready account is tried (at most 3).
+
+The words are 10 to 1000 characters after trimming. The model's answer is untrusted text; the server keeps only what passes:
+
+- 1 lead and 2 to 6 bots. The first bot marked `lead` (else the first bot) leads and comes first. **More than 6 are trimmed** to the lead and the first 5 others, and `trimmed` says how many were dropped (a refusal would cost the person another 90 s for something the server can fix).
+- Names are one word (letters, digits, `-`, `_`, at most 40), from the title when the name is unusable, then made free in the space (`TechLead` → `TechLead2`), and unique within the draft. Titles at most 60 characters, reasons 200, the description 160; at most 4 `owns` and 4 avoids of 60 characters. Instructions (the bot's soul) at most 4096 bytes. A bot without a title or instructions is dropped.
+- `preset` is a known preset id, else `custom`; `avatar` one of the presets' avatars, else the preset's own.
+- Nothing else is read from the answer: no tools, accounts, logins, schedules or routines.
+- The handle is server-picked: the team name's slug made free (`bakery-desk`, `bakery-desk2`), else `team`.
+
+The answer is the §4 shape with `need` (the trimmed words), `facts: []`, `stack_line: null`, `also_possible: []`, `read: {"files": 0, "manifests": 0, "ms": …}`, `partial: null`, `limits: []`, `fallback: false`, `trimmed`, and each bot row carrying `owns`, `reason`, `reason_parts` (one text part) and read-only `instructions`. Row keys are `lead`, else the name's slug (`orderkeeper`), unique.
+
+The server keeps the drafted instructions, avoids, description and words with `suggestion_id`. `from-template` builds from that copy plus the §3b edits (names, on/off); a `preset` edit on a drafted bot is 400 `bad_row`, since the instructions belong to the drafted role. Each bot gets its known preset's persona (or "You are {name}, the team's {title}."), the drafted instructions as its soul, and `owns` / avoids as its covers and avoids. The team gets icon `users`, the drafted description, and channel instructions that quote the words and keep sending, spending and deleting with the person. `template_id: "coding"` with a drafted suggestion is 400 `bad_request`. Undo is the usual one step.
+
+One draft per space at a time. **`DELETE /api/teams/suggest?space=`** stops it and answers **204**, also when nothing runs; the stopped request answers 409 `cancelled`. A client that goes away stops its draft too.
+
+| Status | `code` | Extra | When |
+|---|---|---|---|
+| 400 | `bad_request` | | `need` isn't a string |
+| 409 | `busy` | | a draft is already running in this space |
+| 409 | `cancelled` | | `DELETE` stopped this draft |
+| 409 | `no_ready_account` | | no account is ready (none signed in, all off), or every one tried was signed out |
+| 422 | `need_too_short` / `need_too_long` | | under 10 or over 1000 characters after trimming |
+| 429 | `account_limited` | `account` (name), `until` (RFC 3339) | every account that could run it is out of usage; `error` says until when, in local time |
+| 502 | `draft_failed` | | two unusable answers, an engine error, or no answer within about 90 s |
 
 ## 5. Errors from `from-template`
 

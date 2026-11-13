@@ -36,7 +36,8 @@ const ui = await loadBundled(
   export { default as React } from 'react';
   export { createRoot } from 'react-dom/client';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
-  export { WhatsNewHost, WhatsNewSheetView, WhatsNewAboutView, WhatsNewAbout, hasWhatsNew } from './src/components/WhatsNewSheet';
+  export { WhatsNewHost, WhatsNewSheetView, hasWhatsNew } from './src/components/WhatsNewSheet';
+  export { VersionCardView } from './src/components/VersionCard';
   export { AppUpdateBannerView } from './src/components/AppUpdateBanner';
   export { openWhatsNew, SEEN_KEY } from './src/whatsNewSheet';
   export { WHATS_NEW } from './src/whatsNewContent';
@@ -63,7 +64,7 @@ test('validator: every bundled whatsnew file keeps the limits, its name matches 
     for (const h of e.highlights) if (h.open) assert.ok(s.highlightView(h), `${v} ${h.id}: ${h.open}`);
   }
   assert.equal(real['0.7.5'].highlights.find((h) => h.id === 'teams').open, 'settings/teams');
-  assert.equal(real['0.7.5'].highlights.find((h) => h.id === 'telegram').open, 'settings/connections');
+  assert.equal(real['0.7.5'].highlights.find((h) => h.id === 'telegram').open, 'settings/apps');
 });
 
 test('validator: names each broken limit', () => {
@@ -302,23 +303,50 @@ test('banner: "See what’s new" on the "Updated to" bar only, and only when tha
   assert.equal(ui.hasWhatsNew('0.7.4'), false);
 });
 
-test('Settings › About: What’s new in the latest version, then earlier versions, then GitHub', async () => {
-  const html = ui.renderToStaticMarkup(React.createElement(ui.WhatsNewAboutView, { entries: ui.WHATS_NEW, onPick() {} }));
+test('Settings › kwant: What’s new in the running version opens its sheet; a newer one opens its release notes', async () => {
+  const model = (available) => ({
+    status: { current: '0.7.6', canInstall: false, lastChecked: Date.now(), how: null, state: available ? 'available' : 'idle', available, progress: null, error: null },
+    unsupported: false,
+    current: '0.7.6',
+    phase: 'idle',
+    target: null,
+    actionError: null,
+    installError: null,
+    checkedAt: 1,
+  });
+  const props = (available) => ({
+    model: model(available),
+    now: Date.now(),
+    onCheck() {},
+    onInstall() {},
+    onWhatsNew: (v) => ui.openWhatsNew(v),
+    onReleaseNotes: (v, notes, date) => ui.openWhatsNew(v, { notes, date }),
+  });
+  const html = ui.renderToStaticMarkup(React.createElement(ui.VersionCardView, props(null)));
   assert.match(html, /What’s new in 0\.7\.6<\/b><span[^>]*>Nov 14 · 3 new things, 6 fixes/);
-  assert.match(html, /Earlier versions/);
-  assert.match(html, /0\.7\.5<\/span><span[^>]*>Nov 7<\/span><span[^>]*>6 new things, 4 fixes/);
-  assert.match(html, /Older releases on GitHub/);
-  assert.equal(ui.renderToStaticMarkup(React.createElement(ui.WhatsNewAboutView, { entries: [], onPick() {} })), '');
+  assert.doesNotMatch(html, /Earlier versions|0\.7\.5/);
+  assert.match(html, /All releases on GitHub/);
 
-  // Picking a row opens that version's sheet through the host.
   localStorage.setItem(ui.SEEN_KEY, '0.7.6');
   await host({ established: true });
   const el = document.createElement('div');
   document.body.append(el);
   const root = createRoot(el);
   mounted.push(root);
-  await act(async () => root.render(React.createElement(ui.WhatsNewAbout)));
+  await act(async () => root.render(React.createElement(ui.VersionCardView, props(null))));
   await settle();
-  await click(el.querySelector('button[aria-label="What’s new in 0.7.5"]'));
-  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant bots 0.7.5');
+  await click(el.querySelector('button[data-whats-new-current="0.7.6"]'));
+  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant bots 0.7.6');
+  await click(sheet().querySelector('[data-whats-new-done]'));
+  assert.equal(sheet(), null);
+
+  // A version this app doesn't bundle: only its release notes, no way "back" to a sheet it doesn't have
+  const next = { version: '9.9.9', notes: '### Added\n- **Faster bots.**', date: '2026-11-12T20:49:18Z', url: 'https://github.com/alexsergivan/kwant/releases/tag/mac-v9.9.9' };
+  await act(async () => root.render(React.createElement(ui.VersionCardView, props(next))));
+  await settle();
+  await click(el.querySelector('button[data-whats-new-next="9.9.9"]'));
+  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant bots 9.9.9');
+  assert.match(sheet().textContent, /Released Nov 12/);
+  assert.match(sheet().textContent, /Faster bots\./);
+  assert.doesNotMatch(sheet().textContent, /All changes in/);
 });

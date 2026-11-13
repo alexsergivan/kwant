@@ -146,6 +146,22 @@ async fn review_task(state: &AppState, owner: &str, title: &str, acceptance: &st
     t.id
 }
 
+/// What 0.9.5 B adds to each done item.
+const DONE_KEYS: [&str; 12] = [
+    "result_message_id",
+    "result_conversation_id",
+    "result_thread_id",
+    "result_link",
+    "source",
+    "answer_excerpt",
+    "trail",
+    "trail_dropped",
+    "why",
+    "why_kind",
+    "changed",
+    "changed_nothing",
+];
+
 fn find<'a>(v: &'a Value, id: &str) -> &'a Value {
     v["items"].as_array().unwrap().iter().find(|i| i["id"] == id).unwrap_or_else(|| panic!("{id} missing from {v}"))
 }
@@ -280,13 +296,18 @@ async fn inbox_joins_away_and_review_tasks_with_fallbacks() {
     assert_eq!(r2["criteria"][0]["text"], "Runs at 2am");
     assert_eq!(r2["verdict"]["line"], "No required checks yet.");
 
-    // Away items come through unchanged, with their group and key added
+    // Away items come through unchanged, with their group, key and unread flag added, and the
+    // done fields (0.9.5 B) on finished and failed ones
     let away = get(&app, "/api/away").await;
     for section in ["waiting", "finished", "failed"] {
         for a in away[section].as_array().unwrap() {
             let mut i = find(&v, a["id"].as_str().unwrap()).clone();
             let o = i.as_object_mut().unwrap();
             assert!(o.remove("group").is_some() && o.remove("sort_key").is_some());
+            assert_eq!(o.remove("unread"), Some(json!(true)), "{a}");
+            for key in DONE_KEYS {
+                assert_eq!(o.remove(key).is_some(), section != "waiting", "{key} on {a}");
+            }
             assert_eq!(&i, a);
         }
     }
@@ -298,15 +319,17 @@ async fn inbox_joins_away_and_review_tasks_with_fallbacks() {
     // GET /api/away is byte for byte what it was before review tasks and the inbox existed
     assert_eq!(away_bytes(&app).await, away_before);
 
-    // Marking seen clears finished and failed, never review items
+    // Marking seen only clears unread (0.9.5 B): finished and failed stay for 7 days, and the
+    // badge counts unread ones
     let (s, _) = raw(&app, "POST", "/api/away/seen").await;
     assert_eq!(s, StatusCode::OK);
     let v = get(&app, "/api/inbox").await;
     assert!(v["last_seen"].is_string());
-    for id in [&t1, &t2, &t3, &q.id] {
+    for id in [&t1, &t2, &t3, &q.id, &done, &failed] {
         assert!(has(&v, id), "{id} cleared by seen: {v}");
     }
-    assert!(!has(&v, &done) && !has(&v, &failed), "{v}");
+    assert_eq!(find(&v, &done)["unread"], false, "{v}");
+    assert_eq!(find(&v, &failed)["unread"], false, "{v}");
     assert_eq!(v["counts"]["badge"], 4, "1 question + 3 review items: {v}");
 
     // since must parse

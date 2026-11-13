@@ -10,15 +10,22 @@ const u = await loadBundled(`export * from './src/appUpdate';`);
 const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
-  import { AppUpdateBannerView, AppUpdateAboutView } from './src/components/AppUpdateBanner';
+  import { AppUpdateBannerView } from './src/components/AppUpdateBanner';
+  import { VersionCardView } from './src/components/VersionCard';
   export const banner = (props) => renderToStaticMarkup(React.createElement(AppUpdateBannerView, props));
-  export const about = (props) => renderToStaticMarkup(React.createElement(AppUpdateAboutView, props));
+  const noop = () => {};
+  export const card = (props) =>
+    renderToStaticMarkup(React.createElement(VersionCardView, { now: Date.parse('2026-11-12T22:02:00Z'), onCheck: noop, onInstall: noop, onWhatsNew: noop, onReleaseNotes: noop, ...props }));
 `);
 const src = (path) => readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
 
 const NOTES = '### Added\n- **In-app updates.**';
+const CHECKED = '2026-11-12T22:00:00Z';
 const status = (over = {}) => ({
   supported: true,
+  can_install: true,
+  checked_at: CHECKED,
+  how: null,
   current: '0.1.2',
   state: 'available',
   available: { version: '0.1.3', notes: NOTES, date: '2026-10-27T10:00:00Z', url: 'https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.3' },
@@ -29,6 +36,7 @@ const status = (over = {}) => ({
 const model = (raw, over = {}) => ({
   status: u.parseUpdateStatus(raw),
   unsupported: false,
+  current: null,
   phase: 'idle',
   target: null,
   actionError: null,
@@ -88,6 +96,16 @@ test('parses the contract; supported=false and junk mean not the Mac app', () =>
   // A non-https link never becomes the Download manually href.
   const odd = u.parseUpdateStatus(status({ available: { version: '0.1.3', notes: '', url: 'javascript:alert(1)' } }));
   assert.equal(odd.available.url, 'https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.3');
+  // The Mac app installs; elsewhere the server says how
+  assert.equal(s.canInstall, true);
+  assert.equal(s.lastChecked, Date.parse(CHECKED));
+  assert.equal(s.how, null);
+  const off = u.parseUpdateStatus(status({ can_install: false, checked_at: null, how: { kind: 'docker', command: 'docker compose pull kwnt && docker compose up -d' } }));
+  assert.equal(off.canInstall, false);
+  assert.equal(off.lastChecked, null);
+  assert.deepEqual(off.how, { kind: 'docker', command: 'docker compose pull kwnt && docker compose up -d' });
+  assert.deepEqual(u.parseUpdateStatus(status({ how: { kind: 'windows', command: null } })).how, { kind: 'windows', command: null });
+  assert.equal(u.parseUpdateStatus(status({ how: { kind: 'rm -rf', command: 'x' } })).how, null);
 });
 
 test('banner for each state', () => {
@@ -105,6 +123,8 @@ test('banner for each state', () => {
   assert.equal(u.bannerView(model(status(), { phase: 'restarting', target: '0.1.3' }), null).kind, 'restarting');
   assert.deepEqual(u.bannerView(model(status({ state: 'idle', available: null }), { phase: 'updated', target: '0.1.3' }), null), { kind: 'updated', version: '0.1.3' });
   assert.equal(u.bannerView(model(status(), { phase: 'stalled', target: '0.1.3' }), null).kind, 'error');
+  // Off the Mac app the update can't run from the app: no bar, the kwant card says it
+  assert.equal(u.bannerView(model(status({ can_install: false })), null), null);
 });
 
 test('dismiss hides that version only, and storage that throws is fine', () => {
@@ -121,7 +141,7 @@ test('dismiss hides that version only, and storage that throws is fine', () => {
   assert.doesNotThrow(() => u.dismissVersion('0.1.3', blocked));
 });
 
-test('unsupported (404 or supported=false) renders nothing and never polls again', async () => {
+test('unsupported (404 or supported=false) shows the version alone and never polls again', async () => {
   for (const answer of [json({ error: 'not found' }, 404), json({ ...status(), supported: false })]) {
     const h = harness(() => answer);
     h.ctrl.start();
@@ -130,7 +150,11 @@ test('unsupported (404 or supported=false) renders nothing and never polls again
     assert.equal(h.live().length, 0, 'no timer left');
     assert.deepEqual(h.calls, ['GET /api/app/update']);
     assert.equal(u.bannerView(h.ctrl.get(), null), null);
-    assert.equal(ui.about({ model: h.ctrl.get(), onCheck() {}, onUpdate() {} }), '');
+    assert.equal(u.versionLine(h.ctrl.get()).kind, 'off');
+    const html = ui.card({ model: h.ctrl.get() });
+    assert.match(html, /Update checks are turned off here\./);
+    assert.doesNotMatch(html, /latest version/);
+    if (answer.status === 200) assert.match(html, /kwant bots <span[^>]*>0\.1\.2<\/span>/, 'the version from the answer');
     await h.ctrl.check();
     await h.ctrl.install();
     assert.deepEqual(h.calls, ['GET /api/app/update'], 'check/install do nothing off the Mac app');
@@ -193,7 +217,7 @@ test('install: downloading → restarting while the server is gone → updated w
   await h.tick();
   assert.deepEqual(u.bannerView(h.ctrl.get(), null), { kind: 'updated', version: '0.1.3' });
   assert.equal(store.m.has(u.UPDATE_PENDING_KEY), false);
-  assert.equal(u.aboutLine(h.ctrl.get()), 'Updated to 0.1.3.');
+  assert.deepEqual(u.versionLine(h.ctrl.get()), { kind: 'updated', version: '0.1.3' });
   h.ctrl.clearUpdated();
   assert.equal(u.bannerView(h.ctrl.get(), null), null);
 });
@@ -266,13 +290,13 @@ test('Check for updates polls fast while checking, then shows the result', async
   });
   h.ctrl.start();
   await flush();
-  assert.equal(u.aboutLine(h.ctrl.get()), 'You’re up to date.');
+  assert.equal(u.versionLine(h.ctrl.get()).kind, 'latest');
   await h.ctrl.check();
-  assert.equal(u.aboutLine(h.ctrl.get()), 'Checking for updates…');
+  assert.equal(u.versionLine(h.ctrl.get()).kind, 'checking');
   assert.equal(h.live()[0].ms, 1000);
   await h.tick();
   await h.tick();
-  assert.equal(u.aboutLine(h.ctrl.get()), 'You’re up to date.');
+  assert.deepEqual(u.versionLine(h.ctrl.get()), { kind: 'latest', checkedAt: Date.parse(CHECKED) });
   assert.equal(h.live()[0].ms, 30 * 60 * 1000);
 });
 
@@ -313,26 +337,118 @@ test('banner markup: buttons, notes, progress and dismiss', () => {
   assert.match(ui.banner({ view: { kind: 'updated', version: '0.1.3' }, onUpdate() {}, onDismiss() {} }), /Updated to kwant bots 0\.1\.3\./);
 });
 
-test('About row: version, Check for updates, and the offer', () => {
-  const up = ui.about({ model: model(status({ state: 'idle', available: null })), onCheck() {}, onUpdate() {} });
-  assert.match(up, /kwant bots for Mac <span[^>]*>0\.1\.2<\/span>/);
-  assert.match(up, /Check for updates/);
-  assert.match(up, /You’re up to date\./);
-  assert.doesNotMatch(up, /disabled=""/);
-  const offer = ui.about({ model: model(status()), onCheck() {}, onUpdate() {} });
-  assert.match(offer, /kwant bots 0\.1\.3 is ready\./);
-  assert.match(offer, /Update to 0\.1\.3 and restart/);
-  const busy = ui.about({ model: model(status({ state: 'downloading', progress: 0.2 })), onCheck() {}, onUpdate() {} });
-  assert.match(busy, /disabled=""/);
-  assert.match(busy, /Downloading the update… 20%/);
-  const failed = ui.about({ model: model(status({ state: 'error', available: null, error: 'GitHub didn’t answer.' })), onCheck() {}, onUpdate() {} });
-  assert.match(failed, /text-amber-300[^>]*>GitHub didn’t answer\./);
-  assert.equal(ui.about({ model: model(null), onCheck() {}, onUpdate() {} }), '');
+test('version line: one of latest, available, checking, couldn’t check — never a wrong latest', () => {
+  const line = (raw, over) => u.versionLine(model(raw, over));
+  assert.deepEqual(line(status({ state: 'idle', available: null })), { kind: 'latest', checkedAt: Date.parse(CHECKED) });
+  assert.equal(line(status()).kind, 'available');
+  assert.equal(line(status()).canInstall, true);
+  assert.equal(line(status({ can_install: false })).canInstall, false);
+  assert.equal(line(status({ state: 'checking', available: null })).kind, 'checking');
+  // Never checked yet: checking, not "latest"
+  assert.equal(line(status({ state: 'idle', available: null, checked_at: null })).kind, 'checking');
+  assert.equal(line(null).kind, 'loading');
+  const cant = line(status({ state: 'error', available: null, error: 'Couldn’t check for updates: GitHub couldn’t be reached.' }));
+  assert.equal(cant.kind, 'check-error');
+  // A refused Check again with nothing known
+  assert.equal(line(status({ state: 'idle', available: null }), { actionError: 'busy' }).kind, 'check-error');
+  // A version found earlier stays on offer after a failed re-check
+  assert.equal(line(status({ state: 'error', error: 'Couldn’t check for updates: offline' })).kind, 'available');
+  // A failed install is its own line, with Try again and Download manually
+  const inst = line(status({ state: 'error', error: 'The signature check failed.' }));
+  assert.equal(inst.kind, 'install-error');
+  assert.equal(inst.error, 'The signature check failed.');
+  assert.equal(line(status({ state: 'downloading', progress: 0.2 })).kind, 'downloading');
+  assert.equal(line(status({ state: 'ready' })).kind, 'restarting');
 });
 
-test('wired once: the banner in the shell, the About row in App settings, hidden on phones', () => {
+test('checked ago, in plain words', () => {
+  const t = Date.parse(CHECKED);
+  assert.equal(u.checkedAgo(null, t), '');
+  assert.equal(u.checkedAgo(t, t + 20_000), 'Checked just now');
+  assert.equal(u.checkedAgo(t, t + 2 * 60_000), 'Checked 2 min ago');
+  assert.equal(u.checkedAgo(t, t + 3 * 3600_000), 'Checked 3 h ago');
+  assert.equal(u.checkedAgo(t, t + 26 * 3600_000), 'Checked 1 day ago');
+  assert.equal(u.checkedAgo(t, t + 50 * 3600_000), 'Checked 2 days ago');
+});
+
+test('kwant card: the version, one status line, What’s new, All releases — no earlier versions', () => {
+  const latest = ui.card({ model: model(status({ state: 'idle', available: null })) });
+  assert.match(latest, /data-version-card="latest"/);
+  assert.match(latest, /kwant bots <span[^>]*>0\.1\.2<\/span>/);
+  assert.match(latest, /You’re on the latest version/);
+  assert.match(latest, /Check again/);
+  assert.match(latest, /Checked 2 min ago/);
+  assert.match(latest, /All releases on GitHub/);
+  assert.doesNotMatch(latest, /Earlier versions|Update<|is available/);
+
+  const mac = ui.card({ model: model(status()) });
+  assert.match(mac, /kwant bots 0\.1\.3 is available/);
+  assert.match(mac, /data-version-update[^>]*>.*Update<\/button>/s);
+  assert.doesNotMatch(mac, /aria-expanded/, 'on the Mac, Update installs');
+  assert.match(mac, /What’s new in 0\.1\.3/, 'the newer version’s notes');
+  assert.doesNotMatch(mac, /latest version/);
+
+  const how = { kind: 'docker', command: 'docker compose pull kwnt && docker compose up -d' };
+  const docker = ui.card({ model: model(status({ can_install: false, how })), howOpen: true });
+  assert.match(docker, /aria-expanded="true"/);
+  assert.match(docker, /How to update/);
+  assert.match(docker, /docker compose pull kwnt &amp;&amp; docker compose up -d/);
+  assert.match(docker, /Copy/);
+  const closed = ui.card({ model: model(status({ can_install: false, how })) });
+  assert.match(closed, /aria-expanded="false"/);
+  assert.doesNotMatch(closed, /How to update/);
+  const win = ui.card({ model: model(status({ can_install: false, how: { kind: 'windows', command: null } })), howOpen: true });
+  assert.match(win, /Download kwant bots 0\.1\.3/);
+  assert.match(win, /href="https:\/\/github\.com\/alexsergivan\/kwant\/releases\/tag\/mac-v0\.1\.3"/);
+
+  const cant = ui.card({ model: model(status({ state: 'error', available: null, error: 'Couldn’t check for updates: GitHub couldn’t be reached.' })) });
+  assert.match(cant, /data-version-card="check-error"/);
+  assert.match(cant, /Couldn’t check for updates/);
+  assert.match(cant, /Try again/);
+  assert.match(cant, />GitHub couldn’t be reached\.</);
+  assert.doesNotMatch(cant, /latest version/);
+
+  const failed = ui.card({ model: model(status({ state: 'error', error: 'The signature check failed.' })) });
+  assert.match(failed, /kwant bots 0\.1\.3 didn’t install\./);
+  assert.match(failed, /Download manually/);
+
+  const dl = ui.card({ model: model(status({ state: 'downloading', progress: 0.43 })) });
+  assert.match(dl, /Downloading kwant bots 0\.1\.3… 43%/);
+  assert.match(dl, /role="progressbar"[^>]*aria-valuenow="43"/);
+
+  // The current version’s sheet, in the What’s new card’s look, when this app bundles one
+  const entry = { version: '0.1.2', date: '2026-11-10', highlights: [{ id: 'a', title: 'A', text: 'a' }, { id: 'b', title: 'B', text: 'b' }], fixes: ['x'] };
+  const withSheet = ui.card({ model: model(status({ state: 'idle', available: null })), entryFor: (v) => (v === '0.1.2' ? entry : null) });
+  assert.match(withSheet, /data-whats-new-current="0\.1\.2"/);
+  assert.match(withSheet, /What’s new in 0\.1\.2/);
+  assert.match(withSheet, /Nov 10 · 2 new things, 1 fix/);
+});
+
+test('opening Settings checks again when the last answer is over an hour old, quietly', async () => {
+  let checks = 0;
+  const h = harness((url, init) => {
+    if (init.method === 'POST') {
+      checks++;
+      return json({ error: 'nope' }, 409);
+    }
+    return json(status({ state: 'idle', available: null }));
+  });
+  h.ctrl.start();
+  await flush();
+  h.advance(Date.parse(CHECKED) + 10 * 60_000);
+  await h.ctrl.checkIfStale();
+  assert.equal(checks, 0, 'fresh: no check');
+  h.advance(2 * 3600_000);
+  await h.ctrl.checkIfStale();
+  assert.equal(checks, 1);
+  assert.equal(h.ctrl.get().actionError, null, 'a refused quiet check says nothing');
+});
+
+test('wired once: the banner in the shell, the kwant card in App settings, hidden on phones', () => {
   assert.match(src('Shell.tsx'), /<AppUpdateBanner \/>/);
-  assert.match(src('components/SettingsModal.tsx'), /<AppUpdateAbout \/>/);
+  const settings = src('components/SettingsModal.tsx');
+  assert.equal(settings.match(/<VersionCard \/>/g)?.length, 1);
+  assert.doesNotMatch(settings, /AppUpdateAbout|WhatsNewAbout/);
   assert.match(src('components/AppUpdateBanner.tsx'), /if \(!view \|\| phone\) return null;/);
 });
 
@@ -354,9 +470,9 @@ test('app_update is saved in the Mac app and never sent to a server without it',
   assert.deepEqual(notify.notifyOnToSave(['turn_finished'], true), ['turn_finished']);
 });
 
-test('App settings shows the switch only when the update API is supported', () => {
+test('App settings shows the switch only where the app installs updates (the Mac app)', () => {
   const s = src('components/SettingsModal.tsx');
-  assert.match(s, /const appUpdates = useAppUpdate\(\)\.model\.status !== null;/);
+  assert.match(s, /const appUpdates = useAppUpdate\(\)\.model\.status\?\.canInstall === true;/);
   assert.match(s, /notifyKindsFor\(appUpdates, !!proactive, !!discovery(, [^)]+)?\)\.map/);
   assert.match(s, /notify_on: notifyOnToSave\(notifyOn, appUpdates, !!proactive, !!discovery(, [^)]+)?\)/);
   assert.doesNotMatch(s, /\{NOTIFY_KINDS\.map/);

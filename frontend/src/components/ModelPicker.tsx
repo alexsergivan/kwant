@@ -171,7 +171,7 @@ const SettingsLink: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSetting
       Open Settings <ChevronRight size={11} />
     </button>
   ) : (
-    <span>Check Settings › This space › Accounts.</span>
+    <span>Check Settings › This space › Apps & accounts.</span>
   );
 
 /** "Sign in with Claude", when that's what fixes it. */
