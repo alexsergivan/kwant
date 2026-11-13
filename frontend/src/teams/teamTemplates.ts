@@ -85,6 +85,8 @@ export interface SuggestedBot {
   existing_avatar?: string | null;
   /** That bot already leads a team, so adding it here makes it a member, not this team's lead. */
   existing_leads_team?: string | null;
+  /** A need suggestion (team-from-words): the drafted instructions (soul), shown read-only in the sheet. */
+  instructions?: string | null;
 }
 
 /** api.md §0.6: the wire's `existing` object; the client flattens it onto the row. */
@@ -110,6 +112,8 @@ export interface Suggestion {
   fallback: boolean;
   /** What was read, for the readline: the folder or the repo (client-side). */
   source: string;
+  /** A need suggestion: the person's words, echoed by the server. */
+  need?: string | null;
 }
 
 type WireSuggested = Omit<SuggestedBot, 'reason' | 'owns'> & {
@@ -188,7 +192,52 @@ export type CreateRequest =
   /** `team_id` set: A18, add the ticked bots to that existing team (Manage team). */
   | { kind: 'suggestion'; space: string; suggestion_id: string; handle?: string; team_id?: string; rows: Record<string, RowSend> };
 
-export type SuggestRequest = { space: string } & ({ workspace_path: string } | { repo_url: string } | { team_id: string });
+export type SuggestRequest = { space: string } & ({ workspace_path: string } | { repo_url: string } | { team_id: string } | { need: string });
+
+// ---------------------------------------------------------------------------------------------------
+// Team from your own words (brief: autonomy/team-from-words/brief.md, "Server contract")
+
+/** 10–1000 characters after trimming (422 `need_too_short` / `need_too_long`). */
+export const NEED_MIN = 10;
+export const NEED_MAX = 1000;
+export const NEED_PLACEHOLDER = 'e.g. I run a small bakery: answer customer emails, post on Instagram, keep track of orders';
+
+/** The client's own length check, the same limits as the server. null when it can be sent. */
+export function needProblem(raw: string): string | null {
+  const n = raw.trim().length;
+  if (n < NEED_MIN) return n === 0 ? 'Say what your bots should do first.' : 'Add a few more words so the team fits.';
+  if (n > NEED_MAX) return `That’s ${n - NEED_MAX} characters over the 1,000 limit. Shorten it a little.`;
+  return null;
+}
+
+export const NEED_FAILED = 'Couldn’t suggest a team this time. Try again, or start from a ready-made team.';
+
+/** A time from the server (`until`, RFC 3339) as the person's clock time, or null. */
+const clock = (v: unknown): string | null => {
+  if (typeof v !== 'string') return null;
+  const d = new Date(v);
+  return Number.isFinite(d.getTime()) ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+};
+
+/**
+ * What a failed need suggestion says: { head, reason }. `head` is the brief's line; `reason` is the
+ * server's own words when it gave any, or a line built from a known code. Never invents numbers.
+ */
+export function needError(e: unknown): { head: string; reason: string | null; noAccount: boolean } {
+  if (!(e instanceof TeamsError)) return { head: NEED_FAILED, reason: null, noAccount: false };
+  if (e.status === 0) return { head: 'You’re offline.', reason: 'Suggest a team works when you’re back. Your words are kept.', noAccount: false };
+  const said = serverErrorText(e);
+  if (e.code === 'no_ready_account') return { head: 'Add an AI account first.', reason: said ?? 'No account in this space can run right now.', noAccount: true };
+  if (e.code === 'need_too_short') return { head: 'Add a few more words so the team fits.', reason: null, noAccount: false };
+  if (e.code === 'need_too_long') return { head: 'That’s over the 1,000-character limit. Shorten it a little.', reason: null, noAccount: false };
+  if (e.code === 'busy') return { head: 'Already suggesting a team here.', reason: said ?? 'Wait for that one to finish, then try again.', noAccount: false };
+  if (e.status === 429) {
+    const until = clock(e.extra?.until);
+    const account = typeof e.extra?.account === 'string' ? (e.extra.account as string) : null;
+    return { head: NEED_FAILED, reason: said ?? (until ? `${account ?? 'The account'} is out until ${until}.` : null), noAccount: false };
+  }
+  return { head: NEED_FAILED, reason: said, noAccount: false };
+}
 
 export class TeamsError extends Error {
   constructor(
@@ -323,6 +372,12 @@ export const teamsApi = {
     call<TemplatePreview>(`/api/team-templates/${enc(templateId)}/preview?space=${enc(space)}`),
   suggest: ({ space, ...src }: SuggestRequest, source: string) =>
     call<WireSuggestion>(`/api/teams/suggest?space=${enc(space)}`, 'POST', src).then((s) => normSuggestion(s, source)),
+  /** Stops a running suggest (decisions-1112 §2: `DELETE /api/teams/suggest?space=`, 204 also when idle).
+   *  Fire and forget: a 404 from a server without the route, or any other failure, is ignored; the
+   *  409 `busy` copy on the next ask stays the fallback. */
+  cancelSuggest: (space: string): void => {
+    call(`/api/teams/suggest?space=${enc(space)}`, 'DELETE').catch(() => {});
+  },
   templateInfo: (teamId: string, space: string) =>
     call<WireTemplateInfo>(`/api/teams/${enc(teamId)}/template?space=${enc(space)}`).then(normInfo),
 };

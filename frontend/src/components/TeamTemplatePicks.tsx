@@ -1,7 +1,7 @@
 // 0.7.7 T7 entry points: the welcome cards (T7.1), the New team tiles (T7.2) and the sidebar box (T7.3).
 // Each opens the same preview sheet. Design: next-077/design/design.md §T7.
 import React from 'react';
-import { ChevronRight, X } from 'lucide-react';
+import { ChevronRight, Sparkles, X } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { TEMPLATE_ICONS, TemplateGlyph } from './TeamPreviewSheet';
 import { useMedia } from '../useMedia';
@@ -112,7 +112,7 @@ export const TemplateTiles: React.FC<{ templates: TeamTemplate[]; onPick: (id: s
 };
 
 /** T7.3: a dashed box at the bottom of the Bots list while the space has no teams. */
-export const TemplateSidebarBox: React.FC<{ templates: TeamTemplate[]; onPick: (id: string) => void; onHide: () => void }> = ({ templates, onPick, onHide }) => {
+export const TemplateSidebarBox: React.FC<{ templates: TeamTemplate[]; onPick: (id: string) => void; onHide: () => void; onDescribe?: () => void }> = ({ templates, onPick, onHide, onDescribe }) => {
   const phone = useMedia(PHONE_QUERY);
   if (!templates.length) return null;
   return (
@@ -122,6 +122,18 @@ export const TemplateSidebarBox: React.FC<{ templates: TeamTemplate[]; onPick: (
         <p className="text-[11px] leading-4 text-zinc-400">Bots, instructions and skills in one step.</p>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
+        {onDescribe && (
+          <button
+            type="button"
+            data-describe-own
+            onClick={onDescribe}
+            aria-label="Describe your own team"
+            className={`inline-flex items-center gap-[5px] ${phone ? 'h-11 px-3.5' : 'h-[26px] px-[9px]'} rounded-full border border-sky-300/35 bg-sky-300/[.08] text-xs font-medium text-sky-200 hover:bg-sky-300/[.14] ${FOCUS}`}
+          >
+            <Sparkles size={12} className="text-sky-300" aria-hidden="true" />
+            Describe your own
+          </button>
+        )}
         {templates.map((t) => {
           const Icon = TEMPLATE_ICONS[t.icon];
           return (

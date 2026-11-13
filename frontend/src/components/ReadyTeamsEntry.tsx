@@ -56,6 +56,7 @@ export const ReadyTeamsSidebarBox: React.FC<{ teamCount: number }> = ({ teamCoun
     <TemplateSidebarBox
       templates={rt.templates}
       onPick={(id) => rt.open({ kind: 'template', templateId: id })}
+      onDescribe={rt.describe}
       onHide={() => {
         hideReadyTeams(rt.space);
         setHidden(true);
