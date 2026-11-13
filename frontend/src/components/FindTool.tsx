@@ -954,10 +954,12 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
     const isOpen = open.has(row.key);
     const setupApp =
       keyOpen && !keyOpen.replace ? [s, ...row.others].find((x): x is Extract<Source, { kind: 'composio' }> => x.kind === 'composio' && x.app.slug === keyOpen.slug) : undefined;
-    const description = s.kind === 'directory' ? markCutDescription(s.description) : s.description;
+    const description =
+      s.kind === 'directory' ? markCutDescription(s.description) : s.kind === 'builtin' ? s.description.replace(/\s*Sign in after adding\.$/, '') : s.description;
     const slug = s.kind === 'composio' ? s.app.slug : s.kind === 'builtin' ? s.preset.id : row.appKey;
     const late = s.kind === 'directory';
     const linkId = `${optionId(o)}-ways`;
+    const setupHere = !!(setupApp && setupApp.id === s.id);
     return (
       <li
         key={o.key}
@@ -983,6 +985,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
                 </p>
               )}
               <div className="mt-1.5">{howLine(s, row, false)}</div>
+              {phone && !setupHere && <div className="mt-2.5">{sourceAction(s, row, { active: isActive, onClick: () => run(o) })}</div>}
               {row.others.length > 0 && (
                 <button
                   type="button"
@@ -1001,9 +1004,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
               )}
             </div>
           </div>
-          {!(setupApp && setupApp.id === s.id) && (
-            <div className={phone ? 'pl-[42px]' : 'shrink-0'}>{sourceAction(s, row, { active: isActive, onClick: () => run(o) })}</div>
-          )}
+          {!phone && !setupHere && <div className="shrink-0">{sourceAction(s, row, { active: isActive, onClick: () => run(o) })}</div>}
         </div>
         {setupApp && keySetup(setupApp.app)}
       </li>

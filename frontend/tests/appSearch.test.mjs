@@ -4,7 +4,7 @@ import test from 'node:test';
 import { loadBundled } from './bundle.mjs';
 
 const m = await loadBundled(`
-  export { appKey, byMaker, mergeRows, signInOf, leadTier, otherWaysLabel, moreOtherWays, sourceWords } from './src/appSearch';
+  export { appKey, byMaker, presetPublisher, mergeRows, signInOf, leadTier, otherWaysLabel, moreOtherWays, sourceWords } from './src/appSearch';
   export { MCP_PRESETS } from './src/mcp';
 `);
 
@@ -52,6 +52,13 @@ test('appKey: one key per app, whatever the listing calls it', () => {
     ['', ''],
   ])
     assert.equal(m.appKey(name), key, name);
+});
+
+test('presetPublisher: the maker\'s own domain wins over the address (GitHub), else the last two labels', () => {
+  const by = (id) => m.presetPublisher(m.MCP_PRESETS.find((p) => p.id === id));
+  assert.equal(by('github'), 'github.com', 'api.githubcopilot.com is GitHub\'s');
+  assert.equal(by('notion'), 'notion.com');
+  assert.equal(by('fetch'), null, 'a local server has no publisher');
 });
 
 test('byMaker: a domain publisher, its own address, and the app named after it', () => {

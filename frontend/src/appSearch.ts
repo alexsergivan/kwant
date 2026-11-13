@@ -44,6 +44,7 @@ export function appKey(name: string): string {
 /** "by notion.com" for a remote built-in tool: the last two labels of its address. */
 export function presetPublisher(p: McpPreset): string | null {
   if (p.form.transport !== 'http') return null;
+  if (p.domain) return p.domain;
   try {
     const host = new URL(p.form.url).hostname.split('.');
     return host.slice(-2).join('.');
