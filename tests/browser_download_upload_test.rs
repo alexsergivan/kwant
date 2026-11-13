@@ -345,7 +345,7 @@ async fn browser_upload_answers_the_pages_own_picker_with_a_chat_attachment() {
     // A real chat attachment only gets its context_id once it's actually sent with a message
     // (see `attachments::attach_to_message`); link it to this turn's own chat the same way.
     let attachment_id = upload_attachment(&e.state, "post.mov", b"attachment bytes, also not a real video").await;
-    e.state.db.link_attachments(&[attachment_id.clone()], "msg-a", "chat-a", Some("chat-a"), None, None).await.unwrap();
+    e.state.db.link_attachments(std::slice::from_ref(&attachment_id), "msg-a", "chat-a", Some("chat-a"), None, None).await.unwrap();
 
     let base = serve().await;
     let (page, is_error) = self_tool(&e.app, &token, "browser_open", json!({"url": format!("{base}/upload")})).await;
@@ -382,7 +382,7 @@ async fn browser_upload_refuses_an_attachment_from_another_chat() {
 
     // Linked to a different chat than the one this turn runs in.
     let attachment_id = upload_attachment(&e.state, "secret.mov", b"someone else's chat's file").await;
-    e.state.db.link_attachments(&[attachment_id.clone()], "msg-b", "chat-b", Some("chat-b"), None, None).await.unwrap();
+    e.state.db.link_attachments(std::slice::from_ref(&attachment_id), "msg-b", "chat-b", Some("chat-b"), None, None).await.unwrap();
 
     let base = serve().await;
     let (page, is_error) = self_tool(&e.app, &token, "browser_open", json!({"url": format!("{base}/upload")})).await;
