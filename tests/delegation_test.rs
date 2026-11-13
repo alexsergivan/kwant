@@ -1468,16 +1468,16 @@ async fn three_failures_in_a_row_skip_the_fourth_mention_without_pausing() {
 async fn a_follow_up_hands_corrections_back_to_teammates_who_just_reported() {
     let env = setup().await;
     let lead = name(&env, &env.lead).await;
-    let ids = [add_bot(&env, "Social").await, add_bot(&env, "Writer").await, add_bot(&env, "SEO").await];
+    let ids = [add_bot(&env, "Social").await, add_bot(&env, "Copy").await, add_bot(&env, "SEO").await];
     let channel = team_channel_with(&env, "marketing-rounds", &[&env.lead, &ids[0], &ids[1], &ids[2]]).await;
-    say_in(&env, &channel, &format!("@{lead} Marketing plan ROUNDSMARK REPLYTAG:plan MENTION:Social+Writer+SEO FOLLOWUP:Social+Writer+SEO")).await;
+    say_in(&env, &channel, &format!("@{lead} Marketing plan ROUNDSMARK REPLYTAG:plan MENTION:Social+Copy+SEO FOLLOWUP:Social+Copy+SEO")).await;
 
     let notes = || async { refusals(&channel_messages(&env, &channel).await) };
     wait_for("the repeat note after the last round", || async { !notes().await.is_empty() }).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let notes = notes().await;
     assert_eq!(notes.len(), 1, "one note for all three: {notes:?}");
-    for who in ["Social", "Writer", "SEO"] {
+    for who in ["Social", "Copy", "SEO"] {
         assert!(notes[0].contains(&format!("already asked {who} exactly this in this request")), "{}", notes[0]);
     }
     assert!(capped(&channel_messages(&env, &channel).await).is_empty(), "nothing waits for the person");

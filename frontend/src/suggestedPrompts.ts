@@ -12,7 +12,7 @@ export type PromptContext =
   | { kind: 'team'; members: PromptBot[]; lead?: string; purpose?: string }
   /** A chat with one bot. */
   | { kind: 'bot'; bot: PromptBot }
-  /** #general: Laya picks who answers, so prompts don't name anyone. */
+  /** #general: the best fit answers, so prompts don't name anyone. */
   | { kind: 'general'; bots: PromptBot[] };
 
 /** Chips in a 1:1 chat and #general; a team gets one more so a third member has an ask too. */
@@ -202,8 +202,9 @@ export function suggestedPrompts(ctx: PromptContext): string[] {
   if (ctx.kind === 'general') {
     const bots = (ctx.bots ?? []).filter(named);
     if (!bots.length) return [];
-    const asks = distinctAsks(bots, MAX_PROMPTS - 1).map(([, ask]) => capitalize(ask));
-    return [...asks, 'Who here can help me with what?'];
+    // Up to three different roles' asks; the filler only takes a slot that no role fills.
+    const asks = distinctAsks(bots, MAX_PROMPTS).map(([, ask]) => capitalize(ask));
+    return asks.length < MAX_PROMPTS ? [...asks, 'Who here can help me with what?'] : asks;
   }
 
   const members = (ctx.members ?? []).filter(named);

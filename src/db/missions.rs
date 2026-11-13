@@ -152,7 +152,41 @@ pub struct OutcomeCheck {
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+    /// A `command` (exit 75) or `http` (`waiting_status` / `waiting_contains`) check that said "not
+    /// yet": since when, in this round. Cleared when it passes or fails.
+    pub waiting_since: Option<DateTime<Utc>>,
+    /// When the missions tick runs a waiting check again.
+    pub next_run_at: Option<DateTime<Utc>>,
+    /// Its deadline: `waiting_since` + `wait_hours`, later after the person's "Wait 24 h more".
+    pub wait_until: Option<DateTime<Utc>>,
+    /// Runs in this round (KWANT_CHECK_RUN of the last run).
+    pub runs: i64,
+    /// The round (the task's attempt) `runs` counts in.
+    #[serde(skip)]
+    pub wait_round: i64,
+    /// Set when it stopped waiting at its deadline (status `error`, failure class `waited_too_long`).
+    pub timed_out_at: Option<DateTime<Utc>>,
 }
+
+/// A command check's exit code for "not yet, check me again later" (EX_TEMPFAIL).
+pub const WAITING_EXIT: i64 = 75;
+pub const DEFAULT_RECHECK_MINS: i64 = 15;
+pub const RECHECK_MINS: std::ops::RangeInclusive<i64> = 5..=1440;
+pub const DEFAULT_WAIT_HOURS: i64 = 72;
+pub const WAIT_HOURS: std::ops::RangeInclusive<i64> = 1..=336;
+/// What the person's "Wait 24 h more" adds to a waiting check's deadline.
+pub const WAIT_MORE_HOURS: i64 = 24;
+/// The columns waiting checks added to `outcome_checks`, for databases made before them.
+const WAITING_COLUMNS: [(&str, &str); 6] = [
+    ("waiting_since", "TIMESTAMP"),
+    ("next_run_at", "TIMESTAMP"),
+    ("wait_until", "TIMESTAMP"),
+    ("runs", "INTEGER NOT NULL DEFAULT 0"),
+    ("wait_round", "INTEGER NOT NULL DEFAULT 0"),
+    ("timed_out_at", "TIMESTAMP"),
+];
+const OLD_CHECK_STATUSES: &str = "CHECK (status IN ('pending', 'needs_approval', 'running', 'passed', 'failed', 'error'))";
+const NEW_CHECK_STATUSES: &str = "CHECK (status IN ('pending', 'needs_approval', 'running', 'passed', 'failed', 'error', 'waiting'))";
 
 impl OutcomeCheck {
     pub fn spec_value(&self) -> Value {
@@ -416,7 +450,7 @@ impl Database {
                 spec TEXT NOT NULL,
                 required INTEGER NOT NULL DEFAULT 1,
                 approved INTEGER NOT NULL DEFAULT 1,
-                status TEXT NOT NULL CHECK (status IN ('pending', 'needs_approval', 'running', 'passed', 'failed', 'error')),
+                status TEXT NOT NULL CHECK (status IN ('pending', 'needs_approval', 'running', 'passed', 'failed', 'error', 'waiting')),
                 output_excerpt TEXT,
                 checked_by TEXT,
                 requested_by TEXT NOT NULL,
@@ -424,7 +458,13 @@ impl Database {
                 evidence_id TEXT,
                 created_at TIMESTAMP NOT NULL,
                 started_at TIMESTAMP,
-                finished_at TIMESTAMP
+                finished_at TIMESTAMP,
+                waiting_since TIMESTAMP,
+                next_run_at TIMESTAMP,
+                wait_until TIMESTAMP,
+                runs INTEGER NOT NULL DEFAULT 0,
+                wait_round INTEGER NOT NULL DEFAULT 0,
+                timed_out_at TIMESTAMP
             )",
             "CREATE INDEX IF NOT EXISTS outcome_checks_task ON outcome_checks (task_id)",
         ] {
@@ -433,8 +473,15 @@ impl Database {
         for t in TRIGGERS {
             sqlx::query(t).execute(&self.pool).await?;
         }
-        // A restart stops every check that was running
-        sqlx::query("UPDATE outcome_checks SET status = 'error', output_excerpt = 'kwnt restarted while the check ran', finished_at = ? WHERE status = 'running'")
+        for (col, ty) in WAITING_COLUMNS {
+            let has: Option<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('outcome_checks') WHERE name = ?").bind(col).fetch_optional(&self.pool).await?;
+            if has.is_none() {
+                sqlx::query(&format!("ALTER TABLE outcome_checks ADD COLUMN {col} {ty}")).execute(&self.pool).await?;
+            }
+        }
+        // A restart stops every check that was running. One that was waiting goes back to
+        // waiting in [`Database::migrate_waiting_checks`], once the table allows that status
+        sqlx::query("UPDATE outcome_checks SET status = 'error', output_excerpt = 'kwnt restarted while the check ran', finished_at = ? WHERE status = 'running' AND waiting_since IS NULL")
             .bind(Utc::now())
             .execute(&self.pool)
             .await?;
@@ -466,6 +513,38 @@ impl Database {
         let result = rebuild_budgets(&mut conn, &old).await;
         sqlx::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await?;
         result
+    }
+
+    /// Waiting checks (0.9.7): `outcome_checks.status` gains `waiting` and `task_failures.class`
+    /// gains `waited_too_long`. Tables made before that are rebuilt once from their stored SQL,
+    /// like [`Database::migrate_opt_in_budgets`]. Then a check that was waiting when kwnt stopped
+    /// (running one of its re-runs) waits again, due at once: its schedule lives in the table.
+    pub(super) async fn migrate_waiting_checks(&self) -> Result<(), DbError> {
+        let mut conn = self.pool.acquire().await?;
+        let mut old = Vec::new();
+        for (table, from, to) in [
+            ("outcome_checks", OLD_CHECK_STATUSES, NEW_CHECK_STATUSES),
+            ("task_failures", super::autofix::OLD_CLASS_CHECK, super::autofix::NEW_CLASS_CHECK),
+        ] {
+            let sql: Option<(String,)> = sqlx::query_as("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .bind(table)
+                .fetch_optional(&mut *conn)
+                .await?;
+            if let Some((sql,)) = sql.filter(|(sql,)| sql.contains(from)) {
+                old.push((table, sql.replace(from, to)));
+            }
+        }
+        if !old.is_empty() {
+            sqlx::query("PRAGMA foreign_keys = OFF").execute(&mut *conn).await?;
+            let result = rebuild_tables(&mut conn, &old).await;
+            sqlx::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await?;
+            result?;
+        }
+        sqlx::query("UPDATE outcome_checks SET status = 'waiting', next_run_at = ? WHERE status = 'running' AND waiting_since IS NOT NULL")
+            .bind(Utc::now())
+            .execute(&mut *conn)
+            .await?;
+        Ok(())
     }
 
     // Missions
@@ -1105,21 +1184,141 @@ impl Database {
 
     pub async fn finish_check(&self, id: &str, status: &str, output: Option<&str>, checked_by: &str, evidence_id: Option<&str>) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE outcome_checks SET status = ?, output_excerpt = ?, checked_by = ?, evidence_id = ?, finished_at = ? WHERE id = ?")
-            .bind(status)
-            .bind(output)
-            .bind(checked_by)
-            .bind(evidence_id)
-            .bind(Utc::now())
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        // A result ends any wait: the schedule and deadline go, `runs` stays for the record
+        sqlx::query(
+            "UPDATE outcome_checks SET status = ?, output_excerpt = ?, checked_by = ?, evidence_id = ?, finished_at = ?, \
+             waiting_since = NULL, next_run_at = NULL, wait_until = NULL, timed_out_at = NULL WHERE id = ?",
+        )
+        .bind(status)
+        .bind(output)
+        .bind(checked_by)
+        .bind(evidence_id)
+        .bind(Utc::now())
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
         let task: Option<(String,)> = sqlx::query_as("SELECT task_id FROM outcome_checks WHERE id = ?").bind(id).fetch_optional(&mut *tx).await?;
         if let Some((task_id,)) = task {
             insert_event(&mut tx, &task_id, None, "check_result", checked_by, None, None, &serde_json::json!({"check_id": id, "status": status})).await?;
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    /// How many times the task has gone to review: a waiting check's round. Unlike `attempts`,
+    /// which the person's Retry resets, it only grows, so a round's idempotency key never repeats.
+    pub async fn review_rounds(&self, task_id: &str) -> Result<i64, DbError> {
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM task_events WHERE task_id = ? AND to_state = 'review'")
+            .bind(task_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n)
+    }
+
+    /// Counts a run of a started check in `round` (the task's attempt): 1 in a new round, else
+    /// one more. Returns the run number.
+    pub async fn count_check_run(&self, id: &str, round: i64) -> Result<i64, DbError> {
+        let (runs,): (i64,) = sqlx::query_as(
+            "UPDATE outcome_checks SET runs = CASE WHEN wait_round = ?1 THEN runs + 1 ELSE 1 END, wait_round = ?1 WHERE id = ?2 RETURNING runs",
+        )
+        .bind(round)
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(runs)
+    }
+
+    /// Stores a "not yet" result: the check waits, to run again at `next_run_at`, until
+    /// `wait_until`. A first run of the round starts the wait; later runs keep its start and
+    /// deadline (which the person may have moved).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn wait_check(
+        &self,
+        id: &str,
+        output: Option<&str>,
+        evidence_id: Option<&str>,
+        now: DateTime<Utc>,
+        next_run_at: DateTime<Utc>,
+        wait_until: DateTime<Utc>,
+    ) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE outcome_checks SET status = 'waiting', output_excerpt = ?1, checked_by = 'kwant', evidence_id = ?2, finished_at = ?3, \
+             waiting_since = CASE WHEN runs <= 1 OR waiting_since IS NULL THEN ?3 ELSE waiting_since END, \
+             wait_until = CASE WHEN runs <= 1 OR wait_until IS NULL THEN ?4 ELSE wait_until END, \
+             next_run_at = ?5, timed_out_at = NULL WHERE id = ?6",
+        )
+        .bind(output)
+        .bind(evidence_id)
+        .bind(now)
+        .bind(wait_until)
+        .bind(next_run_at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        let task: Option<(String,)> = sqlx::query_as("SELECT task_id FROM outcome_checks WHERE id = ?").bind(id).fetch_optional(&mut *tx).await?;
+        if let Some((task_id,)) = task {
+            insert_event(&mut tx, &task_id, None, "check_result", "kwant", None, None, &serde_json::json!({"check_id": id, "status": "waiting"})).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Ends a wait at its deadline: `error`, with `timed_out_at`; its start and deadline stay so
+    /// the person sees how long it waited.
+    pub async fn time_out_check(&self, id: &str, output: Option<&str>, evidence_id: Option<&str>, now: DateTime<Utc>) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE outcome_checks SET status = 'error', output_excerpt = ?, checked_by = 'kwant', evidence_id = ?, finished_at = ?, \
+             next_run_at = NULL, timed_out_at = ? WHERE id = ?",
+        )
+        .bind(output)
+        .bind(evidence_id)
+        .bind(now)
+        .bind(now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        let task: Option<(String,)> = sqlx::query_as("SELECT task_id FROM outcome_checks WHERE id = ?").bind(id).fetch_optional(&mut *tx).await?;
+        if let Some((task_id,)) = task {
+            insert_event(&mut tx, &task_id, None, "check_result", "kwant", None, None, &serde_json::json!({"check_id": id, "status": "error", "timed_out": true})).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The person's "Wait 24 h more" on a waiting or timed-out check: the deadline moves to
+    /// `hours` past the later of now and the old deadline, and it runs again at once. False when
+    /// the check isn't waiting or timed out.
+    pub async fn extend_wait(&self, id: &str, now: DateTime<Utc>, hours: i64) -> Result<bool, DbError> {
+        let Some(c) = self.get_check(id).await? else { return Ok(false) };
+        if !(c.status == "waiting" || (c.status == "error" && c.timed_out_at.is_some())) {
+            return Ok(false);
+        }
+        let from = c.wait_until.map_or(now, |u| u.max(now));
+        let r = sqlx::query(
+            "UPDATE outcome_checks SET status = 'waiting', wait_until = ?, next_run_at = ?, timed_out_at = NULL, \
+             waiting_since = COALESCE(waiting_since, ?) WHERE id = ? AND (status = 'waiting' OR (status = 'error' AND timed_out_at IS NOT NULL))",
+        )
+        .bind(from + chrono::Duration::hours(hours))
+        .bind(now)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() == 1)
+    }
+
+    /// Waiting checks due by `now` on tasks in review, oldest due first, at most `limit`.
+    pub async fn due_waiting_checks(&self, now: DateTime<Utc>, limit: i64) -> Result<Vec<OutcomeCheck>, DbError> {
+        Ok(sqlx::query_as::<_, OutcomeCheck>(
+            "SELECT c.* FROM outcome_checks c JOIN tasks t ON t.id = c.task_id \
+             WHERE c.status = 'waiting' AND c.next_run_at <= ? AND t.state = 'review' ORDER BY c.next_run_at, c.rowid LIMIT ?",
+        )
+        .bind(now)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     // Events
@@ -1331,6 +1530,57 @@ async fn rebuild_budgets(conn: &mut sqlx::SqliteConnection, old: &[(&str, String
     sqlx::query("UPDATE missions SET budget_tokens = 0 WHERE budget_tokens = ?").bind(OLD_DEFAULT_MISSION_BUDGET).execute(&mut *tx).await?;
     if fk_violations(&mut tx).await? > before {
         return Err(DbError::Migration("foreign key check failed after the budget rebuild".into()));
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Rebuilds each `(table, new_sql)` from `new_sql` (its stored SQL with a CHECK list widened), in
+/// one transaction, as [`rebuild_budgets`] does: create, copy every row (rowid too), drop,
+/// rename, then its indexes and every trigger (dropped first: SQLite re-checks them on a rename).
+async fn rebuild_tables(conn: &mut sqlx::SqliteConnection, tables: &[(&str, String)]) -> Result<(), DbError> {
+    let mut tx = sqlx::Connection::begin(&mut *conn).await?;
+    let before = fk_violations(&mut tx).await?;
+    let triggers: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL ORDER BY name").fetch_all(&mut *tx).await?;
+    for (name, _) in &triggers {
+        sqlx::query(&format!("DROP TRIGGER \"{name}\"")).execute(&mut *tx).await?;
+    }
+    for (table, sql) in tables {
+        let new_table = format!("{table}__rebuild_new");
+        let head = format!("CREATE TABLE {table} ");
+        let quoted = format!("CREATE TABLE \"{table}\" ");
+        let body = sql
+            .strip_prefix(&head)
+            .or_else(|| sql.strip_prefix(&quoted))
+            .ok_or_else(|| DbError::Migration(format!("{table}: unexpected table SQL")))?;
+        let indexes: Vec<(String,)> =
+            sqlx::query_as("SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type = 'index' AND sql IS NOT NULL ORDER BY name")
+                .bind(table)
+                .fetch_all(&mut *tx)
+                .await?;
+        sqlx::query(&format!("CREATE TABLE {new_table} {body}")).execute(&mut *tx).await?;
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info(?) ORDER BY cid").bind(table).fetch_all(&mut *tx).await?;
+        let list = cols.iter().map(|(c,)| format!("\"{c}\"")).collect::<Vec<_>>().join(", ");
+        let copied = sqlx::query(&format!("INSERT INTO {new_table} (rowid, {list}) SELECT rowid, {list} FROM {table}"))
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        let (count,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table}")).fetch_one(&mut *tx).await?;
+        if copied != count as u64 {
+            return Err(DbError::Migration(format!("{table}: copied {copied} of {count} rows")));
+        }
+        sqlx::query(&format!("DROP TABLE {table}")).execute(&mut *tx).await?;
+        sqlx::query(&format!("ALTER TABLE {new_table} RENAME TO {table}")).execute(&mut *tx).await?;
+        for (stmt,) in &indexes {
+            sqlx::query(stmt).execute(&mut *tx).await?;
+        }
+    }
+    for (_, stmt) in &triggers {
+        sqlx::query(stmt).execute(&mut *tx).await?;
+    }
+    if fk_violations(&mut tx).await? > before {
+        return Err(DbError::Migration("foreign key check failed after a table rebuild".into()));
     }
     tx.commit().await?;
     Ok(())

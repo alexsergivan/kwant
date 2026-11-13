@@ -14,7 +14,10 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 pub const SOURCES: [&str; 6] = ["check", "turn", "lease", "budget", "routine", "handoff"];
-pub const CLASSES: [&str; 10] = ["transient", "stalled", "check_failed", "auth", "quota", "budget", "denied", "bad_spec", "needs_input", "unknown"];
+pub const CLASSES: [&str; 11] = ["transient", "stalled", "check_failed", "auth", "quota", "budget", "denied", "bad_spec", "needs_input", "unknown", "waited_too_long"];
+/// `task_failures.class`'s CHECK before `waited_too_long`, and after (see `migrate_waiting_checks`).
+pub(super) const OLD_CLASS_CHECK: &str = "CHECK (class IN ('transient', 'stalled', 'check_failed', 'auth', 'quota', 'budget', 'denied', 'bad_spec', 'needs_input', 'unknown'))";
+pub(super) const NEW_CLASS_CHECK: &str = "CHECK (class IN ('transient', 'stalled', 'check_failed', 'auth', 'quota', 'budget', 'denied', 'bad_spec', 'needs_input', 'unknown', 'waited_too_long'))";
 pub const STRATEGIES: [&str; 6] = ["retry_same", "retry_with_diagnostics", "retry_from_checkpoint", "wait_and_retry", "propose_change", "none"];
 pub const TARGETS: [&str; 5] = ["routine_instructions", "routine_schedule", "check_spec", "task_acceptance", "max_attempts"];
 
@@ -127,7 +130,7 @@ impl Database {
                 task_id TEXT NOT NULL REFERENCES tasks(id),
                 attempt INTEGER NOT NULL,
                 source TEXT NOT NULL CHECK (source IN ('check', 'turn', 'lease', 'budget', 'routine', 'handoff')),
-                class TEXT NOT NULL CHECK (class IN ('transient', 'stalled', 'check_failed', 'auth', 'quota', 'budget', 'denied', 'bad_spec', 'needs_input', 'unknown')),
+                class TEXT NOT NULL CHECK (class IN ('transient', 'stalled', 'check_failed', 'auth', 'quota', 'budget', 'denied', 'bad_spec', 'needs_input', 'unknown', 'waited_too_long')),
                 summary TEXT NOT NULL,
                 excerpt TEXT,
                 diagnostics_path TEXT,
