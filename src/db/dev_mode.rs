@@ -392,7 +392,7 @@ impl Database {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(self.get_skill(&id).await?)
+        self.get_skill(&id).await
     }
 
     async fn dev_cards_has(&self, column: &str) -> Result<bool, DbError> {
