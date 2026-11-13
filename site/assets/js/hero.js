@@ -151,6 +151,51 @@
     if (start && tabs[+start]) select(tabs[+start]);
   }
 
+  // The "Watch it work" reel (it has a voiceover; the hero clips stay muted). Without JS (or <dialog>) the pill is a plain link to the mp4. The video's src and
+  // poster are set only when the dialog opens, so the page loads none of it. Esc, Close and a click on the backdrop
+  // close it; closing pauses and rewinds; the native dialog returns focus to the pill.
+  function startReel(pill) {
+    var dlg = document.getElementById("reel-dialog");
+    if (!dlg || typeof dlg.showModal !== "function") return;
+    var video = dlg.querySelector("video"), play = dlg.querySelector("[data-reel-play]");
+    function arm() {
+      if (video.dataset.ready) return;
+      video.dataset.ready = "1";
+      var big = (window.innerWidth * (window.devicePixelRatio || 1)) > 1280;
+      var poster = (big && video.dataset.posterLg) || video.dataset.posterSm || video.dataset.posterLg;
+      if (poster) video.poster = poster;
+      var track = video.querySelector("track[data-src]");
+      if (track) track.src = track.dataset.src;
+      video.src = video.dataset.src;
+    }
+    pill.addEventListener("click", function (e) {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      arm();
+      document.documentElement.classList.add("reel-open");
+      dlg.showModal();
+      if (reduce.matches) { play.hidden = false; play.focus(); return; }
+      // Unmuted, inside the click: the click is the gesture that allows sound. If the browser still refuses, the
+      // native controls and the poster stay up; it is never retried muted.
+      play.hidden = true;
+      video.muted = false;
+      video.focus();
+      video.play().catch(function () {});
+    });
+    play.addEventListener("click", function () { play.hidden = true; video.focus(); video.play().catch(function () {}); });
+    video.addEventListener("play", function () { play.hidden = true; });
+    dlg.querySelector("[data-reel-close]").addEventListener("click", function () { dlg.close(); });
+    // A click on the dialog element itself (not its contents) is a click on the backdrop.
+    dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
+    dlg.addEventListener("close", function () {
+      video.pause();
+      try { video.currentTime = 0; } catch (err) {}
+      document.documentElement.classList.remove("reel-open");
+      pill.focus();
+    });
+  }
+  var reelPill = document.querySelector("[data-reel]"); if (reelPill) startReel(reelPill);
+
   function go() {
     var cv = document.querySelector("canvas[data-nebula]"); if (cv) startNebula(cv);
     var m = document.querySelector("[data-moments]"); if (m) startMoments(m);

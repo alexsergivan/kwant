@@ -382,9 +382,45 @@ def expand(body, root):
     return body
 
 
-def header(root, active):
+# The "Watch it work · 1:00" reel (home page, desktop). The pill and its lightbox are only emitted once the video is in
+# site/assets/media, so the site never links to a missing file. The description is the reel's text alternative.
+REEL = "assets/media/reel.mp4"
+REEL_VTT = "assets/media/reel.vtt"
+REEL_POSTERS = ("assets/media/reel-poster-960.webp", "assets/media/reel-poster-1920.webp")
+REEL_DESC = ("A one-minute recording of the kwant app in use, in one demo space with no sound. A fresh install opens on a "
+             "team of helper bots. You ask for something in plain words, and one bot hands the work on to a teammate. "
+             "You point at the exact part of a page that is wrong and a bot fixes it. A risky step waits on an approval "
+             "card until you press Approve. A finished task shows the checks it passed. A routine is set up to run every "
+             "morning while you are away. It ends on the kwant avatars and kwant.si.")
+
+
+def reel_markup(root):
+    """The reel pill and its <dialog>. Without JS the pill is a plain link to the mp4. hero.js opens the dialog and only
+    then sets the video's src and poster, so nothing of the reel loads with the page."""
+    if not (OUT / REEL).exists():
+        return "", ""
+    posters = " ".join(f'data-poster-{w}="{root}{p}"' for w, p in zip(("sm", "lg"), REEL_POSTERS) if (OUT / p).exists())
+    track = (f'\n      <track kind="captions" srclang="en" label="English" data-src="{root}{REEL_VTT}">'
+             if (OUT / REEL_VTT).exists() else "")
+    pill = (f'\n  <div class="reel"><a class="btn btn-line px" href="{root}{REEL}" data-reel aria-haspopup="dialog" '
+            f'aria-controls="reel-dialog">{px_icon(IC["play"])}Watch it work <span>1:00</span></a></div>')
+    dialog = f"""
+<dialog class="reel-dialog" id="reel-dialog" aria-labelledby="reel-title" aria-describedby="reel-desc">
+  <div class="reel-bar"><h2 id="reel-title">kwant in one minute</h2><button type="button" class="reel-close" data-reel-close aria-label="Close video">Close</button></div>
+  <div class="reel-frame">
+    <video controls playsinline preload="none" data-src="{root}{REEL}" {posters} aria-describedby="reel-desc">{track}
+    </video>
+    <button type="button" class="reel-play" data-reel-play hidden aria-label="Play video">{px_icon(IC["play"])}</button>
+  </div>
+  <p class="sr-only" id="reel-desc">{REEL_DESC}</p>
+</dialog>"""
+    return pill, dialog
+
+
+def header(root, active, home_page=False):
     """The floating pill nav (Mira's site redesign): brand, Features, Docs, Blog once it is live, the GitHub star
-    count written at build time, and Get started."""
+    count written at build time, and Get started. The home page adds the reel pill and its dialog."""
+    reel, dialog = reel_markup(root) if home_page else ("", "")
     home = root or "./"
     def nl(href, text, name):
         cur = ' aria-current="page"' if active == name else ""
@@ -399,8 +435,8 @@ def header(root, active):
     {nl(f"{root}docs/quickstart.html", "Docs", "docs")}
     {blog}<a class="nl stars" href="{GITHUB}" rel="noopener" aria-label="kwant on GitHub, {n} stars">{GH_ICON}<b>★ {n}</b></a>
     <a class="btn btn-solid btn-get px" href="{root}docs/quickstart.html">Get started</a>
-  </nav>
-</header>"""
+  </nav>{reel}
+</header>{dialog}"""
 
 
 def footer(root, home_page=False):
@@ -667,7 +703,7 @@ def page(meta, body, root, dates):
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
 <body class="page-{meta.get("active", "docs" if meta.get("nav") else "home") if not is404 else "404"}">
-{header(root, "docs" if meta.get("nav") else meta.get("active", "home"))}
+{header(root, "docs" if meta.get("nav") else meta.get("active", "home"), meta["path"] == "index.html")}
 <main id="main">
 {body}
 </main>
