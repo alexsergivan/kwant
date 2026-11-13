@@ -145,15 +145,50 @@ async fn await_reply(ws: &mut WsStream, id: u64) -> Result<Result<Value, Browser
     Err(BrowserError::Protocol("Connection closed before response".into()))
 }
 
-/// `function(needle)` evaluated in the page. Collects visible interactive elements (incl. open
-/// shadow roots and same-origin iframes), topmost first. With a needle, picks the best label match
-/// and either returns its viewport center (when nothing covers it) or clicks it directly. With
-/// `probe`, returns the matched item itself (with its element) and touches nothing.
+/// `function(needle, probe)` evaluated in the page. Collects visible interactive elements (incl.
+/// open shadow roots and same-origin iframes), topmost first. Also lists, at most 40 of each,
+/// clickable cards (the outermost element with a pointer cursor whose parent has none: a tile
+/// with a JS click listener) and controls that show only on hover (opacity 0 or visibility
+/// hidden inside a shown card: a tile's ⋮ button), with the card to hover. An icon-only control
+/// is named by its aria-label or title, else by its icon word (`more_vert` reads "More").
+/// With a needle, picks the best label match (controls listed before cards and hover controls
+/// existed first) and either returns its viewport center (when nothing covers it), clicks it
+/// directly, or, for a control shown on hover, keeps it for `REF_JS('hovered')` and says
+/// `hover: true`. With `probe`, returns the matched item itself (with its element and the label
+/// the payment floor judged before icon words were read) and touches nothing; with no needle
+/// either, returns all items (with their elements).
 const CLICKABLES_JS: &str = r#"function (needle, probe) {
   var SEL = 'button,a[href],[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=option],input,textarea,select,summary,label,[onclick]';
-  var items = [];
+  // Clickable cards (a div with a JS click listener) and controls shown only on hover are listed
+  // at most this many each, topmost and in view first, so a busy page doesn't flood the list
+  var CARD_CAP = 40, HOVER_CAP = 40;
+  // The word a person reads for an icon-only control's icon-font word (Material icons and symbols)
+  var ICONS = { more_vert: 'More', more_horiz: 'More', download: 'Download', file_download: 'Download',
+    close: 'Close', delete: 'Delete', delete_outline: 'Delete', edit: 'Edit', share: 'Share', ios_share: 'Share',
+    content_copy: 'Copy', play_arrow: 'Play', pause: 'Pause', search: 'Search', menu: 'Menu', settings: 'Settings',
+    upload: 'Upload', file_upload: 'Upload', add: 'Add', arrow_back: 'Back', favorite: 'Like', favorite_border: 'Like' };
+  var ICON_SEL = 'i,mat-icon,[class*=icon],[class*=Icon],[class*=symbol],[class*=Symbol]';
+  var items = [], cards = [], hovers = [], seq = 0;
+  var styles = new Map(), fades = new Map();
   function clean(s) { return (s || '').replace(/\s+/g, ' ').trim().slice(0, 80); }
-  // A control's role for the ref list: what it is, in one word
+  function style(el) { var s = styles.get(el); if (!s) { s = getComputedStyle(el); styles.set(el, s); } return s; }
+  // The parent element, also out of a shadow root (to its host); null at a document's top
+  function up(el) { return el.parentElement || (el.parentNode && el.parentNode.host) || null; }
+  // Whether el or an element around it is fully see-through (opacity 0)
+  function faded(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (fades.has(el)) return fades.get(el);
+    var f = Number(style(el).opacity) === 0 || faded(up(el));
+    fades.set(el, f);
+    return f;
+  }
+  // innerText leaves out the text of a visibility:hidden element; a control shown on hover still has a name
+  function textOf(el) {
+    var t = el.innerText;
+    if (!clean(t) && style(el).visibility !== 'visible') t = el.textContent;
+    return t || '';
+  }
+  // A control a role for the ref list: what it is, in one word
   function roleOf(el) {
     var role = (el.getAttribute('role') || '').toLowerCase();
     if (role) return role;
@@ -165,7 +200,17 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
     if (tag === 'TEXTAREA' || (tag === 'INPUT' && ['submit', 'button', 'image', 'reset'].indexOf(t) < 0)) return 'field';
     return 'button';
   }
-  function nameOf(el) {
+  // The icon-font word an icon-only control shows (its whole text, in an icon element), or ''
+  function iconWord(el, text) {
+    if (!/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/.test(text)) return '';
+    var icons = [el].concat(Array.prototype.slice.call(el.querySelectorAll(ICON_SEL)));
+    for (var i = 0; i < icons.length; i++) {
+      if ((i > 0 || el.matches(ICON_SEL)) && clean(icons[i].textContent) === text) return text;
+    }
+    return '';
+  }
+  // With old, the name as it was before icon words were read (the payment floor judges that one)
+  function nameOf(el, old) {
     var tag = el.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
       var t = (el.type || '').toLowerCase();
@@ -173,12 +218,33 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
       if (t === 'hidden') return '';
       return clean(el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
     }
-    return clean(el.innerText || el.getAttribute('aria-label') || el.title || el.value);
+    if (old) return clean(el.innerText || el.getAttribute('aria-label') || el.title || el.value);
+    var text = textOf(el), word = iconWord(el, clean(text));
+    if (word) return clean(el.getAttribute('aria-label') || el.title) || (ICONS.hasOwnProperty(word) ? ICONS[word] : word);
+    return clean(text || el.getAttribute('aria-label') || el.title || el.value);
   }
-  function labelOf(el) {
-    var name = nameOf(el), tag = el.tagName, t = (el.type || '').toLowerCase();
+  function labelOf(el, old) {
+    var name = nameOf(el, old), tag = el.tagName, t = (el.type || '').toLowerCase();
     if (!name || !(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') || t === 'submit' || t === 'button') return name;
     return name + ' (' + (t === 'checkbox' || t === 'radio' ? t : 'field') + ')';
+  }
+  // A card's name: its aria-label or title, else its first line of text that isn't one of its own
+  // controls or icons (a tile's ⋮ button reads more_vert), else an image's alt text
+  function cardLabel(el) {
+    var named = clean(el.getAttribute('aria-label') || el.title);
+    if (named) return named.slice(0, 60);
+    var own = new Set(), inner = el.querySelectorAll(SEL + ',' + ICON_SEL);
+    for (var i = 0; i < inner.length; i++) {
+      var ls = (inner[i].innerText || inner[i].textContent || '').split('\n');
+      for (var k = 0; k < ls.length; k++) own.add(clean(ls[k]));
+    }
+    var lines = (el.innerText || '').split('\n');
+    for (var j = 0; j < lines.length; j++) {
+      var line = clean(lines[j]);
+      if (line && !own.has(line)) return line.slice(0, 60);
+    }
+    var img = el.querySelector('img[alt]:not([alt=""])');
+    return img ? clean(img.alt).slice(0, 60) : '';
   }
   // The text that tells a repeated control apart (the product a repeated "Add to cart" belongs
   // to): the first line of the largest block around it that holds no other control of that name
@@ -197,6 +263,46 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
     }
     return '';
   }
+  // The visible element to hover so that el shows: the nearest one around it that is shown and
+  // larger than el (the tile, not a wrapper of the button's own size)
+  function cardFor(el, r0) {
+    for (var a = up(el), d = 0; a && d < 12; a = up(a), d++) {
+      if (a.tagName === 'BODY' || a.tagName === 'HTML') return null;
+      var r = a.getBoundingClientRect();
+      if (r.width < r0.width + 8 && r.height < r0.height + 8) continue;
+      var cs = style(a);
+      if (cs.display === 'none' || cs.visibility !== 'visible' || faded(a)) continue;
+      return a;
+    }
+    return null;
+  }
+  // A card: the outermost element with a pointer cursor that isn't (in) a listed control
+  function isCard(el) {
+    if (el.tagName === 'BODY' || el.tagName === 'HTML' || style(el).cursor !== 'pointer') return false;
+    var p = up(el);
+    if (p && style(p).cursor === 'pointer') return false;
+    return !el.closest(SEL);
+  }
+  // One control covers (nearly) all of it: that control is listed itself
+  function filled(el, r) {
+    var inner = el.querySelectorAll(SEL);
+    for (var i = 0; i < inner.length; i++) {
+      var q = inner[i].getBoundingClientRect();
+      if (q.width * q.height >= 0.8 * r.width * r.height) return true;
+    }
+    return false;
+  }
+  function place(el, r, root, ox, oy) {
+    var lx = r.left + r.width / 2, ly = r.top + r.height / 2;
+    var x = ox + lx, y = oy + ly;
+    var inView = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight;
+    var onTop = false;
+    if (inView) {
+      var hit = root.elementFromPoint ? root.elementFromPoint(lx, ly) : null;
+      onTop = !hit || hit === el || el.contains(hit) || hit.contains(el);
+    }
+    return { x: Math.round(x), y: Math.round(y), inView: inView, onTop: onTop };
+  }
   function walk(root, ox, oy) {
     var all;
     try { all = root.querySelectorAll('*'); } catch (e) { return; }
@@ -207,38 +313,71 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
         try { var d = el.contentDocument; if (d) { var fr = el.getBoundingClientRect(); walk(d, ox + fr.left, oy + fr.top); } } catch (e) {}
         continue;
       }
-      if (!el.matches(SEL)) continue;
-      var r = el.getBoundingClientRect();
-      if (r.width < 2 || r.height < 2) continue;
-      var cs = getComputedStyle(el);
-      if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) === 0) continue;
-      var label = labelOf(el);
-      if (!label) continue;
-      var lx = r.left + r.width / 2, ly = r.top + r.height / 2;
-      var x = ox + lx, y = oy + ly;
-      var inView = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight;
-      var onTop = false;
-      if (inView) {
-        var hit = root.elementFromPoint ? root.elementFromPoint(lx, ly) : null;
-        onTop = !hit || hit === el || el.contains(hit) || hit.contains(el);
+      var r, cs, p;
+      if (!el.matches(SEL)) {
+        if (!isCard(el)) continue;
+        r = el.getBoundingClientRect();
+        var win = el.ownerDocument.defaultView || window;
+        if (r.width < 16 || r.height < 16 || (r.width >= win.innerWidth * 0.95 && r.height >= win.innerHeight * 0.95)) continue;
+        cs = style(el);
+        if (cs.visibility !== 'visible' || cs.display === 'none' || faded(el) || filled(el, r)) continue;
+        var name = cardLabel(el);
+        if (!name) continue;
+        p = place(el, r, root, ox, oy);
+        cards.push({ seq: seq++, label: name, old: name, name: name, role: 'card', kind: 'card', x: p.x, y: p.y, inView: p.inView, onTop: p.onTop, el: el, tier: 1 });
+        continue;
       }
-      items.push({ label: label, name: nameOf(el), role: roleOf(el), x: Math.round(x), y: Math.round(y), inView: inView, onTop: onTop, el: el });
+      r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      cs = style(el);
+      if (cs.display === 'none') continue;
+      // Hidden only until the mouse is over something around it: a ⋮ button at opacity 0 on a tile
+      var hidden = cs.visibility === 'hidden' || Number(cs.opacity) === 0;
+      var role = roleOf(el), card = null;
+      if (hidden || faded(up(el))) card = role === 'field' || role === 'checkbox' || role === 'radio' || role === 'select' ? null : cardFor(el, r);
+      if (hidden && !card) continue;
+      var label = labelOf(el, false);
+      if (!label) continue;
+      p = place(el, r, root, ox, oy);
+      var item = { seq: seq++, label: label, old: labelOf(el, true), name: nameOf(el, false), role: role, kind: 'control',
+                   x: p.x, y: p.y, inView: p.inView, onTop: p.onTop, el: el, tier: hidden ? 1 : 0,
+                   card: card, cardLabel: card ? cardLabel(card) : '' };
+      (hidden ? hovers : items).push(item);
     }
   }
   walk(document, 0, 0);
-  items.sort(function (a, b) { return (b.onTop - a.onTop) || (b.inView - a.inView); });
+  function order(a, b) { return (b.onTop - a.onTop) || (b.inView - a.inView); }
+  items = items.concat(cards.sort(order).slice(0, CARD_CAP), hovers.sort(order).slice(0, HOVER_CAP));
+  items.sort(function (a, b) { return order(a, b) || (a.seq - b.seq); });
+  function registry() {
+    var reg = window[Symbol.for('kwnt.refs')];
+    if (!reg) {
+      reg = { gen: 0 };
+      try { Object.defineProperty(window, Symbol.for('kwnt.refs'), { value: reg }); } catch (e) {}
+    }
+    return reg;
+  }
   var match = null;
   if (needle) {
+    // The controls listed before cards and hover-only controls existed first, so a label that
+    // matched one of those still picks the same element (the payment floor judges that one)
     var n = clean(needle).toLowerCase(), best = 0;
-    for (var j = 0; j < items.length; j++) {
-      var l = items[j].label.toLowerCase();
-      var s = l === n ? 3 : l.indexOf(n) === 0 ? 2 : l.indexOf(n) >= 0 ? 1 : 0;
-      if (s > best) { best = s; match = items[j]; }
+    for (var tier = 0; tier < 2 && !best; tier++) {
+      for (var j = 0; j < items.length; j++) {
+        if (items[j].tier !== tier) continue;
+        var l = items[j].label.toLowerCase();
+        var s = l === n ? 3 : l.indexOf(n) === 0 ? 2 : l.indexOf(n) >= 0 ? 1 : 0;
+        if (s > best) { best = s; match = items[j]; }
+      }
     }
-    if (probe) return match;
+    if (probe) return match ? { el: match.el, label: match.old || match.label, item: match } : null;
     if (match) {
       var m = match.el;
-      if (!match.onTop) {
+      if (match.card) {
+        // Shown on hover: the click hovers its card first (see REF_JS 'hovered')
+        registry().hovered = { el: m, label: match.label, old: match.old, kind: match.kind, card: match.card, cardLabel: match.cardLabel };
+        match = { label: match.label, hover: true, clicked: false };
+      } else if (!match.onTop) {
         m.scrollIntoView({ block: 'center' });
         if (typeof m.focus === 'function') m.focus();
         m.click();
@@ -248,16 +387,14 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
       }
     }
   }
+  // A peek (no needle, probe): the items with their elements, without numbering them
+  if (!needle && probe) return items;
   if (!needle) {
     // A listing numbers the controls (ref = position + 1) and keeps their elements in the page,
     // so the next `act` by ref hits exactly this element or says it is gone
     var twins = {};
     for (var k = 0; k < items.length; k++) (twins[items[k].name] = twins[items[k].name] || []).push(items[k].el);
-    var reg = window[Symbol.for('kwnt.refs')];
-    if (!reg) {
-      reg = { gen: 0 };
-      try { Object.defineProperty(window, Symbol.for('kwnt.refs'), { value: reg }); } catch (e) {}
-    }
+    var reg = registry();
     // A control is new when its element wasn't in this page's previous list (a dropdown's
     // options, a dialog's buttons). The first list of a page, and one after the address changed
     // (other than its #fragment), marks nothing
@@ -265,69 +402,143 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
     var before = reg.items && reg.href === here ? new Set(reg.items.map(function (i) { return i.el; })) : null;
     reg.gen += 1;
     reg.href = here;
-    reg.items = items.map(function (i) { return { el: i.el, label: i.label }; });
+    reg.items = items.map(function (i) { return { el: i.el, label: i.label, old: i.old, kind: i.kind, card: i.card, cardLabel: i.cardLabel }; });
     reg.labelOf = labelOf;
+    reg.cardLabel = cardLabel;
     return { gen: reg.gen, items: items.map(function (i, k) {
-      return { ref: k + 1, label: i.label, name: i.name, role: i.role, onTop: i.onTop,
+      return { ref: k + 1, label: i.label, name: i.name, role: i.role, onTop: i.onTop, hover: !!i.card,
                new: !!before && !before.has(i.el),
-               context: twins[i.name].length > 1 ? contextOf(i.el, i.name, twins[i.name]) : '' };
+               context: i.card ? i.cardLabel : twins[i.name].length > 1 ? contextOf(i.el, i.name, twins[i.name]) : '' };
     }) };
   }
   return { items: items.map(function (i) { return { label: i.label, onTop: i.onTop }; }), match: match };
 }"#;
 
-/// Finds control `ref` from the last listing (see [`CLICKABLES_JS`]). With `probe`, returns
-/// `{el, label}` (or null) and touches nothing. Otherwise checks it can still be clicked: still
-/// in the page, shown, the same label, and on top at its center after scrolling it into view
-/// (so a cookie banner or modal over it is reported, not clicked through). Returns
-/// `{ok: true, x, y, label}` in top-page pixels, or `{ok: false, why}`.
+/// Finds control `ref` from the last listing (see [`CLICKABLES_JS`]), or with `"hovered"` the
+/// hover-only control a click by label picked. With `probe` true, returns `{el, label}` (or
+/// null) and touches nothing. Otherwise checks it can still be clicked: still in the page, shown,
+/// the same label, and on top at its center after scrolling it into view (so a cookie banner or
+/// modal over it is reported, not clicked through). Returns `{ok: true, x, y, label, hovered}` in
+/// top-page pixels, or `{ok: false, why}`. A control that shows on hover and isn't shown yet
+/// returns `{ok: false, hover: {x, y, card}}`: where to put the mouse first; with `probe` 'spot'
+/// that place comes back as `{ok: true, x, y, label, card}`.
 const REF_JS: &str = r#"function (ref, probe) {
   function clean(s) { return (s || '').replace(/\s+/g, ' ').trim().slice(0, 80); }
   var reg = window[Symbol.for('kwnt.refs')];
-  var item = reg && reg.items && reg.items[ref - 1];
-  if (probe) return item ? { el: item.el, label: item.label } : null;
+  // 'hovered': the control a click by label picked that shows only on hover
+  var item = ref === 'hovered' ? reg && reg.hovered : reg && reg.items && reg.items[ref - 1];
+  if (probe === true) return item ? { el: item.el, label: item.old || item.label } : null;
   if (!item) return { ok: false, why: reg ? 'there is no ref ' + ref + ' in the last list' : 'this page has no list of refs yet (it changed or reloaded)' };
   var el = item.el;
   if (!el.isConnected) return { ok: false, why: 'it is no longer on the page' };
-  var label = reg.labelOf ? reg.labelOf(el) : item.label;
+  var label = item.kind === 'card' ? (reg.cardLabel ? reg.cardLabel(el) : item.label) : reg.labelOf ? reg.labelOf(el) : item.label;
   if (label !== item.label) return { ok: false, why: 'it now reads "' + label + '", not "' + item.label + '"' };
-  function shown() {
-    var r = el.getBoundingClientRect();
+  // A control shown on hover counts as shown only when nothing around it is see-through either
+  function seeThrough(node) {
+    for (var a = node; a && a.nodeType === 1; a = a.parentElement || (a.parentNode && a.parentNode.host)) {
+      if (Number(getComputedStyle(a).opacity) === 0) return true;
+    }
+    return false;
+  }
+  function shown(node, whole) {
+    var r = node.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return null;
-    var cs = getComputedStyle(el);
+    var cs = getComputedStyle(node);
     if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) === 0) return null;
+    if (whole && (cs.visibility !== 'visible' || seeThrough(node))) return null;
     return r;
   }
-  var r = shown();
-  if (!r) return { ok: false, why: 'it is hidden now' };
-  var win = el.ownerDocument.defaultView;
-  if (r.top < 0 || r.left < 0 || r.bottom > win.innerHeight || r.right > win.innerWidth) {
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    r = shown();
-    if (!r) return { ok: false, why: 'it is hidden now' };
-  }
-  var lx = r.left + r.width / 2, ly = r.top + r.height / 2;
-  // The top-page point: add the offsets of the (same-origin) frames it sits in
-  var x = lx, y = ly, frames = [];
-  for (var w = win; w !== w.top && w.frameElement; w = w.parent) {
-    var fr = w.frameElement.getBoundingClientRect();
-    x += fr.left; y += fr.top;
-    frames.push(w.frameElement);
-  }
-  if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return { ok: false, why: 'it is outside the window' };
   function covers(hit, target) { return !hit || hit === target || target.contains(hit) || hit.contains(target); }
   function what(hit) {
     var t = clean(hit.innerText || hit.getAttribute('aria-label') || '').slice(0, 40);
     return hit.tagName.toLowerCase() + (t ? ' "' + t + '"' : '');
   }
-  var root = el.getRootNode();
-  var hit = root.elementFromPoint ? root.elementFromPoint(lx, ly) : null;
-  if (!covers(hit, el)) return { ok: false, why: 'it is covered by ' + what(hit) };
-  if (frames.length) {
-    var top = document.elementFromPoint(x, y), outer = frames[frames.length - 1];
-    if (!covers(top, outer)) return { ok: false, why: 'it is covered by ' + what(top) };
+  // Where to put the mouse on node, in top-page pixels: its center, scrolled into view, and
+  // nothing over it (so a cookie banner or modal over it is reported, not clicked through)
+  function spot(node, whole) {
+    var r = shown(node, whole);
+    if (!r) return { ok: false, why: 'it is hidden now' };
+    var win = node.ownerDocument.defaultView;
+    if (r.top < 0 || r.left < 0 || r.bottom > win.innerHeight || r.right > win.innerWidth) {
+      node.scrollIntoView({ block: 'center', inline: 'center' });
+      r = shown(node, whole);
+      if (!r) return { ok: false, why: 'it is hidden now' };
+    }
+    var lx = r.left + r.width / 2, ly = r.top + r.height / 2;
+    // The top-page point: add the offsets of the (same-origin) frames it sits in
+    var x = lx, y = ly, frames = [];
+    for (var w = win; w !== w.top && w.frameElement; w = w.parent) {
+      var fr = w.frameElement.getBoundingClientRect();
+      x += fr.left; y += fr.top;
+      frames.push(w.frameElement);
+    }
+    if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return { ok: false, why: 'it is outside the window' };
+    var root = node.getRootNode();
+    var hit = root.elementFromPoint ? root.elementFromPoint(lx, ly) : null;
+    if (!covers(hit, node)) return { ok: false, why: 'it is covered by ' + what(hit) };
+    if (frames.length) {
+      var top = document.elementFromPoint(x, y), outer = frames[frames.length - 1];
+      if (!covers(top, outer)) return { ok: false, why: 'it is covered by ' + what(top) };
+    }
+    return { ok: true, x: Math.round(x), y: Math.round(y) };
   }
-  return { ok: true, x: Math.round(x), y: Math.round(y), label: item.label };
+  var card = item.card;
+  if (card && !shown(el, true)) {
+    // Shown only on hover: say where to hover (its card), or why that can't be done
+    if (!card.isConnected) return { ok: false, why: 'it is hidden now' };
+    var c = spot(card, true);
+    if (!c.ok) return { ok: false, why: 'it shows on hover, and its card "' + item.cardLabel + '" ' + c.why.replace(/^it /, '') };
+    if (probe === 'spot') return { ok: true, x: c.x, y: c.y, label: item.label, card: item.cardLabel };
+    return { ok: false, hover: { x: c.x, y: c.y, card: item.cardLabel }, label: item.label };
+  }
+  var s = spot(el, !!card);
+  if (!s.ok) return s;
+  return { ok: true, x: s.x, y: s.y, label: item.label, hovered: !!card };
+}"#;
+
+/// `function(target)`: a label or a ref to hover. Finds it (as a click would), keeps what is
+/// shown now (for [`APPEARED_JS`]) and returns where to put the mouse: the card of a control that
+/// shows on hover, else the control itself, as `{ok, x, y, label, card}` or `{ok: false, why}`.
+const HOVER_JS: &str = r#"function (target) {
+  var CLICK = __CLICKABLES__;
+  var REF = __REF__;
+  var key = target;
+  if (typeof target === 'string') {
+    var m = CLICK(target, true);
+    if (!m) return { ok: false, why: 'nothing on the page matches "' + target + '"' };
+    var reg = window[Symbol.for('kwnt.refs')];
+    if (!reg) {
+      reg = { gen: 0 };
+      try { Object.defineProperty(window, Symbol.for('kwnt.refs'), { value: reg }); } catch (e) {}
+    }
+    var i = m.item;
+    reg.hovered = { el: i.el, label: i.label, old: i.old, kind: i.kind, card: i.card, cardLabel: i.cardLabel };
+    key = 'hovered';
+  }
+  var spot = REF(key, 'spot');
+  if (spot.ok) {
+    // What is shown now, to tell what the hover brings up
+    var shown = new Set();
+    var now = CLICK(null, true);
+    for (var k = 0; k < now.length; k++) if (!now[k].card) shown.add(now[k].el);
+    window[Symbol.for('kwnt.refs')].shownBefore = shown;
+  }
+  return spot;
+}"#;
+
+/// `function()` after a hover: the controls shown now that weren't before it (at most 12), as
+/// `Label (role)`.
+const APPEARED_JS: &str = r#"function () {
+  var CLICK = __CLICKABLES__;
+  var reg = window[Symbol.for('kwnt.refs')];
+  var before = reg && reg.shownBefore;
+  if (!before) return [];
+  reg.shownBefore = null;
+  var now = CLICK(null, true), out = [];
+  for (var k = 0; k < now.length && out.length < 12; k++) {
+    if (!now[k].card && !before.has(now[k].el)) out.push(now[k].label + ' (' + now[k].role + ')');
+  }
+  return out;
 }"#;
 
 /// What the payment floor needs from the page before a `browser_act` (see
@@ -580,7 +791,8 @@ impl ClickTarget {
 }
 
 /// One line of the control list: `[3] button "Add to cart" · Sauce Labs Backpack`. The context
-/// (nearby text) is only there when several controls share a name. A control that wasn't in the
+/// (nearby text) is only there when several controls share a name, or, for a control that shows
+/// on hover (marked [`HOVER_MARK`]), it is the card to hover. A control that wasn't in the
 /// page's previous list starts with [`NEW_MARK`]: `*[12] option "Large"`.
 pub fn ref_line(item: &Value) -> Option<String> {
     let r = item["ref"].as_u64()?;
@@ -588,11 +800,30 @@ pub fn ref_line(item: &Value) -> Option<String> {
     let role = item["role"].as_str().filter(|r| !r.is_empty()).unwrap_or("button");
     let mark = if item["new"].as_bool() == Some(true) { NEW_MARK } else { "" };
     let mut line = format!("{mark}[{r}] {role} \"{name}\"");
+    if item["hover"].as_bool() == Some(true) {
+        line.push_str(HOVER_MARK);
+    }
     if let Some(ctx) = item["context"].as_str().filter(|c| !c.is_empty()) {
         line.push_str(" · ");
         line.push_str(ctx);
     }
     Some(line)
+}
+
+/// Marks a control that shows only when the mouse is over its card (the card follows as the
+/// context): `[7] button "More" (on hover) · Clip 1`. A click on it hovers the card first.
+pub const HOVER_MARK: &str = " (on hover)";
+
+/// How long a page gets to show what it shows on hover (a CSS transition, a JS mouseenter).
+const HOVER_SETTLE: Duration = Duration::from_millis(200);
+
+/// What a hover brought up, for the bot: `Hovered over "Clip 1". Appeared: More (button)`.
+pub fn hover_summary(over: &str, appeared: &[String]) -> String {
+    if appeared.is_empty() {
+        format!("Hovered over \"{over}\". Nothing new appeared.")
+    } else {
+        format!("Hovered over \"{over}\". Appeared: {}", appeared.join(", "))
+    }
 }
 
 /// Marks a control line as new since the page's previous list (see [`ref_line`]).
@@ -2341,32 +2572,112 @@ impl BrowserController {
     }
 
     /// Clicks control `r` from the last list with a real mouse click at its center, after
-    /// checking it is still in the page, shown, unchanged and not covered (see [`REF_JS`]).
+    /// checking it is still in the page, shown, unchanged and not covered (see [`REF_JS`]). A
+    /// control that shows only on hover (a tile's ⋮ button) gets the mouse over its card first.
     /// Otherwise clicks nothing and says why ([`BrowserError::StaleRef`]); the page state the
     /// caller returns next re-lists the controls.
     pub async fn click_ref(&self, r: u32) -> Result<String, BrowserError> {
+        self.click_checked(json!(r), &format!("ref {r}")).await
+    }
+
+    /// One [`REF_JS`] check of `key` (a ref, or `"hovered"`).
+    async fn ref_check(&self, key: &Value) -> Result<Value, BrowserError> {
         let res = self
             .send_cdp_command(
                 "Runtime.evaluate",
-                json!({ "expression": format!("({REF_JS})({r}, false)"), "returnByValue": true }),
+                json!({ "expression": format!("({REF_JS})({key}, false)"), "returnByValue": true }),
             )
             .await?;
         if let Some(err) = res.get("exceptionDetails") {
             return Err(BrowserError::Protocol(format!("ref check failed: {}", err["text"])));
         }
-        let v = &res["result"]["value"];
+        Ok(res["result"]["value"].clone())
+    }
+
+    /// Clicks `key` (see [`Self::ref_check`]) after checking it. A control shown only on hover
+    /// gets the mouse over its card, a moment to show, and the check again: still hidden means
+    /// nothing is clicked. `what` names it in the error ("ref 3", "\"More\"").
+    async fn click_checked(&self, key: Value, what: &str) -> Result<String, BrowserError> {
+        let mut v = self.ref_check(&key).await?;
+        if let Some(h) = v.get("hover").filter(|h| h.is_object()).cloned() {
+            self.mouse_move(h["x"].as_i64().unwrap_or(0), h["y"].as_i64().unwrap_or(0)).await?;
+            tokio::time::sleep(HOVER_SETTLE).await;
+            v = self.ref_check(&key).await?;
+            if v.get("hover").is_some_and(Value::is_object) {
+                let card = h["card"].as_str().unwrap_or_default();
+                return Err(BrowserError::StaleRef(format!(
+                    "Didn't click {what}: it stayed hidden after hovering over \"{card}\". The clickable list was read again just now; pick from the new list."
+                )));
+            }
+        }
         if v["ok"].as_bool() != Some(true) {
             let why = v["why"].as_str().unwrap_or("it can't be found");
             return Err(BrowserError::StaleRef(format!(
-                "Didn't click ref {r}: {why}. The clickable list was read again just now; pick from the new list."
+                "Didn't click {what}: {why}. The clickable list was read again just now; pick from the new list."
             )));
         }
         let (x, y) = (v["x"].as_i64().unwrap_or(0), v["y"].as_i64().unwrap_or(0));
+        if v["hovered"].as_bool() == Some(true) {
+            // From the card onto the control, so the hover that shows it holds through the click
+            self.mouse_move(x, y).await?;
+        }
         self.interact_click(x, y).await?;
         tokio::time::sleep(Duration::from_millis(250)).await;
         let _ = self.sync_location().await;
         let _ = self.capture_screenshot().await;
         Ok(v["label"].as_str().unwrap_or_default().to_string())
+    }
+
+    /// Moves the mouse to `x`, `y` (top-page pixels): what makes a page show what it shows on hover.
+    pub async fn mouse_move(&self, x: i64, y: i64) -> Result<(), BrowserError> {
+        self.send_cdp_command("Input.dispatchMouseEvent", json!({ "type": "mouseMoved", "x": x, "y": y })).await?;
+        Ok(())
+    }
+
+    /// Hovers `target` (a ref or a label, matched as a click would be; a control that shows on
+    /// hover is hovered through its card) and says what appeared: `Hovered over "Clip 1".
+    /// Appeared: More (button), Download (menuitem)`. Clicks nothing.
+    pub async fn hover_target(&self, target: &ClickTarget) -> Result<String, BrowserError> {
+        let arg = match target {
+            ClickTarget::Ref(r) => json!(r),
+            ClickTarget::Text(t) => json!(t),
+        };
+        let script = HOVER_JS.replace("__CLICKABLES__", CLICKABLES_JS).replace("__REF__", REF_JS);
+        let res = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": format!("({script})({arg})"), "returnByValue": true }),
+            )
+            .await?;
+        if let Some(err) = res.get("exceptionDetails") {
+            return Err(BrowserError::Protocol(format!("hover check failed: {}", err["text"])));
+        }
+        let v = &res["result"]["value"];
+        let what = match target {
+            ClickTarget::Ref(r) => format!("ref {r}"),
+            ClickTarget::Text(t) => format!("\"{t}\""),
+        };
+        if v["ok"].as_bool() != Some(true) {
+            let why = v["why"].as_str().unwrap_or("it can't be found");
+            return Err(BrowserError::StaleRef(format!(
+                "Didn't hover over {what}: {why}. The clickable list was read again just now; pick from the new list."
+            )));
+        }
+        self.mouse_move(v["x"].as_i64().unwrap_or(0), v["y"].as_i64().unwrap_or(0)).await?;
+        tokio::time::sleep(HOVER_SETTLE + Duration::from_millis(50)).await;
+        let res = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": format!("({})()", APPEARED_JS.replace("__CLICKABLES__", CLICKABLES_JS)), "returnByValue": true }),
+            )
+            .await?;
+        let appeared: Vec<String> = res["result"]["value"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let _ = self.capture_screenshot().await;
+        let over = v["card"].as_str().or(v["label"].as_str()).unwrap_or_default();
+        Ok(hover_summary(over, &appeared))
     }
 
     /// Clicks `target`: a ref with [`Self::click_ref`], a label with [`Self::click_text`].
@@ -2400,6 +2711,10 @@ impl BrowserController {
                 options.join(" | ")
             )));
         };
+        if value["match"]["hover"].as_bool() == Some(true) {
+            // Shown only on hover: CLICKABLES_JS kept it as 'hovered' for the checked click
+            return self.click_checked(json!("hovered"), &format!("\"{label}\"")).await;
+        }
         if value["match"]["clicked"].as_bool() == Some(true) {
             tokio::time::sleep(Duration::from_millis(300)).await;
             let _ = self.sync_location().await;
@@ -2603,7 +2918,7 @@ mod agent_shot_tests {
 
 #[cfg(test)]
 mod ref_tests {
-    use super::{ref_line, ClickTarget};
+    use super::{hover_summary, ref_line, ClickTarget, CLICKABLES_JS, PAYMENT_SIGNALS_JS, REF_JS};
     use serde_json::json;
 
     #[test]
@@ -2633,6 +2948,49 @@ mod ref_tests {
         assert_eq!(line(json!({"label": "No ref"})), None);
         assert_eq!(line(json!({"ref": 12, "role": "option", "name": "Large", "new": true})).as_deref(), Some("*[12] option \"Large\""));
         assert_eq!(line(json!({"ref": 12, "role": "option", "name": "Large", "new": false})).as_deref(), Some("[12] option \"Large\""));
+    }
+
+    /// A control that shows only on hover says so, with its card as the context; a copied line
+    /// of it is still that ref.
+    #[test]
+    fn a_hover_control_line_names_its_card() {
+        let l = ref_line(&json!({"ref": 7, "role": "button", "name": "More", "hover": true, "context": "Self-checkout"})).unwrap();
+        assert_eq!(l, "[7] button \"More\" (on hover) · Self-checkout");
+        assert_eq!(ClickTarget::from_args(&json!({"text": l})), Some(ClickTarget::Ref(7)));
+        let card = ref_line(&json!({"ref": 6, "role": "card", "name": "Self-checkout", "hover": false})).unwrap();
+        assert_eq!(card, "[6] card \"Self-checkout\"");
+        assert_eq!(ref_line(&json!({"ref": 6, "role": "card", "name": "Self-checkout", "hover": true, "new": true})).unwrap(),
+            "*[6] card \"Self-checkout\" (on hover)");
+    }
+
+    #[test]
+    fn a_hover_says_what_appeared() {
+        assert_eq!(hover_summary("Clip 1", &["More (button)".into(), "Download (menuitem)".into()]),
+            "Hovered over \"Clip 1\". Appeared: More (button), Download (menuitem)");
+        assert_eq!(hover_summary("More", &[]), "Hovered over \"More\". Nothing new appeared.");
+    }
+
+    /// The words icon-only controls get, and the caps on cards and hover controls, are the ones
+    /// the brief names (the real-Chrome test in tests/browser_hover_test.rs checks them on a page).
+    #[test]
+    fn icon_words_and_caps_are_the_named_ones() {
+        for pair in ["more_vert: 'More'", "more_horiz: 'More'", "download: 'Download'", "close: 'Close'",
+                     "delete: 'Delete'", "edit: 'Edit'", "share: 'Share'"] {
+            assert!(CLICKABLES_JS.contains(pair), "{pair}");
+        }
+        assert!(CLICKABLES_JS.contains("var CARD_CAP = 40, HOVER_CAP = 40;"));
+        // display:none is never a hover control: it is dropped before the hover check
+        let none = CLICKABLES_JS.find("if (cs.display === 'none') continue;").unwrap();
+        assert!(none < CLICKABLES_JS.find("var hidden = cs.visibility === 'hidden'").unwrap());
+    }
+
+    /// The payment floor's script still embeds the click matcher and the ref check, and both still
+    /// hand it the label it judged before icon words were read (`old`).
+    #[test]
+    fn the_payment_check_judges_the_old_label() {
+        assert!(PAYMENT_SIGNALS_JS.contains("__CLICKABLES__") && PAYMENT_SIGNALS_JS.contains("__REF__"));
+        assert!(CLICKABLES_JS.contains("label: match.old || match.label, item: match"));
+        assert!(REF_JS.contains("if (probe === true) return item ? { el: item.el, label: item.old || item.label } : null;"));
     }
 }
 

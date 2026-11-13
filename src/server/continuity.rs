@@ -709,13 +709,13 @@ fn browser_tools() -> Vec<Value> {
         }),
         json!({
             "name": BROWSER_ACT,
-            "description": "Do one thing on the current page and get the page back. click clicks a control by its ref, the number in the page's clickable list ([3] button \"Add to cart\"), or by its visible label in text; a line starting with * (*[12] option \"Large\") is a control that appeared since your last look, e.g. the options a click opened; if the ref is gone, hidden or covered nothing is clicked and you get a fresh list. type types into the field with that ref, or the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
+            "description": "Do one thing on the current page and get the page back. click clicks a control by its ref, the number in the page's clickable list ([3] button \"Add to cart\"), or by its visible label in text; a line starting with * (*[12] option \"Large\") is a control that appeared since your last look, e.g. the options a click opened; if the ref is gone, hidden or covered nothing is clicked and you get a fresh list. A control marked (on hover) ([7] button \"More\" (on hover) · Clip 1) shows only when the mouse is over its card; click it as usual and the card is hovered first. hover puts the mouse over a ref or label and says what appeared, without clicking. type types into the field with that ref, or the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["click", "click_text", "type", "key", "scroll"]},
-                    "ref": {"type": "integer", "description": "click or type: the control's number from the clickable list"},
-                    "text": {"type": "string", "description": "click: a visible label, when there's no ref; type: the text to type"},
+                    "action": {"type": "string", "enum": ["click", "click_text", "hover", "type", "key", "scroll"]},
+                    "ref": {"type": "integer", "description": "click, hover or type: the control's number from the clickable list"},
+                    "text": {"type": "string", "description": "click or hover: a visible label, when there's no ref; type: the text to type"},
                     "key": {"type": "string", "description": "key: the key to press"},
                     "delta_y": {"type": "number", "description": "scroll: pixels to scroll, default 600"},
                 },

@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Bots can open menus that show only on hover.** On pages like Google Flow, a clip's tile opens when clicked but isn't a button, and its ⋮ menu stays invisible until the mouse is over the tile. A bot's list of controls now shows such tiles, up to 40, by their names, and the hidden buttons, up to 40, as `button "More" (on hover) · Clip 1`. Clicking one moves the mouse over the tile first, checks the button is now showing, then clicks it, so a bot can open the menu and pick Download. A new **hover** action moves the mouse over something without clicking and says what appeared. Buttons that show only an icon are named by it (More, Download, Close, Delete, Edit, Share). The payment check is unchanged.
+
 ### Fixed
 - **Find any Composio app by its name.** Apps & accounts › Another app only searched Composio's 120 most popular apps, so "ElevenLabs" said "No Composio apps match". Now a name the popular list doesn't have is checked with Composio itself, through Composio Connect, or on the app's public page on composio.dev when Connect can't answer (only the app's name is sent). "ElevenLabs", "elevenlabs" and "Eleven Labs" all find ElevenLabs, ready to connect. When nothing is found, the line says why and what to try: the app's full name, trying again if Composio couldn't be reached, or asking a bot. Answers are kept for 10 minutes.
 
