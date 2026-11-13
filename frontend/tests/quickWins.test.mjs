@@ -77,7 +77,8 @@ test('engineTip: the engine goes in the tooltip, Auto says Laya picks', () => {
 test('sidebar rows carry no LAYA pill or engine badge; the engine is in the name tooltip', () => {
   const src = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(src, />\s*Laya\s*</);
-  assert.match(src, /title=\{`\$\{k\.name\} · \$\{engineTip\(k\.preferred_model\)\}`\}/);
+  // The name tooltip says what the avatar's model badge says, and the engine when there is no badge.
+  assert.match(src, /title=\{`\$\{k\.name\} · \$\{badge\?\.label \?\? engineTip\(k\.preferred_model\)\}`\}/);
   // No account yet reads as a next step, not a warning.
   assert.doesNotMatch(src, /Nothing can run here/);
 });
@@ -93,7 +94,7 @@ test('first-run welcome: what kwant bots are, the bots, one action', () => {
     onAction: () => clicked++,
   });
   assert.match(html, /data-first-run-welcome/);
-  assert.match(html, /Laya picks who answers/);
+  assert.match(html, /the best fit answers/);
   assert.match(html, /Architect<\/span><span[^>]*> · Systems Architect/);
   assert.match(html, />TechLead</);
   assert.equal(html.split('<button').length, 2, 'exactly one button');

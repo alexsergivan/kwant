@@ -207,7 +207,7 @@ async fn a_proposal_needs_evidence_and_creates_nothing() {
     assert_eq!(card["kind"], "hire_proposal");
     assert_eq!(card["choices"], json!(["deny", "accept_once", "always_accept"]));
     assert_eq!(card["evidence"]["similar_requests"].as_array().unwrap().len(), 3);
-    assert_eq!(card["team"]["name"], "core-engineering", "defaults to the proposer's team");
+    assert_eq!(card["team"]["name"], "helpers", "defaults to the proposer's team");
     assert_eq!(card["can_undo"], false);
 
     // One proposal per turn
@@ -220,7 +220,7 @@ async fn a_proposal_needs_evidence_and_creates_nothing() {
     assert!(refused(&e, &token, secret).await.contains("no keys"));
     let text = refused(&e, &token, specialist("Planner", "Recipe planner")).await;
     assert!(text.contains("already waiting"), "{text}");
-    let text = refused(&e, &token, specialist("Arch2", "Systems Architect")).await;
+    let text = refused(&e, &token, specialist("Analyst2", "Research Analyst")).await;
     assert!(text.contains("already does this kind of work"), "{text}");
 }
 
@@ -255,9 +255,9 @@ async fn only_the_person_decides_and_accept_once_creates_the_bot_in_the_team() {
     let chef = bot_named(&e, "spc_default", "Chef").await.expect("Chef was created");
     assert_eq!(chef.title, "Recipe planner");
     assert_eq!(v["hired_kwant_id"], json!(chef.id));
-    let team = e.state.db.get_team_by_name(&SpaceId::default_space(), "core-engineering").await.unwrap().unwrap();
+    let team = e.state.db.get_team_by_name(&SpaceId::default_space(), "helpers").await.unwrap().unwrap();
     assert!(team.member_kwants.contains(&chef.id), "joined the team");
-    let team_channel = e.state.db.list_channels(&SpaceId::default_space()).await.unwrap().into_iter().find(|c| c.name == "team-core-engineering");
+    let team_channel = e.state.db.list_channels(&SpaceId::default_space()).await.unwrap().into_iter().find(|c| c.name == "team-helpers");
     if let Some(c) = team_channel {
         assert!(c.member_kwants.contains(&chef.id), "joined the team's channel");
     }
@@ -283,7 +283,7 @@ async fn only_the_person_decides_and_accept_once_creates_the_bot_in_the_team() {
     let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{action}/undo"), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert!(bot_named(&e, "spc_default", "Chef").await.is_none());
-    let team = e.state.db.get_team_by_name(&SpaceId::default_space(), "core-engineering").await.unwrap().unwrap();
+    let team = e.state.db.get_team_by_name(&SpaceId::default_space(), "helpers").await.unwrap().unwrap();
     assert!(!team.member_kwants.contains(&chef.id));
     let (m, card) = card_of(&e, &h).await;
     assert_eq!(card["status"], "undone");
@@ -398,7 +398,7 @@ async fn deny_is_remembered_in_its_space_only() {
     // A team from another space is refused
     let token = turn_of(&e, &other, &home_general.id, "t-home2").await;
     let mut cross = specialist("Taxman", "Tax advisor");
-    cross["team"] = json!(e.state.db.get_team_by_name(&SpaceId::default_space(), "core-engineering").await.unwrap().unwrap().id);
+    cross["team"] = json!(e.state.db.get_team_by_name(&SpaceId::default_space(), "helpers").await.unwrap().unwrap().id);
     assert!(refused(&e, &token, cross).await.contains("another space"));
 
     // The person clears the denials: the kind can be proposed again

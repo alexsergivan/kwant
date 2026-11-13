@@ -150,6 +150,8 @@ export interface DoneTrailStep {
   by: string | null;
 }
 
+import type { Checked } from '../doneCheck';
+
 export type DoneSource =
   | { kind: 'routine'; routine_id: string; run_id: string; trigger: string; task_id?: string }
   | { kind: 'task'; task_id: string }
@@ -184,6 +186,11 @@ export interface DoneFields {
   /** Team jobs only: who led it and whom it handed work to. */
   lead?: TeamMember;
   members?: TeamMember[];
+  /**
+   * 0.9.8 done-check (Vega #566): whether anything checked this done item, and how. Optional: an older server
+   * sends none and the Inbox draws no check box. Read it through doneCheck.knownChecked.
+   */
+  checked?: Checked | null;
 }
 
 // `task_id` is a review's task (ReviewFields) or a watch item's (P1, null when none), so it takes both.

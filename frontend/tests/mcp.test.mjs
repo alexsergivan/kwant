@@ -23,6 +23,7 @@ const {
   joinCommandLine,
   validateMcpForm,
   toServerName,
+  directoryServerName,
   parseMcpToolName,
   parseToolCalls,
   formatArgs,
@@ -426,4 +427,21 @@ test('a blank required key still saves, and the flag stays out of the request', 
   const payload = formToPayload(github);
   assert.deepEqual(payload.headers, { Authorization: '' });
   assert.equal(JSON.stringify(payload).includes('required'), false);
+});
+
+test('a public-directory tool starts with a valid name, so Add & test works without a rename', () => {
+  const ok = (name) => assert.equal(validateMcpForm({ ...emptyMcpForm('http'), name, url: 'https://x.example/mcp' }), null, name);
+  const cases = [
+    [{ title: 'ElevenLabs Voices', registry_name: 'io.github.elevenlabs/voices' }, 'elevenlabs-voices'],
+    [{ title: '  Notion (official) ', registry_name: 'com.notion/mcp' }, 'notion-official'],
+    [{ title: '', registry_name: 'io.github.acme/pg-tools' }, 'pg-tools'],
+    [{ title: '日本語', registry_name: 'io.github.acme/Weather.API' }, 'weather-api'],
+    [{ title: 'x'.repeat(60) + ' tail', registry_name: 'a/b' }, 'x'.repeat(48)],
+    [{ title: '__ä__', registry_name: '🙂' }, 'tool'],
+  ];
+  for (const [entry, want] of cases) {
+    const got = directoryServerName(entry);
+    assert.equal(got, want);
+    ok(got);
+  }
 });

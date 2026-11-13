@@ -109,7 +109,7 @@ fn rows(s: &Value) -> Vec<Value> {
     s["bots"].as_array().unwrap().iter().chain(s["also_possible"].as_array().unwrap()).cloned().collect()
 }
 
-/// Edits that give every suggested bot a name no seeded bot has (the space starts with a TechLead).
+/// Edits that give every suggested bot a name no seeded bot has (the space starts with Assistant, Researcher and Writer).
 fn renamed(s: &Value, prefix: &str) -> Map<String, Value> {
     s["bots"].as_array().unwrap().iter().map(|r| (r["key"].as_str().unwrap().to_string(), json!({ "name": format!("{prefix}{}", r["key"].as_str().unwrap()) }))).collect()
 }
@@ -174,8 +174,13 @@ async fn a_folder_is_read_once_and_its_team_is_made_with_one_undo() {
 }
 
 #[tokio::test]
-async fn the_default_names_clash_with_the_seeded_lead_and_nothing_is_made() {
+async fn the_default_names_clash_with_an_existing_bot_and_nothing_is_made() {
     let e = setup().await;
+    // An old install's seeded TechLead (fresh installs seed Assistant, Researcher and Writer)
+    let techlead = json!({"name": "TechLead", "title": "Staff Engineer", "persona_prompt": "Test persona",
+        "avatar_sprite": "tech_lead", "driver_type": "cli", "preferred_model": "claude"});
+    let (s, v) = call(&e.app, "POST", "/api/kwants", Some(techlead)).await;
+    assert!(s.is_success(), "{s} {v}");
     let tmp = tempdir().unwrap();
     let shop = folder(tmp.path(), "shop", &shop_files(None));
     let (_, sug) = suggest(&e, json!({ "workspace_path": shop.to_str().unwrap() })).await;
@@ -371,7 +376,7 @@ async fn bad_sources_are_refused_and_nothing_is_read() {
     assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("team_not_found")), "{v}");
 
     // A team without a folder or repo has nothing to read
-    let (s, inbox) = create(&e, json!({ "template_id": "inbox" })).await;
+    let (s, inbox) = create(&e, json!({ "template_id": "inbox", "names": { "Researcher": "Finder" } })).await;
     assert_eq!(s, StatusCode::CREATED, "{inbox}");
     let (s, v) = suggest(&e, json!({ "team_id": inbox["team"]["id"] })).await;
     assert_eq!((s, v["code"].as_str()), (StatusCode::CONFLICT, Some("team_has_no_project")), "{v}");

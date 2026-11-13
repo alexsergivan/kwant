@@ -69,7 +69,8 @@ pub(crate) fn db_status(e: &DbError) -> StatusCode {
     }
 }
 
-/// The space's kwants, each with `runs_on`: the account its next turn would use.
+/// The space's kwants, each with `runs_on`: the account its next turn would use, and
+/// `last_ran_on`: what its newest reply ran on, or null (see `crate::db::last_ran_on`).
 pub async fn list_kwants(
     State(state): State<AppState>,
     Scope(space): Scope,
@@ -79,11 +80,14 @@ pub async fn list_kwants(
         .kwant_views(&space)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // What each bot's newest reply ran on: the model badge on a resting row
+    let mut last_ran_on = state.db.last_ran_on_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut out = Vec::with_capacity(views.len());
     for v in views {
         let runs_on = super::profile_turn::runs_on(&state, &v.kwant).await;
         let mut item = serde_json::to_value(&v).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         item["runs_on"] = runs_on;
+        item["last_ran_on"] = last_ran_on.remove(&v.kwant.id).unwrap_or(serde_json::Value::Null);
         let mode = state
             .db
             .kwant_approvals_in(&space, &v.kwant.id)
@@ -1099,13 +1103,13 @@ async fn run_turn_with(
             // boxed, so the retry loop around the turn adds no stack to it
             async move {
                 let reply = Box::pin(try_kwant_turn(scope, kwant, p, o)).await;
-                Box::pin(continue_once_if_capped_into(scope, kwant, reply, false, Some(&slot))).await
+                Box::pin(continue_once_if_capped_into(scope, kwant, reply, None, Some(&slot))).await
             }
         })
         .await
     } else {
         let reply = try_kwant_turn(&scope, kwant, prompt.clone(), opts()).await;
-        continue_once_if_capped(&scope, kwant, reply, false).await
+        continue_once_if_capped(&scope, kwant, reply, None).await
     };
     match reply {
         Ok(text) => {
@@ -1141,14 +1145,15 @@ This is your one automatic continuation: pick up where you left off, finish the 
 /// For turns nobody is watching (routines, delegations): a turn that stopped at the model-call
 /// cap gets one more turn to finish, never more. Returns both replies joined, so a delegation's
 /// result has all of it. A turn that didn't hit the cap, or failed, is returned as it is.
-/// `always_ask` carries [`TurnOpts::always_ask`] over to the continuation.
+/// `started_by` is the label of a turn kwnt started on its own: the continuation is one too
+/// ([`TurnOpts::always_ask`], its cards say what started it). `None` for any other turn.
 pub(super) async fn continue_once_if_capped(
     scope: &TurnScope,
     kwant: &Kwant,
     first: Result<String, String>,
-    always_ask: bool,
+    started_by: Option<&str>,
 ) -> Result<String, String> {
-    continue_once_if_capped_into(scope, kwant, first, always_ask, None).await
+    continue_once_if_capped_into(scope, kwant, first, started_by, None).await
 }
 
 /// [`continue_once_if_capped`] for an unwatched turn: the continuation, when there is one, is the
@@ -1157,7 +1162,7 @@ pub(super) async fn continue_once_if_capped_into(
     scope: &TurnScope,
     kwant: &Kwant,
     first: Result<String, String>,
-    always_ask: bool,
+    started_by: Option<&str>,
     busy_slot: Option<&super::busy_retry::Slot>,
 ) -> Result<String, String> {
     let Ok(text) = &first else {
@@ -1172,7 +1177,8 @@ pub(super) async fn continue_once_if_capped_into(
     }
     let opts = TurnOpts {
         label: Some("Automatic continuation (once): the last turn ran out of model calls".into()),
-        always_ask,
+        always_ask: started_by.is_some(),
+        started_by: started_by.map(str::to_string),
         busy_slot: busy_slot.cloned(),
         ..Default::default()
     };
@@ -1945,16 +1951,12 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
                 if !contributors.contains(&kwant.name) {
                     contributors.push(kwant.name.clone());
                 }
-                for i in crate::router::handoff_targets(&text, &names) {
-                    let k = &scope.teammates[i];
-                    let turns_taken = spoke.get(&k.id).copied().unwrap_or(0);
-                    if k.id != kwant.id
-                        && turns_taken < discussion::MAX_TURNS_PER_KWANT
-                        && !queue.iter().any(|(q, _)| q.id == k.id)
-                    {
-                        queue.push_back((k.clone(), Some(kwant.name.clone())));
-                    }
-                }
+                // Whoever was @mentioned goes next, in mention order, ahead of the planned reactors.
+                let mentioned: Vec<Kwant> = crate::router::handoff_targets(&text, &names)
+                    .into_iter()
+                    .map(|i| scope.teammates[i].clone())
+                    .collect();
+                discussion::put_mentions_first(&mut queue, &mentioned, |k| k.id.as_str(), &kwant.id, &kwant.name, &spoke);
                 previous = Some(kwant.clone());
             }
         }
@@ -2018,9 +2020,17 @@ pub(super) struct TurnOpts {
     /// (agent, effort) to run on instead of asking Laya: a turn resumed after a late Allow
     /// keeps those of the turn that asked.
     routed: Option<(String, String)>,
-    /// Every call that could change something asks the person, even with approvals off (an
-    /// owner turn kwnt starts on its own; see [`super::loose_ends_owner`]).
+    /// kwnt started this turn on its own, nobody asked for it (the loose-ends owner, Watch,
+    /// Verify…): under Ask or "Ask only when risky" every call that could change something asks,
+    /// and the card says why. With approvals off it runs like any turn (0.9.7) unless
+    /// `strict_ask` (see [`super::mcp_runtime::BrokerApprover::always_ask`]).
     pub(super) always_ask: bool,
+    /// An `always_ask` turn that asks even with approvals off: it runs something the person
+    /// hasn't reviewed (a Skill Foundry draft or replay).
+    pub(super) strict_ask: bool,
+    /// What kwnt started an `always_ask` turn for, on its cards (`details.started_by`). Its
+    /// label, kept by its continuations, whose own label is kwnt's.
+    pub(super) started_by: Option<String>,
     /// Shared with the save step: holds a reply with open choices, and gets the saved message
     /// (see [`super::decide`]).
     pub(super) hook: Option<super::decide::HookSlot>,
@@ -2131,7 +2141,12 @@ impl TurnOpts {
     /// Options for a turn nobody asked for, saved under `label`: every call that could change
     /// something asks (see [`TurnOpts::always_ask`]).
     pub(super) fn always_asking(label: &str) -> Self {
-        TurnOpts { label: Some(label.to_string()), always_ask: true, ..Default::default() }
+        TurnOpts { label: Some(label.to_string()), always_ask: true, started_by: Some(label.to_string()), ..Default::default() }
+    }
+
+    /// [`TurnOpts::always_asking`] that asks even with approvals off (see [`TurnOpts::strict_ask`]).
+    pub(super) fn strict_asking(label: &str) -> Self {
+        TurnOpts { strict_ask: true, ..TurnOpts::always_asking(label) }
     }
 
     /// The delivery check (see [`super::delivery_check`]) looks at this turn's reply: not a
@@ -2290,6 +2305,8 @@ pub(super) fn is_reply_by(m: &Message, bot: &str) -> bool {
 /// it was routed, so a routed turn's continuation runs on the same agent, effort and tier.
 struct Carried {
     always_ask: bool,
+    strict_ask: bool,
+    started_by: Option<String>,
     delegation_id: Option<String>,
     routed: Option<(String, String)>,
     routing: Option<serde_json::Value>,
@@ -2309,6 +2326,8 @@ impl Carried {
     fn of(o: &TurnOpts) -> Self {
         Carried {
             always_ask: o.always_ask,
+            strict_ask: o.strict_ask,
+            started_by: o.started_by.clone(),
             delegation_id: o.delegation_id.clone(),
             routed: o.routed.clone(),
             routing: o.routing.clone(),
@@ -2322,8 +2341,8 @@ impl Carried {
     }
 
     fn into_opts(self) -> TurnOpts {
-        let Carried { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _, source } = self;
-        TurnOpts { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, source, ..Default::default() }
+        let Carried { always_ask, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _, source } = self;
+        TurnOpts { always_ask, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, source, ..Default::default() }
     }
 
     /// The delivery check's continuation of the turn: checked against the first turn's `plan`
@@ -2742,6 +2761,25 @@ impl RanOn {
     }
 }
 
+/// The `turn_runs_on` event for the attempt that is about to run on `r`; its model fields are the
+/// ones the saved reply's `meta.ran_on` gets.
+fn turn_runs_on(r: &RanOn, tag: &crate::drivers::events::TurnTag, picked_by: &str) -> RuntimeEvent {
+    let v = r.to_json(None, picked_by, "");
+    let text = |key: &str| v[key].as_str().map(str::to_string);
+    RuntimeEvent::TurnRunsOn {
+        kwant_id: tag.kwant_id.clone(),
+        turn_id: tag.turn_id.clone(),
+        context_id: Some(tag.context_id.clone()),
+        thread_id: tag.thread_id.clone(),
+        engine: r.engine.as_str().to_string(),
+        family: text("family").unwrap_or_default(),
+        model: text("model"),
+        model_label: text("model_label"),
+        tier: text("tier"),
+        picked_by: picked_by.to_string(),
+    }
+}
+
 /// Setting: seconds a streaming model may stay silent (outside tool runs) before its turn is stopped.
 pub const STALL_SETTING: &str = "turn_stall_secs";
 pub const DEFAULT_STALL_SECS: u64 = 120;
@@ -3103,6 +3141,8 @@ async fn run_kwant_turn_inner(
         let card_opts = super::mcp_runtime::TurnApprovalOpts {
             routed: Some((target_model.clone(), effort_level.clone())),
             always_ask: opts.always_ask,
+            strict_ask: opts.strict_ask,
+            started_by: opts.started_by.clone(),
             rehearse: opts.rehearse.clone(),
             purpose: opts.purpose.clone(),
         };
@@ -3312,6 +3352,12 @@ async fn run_kwant_turn_inner(
             model: None,
             profile: p,
         });
+        // `turn_runs_on`'s `picked_by`: who chose what the first account runs; "fallback" once
+        // the turn has left it (or skipped it as known to be out)
+        let picked_first = if pinned_model.is_some() || pinned_family { "pinned" } else { "laya" };
+        let mut left_first = moved_from.is_some();
+        // The last `turn_runs_on` sent, so a stall retry on the same account doesn't repeat it
+        let mut sent_runs_on: Option<RuntimeEvent> = None;
         // The switches as the reply's `meta.failover` (one object per switch), so they survive a reload
         let mut switch_meta: Vec<serde_json::Value> = Vec::new();
         let chat_key = format!("{}|{:?}|{:?}", target_kwant.id, scope.channel_id, scope.thread_id);
@@ -3343,6 +3389,7 @@ async fn run_kwant_turn_inner(
                 (pinned_model.clone(), tier)
             };
             let (driver_key, driver_endpoint) = if cross { (None, None) } else { (configured_key.clone(), endpoint.clone()) };
+            left_first |= i > 0;
             let (driver, host_engine) = match super::profile_turn::driver_for(
                 state,
                 profile.as_ref(),
@@ -3476,6 +3523,14 @@ async fn run_kwant_turn_inner(
                 account: super::profile_turn::account_name(profile.as_ref(), e),
                 choice: if unlisted_api { None } else { choice.clone() },
             });
+            if let Some(r) = &ran_on {
+                let picked_by = if left_first { "fallback" } else { picked_first };
+                let event = turn_runs_on(r, tag, picked_by);
+                if sent_runs_on.as_ref() != Some(&event) {
+                    let _ = state.event_sender.send(event.clone());
+                    sent_runs_on = Some(event);
+                }
+            }
             let stall_limit = if driver.streams_progress() { stall_after } else { None };
             state.turns.note_driver(&tag.turn_id, driver.streams_progress(), runs_on.map(super::bot_status::engine_label));
             let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -3896,6 +3951,13 @@ async fn run_kwant_turn_inner(
                 let mut meta = ran_on
                     .as_ref()
                     .map(|r| serde_json::json!({ "ran_on": r.to_json(output.model.as_deref(), pick, &effort_level) }));
+                // The badge's resting value, kept for the bot list before the reply goes out
+                if let Some(r) = meta.as_ref().map(|m| &m["ran_on"]) {
+                    let last = crate::db::last_ran_on::last_ran_on(r, left_first, chrono::Utc::now());
+                    if let Err(e) = state.db.set_last_ran_on(&target_kwant.id, &last).await {
+                        tracing::warn!(kwant = %target_kwant.id, error = %e, "could not save last_ran_on");
+                    }
+                }
                 if let Some(usage) = &output.usage {
                     meta.get_or_insert_with(|| serde_json::json!({}))["usage"] = serde_json::json!(usage);
                 }
@@ -4289,6 +4351,35 @@ async fn send_chat_routed(
             }
         }
     }
+    // A direct chat (`kwant_id`) or a team chat (`team_id` and its channel) with no @mention: an
+    // open question card of that bot, or of one of the team's members, takes the typed message as
+    // its answer, as the card promises. Only the answer step below uses this; routing is unchanged.
+    let mut typed_answer: Option<(String, String)> = None;
+    if let (None, None) = (kwant_mention, team_mention) {
+        let chat: Option<(&str, Vec<Kwant>)> = match (payload.kwant_id.as_deref(), payload.team_id.as_deref(), payload.channel_id.as_deref()) {
+            (Some(kid), None, None) => all_kwants.iter().find(|k| k.id == kid).map(|k| (kid, vec![k.clone()])),
+            (None, Some(tid), Some(cid)) => all_teams.iter().find(|t| t.id == tid || t.name.eq_ignore_ascii_case(tid)).map(|t| {
+                let ids: Vec<String> = serde_json::from_str(&t.member_kwants).unwrap_or_default();
+                (cid, all_kwants.iter().filter(|k| ids.contains(&k.id)).cloned().collect())
+            }),
+            _ => None,
+        };
+        if let Some((ctx, members)) = chat {
+            let recent = state.db.list_messages(ctx, 30).await.unwrap_or_default();
+            let open = state.db.list_questions(Some("open"), Some(ctx), None).await.unwrap_or_default();
+            let direct = payload.kwant_id.is_some();
+            let open: Vec<_> = open
+                .into_iter()
+                .filter(|q| q.thread_id.is_none())
+                .filter(|q| if direct { q.channel_id.is_none() && q.direct_kwant_id.as_deref() == Some(ctx) } else { q.channel_id.as_deref() == Some(ctx) })
+                .collect();
+            if let Some(a) = crate::router::sticky::awaiting_answer(&recent, &open, &members) {
+                if let (true, Some(qid)) = (a.card, a.question_id) {
+                    typed_answer = Some((a.kwant.name.clone(), qid));
+                }
+            }
+        }
+    }
 
     // Detect if a team is targeted
     let target_team = if let Some(tid) = payload.team_id.as_ref().filter(|_| reply_bot.is_none()) {
@@ -4449,12 +4540,16 @@ async fn send_chat_routed(
 
     // Typed instead of tapped: the answer closes the bot's open question, and a turn still waiting
     // on it carries on with it (no second turn)
-    if let Some((asker, Some(qid))) = &awaiting {
+    let asked = match &awaiting {
+        Some((asker, Some(qid))) => Some((asker.name.clone(), qid.clone())),
+        _ => typed_answer,
+    };
+    if let Some((asker, qid)) = &asked {
         if super::questions::answer_by_message(&state, qid, &payload.prompt).await {
             return Ok(Json(json!({
                 "status": "answered",
                 "user_message_id": saved_user_msg.id,
-                "kwant": asker.name,
+                "kwant": asker,
                 "question_id": qid,
             })));
         }
@@ -6870,7 +6965,7 @@ pub async fn execute_tool(
             .map_err(crate::tools::ToolError::Execution)?;
         // What runs (and what the person approves) is the push pinned to the checked commit
         let command = pass.pinned.clone().unwrap_or_else(|| command.to_string());
-        if !super::computer::approve_local_shell(state, team_id.unwrap_or("default"), &command, &workspace).await {
+        if !super::computer::approve_local_shell_granted(state, team_id.unwrap_or("default"), &command, &workspace, pass.grant.as_ref()).await {
             return Err(crate::tools::ToolError::Execution(
                 "The person did not approve this command, so it was not run.".into(),
             ));
@@ -7189,6 +7284,8 @@ mod tests {
             purpose: Some("routine".into()),
             task: Some(Default::default()),
             always_ask: true,
+            strict_ask: true,
+            started_by: Some("Watch".into()),
             delegation_id: Some("d1".into()),
             nav_prompt: Some("open https://example.org".into()),
             fresh_eyes: false,
@@ -7203,6 +7300,8 @@ mod tests {
         assert_eq!(next.purpose, first.purpose);
         assert_eq!(next.task, first.task);
         assert!(next.always_ask);
+        assert!(next.strict_ask, "a strict turn's continuation stays strict");
+        assert_eq!(next.started_by.as_deref(), Some("Watch"), "and its cards still say what started it");
         assert_eq!(next.delegation_id.as_deref(), Some("d1"));
         assert!(next.nav_prompt.is_none(), "the continuation's prompt is kwnt's, it never moves the browser");
     }

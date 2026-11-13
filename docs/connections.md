@@ -272,7 +272,9 @@ per-bot opt-outs, testing and removing all use those routes.
 
 These routes are person-only, refuse bot tokens, and use the person's own Composio key from the
 connector's header. Before Composio is added the app list answers from kwant's bundled popular
-apps and the other routes answer `409`, both **without contacting Composio**; added without a key,
+apps, and a search they barely match only checks `HEAD https://composio.dev/toolkits/<slug>` (no
+key, at most 3 slugs, 3 s, cached 10 min); the other routes answer `409` **without contacting
+Composio**; added without a key,
 they answer `409`. The key is never echoed or logged. `KWNT_COMPOSIO_API_URL` points them at
 another API address and `KWNT_COMPOSIO_CONNECT_URL` at another Composio Connect (tests).
 

@@ -1,0 +1,53 @@
+{
+  "version": "0.9.6",
+  "date": "2026-11-13",
+  "highlights": [
+    {
+      "id": "team-from-words",
+      "title": "Describe what you need, get a team",
+      "text": "Write what your bots should do and press Suggest a team. You get 2 to 6 bots to untick or rename before you create them, and you can undo it.",
+      "image": null,
+      "open": "settings/teams"
+    },
+    {
+      "id": "inbox-away",
+      "title": "Done while you were away",
+      "text": "The Inbox now has two groups: Needs you, and what your bots finished while you were away. Done items stay for 7 days, and the badge counts only unread ones.",
+      "image": null,
+      "open": "inbox"
+    },
+    {
+      "id": "inbox-why",
+      "title": "See what a bot did and why",
+      "text": "Each done item shows the answer, a trail of what the bot did with times, and why it ran. Press Looks good, or ask the bot to redo it.",
+      "image": null,
+      "open": "inbox"
+    },
+    {
+      "id": "no-silent-stops",
+      "title": "A stopped bot carries on or asks you",
+      "text": "When a reply in your chat stops, the bot continues by itself, or you get one line in the chat and one item in Needs you, with Retry or Continue.",
+      "image": null,
+      "open": "inbox"
+    },
+    {
+      "id": "version-card",
+      "title": "Your kwant version in one card",
+      "text": "Settings says if you're on the latest kwant. Update installs a new version in the Mac app; on a server you get one command to copy.",
+      "image": null,
+      "open": "settings/app"
+    },
+    {
+      "id": "real-chrome",
+      "title": "Sign in to Google in kwant's Chrome",
+      "text": "kwant's Chrome now presents itself as normal Chrome. If Google still refuses a sign-in, Sign in in Chrome opens a window for it on a computer with a screen, then goes back to no window.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A new space's Get started card names that space's own bots, not the main space's starter bots.",
+    "If kwant's Chrome closes right after starting, you're told why at once, with Chrome's last lines, not after a timeout.",
+    "A mission task that finds the browser busy waits and tries again twice by itself, instead of failing at once."
+  ]
+}

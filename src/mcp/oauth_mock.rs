@@ -1,7 +1,7 @@
 //! A small OAuth-protected streamable-HTTP MCP server, run with the hidden
 //! `kwnt mcp-oauth-mock-server` subcommand. It implements just enough of the MCP authorization
-//! spec (protected-resource and authorization-server metadata, dynamic registration, PKCE S256,
-//! `resource`, refresh with rotation) for tests and live checks of kwnt's sign-in without a
+//! spec (protected-resource and authorization-server metadata, dynamic registration or client ID
+//! metadata documents, PKCE S256, `resource`, refresh with rotation) for tests and live checks of kwnt's sign-in without a
 //! real provider.
 //!
 //! `/authorize` shows an "Allow" link instead of asking for credentials; its target is also sent
@@ -25,11 +25,31 @@ use std::sync::{Arc, Mutex};
 pub struct MockOptions {
     /// `expires_in` of issued access tokens. Below 60 makes kwnt refresh on every use.
     pub expires_in: i64,
+    /// Offer dynamic client registration (`registration_endpoint`).
+    pub registration: bool,
+    /// Advertise `client_id_metadata_document_supported`: an https client_id is fetched as a
+    /// client ID metadata document and the redirect_uri checked against its `redirect_uris`.
+    pub client_documents: bool,
+    /// For client documents: a loopback http redirect_uri matches a listed one on any port
+    /// (RFC 8252 §7.3). Off: exact match only.
+    pub loopback_any_port: bool,
+    /// Where to fetch client documents of a given origin instead (tests have no public https):
+    /// `https://kwant.si` → `http://127.0.0.1:1234`. The original host goes in `Host`.
+    pub document_hosts: HashMap<String, String>,
+    /// Refuse every dynamic registration (a server that has the endpoint but says no).
+    pub refuse_registration: bool,
 }
 
 impl Default for MockOptions {
     fn default() -> Self {
-        Self { expires_in: 3600 }
+        Self {
+            expires_in: 3600,
+            registration: true,
+            client_documents: false,
+            loopback_any_port: true,
+            document_hosts: HashMap::new(),
+            refuse_registration: false,
+        }
     }
 }
 
@@ -55,6 +75,8 @@ pub struct MockState {
     pub registrations: AtomicU64,
     pub code_exchanges: AtomicU64,
     pub refreshes: AtomicU64,
+    /// Client documents fetched (each authorize with a document client_id fetches once).
+    pub document_fetches: AtomicU64,
     inner: Mutex<Inner>,
 }
 
@@ -97,16 +119,82 @@ async fn resource_metadata(State(s): State<Shared>) -> Json<Value> {
 
 async fn server_metadata(State(s): State<Shared>) -> Json<Value> {
     let b = &s.base_url;
-    Json(json!({
+    let mut meta = json!({
         "issuer": b,
         "authorization_endpoint": format!("{b}/authorize"),
         "token_endpoint": format!("{b}/token"),
-        "registration_endpoint": format!("{b}/register"),
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
-    }))
+    });
+    if s.options.registration {
+        meta["registration_endpoint"] = json!(format!("{b}/register"));
+    }
+    if s.options.client_documents {
+        meta["client_id_metadata_document_supported"] = json!(true);
+    }
+    Json(meta)
+}
+
+/// Whether `redirect_uri` is one of `listed`: exactly, or (with `any_port`) a loopback http URI
+/// that differs only in its port.
+fn redirect_listed(listed: &[String], redirect_uri: &str, any_port: bool) -> bool {
+    if listed.iter().any(|u| u == redirect_uri) {
+        return true;
+    }
+    let Ok(want) = url::Url::parse(redirect_uri) else { return false };
+    let loopback = |u: &url::Url| {
+        u.scheme() == "http"
+            && match u.host() {
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                Some(url::Host::Domain(d)) => d == "localhost",
+                None => false,
+            }
+    };
+    any_port
+        && loopback(&want)
+        && listed.iter().filter_map(|u| url::Url::parse(u).ok()).any(|mut u| {
+            let _ = u.set_port(want.port());
+            loopback(&u) && u == want
+        })
+}
+
+/// Fetches and checks a client ID metadata document; returns its redirect_uris.
+async fn fetch_client_document(s: &MockState, client_id: &str) -> Result<Vec<String>, String> {
+    let url = url::Url::parse(client_id).map_err(|_| "client_id is not a URL")?;
+    if url.scheme() != "https" || url.path() == "/" || url.fragment().is_some() {
+        return Err("a document client_id must be an https URL with a path".into());
+    }
+    let origin = url.origin().ascii_serialization();
+    let host = url.host_str().unwrap_or_default().to_string();
+    let target = match s.options.document_hosts.get(&origin) {
+        Some(local) => format!("{}{}", local.trim_end_matches('/'), &client_id[origin.len()..]),
+        None => client_id.to_string(),
+    };
+    s.document_fetches.fetch_add(1, Ordering::SeqCst);
+    let resp = reqwest::Client::new()
+        .get(&target)
+        .header("host", host)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("could not fetch the client document: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("client document answered {}", resp.status()));
+    }
+    let doc: Value = resp.json().await.map_err(|_| "client document is not JSON")?;
+    if doc["client_id"].as_str() != Some(client_id) {
+        return Err("client document's client_id does not match its URL".into());
+    }
+    if doc["token_endpoint_auth_method"].as_str().is_some_and(|m| m != "none") {
+        return Err("the mock only takes public document clients".into());
+    }
+    Ok(doc["redirect_uris"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect())
+        .unwrap_or_default())
 }
 
 async fn register(State(s): State<Shared>, Json(body): Json<Value>) -> Response {
@@ -116,6 +204,9 @@ async fn register(State(s): State<Shared>, Json(body): Json<Value>) -> Response 
         .unwrap_or_default();
     if uris.is_empty() {
         return oauth_error("invalid_redirect_uri", "redirect_uris is required");
+    }
+    if s.options.refuse_registration {
+        return oauth_error("invalid_client_metadata", "registration is closed");
     }
     s.registrations.fetch_add(1, Ordering::SeqCst);
     let client_id = s.next("client");
@@ -131,7 +222,17 @@ fn escape(s: &str) -> String {
 async fn authorize(State(s): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
     let get = |k: &str| q.get(k).cloned().unwrap_or_default();
     let (client_id, redirect_uri, state) = (get("client_id"), get("redirect_uri"), get("state"));
-    let known = s.inner.lock().unwrap().clients.get(&client_id).is_some_and(|u| u.contains(&redirect_uri));
+    let registered = s.inner.lock().unwrap().clients.get(&client_id).cloned();
+    let known = match registered {
+        Some(uris) => uris.contains(&redirect_uri),
+        None if s.options.client_documents && client_id.starts_with("https://") => {
+            match fetch_client_document(&s, &client_id).await {
+                Ok(uris) => redirect_listed(&uris, &redirect_uri, s.options.loopback_any_port),
+                Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid_client: {e}")).into_response(),
+            }
+        }
+        None => false,
+    };
     if !known {
         return (StatusCode::BAD_REQUEST, "unknown client or redirect_uri").into_response();
     }
@@ -245,6 +346,7 @@ pub fn router(base_url: &str, options: MockOptions) -> (Router, Shared) {
         registrations: AtomicU64::new(0),
         code_exchanges: AtomicU64::new(0),
         refreshes: AtomicU64::new(0),
+        document_fetches: AtomicU64::new(0),
         inner: Mutex::default(),
     });
     let app = Router::new()
@@ -264,4 +366,20 @@ pub async fn serve(listener: tokio::net::TcpListener, options: MockOptions) -> s
     let base = format!("http://{}", listener.local_addr()?);
     let (app, _) = router(&base, options);
     axum::serve(listener, app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redirect_listed;
+
+    #[test]
+    fn loopback_redirects_match_on_any_port_only_when_allowed() {
+        let listed = vec!["http://127.0.0.1/cb".to_string(), "https://k.dev/cb".to_string()];
+        assert!(redirect_listed(&listed, "http://127.0.0.1/cb", false));
+        assert!(redirect_listed(&listed, "http://127.0.0.1:51234/cb", true));
+        assert!(!redirect_listed(&listed, "http://127.0.0.1:51234/cb", false));
+        assert!(!redirect_listed(&listed, "http://127.0.0.1:51234/other", true));
+        assert!(!redirect_listed(&listed, "https://k.dev:8443/cb", true), "only loopback http ports vary");
+        assert!(!redirect_listed(&listed, "http://evil.test/cb", true));
+    }
 }

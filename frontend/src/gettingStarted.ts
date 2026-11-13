@@ -128,11 +128,11 @@ export function heroText(v: StepsView, opts: { host?: string | null; mac?: boole
   if (v.open === 3 && v.done2 && v.foundReady)
     return {
       title: `${name} is ready ${opts.host ? `on ${opts.host}` : opts.mac ? 'on this Mac' : 'on this computer'}`,
-      sub: 'You were already signed in. Pick a team and say hello.',
+      sub: 'You were already signed in. Meet your team and say hello.',
     };
-  if (v.open === 3 && v.done2) return { title: `${name} is ready`, sub: 'Last step: who should your bots be?' };
+  if (v.open === 3 && v.done2) return { title: `${name} is ready`, sub: 'Last step: meet your team.' };
   return {
-    title: 'Welcome to kwant bots',
+    title: 'Welcome to kwant',
     sub: opts.host
       ? 'Choose your AI and sign in. It installs on your server, not on this phone.'
       : 'Choose your AI and sign in. The rest installs by itself.',
@@ -476,7 +476,7 @@ export function showCard(opts: { dismissed: boolean; canRun: boolean | null; gen
   if (opts.mainSpace === false) return false;
   if (opts.started) return true;
   if (opts.canRun === null) return false;
-  // A fresh install comes with one starter team (core-engineering), so one team still counts as fresh.
+  // A fresh install comes with one starter team (helpers), so one team still counts as fresh.
   return opts.generalMessages === 0 && opts.teams <= 1;
 }
 

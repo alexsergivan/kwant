@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
-import { ModernAvatar } from './ModernAvatar';
+import { ModernAvatar, useModelBadge } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
-import { canRunNow, engineTip, isUsable } from '../engines';
+import { canRunNow, engineTip, isUsable, pinnedCantRun, type RunsOn } from '../engines';
 import { statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
-import { Space, spaceSummary, spaceSummaryTitle } from '../spaces';
+import { Space } from '../spaces';
 import { SpaceSwitcher, SpaceTile } from './Spaces';
 import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
@@ -18,10 +18,8 @@ import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
 import { type AttentionRow, type NeedsYouRow, PINNED_RANK, workingIds, directIds, rollupLabel } from '../chatsTab';
 import type { InboxItem } from '../api/inbox';
-import { DevFlipNote, useDevMode } from './DevModeSwitch';
-import { SpaceControls } from './SpaceControls';
-import { DevOnToast } from './DevOnToast';
-import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
+import { useDevMode } from './DevModeSwitch';
+import { MovedPointer, SpaceSubline } from './FirstScreenBits';
 import { DevDeskRow } from './DevDesk';
 import { GlobeSlot, WatchGlobe, useFadeOut, useLingeringIds } from './WatchLive';
 import type { Browsing } from '../watchLive';
@@ -29,6 +27,16 @@ import { IdeaJarRow } from './IdeaJarRow';
 import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
 import { BudgetMeter, useBudgets } from './BotBudget';
 import { PAUSED_ROW_LINE } from '../botBudget';
+
+/** A bot's name in its row; the tooltip says what it runs on in the same words as its avatar's model badge. */
+const BotName: React.FC<{ kwant: Kwant; className: string }> = ({ kwant: k, className }) => {
+  const badge = useModelBadge(k.id);
+  return (
+    <span data-bot-name className={className} title={`${k.name} · ${badge?.label ?? engineTip(k.preferred_model)}`}>
+      {k.name}
+    </span>
+  );
+};
 
 export interface Kwant {
   id: string;
@@ -39,6 +47,8 @@ export interface Kwant {
   avatar_sprite: string;
   driver_type: string;
   preferred_model: string;
+  /** What its newest reply ran on (GET /api/kwants, 0.9.6+); null when it never replied. */
+  last_ran_on?: RunsOn | null;
   /** Pinned LLM profile; null uses the engine's default. */
   profile_id?: string | null;
   /** Whether turns may move to the engine's next profile when this one is out of usage. */
@@ -105,6 +115,8 @@ export interface SidebarProps {
   selectedTeamId?: string | null;
   /** What busy bots are doing ("Working on …", "Working here"), shown under their name. */
   busyKwants?: Record<string, string>;
+  /** Teammates who already replied in a team turn now waiting on the person: "Done · replied in @team". */
+  doneKwants?: Record<string, string>;
   /** Busy bots' status for the avatar dot; bots not listed are Available (or Can't run). */
   botStatus?: Record<string, BotStatus>;
   /** Open browser steps per bot ("Needs you" pill). */
@@ -155,6 +167,10 @@ export interface SidebarProps {
   onOpenDevDesk?: () => void;
   /** Dev mode Connect (flow F5): opens Loose ends on the GitHub form; after connecting the app returns to the Dev desk. */
   onConnectDevGitHub?: () => void;
+  /** First-screen A (0.9.8 and 0.9.9): "Dev mode and Approvals moved to this space's settings." for past users. */
+  movedPointer?: boolean;
+  onOpenMoved?: () => void;
+  onHideMoved?: () => void;
   /** Idea jar (0.7): ready takes for the violet badge, whether its page is open, how to open it, and the quick-add. Hidden on phone, which has the Jar tab. */
   ideaJarCount?: number;
   ideaJarActive?: boolean;
@@ -347,6 +363,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isChannel,
   selectedTeamId,
   busyKwants = {},
+  doneKwants = {},
   botStatus = {},
   needsYou = {},
   browsingOwners = {},
@@ -375,7 +392,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   missionsActive = false,
   devDeskActive = false,
   onOpenDevDesk,
-  onConnectDevGitHub,
+  movedPointer = false,
+  onOpenMoved,
+  onHideMoved,
   onOpenMissions,
   ideaJarCount = 0,
   ideaJarActive = false,
@@ -484,50 +503,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return selectedId === c.id;
   };
 
-  // Dev mode and Approvals live in the space controls block under the header (explainer spec §1).
+  // Dev mode and Approvals live in Space settings › General (first-screen A); the header names them.
   const dev = useDevMode(space.id);
   const devOn = !!dev?.on;
-  // The off note under the header (flow copy §7: HEAD → main, with Turn back on).
-  const [devOffNote, setDevOffNote] = useState(false);
-  const dismissDevOff = useCallback(() => setDevOffNote(false), []);
-  useEffect(() => setDevOffNote(false), [space.id]);
-  // Flow F3: switching on keeps the person where they are; a toast says what was found, with one next
-  // step and Undo. It replaces the HEAD → dev note. The toast reads the live store, so a "checking"
-  // toast updates in place when the status arrives.
-  const [devOnToast, setDevOnToast] = useState<DevModeState | null>(null);
-  const closeDevOnToast = useCallback(() => setDevOnToast(null), []);
-  useEffect(() => setDevOnToast(null), [space.id]);
-  const showOn = (s: DevModeState) => {
-    setDevOffNote(false);
-    setDevOnToast(s);
-  };
-  const focusDevSwitch = () => setTimeout(() => document.querySelector<HTMLElement>('[data-dev-switch]')?.focus(), 0);
-  const connectDev = onConnectDevGitHub ? () => onConnectDevGitHub() : undefined;
-  const typeDevRepo = () => {
-    deskIntent.set(space.id, 'type');
-    onOpenDevDesk?.();
-  };
-  const seeDevRepos = () => {
-    deskIntent.set(space.id, 'repos');
-    onOpenDevDesk?.();
-  };
-  const spaceControls = (
-    <SpaceControls
-      space={{ id: space.id, name: space.name, approvals: space.approvals }}
-      phone={phone}
-      bots={kwants}
-      onTurnedOn={showOn}
-      onTurnedOff={() => {
-        setDevOnToast(null);
-        setDevOffNote(true);
-      }}
-      onOpenDevDesk={onOpenDevDesk}
-      onSeeRepos={onOpenDevDesk ? seeDevRepos : undefined}
-      onLinkRepo={onOpenDevDesk ? typeDevRepo : undefined}
-      onConnect={connectDev}
-      onOpenSettings={onOpenSpaceSettings}
-    />
-  );
   // Phones: section titles stay pinned while their list scrolls, so they are never cut off
   const sectionHead = `px-2 py-1 min-w-0 flex items-center justify-between gap-2 text-2xs font-semibold text-zinc-400 uppercase tracking-wider${
     phone ? ' kw-sticky-head sticky top-0 z-10' : ''
@@ -560,7 +538,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const attLine = att && (att.rank === 2 || att.rank === 3 || att.rank === 4 || (att.rank === 1 && att.review)) ? att.line : undefined;
     const attTone = !att ? '' : att.rank === 1 ? 'text-warn' : att.rank === 2 ? 'text-rose-300' : att.rank === 3 ? 'text-[#7dd3fc]' : 'text-zinc-200';
     const attDot = !att ? '' : att.rank === 1 ? 'kw-status-warn' : att.rank === 2 ? 'bg-rose-400' : att.rank === 3 ? 'bg-[#38bdf8]' : 'bg-teal-400';
-    const status = asked ? 'needs_you' : statusOf(k.id, botStatus, canRun);
+    // Pinned to an engine that can't run, with failover off: its turn would fail, so no green dot
+    const pinnedTip = pinnedCantRun(k, engines.engines);
+    const status = asked ? 'needs_you' : statusOf(k.id, botStatus, pinnedTip ? false : canRun);
     const isLead = !!team && k.id === team.lead_kwant_id;
     const canRemove = !!team && !isLead && !!onUpdateTeamMembers;
     const hasRowActions = !!onEditKwant || canRemove;
@@ -583,6 +563,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         : budgetPaused && !busyKwants[k.id]
           ? PAUSED_ROW_LINE
           : busyKwants[k.id];
+    // A teammate who finished its part of a team turn that now waits on the person (UX audit #2)
+    const doneLine = !busyLine && !warn ? doneKwants[k.id] : undefined;
     // A stuck or finished row opens where that happened (its thread or chat), like its Inbox card
     // A review row opens its item in the Inbox
     const open = asked && onOpenNeedsYou
@@ -614,7 +596,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >
-        <span className="shrink-0" title={status === 'cant_run' ? "Can't run yet: no account works here" : statusText(k.name, status)}>
+        <span className="shrink-0" title={status === 'cant_run' ? pinnedTip ?? "Can't run yet: no account works here" : statusText(k.name, status)}>
           <ModernAvatar role={k.avatar_sprite} name={k.name} size={chat ? 32 : 28} status={status} kwantId={k.id} />
         </span>
         <div className="flex-1 min-w-0">
@@ -623,9 +605,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* The full name, on up to two lines (QA a), wrapping only between words or after a hyphen:
                 never inside a word ("Researche / r"). A word too long for the line ends in "…"; the
                 whole name and what it runs on are in the tooltip */}
-            <span data-bot-name className={`min-w-0 text-body font-semibold leading-5 text-zinc-100 ${NAME_WRAP}`} title={`${k.name} · ${engineTip(k.preferred_model)}`}>
-              {k.name}
-            </span>
+            <BotName kwant={k} className={`min-w-0 text-body font-semibold leading-5 text-zinc-100 ${NAME_WRAP}`} />
             {isLead && (
               <span className="shrink-0 flex items-center gap-0.5 h-5 text-2xs uppercase tracking-wide text-amber-300" title={`Leads @${team!.name}`}>
                 <Crown size={10} aria-hidden="true" />
@@ -719,6 +699,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 aria-hidden="true"
               />
               <span className="truncate">{busyLine}</span>
+            </p>
+          ) : doneLine ? (
+            <p className={`flex items-center gap-1.5 text-meta text-zinc-400 truncate${actionRoom}`} title={doneLine} data-bot-done="">
+              <span className="kw-status-dot !h-1.5 !w-1.5 kw-status-ok" aria-hidden="true" />
+              <span className="truncate">{doneLine}</span>
             </p>
           ) : (
             // Keeps its one line even with no title, so Edit and Remove sit under the name, never on it (#290 N1)
@@ -927,7 +912,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside
       ref={asideRef}
-      aria-label={`${space.name} chats and kwant bots`}
+      aria-label={`${space.name} chats and bots`}
       data-kw-sidebar
       className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-hairline'} bg-surface-side flex flex-col select-none flex-shrink-0`}
     >
@@ -950,7 +935,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <SpaceTile space={space} size={32} dev={false} />
             <span className="flex-1 min-w-0">
               <span className="block text-body font-semibold text-zinc-50 truncate">{space.name}</span>
-              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
+              <SpaceSubline counts={space.counts} devOn={devOn} approvals={space.approvals} />
             </span>
             <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
@@ -960,7 +945,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <SpaceTile space={space} size={32} dev={false} />
             <span className="flex-1 min-w-0">
               <h1 className="text-body font-semibold text-zinc-50 truncate">{space.name}</h1>
-              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
+              <SpaceSubline counts={space.counts} devOn={devOn} approvals={space.approvals} />
             </span>
             <button
               type="button"
@@ -977,24 +962,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
         )}
-        {spaceControls}
-        {devOffNote && <DevFlipNote on={false} approvals={space.approvals} onDismiss={dismissDevOff} onTurnBackOn={() => turnDevMode(space.id, true).then(showOn)} />}
-        {devOnToast && devOn && (
-          <DevOnToast
-            state={dev ?? devOnToast}
-            phone={phone}
-            onOpenDesk={() => onOpenDevDesk?.()}
-            onConnect={connectDev}
-            onTypeRepo={typeDevRepo}
-            onUndo={() =>
-              turnDevMode(space.id, false).then(() => {
-                setDevOffNote(true);
-                focusDevSwitch();
-              })
-            }
-            onClose={closeDevOnToast}
-          />
-        )}
+        {movedPointer && onOpenMoved && onHideMoved && <MovedPointer phone={phone} onOpen={onOpenMoved} onHide={onHideMoved} />}
         {phone && switcherOpen && (
           <SpaceSwitcher
             spaces={spaces}
@@ -1109,7 +1077,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   key={c.id}
                   onClick={() => onSelectChannel(c)}
                   // The channel's header says it too; no pill on every row
-                  title={layaRoutes(c, kwants.length) ? 'Laya picks who answers here' : undefined}
+                  title={layaRoutes(c, kwants.length) ? 'The best fit answers here' : undefined}
                   className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-body font-medium transition-colors text-left ${
                     active
                       ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'

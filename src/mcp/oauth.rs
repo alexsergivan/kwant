@@ -1,6 +1,7 @@
-//! OAuth sign-in for http MCP servers (MCP authorization spec 2025-06-18): protected-resource
-//! and authorization-server discovery, dynamic client registration (RFC 7591), the
-//! authorization code flow with PKCE S256 and `resource` (RFC 8707), and token refresh.
+//! OAuth sign-in for http MCP servers (MCP authorization spec 2025-06-18, plus Client ID
+//! Metadata Documents from 2025-11-25): protected-resource and authorization-server discovery,
+//! dynamic client registration (RFC 7591) or a client ID metadata document, the authorization
+//! code flow with PKCE S256 and `resource` (RFC 8707), and token refresh.
 //!
 //! This module talks HTTP but not to the database; `server::mcp_oauth` stores what it returns.
 
@@ -23,18 +24,44 @@ const MAX_PENDING: usize = 64;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const CLIENT_NAME: &str = "kwnt";
 
+/// The client ID metadata document for kwant on this computer (loopback callbacks), published
+/// at kwant.si from `site/oauth/client.json`. [`static_client_document`] is its content.
+pub const STATIC_CLIENT_ID: &str = "https://kwant.si/oauth/client.json";
+/// Where a self-hosted kwant serves its own client ID metadata document.
+pub const CLIENT_DOCUMENT_PATH: &str = "/api/mcp/oauth/client.json";
+const CALLBACK_PATH: &str = "/api/mcp/oauth/callback";
+const DOCUMENT_CLIENT_NAME: &str = "kwant";
+const CLIENT_URI: &str = "https://kwant.si";
+const LOGO_URI: &str = "https://kwant.si/apple-touch-icon.png";
+
 #[derive(Error, Debug)]
 pub enum OAuthError {
     #[error("{0}")]
     Discovery(String),
-    #[error("this server's sign-in does not support automatic client registration")]
+    #[error("this server only lets in apps that were set up with it in advance, so signing in from here can't work")]
     NoRegistration,
+    #[error(
+        "this server's sign-in only works from localhost or an https address, not from a plain http address like this one"
+    )]
+    CimdNeedsHttps,
     #[error("client registration failed: {0}")]
     Registration(String),
     #[error("token request failed: {0}")]
     Token(String),
     #[error("{0}")]
     Http(String),
+}
+
+impl OAuthError {
+    /// A stable code for errors that trying again can't fix, so the app can say what to do
+    /// instead of offering Retry.
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            OAuthError::NoRegistration => Some("no_client_registration"),
+            OAuthError::CimdNeedsHttps => Some("cimd_needs_https"),
+            _ => None,
+        }
+    }
 }
 
 fn http_err(e: reqwest::Error) -> OAuthError {
@@ -287,6 +314,22 @@ pub struct AuthServerMetadata {
     pub code_challenge_methods_supported: Option<Vec<String>>,
     #[serde(default)]
     pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
+    /// Client ID Metadata Documents (MCP authorization 2025-11-25): the client_id may be an
+    /// https URL of a JSON document describing the client.
+    #[serde(default, deserialize_with = "lenient_bool")]
+    pub client_id_metadata_document_supported: Option<bool>,
+}
+
+/// A flag that is not a JSON boolean counts as absent, so one odd field never hides the rest of
+/// the metadata.
+fn lenient_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    Ok(Value::deserialize(d)?.as_bool())
+}
+
+impl AuthServerMetadata {
+    pub fn supports_client_documents(&self) -> bool {
+        self.client_id_metadata_document_supported == Some(true)
+    }
 }
 
 /// Everything discovery found for one MCP server.
@@ -425,6 +468,7 @@ pub async fn discover(
             registration_endpoint: Some(format!("{origin}/register")),
             code_challenge_methods_supported: None,
             token_endpoint_auth_methods_supported: None,
+            client_id_metadata_document_supported: None,
         },
         None => return Err(OAuthError::Discovery("could not find the server's sign-in metadata".into())),
     };
@@ -483,6 +527,97 @@ pub async fn register_client(
         .map(str::to_string)
         .unwrap_or_else(|| if client_secret.is_some() { "client_secret_post".into() } else { "none".into() });
     Ok(ClientRegistration { client_id, client_secret, auth_method })
+}
+
+fn is_loopback_url(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+fn client_document(client_id: &str, application_type: &str, redirect_uris: Vec<String>) -> Value {
+    json!({
+        "client_id": client_id,
+        "client_name": DOCUMENT_CLIENT_NAME,
+        "client_uri": CLIENT_URI,
+        "logo_uri": LOGO_URI,
+        "application_type": application_type,
+        "redirect_uris": redirect_uris,
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    })
+}
+
+/// The document at [`STATIC_CLIENT_ID`]: kwant on this computer. Loopback callbacks without a
+/// port (servers that follow RFC 8252 §7.3 accept any port) and on the default port (servers
+/// that match exactly).
+pub fn static_client_document() -> Value {
+    let port = crate::config::DEFAULT_PORT;
+    let mut uris = Vec::new();
+    for host in ["127.0.0.1", "localhost", "[::1]"] {
+        uris.push(format!("http://{host}{CALLBACK_PATH}"));
+        uris.push(format!("http://{host}:{port}{CALLBACK_PATH}"));
+    }
+    client_document(STATIC_CLIENT_ID, "native", uris)
+}
+
+/// The document a self-hosted kwant serves at `{origin}`[`CLIENT_DOCUMENT_PATH`]: its own
+/// callback only. `None` unless `origin` is a public https origin.
+pub fn self_hosted_client_document(origin: &str) -> Option<Value> {
+    let url = Url::parse(origin).ok()?;
+    if url.scheme() != "https" || is_loopback_url(&url) || url.host().is_none() || url.path() != "/" {
+        return None;
+    }
+    let origin = url.origin().ascii_serialization();
+    Some(client_document(&format!("{origin}{CLIENT_DOCUMENT_PATH}"), "web", vec![callback_url(&origin)]))
+}
+
+/// The client_id kwant uses with a server that supports client ID metadata documents, for a
+/// sign-in started on `origin` (already checked by [`validate_origin`]).
+pub fn client_document_id(origin: &str) -> Result<String, OAuthError> {
+    let url = Url::parse(origin).map_err(|_| OAuthError::CimdNeedsHttps)?;
+    if is_loopback_url(&url) {
+        return Ok(STATIC_CLIENT_ID.to_string());
+    }
+    self_hosted_client_document(origin)
+        .and_then(|d| d["client_id"].as_str().map(str::to_string))
+        .ok_or(OAuthError::CimdNeedsHttps)
+}
+
+/// Picks how kwant identifies itself to a new authorization server: dynamic registration when
+/// the server offers it (falling back to a client ID metadata document if registration is
+/// refused), otherwise a client ID metadata document. See autonomy/mcp-oauth-cimd/impl.md.
+pub async fn obtain_client(
+    http: &reqwest::Client,
+    meta: &AuthServerMetadata,
+    origin: &str,
+    redirect_uri: &str,
+) -> Result<ClientRegistration, OAuthError> {
+    let documents = meta.supports_client_documents();
+    if meta.registration_endpoint.is_some() {
+        match register_client(http, meta, redirect_uri).await {
+            Err(OAuthError::Registration(e)) if documents => {
+                if let Ok(client_id) = client_document_id(origin) {
+                    tracing::info!(error = %e, "MCP OAuth registration refused; using kwant's client ID metadata document");
+                    return Ok(document_client(client_id));
+                }
+                return Err(OAuthError::Registration(e));
+            }
+            other => return other,
+        }
+    }
+    if documents {
+        return client_document_id(origin).map(document_client);
+    }
+    Err(OAuthError::NoRegistration)
+}
+
+fn document_client(client_id: String) -> ClientRegistration {
+    ClientRegistration { client_id, client_secret: None, auth_method: "none".into() }
 }
 
 /// The URL the user's browser opens to sign in.
@@ -651,7 +786,7 @@ pub fn validate_origin(origin: &str, hosts: &[&str]) -> Result<String, String> {
 }
 
 pub fn callback_url(origin: &str) -> String {
-    format!("{origin}/api/mcp/oauth/callback")
+    format!("{origin}{CALLBACK_PATH}")
 }
 
 #[cfg(test)]
@@ -799,5 +934,94 @@ mod tests {
         assert!(validate_origin("javascript:alert(1)", &["k.dev"]).is_err());
         assert!(validate_origin("http://k.dev:8080", &["k.dev"]).is_err());
         assert_eq!(callback_url("https://k.dev"), "https://k.dev/api/mcp/oauth/callback");
+    }
+
+    /// ElevenLabs' hosted MCP (read Nov 13 2026): no registration endpoint, client documents yes.
+    #[test]
+    fn reads_client_document_support() {
+        let meta: AuthServerMetadata = serde_json::from_value(json!({
+            "issuer": "https://api.us.elevenlabs.io",
+            "authorization_endpoint": "https://elevenlabs.io/app/oauth/authorize",
+            "token_endpoint": "https://api.us.elevenlabs.io/v1/oauth/token",
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "private_key_jwt"],
+            "client_id_metadata_document_supported": true
+        }))
+        .unwrap();
+        assert!(meta.supports_client_documents());
+        assert_eq!(meta.registration_endpoint, None);
+
+        let base = json!({"authorization_endpoint": "https://a.dev/a", "token_endpoint": "https://a.dev/t"});
+        let without: AuthServerMetadata = serde_json::from_value(base.clone()).unwrap();
+        assert!(!without.supports_client_documents());
+        // An odd value never hides the rest of the metadata
+        for odd in [json!("true"), json!(1), Value::Null] {
+            let mut m = base.clone();
+            m["client_id_metadata_document_supported"] = odd;
+            let parsed: AuthServerMetadata = serde_json::from_value(m).unwrap();
+            assert!(!parsed.supports_client_documents());
+            assert_eq!(parsed.token_endpoint, "https://a.dev/t");
+        }
+    }
+
+    #[test]
+    fn picks_the_client_document_for_the_origin() {
+        for loopback in ["http://127.0.0.1:8799", "http://127.0.0.1:51234", "http://localhost:8799", "http://[::1]:8799"] {
+            assert_eq!(client_document_id(loopback).unwrap(), STATIC_CLIENT_ID, "{loopback}");
+        }
+        assert_eq!(
+            client_document_id("https://kwant.example.com").unwrap(),
+            "https://kwant.example.com/api/mcp/oauth/client.json"
+        );
+        assert_eq!(
+            client_document_id("https://kwant.example.com:8443").unwrap(),
+            "https://kwant.example.com:8443/api/mcp/oauth/client.json"
+        );
+        // Plain http on a LAN or public name: no document can name it
+        for no in ["http://192.168.1.5:8799", "http://kwant.example.com", "not a url"] {
+            assert!(matches!(client_document_id(no), Err(OAuthError::CimdNeedsHttps)), "{no}");
+        }
+    }
+
+    #[test]
+    fn self_hosted_document_names_only_its_own_callback() {
+        let doc = self_hosted_client_document("https://kwant.example.com").unwrap();
+        assert_eq!(doc["client_id"], "https://kwant.example.com/api/mcp/oauth/client.json");
+        assert_eq!(doc["redirect_uris"], json!(["https://kwant.example.com/api/mcp/oauth/callback"]));
+        assert_eq!(doc["token_endpoint_auth_method"], "none");
+        assert_eq!(doc["grant_types"], json!(["authorization_code", "refresh_token"]));
+        assert_eq!(doc["response_types"], json!(["code"]));
+        assert_eq!(doc["client_name"], "kwant");
+        assert_eq!(doc["application_type"], "web");
+        for no in ["http://kwant.example.com", "https://localhost:8443", "https://127.0.0.1", "https://k.dev/x", "nope"] {
+            assert!(self_hosted_client_document(no).is_none(), "{no}");
+        }
+    }
+
+    /// site/oauth/client.json is what kwant.si serves as STATIC_CLIENT_ID; it must say what the
+    /// code expects (loopback callbacks, with and without the default port).
+    #[test]
+    fn static_document_matches_the_site_file() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("site/oauth/client.json");
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let doc = static_client_document();
+        assert_eq!(file, doc, "update site/oauth/client.json to match static_client_document()");
+        assert_eq!(doc["client_id"], STATIC_CLIENT_ID);
+        assert_eq!(doc["application_type"], "native");
+        let uris: Vec<&str> = doc["redirect_uris"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(uris.contains(&"http://127.0.0.1:8799/api/mcp/oauth/callback"));
+        assert!(uris.contains(&"http://127.0.0.1/api/mcp/oauth/callback"));
+        assert!(uris.iter().all(|u| {
+            let url = Url::parse(u).unwrap();
+            url.scheme() == "http" && is_loopback_url(&url) && url.path() == CALLBACK_PATH
+        }));
+    }
+
+    #[test]
+    fn dead_end_errors_have_codes() {
+        assert_eq!(OAuthError::NoRegistration.code(), Some("no_client_registration"));
+        assert_eq!(OAuthError::CimdNeedsHttps.code(), Some("cimd_needs_https"));
+        assert_eq!(OAuthError::Registration("x".into()).code(), None);
+        assert!(!OAuthError::NoRegistration.to_string().contains("automatic client registration"));
     }
 }

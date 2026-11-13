@@ -96,19 +96,42 @@ An http server that answers 401 while kwnt has no usable sign-in (and the user s
 http servers that require sign-in (e.g. `https://mcp.notion.com/mcp`) use the MCP authorization
 spec (2025-06-18): kwnt reads the 401's `WWW-Authenticate: Bearer resource_metadata=…` (or
 `/.well-known/oauth-protected-resource`), then the authorization server's metadata
-(`/.well-known/oauth-authorization-server`, falling back to OpenID discovery), registers itself
-as client `kwnt` (dynamic client registration, RFC 7591), and runs the authorization code flow
-with PKCE S256 and the `resource` parameter (RFC 8707). Authorization-server endpoints must be
-https (plain http only on loopback).
+(`/.well-known/oauth-authorization-server`, falling back to OpenID discovery), gets a client
+(below), and runs the authorization code flow with PKCE S256 and the `resource` parameter
+(RFC 8707). Authorization-server endpoints must be https (plain http only on loopback).
+
+How kwnt gets a client, in order:
+1. A client stored earlier for this server, callback URL and authorization server.
+2. Dynamic client registration (RFC 7591) as client `kwnt`, when the server has a
+   `registration_endpoint`.
+3. A client ID metadata document (MCP spec 2025-11-25), when the server says
+   `client_id_metadata_document_supported: true` and has no registration endpoint, or refused
+   the registration. The client_id is the document's https URL, with no client secret:
+   - kwant opened on this computer (`127.0.0.1`, `localhost`, `[::1]`):
+     `https://kwant.si/oauth/client.json`. It lists the callback on those hosts without a port
+     and on port 8799; servers that match the port exactly only work on port 8799.
+   - kwant on a public https address: `<origin>/api/mcp/oauth/client.json`, served by kwnt
+     itself (below), so the server must be able to reach that address.
+   - kwant on plain http elsewhere (a LAN address): no document; `502` with
+     `"code": "cimd_needs_https"`.
+4. Neither: `502` with `"code": "no_client_registration"`. The server only accepts clients registered with it in advance, and kwnt has no field for a client ID made that way, so retrying can't help.
 
 ### `POST /api/mcp/servers/:id/oauth/start`
 Body: `{"origin": "https://kwnt.example.com"}`: the browser's `location.origin`. It must be http(s)
 with no path, and its host must equal the request's `Host` or `X-Forwarded-Host`. The callback is
 `<origin>/api/mcp/oauth/callback`, so the same build works on localhost and behind a proxy.
 `200` → `{"authorize_url": "https://…"}`: open it in a popup. `400` bad origin or a stdio server,
-`404` unknown server, `502` discovery or registration failed (`{"error": "…"}`).
+`404` unknown server, `502` discovery or registration failed (`{"error": "…"}`). A `502` with a
+`code` (`no_client_registration`, `cimd_needs_https`) can't succeed on retry; without one it may.
 The sign-in must finish within 10 minutes; starting again for the same server replaces the
 earlier attempt. Registrations are reused per server, callback URL and authorization server.
+
+### `GET /api/mcp/oauth/client.json`
+kwnt's client ID metadata document for a self-hosted kwant, fetched by authorization servers
+without an API token. Built from `X-Forwarded-Host` (first value) or `Host`, always as https:
+`{"client_id": "https://<host>/api/mcp/oauth/client.json", "redirect_uris":
+["https://<host>/api/mcp/oauth/callback"], "token_endpoint_auth_method": "none", …}`. `404` on a
+loopback or malformed host (kwant on this computer uses kwant.si's document).
 
 ### `GET /api/mcp/oauth/callback?code=…&state=…` (or `?error=…&state=…`)
 Where the provider redirects the popup. kwnt exchanges the code and stores the tokens, then
@@ -189,6 +212,82 @@ description, reason, repository_url, transport, url, command, args, package, run
 fixed_headers` (names only), `inputs[{name, kind: "env"|"header", description, required, secret, template, placeholder}],
 status (pending|installing|installed|dismissed), server_id, last_error`. Changes arrive as SSE `mcp_suggestion_updated
 {suggestion}` and the message meta is updated in place.
+
+## Public directory (Find a tool)
+
+The person searches the official [MCP Registry](https://registry.modelcontextprotocol.io) and adds
+an entry in one step. kwnt keeps its own copy of the registry (latest versions only, in memory):
+the first sync pages through the whole registry after start (`/v0.1/servers?version=latest`,
+100 a page, 150 ms apart), then every 6 hours only what changed (`updated_since`, from 10 minutes
+before the last sync started). A failed sync keeps the old copy and tries again after 2 minutes,
+doubling up to an hour. Until the first sync has finished, a search goes to the registry's own
+search instead. Both routes refuse agents' tokens (`403`); agents use `mcp_search`/`mcp_suggest`.
+Only entries kwnt can add in one step are kept (the same rules as suggestions: a remote, or an
+npm/PyPI/OCI package run with `npx`/`uvx`/`docker`; no shells, no placeholder addresses).
+
+### `GET /api/mcp/registry/search?q=&space=`
+Up to 12 entries for `q` (cut to 60 characters; fewer than 2 letters answer no entries).
+`200` →
+
+```json
+{
+  "entries": [{
+    "registry_name": "com.stripe/mcp",
+    "version": "0.2.4",
+    "title": "Stripe",
+    "description": "MCP server integrating with Stripe - tools for customers, products, payments, and more.",
+    "publisher": {"label": "stripe.com", "kind": "domain"},
+    "kind": "remote",
+    "url": "https://mcp.stripe.com",
+    "transport": "http",
+    "command": null,
+    "inputs": [],
+    "already_added": false
+  }],
+  "unavailable": false,
+  "source": "copy"
+}
+```
+
+| Field | Notes |
+|---|---|
+| `title` | The entry's title; else the last part of its name, or the publisher's name when that part is generic (`mcp`, `server`, `mcp-server`, `remote`, `official`, `api`), in title case. |
+| `publisher` | From the name's namespace: `com.stripe` → `{"label": "stripe.com", "kind": "domain"}`, `io.github.alice` → `{"label": "github.com/alice", "kind": "github"}`. The registry checked the namespace (a DNS or GitHub proof); kwnt checks nothing more. |
+| `kind` | `"remote"` (an http address, `url` and `transport: "http"`) or `"stdio"` (`command` is the command line that would run, e.g. `npx -y @scope/pkg@1.0.0`, shown, never run by search). |
+| `url` | A bare host keeps no trailing `/` (`https://mcp.stripe.com`). |
+| `inputs` | What the person types: header names for remotes, env names for packages. `secret` ones belong in password fields. |
+| `already_added` | A server from this entry exists in the space: installed from it before, or one with the same address (remote) or the same command and arguments (stdio). |
+| `unavailable` | `true` (with no entries) only when there's no copy yet and the registry can't be reached. |
+| `source` | `"copy"` or `"live"` (before the first sync). |
+
+Ranking, best first: entries whose publisher is what was typed (`stripe` → `com.stripe/*`,
+`github` → `io.github.github/*`; a publisher's name is a two-label domain's first label or the GitHub
+user, so `io.ddx.pg` isn't `pg`); then how the name or title matches (starts with it, a word starts
+with it, a known alias such as `pg` → postgres, a name part, contains it, one or two typos); within
+each of those, a publisher one or two typos from what was typed (`strpie` → stripe.com); an exact
+name or title (for typo matches, a whole name or title a typo away: `gmial` → Gmail); remotes before packages; then registry order. Typos are only looked for when closer
+matches leave fewer than 12 rows. `ai.smithery/*` mirrors and entries whose address is a
+`{placeholder}` always come last. Case and accents don't matter. The answer carries
+`Server-Timing: directory;dur=<ms>`.
+
+### `POST /api/mcp/registry/install?space=` `{registry_name, env?: {NAME: value}, headers?: {Name: value}}`
+Fetches the entry's latest version from the registry again and plans it from the registry's data
+only (never from the request). `env` and `headers` fill its `inputs` by name (a `Bearer {token}`
+template gets the bare value). The server is added like one the person typed in: for every bot,
+named after the entry (`com.stripe/mcp` → `stripe`, `-2` if taken). It's tested; it's kept when the
+test passes or the server only needs sign-in.
+
+- `200` → `{registry_name, version, server: Server, test, oauth_required}`. With
+  `oauth_required: true`, start the sign-in (`POST /api/mcp/servers/:id/oauth/start`).
+- `400` bad `registry_name`, a missing required input, an unknown name, a value that isn't one line,
+  more than 50 values, or a body that isn't JSON with text values.
+- `404` the registry doesn't know it (any more). `409` the space is archived.
+- `422` it can't be added in one step, or it didn't start (`{error, test}`; nothing is kept).
+- `502` `{error, unavailable: true}`: the registry can't be reached.
+- `403` an agent's token.
+
+The values sent are never in the answer (every value of 6+ characters is replaced with `********`
+anywhere in it, error text included) and never logged; a malformed body gets a fixed message.
 
 ## Fallbacks before "not possible"
 

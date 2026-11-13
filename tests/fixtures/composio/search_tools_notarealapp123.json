@@ -1,0 +1,71 @@
+{
+ "successful": true,
+ "data": {
+  "results": [
+   {
+    "index": 1,
+    "use_case": "notarealapp123",
+    "execution_guidance": "Found 4 tools for this query. Look at the schemas to know how to use them.",
+    "primary_tool_slugs": [
+     "GOOGLESUPER_GET_APP",
+     "INSPO_MCP_FIND_COMPONENTS"
+    ],
+    "related_tool_slugs": [
+     "INSPO_MCP_GET_FILTERS",
+     "INSPO_MCP_FIND_REFERENCE_COMPONENTS"
+    ],
+    "toolkits": [
+     "googlesuper",
+     "inspo_mcp"
+    ]
+   }
+  ],
+  "toolkit_connection_statuses": [
+   {
+    "toolkit": "googlesuper",
+    "description": "Google Super App combines all Google services including Drive, Calendar, Gmail, Sheets, Analytics, Ads, and more, providing a unified platform for seamless integration and management of your digital life.",
+    "has_active_connection": true,
+    "accounts": [
+     {
+      "id": "googlesuper_redacted",
+      "alias": "Personal",
+      "user_info": {
+       "name": "[redacted]",
+       "email": "[redacted]"
+      },
+      "status": "ACTIVE",
+      "is_default": true,
+      "account_type": "PRIVATE"
+     }
+    ],
+    "status_message": "Connection is active and ready to use"
+   },
+   {
+    "toolkit": "inspo_mcp",
+    "description": "Inspo MCP provides read-only design-reference search across captured production websites, components, color palettes, typography, and page structure for coding agents.",
+    "has_active_connection": true,
+    "status_message": "This toolkit does not require authentication. Tools are ready to use."
+   }
+  ],
+  "tool_schemas": {
+   "ELEVENLABS_GET_VOICES": {
+    "toolkit": "ELEVENLABS",
+    "tool_slug": "ELEVENLABS_GET_VOICES",
+    "description": "Retrieves a list of all available voices along with their detailed attributes and settings.",
+    "input_schema": {
+     "type": "object",
+     "properties": {}
+    },
+    "hasFullSchema": true
+   }
+  },
+  "session": {
+   "id": "size",
+   "generate_id": true
+  },
+  "success": true,
+  "error": null
+ },
+ "error": null,
+ "log_id": "log_recorded"
+}

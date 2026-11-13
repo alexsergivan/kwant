@@ -1,6 +1,9 @@
-import React, { useCallback, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { HardHat, useDevModeOn } from './DevModeSwitch';
-import { isKwantWorking, subscribeKwant } from '../kwantActivity';
+import { isKwantWorking, lastRunOf, liveRunOf, subscribeKwant } from '../kwantActivity';
+import { modelBadgeFor, modelBadgeSize, type ModelBadge } from '../engines';
+import { badgeBotOf, badgeEngines, subscribeBadgeData } from '../modelBadgeData';
+import { EngineMark } from './EngineMark';
 import { AvatarMood, useKwantMood, useKwantNotices } from './AvatarMood';
 import { moodLabel, restingUntilOf } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
@@ -16,6 +19,10 @@ interface ModernAvatarProps {
   className?: string;
   /** The kwant this avatar shows; it animates while that kwant is working on a turn. */
   kwantId?: string;
+  /** The AI model badge (bottom-left) on avatars of 24 px and up; off for reply avatars in the chat. */
+  modelBadge?: boolean;
+  /** Eyes shut and still: the empty chat while nothing can run yet (first-screen E). */
+  asleep?: boolean;
 }
 
 const noopUnsubscribe = () => undefined;
@@ -29,13 +36,93 @@ export const useKwantWorking = (kwantId: string | undefined): boolean => {
   return useSyncExternalStore(subscribe, () => isKwantWorking(kwantId), () => false);
 };
 
+/** The bot's model badge: its pinned engine, Laya's pick for the running reply, or its last reply's. */
+export const useModelBadge = (kwantId: string | undefined): ModelBadge | null => {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      if (!kwantId) return noopUnsubscribe;
+      const a = subscribeKwant(kwantId, onChange);
+      const b = subscribeBadgeData(onChange);
+      return () => {
+        a();
+        b();
+      };
+    },
+    [kwantId],
+  );
+  const working = useSyncExternalStore(subscribe, () => isKwantWorking(kwantId), () => false);
+  const live = useSyncExternalStore(subscribe, () => liveRunOf(kwantId), () => undefined);
+  const last = useSyncExternalStore(subscribe, () => lastRunOf(kwantId), () => undefined);
+  const bot = useSyncExternalStore(subscribe, () => badgeBotOf(kwantId), () => undefined);
+  const engines = useSyncExternalStore(subscribe, badgeEngines, () => null);
+  return useMemo(
+    () => (bot ? modelBadgeFor(last ? { ...bot, last_ran_on: last } : bot, working ? live : null, engines) : null),
+    [bot, last, working, live, engines],
+  );
+};
+
+const prefersReducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+const BadgeFace: React.FC<{ badge: ModelBadge; glyph: number; className?: string }> = ({ badge, glyph, className = '' }) => (
+  <span
+    className={`kw-mb-layer ${badge.cantRun ? 'text-zinc-600' : badge.mark === 'laya' ? 'text-violet-300' : 'text-zinc-100'} ${className}`}
+    style={badge.resting ? { opacity: 0.6 } : undefined}
+  >
+    <EngineMark mark={badge.mark} size={glyph} />
+  </span>
+);
+
+/** Bottom-left, the mirror of the status dot. A changed mark cross-fades in 150 ms (instant under reduced motion). */
+export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ kwantId, size }) => {
+  const badge = useModelBadge(kwantId);
+  const d = modelBadgeSize(size);
+  const [leaving, setLeaving] = useState<ModelBadge | null>(null);
+  const shownRef = useRef<ModelBadge | null>(badge);
+  const key = badge?.key;
+  useEffect(() => {
+    const before = shownRef.current;
+    shownRef.current = badge;
+    if (!before || !badge || before.key === badge.key || prefersReducedMotion()) {
+      setLeaving(null);
+      return;
+    }
+    setLeaving(before);
+    const t = window.setTimeout(() => setLeaving(null), 150);
+    return () => window.clearTimeout(t);
+    // Only a new mark fades; a new label on the same mark doesn't.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  if (!badge || !d) return null;
+  const glyph = Math.round(d * (badge.mark === 'custom' ? 0.7 : 0.64));
+  return (
+    <span
+      className={`kw-model-badge ring-2 ring-zinc-950 ${badge.cantRun ? 'bg-zinc-950' : 'bg-zinc-900'}`}
+      style={{ width: d, height: d }}
+      role="img"
+      aria-label={badge.label}
+      title={badge.label}
+      data-model-badge={badge.mark}
+      data-badge-resting={badge.resting || undefined}
+      data-badge-cant-run={badge.cantRun ?? undefined}
+    >
+      {leaving && <BadgeFace key={`out:${leaving.key}`} badge={leaving} glyph={glyph} className="kw-mb-out" />}
+      <BadgeFace key={badge.key} badge={badge} glyph={glyph} className={leaving ? 'kw-mb-in' : ''} />
+      {badge.resting && badge.auto && (
+        <span className="kw-mb-spark text-violet-300" style={{ fontSize: Math.max(8, Math.round(d * 0.55)) }} aria-hidden="true" data-badge-spark>
+          ✦
+        </span>
+      )}
+    </span>
+  );
+};
+
 type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
   | 'partyhat' | 'hardhat' | 'flower' | 'none';
 
-interface Creature {
+export interface Creature {
   body: string;
   shade: string;
   light: string;
@@ -333,6 +420,13 @@ function renderCreature(c: Creature) {
   ];
 }
 
+/** The bot's creature, resolved exactly as ModernAvatar resolves it, for scenes that draw the bot outside its frame. */
+export function useCreatureFor(role: string | undefined, name: string, kwantId?: string): Creature {
+  useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
+  return pickCreature(avatarStyleFor(role, kwantId, name, isStyleId) ?? 'default', name);
+}
+export { renderCreature };
+
 export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   role,
   name = '',
@@ -340,6 +434,8 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   status,
   className = '',
   kwantId,
+  modelBadge = true,
+  asleep = false,
 }) => {
   const working = useKwantWorking(kwantId);
   // Never green (or idle grey) while a turn runs: the turn stream wins over a stale status.
@@ -387,7 +483,15 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
           <g className="kw-avatar-body">
             {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
             {/* One blink when the person sends this bot a message: the eyes close for 160 ms. */}
-            {notices > 0 && (
+            {asleep && (
+              <g data-asleep>
+                {px(10, 10, 2, 2, creature.body, 'sl1')}
+                {px(14, 10, 2, 2, creature.body, 'sl2')}
+                {px(10, 12, 2, 1, creature.shade, 'sl3')}
+                {px(14, 12, 2, 1, creature.shade, 'sl4')}
+              </g>
+            )}
+            {!asleep && notices > 0 && (
               <g key={notices} className="kw-avatar-blink">
                 {px(10, 10, 2, 3, creature.body, 'bl1')}
                 {px(14, 10, 2, 3, creature.body, 'bl2')}
@@ -400,6 +504,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
       </svg>
       <AvatarMood mood={mood} size={size} />
       {hat && <HardHat />}
+      {modelBadge && kwantId && modelBadgeSize(size) !== null && <AvatarModelBadge kwantId={kwantId} size={size} />}
       {shown && (
         <>
           <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${STATUS_DOT[shown]}`} aria-hidden="true" />

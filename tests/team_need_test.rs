@@ -182,21 +182,21 @@ async fn seven_bots_are_trimmed_to_the_lead_and_five_others() {
 async fn drafted_names_that_clash_are_made_unique_and_presets_are_checked() {
     let e = setup().await;
     claude_ready(&e);
-    // The space starts with a TechLead; the model also repeats a name and names a preset that doesn't exist
+    // The space starts with an Assistant; the model also repeats a name and names a preset that doesn't exist
     let answer = draft(vec![
-        bot("TechLead", "Shop Lead", true, "custom"),
-        bot("Writer", "Copy Writer", false, "made_up_role"),
-        bot("Writer", "Second Writer", false, "custom"),
+        bot("Assistant", "Shop Lead", true, "custom"),
+        bot("Copywriter", "Copy Writer", false, "made_up_role"),
+        bot("Copywriter", "Second Writer", false, "custom"),
     ]);
     plan_replies("tfw_names", &[&answer]);
     let (s, sug) = suggest(&e, "Write my product pages for me. REPLYSEQ:tfw_names").await;
     assert_eq!(s, StatusCode::OK, "{sug}");
     let rows = sug["bots"].as_array().unwrap();
     let names: Vec<String> = rows.iter().map(|r| r["name"].as_str().unwrap().to_lowercase()).collect();
-    assert_ne!(names[0], "techlead", "{sug}");
-    assert!(names[0].starts_with("techlead"), "{sug}");
-    assert_eq!(names[1], "writer");
-    assert_ne!(names[2], "writer");
+    assert_ne!(names[0], "assistant", "{sug}");
+    assert!(names[0].starts_with("assistant"), "{sug}");
+    assert_eq!(names[1], "copywriter");
+    assert_ne!(names[2], "copywriter");
     let keys: std::collections::HashSet<&str> = rows.iter().map(|r| r["key"].as_str().unwrap()).collect();
     assert_eq!(keys.len(), 3, "{sug}");
     assert_eq!(rows[1]["preset"], "custom", "an unknown preset is custom");

@@ -360,3 +360,151 @@ export function engineSummary(e: EngineInfo, accounts: SummaryAccount[] = []): {
     }
   }
 }
+
+// ---- The model badge on a bot's avatar (autonomy/model-badge/brief.md) ----
+
+/** What a turn runs on: the live `turn_runs_on` event, or a bot's `last_ran_on` from GET /api/kwants. */
+export interface RunsOn {
+  engine: string;
+  family?: string | null;
+  model?: string | null;
+  model_label?: string | null;
+  tier?: string | null;
+  /** "laya", "pinned" or "fallback" (the turn moved off the bot's first-choice account). */
+  picked_by?: string | null;
+  at?: string | null;
+}
+
+/** The mark drawn in the badge: a provider's, or Laya's ✦ for an auto bot that never ran. */
+export type BadgeMark = Family | 'laya';
+
+export interface ModelBadge {
+  mark: BadgeMark;
+  /** Auto and resting: the last reply's mark at 60%, with a ✦ in its corner. */
+  resting: boolean;
+  /** Laya picks this bot's model (the ✦ corner when resting). */
+  auto: boolean;
+  /** The engine can't run: signed out, switched off, or not on this computer at all (no CLI, key or
+   *  server). Greyed out. */
+  cantRun: 'signed_out' | 'off' | 'not_set_up' | null;
+  /** Tooltip and aria-label; the name's tooltip in the bot list says the same. */
+  label: string;
+  /** Changes exactly when the mark changes, for the cross-fade. */
+  key: string;
+}
+
+const familyOfRun = (r: RunsOn): Family | null => {
+  if (r.family && FAMILIES.some((f) => f.id === r.family)) return r.family as Family;
+  return FAMILY_OF[r.engine as EngineId] ?? null;
+};
+
+/** "Claude · Haiku" for a turn, worded exactly like the reply's own ran-on line. */
+export function runsOnLabel(r: RunsOn, engines: EngineInfo[] | null = null): string {
+  const family = familyOfRun(r);
+  return ranOnLabel(JSON.stringify({ ran_on: { ...r, family: family ?? r.family } }), engines) ?? (family ? familyLabel(family).replace(/ \(.*\)$/, '') : r.engine);
+}
+
+/** The server's words for an engine that is signed in but out of usage ("Quota exceeded until 08:15 UTC"). */
+const isQuotaDetail = (detail: string | null | undefined): boolean => /quota exceeded|usage limit|out of usage/i.test(detail ?? '');
+
+/** Whether a family's engines can run now; why not when they can't. null while unknown. */
+function familyCantRun(family: Family, engines: EngineInfo[] | null): ModelBadge['cantRun'] {
+  if (!engines?.length) return null;
+  const mine = engines.filter((e) => FAMILY_OF[e.id] === family);
+  if (!mine.length || mine.some(isUsable)) return null;
+  if (mine.some((e) => e.enabled !== false && e.status === 'checking')) return null;
+  // Signed in but not ready right now (out of usage until it resets): failover still runs the bot, so it isn't greyed.
+  if (mine.some((e) => e.enabled !== false && e.status === 'ready')) return null;
+  // The server reports an engine that is signed in but out of usage as status 'error' with "Quota exceeded …"
+  // (drivers/engines.rs): it isn't signed out, and it runs again when the usage resets.
+  if (mine.some((e) => e.enabled !== false && e.status === 'error' && isQuotaDetail(e.detail))) return null;
+  // Off when every one that's here at all is switched off; otherwise it needs a sign-in (or a key).
+  const here = mine.filter((e) => e.status !== 'not_installed' || e.enabled === false);
+  if (!here.length) return 'not_set_up';
+  return here.every((e) => e.enabled === false || e.status === 'disabled') ? 'off' : 'signed_out';
+}
+
+/** pickLabel, with the model named the way a reply's ran-on line names it: "Claude · Sonnet", not "Claude · Claude Sonnet (latest)". */
+function shortPickLabel(value: string, engines: EngineInfo[] | null): string {
+  const full = pickLabel(value, engines);
+  const at = full.indexOf(' · ');
+  if (at < 0) return full;
+  const model = shortModelLabel(full.slice(at + 3), full.slice(0, at));
+  // An id that starts with the family's own name ("grok-4") reads as "Grok 4".
+  const fam = full.slice(0, at);
+  const m = model.toLowerCase().startsWith(fam.toLowerCase() + '-') ? `${fam} ${model.slice(fam.length + 1)}` : model;
+  // A bare id the engine list doesn't know yet ("sonnet") reads as a name.
+  return `${fam} · ${/^[a-z]+$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m}`;
+}
+
+/**
+ * The badge for a bot: its pinned engine, or (auto) Laya's pick for the reply it's working on, else
+ * the engine of its last reply. `liveTurn` is the running turn's `turn_runs_on`, null when resting.
+ * null when there's nothing to show (no bot, or a pick this app can't read).
+ */
+export function modelBadgeFor(
+  kwant: { preferred_model?: string | null; last_ran_on?: RunsOn | null } | null | undefined,
+  liveTurn: RunsOn | null | undefined,
+  engines: EngineInfo[] | null = null,
+): ModelBadge | null {
+  if (!kwant) return null;
+  const pick = parsePick(kwant.preferred_model);
+  const auto = pick.family === 'auto';
+  if (liveTurn) {
+    const family = familyOfRun(liveTurn);
+    if (!family) return null;
+    const what = runsOnLabel(liveTurn, engines);
+    const label = liveTurn.picked_by === 'fallback'
+      ? `Moved to ${what} for this reply`
+      : auto
+        ? `Laya picked ${what} for this reply`
+        : `Runs on ${what}`;
+    return { mark: family, resting: false, auto, cantRun: null, label, key: `${family}:${liveTurn.model ?? ''}` };
+  }
+  if (auto) {
+    const last = kwant.last_ran_on;
+    const family = last ? familyOfRun(last) : null;
+    if (!last || !family) return { mark: 'laya', resting: false, auto, cantRun: null, label: 'Laya picks the model', key: 'laya' };
+    return {
+      mark: family,
+      resting: true,
+      auto,
+      cantRun: null,
+      label: `Laya picks the model. Last reply: ${runsOnLabel(last, engines)}`,
+      key: `${family}:${last.model ?? ''}:rest`,
+    };
+  }
+  const family = pick.family;
+  if (family === null || family === 'auto') return null;
+  const cantRun = familyCantRun(family, engines);
+  const suffix = cantRun ? ` · ${cantRun === 'not_set_up' ? 'not set up' : cantRun === 'off' ? 'off' : 'signed out'}` : '';
+  return {
+    mark: family,
+    resting: false,
+    auto,
+    cantRun,
+    label: `Runs on ${shortPickLabel(kwant.preferred_model ?? '', engines)}${suffix}`,
+    key: `${family}:${pick.model ?? ''}`,
+  };
+}
+
+/**
+ * Why a bot pinned to one engine can't run now, or null when it can (or it isn't pinned). Only with failover
+ * off: with failover on, a signed-out engine's turn moves on and really runs, so the dot stays green.
+ * The words are the badge's own tip, "Runs on Grok · signed out" (0.9.7 model-badge QA).
+ */
+export function pinnedCantRun(
+  kwant: { preferred_model?: string | null; profile_failover?: boolean } | null | undefined,
+  engines: EngineInfo[] | null | undefined,
+): string | null {
+  if (!kwant || kwant.profile_failover !== false) return null;
+  const badge = modelBadgeFor({ preferred_model: kwant.preferred_model }, null, engines ?? null);
+  return badge && !badge.auto && badge.cantRun ? badge.label : null;
+}
+
+/** The badge's diameter for an avatar of `size` px: none under 24, 14 at 28–34, larger on big avatars. */
+export function modelBadgeSize(size: number): number | null {
+  if (size < 24) return null;
+  if (size < 28) return 12;
+  return Math.max(14, Math.min(28, Math.round(size * 0.28)));
+}

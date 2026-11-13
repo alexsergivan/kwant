@@ -9,6 +9,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -26,6 +27,8 @@ import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
 import { liveNamingOrder, namesToFill } from './workingStrip';
+import { doneLines } from './waitingState';
+import { botOf } from './sharedFiles';
 import {
   HumanStep,
   HumanStepMeta,
@@ -38,7 +41,8 @@ import {
   turnsAwaitingStep,
 } from './humanSteps';
 import { notifyBrowserPages, pageTeam, stepPage } from './browserPages';
-import { McpSuggestionCard } from './components/McpSuggestionCard';
+import { McpSuggestionCard, type SuggestionSignInResult } from './components/McpSuggestionCard';
+import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
 import type { ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
@@ -77,7 +81,8 @@ import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
-import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
+import { clearAllTurns, forgetLastRuns, resetTurns, turnEnded, turnRunsOn, turnStarted } from './kwantActivity';
+import { setBadgeBots, setBadgeEngines } from './modelBadgeData';
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
@@ -150,13 +155,14 @@ import { useEngines } from './useEngines';
 import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
+import { OPEN_ADD_TOOL_EVENT, type OpenAddTool } from './mcp';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
 import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { BudgetNeedsYou } from './components/BotBudget';
-import { budgetStore, isBudgetMessage, requestBudgetFocus } from './botBudget';
+import { budgetStore, isBudgetMessage, requestBudgetFocus, sendWaitsForBudget } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
@@ -369,6 +375,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(tab);
     playSfx('click');
   };
+  // First-screen A: the "moved" pointer under the space header, until Open or ✕ (0.9.8 and 0.9.9).
+  const [movedHidden, setMovedHidden] = useState(movedSeen);
+  const hideMoved = () => {
+    markMovedSeen();
+    setMovedHidden(true);
+  };
+  const openMoved = () => {
+    openSpaceSettings('general');
+    ringDevSettings();
+    hideMoved();
+  };
   // Settings › All spaces: what applies to every space and to the app.
   const openAppSettings = () => {
     setSettingsScope('app');
@@ -447,6 +464,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   // Connections' "+ Add connection" opens Tools straight on adding a server.
   const [mcpStartAdding, setMcpStartAdding] = useState(false);
+  // Add a tool opened from Apps & accounts' Find a tool, straight on that tool's form.
+  const [mcpStartWith, setMcpStartWith] = useState<OpenAddTool | null>(null);
+  useEffect(() => {
+    const open = (e: Event) => {
+      setMcpStartWith((e as CustomEvent<OpenAddTool>).detail ?? null);
+      setMcpStartAdding(true);
+      setIsMcpOpen(true);
+    };
+    window.addEventListener(OPEN_ADD_TOOL_EVENT, open);
+    return () => window.removeEventListener(OPEN_ADD_TOOL_EVENT, open);
+  }, []);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
@@ -555,7 +583,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const devOn = useDevModeOn(space.id);
   // 0.8.0 B3: the space's pre-push cards (Dev mode only): the bot's thread and the Inbox read them.
   const prepush = usePrepushCards(space.id, devOn);
-  const prepushWaiting = prepushNeedsYou(prepush.cards).length;
+  const prepushWaiting = prepushNeedsYou(prepush.cards, prepush.acted).length;
   const kwantNames = useMemo(() => Object.fromEntries(kwants.map((k) => [k.id, k.name])), [kwants]);
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
@@ -1223,6 +1251,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             }
             break;
           }
+          case 'turn_runs_on':
+            // The engine and model a turn runs on: at its start, and again when it fails over (model badge).
+            if (event.data?.kwant_id) turnRunsOn(event.data.kwant_id, event.data);
+            break;
           case 'thread_updated':
           case 'ThreadUpdated': {
             const t: Thread | undefined = event.data?.thread;
@@ -1837,13 +1869,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setDiscussionState({ inProgress: false });
       setRoutingState(null);
     }
-    streamingContextIdRef.current = targetId;
-    if (!(targetId in liveRef.current)) {
-      streamsRef.current[targetId] = { text: '', thinking: '' };
-      setStreamingText('');
-      setStreamingThinking('');
+    // A bot paused at its monthly budget: the message is saved and waits, and nothing starts (QA F1), so
+    // no "getting started", timer or Stop. Continue starts the turn, and its events show it working.
+    const budgetWait = (): boolean => !threadId && !isTargetChannel && sendWaitsForBudget(budgetStore.get().byBot, targetId);
+    if (!budgetWait()) {
+      streamingContextIdRef.current = targetId;
+      if (!(targetId in liveRef.current)) {
+        streamsRef.current[targetId] = { text: '', thinking: '' };
+        setStreamingText('');
+        setStreamingThinking('');
+      }
+      markLive(targetId, speakerName);
     }
-    markLive(targetId, speakerName);
 
     // Optimistically add user message
     const tempId = `temp-${Date.now()}`;
@@ -1893,6 +1930,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         throw new Error(message);
       }
       const reply = await res.json().catch(() => null);
+      // Paused while this was on its way (the list caught up since): drop the working state it started
+      if (budgetWait() && turnsIn(turnsRef.current, targetId).length === 0) {
+        clearLive(targetId);
+        if (streamingContextIdRef.current === targetId) streamingContextIdRef.current = null;
+      }
       const held = heldFromReply(reply, tempId);
       if (held) {
         // H3: saved, but no turn starts yet, so no "thinking" for it; the line under the message says why.
@@ -2286,10 +2328,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // The card call first; a 409 means the card moved on, so fetch it again (Rigel QA 1). Then the
   // chat message: if only that fails, say the change applied (Ada Later 7).
+  // 0.9.7 prepush-grant: the Inbox item goes the moment the person presses, before the server answers;
+  // it comes back only if the press didn't apply.
   const prepushAct = async (c: PrepushCardData, act: () => Promise<PrepushCardData>, message: string) => {
+    prepush.setActed(c.id, true);
     try {
       prepush.put(await act());
     } catch (e) {
+      prepush.setActed(c.id, false);
       if (e instanceof DevModeError && e.status === 409) void prepush.refresh(c.id);
       throw e;
     }
@@ -2490,7 +2536,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // Same flow as the servers screen: the window opens inside the click, the address comes after.
   // In the Mac app the sign-in opens in the default browser and the server is watched instead.
-  const handleSuggestionSignIn = async (serverId: string): Promise<string | void> => {
+  const handleSuggestionSignIn = async (serverId: string): Promise<SuggestionSignInResult> => {
     const macApp = inDesktopApp();
     const popup = macApp ? null : window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
     const before = macApp ? await mcpSignIn(serverId).catch(() => undefined) : undefined;
@@ -2502,6 +2548,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         body: JSON.stringify({ origin: window.location.origin }),
       });
       const data = await res.json().catch(() => null);
+      // A code means retrying can't help: the card swaps its button for a next step.
+      if (!res.ok && isSignInDeadEndCode(data?.code)) {
+        popup?.close();
+        return { code: data.code };
+      }
       if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : `Request failed (HTTP ${res.status}).`);
       if (typeof data?.authorize_url !== 'string' || !/^https?:\/\//.test(data.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
       url = data.authorize_url;
@@ -3237,7 +3288,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const chatSubtitle = !isChannel
     ? currentKwant?.title || 'Kwant bot'
     : isGeneral
-      ? `Laya picks who answers, from the ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} in ${space.name}`
+      ? `The best fit of your ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} answers`
       : currentTeam?.description || currentChannel?.description || `A team in ${space.name}`;
 
   // "Suggested:" prompts from who is in this chat, so a kitchen team isn't offered developer prompts
@@ -3431,6 +3482,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const awaitingTurns = new Set([...turnsAwaitingAnswer(questions), ...browserTurns]);
   const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
   const awaitingBrowserHere = awaitingHere && openTurns.some((t) => t.state === 'running' && browserTurns.has(t.turn_id));
+  // The bot whose question the chat waits on, for the waiting banner (UX audit #2).
+  const awaitingTurnHere = awaitingHere ? openTurns.find((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) : undefined;
+  const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
   // The open chat's running turn's live steps (the newest, when several reply at once).
   const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
   const needsYouByKwant = openStepsByKwant(humanSteps);
@@ -3567,6 +3621,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
+  // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
+  const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
 
   // Avatar moods and the background-tab signal come from the same state as the sidebar's dots.
@@ -3625,6 +3681,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const spriteOf = useCallback((id: string) => kwants.find((k) => k.id === id)?.avatar_sprite, [kwants]);
   // Avatars that only know a bot's title or name look its saved style up here.
   useEffect(() => setKnownBots(kwants), [kwants]);
+  // The model badge on each bot's avatar: its pick and last reply's engine (which now carries what a
+  // turn that just ended ran on), and which engines can run.
+  useEffect(() => {
+    setBadgeBots(kwants);
+    forgetLastRuns();
+  }, [kwants]);
+  useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
@@ -3764,10 +3827,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         bots={kwants}
         engines={engines.engines}
         reloadEngines={engines.reload}
-        onDismissed={() => undefined}
+        // Someone who finishes Get started in 0.9.8 never saw the old sidebar controls: no "moved" pointer.
+        onDismissed={hideMoved}
         spaceName={space.name}
         onImported={reloadAfterImport}
         mainSpace={space.is_default}
+        teams={teams}
       />
     ) : null;
   const setupChecklist = (
@@ -3845,6 +3910,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      doneKwants={doneKwants}
       browsingOwners={globes.owners}
       browsingBots={globes.bots}
       browserNeedsYou={browserNeedsYou}
@@ -3913,6 +3979,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         playSfx('click');
       }}
       onConnectDevGitHub={connectDevGitHub}
+      movedPointer={movedPointerShows({ established: whatsNewEstablished, seen: movedHidden })}
+      onOpenMoved={openMoved}
+      onHideMoved={hideMoved}
       ideaJarCount={ideaJarCount}
       ideaJarActive={page === 'jar'}
       onOpenIdeaJar={() => {
@@ -3942,7 +4011,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       top={
         <>
-          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
+          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} acted={prepush.acted} />
           <SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />
           <BudgetNeedsYou onRaise={raiseBudget} />
         </>
@@ -4034,7 +4103,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           pendingApprovals={approvalsHere}
           prepush={
             devOn && currentKwant && !viewingHistory ? (
-              <PrepushThread cards={threadCards(prepush.cards, currentKwant.id)} bot={currentKwant.name} live={prepush.live} onRetry={prepushRetry} onOverride={prepushOverride} />
+              <PrepushThread
+                cards={threadCards(prepush.cards, currentKwant.id)}
+                all={prepush.cards}
+                bot={currentKwant.name}
+                live={prepush.live}
+                onRetry={prepushRetry}
+                onOverride={prepushOverride}
+                approvals={approvalsHere}
+                onOpenApproval={setHighlightMessageId}
+              />
             ) : devOn && isChannel && !viewingHistory && pointerMemberIds.length > 0 ? (
               // 0.8.1 F3: team chats and channels get one pointer line per member bot; the card stays in the 1:1.
               <PrepushPointers
@@ -4173,6 +4251,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onSendToOtherBot={openThreadId ? undefined : handleSendToOtherBot}
           awaitingAnswer={awaitingHere}
           awaitingBrowser={awaitingBrowserHere}
+          awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
           renderHumanStep={renderHumanStep}
           contextKey={openCtx}
@@ -4529,11 +4608,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         <McpServersModal
           isOpen={isMcpOpen}
           startAdding={mcpStartAdding}
-          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); }}
+          startWith={mcpStartWith}
+          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); setMcpStartWith(null); }}
           kwants={kwants}
           onOpenConnections={() => {
             setIsMcpOpen(false);
             setMcpStartAdding(false);
+            setMcpStartWith(null);
             openConnections();
           }}
         />

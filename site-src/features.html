@@ -18,6 +18,8 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-097">New in 0.9.7</a></li>
+        <li><a href="#new-096">New in 0.9.6</a></li>
         <li><a href="#new-095">New in 0.9.5</a></li>
         <li><a href="#new-09">New in 0.9.4</a></li>
         <li><a href="#new-08">New in 0.8.2</a></li>
@@ -54,6 +56,88 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-097" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.7</p>
+      <h2>Your bot at work while a reply is coming, and which AI each bot runs on</h2>
+      <p>While a reply is coming, you see the bot itself at work instead of grey lines. Each bot's avatar shows the AI it runs on, live while it works. One search box finds a tool, built in, through Composio or from the public directory.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="working-avatar">Your bot at work while a reply is coming</h3>
+        <p>Before the first words of a reply arrive, the bubble shows the bot's own avatar at a small pixel laptop: it types, the screen fills and clears, and the line next to it says <strong>Ben is working on it</strong>. In a team chat it's the bot that is speaking. The first words fade in where the picture was, at the same height, so nothing jumps. With reduced motion on, the picture stands still, and screen readers hear "Ben is working on the answer".</p>
+      </div>
+      <div class="frame">{{video:clip-v097-working-avatar|Sending "Is the stock count on the Ridgeline 2P page live?" to Ben. The working scene appears in his reply bubble, then his answer fades in at the same height: "Yes, it's live…".}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="model-badge">Each bot's AI on its avatar</h3>
+        <p>A small mark at the bottom left of a bot's avatar shows the AI it runs on: Anthropic, OpenAI, xAI, Ollama, a chip for a custom engine, or ✦ when Laya picks the model. While a bot works, the mark shows what it runs on right now and changes if the bot moves to another engine. A resting bot that Laya picks for shows its last reply's mark, faded, with a small ✦. A pinned bot whose engine is signed out, off or not set up is greyed, and the tooltip says why: <strong>Runs on Claude · Sonnet · signed out</strong>. Running out of usage doesn't grey it.</p>
+      </div>
+      <div class="frame">{{shot:v097-model-badge|The Shop team chat in Trailhead Outfitters. Ann, Ben and Cody each answer with their avatar mark: Anthropic on Ann and Ben, OpenAI on Cody. Ben's reply chip reads "Claude · Sonnet · This machine". In the sidebar, the tooltip "Runs on Claude · Sonnet" is open next to Ben.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="find-a-tool">Find a tool in one search box</h3>
+        <p>One search box finds a tool to add, in <strong>Add a tool</strong> and on <strong>Apps &amp; accounts</strong>. Suggestions start from the first letter and forgive typos and short names ("gmial", "11labs", "pg"). Results come in three groups: <strong>Built in</strong>, <strong>Through Composio</strong>, and <strong>From the public directory</strong>, a copy of the official MCP Registry that kwant refreshes every 6 hours. <strong>Add &amp; test</strong> installs a tool from there in one step. Connecting a Composio app before Composio is set up asks for the key right there.</p>
+      </div>
+      <div class="frame">{{video:clip-v097-find-a-tool|Find a tool. Typing "gmai" shows Gmail and Mailchimp through Composio, and Gmail Tools and MailSweep from the public directory. Typing "11labs" shows ElevenLabs through Composio and Voicebox from the public directory. Add opens the form with Voicebox and https://voices.example.com/mcp, then Add & test. It ends on the tools list with Voicebox "Working · 2 tools" (text to speech, list voices).}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-097" class="span3"><h3>Smaller changes in 0.9.7</h3><p>Through Composio finds any Composio app. Signing in to tool servers like ElevenLabs works.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-096" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.6</p>
+      <h2>A team from your own words, and what your bots did while you were away</h2>
+      <p>Describe what you need and kwant suggests a team. The Inbox shows what your bots finished while you were away, with the answer, what they did and why. A bot that stops either continues by itself or asks you once. Settings says in one card whether you're on the latest kwant. kwant's Chrome looks like normal Chrome, and opens a window when Google insists on one.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="team-from-words">A team from your words</h3>
+        <p>Write what your bots should do in the "What should your bots do?" box on the Get ready card, from <strong>Describe your own</strong> in the sidebar, or with "Describe what this team should do" in New team, and press <strong>Suggest a team</strong>. One of your ready AI accounts drafts it, without tools, usually in under a minute. The <strong>Suggested team</strong> sheet shows 2 to 6 bots with the lead first: untick or rename them, or <strong>Try again</strong> with the same words, then <strong>Create team</strong>, with Undo. The draft never gives a bot tools, accounts or routines, and the team's pinned instructions quote your words.</p>
+      </div>
+      <div class="frame">{{video:clip-v096-team-from-words|Describing an outdoor shop's team in words and pressing Suggest a team, then the Suggested team sheet: StockWatch unticked, PageKeeper renamed PageCare, Create team, and the new team in the sidebar.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="inbox-away">Done while you were away</h3>
+        <p>The Inbox has two groups: <strong>Needs you</strong> and <strong>Done while you were away</strong>. Done items stay for 7 days, seen or not, and the badge counts only the ones you haven't read. Open one and you see what ran, when and why, the answer with <strong>Open in chat</strong>, a <strong>What Ben did</strong> trail with times, and <strong>Why</strong>: what was asked, or the routine's instruction with <strong>Edit routine</strong>. Chips say "Read only · changed nothing" or "No checks set · Add one". Answer with <strong>Looks good</strong> or <strong>Ask Ben to redo…</strong>; Roll back is hidden when nothing changed. In a routine's History, each run has <strong>Open result ›</strong>.</p>
+      </div>
+      <div class="frame">{{shot:v096-inbox-away|The Inbox with Needs you and Done while you were away; Ben's Morning price check is open with his answer, What Ben did, Why with Edit routine, and Looks good and Ask Ben to redo.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="no-silent-stops">A stopped bot carries on or asks you</h3>
+        <p>When a reply in your own chat stops before it's done, it either continues by itself, a limited number of times, or leaves you exactly one ask: one line in the chat with <strong>Retry</strong> or <strong>Continue</strong>, and one item in <strong>Needs you</strong> that says what stopped and why. The item closes when you write in that chat or when the bot's next reply there finishes. When kwant restarts in the middle of a reply in your own chat, that reply continues by itself once; if it can't, you get "Ben's reply was cut off when kwant restarted. Retry in the chat sends your message again." A failed hand-off or routine run keeps its one Inbox entry, and a mission task kwant stops gets one line in its chat.</p>
+      </div>
+      <div class="frame">{{shot:v096-stopped-line|Ben's chat with an amber line under a stopped reply, saying the claude CLI exited with no output, and a Retry button that sends the message again.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="version-card">Your kwant version in one card</h3>
+        <p>Settings has one <strong>kwant bots</strong> card in place of About and the list of earlier versions. It says "You're on the latest version" with <strong>Check again</strong>, "kwant bots X is available" with <strong>Update</strong>, or "Couldn't check for updates" with <strong>Try again</strong>, and never says you're on the latest version when it couldn't check. In the Mac app, Update installs it. On a server it opens <strong>How to update</strong>, with one command and <strong>Copy</strong>; on the Windows beta it links the new installer. A server checks 5 seconds after it starts and then every 6 hours (<code>KWNT_UPDATE_CHECK=off</code> turns that off); the Mac app checks every hour and when you open Settings.</p>
+      </div>
+      <div class="frame">{{shot:v096-version-card|Settings with the kwant bots card on 0.9.6: You're on the latest version, Check again, Checked 1 min ago, and What's new in 0.9.6.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="real-chrome">Sign in to Google in kwant's Chrome</h3>
+        <p>kwant's Chrome now tells sites it is Chrome, with Chrome's own version details, and no longer marks itself as automated. It prefers an installed Google Chrome over Chromium, and nothing is injected into pages. Google still refuses sign-ins in a Chrome without a window, so the live view then says "Google only allows sign-in in a normal Chrome window." with <strong>Sign in in Chrome</strong>. On a computer with a screen, that opens Chrome in a window for the sign-in, and it goes back to no window once you're signed in. <a href="docs/browser.html">Browser</a></p>
+      </div>
+      <div class="frame">{{shot:v096-real-chrome-signin|Ben's chat with the bot browser on a Google sign-in refusal page, and the notice that Google only allows sign-in in a normal Chrome window, with Sign in in Chrome.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-096" class="span3"><h3>Smaller changes in 0.9.6</h3><p>A new space's Get started card names that space's own bots (<strong>Keep the bots you have</strong>) instead of the main space's starter bots. If kwant's Chrome closes right after it starts, you're told why at once, with Chrome's last lines. A mission task that finds the browser busy tries again twice by itself.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-095" class="fgroup">
   <div class="wrap">

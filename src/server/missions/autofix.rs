@@ -12,7 +12,7 @@ use super::routes::{bad, conflict, internal, load_task, not_found};
 use super::{emit_task, transition, Actor};
 use crate::db::autofix::{Attempt, ChangeWrite, Failure, NewAttempt, NewFailure, WorkflowChange, TARGETS};
 use crate::db::missions::{Task, TaskChange};
-use crate::server::AppState;
+use crate::server::{busy_retry, AppState};
 use axum::{
     extract::{Path, RawQuery, State},
     http::{HeaderMap, StatusCode},
@@ -157,6 +157,9 @@ pub fn classify(source: &str, status: &str, text: &str) -> &'static str {
         ("turn", "stalled") => "stalled",
         ("turn", "denied") => "denied",
         ("turn", "needs_input") => "needs_input",
+        // kwnt's own give-up on a busy browser step (0.9.7): a temporary error, but one whose
+        // retries already ran, so [`strategy_of`] doesn't run it again
+        (_, _) if busy_retry::gave_up(&t).is_some() => "transient",
         // quota and auth before transient: "429 usage limit reached" won't pass in a minute, and
         // "401" next to "Reconnecting… timed out" is still a login problem
         (_, _) if is_quota(&t) => "quota",
@@ -176,6 +179,37 @@ fn strategy_for(class: &str) -> &'static str {
         "unknown" => "retry_same",
         _ => "none",
     }
+}
+
+/// What the person must do after a task's browser stayed busy through kwnt's own retries.
+pub const BUSY_FIX: &str = "The browser stayed busy. Let the other job finish or close its page, then press Retry.";
+
+/// What the person must do after a busy browser step that may reach outside wasn't run again.
+pub const BUSY_OUTWARD_FIX: &str = "A step that may reach outside met a busy browser. Check whether it went through, then press Retry.";
+
+/// The fix for kwnt's own give-up on a busy browser step ([`busy_retry::gave_up`]), read from a
+/// failure's summary or excerpt. Its retries already waited 1, then 2 minutes (or the step may
+/// have reached outside), so running the whole task again would only repeat that: AutoFix
+/// doesn't, whatever the class says (0.9.7, busy-retry-transient).
+fn busy_fix(summary: &str, excerpt: Option<&str>) -> Option<&'static str> {
+    let exit = busy_retry::gave_up(summary).or_else(|| excerpt.and_then(busy_retry::gave_up))?;
+    Some(if exit == busy_retry::Exit::Outward { BUSY_OUTWARD_FIX } else { BUSY_FIX })
+}
+
+/// AutoFix's strategy for `failure`: its class's ([`strategy_for`]), except `none` for kwnt's own
+/// give-up on a busy browser step ([`busy_fix`]).
+fn strategy_of(failure: &Failure) -> &'static str {
+    if busy_fix(&failure.summary, failure.excerpt.as_deref()).is_some() {
+        "none"
+    } else {
+        strategy_for(&failure.class)
+    }
+}
+
+/// What the person must do for `failure` when AutoFix never retries it: the busy browser's fix,
+/// else its class's ([`fix_text`]).
+fn fix_of(failure: &Failure) -> Option<&'static str> {
+    busy_fix(&failure.summary, failure.excerpt.as_deref()).or_else(|| fix_text(&failure.class))
 }
 
 /// What the person must do when AutoFix stopped short of the retry budget.
@@ -521,7 +555,7 @@ async fn plan(state: &AppState, task: &Task, failure: &Failure) -> Option<Attemp
     if failure.class == "needs_input" || task.source_kind == "delegation" {
         return None;
     }
-    let mut strategy = strategy_for(&failure.class);
+    let mut strategy = strategy_of(failure);
     if failure.class == "stalled" && failure.checkpoint_id.is_some() {
         strategy = "retry_from_checkpoint";
     }
@@ -537,7 +571,7 @@ async fn plan(state: &AppState, task: &Task, failure: &Failure) -> Option<Attemp
     let new = |status, not_before, reason: String| NewAttempt { task, failure_id: &failure.id, strategy, idempotency_key: k.clone(), status, not_before, reason };
     if strategy == "none" {
         // The code first, as for the other skips, so the attempt doesn't repeat the Needs-you text
-        let why = fix_text(&failure.class).map_or_else(|| "AutoFix retried this once already".into(), |fix| format!("not_retryable: {fix}"));
+        let why = fix_of(failure).map_or_else(|| "AutoFix retried this once already".into(), |fix| format!("not_retryable: {fix}"));
         return insert(state, &new("skipped", None, why)).await;
     }
     if strategy == "propose_change" {
@@ -866,7 +900,7 @@ pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
                 let attempts = state.db.attempts_of(&task.id).await.unwrap_or_default();
                 attempts.iter().rev().find(|a| a.failure_id == f.id).is_some_and(|a| a.status == "skipped" && a.reason.starts_with("over_recovery_budget"))
             };
-            if let Some(text) = fix_text(&f.class) {
+            if let Some(text) = fix_of(f) {
                 items.push(json!({"kind": "fix_needed", "id": f.id, "text": text}));
             } else if task.state == "failed" && over_budget().await {
                 items.push(json!({"kind": "fix_needed", "id": f.id, "text": RECOVERY_BUDGET_FIX}));
@@ -962,7 +996,7 @@ pub async fn run_autofix(State(state): State<AppState>, RawQuery(q): RawQuery, h
                 state.db.get_attempt(&s.id).await.map_err(internal)?.ok_or_else(|| not_found("autofix"))?
             }
             (None, None) => {
-                let strategy = match strategy_for(&failure.class) {
+                let strategy = match strategy_of(&failure) {
                     "none" => "retry_same",
                     s => s,
                 };
@@ -1411,5 +1445,49 @@ mod tests {
             assert!(fix.ends_with('.') && !fix.contains("retry:"), "{fix}");
         }
         assert_eq!(fix_text("transient"), None);
+    }
+
+    fn failure(class: &str, summary: &str, excerpt: Option<&str>) -> Failure {
+        Failure {
+            id: "f1".into(),
+            task_id: "t1".into(),
+            attempt: 1,
+            source: "turn".into(),
+            class: class.into(),
+            summary: redact(summary),
+            excerpt: excerpt.map(redact),
+            diagnostics_path: None,
+            checkpoint_id: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    // 0.9.7 busy-retry-transient: a task whose browser stayed busy through kwnt's own 2 retries
+    // (1, then 2 min) ends once, with a plain fix line; AutoFix doesn't run it again
+    #[test]
+    fn busy_give_up_is_never_run_again() {
+        use crate::server::busy_retry::{unwatched_failure, Exit, Step};
+        let step = Step { tool: "browser_act".into(), args: json!({"action": "scroll"}).to_string() };
+        let send = Step { tool: "browser_act".into(), args: json!({"action": "click", "name": "Send"}).to_string() };
+        for (exit, step, fix) in [(Exit::Exhausted, &step, BUSY_FIX), (Exit::Outward, &send, BUSY_OUTWARD_FIX)] {
+            let err = unwatched_failure(step, &exit);
+            // Classed as what it is (a temporary error, never the bot's own doing, so no lesson)…
+            let class = classify("turn", "error", &err);
+            assert_eq!(class, "transient", "{err}");
+            assert_eq!(classify("routine", "error", &format!("the bot's turn failed: {err}")), "transient");
+            // …but not run again: no strategy, and the fix line says what to do
+            let f = failure(class, err.lines().next().unwrap(), Some(&err));
+            assert_eq!(f.summary, err, "masking leaves it whole");
+            assert_eq!(strategy_of(&f), "none", "{err}");
+            assert_eq!(fix_of(&f), Some(fix), "{err}");
+            // The excerpt alone is enough (a summary cut short)
+            assert_eq!(fix_of(&failure(class, "the turn failed", Some(&err))), Some(fix));
+            assert!(fix.ends_with("then press Retry.") && !fix.contains("retry:"), "{fix}");
+        }
+        // Any other temporary error still waits and runs again, with no fix line
+        let other = failure("transient", "rate limit exceeded, retry in 20s", None);
+        assert_eq!((strategy_of(&other), fix_of(&other)), ("wait_and_retry", None));
+        let unknown = failure("unknown", "the claude driver failed: boom", None);
+        assert_eq!((strategy_of(&unknown), fix_of(&unknown)), ("retry_same", None));
     }
 }

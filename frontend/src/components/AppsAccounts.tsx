@@ -1,12 +1,12 @@
-// Settings › This space › Apps & accounts (0.9.5): app tiles first, then Composio search, the AI
+// Settings › This space › Apps & accounts (0.9.5): app tiles first, then Find a tool, the AI
 // accounts the bots think with, and a closed Advanced (tool servers, Telegram, notes from bots).
 // Connecting an app is one sheet with three steps; the bots picked in step 3 get it, turned on.
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Check, ChevronRight, ExternalLink, Info, Loader2, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronRight, ExternalLink, Eye, EyeOff, Info, Loader2, RefreshCw, X } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
-import { CatalogEntry, ComposioApp, Connection, ConnectionsError, ConnectionsList, composioBody, composioErrorText, connectionsApi } from '../connections';
+import { CatalogEntry, Connection, ConnectionsError, ConnectionsList, composioErrorText, connectionsApi } from '../connections';
 import {
   APP_TILES,
   AppTile,
@@ -29,13 +29,16 @@ import { parsePick, type EngineInfo } from '../engines';
 import { AccountPriority } from './AccountPriority';
 import { Profile, cardOf } from '../profiles';
 import type { Kwant } from './Sidebar';
-import { ComposioAppSearch } from './ConnectionsView';
+import { FindTool, FindToolApi } from './FindTool';
+import { OPEN_ADD_TOOL_EVENT, OpenAddTool } from '../mcp';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { ModernAvatar } from './ModernAvatar';
 
 /** The tile mark: plain initials on the overlay colour, never a brand logo. */
 const TILE_BG = '#231d4b';
-export const COMPOSIO_HOME = 'https://platform.composio.dev';
+/** Where a Composio key is made, when the server doesn't say (#548 sends key_url). */
+export const COMPOSIO_HOME = 'https://dashboard.composio.dev';
+const keyUrlOf = (e: CatalogEntry | undefined) => (e?.key_url && /^https:\/\//.test(e.key_url) ? e.key_url : COMPOSIO_HOME);
 
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
@@ -63,7 +66,7 @@ export const AppMark: React.FC<{ name: string; size?: number; tint?: string }> =
 // ── The Connect sheet ────────────────────────────────────────────────────────────────────────
 
 export interface ConnectApi {
-  addComposio: (body: { url: string; api_key?: string; enabled: boolean }) => Promise<{ connection_id: string }>;
+  addComposio: (body: { url?: string; api_key?: string; enabled: boolean }) => Promise<{ connection_id: string }>;
   connect: (slug: string) => Promise<{ redirect_url: string }>;
   give: (serverId: string, kwantIds: string[], chosen: string[]) => Promise<void>;
   botsWith: (serverId: string, kwantIds: string[]) => Promise<string[]>;
@@ -90,7 +93,7 @@ export interface ConnectSheetProps {
   api?: ConnectApi;
   phone?: boolean;
   /** Tests and screenshots: start with these filled in. */
-  initial?: { url?: string; picked?: string[]; opened?: boolean; error?: string };
+  initial?: { key?: string; picked?: string[]; opened?: boolean; error?: string };
 }
 
 /** One numbered step of the sheet. Outside the sheet, so typing in a step keeps its focus.
@@ -144,13 +147,13 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
   // Composio set up already (or just now, if giving it to bots failed after): skip to the app.
   const [serverId, setServerId] = useState<string | null>(composio.added ? serverIdOf(composio.connection_id) : null);
   const ready = composio.added;
-  const [opened, setOpened] = useState(!!initial.opened);
-  const [url, setUrl] = useState(initial.url ?? '');
-  const [key, setKey] = useState('');
+  const [key, setKey] = useState(initial.key ?? '');
+  const [addingKey, setAddingKey] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [picked, setPicked] = useState<string[]>(initial.picked ?? []);
   const [pickedLoaded, setPickedLoaded] = useState(!ready || !!initial.picked);
-  const [error, setError] = useState<{ step: 1 | 2 | 3; text: string } | null>(initial.error ? { step: 2, text: initial.error } : null);
+  const [error, setError] = useState<{ step: 1 | 2 | 3; text: string } | null>(initial.error ? { step: 1, text: initial.error } : null);
+  const keyUrl = keyUrlOf(composio);
   const [saving, setSaving] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [signInOpened, setSignInOpened] = useState(false);
@@ -168,7 +171,9 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
     };
   }, [ready, serverId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const title = app ? `Connect ${app.name}` : ready ? 'Choose bots for Composio' : 'Set up Composio';
+  const title = app ? `Connect ${app.name}` : ready ? 'Choose bots for Composio' : 'Add Composio';
+  // The sign-in step: before setup it waits for the key (step 2); once Composio is added it's step 1.
+  const signInStep: 1 | 2 = ready ? 1 : 2;
   const chosenBots = kwants.filter((k) => picked.includes(k.id));
   const approval = approvalLine(app?.acts ?? 'Send, post or change things', chosenBots, spaceMode);
   const toggle = (kid: string) => (setPicked((p) => (p.includes(kid) ? p.filter((x) => x !== kid) : [...p, kid])), setError((x) => (x?.step === 3 ? null : x)));
@@ -190,9 +195,9 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
       // 409: Composio refused the saved key. Anything else (502, no answer) is Composio being down or slow.
       const keyRefused = (e as { status?: number } | null)?.status === 409;
       setError({
-        step: 1,
+        step: signInStep,
         text: keyRefused
-          ? `Composio refused your API key, so the ${app.name} sign-in can’t start here. Fix the key under Advanced › Manage tools, or sign in to ${app.name} on composio.dev.`
+          ? `Composio didn’t accept your saved key, so the ${app.name} sign-in can’t start. Replace the key on the Composio tile under Advanced.`
           : `Composio couldn’t be reached, so the ${app.name} sign-in didn’t open. Try again in a minute.`,
       });
     } finally {
@@ -200,28 +205,43 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
     }
   };
 
+  /** Step 1 before setup: saves the key (off, for nobody yet); the server checks it with Composio. */
+  const addKey = async (): Promise<string | null> => {
+    if (serverId) return serverId;
+    if (!key.trim()) {
+      setError({ step: 1, text: 'Paste your Composio API key first.' });
+      return null;
+    }
+    setAddingKey(true);
+    setError(null);
+    try {
+      const r = await api.addComposio({ api_key: key.trim(), enabled: false });
+      const sid = serverIdOf(r.connection_id);
+      if (!sid) {
+        setError({ step: 1, text: 'Composio was added, but kwant bots didn’t say which server it is. Open Advanced to finish there.' });
+        return null;
+      }
+      setServerId(sid);
+      return sid;
+    } catch (err) {
+      setError({ step: 1, text: composioErrorText(err) });
+      return null;
+    } finally {
+      setAddingKey(false);
+    }
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     let sid = serverId;
-    if (!sid) {
-      const body = composioBody(url, key, false);
-      if ('error' in body) return setError({ step: 2, text: body.error });
-    }
+    if (!sid && !key.trim()) return setError({ step: 1, text: 'Paste your Composio API key first.' });
     if (picked.length === 0 && !ready) return setError({ step: 3, text: 'Tick at least one bot. Only the bots you tick can use it.' });
     setSaving(true);
     try {
       if (!sid) {
-        const body = composioBody(url, key, false) as { url: string; api_key?: string; enabled: boolean };
-        try {
-          const r = await api.addComposio(body);
-          sid = serverIdOf(r.connection_id);
-          setServerId(sid);
-        } catch (err) {
-          setError({ step: 2, text: composioErrorText(err) });
-          return;
-        }
-        if (!sid) return setError({ step: 2, text: 'Composio was added, but kwant bots didn’t say which server it is. Open Advanced to finish there.' });
+        sid = await addKey();
+        if (!sid) return;
       }
       try {
         await api.give(sid, kwants.map((k) => k.id), picked);
@@ -237,7 +257,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
   };
 
   const stepDone = (n: 1 | 2 | 3) =>
-    n === 3 ? picked.length > 0 : n === 1 ? (ready ? signInOpened : opened) : ready || !!serverId || !('error' in composioBody(url, key, false));
+    n === 3 ? picked.length > 0 : n === signInStep ? signInOpened : !!serverId;
   const stepProps = (n: 1 | 2 | 3) => ({ n, done: stepDone(n), error: error?.step === n ? error.text : null });
 
   const panel = isPhone
@@ -255,7 +275,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
             <h2 id={`${id}-t`} className="text-sm font-semibold text-zinc-100">
               {title}
             </h2>
-            <p className="text-[11px] text-zinc-400">{!ready ? 'Takes about 2 minutes' : app ? 'Composio is set up, so this takes a minute' : 'Picked bots can use every app on your Composio'}</p>
+            <p className="text-[11px] text-zinc-400">{!ready ? 'Takes about a minute' : app ? 'Composio is set up, so this takes a minute' : 'Picked bots can use every app on your Composio'}</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="inline-flex items-center justify-center w-11 h-11 sm:w-8 sm:h-8 -mr-2 sm:-mr-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500">
             <X size={17} />
@@ -284,86 +304,92 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
             </div>
 
             <ol className="space-y-4" aria-label="Steps">
-              {ready ? (
-                app && (
-                  <Step {...stepProps(1)} title={`Sign in to ${app.name}`}>
-                    {composio.can_connect ? (
+              {!ready && (
+                <Step {...stepProps(1)} errorInChildren title="Add your free Composio key">
+                  <p className="text-[11px] text-zinc-400">Composio is a service with a free plan that signs your bots in to apps. Add your key once and your bots can use any app you connect.</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <label htmlFor={`${id}-key`} className="text-[11px] font-medium text-zinc-300">
+                      Composio API key
+                    </label>
+                    <a href={keyUrl} target="_blank" rel="noopener noreferrer" className={linkBtn} data-sheet-key-link>
+                      Get a free key <ExternalLink size={12} aria-hidden="true" />
+                      <span className="sr-only">(opens in a new tab)</span>
+                    </a>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <div className="relative flex-1 min-w-[12rem]">
+                      <input
+                        id={`${id}-key`}
+                        className={`${field} pr-11`}
+                        type={showKey ? 'text' : 'password'}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Paste your key"
+                        value={key}
+                        readOnly={!!serverId || addingKey}
+                        onChange={(e) => (setKey(e.target.value), setError((x) => (x?.step === 1 ? null : x)))}
+                        aria-describedby={error?.step === 1 ? `${id}-key-e ${id}-key-h` : `${id}-key-h`}
+                        aria-invalid={error?.step === 1 ? true : undefined}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowKey((v) => !v)}
+                        aria-label={showKey ? 'Hide key' : 'Show key'}
+                        aria-pressed={showKey}
+                        className="absolute right-0 top-0 h-full w-11 inline-flex items-center justify-center text-zinc-400 hover:text-zinc-200 rounded-r-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                      >
+                        {showKey ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}
+                      </button>
+                    </div>
+                    {serverId ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-emerald-300" data-sheet-key-added>
+                        <Check size={13} aria-hidden="true" /> Key added
+                      </span>
+                    ) : (
+                      <button type="button" className={quietBtn} onClick={() => void addKey()} disabled={addingKey || !key.trim()} data-sheet-add-key>
+                        {addingKey && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+                        {addingKey ? 'Checking your key…' : 'Add key'}
+                      </button>
+                    )}
+                  </div>
+                  {error?.step === 1 && (
+                    <p id={`${id}-key-e`} role="alert" className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-200" data-sheet-error={1}>
+                      {error.text}{' '}
+                      <a href={keyUrl} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:underline">
+                        Open your API keys ↗
+                      </a>
+                    </p>
+                  )}
+                  <p id={`${id}-key-h`} className="text-[11px] text-zinc-400">
+                    Free plan: 10,000 tool calls a month. Kept on this computer and never shown again.
+                  </p>
+                </Step>
+              )}
+              {app && (
+                <Step {...stepProps(signInStep)} title={`Sign in to ${app.name}`}>
+                    {composio.can_connect || (!ready && serverId) ? (
                       <>
                         <p className="text-[11px] text-zinc-400">Opens {app.name}’s own sign-in on Composio {inDesktopApp() ? 'in your browser' : 'in a new tab'}. Come back here when it says you’re connected.</p>
-                        <button type="button" className={quietBtn} onClick={signIn} disabled={signingIn} data-sheet-signin>
+                        <button type="button" className={quietBtn} onClick={signIn} disabled={signingIn || (!ready && !serverId)} data-sheet-signin>
                           {signingIn ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ExternalLink size={12} aria-hidden="true" />}
                           {signInOpened ? `Open ${app.name} sign-in again` : `Sign in to ${app.name}`}
                         </button>
                         {signInOpened && <p className="text-[11px] text-emerald-200">Opened. Finish there, then choose the bots below.</p>}
                       </>
+                    ) : !ready ? (
+                      <p className="text-[11px] text-zinc-400">Add your key first, then sign in to {app.name} here.</p>
                     ) : (
                       <p className="text-[11px] text-zinc-400">
-                        On{' '}
-                        <a href={COMPOSIO_HOME} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 rounded">
-                          composio.dev ↗
+                        Sign in to {app.name} on{' '}
+                        <a href={keyUrl} target="_blank" rel="noopener noreferrer" className="text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 rounded">
+                          your Composio dashboard ↗
                         </a>
-                        , add {app.name} to the same MCP server you gave kwant bots and sign in there.{' '}
-                        {composio.can_search
-                          ? 'kwant bots can’t open this sign-in for you with your Composio link, so sign in there.'
-                          : 'To sign in from here instead, add your Composio API key under Advanced › Manage tools.'}
+                        . To sign in from here instead, add your Composio API key on the Composio tile under Advanced.
                       </p>
                     )}
-                  </Step>
-                )
-              ) : (
-                <>
-                  <Step {...stepProps(1)} title="Make a free Composio account">
-                    <p className="text-[11px] text-zinc-400">
-                      Sign up, then {app ? `add ${app.name} and sign in to it there` : 'add the apps you want and sign in to them there'}. Composio keeps that sign-in for your bots.
-                    </p>
-                    <a href={COMPOSIO_HOME} target="_blank" rel="noopener noreferrer" className={quietBtn} onClick={() => setOpened(true)} data-sheet-open-composio>
-                      Open Composio <ExternalLink size={12} aria-hidden="true" />
-                      <span className="sr-only">(opens in a new tab)</span>
-                    </a>
-                  </Step>
-                  <Step {...stepProps(2)} errorInChildren title="Paste your Composio link">
-                    <label htmlFor={`${id}-url`} className="sr-only">
-                      Composio MCP link
-                    </label>
-                    <input
-                      id={`${id}-url`}
-                      className={field}
-                      type="url"
-                      inputMode="url"
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="https://backend.composio.dev/v3/mcp/…"
-                      value={url}
-                      onChange={(e) => (setUrl(e.target.value), setError((x) => (x?.step === 2 ? null : x)))}
-                      aria-describedby={error?.step === 2 ? `${id}-url-e ${id}-url-h` : `${id}-url-h`}
-                      aria-invalid={error?.step === 2 ? true : undefined}
-                      disabled={!!serverId}
-                    />
-                    {error?.step === 2 && (
-                      <p id={`${id}-url-e`} role="alert" className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-200" data-sheet-error={2}>
-                        {error.text}
-                      </p>
-                    )}
-                    <p id={`${id}-url-h`} className="text-[11px] text-zinc-400">
-                      In Composio, open <span className="text-zinc-200">MCP</span> in the left menu, pick your server (or create one with {app ? app.name : 'your apps'}), and copy its URL. It starts with https:// and is on composio.dev.
-                    </p>
-                    {showKey ? (
-                      <div className="space-y-1">
-                        <label htmlFor={`${id}-key`} className="block text-[11px] font-medium text-zinc-300">
-                          Composio API key <span className="font-normal text-zinc-500">(optional)</span>
-                        </label>
-                        <input id={`${id}-key`} className={field} type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} />
-                        <p className="text-[11px] text-zinc-500">Lets you find and sign in to apps from kwant bots. Kept on this computer and never shown again.</p>
-                      </div>
-                    ) : (
-                      <button type="button" className={linkBtn} onClick={() => setShowKey(true)}>
-                        Add your API key too (optional)
-                      </button>
-                    )}
-                  </Step>
-                </>
+                </Step>
               )}
-              <Step {...stepProps(3)} label={ready ? (app ? 2 : null) : 3} title="Which bots get it?">
+              <Step {...stepProps(3)} label={ready ? (app ? 2 : null) : app ? 3 : 2} title="Which bots get it?">
                 {!pickedLoaded ? (
                   <p className="flex items-center gap-2 text-[11px] text-zinc-400">
                     <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Checking which bots have it…
@@ -451,6 +477,10 @@ export interface AppsAccountsProps {
   appStatus?: (slug: string) => Promise<{ connected: boolean }>;
   initialSheet?: { slug: string | null; initial?: ConnectSheetProps['initial'] };
   phone?: boolean;
+  /** Tests and shots: Find a tool's data and text already typed, and where Add a tool goes. */
+  findApi?: FindToolApi;
+  initialFindQuery?: string;
+  onAddTool?: (detail: OpenAddTool) => void;
 }
 
 // An older server (or an empty reply) may leave out a list; treat it as empty rather than crash.
@@ -588,9 +618,12 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
     setSheet({ app });
   };
 
-  const searchApi = {
-    search: connectionsApi.searchComposioApps,
-    connect: connectionsApi.connectComposioApp,
+  /** Add a tool, opened on a built-in tool's form, a directory listing's form or Add by address. */
+  const openAddTool = (detail: OpenAddTool) => (p.onAddTool ?? ((d: OpenAddTool) => window.dispatchEvent(new CustomEvent(OPEN_ADD_TOOL_EVENT, { detail: d }))))(detail);
+  /** A tool server's bots: its card under Advanced says who has it. */
+  const openServerBots = () => {
+    setAdvancedOpen(true);
+    window.setTimeout(() => advancedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   };
 
   return (
@@ -672,27 +705,25 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
         {data && !composio && <p className="text-[11px] text-zinc-400">This server can’t connect apps yet. Update kwant bots to connect them here.</p>}
       </section>
 
-      {/* Find any other app */}
-      {composio && (
+      {/* Find a tool: built in, through Composio, and the public directory */}
+      {data && (
         <section aria-labelledby="apps-find" className="space-y-2" data-apps-search>
           <h3 id="apps-find" className={sectionTitle}>
-            Another app
+            Find a tool
           </h3>
-          {composio.added ? (
-            <ComposioAppSearch
-              entry={composio}
-              api={searchApi}
-              onPick={(a: ComposioApp) => openApp(tileFor(a))}
-            />
-          ) : (
-            <p className="text-[11px] text-zinc-400">
-              Composio has hundreds more, like Figma, Linear or HubSpot.{' '}
-              <button type="button" className={linkBtn} onClick={() => openApp(null)} data-apps-setup-composio>
-                Set up Composio
-              </button>{' '}
-              and you can search them here.
-            </p>
-          )}
+          <FindTool
+            browseWhenEmpty={false}
+            data={data}
+            api={p.findApi}
+            phone={p.phone}
+            initialQuery={p.initialFindQuery}
+            onChanged={() => reload()}
+            onAddPreset={(preset) => openAddTool({ preset: preset.id })}
+            onAddDirectory={(entry) => openAddTool({ directory: entry })}
+            onAddByAddress={() => openAddTool({ address: true })}
+            onChooseBots={(t) => (t.kind === 'composio' ? openApp(tileFor({ slug: t.slug, name: t.name })) : openServerBots())}
+            onComposioElsewhere={(slug, name) => openApp(tileFor({ slug, name }))}
+          />
         </section>
       )}
 

@@ -25,7 +25,7 @@ use kwnt::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tempfile::{tempdir, TempDir};
 use tower::ServiceExt;
 
@@ -67,20 +67,39 @@ async fn fake_signin_mcp() -> String {
 }
 
 struct Registry {
-    entries: Vec<Value>,
+    entries: Mutex<Vec<Value>>,
     hits: AtomicUsize,
+    /// Every `updated_since` a listing was asked with.
+    since: Mutex<Vec<String>>,
 }
 
+/// Listing pages: a search answers in one page; a listing without one (the directory's sync)
+/// comes 2 entries a page with `nextCursor`, and `updated_since` keeps only entries changed after it.
 async fn list(State(r): State<Arc<Registry>>, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
     r.hits.fetch_add(1, Ordering::SeqCst);
-    let search = q.get("search").cloned().unwrap_or_default();
-    let servers: Vec<Value> = r.entries.iter().filter(|e| e["server"]["name"].as_str().unwrap().contains(&search)).cloned().collect();
-    Json(json!({"servers": servers, "metadata": {"count": servers.len()}}))
+    let entries = r.entries.lock().unwrap().clone();
+    if let Some(search) = q.get("search") {
+        let servers: Vec<Value> = entries.iter().filter(|e| e["server"]["name"].as_str().unwrap().contains(search.as_str())).cloned().collect();
+        return Json(json!({"servers": servers, "metadata": {"count": servers.len()}}));
+    }
+    assert_eq!(q.get("version").map(String::as_str), Some("latest"));
+    let mut entries = entries;
+    if let Some(since) = q.get("updated_since") {
+        r.since.lock().unwrap().push(since.clone());
+        entries.retain(|e| e["_meta"]["io.modelcontextprotocol.registry/official"]["updatedAt"].as_str().unwrap_or("") > since.as_str());
+    }
+    let start: usize = q.get("cursor").map(|c| c.parse().unwrap()).unwrap_or(0);
+    let servers: Vec<Value> = entries.iter().skip(start).take(2).cloned().collect();
+    let mut metadata = json!({"count": servers.len()});
+    if start + 2 < entries.len() {
+        metadata["nextCursor"] = json!((start + 2).to_string());
+    }
+    Json(json!({"servers": servers, "metadata": metadata}))
 }
 
 async fn one(State(r): State<Arc<Registry>>, Path((name, version)): Path<(String, String)>) -> Response {
     assert_eq!(version, "latest");
-    match r.entries.iter().find(|e| e["server"]["name"] == name.as_str()) {
+    match r.entries.lock().unwrap().iter().find(|e| e["server"]["name"] == name.as_str()) {
         Some(e) => Json(e.clone()).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -92,7 +111,8 @@ fn entry(name: &str, server: Value, status: &str) -> Value {
     for (k, v) in server.as_object().unwrap() {
         s[k] = v.clone();
     }
-    json!({"server": s, "_meta": {"io.modelcontextprotocol.registry/official": {"status": status, "isLatest": true}}})
+    json!({"server": s, "_meta": {"io.modelcontextprotocol.registry/official": {"status": status, "isLatest": true,
+                                                                                 "updatedAt": "2026-01-01T00:00:00Z"}}})
 }
 
 async fn fake_registry(echo_url: &str, signin_url: &str) -> (String, Arc<Registry>) {
@@ -113,7 +133,7 @@ async fn fake_registry(echo_url: &str, signin_url: &str) -> (String, Arc<Registr
         entry("io.github.kwnt-test/echo-shell", json!({"description": "Wants a shell.",
             "packages": [{"registryType": "npm", "identifier": "x", "version": "1.0.0", "runtimeHint": "bash", "transport": {"type": "stdio"}}]}), "active"),
     ];
-    let reg = Arc::new(Registry { entries, hits: AtomicUsize::new(0) });
+    let reg = Arc::new(Registry { entries: Mutex::new(entries), hits: AtomicUsize::new(0), since: Mutex::new(Vec::new()) });
     let app = Router::new()
         .route("/v0.1/servers", get(list))
         .route("/v0.1/servers/:name/versions/:version", get(one))
@@ -458,6 +478,221 @@ async fn server_that_needs_sign_in_is_kept_and_says_so() {
     assert_eq!(v["suggestion"]["status"], "installed");
     let server_id = v["server"]["id"].as_str().unwrap();
     assert!(e.state.db.get_mcp_server(server_id).await.unwrap().is_some());
+}
+
+// ---- The public directory (Find a tool): GET /api/mcp/registry/search, POST /api/mcp/registry/install ----
+
+async fn dir_search(e: &Env, q: &str) -> Value {
+    let (status, v) = call(&e.app, "GET", &format!("/api/mcp/registry/search?q={q}"), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    v
+}
+
+fn row<'a>(v: &'a Value, name: &str) -> Option<&'a Value> {
+    v["entries"].as_array().unwrap().iter().find(|r| r["registry_name"] == name)
+}
+
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+#[tokio::test]
+async fn directory_searches_live_until_the_copy_is_synced_then_keeps_it_current() {
+    let e = setup().await;
+
+    // No copy yet: the registry's own search answers
+    let v = dir_search(&e, "echo").await;
+    assert_eq!(v["source"], "live");
+    assert_eq!(v["unavailable"], false);
+    let echo = row(&v, "io.github.kwnt-test/echo").expect("echo").clone();
+    assert_eq!(echo["title"], "Echo");
+    assert_eq!(echo["kind"], "remote");
+    assert_eq!(echo["transport"], "http");
+    assert_eq!(echo["url"], e.echo_url.as_str());
+    assert_eq!(echo["command"], Value::Null);
+    assert_eq!(echo["publisher"], json!({"label": "github.com/kwnt-test", "kind": "github"}));
+    assert_eq!(echo["inputs"][0], json!({"name": "Authorization", "description": "Your Echo API key", "required": true, "secret": true}));
+    assert_eq!(echo["already_added"], false);
+    let local = row(&v, "io.github.kwnt-test/echo-local").expect("local");
+    assert_eq!(local["kind"], "stdio");
+    assert_eq!(local["url"], Value::Null);
+    assert_eq!(local["command"], "npx -y @kwnt-test/echo-mcp@1.0.0");
+    assert!(row(&v, "io.github.kwnt-test/echo-shell").is_none(), "not one click");
+    assert!(row(&v, "io.github.kwnt-test/echo-old").is_none(), "deleted");
+    // An exact name comes first
+    assert_eq!(v["entries"][0]["registry_name"], "io.github.kwnt-test/echo");
+
+    // Too short to search, and an agent's token is refused
+    let v = dir_search(&e, "e").await;
+    assert_eq!(v["entries"], json!([]));
+    let token = turn(&e, "t-dir").await;
+    let (status, _) = call(&e.app, "GET", "/api/mcp/registry/search?q=echo", Some(&token), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The first sync pages through everything (6 entries, 2 a page)
+    let hits = e.reg.hits.load(Ordering::SeqCst);
+    let kept = e.state.mcp_directory.sync_once(&e.state.mcp_registry).await.unwrap();
+    assert_eq!(kept, 4, "echo, echo-local, echo-broken, echo-signin");
+    assert_eq!(e.reg.hits.load(Ordering::SeqCst) - hits, 3);
+    assert!(e.reg.since.lock().unwrap().is_empty(), "the first sync is a full one");
+
+    // Now the copy answers, without asking the registry
+    let hits = e.reg.hits.load(Ordering::SeqCst);
+    let v = dir_search(&e, "echo").await;
+    assert_eq!(v["source"], "copy");
+    assert_eq!(v["entries"][0]["registry_name"], "io.github.kwnt-test/echo");
+    assert_eq!(v["entries"].as_array().unwrap().len(), 4);
+    let v = dir_search(&e, "ehco").await;
+    assert_eq!(v["entries"][0]["registry_name"], "io.github.kwnt-test/echo", "one typo still finds it: {v}");
+    assert_eq!(e.reg.hits.load(Ordering::SeqCst), hits);
+
+    // The next sync asks only for what changed: a new entry arrives and a deleted one goes
+    {
+        let mut entries = e.reg.entries.lock().unwrap();
+        let mut fresh = entry("io.github.kwnt-test/echo-new", json!({"description": "Brand new.",
+            "remotes": [{"type": "streamable-http", "url": "https://new.example/mcp"}]}), "active");
+        fresh["_meta"]["io.modelcontextprotocol.registry/official"]["updatedAt"] = json!(now_rfc3339());
+        entries.push(fresh);
+        let broken = entries.iter_mut().find(|x| x["server"]["name"] == "io.github.kwnt-test/echo-broken").unwrap();
+        broken["_meta"]["io.modelcontextprotocol.registry/official"]["status"] = json!("deleted");
+        broken["_meta"]["io.modelcontextprotocol.registry/official"]["updatedAt"] = json!(now_rfc3339());
+    }
+    let kept = e.state.mcp_directory.sync_once(&e.state.mcp_registry).await.unwrap();
+    assert_eq!(kept, 4);
+    assert_eq!(e.reg.since.lock().unwrap().len(), 1, "one page of changes");
+    let v = dir_search(&e, "echo").await;
+    assert!(row(&v, "io.github.kwnt-test/echo-new").is_some(), "{v}");
+    assert!(row(&v, "io.github.kwnt-test/echo-broken").is_none(), "{v}");
+    assert!(row(&v, "io.github.kwnt-test/echo").is_some(), "unchanged entries stay");
+
+    // Registry down after a sync: the copy still answers
+    let mut e = e;
+    e.state.mcp_registry = Arc::new(McpRegistry::new("http://127.0.0.1:9"));
+    e.app = create_router(e.state.clone());
+    assert!(e.state.mcp_directory.sync_once(&e.state.mcp_registry).await.is_err());
+    let v = dir_search(&e, "echo").await;
+    assert_eq!(v["source"], "copy");
+    assert_eq!(v["unavailable"], false);
+    assert_eq!(v["entries"].as_array().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn directory_without_copy_or_registry_says_unavailable() {
+    let mut e = setup().await;
+    e.state.mcp_registry = Arc::new(McpRegistry::new("http://127.0.0.1:9"));
+    e.app = create_router(e.state.clone());
+    let v = dir_search(&e, "stripe").await;
+    assert_eq!(v["entries"], json!([]));
+    assert_eq!(v["unavailable"], true);
+    let (status, v) = call(&e.app, "POST", "/api/mcp/registry/install", None, Some(json!({"registry_name": "com.stripe/mcp"}))).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(v["unavailable"], true);
+}
+
+#[tokio::test]
+async fn directory_install_adds_tests_and_never_echoes_secrets() {
+    let e = setup().await;
+    let install = |body: Value| {
+        let app = e.app.clone();
+        async move { call(&app, "POST", "/api/mcp/registry/install", None, Some(body)).await }
+    };
+
+    // Agents can't add from the directory
+    let token = turn(&e, "t-dir-install").await;
+    let (status, _) = call(&e.app, "POST", "/api/mcp/registry/install", Some(&token),
+        Some(json!({"registry_name": "io.github.kwnt-test/echo", "headers": {"Authorization": SECRET}}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(servers(&e).await.is_empty());
+
+    // Refusals, none of which quote a value
+    let (status, v) = install(json!({"registry_name": "../etc/passwd"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    let (status, v) = install(json!({"registry_name": "io.github.kwnt-test/nope"})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{v}");
+    let (status, v) = install(json!({"registry_name": "io.github.kwnt-test/echo-shell"})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("one step"), "{v}");
+    let (status, v) = install(json!({"registry_name": "io.github.kwnt-test/echo"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Authorization is required"), "{v}");
+    let (status, v) = install(json!({"registry_name": "io.github.kwnt-test/echo", "headers": {"X-Other": SECRET}})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert!(!v.to_string().contains(SECRET), "{v}");
+    let (status, v) = install(json!({"registry_name": 5, "headers": {"Authorization": SECRET}})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert!(!v.to_string().contains(SECRET), "{v}");
+    let (status, v) = install(json!({"registry_name": "io.github.kwnt-test/echo", "headers": {"Authorization": "line\nbreak-123"}})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert!(!v.to_string().contains("break-123"), "{v}");
+
+    // A wrong key: the server doesn't start, isn't kept, and the key isn't echoed
+    let (status, v) = install(json!({"registry_name": "io.github.kwnt-test/echo", "headers": {"Authorization": "wrong-key-999"}})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert!(!v.to_string().contains("wrong-key-999"), "{v}");
+    assert!(servers(&e).await.is_empty());
+
+    // The right key: added for every bot, tested, masked
+    let (status, v) = install(json!({"registry_name": "io.github.kwnt-test/echo", "headers": {"Authorization": SECRET}})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert!(!v.to_string().contains(SECRET), "{v}");
+    assert_eq!(v["registry_name"], "io.github.kwnt-test/echo");
+    assert_eq!(v["version"], "1.0.0");
+    assert_eq!(v["oauth_required"], false);
+    assert_eq!(v["test"]["ok"], true, "{v}");
+    assert_eq!(v["server"]["name"], "echo");
+    assert_eq!(v["server"]["headers"]["Authorization"], SECRET_MASK);
+    assert_eq!(v["server"]["disabled_for_kwants"], json!([]));
+    let id = v["server"]["id"].as_str().unwrap().to_string();
+    let stored = e.state.db.get_mcp_server(&id).await.unwrap().unwrap();
+    assert_eq!(stored.headers.get("Authorization").map(String::as_str), Some(format!("Bearer {SECRET}").as_str()));
+
+    // The search now says it's there
+    let v = dir_search(&e, "echo").await;
+    assert_eq!(row(&v, "io.github.kwnt-test/echo").unwrap()["already_added"], true);
+    assert_eq!(row(&v, "io.github.kwnt-test/echo-signin").unwrap()["already_added"], false);
+
+    // One that needs sign-in is kept and says so
+    let (status, v) = install(json!({"registry_name": "io.github.kwnt-test/echo-signin"})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["oauth_required"], true);
+    assert_eq!(v["test"]["auth_required"], true);
+    assert_eq!(servers(&e).await.len(), 2);
+}
+
+#[tokio::test]
+async fn directory_install_uses_the_forms_name() {
+    let e = setup().await;
+    let install = |body: Value| {
+        let app = e.app.clone();
+        async move { call(&app, "POST", "/api/mcp/registry/install", None, Some(body)).await }
+    };
+    let added = |v: &Value| v["server"]["name"].as_str().unwrap_or_default().to_string();
+    let signin = "io.github.kwnt-test/echo-signin";
+
+    // Name honoured (trimmed, case kept)
+    let (status, v) = install(json!({"registry_name": signin, "name": "  Echo_Login "})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(added(&v), "Echo_Login");
+    // A clash with it gets a suffix
+    let (status, v) = install(json!({"registry_name": signin, "name": "echo_login"})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(added(&v), "echo_login-2");
+    // Missing name: today's behaviour, the entry's own name
+    let (status, v) = install(json!({"registry_name": signin})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(added(&v), "echo-signin");
+    // Not the form's rule (or kwnt's own name): the entry's name, kept free
+    for (bad, want) in [("Echo Login!", "echo-signin-2"), ("   ", "echo-signin-3"), ("kwnt", "echo-signin-4"), ("a__b", "echo-signin-5")] {
+        let (status, v) = install(json!({"registry_name": signin, "name": bad})).await;
+        assert_eq!(status, StatusCode::OK, "{bad:?}: {v}");
+        assert_eq!(added(&v), want, "{bad:?}");
+    }
+    // A name that isn't text is refused like any bad body, and nothing is added
+    let (status, _) = install(json!({"registry_name": signin, "name": 5})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut names: Vec<String> = servers(&e).await.into_iter().map(|s| s.name).collect();
+    names.sort();
+    assert_eq!(names, ["Echo_Login", "echo-signin", "echo-signin-2", "echo-signin-3", "echo-signin-4", "echo-signin-5", "echo_login-2"]);
 }
 
 /// The real registry, by hand only: `cargo test --test mcp_suggest_test -- --ignored`.

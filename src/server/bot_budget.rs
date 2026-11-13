@@ -158,7 +158,7 @@ pub async fn status(state: &AppState, kwant: &Kwant) -> Budget {
     }
 }
 
-/// Short token counts: 950, 1.5k, 61k, 2.04M. One decimal below 100k, like the app's `compactTokens`,
+/// Short token counts: 950, 1.5k, 61k, 2M, 2.5M. One decimal below 100k, like the app's `compactTokens`,
 /// so 1,500 of 1,800 reads "1.5k of 1.8k", not "1k of 1k".
 fn short(n: u64) -> String {
     match n {
@@ -169,7 +169,7 @@ fn short(n: u64) -> String {
         }
         100_000..=999_999 => format!("{}k", (n as f64 / 1_000.0).round() as u64),
         _ => {
-            let m = format!("{:.2}", n as f64 / 1_000_000.0);
+            let m = format!("{:.1}", n as f64 / 1_000_000.0);
             format!("{}M", m.trim_end_matches('0').trim_end_matches('.'))
         }
     }
@@ -179,7 +179,7 @@ fn month_name(month: &str) -> String {
     NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d").map(|d| d.format("%B").to_string()).unwrap_or_else(|_| month.to_string())
 }
 
-/// "2.04M of 2M fresh tokens in November" / "$20.40 of $20.00 in November", for the limit hit
+/// "2M of 2M fresh tokens in November" / "$20.40 of $20.00 in November", for the limit hit
 /// (or the one with the higher percentage).
 pub fn used_of(b: &Budget) -> String {
     let pt = if b.budget_tokens > 0 { b.used_tokens as f64 / b.budget_tokens as f64 } else { -1.0 };
@@ -678,8 +678,11 @@ mod tests {
 
     #[test]
     fn short_counts() {
-        assert_eq!(short(2_040_000), "2.04M");
+        // One decimal for millions, ".0" trimmed, like the app's compactTokens (Mira, 0.9.5 follow-up 3)
+        assert_eq!(short(2_040_000), "2M");
         assert_eq!(short(2_000_000), "2M");
+        assert_eq!(short(2_450_000), "2.5M");
+        assert_eq!(short(12_340_000), "12.3M");
         assert_eq!(short(61_000), "61k");
     }
 

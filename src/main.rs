@@ -125,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(Commands::McpOauthMockServer { host, port, expires_in }) = &cli.command {
         let listener = tokio::net::TcpListener::bind((host.as_str(), *port)).await?;
         println!("mock OAuth MCP server: http://{}/mcp", listener.local_addr()?);
-        kwnt::mcp::oauth_mock::serve(listener, kwnt::mcp::oauth_mock::MockOptions { expires_in: *expires_in }).await?;
+        kwnt::mcp::oauth_mock::serve(listener, kwnt::mcp::oauth_mock::MockOptions { expires_in: *expires_in, ..Default::default() }).await?;
         return Ok(());
     }
 

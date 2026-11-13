@@ -312,12 +312,14 @@ fn is_loopback_host(host: &str) -> bool {
 }
 
 /// Paths that never need the token: health, the login endpoints themselves, the OAuth redirect
-/// (the provider's page sends the browser there) and the MCP endpoints, which carry their own
+/// (the provider's page sends the browser there), the OAuth client document and the MCP endpoints, which carry their own
 /// per-turn tokens.
 fn exempt(path: &str) -> bool {
     path == "/api/health"
         || path.starts_with("/api/auth/")
         || path == "/api/mcp/oauth/callback"
+        // The client ID metadata document authorization servers fetch (public by design)
+        || path == crate::mcp::oauth::CLIENT_DOCUMENT_PATH
         || path.starts_with("/api/mcp/permission/")
         || path.starts_with("/api/mcp/gateway")
         || path == "/api/mcp/self"

@@ -33,11 +33,11 @@ test('words, the queue and questions win over the approval line', () => {
   assert.equal(w.liveBubble({ live, awaitingAnswer: true, awaitingBrowser: true }), 'browser');
 });
 
-test('ChatView draws the approval line before it falls back to the skeleton', () => {
+test('ChatView draws the approval line before it falls back to the bot at work', () => {
   const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   const line = chat.indexOf("bubble === 'approval' ? (");
-  const skel = chat.indexOf('aria-label="Waiting for the first words"');
-  assert.ok(line > 0 && skel > line, 'the approval branch comes before the skeleton');
+  const skel = chat.indexOf('<WorkingAvatar');
+  assert.ok(line > 0 && skel > line, 'the approval branch comes before the bot at work');
   assert.match(chat, /Paused on the approval below\. Allow or deny it there; this reply carries on from it\./);
   assert.match(chat, /bubble === 'approval' \? 'Waiting for your OK'/);
 });

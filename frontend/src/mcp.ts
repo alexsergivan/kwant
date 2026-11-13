@@ -534,6 +534,16 @@ export const toServerName = (label: string): string =>
     .replace(/^[-_]+|[-_]+$/g, '')
     .slice(0, 48);
 
+/**
+ * The server name a public-directory listing starts with: its title made valid ("ElevenLabs Voices" →
+ * "elevenlabs-voices"), else the last part of its registry name, so Add & test works without a rename.
+ */
+export const directoryServerName = (entry: { title?: string | null; registry_name: string }): string =>
+  toServerName(entry.title ?? '') ||
+  toServerName(entry.registry_name.split('/').pop() ?? '') ||
+  toServerName(entry.registry_name) ||
+  'tool';
+
 /** Returns a friendly message for the first problem in the form, or null when it can be saved. */
 export const validateMcpForm = (form: McpFormState): string | null => {
   const name = form.name.trim();
@@ -829,3 +839,12 @@ export const kwantUsage = (
 
 /** A new kwant starts with every server on, the same as the backend default. */
 export const defaultKwantServerIds = (servers: Array<Pick<McpServer, 'id'>>): string[] => servers.map((s) => s.id);
+
+/** Opens Add a tool from elsewhere (Apps & accounts' Find a tool): on a built-in tool's form, a
+ * public-directory listing's form, or Add by address. App.tsx listens. */
+export const OPEN_ADD_TOOL_EVENT = 'kwant:open-add-tool';
+export interface OpenAddTool {
+  preset?: string;
+  directory?: import('./connections').DirectoryEntry;
+  address?: boolean;
+}

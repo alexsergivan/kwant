@@ -31,6 +31,7 @@ import { TelegramConnection } from './TelegramCard';
 import { ToolNotesSection, ToolNotesSectionProps } from './ToolNotesSection';
 import { notesChipText } from '../toolNotes';
 import { usePhoneLayout } from '../usePhoneLayout';
+import { ComposioTile, ComposioTileApi } from './ComposioTile';
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
@@ -190,7 +191,7 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
 };
 
 export interface ComposioSearchApi {
-  search: (q: string) => Promise<{ apps: ComposioApp[]; can_connect: boolean }>;
+  search: (q: string) => Promise<{ apps: ComposioApp[]; can_connect: boolean; hint?: string }>;
   connect: (slug: string) => Promise<{ redirect_url: string }>;
 }
 
@@ -208,6 +209,8 @@ export const ComposioAppSearch: React.FC<{
   const id = useId();
   const [q, setQ] = useState('');
   const [apps, setApps] = useState<ComposioApp[] | null>(initialApps ?? null);
+  /** The server's line for a search with no apps (what to try next). */
+  const [hint, setHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -230,7 +233,9 @@ export const ComposioAppSearch: React.FC<{
     setError(null);
     setOpened(null);
     try {
-      setApps((await api.search(query)).apps);
+      const found = await api.search(query);
+      setApps(found.apps);
+      setHint(found.hint ?? null);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -293,7 +298,7 @@ export const ComposioAppSearch: React.FC<{
             Opened {opened}’s sign-in on Composio in {inDesktopApp() ? 'your browser' : 'a new tab'}. Its tools reach your bots through the Composio server once you finish there.
           </p>
         )}
-        {apps && apps.length === 0 && <p className="text-xs text-zinc-400">No Composio apps match.</p>}
+        {apps && apps.length === 0 && <p className="text-xs text-zinc-400" data-composio-search="none">{hint ?? 'No Composio apps match.'}</p>}
       </div>
       {apps && apps.length > 0 && (
         <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800" aria-label="Composio apps">
@@ -369,7 +374,7 @@ export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen =
     if ('error' in body) return setError(body.error);
     setSaving(true);
     setError(null);
-    const problem = await onAdd(body.url, body.api_key ?? '', body.enabled);
+    const problem = await onAdd(body.url ?? '', body.api_key ?? '', body.enabled);
     setSaving(false);
     if (problem) setError(problem);
     else (setOpen(false), setUrl(''), setKey(''), setEnabled(false));
@@ -608,6 +613,8 @@ export interface ConnectionsViewProps extends ManageLinks {
   hideAccounts?: boolean;
   /** Apps & accounts' Advanced: Composio's "Choose bots" (instead of "Turn on in Tools"). */
   onChooseComposioBots?: () => void;
+  /** Tests and screenshots: the Composio tile's api. */
+  composioTileApi?: ComposioTileApi;
 }
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
@@ -636,6 +643,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   phone,
   hideAccounts = false,
   onChooseComposioBots,
+  composioTileApi,
   ...links
 }) => {
   const phoneLayout = usePhoneLayout();
@@ -801,17 +809,25 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               </h3>
               <ul className="space-y-2">
                 <TelegramConnection />
-                {data.catalog.map((entry) => (
-                  <ComposioCard
-                    key={entry.id}
-                    entry={entry}
-                    initialOpen={composioOpen}
-                    onAdd={onAddComposio}
-                    onOpenTools={links.onOpenTools}
-                    onChooseBots={entry.id === 'composio' ? onChooseComposioBots : undefined}
-                    openRequest={entry.id === 'composio' ? composioRequest : 0}
-                  />
-                ))}
+                {data.catalog.map((entry) =>
+                  entry.id === 'composio' ? (
+                    <ComposioTile
+                      key={entry.id}
+                      entry={entry}
+                      usedBy={data.connections.find((c) => c.id === entry.connection_id)?.used_by.map((b) => b.name) ?? []}
+                      onAddLink={onAddComposio}
+                      onOpenTools={onChooseComposioBots ? undefined : links.onOpenTools}
+                      onChooseBots={onChooseComposioBots}
+                      onChanged={onRefresh}
+                      phone={phone ?? phoneLayout}
+                      openRequest={composioRequest}
+                      api={composioTileApi}
+                      initialOpen={composioOpen && !entry.added ? 'add' : undefined}
+                    />
+                  ) : (
+                    <ComposioCard key={entry.id} entry={entry} initialOpen={composioOpen} onAdd={onAddComposio} onOpenTools={links.onOpenTools} />
+                  ),
+                )}
               </ul>
             </section>
           )}

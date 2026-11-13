@@ -112,6 +112,29 @@ pub enum RuntimeEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         slots: Option<usize>,
     },
+    /// The engine and model a kwant's turn runs on, sent as its driver starts (before any reply
+    /// text) and again with the new values when the turn moves to another engine, model or
+    /// account (failover). Placed like `turn_started`. `model`, `model_label` and `tier` are the
+    /// same values the saved reply's `meta.ran_on` carries; `model` is null when the engine picks
+    /// its own. `picked_by` is "laya" (an auto bot: Laya picked), "pinned" (the bot's settings
+    /// pin the engine or the model) or "fallback" (the turn left its first account).
+    #[serde(rename = "turn_runs_on", alias = "TurnRunsOn")]
+    TurnRunsOn {
+        kwant_id: String,
+        turn_id: String,
+        context_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+        /// The engine id: "claude", "codex", "grok", "anthropic_api", "ollama", "custom", …
+        engine: String,
+        /// The model family: "claude", "codex", "grok" or "ollama" (a custom API's own family).
+        family: String,
+        model: Option<String>,
+        model_label: Option<String>,
+        /// "fast", "balanced" or "deep"; null when the model has no known tier.
+        tier: Option<String>,
+        picked_by: String,
+    },
     /// A thread was created, renamed or archived.
     #[serde(rename = "thread_updated", alias = "ThreadUpdated")]
     ThreadUpdated { thread: Value },

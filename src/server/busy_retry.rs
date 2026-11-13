@@ -24,9 +24,9 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-/// The `code` of a browser call that failed because the browser is there but overloaded.
-// TODO(#544): use `crate::sandbox::service::BROWSER_BUSY_CODE` once #544 is on main.
-pub const BROWSER_BUSY_CODE: &str = "BROWSER_BUSY";
+/// The `code` of a browser call that failed because the browser is there but overloaded: the
+/// browser recovery's own (#544), so the two can't drift apart.
+pub use crate::sandbox::service::BROWSER_BUSY_CODE;
 
 /// How many times kwnt runs a reply again by itself after it ended on a busy browser step.
 pub const MAX_RETRIES: u8 = 2;
@@ -234,17 +234,52 @@ impl Slot {
     }
 }
 
+/// How [`unwatched_failure`]'s two errors start. AutoFix tells them apart from any other failed
+/// turn by these ([`gave_up`]), so the wording lives here once.
+const STAYED_BUSY: &str = "the browser stayed busy after ";
+const BUSY_OUTWARD: &str = "the browser was busy at `";
+const OUTWARD_TAIL: &str = "a step that may reach outside";
+
 /// Why an unwatched run failed when kwnt didn't (or no longer) retry its busy step: the run's
 /// error, which goes where a failed run goes today (a routine's Inbox item, a hand-off's lead).
 pub fn unwatched_failure(step: &Step, exit: &Exit) -> String {
     match exit {
         Exit::Outward => format!(
-            "the browser was busy at `{tool}`, a step that may reach outside (a send, a post, a payment), so it wasn't run again \
+            "{BUSY_OUTWARD}{tool}`, {OUTWARD_TAIL} (a send, a post, a payment), so it wasn't run again \
              by itself. Check whether it went through before running it again",
             tool = step.tool,
         ),
-        _ => format!("the browser stayed busy after {MAX_RETRIES} automatic retries of `{tool}`", tool = step.tool),
+        _ => format!("{STAYED_BUSY}{MAX_RETRIES} automatic retries of `{tool}`", tool = step.tool),
     }
+}
+
+/// Whether a failed run's error (any case, possibly inside a longer one) is kwnt's own give-up on
+/// a busy browser step ([`unwatched_failure`]): `Some(Exit::Exhausted)` when its retries ran out,
+/// `Some(Exit::Outward)` when the step may reach outside and wasn't retried. Running the whole
+/// task again would only wait the same minutes again (or repeat a send), so AutoFix doesn't.
+pub fn gave_up(error: &str) -> Option<Exit> {
+    let t = error.to_lowercase();
+    if t.contains(STAYED_BUSY) {
+        Some(Exit::Exhausted)
+    } else if t.contains(BUSY_OUTWARD) && t.contains(OUTWARD_TAIL) {
+        Some(Exit::Outward)
+    } else {
+        None
+    }
+}
+
+/// Test-only: chats (by channel id) whose unwatched retries wait this long instead of
+/// [`cooldown`], so an end-to-end test can run the retries out without 3 minutes of waits. Empty
+/// in a real run.
+fn quick_chats() -> &'static Mutex<HashMap<String, Duration>> {
+    static CHATS: OnceLock<Mutex<HashMap<String, Duration>>> = OnceLock::new();
+    CHATS.get_or_init(Default::default)
+}
+
+/// Test-only: [`unwatched`] retries in channel `channel_id` wait `wait` instead of [`cooldown`].
+#[doc(hidden)]
+pub fn quick_cooldown_in(channel_id: &str, wait: Duration) {
+    quick_chats().lock().unwrap_or_else(|e| e.into_inner()).insert(channel_id.to_string(), wait);
 }
 
 /// The bounded retry for a turn nobody watches. `run` runs the turn with a prompt and the
@@ -290,6 +325,8 @@ where
     RF: Future<Output = Result<String, String>>,
 {
     retry_loop(original, run, |step, attempt, after| async move {
+        let quick = scope.channel_id.as_deref().and_then(|c| quick_chats().lock().unwrap_or_else(|e| e.into_inner()).get(c).copied());
+        let after = quick.unwrap_or(after);
         let at = chrono::Utc::now() + chrono::Duration::from_std(after).unwrap_or_else(|_| chrono::Duration::seconds(60));
         let note = scope.message("system", "kwnt", retry_note(name, &step, attempt, at));
         scope.save(&note, Some(serde_json::json!({"kind": "browser_busy_retry", "attempt": attempt}))).await;
@@ -330,8 +367,11 @@ mod tests {
 
     #[test]
     fn the_code_matches_the_browser_recovery_constant() {
-        // TODO(#544): assert_eq!(BROWSER_BUSY_CODE, crate::sandbox::service::BROWSER_BUSY_CODE)
-        assert_eq!(BROWSER_BUSY_CODE, "BROWSER_BUSY");
+        assert_eq!(BROWSER_BUSY_CODE, crate::sandbox::service::BROWSER_BUSY_CODE);
+        // ...so #544's busy answer, built from its own constants, is what `is_busy` matches
+        let body = json!({"error": crate::sandbox::service::BROWSER_BUSY, "code": crate::sandbox::service::BROWSER_BUSY_CODE,
+            "retryable": true, "is_running": true});
+        assert!(is_busy(&body));
     }
 
     #[test]
@@ -520,5 +560,27 @@ mod tests {
         .await;
         assert_eq!(runs, 1);
         assert_eq!(outcome, Err("the claude driver failed: boom".into()));
+    }
+
+    #[test]
+    fn kwnts_own_busy_give_up_is_told_from_any_other_error() {
+        let step = act(json!({"action": "scroll"}));
+        let send = act(json!({"action": "click", "name": "Send"}));
+        let exhausted = unwatched_failure(&step, &Exit::Exhausted);
+        let outward = unwatched_failure(&send, &Exit::Outward);
+        assert_eq!(gave_up(&exhausted), Some(Exit::Exhausted));
+        assert_eq!(gave_up(&outward), Some(Exit::Outward));
+        // Inside a routine run's longer error, and whatever the case
+        assert_eq!(gave_up(&format!("the bot's turn failed: {exhausted}")), Some(Exit::Exhausted));
+        assert_eq!(gave_up(&exhausted.to_uppercase()), Some(Exit::Exhausted));
+        // #544's busy answer, the ask in a person's chat and other errors are not a give-up
+        for other in [
+            "The browser isn't responding right now (it is overloaded, not gone). This is temporary: retry the same step in a minute.",
+            "the claude driver failed: boom",
+            "the browser was busy at the time",
+            "",
+        ] {
+            assert_eq!(gave_up(other), None, "{other}");
+        }
     }
 }

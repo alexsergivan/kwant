@@ -62,6 +62,8 @@ credit=$(printf '%s\n' "$last" | sed -n 's/.*CREDIT:\([A-Za-z0-9_]*\).*/\1/p' | 
 case "$last" in *"finished the task you delegated"*|*"tasks you delegated have ended"*) ;; *) followup=""; credit="" ;; esac
 lines=$(printf '%s\n' "$last" | sed -n 's/.*LINES:\([A-Za-z0-9_]*:[0-9]*\).*/\1/p' | head -n 1)
 case "$last" in *"finished the task you delegated"*|*"tasks you delegated have ended"*|*"mentioned you"*) lines="" ;; esac
+# A hand-off turn that works a while (for a test to see it running)
+case "$last" in *SLOWHANDOFF*) case "$last" in *"delegated this task to you"*|*"handed this conversation to you"*) sleep 3 ;; esac ;; esac
 out="answer ${tag:-none}"
 for n in $(printf '%s' "$mention" | tr '+' ' '); do out="$out @$n"; done
 for n in $(printf '%s' "$followup" | tr '+' ' '); do out="$out \`@$n\` please revise your part."; done
@@ -1041,6 +1043,93 @@ async fn non_lead_mentions_hand_off_and_refused_mentions_are_reported() {
     }
 }
 
+/// The running turn of `kwant` (up to ~5 s).
+async fn running_turn_of(env: &Env, kwant: &str) -> String {
+    for _ in 0..200 {
+        if let Some(t) = env.state.turns.active_turns().into_iter().find(|t| t.kwant_id == kwant && t.state == "running") {
+            return t.turn_id;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("no running turn of {kwant}");
+}
+
+/// Its last browser step was refused because the browser was busy (by code, as a browser tool
+/// call notes it).
+fn ends_busy(turn_id: &str) {
+    kwnt::server::busy_retry::note(turn_id, "browser_act", &json!({"action": "scroll"}), true);
+}
+
+/// 0.9.6 (#541's Q3): a lead's @mention in its team channel is a delegation, so it already runs
+/// through the hand-offs' wrapper (delegation.rs, `busy_retry::unwatched`): a delegated turn that
+/// ends on a busy browser step is retried by kwnt, said in the delegation's thread, and the
+/// hand-off keeps running instead of failing back to the lead.
+#[tokio::test]
+async fn a_leads_mention_that_ends_on_a_busy_browser_step_is_retried_as_a_hand_off() {
+    let env = setup().await;
+    let (lead, specialist) = (name(&env, &env.lead).await, name(&env, &env.specialist).await);
+    let channel = team_channel(&env, "busy-squad").await;
+    say_in(&env, &channel, &format!("@{lead} Fetch it BUSYMARK SLOWHANDOFF\nREPLYTAG:fetched MENTION:{specialist}")).await;
+    wait_for("the delegation from the mention", || async {
+        env.state.db.list_delegations(Some(&env.lead), None, 10).await.unwrap().iter().any(|d| d.origin_channel_id.as_deref() == Some(channel.as_str()))
+    })
+    .await;
+    let d = env.state.db.list_delegations(Some(&env.lead), None, 10).await.unwrap().into_iter().find(|d| d.origin_channel_id.as_deref() == Some(channel.as_str())).unwrap();
+    assert_eq!(d.specialist_kwant_id, env.specialist);
+
+    ends_busy(&running_turn_of(&env, &env.specialist).await);
+    wait_for("the retry note in the hand-off's thread", || async {
+        channel_messages(&env, &d.thread_id).await.iter().any(|m| meta_kind(m).as_deref() == Some("browser_busy_retry"))
+    })
+    .await;
+    let note = channel_messages(&env, &d.thread_id).await.into_iter().find(|m| meta_kind(m).as_deref() == Some("browser_busy_retry")).unwrap();
+    assert!(note.text.contains(&specialist) && note.text.contains("retry 1 of 2"), "{}", note.text);
+    // It waits its cooldown, still running: no result, nothing failed back to the lead
+    assert_eq!(delegation_status(&env, &d.id).await, "running");
+    let d = env.state.db.get_delegation(&d.id).await.unwrap().unwrap();
+    assert!(d.result_message_id.is_none(), "no result while the retry waits");
+    assert!(
+        channel_messages(&env, &channel).await.iter().all(|m| meta_kind(m).as_deref() != Some("delegation_result")),
+        "nothing is posted back while the retry waits"
+    );
+    assert!(
+        env.state.db.list_parked().await.unwrap().iter().all(|p| p.kwant_id != env.specialist),
+        "a hand-off retries in its own run, nothing is parked in a chat"
+    );
+}
+
+/// ...and a teammate's @mention (not the lead's) is a direct hand-off turn in the person's chat,
+/// which #541's chat path already covers: its busy step is parked for one retry in that chat.
+#[tokio::test]
+async fn a_teammates_mention_that_ends_on_a_busy_browser_step_parks_a_retry_in_the_chat() {
+    let env = setup().await;
+    let (lead, specialist) = (name(&env, &env.lead).await, name(&env, &env.specialist).await);
+    let channel = team_channel(&env, "busy-plain-squad").await;
+    say_in(&env, &channel, &format!("@{specialist} Look BUSYPLAIN SLOWHANDOFF REPLYTAG:plain MENTION:{lead}")).await;
+    wait_for("the lead's handoff turn", || async {
+        prompts_with("BUSYPLAIN").iter().any(|p| p.contains("handed this conversation to you"))
+    })
+    .await;
+    ends_busy(&running_turn_of(&env, &env.lead).await);
+    wait_for("the parked retry", || async {
+        env.state.db.list_parked().await.unwrap().iter().any(|p| p.kwant_id == env.lead)
+    })
+    .await;
+    let parked = env.state.db.list_parked().await.unwrap().into_iter().find(|p| p.kwant_id == env.lead).unwrap();
+    assert_eq!(parked.channel_id.as_deref(), Some(channel.as_str()));
+    assert_eq!(parked.reason, "browser_busy_1");
+    assert!(parked.prompt.contains("browser_act"), "{}", parked.prompt);
+    // The note is saved right after the park (busy_retry::after_turn), so on a slow runner it can
+    // still be on its way when the parked row shows up: wait for it (main CI at ad035614).
+    wait_or_dump(&env, &channel, "the retry note in the chat", || async {
+        channel_messages(&env, &channel).await.iter().any(|m| meta_kind(m).as_deref() == Some("browser_busy_retry"))
+    })
+    .await;
+    let note = channel_messages(&env, &channel).await.into_iter().find(|m| meta_kind(m).as_deref() == Some("browser_busy_retry")).unwrap();
+    assert!(note.text.contains(&lead) && note.text.contains("retry 1 of 2"), "the retry is said in the chat: {}", note.text);
+    assert!(env.state.db.list_delegations(Some(&env.specialist), None, 10).await.unwrap().is_empty(), "not a delegation");
+}
+
 /// A third bot on the fake claude, named `name`.
 async fn add_bot(env: &Env, name: &str) -> String {
     let (s, v) = call(&env.app, "POST", "/api/kwants", Some(json!({"name": name, "title": "Growth Marketer", "persona_prompt": "", "soul": "", "avatar_sprite": "default", "driver_type": "cli", "preferred_model": "claude"}))).await;
@@ -1379,16 +1468,16 @@ async fn three_failures_in_a_row_skip_the_fourth_mention_without_pausing() {
 async fn a_follow_up_hands_corrections_back_to_teammates_who_just_reported() {
     let env = setup().await;
     let lead = name(&env, &env.lead).await;
-    let ids = [add_bot(&env, "Social").await, add_bot(&env, "Writer").await, add_bot(&env, "SEO").await];
+    let ids = [add_bot(&env, "Social").await, add_bot(&env, "Copy").await, add_bot(&env, "SEO").await];
     let channel = team_channel_with(&env, "marketing-rounds", &[&env.lead, &ids[0], &ids[1], &ids[2]]).await;
-    say_in(&env, &channel, &format!("@{lead} Marketing plan ROUNDSMARK REPLYTAG:plan MENTION:Social+Writer+SEO FOLLOWUP:Social+Writer+SEO")).await;
+    say_in(&env, &channel, &format!("@{lead} Marketing plan ROUNDSMARK REPLYTAG:plan MENTION:Social+Copy+SEO FOLLOWUP:Social+Copy+SEO")).await;
 
     let notes = || async { refusals(&channel_messages(&env, &channel).await) };
     wait_for("the repeat note after the last round", || async { !notes().await.is_empty() }).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let notes = notes().await;
     assert_eq!(notes.len(), 1, "one note for all three: {notes:?}");
-    for who in ["Social", "Writer", "SEO"] {
+    for who in ["Social", "Copy", "SEO"] {
         assert!(notes[0].contains(&format!("already asked {who} exactly this in this request")), "{}", notes[0]);
     }
     assert!(capped(&channel_messages(&env, &channel).await).is_empty(), "nothing waits for the person");

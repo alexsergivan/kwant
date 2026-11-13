@@ -52,7 +52,7 @@ test('steps: already signed in → steps 1 and 2 done, step 3 open (D2)', () => 
   const v = m.stepsView({ engines: [ready('claude'), engine('codex')], chosen: null });
   assert.deepEqual(v, { open: 3, done1: true, done2: true, choice: 'claude', foundReady: true });
   assert.equal(m.step1Value(v, [ready('claude')], 'on this Mac'), 'Claude, already signed in on this Mac');
-  assert.deepEqual(m.heroText(v, { mac: true }), { title: 'Claude is ready on this Mac', sub: 'You were already signed in. Pick a team and say hello.' });
+  assert.deepEqual(m.heroText(v, { mac: true }), { title: 'Claude is ready on this Mac', sub: 'You were already signed in. Meet your team and say hello.' });
   assert.equal(m.heroText(v, { host: 'vps.example.net' }).title, 'Claude is ready on vps.example.net');
 });
 

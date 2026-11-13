@@ -779,6 +779,22 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 @keyframes kw-dv-pop { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: none; } }
 @keyframes kw-dv-caret { 0% { opacity: 1; } 50% { opacity: 0; } }
 
+/* The AI model badge, bottom-left on a bot's avatar: the mirror of the status dot (model-badge brief). */
+.kw-model-badge {
+  position: absolute; left: -2px; bottom: -2px; z-index: 2; border-radius: 9999px;
+  display: flex; align-items: center; justify-content: center;
+}
+.kw-mb-layer { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.kw-mb-spark { position: absolute; top: -3px; left: -6px; line-height: 1; text-shadow: 0 0 2px #09090b, 0 0 2px #09090b; }
+.kw-mb-in { animation: kw-mb-in 150ms ease-out both; }
+.kw-mb-out { animation: kw-mb-out 150ms ease-out both; }
+@keyframes kw-mb-in { from { opacity: 0; } }
+@keyframes kw-mb-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .kw-mb-in { animation: none; }
+  .kw-mb-out { display: none; }
+}
+
 /* The hard hat: top-left on avatars of 28 px and up, so it never covers the status dot */
 .kw-dev-hat {
   position: absolute; left: -4px; top: -4px; width: 14px; height: 14px; border-radius: 9999px; z-index: 2;
