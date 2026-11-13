@@ -71,8 +71,8 @@ impl MemoryVectorRow {
             return None;
         }
         let bytes = self.vec.as_deref()?;
-        (bytes.chunks_exact(4).remainder().is_empty() && !bytes.is_empty())
-            .then(|| bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+        let (floats, rest) = bytes.as_chunks::<4>();
+        (rest.is_empty() && !floats.is_empty()).then(|| floats.iter().map(|c| f32::from_le_bytes(*c)).collect())
     }
 }
 
