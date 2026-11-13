@@ -11,6 +11,7 @@ import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
 import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
 import { moodNoticed } from '../kwantMood';
@@ -2168,14 +2169,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {/* On a phone the strip says "working" and "waiting": no skeleton, no "Paused on…" bubble. */}
               {(!phone || queued || streamingText) && (
-              <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
+              <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full" data-live-bubble-body="">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
                     {queuedText(queued.reason, queued.slots)}
                   </p>
                 ) : streamingText ? (
-                  <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} isStreaming={true} />
+                  /* The scene's 62 px holds under the first words (kw-wa-hold), so the bubble does not jump; they fade in once. */
+                  <div className="kw-wa-in kw-wa-hold">
+                    <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} isStreaming={true} />
+                  </div>
                 ) : awaitingAnswer ? (
                   <p className="text-zinc-400" role="status">
                     {awaitingBrowser
@@ -2187,11 +2191,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     Paused on the approval below. Allow or deny it there; this reply carries on from it.
                   </p>
                 ) : (
-                  <div className="space-y-2.5 py-1" role="status" aria-label="Waiting for the first words">
-                    <div className="kws-skel h-3 w-11/12 rounded-full bg-zinc-700/60" />
-                    <div className="kws-skel h-3 w-9/12 rounded-full bg-zinc-700/60" style={{ animationDelay: '120ms' }} />
-                    <div className="kws-skel h-3 w-6/12 rounded-full bg-zinc-700/60" style={{ animationDelay: '240ms' }} />
-                  </div>
+                  <WorkingAvatar
+                    name={
+                      discussionState?.inProgress && discussionState.currentSpeaker
+                        ? discussionState.currentSpeaker
+                        : streamingSpeakerName || title
+                    }
+                  />
                 )}
               </div>
               )}
