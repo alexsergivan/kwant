@@ -1119,8 +1119,14 @@ async fn a_teammates_mention_that_ends_on_a_busy_browser_step_parks_a_retry_in_t
     assert_eq!(parked.channel_id.as_deref(), Some(channel.as_str()));
     assert_eq!(parked.reason, "browser_busy_1");
     assert!(parked.prompt.contains("browser_act"), "{}", parked.prompt);
-    let note = channel_messages(&env, &channel).await.into_iter().find(|m| meta_kind(m).as_deref() == Some("browser_busy_retry"));
-    assert!(note.is_some_and(|n| n.text.contains(&lead) && n.text.contains("retry 1 of 2")), "the retry is said in the chat");
+    // The note is saved right after the park (busy_retry::after_turn), so on a slow runner it can
+    // still be on its way when the parked row shows up: wait for it (main CI at ad035614).
+    wait_or_dump(&env, &channel, "the retry note in the chat", || async {
+        channel_messages(&env, &channel).await.iter().any(|m| meta_kind(m).as_deref() == Some("browser_busy_retry"))
+    })
+    .await;
+    let note = channel_messages(&env, &channel).await.into_iter().find(|m| meta_kind(m).as_deref() == Some("browser_busy_retry")).unwrap();
+    assert!(note.text.contains(&lead) && note.text.contains("retry 1 of 2"), "the retry is said in the chat: {}", note.text);
     assert!(env.state.db.list_delegations(Some(&env.specialist), None, 10).await.unwrap().is_empty(), "not a delegation");
 }
 
