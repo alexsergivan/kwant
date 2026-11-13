@@ -467,7 +467,7 @@ export const BatchPane: React.FC<{ wide: boolean; onOpenItem: (id: string) => vo
 };
 
 const EmptyQueue: React.FC = () => (
-  <div className="py-16 flex flex-col items-center text-center gap-2" data-all-clear>
+  <div className="py-16 flex flex-col items-center text-center gap-2 [[data-needs-you]~&]:hidden" data-all-clear>
     <CheckCircle2 size={30} className="text-teal-300" aria-hidden="true" />
     <p className="text-sm font-semibold text-zinc-100">You’re all caught up</p>
     <p className="text-xs text-zinc-400 max-w-xs">Nothing waits on you and nothing is left to review. Questions, approvals and finished work will show up here.</p>

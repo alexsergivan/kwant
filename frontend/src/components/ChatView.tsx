@@ -74,6 +74,8 @@ import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotic
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { parseSpendStopped } from '../spendStop';
 import { SpendStoppedNotice } from './SpendStop';
+import { parseBudgetNotice } from '../botBudget';
+import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
@@ -319,6 +321,10 @@ export interface ChatViewProps {
   onOpenUsage?: () => void;
   /** Opens App settings at the Computer card, "Run Claude inside the VM" focused (isolation notices). */
   onOpenComputerSettings?: () => void;
+  /** 0.9.5: the bot this 1:1 chat is with; its monthly-budget pause shows above the box. */
+  budgetBotId?: string | null;
+  /** 0.9.5: opens a bot's settings at its monthly budget, the first field focused. */
+  onRaiseBudget?: (kwantId: string) => void;
   /** Opens Manage Team with its folder input focused (isolation notices 6 and 7). */
   onChangeTeamFolder?: (teamId: string) => void;
   /** Opens the named bot's Edit modal on Profile, where its AI is picked (notice 7). */
@@ -534,6 +540,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onOpenAccounts,
   onOpenUsage,
   onOpenComputerSettings,
+  budgetBotId = null,
+  onRaiseBudget,
   onChangeTeamFolder,
   onEditBot,
   canRun = null,
@@ -784,6 +792,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setApprovalOffscreen(false);
   };
   // The running turn's summary line (WorkingStrip): inside the composer section, right above the box.
+  const { byBot: budgetsByBot } = useBudgets();
+  const chatBudget = budgetBotId ? budgetsByBot[budgetBotId] : undefined;
+  const budgetBanner = chatBudget?.state === 'paused' ? <BudgetPausedBanner budget={chatBudget} onRaise={onRaiseBudget} /> : null;
   const workingStrip = (
     <WorkingStrip
       active={isStreaming}
@@ -1339,6 +1350,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
             flash={flashId === msg.id}
           />
         </div>
+      );
+    const budgetNote = parseBudgetNotice(msg.meta);
+    if (budgetNote && (budgetNote.kind === 'bot_budget_stopped' || budgetNote.kind === 'bot_budget_warn'))
+      return (
+        <BudgetNotice
+          key={msg.id}
+          messageId={msg.id}
+          text={msg.text}
+          meta={budgetNote}
+          onRaise={onRaiseBudget}
+          canAct={!(budgetBotId === budgetNote.kwant_id && chatBudget?.state === 'paused')}
+          flash={flashId === msg.id}
+        />
       );
     const spend = parseSpendStopped(msg.meta);
     if (spend)
@@ -2292,6 +2316,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* Phone and desktop (0.8.1 F4): the quiet line sits inside the composer section, right above the box. */}
+        {budgetBanner}
         {workingStrip}
 
         <form
@@ -2466,7 +2491,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <AtSign size={phone ? 18 : 17} aria-hidden="true" />
             {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
             {phone && !isStreaming && (
-              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`} />
+              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`} />
             )}
           </button>
           {stacked && <span className="flex-1" aria-hidden="true" />}
@@ -2479,7 +2504,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {!phone && !isStreaming && (
             <NewTag
               id="mention"
-              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`}
+              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`}
               style={{ right: 'calc(11px + var(--kw-cbtn-step))' }}
             />
           )}
