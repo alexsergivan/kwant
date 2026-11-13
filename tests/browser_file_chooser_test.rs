@@ -113,12 +113,6 @@ async fn title_becomes(ctrl: &BrowserController, want: &str) -> String {
     title
 }
 
-async fn click(ctrl: &BrowserController, x: i64, y: i64) {
-    for kind in ["mousePressed", "mouseReleased"] {
-        cdp(ctrl, "Input.dispatchMouseEvent", json!({"type": kind, "x": x, "y": y, "button": "left", "buttons": if kind == "mousePressed" { 1 } else { 0 }, "clickCount": 1})).await;
-    }
-}
-
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// The next live-view message of `kind` that `matches`, answering pings/frames meanwhile; `None`
