@@ -328,10 +328,10 @@ export function routingLine(r: RoutingMeta, spaceName: string, nameOf?: (kwantId
   const own = serverReason(r);
   if (own) return `${own} Chosen ${pool}.`;
   const matched = r.matched_terms?.length ? ` · matched ${r.matched_terms.map((t) => `'${t}'`).join(', ')}` : '';
-  if (r.fallback) return `Picked by keywords (Laya is offline) · ${r.kwant_name} ${pool}${matched}`;
+  if (r.fallback) return `Picked by keywords (${ROUTER_NAME} is offline) · ${r.kwant_name} ${pool}${matched}`;
   if (r.basis === 'lead') return `No one’s role matched, so the team lead ${r.kwant_name} took it ${pool}`;
   if (r.basis === 'only') return `${r.kwant_name} is the only bot that can answer ${pool}`;
-  return `Laya picked ${r.kwant_name} ${pool}${matched}`;
+  return `${ROUTER_NAME} picked ${r.kwant_name} ${pool}${matched}`;
 }
 
 /** "ran on Work account" from a reply's `ran_on`, or null. */
