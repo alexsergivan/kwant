@@ -653,6 +653,8 @@ fn broker(env: &Env) -> BrokerApprover {
         conversation: env.a.clone(),
         chat: Some(json!({"direct_kwant_id": env.a})),
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     }
 }
 
