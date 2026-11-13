@@ -59,7 +59,7 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
       aria-labelledby={headingId}
       className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`}
     >
-      <ModernAvatar role={kwantName} name={kwantName} size={34} kwantId={kwantId} />
+      <ModernAvatar role={kwantName} name={kwantName} size={34} kwantId={kwantId} modelBadge={false} />
       <div className={`flex-1 min-w-0 max-w-2xl rounded-2xl rounded-tl-sm border bg-zinc-900/60 shadow-sm ${border}`}>
         <div className="px-4 pt-3 pb-2 space-y-1.5">
           <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">

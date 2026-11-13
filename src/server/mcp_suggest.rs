@@ -445,6 +445,83 @@ fn free_name(base: &str, taken: &[String]) -> String {
     }
 }
 
+/// The server name for an install: the person's `preferred` name when it is one the custom form
+/// accepts (letters, numbers, `-` or `_`, trimmed), else the entry's own name; either way kept
+/// free in the space (`name-2`, …). A preferred name that has no room left for a suffix falls
+/// back to the entry's name too.
+fn install_name(preferred: Option<&str>, registry_name: &str, taken: &[String]) -> String {
+    if let Some(p) = preferred.map(str::trim).filter(|p| mcp::usable_server_name(p)) {
+        let name = free_name(p, taken);
+        if mcp::usable_server_name(&name) {
+            return name;
+        }
+    }
+    free_name(&server_name_for(registry_name), taken)
+}
+
+/// A registry entry set up in a space: the server, its first test, and whether it needs sign-in.
+pub(super) struct Installed {
+    pub server: McpServer,
+    pub test: Value,
+    pub oauth_required: bool,
+}
+
+/// Why setting one up failed; `test` when it was created but didn't start (and was removed).
+pub(super) struct InstallFailed {
+    pub status: StatusCode,
+    pub error: String,
+    pub test: Option<Value>,
+}
+
+/// The shared core of installing a registry entry (a suggestion, or the person's pick from the
+/// directory): create the server from `plan` and the resolved values under a free name, test
+/// it, and keep it if it starts or only needs sign-in. A server that doesn't start is removed.
+/// `for_kwant` switches it on for that bot only; `None` adds it like any server the person adds.
+/// `preferred_name` is the Name the person saw on the form (see `install_name`).
+/// Values are never logged.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn create_and_test(
+    state: &AppState,
+    space: &SpaceId,
+    registry_name: &str,
+    preferred_name: Option<&str>,
+    plan: &InstallPlan,
+    env: BTreeMap<String, String>,
+    headers: BTreeMap<String, String>,
+    for_kwant: Option<&str>,
+) -> Result<Installed, InstallFailed> {
+    let failed = |status, error: String, test| InstallFailed { status, error, test };
+    let taken: Vec<String> = state.db.list_mcp_servers(space).await.unwrap_or_default().into_iter().map(|s| s.name).collect();
+    let input = McpServerInput {
+        name: install_name(preferred_name, registry_name, &taken),
+        transport: plan.transport.clone(),
+        command: plan.command.clone(),
+        args: Some(plan.args.clone()),
+        url: plan.url.clone(),
+        env: Some(env),
+        headers: Some(headers),
+        enabled: Some(true),
+        timeout_secs: None,
+    };
+    let server = mcp::build_server(input, None).map_err(|e| failed(StatusCode::BAD_REQUEST, e, None))?;
+    let created = match for_kwant {
+        Some(kwant) => state.db.create_mcp_server_for_kwant(space, &server, kwant).await,
+        None => state.db.create_mcp_server(space, &server).await,
+    };
+    let created = created.map_err(|e| {
+        let (status, Json(body)) = db_err(e);
+        failed(status, body["error"].as_str().unwrap_or("database error").to_string(), None)
+    })?;
+    let test = run_test(state, &created).await;
+    let oauth_required = test["auth_required"] == json!(true);
+    if test["ok"] != json!(true) && !oauth_required {
+        let _ = state.db.delete_mcp_server(&created.id).await;
+        let msg = format!("The server didn't start: {}", test["error"].as_str().unwrap_or("unknown error"));
+        return Err(failed(StatusCode::UNPROCESSABLE_ENTITY, msg, Some(test)));
+    }
+    Ok(Installed { server: created, test, oauth_required })
+}
+
 /// `POST /api/mcp/suggestions/:id/install {env?, headers?}`: the person installs a suggestion.
 /// The server is created from the stored plan only, switched on for the suggesting agent only,
 /// and tested. A failed test removes it again and the suggestion stays pending with the error;
@@ -510,39 +587,16 @@ pub async fn install(
         }
     };
 
-    let taken: Vec<String> = state.db.list_mcp_servers(&space).await.unwrap_or_default().into_iter().map(|s| s.name).collect();
-    let input = McpServerInput {
-        name: free_name(&server_name_for(&s.registry_name), &taken),
-        transport: plan.transport.clone(),
-        command: plan.command.clone(),
-        args: Some(plan.args.clone()),
-        url: plan.url.clone(),
-        env: Some(env),
-        headers: Some(header_values),
-        enabled: Some(true),
-        timeout_secs: None,
-    };
-    let server = match mcp::build_server(input, None) {
-        Ok(s) => s,
-        Err(e) => return fail(StatusCode::BAD_REQUEST, e, None).await,
-    };
-    let created = match state.db.create_mcp_server_for_kwant(&space, &server, &s.kwant_id).await {
-        Ok(c) => c,
-        Err(e) => {
-            let (status, Json(body)) = db_err(e);
-            let msg = body["error"].as_str().unwrap_or("database error").to_string();
-            return fail(status, msg, None).await;
+    let done = match create_and_test(&state, &space, &s.registry_name, None, &plan, env, header_values, Some(&s.kwant_id)).await {
+        Ok(done) => done,
+        Err(InstallFailed { status, error, test }) => {
+            if test.is_some() {
+                tracing::info!(suggestion_id = %id, "suggested MCP server failed its test; removed");
+            }
+            return fail(status, error, test).await;
         }
     };
-
-    let test = run_test(&state, &created).await;
-    let oauth_required = test["auth_required"] == json!(true);
-    if test["ok"] != json!(true) && !oauth_required {
-        let _ = state.db.delete_mcp_server(&created.id).await;
-        let msg = format!("The server didn't start: {}", test["error"].as_str().unwrap_or("unknown error"));
-        tracing::info!(suggestion_id = %id, "suggested MCP server failed its test; removed");
-        return fail(StatusCode::UNPROCESSABLE_ENTITY, msg, Some(test)).await;
-    }
+    let Installed { server: created, test, oauth_required } = done;
     if state.db.mark_mcp_suggestion_installed(&id, &created.id).await.is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
@@ -633,5 +687,27 @@ mod tests {
         assert_eq!(package_identifier(&oci).as_deref(), Some("ghcr.io/a/c"));
         assert!(same_server(&oci, &server("docker", &["run", "ghcr.io/a/c:latest"])));
         assert_eq!(free_name("echo", &["echo".into(), "Echo-2".into()]), "echo-3");
+    }
+
+    #[test]
+    fn install_name_honours_the_forms_name() {
+        let none: Vec<String> = Vec::new();
+        // Honoured, trimmed, case kept
+        assert_eq!(install_name(Some("Stripe"), "com.stripe/mcp", &none), "Stripe");
+        assert_eq!(install_name(Some("  my_tool-2 "), "com.stripe/mcp", &none), "my_tool-2");
+        // Missing or not the form's rule: the entry's own name, as before
+        assert_eq!(install_name(None, "com.stripe/mcp", &none), "stripe");
+        for bad in ["", "   ", "Stripe API", "stripé", "a/b", "-x", "a__b", "kwnt", "KWNT_tools", &"x".repeat(49)] {
+            assert_eq!(install_name(Some(bad), "com.stripe/mcp", &none), "stripe", "{bad:?}");
+        }
+        // A clash gets a suffix, case-insensitively
+        let taken: Vec<String> = vec!["stripe".into(), "Stripe-2".into()];
+        assert_eq!(install_name(Some("STRIPE"), "com.stripe/mcp", &taken), "STRIPE-3");
+        assert_eq!(install_name(None, "com.stripe/mcp", &taken), "stripe-3");
+        assert_eq!(install_name(Some("bad name"), "com.stripe/mcp", &taken), "stripe-3");
+        // No room for a suffix: the entry's name instead of a name build_server would refuse
+        let long = "a".repeat(48);
+        assert_eq!(install_name(Some(&long), "com.stripe/mcp", &none), long);
+        assert_eq!(install_name(Some(&long), "com.stripe/mcp", std::slice::from_ref(&long)), "stripe");
     }
 }

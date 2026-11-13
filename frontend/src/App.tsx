@@ -78,7 +78,8 @@ import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
-import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
+import { clearAllTurns, forgetLastRuns, resetTurns, turnEnded, turnRunsOn, turnStarted } from './kwantActivity';
+import { setBadgeBots, setBadgeEngines } from './modelBadgeData';
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
@@ -151,6 +152,7 @@ import { useEngines } from './useEngines';
 import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
+import { OPEN_ADD_TOOL_EVENT, type OpenAddTool } from './mcp';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
@@ -448,6 +450,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   // Connections' "+ Add connection" opens Tools straight on adding a server.
   const [mcpStartAdding, setMcpStartAdding] = useState(false);
+  // Add a tool opened from Apps & accounts' Find a tool, straight on that tool's form.
+  const [mcpStartWith, setMcpStartWith] = useState<OpenAddTool | null>(null);
+  useEffect(() => {
+    const open = (e: Event) => {
+      setMcpStartWith((e as CustomEvent<OpenAddTool>).detail ?? null);
+      setMcpStartAdding(true);
+      setIsMcpOpen(true);
+    };
+    window.addEventListener(OPEN_ADD_TOOL_EVENT, open);
+    return () => window.removeEventListener(OPEN_ADD_TOOL_EVENT, open);
+  }, []);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
@@ -1224,6 +1237,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             }
             break;
           }
+          case 'turn_runs_on':
+            // The engine and model a turn runs on: at its start, and again when it fails over (model badge).
+            if (event.data?.kwant_id) turnRunsOn(event.data.kwant_id, event.data);
+            break;
           case 'thread_updated':
           case 'ThreadUpdated': {
             const t: Thread | undefined = event.data?.thread;
@@ -3631,6 +3648,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const spriteOf = useCallback((id: string) => kwants.find((k) => k.id === id)?.avatar_sprite, [kwants]);
   // Avatars that only know a bot's title or name look its saved style up here.
   useEffect(() => setKnownBots(kwants), [kwants]);
+  // The model badge on each bot's avatar: its pick and last reply's engine (which now carries what a
+  // turn that just ended ran on), and which engines can run.
+  useEffect(() => {
+    setBadgeBots(kwants);
+    forgetLastRuns();
+  }, [kwants]);
+  useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
@@ -4535,11 +4559,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         <McpServersModal
           isOpen={isMcpOpen}
           startAdding={mcpStartAdding}
-          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); }}
+          startWith={mcpStartWith}
+          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); setMcpStartWith(null); }}
           kwants={kwants}
           onOpenConnections={() => {
             setIsMcpOpen(false);
             setMcpStartAdding(false);
+            setMcpStartWith(null);
             openConnections();
           }}
         />

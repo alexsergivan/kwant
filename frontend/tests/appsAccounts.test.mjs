@@ -14,6 +14,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 }
 g.window.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
 g.window.HTMLElement.prototype.scrollIntoView ??= () => {};
+g.CSS ??= { escape: (x) => String(x).replace(/[^\w-]/g, (c) => '\\' + c) };
 
 const m = await loadBundled(`
   export * from './src/appsAccounts';
@@ -106,61 +107,61 @@ const sheetProps = (over = {}) => ({
 
 test('the sheet says what bots can do and that it goes through Composio, then shows three steps with no bot ticked', () => {
   const html = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps()));
-  for (const t of ['Connect Gmail', 'Your bots will be able to', 'Read and search your mail', 'Through Composio, a service with a free plan', 'Open Composio', 'Paste your Composio link', 'Which bots get it?', 'None until you tick one.']) {
+  for (const t of ['Connect Gmail', 'Your bots will be able to', 'Read and search your mail', 'Through Composio, a service with a free plan', 'Add your free Composio key', 'Composio API key', 'Get a free key', 'Sign in to Gmail', 'Which bots get it?', 'None until you tick one.', 'Free plan: 10,000 tool calls a month.']) {
     assert.ok(html.includes(t), `sheet shows "${t}"`);
   }
   assert.equal((html.match(/data-sheet-step="/g) ?? []).length, 3);
   assert.ok(!/type="checkbox"[^>]*checked/.test(html), 'no bot is preselected');
   assert.match(html, /role="dialog"/);
   assert.match(html, /aria-modal="true"/);
-  assert.ok(html.includes('MCP</span> in the left menu'), 'step 2 says where the link is');
+  for (const t of ['MCP', 'Composio link', 'user_id', 'toolkit', 'server URL', 'connector']) assert.ok(!html.includes(t), `no "${t}" on the main path`);
+  assert.ok(html.includes('href="https://dashboard.composio.dev"'), 'the key link goes to the Composio dashboard');
   assert.ok(!html.includes('Turn on in Tools'));
 });
 
-test('a bad link stops at step 2 with words, and no bot stops at step 3', async () => {
+test('no key stops at step 1 with words, and no bot stops at step 3', async () => {
   const api = fakeApi();
   const host = await mount(m.ConnectSheet, sheetProps({ api }));
   await submit(host);
-  assert.match(text(host.querySelector('[data-sheet-error="2"]')), /^Paste your Composio link first\. It’s under MCP in Composio\.$/);
-  await type(host.querySelector('input[type="url"]'), 'https://example.com/mcp');
-  await submit(host);
-  assert.match(text(host.querySelector('[data-sheet-error="2"]')), /^That isn’t a Composio link\. Copy the one under MCP in Composio; it starts with https:\/\/ and is on composio\.dev\.$/);
-  await type(host.querySelector('input[type="url"]'), 'https://backend.composio.dev/v3/mcp/abc');
+  assert.match(text(host.querySelector('[data-sheet-error="1"]')), /^Paste your Composio API key first\./);
+  await type(host.querySelector('[data-sheet-step="1"] input'), 'ck_abc');
+  assert.equal(host.querySelector('[data-sheet-error="1"]'), null, 'typing clears the key error');
   await submit(host);
   assert.match(text(host.querySelector('[data-sheet-error="3"]')), /Tick at least one bot/);
+  await click(host.querySelector('[data-sheet-bot] input'));
+  assert.equal(host.querySelector('[data-sheet-error="3"]'), null, 'ticking a bot clears the bot error');
   assert.deepEqual(api.calls, [], 'nothing is sent until the form is whole');
 });
 
-test('fixing the link or ticking a bot clears that step’s error at once', async () => {
-  const host = await mount(m.ConnectSheet, sheetProps({ api: fakeApi() }));
-  await type(host.querySelector('input[type="url"]'), 'https://example.com/mcp');
-  await submit(host);
-  assert.ok(host.querySelector('[data-sheet-error="2"]'));
-  await type(host.querySelector('input[type="url"]'), 'https://backend.composio.dev/v3/mcp/abc');
-  assert.equal(host.querySelector('[data-sheet-error="2"]'), null, 'the old link error goes as soon as the link changes');
-  await submit(host);
-  assert.ok(host.querySelector('[data-sheet-error="3"]'));
-  await click(host.querySelector('[data-sheet-bot] input'));
-  assert.equal(host.querySelector('[data-sheet-error="3"]'), null, 'ticking a bot clears the bot error');
+test('Add key saves the key on its own, then the sign-in step opens', async () => {
+  const api = fakeApi();
+  const host = await mount(m.ConnectSheet, sheetProps({ api }));
+  assert.ok(host.querySelector('[data-sheet-signin]') === null, 'no sign-in before the key');
+  await type(host.querySelector('[data-sheet-step="1"] input'), ' ck_abc ');
+  await click(host.querySelector('[data-sheet-add-key]'));
+  assert.deepEqual(api.calls[0], ['add', { api_key: 'ck_abc', enabled: false }], 'added off, for no bot yet');
+  assert.ok(host.querySelector('[data-sheet-key-added]'));
+  assert.ok(host.querySelector('[data-sheet-signin]'), 'Sign in to Gmail is there now');
 });
 
-test('Composio refusing the link shows its reason at step 2', async () => {
+test('Composio refusing the key shows its reason at step 1, next to the key', async () => {
   const { ConnectionsError } = await loadBundled(`export { ConnectionsError } from './src/connections';`);
-  const api = fakeApi({ addComposio: async () => { throw new ConnectionsError('Composio didn’t answer.', 400); } });
-  const host = await mount(m.ConnectSheet, sheetProps({ api, initial: { url: 'https://backend.composio.dev/v3/mcp/abc', picked: ['k1'] } }));
+  const api = fakeApi({ addComposio: async () => { throw new ConnectionsError('Composio didn’t accept this key. Copy your key again from your Composio dashboard.', 400); } });
+  const host = await mount(m.ConnectSheet, sheetProps({ api, initial: { key: 'ck_bad', picked: ['k1'] } }));
   await submit(host);
-  assert.match(text(host.querySelector('[data-sheet-error="2"]')), /Composio didn’t answer/);
+  assert.match(text(host.querySelector('[data-sheet-error="1"]')), /Composio didn’t accept this key\. .*Open your API keys/);
+  assert.equal(host.querySelector('[data-sheet-step="1"] input').getAttribute('aria-invalid'), 'true');
 });
 
 test('picking one bot adds Composio and gives it to just that bot, then says so', async () => {
   const api = fakeApi();
   let done = null;
   const host = await mount(m.ConnectSheet, sheetProps({ api, onDone: (r) => (done = r) }));
-  await type(host.querySelector('input[type="url"]'), 'https://backend.composio.dev/v3/mcp/abc');
+  await type(host.querySelector('[data-sheet-step="1"] input'), 'ck_abc');
   await click(host.querySelector('[data-sheet-bot="k1"] input'));
   assert.match(text(host), /Ann gets it, turned on/);
   await submit(host);
-  assert.deepEqual(api.calls[0], ['add', { url: 'https://backend.composio.dev/v3/mcp/abc', enabled: false }], 'added off: only the picks turn it on');
+  assert.deepEqual(api.calls[0], ['add', { api_key: 'ck_abc', enabled: false }], 'added off: only the picks turn it on');
   assert.deepEqual(api.calls[1], ['give', 'cmp1', ['k1', 'k2', 'k3'], ['k1']]);
   assert.deepEqual({ app: done.app.slug, who: done.who }, { app: 'gmail', who: ['Ann'] }, 'the page words the result once it knows the sign-in');
 });
@@ -168,7 +169,7 @@ test('picking one bot adds Composio and gives it to just that bot, then says so'
 test('with Composio set up the sheet starts at the app’s own sign-in and the bots that have it now', async () => {
   const api = fakeApi();
   const host = await mount(m.ConnectSheet, sheetProps({ api, composio: composio({ added: true, enabled: true, connection_id: 'mcp:cmp1', can_connect: true }) }));
-  assert.ok(!host.querySelector('input[type="url"]'), 'no link to paste again');
+  assert.ok(!host.querySelector('[data-sheet-add-key]'), 'no key to add again');
   assert.equal(host.querySelectorAll('[data-sheet-step]').length, 2);
   assert.ok(host.querySelector('[data-sheet-bot="k2"] input').checked, 'Ben has it already');
   assert.ok(!host.querySelector('[data-sheet-bot="k1"] input').checked);
@@ -196,7 +197,7 @@ test('a refused Composio key says so and doesn’t blame an outage', async () =>
   g.window.open = () => null;
   await click(host.querySelector('[data-sheet-signin]'));
   const t = text(host.querySelector('[data-sheet-error="1"]'));
-  assert.match(t, /refused your API key.*Advanced › Manage tools/);
+  assert.match(t, /Composio didn’t accept your saved key, so the Gmail sign-in can’t start\. Replace the key on the Composio tile under Advanced\./);
   assert.doesNotMatch(t, /may be down/);
 });
 
@@ -296,7 +297,7 @@ const pageProps = (over = {}) => ({
   manageAccounts: () => h('p', null, 'MANAGE'), advanced: () => h('p', null, 'ADVANCED'), phone: false, ...over,
 });
 
-test('the page puts app tiles first, then another app, AI accounts, and a closed Advanced', () => {
+test('the page puts app tiles first, then Find a tool, AI accounts, and a closed Advanced', () => {
   const html = m.renderToStaticMarkup(h(m.AppsAccounts, pageProps()));
   const order = ['data-apps-tiles', 'data-apps-search', 'data-ai-accounts', 'data-apps-advanced'].map((k) => html.indexOf(k));
   assert.ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), `order ${order}`);
@@ -320,8 +321,10 @@ test('the page puts app tiles first, then another app, AI accounts, and a closed
   const tints = [...html.matchAll(/data-app-mark-tint="([^"]+)"/g)].map((x) => x[1]);
   assert.equal(new Set(tints).size, 6, `six tints: ${tints}`);
   assert.equal((html.match(/line-clamp-2/g) ?? []).length, 6);
-  // F8: phone-sized targets on the page's buttons.
-  assert.match(html, /min-h-\[44px\] sm:min-h-\[32px\]/);
+  // F8: phone-sized targets on the page's buttons, and Find a tool's field is 44 px on a phone (40 px from sm, design §1).
+  assert.match(html, /min-h-\[44px\]/);
+  const search = html.slice(html.indexOf('data-apps-search'), html.indexOf('data-ai-accounts'));
+  assert.match(search, /<input[^>]*class="[^"]*h-11 sm:h-10[^"]*"[^>]*data-find-input/);
 });
 
 test('a tile opens the Connect sheet and Escape closes it', async () => {
@@ -414,18 +417,19 @@ test('F4: bot chips show the bot’s face and step 3 says Composio is one connec
   assert.match(html, /data-sheet-one-connection="true">Composio is one connection: the bots you tick can use every app on it, not only Gmail\./);
 });
 
-test('F5: the link error sits right under the field and is read with it; a good link ticks step 2', async () => {
+test('F5: the key error sits right under the field and is read with it; an added key ticks step 1', async () => {
   const host = await mount(m.ConnectSheet, sheetProps({ api: fakeApi() }));
-  const input = host.querySelector('input[type="url"]');
+  const input = host.querySelector('[data-sheet-step="1"] input');
   await submit(host);
-  const err = host.querySelector('[data-sheet-error="2"]');
+  const err = host.querySelector('[data-sheet-error="1"]');
   assert.equal(err.getAttribute('role'), 'alert');
   assert.ok(input.getAttribute('aria-describedby').split(' ').includes(err.id));
   assert.equal(input.getAttribute('aria-invalid'), 'true');
   const after = [...input.closest('[data-sheet-step]').querySelectorAll('*')];
   assert.ok(after.indexOf(err) > after.indexOf(input), 'error after the input');
-  await type(input, 'https://backend.composio.dev/v3/mcp/abc');
-  assert.equal(host.querySelector('[data-sheet-step="2"]').getAttribute('data-done'), 'true');
+  await type(input, 'ck_abc');
+  await click(host.querySelector('[data-sheet-add-key]'));
+  assert.equal(host.querySelector('[data-sheet-step="1"]').getAttribute('data-done'), 'true');
 });
 
 test('Sign-ins and settings has no account list of its own: no "What runs your kwant bots" there', () => {

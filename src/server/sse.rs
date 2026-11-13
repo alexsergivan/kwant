@@ -63,7 +63,8 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         E::TurnComplete { kwant_id, .. } => contexts([kwant_id]),
         E::TurnStarted { kwant_id, context_id, thread_id, .. }
         | E::TurnEnded { kwant_id, context_id, thread_id, .. }
-        | E::TurnQueued { kwant_id, context_id, thread_id, .. } => {
+        | E::TurnQueued { kwant_id, context_id, thread_id, .. }
+        | E::TurnRunsOn { kwant_id, context_id, thread_id, .. } => {
             contexts([context_id, thread_id, &Some(kwant_id.clone())])
         }
         E::ThreadUpdated { thread } => fields(thread, &["kwant_id", "id"], Owner::Context),
@@ -241,6 +242,18 @@ mod tests {
             E::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: None, thread_id: None },
             E::TurnEnded { kwant_id: s("k"), context_id: None, outcome: s("completed"), turn_id: None, thread_id: None, quiet: false },
             E::TurnQueued { turn_id: s("x"), kwant_id: s("k"), context_id: None, thread_id: None, position: 1, reason: s("x"), slots: None },
+            E::TurnRunsOn {
+                kwant_id: s("k"),
+                turn_id: s("x"),
+                context_id: Some(s("c")),
+                thread_id: None,
+                engine: s("claude"),
+                family: s("claude"),
+                model: Some(s("sonnet")),
+                model_label: Some(s("Sonnet")),
+                tier: Some(s("balanced")),
+                picked_by: s("laya"),
+            },
             E::ThreadUpdated { thread: json!({"id": "th", "kwant_id": "k"}) },
             E::DelegationUpdated { delegation: json!({"id": "d", "lead_kwant_id": "k", "thread_id": "th"}) },
             E::MessageAdded { message: json!({"id": "m", "channel_id": "c"}) },
@@ -358,6 +371,7 @@ mod tests {
                 | E::TurnStarted { .. }
                 | E::TurnEnded { .. }
                 | E::TurnQueued { .. }
+                | E::TurnRunsOn { .. }
                 | E::ThreadUpdated { .. }
                 | E::DelegationUpdated { .. }
                 | E::MessageAdded { .. }
@@ -425,6 +439,27 @@ mod tests {
                 !owners(&e).is_empty() || GLOBAL_EVENTS.contains(&t.as_str()),
                 "{t} names nothing to find its space by and isn't global, so scoped streams drop it"
             );
+        }
+    }
+
+    #[test]
+    fn turn_runs_on_is_placed_like_turn_started() {
+        let s = |x: &str| x.to_string();
+        for thread_id in [None, Some(s("th"))] {
+            let started = RuntimeEvent::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: Some(s("t")), thread_id: thread_id.clone() };
+            let runs_on = RuntimeEvent::TurnRunsOn {
+                kwant_id: s("k"),
+                turn_id: s("t"),
+                context_id: Some(s("c")),
+                thread_id,
+                engine: s("codex"),
+                family: s("codex"),
+                model: None,
+                model_label: None,
+                tier: None,
+                picked_by: s("fallback"),
+            };
+            assert_eq!(owners(&runs_on), owners(&started));
         }
     }
 
