@@ -1,6 +1,6 @@
 //! The VM browser container's lifecycle against real Docker: run with
 //! `cargo test --test browser_container_test -- --ignored` on a host with Docker and the
-//! `kwnt-browser:v2` image. Ignored by default so CI and ordinary test runs never start a container.
+//! `kwnt-browser:v3` image. Ignored by default so CI and ordinary test runs never start a container.
 use kwnt::sandbox::service::{managed_container_name, BrowserService};
 use std::process::Command;
 use std::time::Duration;
@@ -17,7 +17,7 @@ impl Drop for Cleanup {
 }
 
 #[tokio::test]
-#[ignore = "needs Docker and the kwnt-browser:v2 image; starts a real container"]
+#[ignore = "needs Docker and the kwnt-browser:v3 image; starts a real container"]
 async fn a_fresh_kwants_container_has_no_restart_and_labels_stops_at_shutdown_and_is_reaped_once_its_folder_is_gone() {
     std::env::set_var(kwnt::sandbox::computer::MODE_ENV, "vm");
     let tmp = tempfile::tempdir().unwrap();

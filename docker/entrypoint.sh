@@ -18,7 +18,7 @@ chromium \
   --user-data-dir="$CHROME_DATA_DIR" \
   --password-store=basic \
   --enable-features=PasswordImport,AutofillServerCommunication \
-  --enable-automation=false &
+  --disable-blink-features=AutomationControlled &
 
 # Proxy incoming port 9222 from container network to local Chromium on 9223
 socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9223 &

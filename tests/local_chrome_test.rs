@@ -88,6 +88,11 @@ async fn local_chrome_runs_windowless_and_can_open_as_a_window() {
     assert!(page_agent.contains(" Chrome/"), "page user agent: {page_agent}");
     assert!(!request_agent.contains("Headless") && !page_agent.contains("Headless"),
         "windowless Chrome must not say so: {request_agent} / {page_agent}");
+    // and not one a program drives: Google refuses its sign-in when this is true
+    let webdriver = ctrl.send_cdp_command("Runtime.evaluate", serde_json::json!({
+        "expression": "navigator.webdriver", "returnByValue": true,
+    })).await.unwrap();
+    assert_eq!(webdriver["result"]["value"], serde_json::json!(false), "navigator.webdriver");
     // the same input path the in-app viewer uses
     ctrl.dispatch_input(BrowserInput::Click { x: 100.0, y: 100.0 }).await.unwrap();
     assert_eq!(title_becomes(&ctrl, "clicked 1280x800").await, "clicked 1280x800");

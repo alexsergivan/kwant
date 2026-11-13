@@ -53,6 +53,9 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
   const [cursor, setCursor] = useState<string>('default');
   // The last resize was answered `ignored`: the page follows a real window and keeps its size
   const [resizeIgnored, setResizeIgnored] = useState(false);
+  // A sign-in page that refuses a windowless browser: the line to show, and its button's label
+  // when a real Chrome window can be opened here
+  const [signIn, setSignIn] = useState<{ text: string; action: string | null } | null>(null);
   // Actions the server answered "Invalid browser input" for (an older server): hide their buttons
   const [unsupported, setUnsupported] = useState<ReadonlySet<string>>(new Set());
   const actionsById = useRef(new Map<number, string>());
@@ -110,6 +113,11 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
             break;
           }
           case 'location': setLocation({ url: message.url || '', title: message.title || '' }); break;
+          case 'signin':
+            setSignIn(typeof message.text === 'string' && message.text
+              ? { text: message.text, action: typeof message.action === 'string' ? message.action : null }
+              : null);
+            break;
           case 'control':
             takingControl.current = false;
             setControlling(!!message.active);
@@ -184,6 +192,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
       setBusy(false);
       setFrame(null);
       setLocation(null);
+      setSignIn(null);
       setTapFocus(null);
       setSelect(null);
       setDialog(null);
@@ -254,7 +263,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
   return {
     /** The page the connected stream shows, null for the server's default (meaningful while `connected`). */
     page: livePage,
-    connected, controlling, busy, error, frame, location, tapFocus, viewport, select, dialog, cursor, unsupported, resizeIgnored,
+    connected, controlling, busy, error, frame, location, tapFocus, viewport, select, dialog, cursor, unsupported, resizeIgnored, signIn,
     send, request, acknowledgeFrame, restoreViewport, clearSelect, clearDialog, clearError,
   };
 }

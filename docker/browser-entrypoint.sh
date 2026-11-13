@@ -1,11 +1,12 @@
 #!/bin/sh
 # Keep Chromium and its private network proxy in the same supervised container.
 set -eu
-# Windowless Chromium tells sites it is "HeadlessChrome"; send the user agent the windowed
-# Chromium of this version sends instead.
-major=$(chromium --version | grep -oE '[0-9]+\.[0-9.]+' | head -n1 | cut -d. -f1)
-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36"
-chromium --headless=new --no-sandbox --disable-dev-shm-usage --user-agent="$agent" \
+# Chromium keeps its own user agent: a --user-agent flag empties the client hints a real Chrome
+# fills, and Google refuses sign-in on that. kwant takes the headless token out over DevTools
+# with the browser's own client hints (src/sandbox/identity.rs). AutomationControlled off keeps
+# navigator.webdriver false while the debugging port is open.
+chromium --headless=new --no-sandbox --disable-dev-shm-usage \
+  --disable-blink-features=AutomationControlled \
   --remote-debugging-port=9223 --remote-allow-origins='*' \
   --window-size=1280,800 --user-data-dir=/tmp/kwnt-chromium about:blank &
 chrome_pid=$!
