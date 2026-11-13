@@ -472,6 +472,8 @@ pub(crate) const READ_ONLY_SELF_TOOLS: &[&str] = &[
     "read_attachment",
     "mcp_search",
     super::page_source::TOOL,
+    super::bot_email::TOOL_ADDRESS,
+    super::bot_email::TOOL_WAIT,
     "skill_get",
     BROWSER_CITE,
     "task_list",
@@ -626,6 +628,7 @@ fn tool_list(scope: &SelfScope, board: bool, notes: bool) -> Value {
         list.extend(super::smart_results::present_result_tools());
         list.extend(super::mcp_suggest::tools());
         list.extend(super::page_source::tools());
+        list.extend(super::bot_email::tools());
         if notes {
             list.push(super::tool_notes::tool());
         }
@@ -1330,6 +1333,7 @@ async fn call_tool(
         super::tool_notes::TOOL => super::tool_notes::call(state, scope, args).await,
         n if super::missions::truth_ledger::handles(n) => super::missions::truth_ledger::call(state, scope, n, args).await,
         super::connection_suggest::TOOL if scope.origin.is_some() => super::connection_suggest::tool_call(state, scope, args).await,
+        n if super::bot_email::handles(n) => super::bot_email::call(state, scope, n, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         n if super::smart_results::present_result_handles(n) => super::smart_results::present_result_call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,

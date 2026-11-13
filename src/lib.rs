@@ -10,6 +10,7 @@ pub mod drivers;
 pub mod embedded;
 pub mod fsx;
 pub mod import;
+pub mod mail;
 pub mod mcp;
 pub mod parallel;
 pub mod profiles;

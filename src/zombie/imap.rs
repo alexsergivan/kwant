@@ -128,33 +128,7 @@ impl ImapSource {
     }
 
     async fn connect(&self) -> Result<async_imap::Session<Box<dyn Io>>, String> {
-        let host = self.cfg.host.trim().to_string();
-        let tcp = tokio::time::timeout(
-            std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS),
-            tokio::net::TcpStream::connect((host.as_str(), self.cfg.port)),
-        )
-        .await
-        .map_err(|_| format!("could not reach {host}:{}: timed out", self.cfg.port))?
-        .map_err(|e| format!("could not reach {host}:{}: {e}", self.cfg.port))?;
-        let stream: Box<dyn Io> = match self.cfg.security {
-            Security::Tls => Box::new(tls(&host, tcp, self.cfg.accept_invalid_certs).await?),
-            Security::Plain => Box::new(tcp),
-            Security::Starttls => {
-                let mut client = async_imap::Client::new(tcp);
-                client.read_response().await.map_err(|e| format!("the server sent no greeting: {e}"))?;
-                client.run_command_and_check_ok("STARTTLS", None).await.map_err(|e| imap_error("STARTTLS", &e))?;
-                Box::new(tls(&host, client.into_inner(), self.cfg.accept_invalid_certs).await?)
-            }
-        };
-        let mut client = async_imap::Client::new(stream);
-        if self.cfg.security != Security::Starttls {
-            client.read_response().await.map_err(|e| format!("the server sent no greeting: {e}"))?;
-        }
-        client
-            .login(self.cfg.username.trim(), self.password.as_str())
-            .await
-            // The server's answer, never the password
-            .map_err(|(e, _)| format!("sign-in to {host} was refused: {}", short(&e.to_string())))
+        connect(&self.cfg.host, self.cfg.port, self.cfg.security, self.cfg.accept_invalid_certs, &self.cfg.username, &self.password).await
     }
 
     async fn read_all(&self, since: DateTime<Utc>) -> Result<Vec<RawMail>, String> {
@@ -224,6 +198,42 @@ impl MissionSource for ImapSource {
             .map_err(|_| "reading the mailbox took too long".to_string())??;
         Ok(conversations_from_raw(&self.id, &raw, &self.me))
     }
+}
+
+/// Signs in to an IMAP server: TLS (checked against the web's roots), STARTTLS, or plain TCP to
+/// this computer only. Shared by the Loose ends reader and bot email (src/mail/imap_smtp.rs).
+pub(crate) async fn connect(
+    host: &str,
+    port: u16,
+    security: Security,
+    accept_invalid_certs: bool,
+    username: &str,
+    password: &str,
+) -> Result<async_imap::Session<Box<dyn Io>>, String> {
+    let host = host.trim().to_string();
+    let tcp = tokio::time::timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS), tokio::net::TcpStream::connect((host.as_str(), port)))
+        .await
+        .map_err(|_| format!("could not reach {host}:{port}: timed out"))?
+        .map_err(|e| format!("could not reach {host}:{port}: {e}"))?;
+    let stream: Box<dyn Io> = match security {
+        Security::Tls => Box::new(tls(&host, tcp, accept_invalid_certs).await?),
+        Security::Plain => Box::new(tcp),
+        Security::Starttls => {
+            let mut client = async_imap::Client::new(tcp);
+            client.read_response().await.map_err(|e| format!("the server sent no greeting: {e}"))?;
+            client.run_command_and_check_ok("STARTTLS", None).await.map_err(|e| imap_error("STARTTLS", &e))?;
+            Box::new(tls(&host, client.into_inner(), accept_invalid_certs).await?)
+        }
+    };
+    let mut client = async_imap::Client::new(stream);
+    if security != Security::Starttls {
+        client.read_response().await.map_err(|e| format!("the server sent no greeting: {e}"))?;
+    }
+    client
+        .login(username.trim(), password)
+        .await
+        // The server's answer, never the password
+        .map_err(|(e, _)| format!("sign-in to {host} was refused: {}", short(&e.to_string())))
 }
 
 /// The stream an IMAP session runs over: TLS or, to this computer only, plain TCP.
@@ -297,11 +307,11 @@ fn short(s: &str) -> String {
     clip(&squash(s), 160)
 }
 
-fn imap_error(step: &str, e: &async_imap::error::Error) -> String {
+pub(crate) fn imap_error(step: &str, e: &async_imap::error::Error) -> String {
     format!("the mail server refused {step}: {}", short(&e.to_string()))
 }
 
-fn uid_set(uids: &[u32]) -> String {
+pub(crate) fn uid_set(uids: &[u32]) -> String {
     uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
 }
 
