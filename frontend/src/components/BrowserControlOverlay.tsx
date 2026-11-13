@@ -590,7 +590,13 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
           />
         </div>
       )}
-      {stream && !stream.fileChooser && stream.fileChooserDone && <FileChooserToast names={stream.fileChooserDone.names} onDone={stream.clearFileChooserDone} />}
+      {stream && !stream.fileChooser && stream.fileChooserDone && (
+        <FileChooserToast
+          names={stream.fileChooserDone.names}
+          onDone={stream.clearFileChooserDone}
+          style={{ top: barHeight + 12 }}
+        />
+      )}
 
       <div className="shrink-0" style={{ height: 'env(safe-area-inset-bottom)' }} />
 

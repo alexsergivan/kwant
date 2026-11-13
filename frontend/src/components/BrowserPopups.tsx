@@ -1,7 +1,21 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Globe } from 'lucide-react';
-import { FileChooserFailure, FileChooserRequest, PageDialog, Rect, SelectRequest, Size, fileChooserTitle, matchOption, nextEnabled, popoverPlacement } from '../browserInput';
-import { preflightFile, uploadWithRetry } from '../attachments';
+import {
+  FILE_CHOOSER_FAILED_TEXT,
+  FileChooserFailure,
+  FileChooserRequest,
+  PageDialog,
+  Rect,
+  SelectRequest,
+  Size,
+  acceptKind,
+  fileChooserTitle,
+  fileMatchesAccept,
+  matchOption,
+  nextEnabled,
+  popoverPlacement,
+} from '../browserInput';
+import { filesFrom, preflightFile, uploadProgressText, uploadWithRetry } from '../attachments';
 
 const PAGE_STEP = 8;
 const TYPEAHEAD_MS = 500;
@@ -345,24 +359,41 @@ export function FileChooserModal({
 }) {
   const [phase, setPhase] = useState<ChooserPhase>('picking');
   const [name, setName] = useState('');
+  const [size, setSize] = useState(0);
   const [progress, setProgress] = useState(0);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const chooseRef = useRef<HTMLButtonElement>(null);
+  const tryAgainRef = useRef<HTMLButtonElement>(null);
+  const okRef = useRef<HTMLButtonElement>(null);
+  const cancelUploadRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const titleId = useId();
 
-  useLayoutEffect(() => {
-    chooseRef.current?.focus({ preventScroll: true });
-  }, []);
-  useEffect(() => () => abortRef.current?.abort(), []);
-
   const error = failure?.error ?? localError;
+  const gone = failure?.code === 'gone';
+  const kind = acceptKind(request.accept);
   const button = 'h-8 [@media(pointer:coarse)]:h-11 px-3 rounded-[10px] text-[13px] max-sm:flex-1';
 
-  const pick = async (files: FileList | null) => {
-    const list = Array.from(files ?? []).slice(0, request.multiple ? undefined : 1);
+  useLayoutEffect(() => {
+    if (error) (gone ? okRef : tryAgainRef).current?.focus({ preventScroll: true });
+    else if (phase === 'picking') chooseRef.current?.focus({ preventScroll: true });
+    else if (phase === 'uploading') cancelUploadRef.current?.focus({ preventScroll: true });
+    else cardRef.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, error === null, gone]);
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const pick = async (files: File[]) => {
+    const list = files.slice(0, request.multiple ? undefined : 1);
     if (list.length === 0) return;
+    if (kind !== 'file' && !list.every((f) => fileMatchesAccept(f, kind))) {
+      setLocalError(`This page asks for ${kind === 'video' ? 'a video.' : 'a photo.'}`);
+      return;
+    }
     for (const f of list) {
       const problem = preflightFile(f);
       if (problem) {
@@ -378,6 +409,7 @@ export function FileChooserModal({
     try {
       for (let i = 0; i < list.length; i++) {
         setName(list.length > 1 ? `${list[i].name} (${i + 1} of ${list.length})` : list[i].name);
+        setSize(list[i].size);
         setProgress(0);
         const attachment = await uploadWithRetry(list[i], setProgress, controller.signal);
         ids.push(attachment.id);
@@ -386,7 +418,7 @@ export function FileChooserModal({
       onAnswer(ids);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
-      setLocalError(err instanceof Error ? err.message : "Couldn’t send that file.");
+      setLocalError(err instanceof Error ? err.message : FILE_CHOOSER_FAILED_TEXT);
       setPhase('picking');
     }
   };
@@ -398,6 +430,19 @@ export function FileChooserModal({
     if (failure) onClearFailure();
   };
 
+  const cancelUpload = () => {
+    abortRef.current?.abort();
+    onCancel();
+  };
+
+  const onDrop: React.DragEventHandler = (e) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    if (phase !== 'picking') return;
+    void pick(filesFrom(e.dataTransfer?.files ?? null));
+  };
+
   return (
     <div
       className={`absolute inset-0 z-50 flex justify-center items-start px-4 sm:px-0 ${compact ? 'pt-4' : 'pt-24'} bg-[rgb(10_7_25/0.6)]`}
@@ -405,11 +450,25 @@ export function FileChooserModal({
       onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
       onWheel={(e) => e.stopPropagation()}
+      onDragOver={(e) => e.preventDefault()}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        dragDepth.current += 1;
+        if (phase === 'picking') setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDragging(false);
+      }}
+      onDrop={onDrop}
     >
       <div
+        ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
         data-escape-layer
         data-file-chooser
         onKeyDown={(e) => {
@@ -419,26 +478,47 @@ export function FileChooserModal({
             onCancel();
           }
         }}
-        className="w-full sm:w-[420px] rounded-[14px] border border-white/[0.14] bg-[#1a1538] p-4 shadow-[0_24px_64px_rgb(0_0_0/0.55)] text-zinc-100 kw-pop-in"
+        className={`w-full sm:w-[420px] rounded-[14px] border p-4 shadow-[0_24px_64px_rgb(0_0_0/0.55)] text-zinc-100 kw-pop-in focus:outline-none ${
+          dragging ? 'border-[#9d8fff] bg-[#201a44]' : 'border-white/[0.14] bg-[#1a1538]'
+        }`}
       >
         <p id={titleId} className="text-[15px] font-semibold text-zinc-100">
-          {fileChooserTitle(request.accept)}
+          {fileChooserTitle(request.accept, request.multiple)}
         </p>
+        {!error && phase === 'picking' && (
+          <p className="mt-1 text-[13px] text-zinc-400">
+            From this device<span className="[@media(pointer:coarse)]:hidden">, or drop it here</span>.{' '}
+            {kind === 'video' ? 'Up to 100 MB.' : 'Up to 20 MB (videos 100 MB).'}
+          </p>
+        )}
 
         {error ? (
-          <>
-            <p role="alert" className="mt-3 text-sm text-rose-300">
-              {error}
-            </p>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <button type="button" onClick={onCancel} className={`${button} ${GHOST_BUTTON}`}>
-                Cancel
-              </button>
-              <button type="button" onClick={retry} className={`${button} ${PRIMARY_BUTTON}`}>
-                Try again
-              </button>
-            </div>
-          </>
+          gone ? (
+            <>
+              <p role="alert" className="mt-3 text-sm text-rose-300">
+                The page moved on and closed its file picker. Click its upload button again if you still need it.
+              </p>
+              <div className="mt-4 flex items-center justify-end">
+                <button ref={okRef} type="button" onClick={onCancel} className={`${button} ${PRIMARY_BUTTON}`}>
+                  OK
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p role="alert" className="mt-3 text-sm text-rose-300">
+                {error}
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={onCancel} className={`${button} ${GHOST_BUTTON}`}>
+                  Cancel
+                </button>
+                <button ref={tryAgainRef} type="button" onClick={retry} className={`${button} ${PRIMARY_BUTTON}`}>
+                  Try again
+                </button>
+              </div>
+            </>
+          )
         ) : phase === 'picking' ? (
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <input
@@ -449,7 +529,7 @@ export function FileChooserModal({
               className="sr-only"
               tabIndex={-1}
               onChange={(e) => {
-                void pick(e.target.files);
+                void pick(Array.from(e.target.files ?? []));
                 e.target.value = '';
               }}
             />
@@ -463,9 +543,27 @@ export function FileChooserModal({
         ) : (
           <div className="mt-4" aria-live="polite">
             <p className="text-sm text-zinc-300 truncate">{phase === 'sending' ? 'Sending to the page…' : name}</p>
-            <div className="mt-2 h-1.5 rounded-full bg-[#2c2552] overflow-hidden">
-              <div className="h-full bg-[#6c58e0] transition-[width]" style={{ width: `${Math.round((phase === 'sending' ? 1 : progress) * 100)}%` }} />
+            <div
+              role="progressbar"
+              aria-label={phase === 'sending' ? 'Sending to the page' : 'Uploading'}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round((phase === 'sending' ? 1 : progress) * 100)}
+              className="mt-2 h-1.5 rounded-full bg-[#2c2552] overflow-hidden"
+            >
+              <div
+                className="h-full w-full origin-left bg-[#6c58e0] transition-transform duration-150 ease-out motion-reduce:transition-none"
+                style={{ transform: `scaleX(${phase === 'sending' ? 1 : progress})` }}
+              />
             </div>
+            {phase === 'uploading' && (
+              <div className="mt-1 flex items-center justify-between">
+                <span className="text-xs text-zinc-400">{uploadProgressText(progress, size)}</span>
+                <button ref={cancelUploadRef} type="button" onClick={cancelUpload} className={`h-7 px-2.5 rounded-[8px] text-[12px] ${GHOST_BUTTON}`}>
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -473,8 +571,12 @@ export function FileChooserModal({
   );
 }
 
-/** "Added {name}", shown once the page has the file; same spot the select/dialog sheets land. */
-export function FileChooserToast({ names, onDone }: { names: string[]; onDone: () => void }) {
+/**
+ * "Added {name}", shown once the page has the file; same spot the select/dialog sheets land.
+ * `style` lets a phone-sized host move it below its own status bar (`top-3` would sit under it);
+ * the desktop takeover stage, with no such bar, leaves it unset and gets the default `top-3`.
+ */
+export function FileChooserToast({ names, onDone, style }: { names: string[]; onDone: () => void; style?: React.CSSProperties }) {
   useEffect(() => {
     const t = setTimeout(onDone, 4000);
     return () => clearTimeout(t);
@@ -486,7 +588,9 @@ export function FileChooserToast({ names, onDone }: { names: string[]; onDone: (
       role="status"
       aria-live="polite"
       data-browser-popup
-      className="absolute left-1/2 top-3 z-50 -translate-x-1/2 rounded-[10px] border border-[rgb(94_234_212/0.2)] bg-[#1a1538] px-3 py-1.5 text-xs text-[#5eead4] shadow-[0_12px_32px_rgb(0_0_0/0.45)] kw-pop-in"
+      title={text}
+      style={style}
+      className={`absolute left-1/2 z-50 max-w-[calc(100%-24px)] truncate -translate-x-1/2 rounded-[10px] border border-[rgb(94_234_212/0.2)] bg-[#1a1538] px-3 py-1.5 text-xs text-[#5eead4] shadow-[0_12px_32px_rgb(0_0_0/0.45)] kw-pop-in ${style ? '' : 'top-3'}`}
     >
       {text}
     </div>

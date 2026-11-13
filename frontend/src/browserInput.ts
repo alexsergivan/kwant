@@ -440,14 +440,38 @@ export function parseFileChooser(m: unknown): FileChooserRequest | null {
 export function parseFileChooserFailure(m: unknown): FileChooserFailure | null {
   const v = m as Record<string, unknown> | null;
   if (typeof v?.id !== 'number') return null;
-  return { code: typeof v.code === 'string' ? v.code : 'failed', error: typeof v.error === 'string' ? v.error : 'Couldn’t send that file.' };
+  return { code: typeof v.code === 'string' ? v.code : 'failed', error: typeof v.error === 'string' ? v.error : FILE_CHOOSER_FAILED_TEXT };
 }
 
-/** The sheet's title, from the input's own `accept` (draft wording — Pixel/Mira have the final call). */
-export function fileChooserTitle(accept: string): string {
-  if (/^video\//i.test(accept)) return 'Choose a video';
-  if (/^image\//i.test(accept)) return 'Choose a photo';
-  return 'Choose a file';
+/** The one text shown for any server-side file-chooser failure that isn't `too_big` or `gone`. */
+export const FILE_CHOOSER_FAILED_TEXT = 'Couldn’t send that file to the page.';
+
+const CHOOSER_VIDEO_EXT = /\.(mp4|mov|m4v|webm|avi|mkv)$/i;
+const CHOOSER_IMAGE_EXT = /\.(jpg|jpeg|png|gif|webp|heic|avif)$/i;
+const isVideoToken = (t: string) => /^video\//i.test(t) || CHOOSER_VIDEO_EXT.test(t);
+const isImageToken = (t: string) => /^image\//i.test(t) || CHOOSER_IMAGE_EXT.test(t);
+
+/** Which kind an `accept` string names, by the rule `fileChooserTitle` and the drop handler share: every comma-separated token must agree, or it's `'file'`. */
+export function acceptKind(accept: string): 'video' | 'image' | 'file' {
+  const tokens = accept.split(',').map((t) => t.trim()).filter(Boolean);
+  if (tokens.length > 0 && tokens.every(isVideoToken)) return 'video';
+  if (tokens.length > 0 && tokens.every(isImageToken)) return 'image';
+  return 'file';
+}
+
+/** Does a dropped file match what this chooser's `accept` asks for (by mime type, or the name's extension when there's no mime)? `'file'` takes anything. */
+export function fileMatchesAccept(file: { type?: string; name: string }, kind: 'video' | 'image' | 'file'): boolean {
+  if (kind === 'file') return true;
+  const test = kind === 'video' ? isVideoToken : isImageToken;
+  return test(file.type || '') || test(file.name);
+}
+
+/** The sheet's title, from the input's own `accept` (every comma-separated token must agree on a kind, so `image/*,video/*` falls back to "file"). */
+export function fileChooserTitle(accept: string, multiple = false): string {
+  const kind = acceptKind(accept);
+  if (kind === 'video') return multiple ? 'Choose videos' : 'Choose a video';
+  if (kind === 'image') return multiple ? 'Choose photos' : 'Choose a photo';
+  return multiple ? 'Choose files' : 'Choose a file';
 }
 
 /** Type-ahead: the first enabled option after `from` (wrapping) whose label starts with `typed`. */
