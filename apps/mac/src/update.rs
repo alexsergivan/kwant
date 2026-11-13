@@ -1,5 +1,6 @@
 //! In-app updates. The app asks GitHub's latest Mac release (`latest.json`, see `plugins.updater`
-//! in tauri.conf.json) on start and every 6 hours. The state lives on kwant's
+//! in tauri.conf.json) on start and every hour, by the wall clock (a Mac asleep overnight checks
+//! when it wakes). The state lives on kwant's
 //! [`UpdateHub`](kwnt::app_update::UpdateHub), so the web app shows it through `/api/app/update`
 //! and the person starts the install there or from the menu-bar icon.
 //!
@@ -9,14 +10,17 @@
 
 use kwnt::app_update::{Available, State, Status, UpdateHub, Updater};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tauri::AppHandle;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 const RELEASES: &str = "https://github.com/alexsergivan/kwant/releases";
 /// After start, so the check doesn't compete with kwant starting up.
 const FIRST_CHECK_AFTER: Duration = Duration::from_secs(15);
-const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+/// How often the loop looks at the clock. A thread's sleep stops while the Mac sleeps, so a
+/// plain `sleep(CHECK_EVERY)` could put the next check off by days; this keeps it close to due.
+const LOOK_EVERY: Duration = Duration::from_secs(5 * 60);
 /// Long enough for the web app to show "Restarting…" before the window goes away.
 const RELAUNCH_AFTER: Duration = Duration::from_millis(1500);
 
@@ -55,13 +59,28 @@ pub fn start(app: &AppHandle) {
         .name("kwant-update-check".into())
         .spawn(move || {
             std::thread::sleep(FIRST_CHECK_AFTER);
+            let mut last: Option<SystemTime> = None;
             loop {
-                // Busy (downloading, relaunching) means there's nothing to check
-                let _ = hub.check();
-                std::thread::sleep(CHECK_EVERY);
+                if check_due(last, SystemTime::now()) {
+                    // Busy (downloading, relaunching) means there's nothing to check
+                    let _ = hub.check();
+                    last = Some(SystemTime::now());
+                }
+                std::thread::sleep(LOOK_EVERY);
             }
         })
         .ok();
+}
+
+/// Due on the first look, then once `CHECK_EVERY` has passed on the wall clock (or the clock
+/// went back).
+fn check_due(last: Option<SystemTime>, now: SystemTime) -> bool {
+    match last {
+        None => true,
+        Some(last) => now
+            .duration_since(last)
+            .map_or(true, |gone| gone >= CHECK_EVERY),
+    }
 }
 
 struct MacUpdater {
@@ -160,7 +179,23 @@ mod tests {
             }),
             progress,
             error: None,
+            can_install: true,
+            checked_at: None,
+            how: None,
         }
+    }
+
+    #[test]
+    fn checks_by_the_wall_clock() {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        assert!(check_due(None, t));
+        assert!(!check_due(Some(t), t + Duration::from_secs(59 * 60)));
+        // a night asleep: due on the first look after waking
+        assert!(check_due(Some(t), t + Duration::from_secs(9 * 60 * 60)));
+        assert!(
+            check_due(Some(t + Duration::from_secs(60)), t),
+            "clock went back"
+        );
     }
 
     #[test]

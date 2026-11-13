@@ -768,7 +768,7 @@ async fn a_link_to_another_app_is_stopped_or_its_prompt_closed_so_the_tab_keeps_
 
 /// Opt in after building docker/browser.Dockerfile. Uses disposable data and a local HTML page.
 #[tokio::test]
-#[ignore = "requires Docker and the kwnt-browser:v2 image"]
+#[ignore = "requires Docker and the kwnt-browser:v3 image"]
 async fn live_chromium_stream_and_isolated_sessions() {
     let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::WARN).try_init();
     let tmp = tempfile::tempdir().unwrap();

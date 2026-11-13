@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { BOT_BUSY_TEXT, HELD_BY_PERSON_TEXT, useBrowserStream } from '../useBrowserStream';
-import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, useComputerMode } from './ComputerModeSwitch';
+import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, SignInLine, useComputerMode } from './ComputerModeSwitch';
 import { browserFooterLabel, isBlankPage, showsLocalWindow } from '../computerMode';
 import { loginMatchesPage } from '../savedPasswords';
 import { PendingLoginPrompt, SavedPasswordsPanel, useSavedPasswords } from './SavedPasswordsPanel';
@@ -774,6 +774,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 {controlError}
               </div>
             )}
+            <SignInLine signIn={stream.signIn} api={computer} />
             <div
               data-browser-watch
               data-watch-state={takeover ? 'stage' : waitingForBot ? 'busy' : needsYou ? 'needs-you' : 'watching'}
@@ -941,7 +942,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             return true;
           }}
           handBackQuiet={recording}
-          belowBar={teamId ? <RecordingStrip stage={teamId} phone /> : null}
+          belowBar={<><SignInLine signIn={stream.signIn} api={computer} />{teamId ? <RecordingStrip stage={teamId} phone /> : null}</>}
           stream={stream}
           step={stepForStage}
           controlling={stream.controlling}
@@ -971,7 +972,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           onRetryControl={takeOver}
           extraAction={recordSteps}
           handBackQuiet={recording}
-          belowBar={teamId ? <RecordingStrip stage={teamId} /> : null}
+          belowBar={<><SignInLine signIn={stream.signIn} api={computer} />{teamId ? <RecordingStrip stage={teamId} /> : null}</>}
         />
       )}
 

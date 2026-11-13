@@ -406,20 +406,63 @@ pub async fn ready_accounts(state: &AppState, space: &SpaceId) -> usize {
         return 0;
     };
     let reports = state.engines.snapshot();
-    let host_ready = |family: Engine| {
-        let (cli, _) = EngineId::of_family(family);
-        reports.iter().any(|r| r.id == cli && r.enabled && r.status == EngineStatus::Ready)
-    };
     let now = chrono::Utc::now();
-    profiles
-        .iter()
-        .filter(|p| p.enabled)
-        .filter(|p| match (p.kind.as_str(), Engine::parse(&p.engine)) {
-            ("system", Some(family)) => host_ready(family),
-            ("system", None) => false,
-            _ => avail.admits(p, now, SignInBar::SignedIn) && profile_engine_on(state, p),
-        })
-        .count()
+    profiles.iter().filter(|p| p.enabled && is_ready(state, p, &avail, &reports, now)).count()
+}
+
+/// Whether an enabled account could take a turn now (see [`ready_accounts`]).
+fn is_ready(state: &AppState, p: &LlmProfile, avail: &Availability, reports: &[EngineReport], now: chrono::DateTime<chrono::Utc>) -> bool {
+    match (p.kind.as_str(), Engine::parse(&p.engine)) {
+        ("system", Some(family)) => {
+            let (cli, _) = EngineId::of_family(family);
+            reports.iter().any(|r| r.id == cli && r.enabled && r.status == EngineStatus::Ready)
+        }
+        ("system", None) => false,
+        _ => avail.admits(p, now, SignInBar::SignedIn) && profile_engine_on(state, p),
+    }
+}
+
+/// The accounts a one-off model call outside a chat (drafting a team from the person's words)
+/// may run on, in the Accounts list order (`priority`, then oldest), as failover tries them.
+#[derive(Debug, Default)]
+pub struct CallAccounts {
+    /// Ready now and not out of usage.
+    pub ready: Vec<LlmProfile>,
+    /// When none is ready only because of usage limits: the account that comes back first, and when.
+    pub limited: Option<(String, chrono::DateTime<chrono::Utc>)>,
+}
+
+/// [`CallAccounts`] for `space`.
+pub async fn call_accounts(state: &AppState, space: &SpaceId) -> CallAccounts {
+    let Some((mut profiles, avail)) = accounts(state, space).await else {
+        return CallAccounts::default();
+    };
+    profiles.sort_by(|a, b| (a.priority, a.created_at, &a.id).cmp(&(b.priority, b.created_at, &b.id)));
+    let reports = state.engines.snapshot();
+    let now = chrono::Utc::now();
+    let limited_until = |p: &LlmProfile| avail.states.get(&p.id).and_then(|s| s.limited_until).filter(|t| *t > now);
+    let mut out = CallAccounts::default();
+    for p in profiles.iter().filter(|p| p.enabled) {
+        // An account out of usage is ready apart from its limit when it would be without it
+        if let Some(until) = limited_until(p) {
+            let signed_in = match p.kind.as_str() {
+                "system" => is_ready(state, p, &avail, &reports, now),
+                "api_key" => avail.with_key.contains(&p.id),
+                _ => avail.signed_in.contains(&p.id),
+            };
+            if signed_in && profile_engine_on(state, p) && out.limited.as_ref().is_none_or(|(_, t)| until < *t) {
+                out.limited = Some((p.name.clone(), until));
+            }
+            continue;
+        }
+        if is_ready(state, p, &avail, &reports, now) {
+            out.ready.push(p.clone());
+        }
+    }
+    if !out.ready.is_empty() {
+        out.limited = None;
+    }
+    out
 }
 
 /// The account a bot's next turn would run on, for its card: the first account failover would

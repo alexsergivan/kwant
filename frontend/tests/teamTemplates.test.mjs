@@ -348,6 +348,7 @@ test('D: reads one source, shows the stack, the reasons with paths, the existing
   assert.equal(s.url, '/api/teams/suggest?space=spc_demo');
   assert.deepEqual(s.body, { workspace_path: '~/projects/shop' });
   assert.match(root.textContent, /Suggested team for shop/);
+  assert.ok(root.querySelector('[aria-label="Team handle"]'), 'a project suggest keeps the handle field (decisions-1112 §4)');
   assert.match(root.textContent, /Rust \(axum\)/);
   assert.match(root.textContent, /server\/Cargo\.toml/);
   assert.ok(root.querySelector('[data-row="frontend"]'));
@@ -385,7 +386,7 @@ test('D: a 410 reads the project again and keeps the edits on rows that come bac
   await click(primary(root));
   assert.equal(out.created, null);
   assert.match(root.textContent, /Read the project again, it had been an hour\./);
-  assert.equal(calls.filter((c) => c.url.startsWith('/api/teams/suggest')).length, 2);
+  assert.equal(calls.filter((c) => c.url.startsWith('/api/teams/suggest') && c.method !== 'DELETE').length, 2);
   assert.match(primary(root).textContent, /Create team · 3 bots/);
   await click(primary(root));
   assert.deepEqual(creates(calls)[1].body.edits.rows.sre, { on: false });
@@ -853,10 +854,10 @@ test('N-5: after folder_in_use the main button picks another folder instead of "
   let btn = primary(root);
   assert.equal(btn.textContent, 'Pick another folder');
   assert.equal(btn.disabled, false);
-  const reads = calls.filter((c) => c.url.startsWith('/api/teams/suggest')).length;
+  const reads = calls.filter((c) => c.url.startsWith('/api/teams/suggest') && c.method !== 'DELETE').length;
   await click(btn);
   assert.equal(picked, 1);
-  assert.equal(calls.filter((c) => c.url.startsWith('/api/teams/suggest')).length, reads, 'the same folder is not read again');
+  assert.equal(calls.filter((c) => c.url.startsWith('/api/teams/suggest') && c.method !== 'DELETE').length, reads, 'the same folder is not read again');
   v.unmount();
   // Create refused after a good read: the same.
   calls = failing(400, { error: said, code: 'folder_in_use', field: 'workspace_path' });

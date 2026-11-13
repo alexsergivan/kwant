@@ -83,6 +83,34 @@ test('the card shows for a fresh space, never for an older one with history, nev
   assert.equal(m.showCard({ ...base, canRun: false, dismissed: true }), false);
 });
 
+test('0.9.5: a new space with bots and an account is not a fresh install; only its own missing account brings the card', () => {
+  // Bakery: a second space that got its team from words, with an account ready. #general was empty and
+  // it had one team, so the main space's fresh-install rule showed the welcome card with the main space's
+  // starter bots.
+  const bakery = { dismissed: false, canRun: true, generalMessages: 0, teams: 1, started: false, mainSpace: false };
+  assert.equal(m.showCard(bakery), false, 'no welcome card in a new space that can already run');
+  assert.equal(m.showCard({ ...bakery, teams: 0 }), false);
+  assert.equal(m.showCard({ ...bakery, started: true }), false, 'a card started there by the old rule goes once an account works');
+  assert.equal(m.showCard({ ...bakery, canRun: false }), true, "the space's own state: nothing can run its bots yet");
+  assert.equal(m.showCard({ ...bakery, canRun: false, dismissed: true }), false);
+  assert.equal(m.showCard({ ...bakery, canRun: null }), false);
+  // The main space keeps today's rule, with the flag given or left out.
+  const main = { ...bakery, mainSpace: true };
+  assert.equal(m.showCard(main), true);
+  assert.equal(m.showCard({ ...main, teams: 2, started: true }), true);
+  assert.equal(m.showCard({ ...main, teams: 2 }), false);
+  const { mainSpace: _, ...unflagged } = bakery;
+  assert.equal(m.showCard(unflagged), true);
+});
+
+test('0.9.5: keep line names the space\'s own bots', () => {
+  assert.equal(m.keepOwnBotsLine([], 'Bakery'), 'The bots already in Bakery.');
+  assert.equal(m.keepOwnBotsLine(['BakeryLead'], 'Bakery'), 'BakeryLead, already in Bakery.');
+  assert.equal(m.keepOwnBotsLine(['BakeryLead', 'Baker'], 'Bakery'), 'BakeryLead and Baker, already in Bakery.');
+  assert.equal(m.keepOwnBotsLine(['BakeryLead', 'Baker', 'Oven'], 'Bakery'), 'BakeryLead, Baker and Oven, already in Bakery.');
+  assert.equal(m.keepOwnBotsLine(['A', 'B', 'C', 'D', 'E'], 'Bakery'), 'A, B and 3 more, already in Bakery.');
+});
+
 test('dismiss is kept per space and clears the stored choice', () => {
   localStorage.clear();
   m.storeChoice('s1', 'grok');
@@ -333,6 +361,24 @@ test('card: already signed in → hero D2, steps 1–2 done with Change, step 3 
   await settle();
   assert.equal(dismissed, 1);
   assert.equal(m.isDismissed('r1'), true);
+  r2.done();
+});
+
+test('0.9.5: outside the main space step 3 never offers the main space\'s starter bots', async () => {
+  localStorage.clear();
+  const bots = [{ id: 'l', name: 'BakeryLead' }, { id: 'b', name: 'Baker' }];
+  const r = mount(h(m.GetStarted, { space: 'bakery', spaceName: 'Bakery', mainSpace: false, bots, engines: [ready('claude')], reloadEngines() {}, onDismissed() {}, hostOverride: null }));
+  await settle();
+  assert.equal(r.host.querySelector('[data-get-started]').getAttribute('data-open-step'), '3');
+  const text = r.host.textContent;
+  for (const name of ['Architect', 'TechLead', 'DevOps', 'Keep the starter bots']) assert.ok(!text.includes(name), `no "${name}" in Bakery`);
+  const keep = r.host.querySelector('[data-keep-starter]');
+  assert.equal(keep.textContent, 'Keep the bots you haveBakeryLead and Baker, already in Bakery.Use ›');
+  r.done();
+  // The main space keeps today's tile.
+  const r2 = mountStep3('main-keep', { mainSpace: true });
+  await settle();
+  assert.match(r2.host.querySelector('[data-keep-starter]').textContent, /^Keep the starter botsArchitect, TechLead and DevOps, in #general\./);
   r2.done();
 });
 

@@ -442,6 +442,11 @@ fn fix_path() {
 
 /// Starts kwant on its own runtime thread; the returned handle stops it.
 fn start_server(config: kwnt::Config) -> Server {
+    // This app checks and installs its own updates (update::start), so the server's release
+    // check stays out. Windows has no in-app update yet: there the server says how to update.
+    if !cfg!(windows) {
+        kwnt::app_update::UpdateHub::shared().mark_desktop_app();
+    }
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::Builder::new()

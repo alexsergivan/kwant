@@ -5,6 +5,9 @@
 
 #![allow(clippy::result_large_err)]
 
+mod need;
+pub use need::cancel as cancel_suggest;
+
 use super::spaces::{check_workspace, space_param, Scope};
 use super::AppState;
 use crate::db::models::NewTeam;
@@ -435,6 +438,9 @@ async fn suggestion_plan(
     tz: String,
 ) -> Result<Plan, Response> {
     let bad = |code: &str, msg: &str, field: &str| fail_at(StatusCode::BAD_REQUEST, code, msg, field);
+    if coding && s.need.is_some() {
+        return Err(fail(StatusCode::BAD_REQUEST, "bad_request", "a team drafted from your words doesn't go with a template"));
+    }
     let mut rows: Vec<Chosen> = s.bots.iter().map(|r| Chosen { row: r, on: true, name: None, preset: None, existing: None }).collect();
     rows.extend(s.also.iter().map(|r| Chosen { row: r, on: false, name: None, preset: None, existing: None }));
     let mut handle = s.handle.clone();
@@ -478,6 +484,7 @@ async fn suggestion_plan(
                         ("name", Value::String(n)) if names::valid_name(n) => c.name = Some(n.clone()),
                         ("name", _) => return Err(bad("bad_name", "a bot name is 1 to 40 characters, no spaces or @", &at)),
                         ("preset", _) if c.row.lead => return Err(bad("bad_row", "the lead keeps its preset", &at)),
+                        ("preset", _) if s.need.is_some() => return Err(bad("bad_row", "a drafted bot keeps its role and instructions", &at)),
                         ("preset", Value::String(p)) if Role::from_preset(p).is_some() => c.preset = Role::from_preset(p),
                         ("preset", _) => return Err(bad("bad_preset", "not one of the team presets", &at)),
                         ("use_existing", Value::Null) => c.existing = None,
@@ -511,7 +518,26 @@ async fn suggestion_plan(
 
     let coding_t = templates::get("coding").expect("the Coding template exists");
     let mut bots = Vec::new();
-    for c in &on {
+    for c in on.iter().filter(|_| s.need.is_some()) {
+        // A drafted bot: its own title, avatar, instructions and scope, as kept with the suggestion
+        let r = c.row;
+        let kept = s.need.as_ref().and_then(|n| n.bots.get(&r.key)).cloned().unwrap_or_default();
+        bots.push(PlanBot {
+            slot: r.key.clone(),
+            field: format!("edits.rows.{}.name", r.key),
+            preset: r.preset.clone(),
+            lead: r.lead,
+            name: c.name.clone().unwrap_or_else(|| r.name.clone()),
+            title: r.title.clone(),
+            avatar: r.avatar_sprite.clone(),
+            persona: need::persona(r),
+            soul: kept.instructions,
+            covers: scope_list(&r.owns),
+            avoids: scope_list(&kept.avoids),
+            existing: c.existing.clone(),
+        });
+    }
+    for c in on.iter().filter(|_| s.need.is_none()) {
         let r = c.row;
         let role = c.preset.or_else(|| Role::from_preset(&r.preset)).unwrap_or(Role::Backend);
         let p = role.preset();
@@ -554,9 +580,17 @@ async fn suggestion_plan(
         Vec::new()
     };
 
-    let target = match &s.team_id {
-        Some(team_id) => Target::Existing { team_id: team_id.clone() },
-        None => Target::New {
+    let target = match (&s.team_id, &s.need) {
+        (Some(team_id), _) => Target::Existing { team_id: team_id.clone() },
+        (None, Some(n)) => Target::New {
+            handle,
+            icon: need::NEED_ICON.to_string(),
+            description: if n.description.is_empty() { "Drafted from your own words.".to_string() } else { n.description.clone() },
+            instructions: crate::teams::need::team_instructions(&n.words),
+            workspace_path: None,
+            repo_url: None,
+        },
+        (None, None) => Target::New {
             handle,
             icon: coding_t.icon.clone(),
             description: coding_t.card_line.clone(),
@@ -595,6 +629,8 @@ pub struct Suggestion {
     pub also: Vec<Row>,
     pub fallback: bool,
     pub expires_at: DateTime<Utc>,
+    /// Set for a suggestion drafted from the person's words: the words and the drafted texts.
+    pub need: Option<need::NeedDraft>,
 }
 
 fn store() -> &'static Mutex<HashMap<String, Suggestion>> {
@@ -659,7 +695,8 @@ struct Read {
 }
 
 /// `POST /api/teams/suggest?space=`: reads one folder, repo or team's project and suggests a
-/// roster (D2–D8). No model call; nothing is made and nothing stays on disk.
+/// roster (D2–D8), with no model call; or drafts one from the person's words (`need`, one model
+/// call, see [`need`]). Nothing is made and nothing stays on disk.
 pub async fn suggest(State(state): State<AppState>, headers: HeaderMap, Scope(space): Scope, body: Bytes) -> Response {
     if let Err(r) = person(&state, &headers).await {
         return r;
@@ -668,15 +705,18 @@ pub async fn suggest(State(state): State<AppState>, headers: HeaderMap, Scope(sp
         return fail(StatusCode::BAD_REQUEST, "bad_request", "the body must be a JSON object");
     };
     for k in req.keys() {
-        if !["workspace_path", "repo_url", "team_id"].contains(&k.as_str()) {
+        if !["workspace_path", "repo_url", "team_id", "need"].contains(&k.as_str()) {
             return fail_at(StatusCode::BAD_REQUEST, "unknown_field", format!("unknown field {k}"), k);
         }
     }
     let given: Vec<(&str, &str)> =
         req.iter().filter_map(|(k, v)| match v { Value::Null => None, Value::String(s) => Some((k.as_str(), s.as_str())), _ => Some((k.as_str(), "")) }).collect();
     let [(kind, value)] = given.as_slice() else {
-        return fail(StatusCode::BAD_REQUEST, "bad_request", "send exactly one of workspace_path, repo_url or team_id");
+        return fail(StatusCode::BAD_REQUEST, "bad_request", "send exactly one of workspace_path, repo_url, team_id or need");
     };
+    if *kind == "need" {
+        return need::suggest(&state, &space, &req["need"]).await;
+    }
 
     let mut team_id = None;
     let mut mode = Mode::New;
@@ -771,6 +811,7 @@ pub async fn suggest(State(state): State<AppState>, headers: HeaderMap, Scope(sp
         also: roster.also_possible.clone(),
         fallback: roster.fallback,
         expires_at: tt::now() + ChronoDuration::minutes(SUGGESTION_MINUTES),
+        need: None,
     };
     let body = json!({
         "suggestion_id": s.id,
@@ -1009,6 +1050,7 @@ mod tests {
             also: Vec::new(),
             fallback: false,
             expires_at: tt::now() + ChronoDuration::minutes(mins),
+            need: None,
         }
     }
 

@@ -11,7 +11,7 @@ use tokio::{process::Command, sync::Mutex, time::{sleep, timeout}};
 /// The VM browser's image. Bump it whenever `docker/browser.Dockerfile` or
 /// `docker/browser-entrypoint.sh` change: kwant builds an image only when its tag is missing, and
 /// replaces a browser container made from another tag, so the bump is what ships the change.
-pub const BROWSER_IMAGE: &str = "kwnt-browser:v2";
+pub const BROWSER_IMAGE: &str = "kwnt-browser:v3";
 const BROWSER_DOCKERFILE: &str = include_str!("../../docker/browser.Dockerfile");
 const BROWSER_ENTRYPOINT: &str = include_str!("../../docker/browser-entrypoint.sh");
 
@@ -64,6 +64,14 @@ pub fn is_job_page(key: &str) -> bool {
 struct SessionTarget {
     context: String,
     target: String,
+}
+
+/// The page before the current one in the tab `target` of the browser at `endpoint`.
+async fn previous_entry(endpoint: &str, target: &str) -> Option<String> {
+    let page = BrowserController::at_endpoint(endpoint, Some(target.to_string()), false);
+    let history = page.send_cdp_command("Page.getNavigationHistory", json!({})).await.ok()?;
+    let index = history["currentIndex"].as_u64()? as usize;
+    history["entries"].as_array()?.get(index.checked_sub(1)?)?["url"].as_str().map(str::to_string)
 }
 
 pub struct BrowserService {
@@ -146,6 +154,17 @@ impl BrowserService {
 
     fn local_profile(&self) -> PathBuf { self.root.join("local-chrome") }
 
+    /// The addresses of the local Chrome's pages, or `None` when it isn't running.
+    pub async fn local_page_urls(&self) -> Option<Vec<String>> {
+        let (endpoint, _) = computer::running_local_chrome(&self.local_profile()).await?;
+        let browser = BrowserController::at_endpoint(&endpoint, None, true);
+        let targets = browser.send_cdp_command("Target.getTargets", json!({})).await.ok()?;
+        Some(targets["targetInfos"].as_array().into_iter().flatten()
+            .filter(|t| t["type"] == "page")
+            .filter_map(|t| t["url"].as_str().map(str::to_string))
+            .collect())
+    }
+
     /// Shows the local Chrome as a real window (`visible`) or runs it without one, streamed into
     /// the app. One profile cannot be open twice, so the running Chrome is closed and started
     /// again in the other form; each bot's open page is reopened there, and sign-ins saved in the
@@ -162,7 +181,15 @@ impl BrowserService {
             if let Ok(targets) = browser.send_cdp_command("Target.getTargets", json!({})).await {
                 for info in targets["targetInfos"].as_array().into_iter().flatten() {
                     if let (Some(id), Some(url)) = (info["targetId"].as_str(), info["url"].as_str()) {
-                        urls.insert(id.to_string(), url.to_string());
+                        // a sign-in Google refused opens again at the sign-in, not at the refusal
+                        let previous = if super::signin_gate::is_rejected(url) {
+                            previous_entry(&endpoint, id).await
+                        } else {
+                            None
+                        };
+                        if let Some(url) = super::signin_gate::reopen_url(url, previous.as_deref()) {
+                            urls.insert(id.to_string(), url);
+                        }
                     }
                 }
             }
@@ -209,13 +236,10 @@ impl BrowserService {
         // at most one kwant Chrome per profile: reuse it, or wait for the one starting
         let (endpoint, running_headless) = computer::ensure_local_chrome(&profile, headless).await
             .map_err(BrowserError::Http)?;
-        // a windowless Chrome started by an older kwant tells sites it is headless. Only that one,
-        // which left no launch record: one kwant started itself is never restarted for it, so a
-        // Chrome that ignores the user agent can't be restarted on every call
-        let stale = running_headless && headless && computer::launched_headless(&profile).is_none()
-            && computer::says_headless(&endpoint).await
-            && computer::local_chrome_user_agent().await.is_some();
-        if running_headless == headless && !stale { return Ok(endpoint); }
+        // what pages tell sites is set over DevTools (`identity`), so a Chrome in the right form
+        // will do, unless an older kwant started it marked as automated, which that can't undo
+        let older = running_headless && headless && computer::started_by_older_kwant(&profile);
+        if running_headless == headless && !older { return Ok(endpoint); }
         // the other form (or that older one) is running on this profile: close it first
         let _ = BrowserController::at_endpoint(&endpoint, None, true)
             .send_cdp_command("Browser.close", json!({})).await;
@@ -414,6 +438,8 @@ impl BrowserService {
                 sleep(Duration::from_millis(250)).await;
             }
         }).await.map_err(|_| BrowserError::Timeout)?; }
+        // every page, popup and worker tells sites what this Chrome is, before any page loads
+        browser.keep_identity().await;
         let sessions = tokio::fs::read(self.sessions_file()).await.ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
         Ok(ServiceState { browser, endpoint, sessions })
@@ -869,7 +895,7 @@ mod image_tests {
     use super::{BROWSER_DOCKERFILE, BROWSER_ENTRYPOINT, BROWSER_IMAGE};
     use sha2::{Digest, Sha256};
 
-    /// The browser files `kwnt-browser:v2` was built from. A change to them without a new
+    /// The browser files `kwnt-browser:v3` was built from. A change to them without a new
     /// [`BROWSER_IMAGE`] would never reach a computer that already has the old tag.
     #[test]
     fn the_browser_image_tag_moves_with_its_files() {
@@ -879,7 +905,7 @@ mod image_tests {
         let hash: String = files.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             (BROWSER_IMAGE, hash.as_str()),
-            ("kwnt-browser:v2", "52d86739629ce24f"),
+            ("kwnt-browser:v3", "8176b39255827329"),
             "docker/browser files changed: bump BROWSER_IMAGE, then record the new hash here"
         );
     }

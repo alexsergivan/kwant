@@ -23,6 +23,7 @@ import {
   RefreshCw,
   ScanSearch,
   ShieldCheck,
+  Sparkles,
   Undo2,
   WifiOff,
   CircleAlert,
@@ -43,6 +44,7 @@ import {
   fieldKey,
   connectForgeFor,
   serverErrorText,
+  needError,
   initialEdits,
   nameError,
   newBotCount,
@@ -121,6 +123,9 @@ const Banner: React.FC<{ tone: 'bad' | 'warn' | 'info'; head: string; children?:
   );
 };
 
+/** "a", "a and b", "a, b and c": the server's own phrases, joined, never rewritten. */
+export const listWords = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
 const Note: React.FC<{ children: React.ReactNode; id?: string }> = ({ children, id }) => (
   <p id={id} className="mt-1 flex items-start gap-1.5 text-xs text-zinc-300">
     <Info size={12} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
@@ -163,7 +168,18 @@ export const Reason: React.FC<{ parts: SuggestedBot['reason'] }> = ({ parts }) =
 export type SheetMode =
   | { kind: 'template'; templateId: string }
   /** D: from New team (no team), Manage team (team), or the Coding template with a folder or repo. */
-  | { kind: 'suggest'; workspace_path?: string | null; repo_url?: string | null; handleSeed?: string; team?: { id: string; name: string }; viaCoding?: boolean };
+  | {
+      kind: 'suggest';
+      workspace_path?: string | null;
+      repo_url?: string | null;
+      handleSeed?: string;
+      team?: { id: string; name: string };
+      viaCoding?: boolean;
+      /** A team from your own words: the person's words, sent as `{ need }`. Try again sends them again. */
+      need?: string;
+      /** The answer the need box already has, so the sheet opens on it without asking twice. */
+      initial?: Suggestion;
+    };
 
 export interface TeamPreviewSheetProps {
   open: boolean;
@@ -178,7 +194,10 @@ export interface TeamPreviewSheetProps {
   /** Bots in this space, for D6's "Add Frontend (already in this space)" avatar. */
   spaceBots?: { id: string; name: string; role?: string }[];
   onClose: () => void;
-  onCreated: (r: CreatedTeam, t: TeamTemplate, handle: string) => void;
+  /** `t` is null for a team from your own words, which has no template. */
+  onCreated: (r: CreatedTeam, t: TeamTemplate | null, handle: string) => void;
+  /** No ready account: "Add an AI account" opens Accounts. */
+  onOpenAccounts?: () => void;
   /** D7: "Use the Coding roster" switches the sheet to the plain Coding template. */
   onUseCoding?: () => void;
   onPickFolder?: () => void;
@@ -206,6 +225,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   onUseCoding,
   onPickFolder,
   onConnectForge,
+  onOpenAccounts,
 }) => {
   const phone = useMedia(PHONE_QUERY);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -215,6 +235,9 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const subId = useId();
   const isD = mode.kind === 'suggest';
   const manage = isD && !!mode.team;
+  /** A team from your own words (brief "Flow"): no facts, read line, partial or stack line. */
+  const isN = mode.kind === 'suggest' && !!mode.need && !mode.team;
+  const need = mode.kind === 'suggest' ? mode.need ?? '' : '';
   const templateId = mode.kind === 'template' ? mode.templateId : 'coding';
   const t = templates?.find((x) => x.id === templateId) ?? null;
 
@@ -267,12 +290,27 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   editsRef.current = edits;
   const sugRef = useRef(sug);
   sugRef.current = sug;
+  /** Need mode: why the last ask failed, in the person's words. */
+  const [needErr, setNeedErr] = useState<ReturnType<typeof needError> | null>(null);
+  /** Need mode: the answer the box handed over is used once, for the first read. */
+  const usedInitial = useRef(false);
+  /** Need mode: Try again keeps the last team here, so Cancel or Escape while asking goes back to it. */
+  const [again, setAgain] = useState(false);
+  const [openInstr, setOpenInstr] = useState<Set<string>>(new Set());
 
   const close = useCallback(() => {
     if (phase === 'creating') return;
+    if (dPhase === 'reading' && readAbort.current && !readAbort.current.signal.aborted) teamsApi.cancelSuggest(space);
     readAbort.current?.abort();
+    if (isN && again && dPhase === 'reading' && sugRef.current) {
+      // Stop the second ask and keep the team that was here.
+      setAgain(false);
+      setDPhase('ready');
+      setLive('Stopped. The last suggestion is still here.');
+      return;
+    }
     onClose();
-  }, [phase, onClose]);
+  }, [phase, onClose, isN, again, dPhase, space]);
   useEscapeLayer(rootRef, true, close, { modal: true });
 
   // Seed names and handle once the template is here (T9 clash rules).
@@ -323,20 +361,26 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       setDPhase('reading');
       setInUse(false);
       setElapsed(0);
-      setLive('Reading the project');
-      if (!navigator.onLine) {
+      setNeedErr(null);
+      setLive(isN ? 'Suggesting a team' : 'Reading the project');
+      const first = isN && !usedInitial.current && mode.initial ? mode.initial : null;
+      usedInitial.current = true;
+      if (!first && !navigator.onLine) {
         setDPhase('offline');
-        setLive('You’re offline. Nothing was read.');
+        setLive(isN ? 'You’re offline. Your words are kept.' : 'You’re offline. Nothing was read.');
         return;
       }
       try {
-        // api.md §4: exactly one source. Manage team reads the team's own folder or repo.
-        const req: SuggestRequest = mode.team
-          ? { space, team_id: mode.team.id }
-          : mode.workspace_path
-            ? { space, workspace_path: mode.workspace_path }
-            : { space, repo_url: mode.repo_url ?? '' };
-        const s = await teamsApi.suggest(req, mode.workspace_path || mode.repo_url || (mode.team ? `@${mode.team.name}` : ''));
+        // api.md §4: exactly one source. Manage team reads the team's own folder or repo. A team from
+        // your own words sends only `{ need }` (brief "Server contract").
+        const req: SuggestRequest = isN
+          ? { space, need: need.trim() }
+          : mode.team
+            ? { space, team_id: mode.team.id }
+            : mode.workspace_path
+              ? { space, workspace_path: mode.workspace_path }
+              : { space, repo_url: mode.repo_url ?? '' };
+        const s = first ?? (await teamsApi.suggest(req, isN ? 'need' : mode.workspace_path || mode.repo_url || (mode.team ? `@${mode.team.name}` : '')));
         if (ac.signal.aborted) return;
         const fresh = initialEdits(s, takenNames);
         const old = sugRef.current;
@@ -349,13 +393,24 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           setHandleNote(c.handleNote);
         }
         setDPhase('ready');
+        setAgain(false);
         setLive(
-          s.bots.length + s.also_possible.length === 0
+          isN
+            ? `Suggested ${plural(s.bots.length, 'bot')}. Nothing is made until you create it.`
+            : s.bots.length + s.also_possible.length === 0
             ? 'Nothing new to add.'
             : `Suggested ${plural(s.bots.length, 'bot')}${s.also_possible.length ? `, ${s.also_possible.length} also possible` : ''}`,
         );
       } catch (e) {
         if (ac.signal.aborted) return;
+        if (isN) {
+          const ne = needError(e);
+          setNeedErr(ne);
+          setAgain(false);
+          setDPhase(e instanceof TeamsError && e.status === 0 ? 'offline' : 'error');
+          setLive(`${ne.head}${ne.reason ? ` ${ne.reason}` : ''}`);
+          return;
+        }
         // The live region still says "Reading the project" otherwise.
         if (cantRead(e)) {
           setCantForge(e instanceof TeamsError ? e.extra?.forge ?? null : null);
@@ -385,7 +440,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [space, mode.kind === 'suggest' ? mode.workspace_path : null, mode.kind === 'suggest' ? mode.repo_url : null],
+    [space, mode.kind === 'suggest' ? mode.workspace_path : null, mode.kind === 'suggest' ? mode.repo_url : null, need],
   );
   useEffect(() => {
     if (isD) void read();
@@ -423,12 +478,15 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   };
   const ticked = isD ? tickedCount(edits) : tBots.length;
   const anyNameBad = isD ? dRows.some((b) => edits[b.key]?.ticked && nameErr(b.key)) : tBots.some((b) => nameErr(b.key));
-  const handleBad = !manage && !cleanHandle(handle);
+  // Decisions 11-12 §4: a team from the person's words has no handle field; the server picks a free one
+  // (free_team_handle), which can be changed later in the team's settings.
+  const askHandle = !manage && !isN;
+  const handleBad = askHandle && !cleanHandle(handle);
   const minBots = manage ? 1 : MIN_BOTS;
   const dSizeBad = isD && (ticked < minBots || ticked > MAX_BOTS);
   const creating = phase === 'creating';
   const canCreate = ready && online && !creating && !anyNameBad && !handleBad && !dSizeBad && renaming === null;
-  const label = t?.label ?? 'Coding';
+  const label = isN ? 'suggested' : t?.label ?? 'Coding';
   const busy = (!isD && !t && !templatesError) || (isD && dPhase === 'reading');
 
   // ---- rename
@@ -469,7 +527,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
 
   // ---- create
   const create = async () => {
-    if (!canCreate || !t) return;
+    if (!canCreate || (!t && !isD)) return;
     setPhase('creating');
     setLive(manage ? `Adding ${plural(newBotCount(edits), 'bot')} to @${mode.kind === 'suggest' ? mode.team?.name : ''}` : `Creating the ${label} team`);
     const h = cleanHandle(handle);
@@ -494,17 +552,19 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         space,
         suggestion_id: sug.suggestion_id,
         rows,
-        ...(manage && mode.kind === 'suggest' && mode.team ? { team_id: mode.team.id } : { handle: h }),
+        ...(manage && mode.kind === 'suggest' && mode.team ? { team_id: mode.team.id } : askHandle ? { handle: h } : {}),
       };
     } else {
       const ns: Record<string, string> = {};
       for (const b of tBots) if (names[b.key] && names[b.key] !== b.name) ns[b.key] = names[b.key];
+      if (!t) return;
       body = { kind: 'template', space, template_id: t.id, handle: h, names: ns };
     }
     try {
       const r = await teamsApi.create(body, idemKey.current);
-      setLive(`Created @${h}. Undo is available.`);
-      onCreated(r, t, h);
+      const made = askHandle ? h : r.team.name;
+      setLive(`Created @${made}. Undo is available.`);
+      onCreated(r, t, made);
     } catch (e) {
       if (e instanceof TeamsError && e.status === 410 && isD) {
         // A17: read again, keep the edits on rows that come back.
@@ -549,7 +609,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   let title = `${label} team`;
   let sub: React.ReactNode = t ? summaryLine(t) : '';
   let glyph = t?.icon ?? 'code-xml';
-  if (isD && mode.kind === 'suggest') {
+  if (isN) {
+    title = 'Suggested team';
+    sub = 'Drafted from your words. Nothing is made until you create it.';
+    glyph = 'sparkles';
+  } else if (isD && mode.kind === 'suggest') {
     if (manage) {
       title = `Suggested for @${mode.team!.name}`;
       sub = (
@@ -651,7 +715,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     </section>
   );
 
-  const handleSec = !manage && (
+  const handleSec = askHandle && (
     <section className={SEC} aria-labelledby={`${titleId}-handle`}>
       <h4 className={H} id={`${titleId}-handle`}>
         Team handle
@@ -795,7 +859,10 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     const off = !e.ticked;
     const existing = b.existing_kwant_id ? spaceBots.find((x) => x.id === b.existing_kwant_id) : null;
     const existingName = existing?.name ?? b.existing_name ?? b.name;
-    const owns = b.owns.filter(safeFolder);
+    // Code suggestions own folders, so only safe folder names show. A team from words owns plain jobs.
+    const owns = isN ? b.owns.filter((o) => o.trim()) : b.owns.filter(safeFolder);
+    const instrOpen = openInstr.has(b.key);
+    const instrId = `${titleId}-in-${b.key}`;
     const disabledTick = !b.lead && off && atMax;
     const choiceBlock = (
       <>
@@ -855,7 +922,32 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
               <Reason parts={b.reason} />
             </p>
             {notes[b.key] && renaming !== b.key && <Note>{notes[b.key]}</Note>}
-            {owns.length > 0 && (
+            {isN && owns.length > 0 && (
+              <p className="mt-1 text-xs text-zinc-300" data-takes-care>
+                Takes care of {listWords(owns)}
+              </p>
+            )}
+            {isN && b.instructions && (
+              <div className="mt-1.5">
+                <button
+                  type="button"
+                  aria-expanded={instrOpen}
+                  aria-controls={instrId}
+                  onClick={() => setOpenInstr((r) => (r.has(b.key) ? new Set([...r].filter((x) => x !== b.key)) : new Set([...r, b.key])))}
+                  className={`inline-flex items-center gap-1 ${phone ? 'min-h-11' : 'min-h-7'} -ml-1 px-1 rounded-md text-[12.5px] font-medium text-sky-300 hover:bg-white/5 ${FOCUS}`}
+                >
+                  <ChevronDown size={12} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${instrOpen ? 'rotate-180' : ''}`} />
+                  Instructions<span className="sr-only"> for {e.name}</span>
+                </button>
+                {instrOpen && (
+                  <div id={instrId} className="mt-1">
+                    <pre className="max-h-[180px] overflow-auto whitespace-pre-wrap break-words p-3 rounded-lg bg-black/30 border border-white/5 text-xs leading-[18px] text-zinc-300 font-sans">{b.instructions}</pre>
+                    <p className="mt-1 text-[11.5px] text-zinc-400">You can change these in the bot’s settings after you create it.</p>
+                  </div>
+                )}
+              </div>
+            )}
+            {!isN && owns.length > 0 && (
               <p className="mt-1 text-xs text-zinc-400">
                 Owns{' '}
                 {owns.map((o) => (
@@ -870,7 +962,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         </div>
         {!also && renaming !== b.key && (
           <span className={`flex items-center gap-1 ${phone ? 'flex-col' : ''}`}>
-            {!b.lead && (
+            {!b.lead && !isN && (
               <RoleSelect
                 phone={phone}
                 name={e.name}
@@ -901,7 +993,60 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   };
 
   const reasonUnknown = sug?.fallback === true;
+  const asked = isN && (
+    <section className={SEC} aria-labelledby={`${titleId}-asked`}>
+      <h4 className={H} id={`${titleId}-asked`}>
+        You asked
+      </h4>
+      <p data-asked className="max-h-[96px] overflow-auto whitespace-pre-wrap break-words p-2.5 rounded-lg bg-black/30 border border-white/5 text-[13px] leading-[18px] text-zinc-200">
+        {need.trim()}
+      </p>
+    </section>
+  );
+  const nBody = () => {
+    if (dPhase === 'reading')
+      return (
+        <>
+          {asked}
+          <div role="status" aria-live="polite" className="flex flex-col items-center text-center pt-6 pb-6 px-3" data-suggesting>
+            <Loader2 size={22} className="text-sky-400 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            <p className="mt-3 text-sm font-semibold text-zinc-50">Suggesting…</p>
+            {elapsed >= 8000 && <p className="mt-1 text-xs text-zinc-400">Usually under a minute.</p>}
+          </div>
+          <Skeleton rows={3} tick />
+        </>
+      );
+    if (dPhase === 'offline' || dPhase === 'error')
+      return (
+        <>
+          <Banner tone={dPhase === 'offline' ? 'warn' : 'bad'} icon={dPhase === 'offline' ? 'offline' : 'alert'} head={needErr?.head ?? 'Couldn’t suggest a team this time. Try again, or start from a ready-made team.'}>
+            {needErr?.reason ? `${needErr.reason} ` : ''}Nothing was created.
+          </Banner>
+          {asked}
+        </>
+      );
+    if (!sug) return null;
+    const lead = sug.bots.find((b) => b.lead);
+    return (
+      <>
+        {expiredNote && (
+          <p role="status" className="mt-3 text-xs text-zinc-300">
+            Suggested again, it had been an hour.
+          </p>
+        )}
+        {asked}
+        <section className={SEC} aria-labelledby={`${titleId}-who`}>
+          <h4 className={H} id={`${titleId}-who`}>
+            Who’s on it{lead && <span className={`${CNT} text-zinc-500`}>{edits[lead.key]?.name} leads</span>}
+          </h4>
+          <ul>{sug.bots.map((b) => sgRow(b, false))}</ul>
+        </section>
+        {handleSec}
+      </>
+    );
+  };
   const dBody = () => {
+    if (isN) return nBody();
     if (dPhase === 'reading') {
       const near = elapsed >= 7000;
       return (
@@ -1064,16 +1209,19 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   };
 
   // ---- footer
+  const phoneN = phone && isN;
   const nNew = isD ? newBotCount(edits) : tBots.length;
   // Manage with nothing new to suggest: the body says so; no "Pick at least" nag.
   const nothingNew = manage && dPhase === 'ready' && !!sug && sug.bots.length === 0 && sug.also_possible.length === 0;
   const sNote = isD && dPhase === 'ready' && !nothingNew ? sizeNote(ticked, minBots) : null;
   const fallbackFooter = isD && (dPhase === 'cantread' || dPhase === 'offline' || dPhase === 'error');
+  const noAccount = isN && dPhase === 'error' && !!needErr?.noAccount && !!onOpenAccounts;
   // N-5: the same folder gets the same refusal, so offer another folder instead of "Try again".
   const pickOther = inUse && !!onPickFolder && mode.kind === 'suggest' && !mode.team && (phase === 'failed' || dPhase === 'error');
   const retry = !pickOther && ((!isD && templatesError && !t) || phase === 'failed' || (isD && (dPhase === 'error' || dPhase === 'offline')));
-  const primaryLabel = creating ? 'Creating…' : pickOther ? 'Pick another folder' : retry ? 'Try again' : manage ? (nothingNew || ticked === 0 ? 'Add bots' : `Add ${plural(ticked, 'bot')}`) : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
+  const primaryLabel = creating ? 'Creating…' : noAccount ? 'Add an AI account first' : pickOther ? 'Pick another folder' : retry ? 'Try again' : manage ? (nothingNew || ticked === 0 ? 'Add bots' : `Add ${plural(ticked, 'bot')}`) : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
   const onPrimary = () => {
+    if (noAccount) return onOpenAccounts?.();
     if (pickOther) return onPickFolder?.();
     if (retry) {
       if (!isD && templatesError && !t) return onRetryTemplates?.();
@@ -1094,7 +1242,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           ? 'Undo takes them out of the team again.'
           : 'Undo removes the team. Your bots stay.'
         : `Undo removes the ${plural(nNew, 'new bot')}.`
-      : 'Undo removes all of it.');
+      : 'Undo removes it all.');
 
   const btnH = phone ? 'h-11 flex-1' : 'h-9';
   const panel = (
@@ -1121,7 +1269,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         </div>
       )}
       <header className={`flex items-center gap-3 ${phone ? 'px-4 pt-1 pb-3' : 'px-5 py-4'} border-b border-zinc-800`}>
-        {glyph === 'scan' ? (
+        {glyph === 'sparkles' ? (
+          <span aria-hidden="true" className="w-10 h-10 rounded-[11px] shrink-0 grid place-items-center bg-sky-400/15 text-sky-400 ring-1 ring-inset ring-sky-300/20">
+            <Sparkles size={20} />
+          </span>
+        ) : glyph === 'scan' ? (
           <span aria-hidden="true" className="w-10 h-10 rounded-[11px] shrink-0 grid place-items-center bg-sky-400/15 text-sky-400 ring-1 ring-inset ring-sky-300/20">
             <ScanSearch size={20} />
           </span>
@@ -1132,7 +1284,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           <h3 id={titleId} className="text-[17px] leading-6 font-semibold text-zinc-50 truncate">
             {title}
           </h3>
-          <p id={subId} className="text-xs text-zinc-400 truncate">
+          <p id={subId} className={`text-xs text-zinc-400 ${phone ? 'line-clamp-2' : 'truncate'}`}>
             {sub}
           </p>
         </div>
@@ -1157,15 +1309,32 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         )}
         {isD ? dBody() : tBody()}
       </div>
+      {/* Phone, team from words: Cancel and Try again share a row as equal halves (Cancel's transparent border matches
+          Try again's), and Create gets its own full-width row: basis-full, since flex-1's 0% basis never wraps.
+          Desktop note: text-balance, not nowrap, so the amber "6 bots at most..." wraps to 2 even lines beside the buttons. */}
       <footer className={`flex ${phone ? 'flex-wrap' : 'items-center'} gap-2 ${phone ? 'px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]' : 'px-5 py-3.5'} border-t border-zinc-800 bg-zinc-900`}>
-        <p className={`${phone ? 'w-full' : 'flex-1 min-w-0'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
+        <p className={`${phone ? 'w-full' : 'flex-1 min-w-0 text-balance'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
           {!fallbackFooter && !sNote && footNote && <Undo2 size={13} aria-hidden="true" />}
           {fallbackFooter ? null : footNote}
         </p>
-        <button type="button" onClick={close} disabled={creating} className={`${btnH} px-3.5 rounded-lg text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}>
+        <button type="button" onClick={close} disabled={creating} className={`${btnH} ${phoneN ? 'flex-1 border border-transparent' : ''} px-3.5 rounded-lg text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}>
           Cancel
         </button>
-        {fallbackFooter && onUseCoding && (
+        {isN && dPhase === 'ready' && (
+          <button
+            type="button"
+            onClick={() => {
+              setAgain(true);
+              void read();
+            }}
+            disabled={creating || !online}
+            className={`${btnH} ${phoneN ? 'flex-1' : ''} whitespace-nowrap inline-flex items-center justify-center gap-1.5 px-3.5 rounded-lg border border-zinc-700 text-sm text-zinc-100 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}
+          >
+            <RefreshCw size={14} aria-hidden="true" />
+            Try again
+          </button>
+        )}
+        {fallbackFooter && onUseCoding && !isN && (
           <button type="button" onClick={onUseCoding} className={`${btnH} px-3.5 rounded-lg border border-zinc-700 text-sm text-zinc-100 hover:bg-white/5 ${FOCUS}`}>
             Use the Coding roster
           </button>
@@ -1176,11 +1345,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             type="button"
             onClick={onPrimary}
             disabled={primaryDisabled}
-            className={`${btnH} inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
+            className={`${btnH} ${phoneN ? 'basis-full' : ''} whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
           >
             {creating && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             {pickOther && !creating && <FolderOpen size={14} aria-hidden="true" />}
-            {retry && !creating && <RefreshCw size={14} aria-hidden="true" />}
+            {retry && !creating && !noAccount && <RefreshCw size={14} aria-hidden="true" />}
             {primaryLabel}
           </button>
         )}

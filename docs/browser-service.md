@@ -51,7 +51,7 @@ The browser profile lives on the container's tmpfs, so stopping or removing it l
 Prebuild images to avoid first-use latency:
 
 ```bash
-docker build -t kwnt-browser:v2 -f docker/browser.Dockerfile docker
+docker build -t kwnt-browser:v3 -f docker/browser.Dockerfile docker
 docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker
 ./target/release/kwnt serve --host 127.0.0.1 --port 8799
 ```

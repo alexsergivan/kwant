@@ -18,8 +18,9 @@ pub const IDEMPOTENCY_HOURS: i64 = 24;
 /// The bot action a create is logged as.
 pub const ACTION: &str = "team_template";
 
-/// What to make. Every text in it is already the server's own (template data, preset text and
-/// discovery facts); nothing here comes from the request except names, a handle and preset ids.
+/// What to make. Every text in it is already the server's own (template data, preset text,
+/// discovery facts, or a draft from the person's words that the server checked and kept with its
+/// suggestion); nothing here comes from the request except names, a handle and preset ids.
 #[derive(Debug, Clone)]
 pub struct Plan {
     pub template_id: Option<String>,
