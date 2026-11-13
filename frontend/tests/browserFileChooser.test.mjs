@@ -90,6 +90,7 @@ test('a file_chooser push opens the sheet; file_chooser_done closes it and leave
   assert.deepEqual(ref.stream.fileChooserDone, { names: ['clip.mp4'] }, 'the toast gets the name to show');
 
   ref.stream.clearFileChooserDone();
+  await settle();
   assert.equal(ref.stream.fileChooserDone, null);
   m.flushSync(() => root.unmount());
 });
@@ -102,6 +103,7 @@ test('cancelFileChooser sends cancel:true and closes the sheet locally with no r
 
   ref.stream.cancelFileChooser(2);
   assert.deepEqual(ws.sent.at(-1), { action: 'file_chooser', id: 2, cancel: true });
+  await settle();
   assert.equal(ref.stream.fileChooser, null, 'the sheet closes right away, optimistically');
   m.flushSync(() => root.unmount());
 });
@@ -123,6 +125,7 @@ test('file_chooser_error shows inline on the sheet it belongs to, and is ignored
   assert.ok(ref.stream.fileChooser, 'the sheet itself stays open so Try again can retry');
 
   ref.stream.clearFileChooserError();
+  await settle();
   assert.equal(ref.stream.fileChooserError, null);
   m.flushSync(() => root.unmount());
 });
