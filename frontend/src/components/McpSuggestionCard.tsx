@@ -3,6 +3,10 @@ import { AlertTriangle, CheckCircle2, ExternalLink, Globe, KeyRound, Loader2, Mi
 import { ModernAvatar } from './ModernAvatar';
 import { Suggestion, SuggestionMeta, failureText, inputKey, inputLabel, installPayload, runsLine, suggestionView } from '../mcpSuggestions';
 import { inDesktopApp } from '../externalLinks';
+import { type SignInDeadEnd, type SignInDeadEndCode, signInDeadEnd } from '../mcpSignInDeadEnd';
+
+/** What a sign-in attempt from the card reports: an error message, or a code retrying can't fix. */
+export type SuggestionSignInResult = string | { code: SignInDeadEndCode } | void;
 
 export interface McpSuggestionCardProps {
   meta: SuggestionMeta;
@@ -14,8 +18,11 @@ export interface McpSuggestionCardProps {
   /** Resolves to an error message on failure; `signIn` true when the server still needs a sign-in. */
   onInstall: (suggestionId: string, body: { env?: Record<string, string>; headers?: Record<string, string> }) => Promise<{ error?: string; signIn?: boolean }>;
   onDismiss: (suggestionId: string) => Promise<string | void>;
-  /** Opens the server's sign-in; resolves to an error message, or nothing once signed in. */
-  onSignIn: (serverId: string) => Promise<string | void>;
+  /**
+   * Opens the server's sign-in; resolves to an error message, a dead-end `code` (the button goes and
+   * a next step shows), or nothing once signed in.
+   */
+  onSignIn: (serverId: string) => Promise<SuggestionSignInResult>;
   /** The install said this server needs a sign-in that hasn't happened yet. */
   needsSignIn?: boolean;
   flash?: boolean;
@@ -43,7 +50,7 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
   const [busy, setBusy] = useState<'install' | 'dismiss' | 'signin' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dismissError, setDismissError] = useState<string | null>(null);
-  const [signInError, setSignInError] = useState<string | null>(null);
+  const [signInError, setSignInError] = useState<string | SignInDeadEnd | null>(null);
 
   const headingId = `mcp-s-${messageId}`;
   const pending = view.status === 'pending' && busy !== 'install';
@@ -80,9 +87,10 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
     if (!view.server_id || busy) return;
     setBusy('signin');
     setSignInError(null);
-    const err = await onSignIn(view.server_id);
+    const res = await onSignIn(view.server_id);
     setBusy(null);
-    if (err) setSignInError(err);
+    if (typeof res === 'string') setSignInError(res);
+    else if (res) setSignInError(signInDeadEnd(res.code, view.title, 'card'));
   };
 
   const border =
@@ -238,22 +246,7 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
             )}
           </p>
           {view.status === 'installed' && needsSignIn && view.server_id && (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={signIn}
-                disabled={busy !== null}
-                className="inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3.5 rounded-xl text-sm font-medium bg-amber-500 text-zinc-950 hover:bg-amber-400 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
-              >
-                {busy === 'signin' && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
-                {busy === 'signin' ? (inDesktopApp() ? 'Finish signing in in your browser…' : 'Waiting for sign-in…') : signInError ? 'Try signing in again' : 'Sign in'}
-              </button>
-              {signInError && (
-                <span role="alert" className="text-rose-300 break-words">
-                  {signInError}
-                </span>
-              )}
-            </div>
+            <SuggestionSignIn busy={busy === 'signin'} disabled={busy !== null} error={signInError} onSignIn={signIn} />
           )}
           {dismissError && (
             <p role="alert" className="text-rose-300 break-words">
@@ -263,5 +256,45 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
         </div>
       </div>
     </section>
+  );
+};
+
+/**
+ * The card's sign-in row. A plain error keeps "Try signing in again"; a dead end (the server can't let
+ * this app in from here) has no button, just the error and one next step under it.
+ */
+export const SuggestionSignIn: React.FC<{
+  busy: boolean;
+  disabled: boolean;
+  error: string | SignInDeadEnd | null;
+  onSignIn: () => void;
+}> = ({ busy, disabled, error, onSignIn }) => {
+  if (error && typeof error !== 'string') {
+    return (
+      <div className="space-y-1">
+        <p role="alert" className="text-rose-300 break-words">
+          {error.error}
+        </p>
+        <p className="text-zinc-400 break-words">{error.next}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={onSignIn}
+        disabled={disabled}
+        className="inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3.5 rounded-xl text-sm font-medium bg-amber-500 text-zinc-950 hover:bg-amber-400 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+      >
+        {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+        {busy ? (inDesktopApp() ? 'Finish signing in in your browser…' : 'Waiting for sign-in…') : error ? 'Try signing in again' : 'Sign in'}
+      </button>
+      {error && (
+        <span role="alert" className="text-rose-300 break-words">
+          {error}
+        </span>
+      )}
+    </div>
   );
 };

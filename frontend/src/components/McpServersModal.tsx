@@ -59,6 +59,7 @@ import {
 } from '../mcp';
 import { inDesktopApp, leaveForSignIn, pollUntil, signInChanged } from '../externalLinks';
 import { useEscapeLayer } from '../escape';
+import { signInDeadEnd } from '../mcpSignInDeadEnd';
 
 interface McpServersModalProps {
   isOpen: boolean;
@@ -87,6 +88,59 @@ const readError = async (res: Response) => {
     // not JSON
   }
   return `Something went wrong (HTTP ${res.status}).`;
+};
+
+/** A sign-in that couldn't start: the server's message, and its `code` when retrying can't help. */
+export interface OAuthFailure {
+  message: string;
+  code?: string;
+}
+
+/**
+ * The amber "asks you to sign in" box on a server card. When the start call returned a dead-end code
+ * (no_client_registration, cimd_needs_https) there is no Connect or Retry: one grey next step instead.
+ */
+export const SignInBox: React.FC<{
+  serverName: string;
+  isConnecting: boolean;
+  macApp: boolean;
+  failure?: OAuthFailure;
+  onConnect: () => void;
+}> = ({ serverName, isConnecting, macApp, failure, onConnect }) => {
+  const deadEnd = failure && !isConnecting ? signInDeadEnd(failure.code, serverName, 'servers') : null;
+  return (
+    <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] space-y-2">
+      <div className="flex items-start gap-2 text-amber-100/90">
+        <KeyRound size={13} className="flex-shrink-0 mt-px text-amber-400" />
+        <span>
+          {isConnecting
+            ? macApp
+              ? 'Finish signing in in your browser. This updates by itself when you’re done.'
+              : 'Waiting for you to approve access in the sign-in window…'
+            : 'This server asks you to sign in and approve access.'}
+        </span>
+      </div>
+      {failure && !isConnecting && (
+        <p role="alert" className="flex items-start gap-1.5 text-rose-300">
+          <AlertCircle size={12} className="flex-shrink-0 mt-px" />
+          <span>{deadEnd ? deadEnd.error : failure.message}</span>
+        </p>
+      )}
+      {deadEnd ? (
+        <p className="text-zinc-400">{deadEnd.next}</p>
+      ) : (
+        <button
+          type="button"
+          onClick={onConnect}
+          disabled={isConnecting && !macApp}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
+        >
+          {isConnecting && !macApp ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
+          {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : failure ? 'Retry' : 'Connect'}
+        </button>
+      )}
+    </div>
+  );
 };
 
 const StatusPill: React.FC<{ server: McpServer; status?: StoredStatus; testing: boolean }> = ({ server, status, testing }) => {
@@ -382,7 +436,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const [presetId, setPresetId] = useState<string | null>(null);
   // Sign-in: the server whose popup is open, sign-in errors per server, and a pending disconnect.
   const [connecting, setConnecting] = useState<string | null>(null);
-  const [oauthErrors, setOauthErrors] = useState<Record<string, string>>({});
+  const [oauthErrors, setOauthErrors] = useState<Record<string, OAuthFailure>>({});
   const [confirmDisconnect, setConfirmDisconnect] = useState<string | null>(null);
   const popupRef = useRef<Window | null>(null);
   const popupWatch = useRef<number | null>(null);
@@ -483,7 +537,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         refresh();
         runTest(id);
       } else {
-        setOauthErrors((e) => ({ ...e, [id]: msg.error || 'Sign-in didn’t finish. Try again.' }));
+        setOauthErrors((e) => ({ ...e, [id]: { message: msg.error || 'Sign-in didn’t finish. Try again.' } }));
         playSfx('alert');
       }
     };
@@ -518,20 +572,26 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     }
     setConnecting(server.id);
     let url: string;
+    let code: string | undefined;
     try {
       const res = await fetch(`/api/mcp/servers/${server.id}/oauth/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ origin: window.location.origin }),
       });
-      if (!res.ok) throw new Error(await readError(res));
-      const body = await res.json();
+      // Read the body once: a failed start carries `error` and, when retrying can't help, `code`.
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        if (typeof body?.code === 'string') code = body.code;
+        throw new Error(body?.error ? String(body.error) : `Something went wrong (HTTP ${res.status}).`);
+      }
       if (typeof body?.authorize_url !== 'string' || !/^https?:\/\//.test(body.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
       url = body.authorize_url;
     } catch (err) {
       popup?.close();
       setConnecting(null);
-      setOauthErrors((e) => ({ ...e, [server.id]: err instanceof Error ? err.message : 'Could not reach the server.' }));
+      const message = err instanceof Error ? err.message : 'Could not reach the server.';
+      setOauthErrors((e) => ({ ...e, [server.id]: { message, code } }));
       playSfx('alert');
       return;
     }
@@ -766,33 +826,13 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
           </div>
         )}
         {(kind === 'needs_sign_in' || oauthError) && server.transport === 'http' && server.enabled && (
-          <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] space-y-2">
-            <div className="flex items-start gap-2 text-amber-100/90">
-              <KeyRound size={13} className="flex-shrink-0 mt-px text-amber-400" />
-              <span>
-                {isConnecting
-                  ? macApp
-                    ? 'Finish signing in in your browser. This updates by itself when you’re done.'
-                    : 'Waiting for you to approve access in the sign-in window…'
-                  : 'This server asks you to sign in and approve access.'}
-              </span>
-            </div>
-            {oauthError && !isConnecting && (
-              <p role="alert" className="flex items-start gap-1.5 text-rose-300">
-                <AlertCircle size={12} className="flex-shrink-0 mt-px" />
-                <span>{oauthError}</span>
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => connect(server)}
-              disabled={isConnecting && !macApp}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
-            >
-              {isConnecting && !macApp ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
-              {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : oauthError ? 'Retry' : 'Connect'}
-            </button>
-          </div>
+          <SignInBox
+            serverName={server.name}
+            isConnecting={isConnecting}
+            macApp={macApp}
+            failure={oauthError}
+            onConnect={() => connect(server)}
+          />
         )}
         {result && !result.ok && kind !== 'needs_sign_in' && (
           <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-rose-500/5 border border-rose-500/20 text-[11px] text-rose-200 space-y-1">

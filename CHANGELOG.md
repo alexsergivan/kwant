@@ -8,9 +8,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-### Added
-- **Sign-in to tool servers that use client documents.** Tool servers whose sign-in has no automatic registration but accepts a client ID metadata document (the MCP spec's 2025-11-25 way, as ElevenLabs does) now work: kwant on this computer signs in as `https://kwant.si/oauth/client.json`, and a self-hosted kwant on https serves its own document at `/api/mcp/oauth/client.json`. Servers with automatic registration keep using it. A server that offers neither now says the app has to be registered in its own settings, instead of a sign-in that can never work.
-
 ## [Mac 0.9.6] - 2026-11-13
 
 kwant 0.9.6: a team suggested from your own words, an Inbox that shows what your bots finished while you were away, bots that carry on or ask you when they stop, one Settings card that says if you're on the latest version and a Chrome that sites see as normal Chrome, with a window for Google sign-ins.

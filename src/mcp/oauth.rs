@@ -38,12 +38,11 @@ const LOGO_URI: &str = "https://kwant.si/apple-touch-icon.png";
 pub enum OAuthError {
     #[error("{0}")]
     Discovery(String),
-    #[error(
-        "this server's sign-in needs an app registered in the server's own settings; \
-         kwant can't register itself there"
-    )]
+    #[error("this server only lets in apps that were set up with it in advance, so signing in from here can't work")]
     NoRegistration,
-    #[error("this server's sign-in only works when kwant is opened on this computer (localhost) or over https")]
+    #[error(
+        "this server's sign-in only works from localhost or an https address, not from a plain http address like this one"
+    )]
     CimdNeedsHttps,
     #[error("client registration failed: {0}")]
     Registration(String),

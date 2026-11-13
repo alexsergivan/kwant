@@ -539,7 +539,10 @@ async fn no_way_to_register_is_a_clear_error() {
     let (status, body) = call(&e.app, "POST", &format!("/api/mcp/servers/{id}/oauth/start"), Some(json!({"origin": ORIGIN}))).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["code"], "no_client_registration", "{body}");
-    assert!(body["error"].as_str().unwrap().contains("server's own settings"), "{body}");
+    assert_eq!(
+        body["error"],
+        "this server only lets in apps that were set up with it in advance, so signing in from here can't work"
+    );
 
     // Documents need https or loopback: kwant on a LAN address can't use them
     let e = env(document_only(false).await).await;
@@ -555,6 +558,10 @@ async fn no_way_to_register_is_a_clear_error() {
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     let body: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(body["code"], "cimd_needs_https", "{body}");
+    assert_eq!(
+        body["error"],
+        "this server's sign-in only works from localhost or an https address, not from a plain http address like this one"
+    );
     assert!(e
         .state
         .db

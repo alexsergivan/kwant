@@ -114,8 +114,7 @@ How kwnt gets a client, in order:
      itself (below), so the server must be able to reach that address.
    - kwant on plain http elsewhere (a LAN address): no document; `502` with
      `"code": "cimd_needs_https"`.
-4. Neither: `502` with `"code": "no_client_registration"`; the app has to be registered in the
-   server's own settings, which kwnt can't do.
+4. Neither: `502` with `"code": "no_client_registration"`. The server only accepts clients registered with it in advance, and kwnt has no field for a client ID made that way, so retrying can't help.
 
 ### `POST /api/mcp/servers/:id/oauth/start`
 Body: `{"origin": "https://kwnt.example.com"}`: the browser's `location.origin`. It must be http(s)
