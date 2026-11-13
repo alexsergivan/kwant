@@ -51,6 +51,7 @@ pub mod concierge;
 pub mod rerouting;
 pub mod import_routes;
 pub mod inbox;
+pub mod inbox_done;
 pub mod isolated_folders_routes;
 pub mod approval_modes;
 pub mod passwords;
