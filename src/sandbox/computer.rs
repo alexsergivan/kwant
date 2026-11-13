@@ -641,7 +641,7 @@ pub async fn ensure_local_chrome(profile: &Path, headless: bool) -> Result<(Stri
 /// its arguments to the running one, which opens one more blank window each time. The stale
 /// `DevToolsActivePort` is removed only once no process holds the profile, since removing a live
 /// Chrome's port file left every later call unable to find it, so each one started another.
-pub async fn ensure_chrome_with<'a, P, PF, S>(
+pub async fn ensure_chrome_with<'a, P, PF, S, L>(
     profile: &Path,
     probe: P,
     spawn: S,
@@ -650,7 +650,8 @@ pub async fn ensure_chrome_with<'a, P, PF, S>(
 where
     P: Fn() -> PF,
     PF: std::future::Future<Output = Option<(String, bool)>> + 'a,
-    S: FnOnce() -> Result<(), String>,
+    S: FnOnce() -> Result<L, String>,
+    L: Into<Launched>,
 {
     let lock = launch_lock(profile);
     let _in_process = lock.lock().await;
@@ -692,11 +693,20 @@ where
             let _ = std::fs::remove_file(profile.join(name));
         }
     }
-    spawn()?;
+    let launched: Launched = spawn()?.into();
     let deadline = tokio::time::Instant::now() + timing.start;
     loop {
+        // read before the probe, so a Chrome that opened its port and then closed is not missed
+        let exited = launched.exit();
         if let Some(found) = probe().await {
             return Ok(found);
+        }
+        if let Some(status) = exited {
+            // it closed without answering: stop waiting, unless another Chrome took the profile
+            // over (then that one is waited for as before)
+            if profile_owner(profile).is_none() {
+                return Err(launched.closed_message(&status));
+            }
         }
         if tokio::time::Instant::now() >= deadline {
             return Err("Chrome started but did not open its debugging port in time.".into());
@@ -705,9 +715,149 @@ where
     }
 }
 
+/// The file in kwant's Chrome profile that Chrome's stderr goes to: emptied at each start, kept
+/// under [`STDERR_CAP`] while kwnt runs, and read only once that Chrome has closed. Not a pipe:
+/// Chrome outlives kwnt, and its next write to a pipe whose reader is gone would fail (EPIPE).
+pub const STDERR_FILE: &str = "kwant-chrome-stderr.log";
+
+/// How large [`STDERR_FILE`] may grow before kwnt empties it.
+const STDERR_CAP: u64 = 256 * 1024;
+
+/// How the Chrome kwant just started ended, if it has, written by the thread that reaps it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChildExit {
+    Code(i32),
+    Signal(i32),
+    Unknown,
+}
+
+impl ChildExit {
+    fn from_status(status: std::process::ExitStatus) -> Self {
+        if let Some(code) = status.code() {
+            return Self::Code(code);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(signal) = status.signal() {
+                return Self::Signal(signal);
+            }
+        }
+        Self::Unknown
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            Self::Code(code) => format!("exit code {code}"),
+            Self::Signal(signal) => format!("signal {signal}"),
+            Self::Unknown => "no exit code".into(),
+        }
+    }
+}
+
+/// What [`ensure_chrome_with`] knows about the Chrome it started: whether it has closed, and where
+/// its stderr went. Empty (never closes, no stderr) for a start that doesn't track its child.
+#[derive(Clone, Default)]
+pub struct Launched {
+    exit: std::sync::Arc<std::sync::OnceLock<ChildExit>>,
+    stderr: Option<PathBuf>,
+}
+
+impl From<()> for Launched {
+    fn from(_: ()) -> Self {
+        Self::default()
+    }
+}
+
+impl Launched {
+    /// One whose exit is set through [`Launched::closed`], and whose stderr is in `stderr`.
+    pub fn tracked(stderr: Option<PathBuf>) -> Self {
+        Self { exit: Default::default(), stderr }
+    }
+
+    /// Records that the child ended (the first call wins).
+    pub fn closed(&self, how: ChildExit) {
+        let _ = self.exit.set(how);
+    }
+
+    pub fn exit(&self) -> Option<ChildExit> {
+        self.exit.get().cloned()
+    }
+
+    /// The error for a Chrome that closed before it answered: in plain words first, with its last
+    /// stderr line, then up to its last three lines.
+    pub fn closed_message(&self, how: &ChildExit) -> String {
+        let lines = self.stderr.as_deref().map(stderr_tail).unwrap_or_default();
+        let Some(last) = lines.last() else {
+            return format!("kwant's Chrome closed right after starting ({}) and printed no error.", how.describe());
+        };
+        let mut text = format!("kwant's Chrome closed right after starting: {last}\n\nIts last lines ({}):", how.describe());
+        for line in &lines {
+            text.push('\n');
+            text.push_str(line);
+        }
+        text
+    }
+}
+
+/// The last (up to) three non-blank lines of the stderr file at `path`, each cut to 300 characters.
+pub fn stderr_tail(path: &Path) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else { return Vec::new() };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let _ = file.seek(SeekFrom::Start(len.saturating_sub(16 * 1024)));
+    let mut raw = Vec::new();
+    let _ = file.read_to_end(&mut raw);
+    let text = String::from_utf8_lossy(&raw);
+    let lines: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| match line.char_indices().nth(300) {
+            Some((at, _)) => format!("{}…", &line[..at]),
+            None => line.to_string(),
+        })
+        .collect();
+    lines[lines.len().saturating_sub(3)..].to_vec()
+}
+
+/// Waits for kwant's Chrome to end and records how, never killing it. Looks often while Chrome
+/// starts, then once a second, and keeps its stderr file under [`STDERR_CAP`] while it runs.
+fn reap_chrome(mut child: std::process::Child, launched: Launched) {
+    let started = std::time::Instant::now();
+    let mut last_cap_check = started;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                launched.closed(ChildExit::from_status(status));
+                return;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                // can't be waited for here: leave it to the port wait, as before
+                let _ = child.wait();
+                return;
+            }
+        }
+        if last_cap_check.elapsed() >= Duration::from_secs(5) {
+            last_cap_check = std::time::Instant::now();
+            if let Some(path) = &launched.stderr {
+                if std::fs::metadata(path).is_ok_and(|m| m.len() > STDERR_CAP) {
+                    // opened for appending, so Chrome's next line lands at the new end
+                    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
+                        let _ = file.set_len(0);
+                    }
+                }
+            }
+        }
+        let starting = started.elapsed() < Duration::from_secs(60);
+        std::thread::sleep(if starting { Duration::from_millis(50) } else { Duration::from_secs(1) });
+    }
+}
+
 /// Starts the kwant Chrome on `profile`, detached, so it outlives a switch or a kwant restart.
 /// Only [`ensure_local_chrome`] calls this, once no Chrome holds the profile.
-fn launch_local_chrome(profile: &Path, headless: bool) -> Result<(), String> {
+fn launch_local_chrome(profile: &Path, headless: bool) -> Result<Launched, String> {
     let chrome = local_chrome_path()
         .ok_or_else(|| local_reason().unwrap_or_else(|| "No Chrome or Chromium was found.".into()))?;
     if !headless {
@@ -720,26 +870,32 @@ fn launch_local_chrome(profile: &Path, headless: bool) -> Result<(), String> {
     record_launch_mode(profile, headless)
         .and_then(|()| record_launch_identity(profile))
         .map_err(|e| format!("Could not write to {}: {e}", profile.display()))?;
+    // stderr to a file emptied at each start (see STDERR_FILE), or nowhere if it can't be written
+    let stderr_path = profile.join(STDERR_FILE);
+    // (emptied through its own handle: on Windows an append-only one can't be cut)
+    let stderr_file = std::fs::File::create(&stderr_path)
+        .and_then(|_| std::fs::OpenOptions::new().append(true).open(&stderr_path))
+        .ok();
+    let launched = Launched::tracked(stderr_file.is_some().then_some(stderr_path));
     let mut cmd = std::process::Command::new(&chrome);
     cmd.args(chrome_args(profile, headless))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(stderr_file.map_or_else(std::process::Stdio::null, std::process::Stdio::from));
     #[cfg(unix)]
     {
         // its own process group, so Ctrl+C on kwnt does not close the person's window
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| format!("Could not start {}: {e}", chrome.display()))?;
     tracing::info!(pid = child.id(), headless, profile = %profile.display(), "started kwant's local Chrome");
-    // reap it when it exits; never kill it
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    // reap it when it exits, and say so to the port wait; never kill it
+    let reaper = launched.clone();
+    std::thread::spawn(move || reap_chrome(child, reaper));
+    Ok(launched)
 }
 
 #[cfg(test)]
@@ -1314,6 +1470,71 @@ mod tests {
         let found = ensure_chrome_with(dir.path(), probe, || { spawned = true; Ok(()) }, fast()).await.unwrap();
         assert!(!spawned);
         assert_eq!(found, ("http://127.0.0.1:9".to_string(), false));
+    }
+
+    /// A Chrome that closes before it answers ends the wait at once, with its own last lines.
+    #[tokio::test]
+    async fn a_chrome_that_closes_at_once_stops_the_wait_with_its_last_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let stderr = dir.path().join(STDERR_FILE);
+        std::fs::write(&stderr, "one\n\ntwo\nthree\n  \nlibnss3.so: cannot open shared object file\n\n").unwrap();
+        let started = std::time::Instant::now();
+        let timing = LaunchTiming { start: Duration::from_secs(20), ..fast() };
+        let error = ensure_chrome_with(dir.path(), || async { None }, || {
+            let launched = Launched::tracked(Some(stderr.clone()));
+            launched.closed(ChildExit::Code(127));
+            Ok(launched)
+        }, timing).await.unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        assert!(error.starts_with("kwant's Chrome closed right after starting: libnss3.so: cannot open shared object file\n"), "{error}");
+        assert!(error.contains("(exit code 127):\ntwo\nthree\nlibnss3.so"), "{error}");
+        assert!(!error.contains("one"), "only the last three lines: {error}");
+    }
+
+    /// One that printed nothing still says it closed, and how.
+    #[tokio::test]
+    async fn a_silent_chrome_that_closes_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = ensure_chrome_with(dir.path(), || async { None }, || {
+            let launched = Launched::tracked(None);
+            launched.closed(ChildExit::Signal(6));
+            Ok(launched)
+        }, fast()).await.unwrap_err();
+        assert_eq!(error, "kwant's Chrome closed right after starting (signal 6) and printed no error.");
+    }
+
+    /// A Chrome that answers is used even if the process kwant started has ended (it handed over).
+    #[tokio::test]
+    async fn a_chrome_that_answers_is_used_even_after_its_launcher_ended() {
+        let dir = tempfile::tempdir().unwrap();
+        // nothing answers before the start; once started, it answers though its process has ended
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+        let probe = || {
+            let n = probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async move { (n >= 1).then(|| ("v".to_string(), true)) }
+        };
+        let found = ensure_chrome_with(dir.path(), probe, || {
+            let launched = Launched::tracked(None);
+            launched.closed(ChildExit::Code(0));
+            Ok(launched)
+        }, fast()).await;
+        assert_eq!(found.unwrap().0, "v");
+    }
+
+    #[test]
+    fn stderr_tail_reads_only_the_end_and_cuts_long_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STDERR_FILE);
+        assert!(stderr_tail(&path).is_empty(), "no file");
+        let mut text = "early line\n".repeat(5000); // more than the 16 KB read
+        text.push_str(&"x".repeat(400));
+        text.push_str("\nlast\n");
+        std::fs::write(&path, text).unwrap();
+        let tail = stderr_tail(&path);
+        assert_eq!(tail.len(), 3);
+        assert_eq!(tail[0], "early line");
+        assert_eq!(tail[1], format!("{}…", "x".repeat(300)));
+        assert_eq!(tail[2], "last");
     }
 
     /// A port file left by a Chrome that is gone is removed and one fresh Chrome starts.
