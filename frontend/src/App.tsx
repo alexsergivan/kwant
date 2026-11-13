@@ -75,7 +75,8 @@ import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
-import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
+import { clearAllTurns, forgetLastRuns, resetTurns, turnEnded, turnRunsOn, turnStarted } from './kwantActivity';
+import { setBadgeBots, setBadgeEngines } from './modelBadgeData';
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
@@ -1221,6 +1222,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             }
             break;
           }
+          case 'turn_runs_on':
+            // The engine and model a turn runs on: at its start, and again when it fails over (model badge).
+            if (event.data?.kwant_id) turnRunsOn(event.data.kwant_id, event.data);
+            break;
           case 'thread_updated':
           case 'ThreadUpdated': {
             const t: Thread | undefined = event.data?.thread;
@@ -3612,6 +3617,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const spriteOf = useCallback((id: string) => kwants.find((k) => k.id === id)?.avatar_sprite, [kwants]);
   // Avatars that only know a bot's title or name look its saved style up here.
   useEffect(() => setKnownBots(kwants), [kwants]);
+  // The model badge on each bot's avatar: its pick and last reply's engine (which now carries what a
+  // turn that just ended ran on), and which engines can run.
+  useEffect(() => {
+    setBadgeBots(kwants);
+    forgetLastRuns();
+  }, [kwants]);
+  useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
