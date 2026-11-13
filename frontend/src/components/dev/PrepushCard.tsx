@@ -177,9 +177,12 @@ const StoryLine: React.FC<{ story: Story; card: Card; bot: string; onOpenCard?: 
       </p>
     ) : (
       <p role="status" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta">
-        <Led s={STORY_LED[story.step]} className={`shrink-0 ${story.step === 'pushed' || story.step === 'blocked' ? '' : 'dv-led-still'}`} />
-        <span data-story-now className={`min-w-0 [overflow-wrap:anywhere] ${story.step === 'pushed' ? 'font-medium text-emerald-300' : story.step === 'blocked' ? 'text-rose-300' : 'text-zinc-200'}`}>
-          {story.step === 'asks' ? `${bot}'s push needs your OK.` : story.now}
+        {/* The light stays beside the first line of text when a long line wraps on a phone (round 2). */}
+        <span data-story-text className="flex min-w-0 items-start gap-2">
+          <Led s={STORY_LED[story.step]} className={`mt-[5px] shrink-0 ${story.step === 'pushed' || story.step === 'blocked' ? '' : 'dv-led-still'}`} />
+          <span data-story-now className={`min-w-0 [overflow-wrap:anywhere] ${story.step === 'pushed' ? 'font-medium text-emerald-300' : story.step === 'blocked' ? 'text-rose-300' : 'text-zinc-200'}`}>
+            {story.step === 'asks' ? `${bot}'s push still needs your OK.` : story.now}
+          </span>
         </span>
         {story.next && onOpenCard && story.step !== 'asks' && (
           <button type="button" data-story-next={story.next.id} className={LINK} onClick={() => onOpenCard(story.next!.id)}>

@@ -346,3 +346,9 @@ test('the new card after an override push names Push anyway as the OK (Mira FIX 
   const out = html(m.PrepushCard, { card: p, bot: 'Quant' });
   assert.match(out, /your Push anyway was the OK, so it didn(&#x27;|')t ask again\./);
 });
+
+test('a long story line keeps its light beside the text, so it never sits alone on a row on a phone', () => {
+  const r = card(fx.PP_RETRIED_GRANT);
+  const out = html(m.PrepushCard, { card: r, bot: 'Quant', story: m.storyOf(r, [r], 'Quant', null, fx.PP_RETRIED_GRANT.grant.expires_at + 1) });
+  assert.match(out, /<span data-story-text="true" class="flex min-w-0 items-start gap-2"><span aria-hidden="true" data-s="off" class="dv-led mt-\[5px\] shrink-0 dv-led-still"><\/span><span data-story-now/);
+});
