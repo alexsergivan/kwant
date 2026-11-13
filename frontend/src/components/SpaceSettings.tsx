@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Check,
   Download,
+  FileText,
   FileUp,
   Globe,
   LayoutGrid,
@@ -36,6 +37,7 @@ import { ImportError, ImportRecord, downloadExport, importApi, importErrorText }
 import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
 import { SpaceApprovalsSetting } from './ApprovalsSetting';
 import { DevModeSettings } from './DevModeSettings';
+import { SpaceDocsTab } from './SpaceDocsTab';
 
 import type { AppsSection, SettingsScope, SpaceSettingsTab } from '../nav';
 import { AppsAccounts } from './AppsAccounts';
@@ -50,6 +52,7 @@ const TABS: Array<{ id: SpaceSettingsTab; label: string; icon: React.ReactNode }
   { id: 'apps', label: 'Apps & accounts', icon: <LayoutGrid size={15} /> },
   { id: 'bots', label: 'Kwant bots', icon: <Bot size={15} /> },
   { id: 'teams', label: 'Teams', icon: <Users size={15} /> },
+  { id: 'docs', label: 'Documents', icon: <FileText size={15} /> },
   { id: 'skills', label: 'Skills', icon: <Sparkles size={15} /> },
   { id: 'routines', label: 'Routines', icon: <CalendarClock size={15} /> },
   { id: 'import', label: 'Import & export', icon: <FileUp size={15} /> },
@@ -250,6 +253,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
               )}
               {tab === 'bots' && <BotsTab {...tp} />}
               {tab === 'teams' && <TeamsTab {...p} />}
+              {tab === 'docs' && <SpaceDocsTab key={space.id} spaceId={space.id} spaceName={space.name} isPhone={p.isPhone} />}
               {tab === 'skills' && <SkillsTab {...p} />}
               {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={toApp} onOpenRunResult={p.onOpenRunResult} />}
               {tab === 'import' && <ImportTab {...tp} />}
