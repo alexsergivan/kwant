@@ -224,8 +224,17 @@ async fn the_continue_button_carries_a_paused_chain_on() {
     env.say("@Ann look at this MENTION:Bob").await;
     env.wait_for("the notice", || async { !env.notices().await.is_empty() }).await;
     let notice = env.notices().await.remove(0);
+    // 0.9.5: the pause is in Needs you too, once, with the notice's Continue
+    let stopped = |away: Value| -> Vec<Value> { away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").cloned().collect() };
+    let items = stopped(ok(&env.app, "GET", "/api/away", None).await);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0]["message_id"], notice.id.as_str());
+    assert_eq!(items[0]["retry"], json!({"type": "continue"}));
+    let title = items[0]["title"].as_str().unwrap();
+    assert!(title.contains("Bob") && title.ends_with("Continue in the chat carries on."), "{title}");
     ok(&env.app, "POST", &format!("/api/chains/{}/continue", notice.id), None).await;
     env.wait_for("Bob's turn", || async { env.replies_from("Bob").await == 1 }).await;
+    assert!(stopped(ok(&env.app, "GET", "/api/away", None).await).is_empty(), "Continue answered it");
     assert!(env.messages().await.iter().any(|m| m.sender_role == "user" && m.text == "continue"), "the person's continue is in the chat");
     // Not a notice: refused
     let first = env.messages().await.remove(0);

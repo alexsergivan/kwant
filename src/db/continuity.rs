@@ -71,7 +71,7 @@ pub struct PinChange {
 }
 
 /// A chat turn in progress: where its reply would go.
-#[derive(Debug, Clone, FromRow, PartialEq)]
+#[derive(Debug, Clone, FromRow, PartialEq, Default)]
 pub struct RunningTurn {
     pub turn_id: String,
     pub kwant_id: String,
@@ -80,6 +80,21 @@ pub struct RunningTurn {
     pub direct_kwant_id: Option<String>,
     pub thread_id: Option<String>,
     pub started_at: DateTime<Utc>,
+    /// Whether a stop of this turn asks the person to resume it in Needs you (a person's own
+    /// chat, see `server::stopped`). `None`: written by a kwnt before 0.9.5.
+    #[sqlx(default)]
+    pub asks: Option<bool>,
+    /// The message the turn answers, so a restart can continue it (0.9.5). `None`: an older kwnt.
+    #[sqlx(default)]
+    pub prompt: Option<String>,
+    /// The turn's tool steps so far, newest last, as `server::restart_resume::Step` JSON: what a
+    /// restart cut off mid-call, and what already ran.
+    #[sqlx(default)]
+    pub steps: Option<String>,
+    /// The turn is itself the continuation of one a restart cut off: a second restart asks the
+    /// person instead of continuing again.
+    #[sqlx(default)]
+    pub resumed: Option<bool>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -285,6 +300,23 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+        // 0.9.5 (additive): whether a restart that cuts it off asks the person in Needs you
+        let has_asks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('running_turns') WHERE name = 'asks'")
+            .fetch_one(&self.pool)
+            .await?;
+        if has_asks == 0 {
+            sqlx::query("ALTER TABLE running_turns ADD COLUMN asks INTEGER").execute(&self.pool).await?;
+        }
+        // 0.9.5 (additive): what a restart needs to continue the turn by itself
+        for (col, ty) in [("prompt", "TEXT"), ("steps", "TEXT"), ("resumed", "INTEGER")] {
+            let has: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('running_turns') WHERE name = ?1")
+                .bind(col)
+                .fetch_one(&self.pool)
+                .await?;
+            if has == 0 {
+                sqlx::query(&format!("ALTER TABLE running_turns ADD COLUMN {col} {ty}")).execute(&self.pool).await?;
+            }
+        }
 
         let had_index: Option<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'",
@@ -1000,8 +1032,8 @@ impl Database {
 
     pub async fn add_running_turn(&self, turn: &RunningTurn) -> Result<(), DbError> {
         sqlx::query(
-            "INSERT OR REPLACE INTO running_turns (turn_id, kwant_id, kwant_name, channel_id, direct_kwant_id, thread_id, started_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO running_turns (turn_id, kwant_id, kwant_name, channel_id, direct_kwant_id, thread_id, started_at, asks, \
+             prompt, steps, resumed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(&turn.turn_id)
         .bind(&turn.kwant_id)
@@ -1010,8 +1042,18 @@ impl Database {
         .bind(&turn.direct_kwant_id)
         .bind(&turn.thread_id)
         .bind(turn.started_at)
+        .bind(turn.asks)
+        .bind(&turn.prompt)
+        .bind(&turn.steps)
+        .bind(turn.resumed)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// Records a running turn's tool steps so far (see [`RunningTurn::steps`]).
+    pub async fn set_running_steps(&self, turn_id: &str, steps: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE running_turns SET steps = ?1 WHERE turn_id = ?2").bind(steps).bind(turn_id).execute(&self.pool).await?;
         Ok(())
     }
 

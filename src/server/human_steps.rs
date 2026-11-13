@@ -632,6 +632,53 @@ pub async fn ask_for_bot_wall(state: &AppState, scope: &SelfScope, on: &str, pag
     }
 }
 
+/// How long kwnt waits before asking again about a sign-in wall it already asked about on a page.
+pub const SIGN_IN_REASK_HOURS: i64 = 12;
+
+/// The step's line for a sign-in wall kwnt found: who needs what, where, and what happens next.
+pub fn sign_in_reason(kwant_name: &str, kind: &str, host: &str) -> String {
+    let reason = match kind {
+        "two_factor" => format!("{kwant_name} needs you to enter the sign-in code for {host} in the browser panel, then it continues."),
+        _ => format!("{kwant_name} needs you to sign in to {host} in the browser panel, then it continues."),
+    };
+    reason.chars().take(300).collect()
+}
+
+/// 0.9.5 (#9): a turn in a person's chat ended with its browser page on a sign-in form it didn't
+/// get past, and it asked the person nothing. Instead of the bot's work stopping there quietly,
+/// the person gets one sign-in step for that site on that page, whose Done starts the bot again.
+/// Asked once per site and page every [`SIGN_IN_REASK_HOURS`] (whatever they answered). Returns
+/// the step's reason when it asked.
+pub async fn ask_for_sign_in_wall(state: &AppState, scope: &SelfScope, page: &str) -> Option<String> {
+    scope.origin.as_ref()?;
+    let turn_id = scope.turn_id.as_deref()?;
+    if browser_is_held(state, page).await || state.db.turn_asked_human_step(turn_id).await.unwrap_or(true) {
+        return None;
+    }
+    let ctrl = state.browser_controllers.lock().await.get(page).cloned()?;
+    let kind = ctrl.probe_sign_in().await.ok().flatten()?;
+    let _ = ctrl.sync_location().await;
+    let raw = ctrl.current_url.lock().await.clone()?;
+    let url = crate::db::human_steps::clean_url(&raw)?;
+    let site = crate::db::human_steps::sign_in_site(&url)?;
+    let host = url::Url::parse(&url).ok()?.host_str()?.trim_start_matches("www.").to_string();
+    let since = chrono::Utc::now() - chrono::Duration::hours(SIGN_IN_REASK_HOURS);
+    if state.db.sign_in_asked_since(page, &site, since).await.unwrap_or(true) {
+        return None;
+    }
+    let reason = sign_in_reason(&scope.kwant_name, kind, &host);
+    match raise_step(state, scope, Some(page.to_string()), kind, &reason, Some(&url), None, "auto", false).await {
+        Ok(_) => {
+            tracing::info!(kwant_id = %scope.kwant_id, page, kind, "a turn ended on a sign-in wall: asked the person");
+            Some(reason)
+        }
+        Err(e) => {
+            tracing::warn!(kwant_id = %scope.kwant_id, error = %e, "couldn't ask the person to sign in");
+            None
+        }
+    }
+}
+
 /// The step to ask for on a blocked page: reason, address and the widget's box.
 fn wall_request(page: &Value) -> (String, Option<String>, Option<CaptchaHit>) {
     let target = CaptchaHit::parse(&page["captcha"]).and_then(CaptchaHit::on_screen);
@@ -856,6 +903,16 @@ pub async fn cancel_for_turn(state: &AppState, turn_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sign_in_wall_asks_for_one_specific_thing() {
+        assert_eq!(sign_in_reason("Ben", "sign_in", "tiktok.com"), "Ben needs you to sign in to tiktok.com in the browser panel, then it continues.");
+        assert_eq!(
+            sign_in_reason("Ben", "two_factor", "github.com"),
+            "Ben needs you to enter the sign-in code for github.com in the browser panel, then it continues."
+        );
+        assert!(sign_in_reason(&"B".repeat(400), "sign_in", "x.com").chars().count() <= 300);
+    }
 
     #[tokio::test]
     async fn the_hub_wakes_the_waiting_turn_once() {

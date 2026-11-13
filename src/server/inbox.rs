@@ -529,7 +529,8 @@ pub fn current_verdict(v: &TaskVerdict, in_review_since: DateTime<Utc>) -> Optio
     serde_json::to_value(v).ok()
 }
 
-/// A watcher's open item (`watch::waiting_items`) in Waiting on you, keyed like the away items.
+/// A watcher's open item (`watch::waiting_items`) or a stopped item (`away::stopped_items`) in
+/// Waiting on you, keyed like the away items.
 fn watch_item(mut v: Value, last_seen: Option<DateTime<Utc>>) -> Value {
     let at = v["timestamp"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&Utc));
     let at_ms = at.map(|t| t.timestamp_millis()).unwrap_or(0);
@@ -841,16 +842,19 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     };
     // What a mission watcher left for the person (P1), listed and counted as on /api/away
     let watch = super::missions::watch::waiting_items(&state, &space).await;
+    // Work that stopped and waits for the person to resume it (0.9.5), as on /api/away
+    let stopped = away::stopped_items(&state, &space).await;
     // A connection only the person can fix (0.9.5), as listed on /api/waiting
     let connections = match state.db.list_kwants(&space).await {
         Ok(kwants) => super::tool_failures::needs_you(&state, &kwants).await,
         Err(_) => Vec::new(),
     };
-    let unseen_total = unseen_total + watch.len() as i64 + connections.len() as i64;
+    let unseen_total = unseen_total + watch.len() as i64 + stopped.len() as i64 + connections.len() as i64;
 
     let mut items: Vec<Value> = Vec::new();
     items.extend(waiting.into_iter().map(|r| away_item(r, Group::WaitingOnYou, seen)));
     items.extend(watch.into_iter().map(|v| watch_item(v, seen)));
+    items.extend(stopped.into_iter().map(|v| watch_item(v, seen)));
     items.extend(connections.into_iter().map(|(at, v)| connection_item(at, &v, seen)));
     // An approval's title is its own question when the call names what it is about (Iris's #539).
     // `question` is sent only then, so the Inbox can tell it from today's tool title, which stays

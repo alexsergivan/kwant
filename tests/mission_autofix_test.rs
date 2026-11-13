@@ -641,6 +641,10 @@ async fn auth_budget_and_denied_are_never_retried_and_ask_the_person() {
     assert_eq!(t["last_failure"]["class"], "budget", "{t}");
     assert!(kinds(&t["needs_you"]).contains(&"fix_needed".to_string()), "{t}");
     assert!(attempts(&e, &budget).await.iter().all(|a| a.status == "skipped"));
+    // 0.9.5: kwant stopped it, so the owner's chat says so once: what, why, what carries it on
+    let lines: Vec<_> = e.state.db.list_messages(&e.bot.id, 50).await.unwrap().into_iter().filter(|m| m.text.starts_with("Blocked: \"Small\"")).collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].text.ends_with("Move it back to the backlog on the board to carry on."), "{}", lines[0].text);
     let (status, v) = send(&e.app, "POST", &format!("/api/tasks/{budget}/autofix"), None, None).await;
     assert_eq!((status, v["code"].as_str()), (StatusCode::CONFLICT, Some("not_retryable")), "{v}");
     kwnt::server::missions::autofix::run_due(&e.state).await;

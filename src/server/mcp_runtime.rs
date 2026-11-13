@@ -497,6 +497,126 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     Some(json!({"ticket_id": ticket_id, "resolved": true, "status": status, "resumed": "new_turn"}))
 }
 
+/// Cards nobody answered within [`crate::db::approval_modes::WAITING_APPROVAL_HOURS`] expire
+/// (0.9.5): each once, with a notice in the card's chat and a Needs-you item whose Retry
+/// (`POST /api/approvals/:id/retry`) asks the bot to make the call again, so the person gets a
+/// fresh card. Audit cards just close (their stage is over). Returns how many expired.
+pub async fn expire_unanswered(state: &AppState) -> usize {
+    let Ok(expired) = state.db.expire_waiting_approvals().await else {
+        return 0;
+    };
+    let n = expired.len();
+    for (approval, chat) in expired {
+        let _ = state.event_sender.send(RuntimeEvent::approval_withdrawn(&approval.id, "expired", None));
+        if super::missions::auditor::is_audit_card(&chat, &approval.tool_name) {
+            continue;
+        }
+        let Ok(Some(kwant)) = state.db.get_kwant(&approval.kwant_id).await else {
+            continue;
+        };
+        let place = expired_place(&chat, &kwant.id);
+        let text = expired_text(&kwant.name, &approval.tool_name, crate::db::approval_modes::WAITING_APPROVAL_HOURS);
+        let msg = crate::db::models::NewMessage {
+            channel_id: place.channel_id.clone(),
+            direct_kwant_id: place.direct_kwant_id.clone(),
+            sender_role: "system".into(),
+            sender_id: "kwnt".into(),
+            text: text.clone(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+        };
+        let meta = json!({
+            "kind": "approval_expired",
+            "approval_id": approval.id,
+            "kwant_id": kwant.id,
+            "kwant_name": kwant.name,
+            "tool_name": approval.tool_name,
+        });
+        let extra = crate::db::models::MessageExtra { thread_id: place.thread_id.clone(), meta: Some(meta) };
+        let saved = state.db.insert_message_with(&msg, &extra).await.ok();
+        if let Some(t) = &place.thread_id {
+            let _ = state.db.touch_thread(t).await;
+        }
+        if let Some(m) = &saved {
+            let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(m).unwrap_or_default() });
+        }
+        super::stopped::ask(state, &place, saved.as_ref().map(|m| m.id.as_str()), &text, super::stopped::Resume::Approval { approval_id: approval.id.clone() }).await;
+        tracing::info!(ticket_id = %approval.id, kwant = %kwant.id, tool = %approval.tool_name, "an approval card expired unanswered: told the person");
+    }
+    if n > 0 {
+        super::missions::listener::refresh_needs_you(state).await;
+    }
+    n
+}
+
+/// Where an expired card's notice goes: its chat as recorded on the card, else the bot's DM.
+fn expired_place(chat: &Value, kwant_id: &str) -> super::stopped::Place {
+    let thread_id = chat["thread_id"].as_str().map(str::to_string);
+    let channel_id = chat["channel_id"].as_str().map(str::to_string);
+    let direct = chat["direct_kwant_id"].as_str().map(str::to_string);
+    let direct_kwant_id = match (&thread_id, &channel_id, direct) {
+        (None, None, None) => Some(kwant_id.to_string()),
+        (_, _, d) => d,
+    };
+    super::stopped::Place { kwant_id: kwant_id.to_string(), channel_id, direct_kwant_id, thread_id }
+}
+
+/// The chat notice (and Needs-you line) for a card that expired unanswered.
+pub fn expired_text(kwant_name: &str, tool_name: &str, hours: i64) -> String {
+    format!("{kwant_name} stopped waiting for your OK to use {tool_name} (no answer in {hours} h), so that step didn't run. Retry asks you again.")
+}
+
+/// Retry on a card that expired unanswered: starts a turn in its chat telling the bot to make the
+/// call again. Nothing is granted: the call asks for a fresh card. `None` when the card isn't
+/// expired (never, or Retry already ran).
+pub async fn retry_expired(state: &AppState, ticket_id: &str) -> Option<Value> {
+    let (approval, chat) = state.db.claim_expired_approval(ticket_id).await.ok().flatten()?;
+    let _ = state.db.close_stopped_for_approval(ticket_id).await;
+    let not_resumed = |why: &str| Some(json!({"ticket_id": ticket_id, "status": "retried", "resumed": false, "reason": why}));
+    let Ok(Some(kwant)) = state.db.get_kwant(&approval.kwant_id).await else {
+        return not_resumed("the bot no longer exists");
+    };
+    if super::spaces::ensure_active(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await.is_err() {
+        return not_resumed("the bot's space is archived");
+    }
+    let details: Value = serde_json::from_str(&approval.parameters).unwrap_or(Value::Null);
+    let arguments = details.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let place = expired_place(&chat, &kwant.id);
+    let thread_id = place.thread_id.clone();
+    // A DM's scope is the bot's own chat (no channel, no thread)
+    let channel_id = place.channel_id.clone();
+    let conversation = thread_id.clone().or_else(|| channel_id.clone()).unwrap_or_else(|| kwant.id.clone());
+    let depth = match &thread_id {
+        Some(t) => state.db.delegation_for_thread(t).await.ok().flatten().map(|d| d.depth).unwrap_or(0),
+        None => 0,
+    };
+    let job = state.turns.start_job([conversation.clone(), ticket_id.to_string()]);
+    let scope = match super::routes::scope_for(state, &kwant, channel_id, thread_id, &job, depth).await {
+        Ok(s) => s,
+        Err(why) => return not_resumed(&why),
+    };
+    let prompt = expired_retry_prompt(&approval.tool_name, &arguments);
+    let target = kwant.clone();
+    let opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    tokio::spawn(async move {
+        let _job = job;
+        let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
+    });
+    Some(json!({"ticket_id": ticket_id, "status": "retried", "resumed": "new_turn"}))
+}
+
+/// The turn Retry starts on an expired card.
+pub fn expired_retry_prompt(tool_name: &str, arguments: &Value) -> String {
+    let args = serde_json::to_string_pretty(arguments).unwrap_or_default();
+    let args: String = args.chars().take(2000).collect();
+    format!(
+        "[The person pressed Retry on a tool call that waited too long for their OK]\nTool: {tool_name}\nArguments: {args}\n\n\
+Nobody answered the approval card in time, so this call never ran. Make the same call again now; \
+the person gets a fresh card to answer. Then continue the task from where you stopped."
+    )
+}
+
 /// The resumed turn's prompt after a late Allow.
 pub fn late_approval_prompt(tool_name: &str, arguments: &Value) -> String {
     let args = serde_json::to_string_pretty(arguments).unwrap_or_default();
@@ -1099,5 +1219,32 @@ async fn gateway_rpc(
             )
         }
         _ => rpc_error(id, -32601, "method not found"),
+    }
+}
+
+#[cfg(test)]
+mod expired_tests {
+    use super::*;
+
+    #[test]
+    fn an_expired_card_says_what_didnt_run_and_what_resumes_it() {
+        assert_eq!(
+            expired_text("Ben", "Bash", 24),
+            "Ben stopped waiting for your OK to use Bash (no answer in 24 h), so that step didn't run. Retry asks you again."
+        );
+        let p = expired_retry_prompt("Bash", &json!({"command": "ls"}));
+        assert!(p.starts_with("[The person pressed Retry on a tool call that waited too long for their OK]\nTool: Bash"), "{p}");
+        assert!(p.contains("\"command\": \"ls\""), "{p}");
+        assert!(p.contains("fresh card"), "Retry grants nothing: {p}");
+    }
+
+    #[test]
+    fn an_expired_card_with_no_chat_tells_the_bots_own_chat() {
+        let p = expired_place(&Value::Null, "k1");
+        assert_eq!((p.direct_kwant_id.as_deref(), p.channel_id, p.thread_id), (Some("k1"), None, None));
+        let p = expired_place(&json!({"thread_id": "t1"}), "k1");
+        assert_eq!((p.direct_kwant_id, p.thread_id.as_deref()), (None, Some("t1")));
+        let p = expired_place(&json!({"channel_id": "c1"}), "k1");
+        assert_eq!((p.direct_kwant_id, p.channel_id.as_deref()), (None, Some("c1")));
     }
 }

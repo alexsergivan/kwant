@@ -62,6 +62,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     // chats say which replies it cut off
     crate::server::mcp_runtime::keep_cards_after_restart(&state).await;
     crate::server::routes::interrupt_running_turns(&state).await;
+    // Cards that ran out of time while kwant was down tell their chat (0.9.5)
+    crate::server::mcp_runtime::expire_unanswered(&state).await;
     // Audits that were waiting their turn when kwant stopped run now (the cut-off ones ended)
     crate::server::missions::auditor::resume_after_restart(&state).await;
     crate::server::missions::watch::resume_after_restart(&state).await;

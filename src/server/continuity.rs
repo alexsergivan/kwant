@@ -835,14 +835,22 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     // finds it open
     // A browser that doesn't answer is retried here for up to a minute (VM mode), so the tool
     // below doesn't wait all over again
-    match super::routes::open_page_steady(state, target, state.job_pages.wait()).await {
+    let opened = super::routes::open_page_steady(state, target, state.job_pages.wait()).await;
+    // 0.9.5: a page still refused because the browser is busy (its answer's `code`, see
+    // [`super::busy_retry`]) is a step kwnt retries by itself if the reply ends on it
+    if let Err(refusal) = &opened {
+        let (_, Json(body)) = super::routes::page_refused(state, *refusal);
+        super::busy_retry::note(&reader, name, args, super::busy_retry::is_busy(&body));
+    }
+    match opened {
         Ok(ctrl) => ctrl.site_guard.set_driver(&scope.kwant_id),
         Err(refusal @ (super::routes::PageRefusal::PagesFull | super::routes::PageRefusal::Busy)) => {
             return (page_refusal_text(state, refusal), true)
         }
         Err(super::routes::PageRefusal::Unavailable) => {}
     }
-    let (text, is_error) = run_browser_tool(state, target, &reader, name, args).await;
+    let (text, is_error, busy) = run_browser_tool_coded(state, target, &reader, name, args).await;
+    super::busy_retry::note(&reader, name, args, busy);
     // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left. Also
     // when the call itself failed: a click that stalled, was covered or timed out because a
     // check slid over the page is still a check for the person
@@ -888,6 +896,13 @@ fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> S
 /// `reader` names who reads (empty: nobody known), for `browser_page` to answer "unchanged" when
 /// that reader's last page (from any browser tool) still reads the same.
 async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &str, args: &Value) -> (String, bool) {
+    let (text, is_error, _) = run_browser_tool_coded(state, target, reader, name, args).await;
+    (text, is_error)
+}
+
+/// [`run_browser_tool`], plus whether the handler answered that the browser is busy (matched on
+/// the answer's `code`, see [`super::busy_retry::is_busy`]).
+async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, name: &str, args: &Value) -> (String, bool, bool) {
     use super::routes::{
         act_sandbox_allowed, cite_sandbox, get_sandbox_page, navigate_sandbox, unchanged_read, CitePayload, InteractPayload, NavigatePayload,
         PageQuery,
@@ -901,7 +916,7 @@ async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &s
     let result = match name {
         BROWSER_OPEN => {
             let Some(url) = args["url"].as_str().map(str::trim).filter(|u| !u.is_empty()) else {
-                return ("url is required".into(), true);
+                return ("url is required".into(), true, false);
             };
             navigate_sandbox(state, target, Json(NavigatePayload { url: url.to_string() })).await
         }
@@ -916,7 +931,7 @@ async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &s
         }
         _ => {
             let Some(action) = args["action"].as_str() else {
-                return ("action is required: click, type, key or scroll".into(), true);
+                return ("action is required: click, type, key or scroll".into(), true, false);
             };
             let payload = InteractPayload {
                 action: action.to_string(),
@@ -944,15 +959,18 @@ async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &s
                 }
             }
             let is_error = page.get("error").is_some();
-            (page.to_string(), is_error)
+            let busy = super::busy_retry::is_busy(&page);
+            (page.to_string(), is_error, busy)
         }
         Err((StatusCode::CONFLICT, _)) => (
             "The user has taken control of the browser. Stop browser actions and wait until they hand it back.".into(),
             true,
+            false,
         ),
         Err((status, Json(body))) => (
             body["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("Browser error (HTTP {}).", status.as_u16())),
             true,
+            super::busy_retry::is_busy(&body),
         ),
     }
 }

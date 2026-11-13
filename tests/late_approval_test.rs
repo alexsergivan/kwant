@@ -219,3 +219,64 @@ async fn a_late_allow_on_an_audit_card_runs_nothing() {
         assert!(!env.state.broker.drop_grant(&env.a, &env.a, tool, &json!({"command": "ls AUDIT_LATE_MARK", "description": "list"})).await, "no grant left");
     }
 }
+
+/// 0.9.5: a card nobody answered in 24 h expires with one ask. The chat gets a notice that says
+/// what didn't run and why, Needs you gets one stopped item, and Retry starts a turn that makes the
+/// call again (granting nothing, so a fresh card asks). Retry runs once.
+#[tokio::test]
+async fn an_expired_card_says_so_once_and_retry_asks_again() {
+    let env = setup().await;
+    let args = json!({"command": "ls EXPIRED_RETRY_MARK", "description": "list"});
+    let ticket = unanswered(&env, args.clone()).await;
+    env.state.db.backdate_approval_for_test(&ticket, 25).await.unwrap();
+    assert_eq!(kwnt::server::mcp_runtime::expire_unanswered(&env.state).await, 1);
+    assert_eq!(kwnt::server::mcp_runtime::expire_unanswered(&env.state).await, 0, "each card expires once");
+    assert_eq!(env.state.db.get_approval(&ticket).await.unwrap().unwrap().status, "expired");
+
+    // One notice in the chat it was asked in
+    let msgs = env.state.db.list_messages(&env.a, 50).await.unwrap();
+    let notices: Vec<_> = msgs.iter().filter(|m| m.meta.as_deref().is_some_and(|x| x.contains("approval_expired"))).collect();
+    assert_eq!(notices.len(), 1, "{msgs:?}");
+    let note = notices[0];
+    assert_eq!(note.sender_role, "system");
+    assert!(note.text.contains("stopped waiting for your OK to use Bash"), "{}", note.text);
+    assert!(note.text.contains("Retry asks you again"), "{}", note.text);
+    let meta: Value = serde_json::from_str(note.meta.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["approval_id"], ticket.as_str());
+
+    // One stopped item in Needs you, whose Retry is the card's; the expired card itself is gone
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    let waiting = away["waiting"].as_array().unwrap();
+    assert!(!waiting.iter().any(|i| i["id"] == ticket.as_str() && i["kind"] == "approval"));
+    let items: Vec<_> = waiting.iter().filter(|i| i["kind"] == "stopped").collect();
+    assert_eq!(items.len(), 1, "{away}");
+    assert_eq!(items[0]["retry"], json!({"type": "approval", "approval_id": ticket}));
+    assert_eq!(items[0]["message_id"], note.id.as_str());
+    assert_eq!(items[0]["link"]["direct_kwant_id"], env.a.as_str());
+    let (_, inbox) = call(&env.app, "GET", "/api/inbox", None).await;
+    assert!(inbox["items"].as_array().unwrap().iter().any(|i| i["kind"] == "stopped" && i["group"] == "waiting_on_you"), "{inbox}");
+
+    // A late answer can't run it
+    let (s, _) = call(&env.app, "POST", &format!("/api/approvals/{ticket}/resolve"), Some(json!({"decision": "allow_once"}))).await;
+    assert_eq!(s.as_u16(), 409);
+
+    // Retry: a new turn makes the call again, nothing is granted, the item closes
+    let (s, v) = call(&env.app, "POST", &format!("/api/approvals/{ticket}/retry"), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(v["resumed"], "new_turn");
+    assert_eq!(env.state.db.get_approval(&ticket).await.unwrap().unwrap().status, "retried");
+    wait_for("the retry turn", || async { !invocations_with("ls EXPIRED_RETRY_MARK").is_empty() }).await;
+    let prompt = invocations_with("ls EXPIRED_RETRY_MARK").pop().unwrap();
+    assert!(prompt.contains("[The person pressed Retry on a tool call that waited too long for their OK]"), "{prompt}");
+    assert!(!env.state.broker.drop_grant(&env.a, &env.a, "Bash", &args).await, "Retry grants nothing");
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    assert!(!away["waiting"].as_array().unwrap().iter().any(|i| i["kind"] == "stopped"), "{away}");
+
+    // Retry runs once; a card that never expired can't be retried
+    let (s, _) = call(&env.app, "POST", &format!("/api/approvals/{ticket}/retry"), None).await;
+    assert_eq!(s.as_u16(), 409);
+    let fresh = unanswered(&env, json!({"command": "ls NOT_EXPIRED_MARK"})).await;
+    let (s, _) = call(&env.app, "POST", &format!("/api/approvals/{fresh}/retry"), None).await;
+    assert_eq!(s.as_u16(), 409);
+    assert_eq!(env.state.db.get_approval(&fresh).await.unwrap().unwrap().status, "waiting");
+}

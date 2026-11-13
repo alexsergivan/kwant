@@ -774,6 +774,39 @@ pub(crate) const FOCUSED_EDITABLE_JS: &str = r#"(() => {
 /// Look-alikes are skipped: a reCAPTCHA v2 checkbox only counts while its challenge (bframe) is
 /// open or the page is otherwise a wall (no field to fill, little text), and phrases like
 /// "press and hold" only count inside an element whose id or class looks like a CAPTCHA.
+/// Whether the page is a sign-in wall (0.9.5): a visible one-time-code field is `"two_factor"`,
+/// a visible password field `"sign_in"`, else `null`. Only fields a person can see count, so a
+/// hidden login form in a page's header or a modal that isn't open doesn't.
+pub const SIGN_IN_PROBE_JS: &str = r##"(function () {
+  function shown(el) {
+    if (!el || el.disabled || el.type === 'hidden') return false;
+    var r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return false;
+    var s = window.getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05;
+  }
+  var inputs = Array.prototype.slice.call(document.querySelectorAll('input'));
+  var otp = inputs.some(function (el) {
+    if (!shown(el)) return false;
+    var ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+    if (ac === 'one-time-code') return true;
+    var hint = ((el.name || '') + ' ' + (el.id || '')).toLowerCase();
+    return /(^|[^a-z])(otp|totp|2fa|mfa)([^a-z]|$)|verification.?code|one.?time/.test(hint);
+  });
+  if (otp) return 'two_factor';
+  if (inputs.some(function (el) { return el.type === 'password' && shown(el); })) return 'sign_in';
+  return null;
+})()"##;
+
+/// The kind of sign-in wall a page shows ([`SIGN_IN_PROBE_JS`]): `"sign_in"` or `"two_factor"`.
+pub fn sign_in_kind(value: &Value) -> Option<&'static str> {
+    match value.as_str() {
+        Some("sign_in") => Some("sign_in"),
+        Some("two_factor") => Some("two_factor"),
+        _ => None,
+    }
+}
+
 pub const CAPTCHA_PROBE_JS: &str = r##"(function () {
   var VENDORS = [
     ['recaptcha', /(^|\.)google\.com\/recaptcha\/|recaptcha\.net\/recaptcha\//i],
@@ -2176,6 +2209,17 @@ impl BrowserController {
         Ok(CaptchaHit::parse(&res["result"]["value"]))
     }
 
+    /// The sign-in wall the page shows, if any (see [`SIGN_IN_PROBE_JS`]).
+    pub async fn probe_sign_in(&self) -> Result<Option<&'static str>, BrowserError> {
+        let res = self.send_cdp_command("Runtime.evaluate", json!({
+            "expression": SIGN_IN_PROBE_JS, "returnByValue": true
+        })).await?;
+        if res.get("exceptionDetails").is_some() {
+            return Err(BrowserError::Protocol("sign-in probe failed".into()));
+        }
+        Ok(sign_in_kind(&res["result"]["value"]))
+    }
+
     /// Declines optional cookies on a known consent banner. Never accepts.
     pub async fn reject_consent(&self) -> Option<String> {
         // Consent managers often render a moment after load: look twice
@@ -2656,6 +2700,24 @@ mod view_claim_tests {
         claims.claim(size(1, 1000));
         assert_eq!(claims.release(1), ViewRelease::Reapply(size(2, 390)));
         assert_eq!(claims.release(2), ViewRelease::Restore);
+    }
+}
+
+#[cfg(test)]
+mod sign_in_probe_tests {
+    use super::{sign_in_kind, SIGN_IN_PROBE_JS};
+    use serde_json::json;
+
+    #[test]
+    fn only_the_two_wall_kinds_count() {
+        assert_eq!(sign_in_kind(&json!("sign_in")), Some("sign_in"));
+        assert_eq!(sign_in_kind(&json!("two_factor")), Some("two_factor"));
+        assert_eq!(sign_in_kind(&json!(null)), None);
+        assert_eq!(sign_in_kind(&json!("captcha")), None);
+        assert_eq!(sign_in_kind(&json!({"kind": "sign_in"})), None);
+        // The probe looks only at visible fields, and a code field wins over a password field
+        assert!(SIGN_IN_PROBE_JS.contains("one-time-code"));
+        assert!(SIGN_IN_PROBE_JS.find("'two_factor'").unwrap() < SIGN_IN_PROBE_JS.find("'sign_in'").unwrap());
     }
 }
 

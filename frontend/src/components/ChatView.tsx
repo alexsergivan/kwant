@@ -72,13 +72,14 @@ import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
 import { routeChipLabel, routeReasonText } from '../routeReason';
-import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
+import { BudgetPausedNotice, ExpiredApprovalNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { parseSpendStopped } from '../spendStop';
 import { SpendStoppedNotice } from './SpendStop';
+import { awayApi } from '../away';
 import { parseBudgetNotice } from '../botBudget';
 import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
-import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
+import { isSystemNotice, parseExpiredApproval, parseInterruption, retryTargets } from '../interruptions';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
@@ -1414,6 +1415,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
           messageId={msg.id}
           meta={capped}
           onContinue={canRun === false ? undefined : chainBudgetApi.continue}
+          flash={flashId === msg.id}
+        />
+      );
+    const expired = parseExpiredApproval(msg);
+    if (expired)
+      return (
+        <ExpiredApprovalNotice
+          key={msg.id}
+          messageId={msg.id}
+          text={msg.text}
+          expired={expired}
+          onRetry={canRun === false ? undefined : awayApi.retryApproval}
           flash={flashId === msg.id}
         />
       );
