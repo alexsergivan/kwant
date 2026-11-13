@@ -21,10 +21,12 @@ fn err(status: StatusCode, message: impl Into<String>) -> ApiError {
     (status, Json(json!({ "error": message.into() })))
 }
 
+const NAME_TAKEN: &str = "an MCP server with that name already exists";
+
 pub(super) fn db_err(e: DbError) -> ApiError {
     if let DbError::Sqlx(sqlx::Error::Database(ref d)) = e {
         if d.is_unique_violation() {
-            return err(StatusCode::CONFLICT, "an MCP server with that name already exists");
+            return err(StatusCode::CONFLICT, NAME_TAKEN);
         }
     }
     tracing::warn!(error = %e, "MCP registry database error");
@@ -71,12 +73,29 @@ pub async fn get_server(State(state): State<AppState>, Path(id): Path<String>) -
     }
 }
 
+/// Two server names a bot could not tell apart: equal ignoring case and surrounding spaces (the
+/// rule `mcp_suggest::free_name` uses for directory installs).
+fn same_server_name(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// The same 409 as the unique index when another server in `space` (not `except`, the one being
+/// edited) already has `name` in another case. The index only catches an exact match.
+async fn check_name_free(state: &AppState, space: &SpaceId, name: &str, except: Option<&str>) -> Result<(), ApiError> {
+    let servers = state.db.list_mcp_servers(space).await.map_err(db_err)?;
+    if servers.iter().any(|s| Some(s.id.as_str()) != except && same_server_name(&s.name, name)) {
+        return Err(err(StatusCode::CONFLICT, NAME_TAKEN));
+    }
+    Ok(())
+}
+
 pub async fn create_server(
     State(state): State<AppState>,
     Scope(space): Scope,
     Json(input): Json<McpServerInput>,
 ) -> ApiResult<McpServerView> {
     let server = mcp::build_server(input, None).map_err(|m| err(StatusCode::BAD_REQUEST, m))?;
+    check_name_free(&state, &space, &server.name, None).await?;
     let created = state.db.create_mcp_server(&space, &server).await.map_err(db_err)?;
     Ok(Json(McpServerView::from(&created)))
 }
@@ -93,6 +112,8 @@ pub async fn update_server(
         .map_err(db_err)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "MCP server not found"))?;
     let server = mcp::build_server(input, Some(&existing)).map_err(|m| err(StatusCode::BAD_REQUEST, m))?;
+    let space = state.db.space_of_mcp_server(&id).await.map_err(db_err)?.unwrap_or_else(SpaceId::default_space);
+    check_name_free(&state, &space, &server.name, Some(&id)).await?;
     let updated = state.db.update_mcp_server(&server).await.map_err(db_err)?;
     if updated.is_some() && (server.url != existing.url || server.transport != existing.transport) {
         // Tokens and registrations belong to the old address
@@ -225,4 +246,16 @@ pub async fn set_kwant_servers(
     state.db.set_kwant_mcp_servers(&kwant_id, &body.server_ids).await.map_err(db_err)?;
     let ids = state.db.get_kwant_mcp_server_ids(&kwant_id).await.map_err(db_err)?;
     Ok(Json(json!({ "server_ids": ids })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_server_name;
+
+    #[test]
+    fn names_match_ignoring_case_and_surrounding_spaces() {
+        assert!(same_server_name("stripe", "Stripe"));
+        assert!(same_server_name(" STRIPE ", "stripe"));
+        assert!(!same_server_name("stripe", "stripe-2"));
+    }
 }
