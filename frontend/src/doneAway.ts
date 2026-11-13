@@ -44,7 +44,8 @@ export function unreadLine(r: Pick<InboxResponse, 'items' | 'since' | 'last_seen
 
 export const isDoneGroup = (g: InboxGroup | undefined): boolean => !!g && DONE_GROUPS.includes(g);
 
-const ROUTINE_PREFIX = /^Routine:\s*/;
+/** A routine's sender id and its review task's title both start `Routine: <name>` (scheduler.rs, listener.rs). */
+export const ROUTINE_PREFIX = /^Routine:\s*/;
 
 /** A routine run's own row, or the review task a routine run made (`Routine: <name>`). */
 export const isRoutineItem = (i: InboxItem): boolean => i.kind === 'routine_run' || (isReview(i) && ROUTINE_PREFIX.test(i.title));
