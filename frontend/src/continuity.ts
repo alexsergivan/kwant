@@ -369,6 +369,16 @@ export function toLocalInput(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** Date.getDay() (0 = Sunday) as a `Weekday`. */
+const DAY_OF: Weekday[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+/** Monday to Friday, the set the Weekdays chip sets and "Weekdays at …" names. */
+export const WORK_WEEK: Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri'];
+/** True when `days` is exactly the set `want`, in any order and ignoring repeats. */
+export const sameDays = (days: Weekday[], want: Weekday[]) => {
+  const set = new Set(days);
+  return set.size === want.length && want.every((d) => set.has(d));
+};
+
 export function emptyScheduleForm(now = new Date(), tz = defaultTimeZone()): ScheduleForm {
   const soon = new Date(now.getTime() + 60 * 60 * 1000);
   soon.setMinutes(0, 0, 0);
@@ -376,7 +386,8 @@ export function emptyScheduleForm(now = new Date(), tz = defaultTimeZone()): Sch
     type: 'daily',
     onceAt: toLocalInput(soon),
     time: '09:00',
-    weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    // Routines setup E: Weekly starts on today only; the Weekdays chip sets Mon–Fri in one click.
+    weekdays: [DAY_OF[now.getDay()]],
     tz,
     everyMinutes: '60',
     monthDays: [1],
@@ -466,24 +477,72 @@ export function monthDaysText(days: MonthDay[]): string {
   return `the ${list}`;
 }
 
+const DAY_NAMES: Record<Weekday, string> = {
+  mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday', sat: 'Saturday', sun: 'Sunday',
+};
+
+/** "Every Monday", "Weekdays", "Weekends", "Every day" or "Mon, Wed and Fri" (always Monday first). */
+export function weekdaysText(days: Weekday[]): string {
+  const sorted = WEEKDAYS.map((d) => d.id).filter((d) => days.includes(d));
+  if (sorted.length === 7) return 'Every day';
+  if (sameDays(sorted, WORK_WEEK)) return 'Weekdays';
+  if (sameDays(sorted, ['sat', 'sun'])) return 'Weekends';
+  if (sorted.length === 1) return `Every ${DAY_NAMES[sorted[0]]}`;
+  const labels = sorted.map((d) => WEEKDAYS.find((w) => w.id === d)?.label ?? d);
+  if (labels.length === 0) return 'No day';
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+/**
+ * Routines setup D: a saved time zone as people say it. "Europe/Kyiv" is "Kyiv time",
+ * "Etc/GMT-3" is "UTC+3" (Etc signs are inverted), UTC stays "UTC", anything else comes back unchanged.
+ */
+export function zoneLabel(tz: string): string {
+  const z = (tz ?? '').trim();
+  if (z === 'UTC' || z === 'Etc/UTC' || z === 'Etc/GMT' || z === 'Etc/UCT' || z === 'Etc/Universal' || z === 'Etc/Zulu' || z === 'GMT') return 'UTC';
+  const etc = /^Etc\/GMT([+-])(\d{1,2})$/.exec(z);
+  if (etc) return etc[2] === '0' ? 'UTC' : `UTC${etc[1] === '-' ? '+' : '\u2212'}${etc[2]}`;
+  const parts = z.split('/');
+  if (parts.length >= 2 && parts.every((p) => /^[A-Za-z][A-Za-z0-9_+-]*$/.test(p)) && !z.startsWith('Etc/')) {
+    return `${parts[parts.length - 1].replace(/_/g, ' ')} time`;
+  }
+  return tz;
+}
+
+/** "GMT+2" for a zone right now, from Intl; null when Intl can't say (an unknown zone). */
+export function zoneOffset(tz: string, now = new Date()): string | null {
+  try {
+    const part = new Intl.DateTimeFormat('en', { timeZone: tz, timeZoneName: 'shortOffset' }).formatToParts(now).find((p) => p.type === 'timeZoneName');
+    return part ? part.value.replace(/^GMT\+0$/, 'GMT') : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Routines setup F: the first non-empty line of a routine's instructions, trimmed, and whether more follows. */
+export function firstLine(text: string): { line: string; more: boolean } {
+  const lines = (text ?? '').split(/\r?\n/);
+  const i = lines.findIndex((l) => l.trim() !== '');
+  if (i < 0) return { line: '', more: false };
+  return { line: lines[i].trim(), more: lines.slice(i + 1).some((l) => l.trim() !== '') };
+}
+
 export function describeSchedule(s: Schedule): string {
   switch (s.type) {
     case 'once':
       return `Once, ${formatWhen(s.at)}`;
     case 'daily':
-      return `Every day at ${s.time} (${s.tz})`;
-    case 'weekly': {
-      const days = s.weekdays.length === 7 ? 'every day' : s.weekdays.map((d) => WEEKDAYS.find((w) => w.id === d)?.label ?? d).join(', ');
-      return `${days} at ${s.time} (${s.tz})`;
-    }
+      return `Every day at ${s.time}, ${zoneLabel(s.tz)}`;
+    case 'weekly':
+      return `${weekdaysText(s.weekdays)} at ${s.time}, ${zoneLabel(s.tz)}`;
     case 'interval':
       return s.every_minutes % 60 === 0
         ? `Every ${s.every_minutes / 60} h`
         : `Every ${s.every_minutes} min`;
     case 'monthly':
-      return `Every month on ${monthDaysText(s.days)} at ${s.time} (${s.tz})`;
+      return `Every month on ${monthDaysText(s.days)} at ${s.time}, ${zoneLabel(s.tz)}`;
     case 'cron':
-      return `Custom rule ${s.expression} (${s.tz})`;
+      return `Custom rule ${s.expression}, ${zoneLabel(s.tz)}`;
     default:
       return 'Unknown schedule';
   }
