@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Dev mode: Plain-words cards for every merge, a second bot&#x27;s review on every pull request, and a floor under production.">
 <meta property="article:published_time" content="2026-11-06">
-<meta property="article:modified_time" content="2026-11-11">
+<meta property="article:modified_time" content="2026-11-12">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@kwantbot">
 <meta name="twitter:title" content="Dev mode: AI code review and a production safety floor · kwant">
@@ -118,7 +118,7 @@
   <li><strong>Draft release notes</strong> writes notes from every landed card since the last tag.</li>
   <li><strong>Verified</strong> goes on a merge only when another bot reviewed that exact head in kwant, every finding was fixed or dismissed, and CI on the merge is green. A pull request merged before its review was ready stays "not verified": the sticker says what was checked before the change landed, not after.</li>
 </ul>
-<p>kwant checks the repo every 5 minutes. The first check writes up the last 5 merges. Card text is written by one of the space's bots, at most 30 model calls per space per day; the risk, the test checks and CI come from rules and need no model.</p>
+<p>kwant checks the repo every 5 minutes. The first check writes up the last 5 merges. Card text is written by one of the space's bots, and its model calls count toward the space's daily spending stop and the bot's monthly budget; the risk, the test checks and CI come from rules and need no model.</p>
 
 <h2 id="reviews">Reviews</h2>
 <p>The <strong>Reviews</strong> tab has one card per open pull request, written by a bot that didn't write the code, on a different engine when the space has one. A new push to the pull request gets a new review.</p>
@@ -277,7 +277,7 @@
 </footer>
 <script src="../assets/js/site.js?v=6d3de1ef56" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/dev-mode#article","headline":"Dev mode: AI code review and a production safety floor","description":"Point a kwant space at its git repos, on GitHub, GitLab, Gitea, Forgejo or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.","url":"https://kwant.si/docs/dev-mode","mainEntityOfPage":"https://kwant.si/docs/dev-mode","image":"https://kwant.si/assets/og/docs-dev-mode.png?v=4b20e5912f","inLanguage":"en","datePublished":"2026-11-06","dateModified":"2026-11-11","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Dev mode","item":"https://kwant.si/docs/dev-mode"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/dev-mode#article","headline":"Dev mode: AI code review and a production safety floor","description":"Point a kwant space at its git repos, on GitHub, GitLab, Gitea, Forgejo or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.","url":"https://kwant.si/docs/dev-mode","mainEntityOfPage":"https://kwant.si/docs/dev-mode","image":"https://kwant.si/assets/og/docs-dev-mode.png?v=4b20e5912f","inLanguage":"en","datePublished":"2026-11-06","dateModified":"2026-11-12","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Dev mode","item":"https://kwant.si/docs/dev-mode"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

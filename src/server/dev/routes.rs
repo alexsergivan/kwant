@@ -195,7 +195,7 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
         "poll_error": first.and_then(|r| r.poll_error.clone()),
         "backup_command": row.as_ref().and_then(|r| r.backup_command.clone()),
         "calls_today": calls,
-        "calls_cap": super::call_cap(),
+        "calls_cap": super::shown_cap(),
     });
     let any_watching = repos.iter().any(|r| matches!(r["status"].as_str(), Some("watching" | "error")));
     let any_unread = repos.iter().any(|r| r["status"] == "not_connected");

@@ -52,6 +52,7 @@ async fn the_env_seams_set_the_poll_and_the_cap() {
     std::env::set_var("KWANT_DEV_MIRROR_CAP_BYTES", "4096");
     assert_eq!(dev::poll_every(), std::time::Duration::from_secs(7));
     assert_eq!(dev::call_cap(), 2);
+    assert_eq!(dev::shown_cap(), Some(2), "an opt-in cap is shown");
     assert_eq!(dev::mirror_cap(), 4096, "a tiny git mirror cap, for QA (the default is 1 GB)");
 
     let tmp = tempfile::tempdir().unwrap();
