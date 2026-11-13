@@ -228,7 +228,11 @@ export const PrepushNeedsYou: React.FC<{ cards: Card[]; names: Record<string, st
               className="flex min-h-11 w-full items-center gap-2.5 rounded-xl border border-amber-500/30 bg-amber-950/20 px-3.5 py-2.5 text-left text-sm text-zinc-200 outline-none hover:bg-amber-950/30 focus-visible:ring-2 focus-visible:ring-sky-400 sm:px-4"
             >
               <span className="kw-chip kw-chip-warn shrink-0">Needs you</span>
-              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{inboxLine(c, names[c.kwant_id] || 'A bot')}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block [overflow-wrap:anywhere]">{inboxLine(c, names[c.kwant_id] || 'A bot')}</span>
+                {/* One item per branch: on a phone the branch goes under the line, since it is what tells two items apart. */}
+                <code data-needs-branch-phone className="dv-sha mt-1 inline-block max-w-full truncate align-top sm:hidden">{c.branch}</code>
+              </span>
               <code className="dv-sha max-w-[40%] shrink truncate max-sm:hidden">{c.branch}</code>
             </button>
           </li>

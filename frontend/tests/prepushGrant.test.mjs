@@ -137,6 +137,11 @@ test('needsYou: a card the person just pressed leaves at once, and comes back if
   assert.deepEqual(m.needsYou([c], new Set(['pp_needs'])), []);
   const { host, rerender } = await mount(m.PrepushNeedsYou, { cards: [c], names: { k_pixel: 'Pixel' }, onOpen: () => {}, acted: new Set() });
   assert.equal(host.querySelectorAll('[data-needs-prepush-item]').length, 1);
+  // The branch tells two items apart, so it is there on a phone too (under the line), not only beside it.
+  const phoneBranch = host.querySelector('[data-needs-branch-phone]');
+  assert.equal(phoneBranch?.textContent, c.branch);
+  assert.match(phoneBranch.className, /sm:hidden/);
+  assert.doesNotMatch(phoneBranch.className, /max-sm:hidden/);
   await rerender({ cards: [c], names: { k_pixel: 'Pixel' }, onOpen: () => {}, acted: new Set(['pp_needs']) });
   assert.equal(host.querySelector('[data-needs-prepush]'), null, 'gone before the server answers');
   await rerender({ cards: [c], names: { k_pixel: 'Pixel' }, onOpen: () => {}, acted: new Set() });
