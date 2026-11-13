@@ -11,8 +11,15 @@ import {
   NewAccountSpec,
   PROTOCOLS,
   Profile,
+  AccountUsage,
+  UsageRow,
   accountState,
+  hasUsageLimits,
   isLoginDone,
+  usageCheckedText,
+  usageCoolingDown,
+  usageRows,
+  usageStale,
   isThirdPartyLabel,
   newAccountFor,
   profilesApi,
@@ -86,6 +93,126 @@ export function accountStatus(p: Profile, engine: EngineInfo, now = Date.now()):
       return accountState(p, now);
   }
 }
+
+/** Re-renders every 30 s so "checked … ago", stale and the Check now wait stay true while Settings is open. */
+function useClock(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+  return now;
+}
+
+const newerUsage = (a: AccountUsage | null | undefined, b: AccountUsage | null | undefined): AccountUsage | null =>
+  !a ? b ?? null : !b ? a : Date.parse(b.checked_at) > Date.parse(a.checked_at) ? b : a;
+
+/** One limit: its label and value, and a thin bar that fills with what is left (design §2). */
+const UsageMeter: React.FC<{ row: UsageRow }> = ({ row: r }) => {
+  const valueText = r.leftText ? `${r.leftText}${r.reset ? `, ${r.reset}` : ''}` : r.reset ?? '';
+  return (
+    <div data-usage-row={r.kind} data-usage-tone={r.tone}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-[11px]">
+        <span className="text-zinc-400">{r.label}</span>
+        <span className="ml-auto whitespace-nowrap text-zinc-500">
+          {r.leftText && <span className={`font-medium ${r.tone === 'ok' ? 'text-zinc-100' : 'text-amber-200'}`}>{r.leftText}</span>}
+          {r.leftText && r.reset && ' · '}
+          {r.reset}
+        </span>
+      </div>
+      <div
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={r.left ?? undefined}
+        aria-label={`${r.label} usage left`}
+        aria-valuetext={valueText}
+        className={`mt-1 h-1 rounded-full overflow-hidden ${r.tone === 'out' ? 'bg-amber-500/20' : 'bg-zinc-800'}`}
+      >
+        {r.left !== null && r.left > 0 && (
+          <div
+            className={`h-full ${r.tone === 'low' ? 'bg-amber-400' : 'bg-zinc-400'} origin-left transition-transform duration-150 ease-out motion-reduce:transition-none`}
+            style={{ transform: `scaleX(${r.left / 100})` }}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * A Claude or Codex sign-in's 5-hour and weekly limits (autonomy/account-usage/design.md): when they were read, a
+ * thin bar each, and Check now (POST /api/profiles/:id/usage, one tiny model call, so only when pressed). Nothing for
+ * API keys or Custom API, and nothing for a Codex account with no numbers (codex may never report them).
+ */
+export const AccountUsageBars: React.FC<{ profile: Profile; canCheck: boolean; dim?: boolean; onChanged: () => Promise<void> }> = ({ profile: p, canCheck, dim, onChanged }) => {
+  const clock = useClock();
+  const [fresh, setFresh] = useState<AccountUsage | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (!hasUsageLimits(p)) return null;
+  const usage = newerUsage(p.usage, fresh);
+  if (!usage && !(p.engine === 'claude' && canCheck)) return null;
+  const now = Math.max(clock, Date.now());
+  const rows = usageRows({ ...p, usage }, now);
+  const stale = usageStale(usage, now);
+  const wait = !checking && usageCoolingDown(usage, now);
+  const check = async () => {
+    if (checking || wait) return;
+    playSfx('click');
+    setChecking(true);
+    setFailed(false);
+    try {
+      setFresh(await profilesApi.usage(p.id));
+      await onChanged();
+    } catch {
+      setFailed(true);
+    } finally {
+      setChecking(false);
+    }
+  };
+  const note = checking ? '· checking…' : failed ? '· couldn’t check, try again in a minute' : usage ? `· ${usageCheckedText(usage, now)}` : '· shows after its next reply';
+  const btnProps = {
+    type: 'button' as const,
+    onClick: check,
+    disabled: checking || wait,
+    'aria-busy': checking || undefined,
+    'aria-label': 'Check usage now',
+    title: wait ? 'You can check again in a minute' : 'Check now. This uses a tiny bit of this account.',
+    'data-usage-check': true,
+  };
+  const spin = checking ? 'animate-spin motion-reduce:animate-none' : '';
+  return (
+    <div data-usage data-usage-stale={stale || undefined} className={`space-y-1.5 ${dim ? 'opacity-70' : ''}`}>
+      <div className="flex items-center gap-1 min-h-6 text-[11px]">
+        <span className="font-medium text-zinc-300">Usage</span>
+        <span role="status" data-usage-note className={failed && !checking ? 'text-rose-300' : 'text-zinc-500'}>
+          {note}
+        </span>
+        {canCheck &&
+          (stale ? (
+            <button {...btnProps} className={`${quietBtn} ml-auto max-sm:py-2`}>
+              <RefreshCw size={11} aria-hidden="true" className={spin} /> {checking ? 'Checking…' : 'Check now'}
+            </button>
+          ) : (
+            <button
+              {...btnProps}
+              className="ml-auto inline-flex items-center justify-center w-6 h-6 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400 max-sm:w-11 max-sm:h-11 max-sm:-my-2.5 max-sm:-mr-2.5"
+            >
+              <RefreshCw size={12} aria-hidden="true" className={spin} />
+            </button>
+          ))}
+      </div>
+      {rows.length > 0 && (
+        <div className={`space-y-1.5 ${stale ? 'opacity-60' : ''}`}>
+          {rows.map((r) => (
+            <UsageMeter key={r.kind} row={r} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 /** A small on/off switch with its name for screen readers. */
 const Switch: React.FC<{ on: boolean; label: string; disabled?: boolean; onChange: (on: boolean) => void }> = ({ on, label, disabled, onChange }) => (
@@ -667,6 +794,8 @@ const AccountRow: React.FC<{
           onChange={(on) => run(() => profilesApi.update(p.id, { enabled: on }))}
         />
       </div>
+
+      <AccountUsageBars profile={p} dim={off} canCheck={p.enabled && !off && (isSystem ? status.tone !== 'muted' && status.label !== 'Needs sign-in' : p.signed_in === true)} onChanged={onChanged} />
 
       {hostAction && <div>{hostAction}</div>}
 
