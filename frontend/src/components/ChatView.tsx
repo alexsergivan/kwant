@@ -11,7 +11,7 @@ import { parsePick } from '../engines';
 import { onContinuity } from '../continuity';
 import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel } from '../agentConnections';
-import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
+import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
 import { AccountCard, BotHome } from './BotHome';

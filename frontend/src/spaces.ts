@@ -2,7 +2,7 @@
 // `/api` call as `?space=` (added by the fetch wrapper in auth.ts) and on the event stream.
 
 import { parseView, viewSegment, type SpaceView } from './nav';
-import { pickedLine, serverReason } from './routeReason';
+import { ROUTER_NAME, pickedLine, serverReason } from './routeReason';
 import { NeedsBitwardenError } from './approvalMode';
 import { needsBitwardenFrom } from './passwordStore';
 
