@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.5] - 2026-11-13
+
+kwant 0.9.5: apps and AI accounts on one settings page, a monthly budget for each bot, one clear line when a bot's connection stops working, and a team browser that recovers when it's busy.
+
+### Added
+- **Apps & accounts.** Connections, Tools and Accounts are now one settings page. Apps are tiles (Gmail, Google Calendar, Slack, Notion, Shopify, GitHub, and any other app you find through Composio), AI accounts say which bots use them, and MCP servers and Telegram sit under **Advanced**. Connecting an app takes 3 steps in one sheet: open Composio, paste your Composio link, and pick the bots that may use it. No bot is picked for you, and picking one turns Composio on for that bot. Old addresses, such as Settings › Connections, open the new page. (#542)
+- **A monthly budget for each bot.** In a bot's settings, **Usage › Monthly budget** sets a limit in tokens, in dollars, or both. It's off until you set it. At 80% the bot's sidebar row gets a small amber meter, its chat gets a note, and the Inbox gets a Needs you item. At 100% the bot starts nothing new: its row and chat say "Paused: monthly budget reached", with **Raise the limit** and **Continue this month**. Settings › All spaces › Usage lists every bot's budget in this space. (#536)
+- **One line when a connection stops working.** When a bot's tool fails because of the connection, the chat gets one line for it, for example "GitHub stopped working for Ben: it needs you to sign in again. Reconnect". It covers an expired sign-in, a Composio app that needs connecting again, a server that didn't start, and one that stopped responding. There's at most one line per connection per turn, and none when a retry within 20 seconds fixed it. Lines only you can fix also show in the Inbox, and the line adds "It works again." once a later call works. (#537)
+
+### Changed
+- **The team browser recovers when it's busy.** A page nobody has used for 10 minutes stops its videos and sounds and is frozen, and an idle team page is cleared after 2 hours, with its sign-ins kept in the team's cookie jar. When the browser is busy, kwant tries again for up to 45 seconds and closes other idle pages to make room. If it still can't, the bot gets "The browser isn't responding right now… retry the same step in a minute" instead of a Docker error, and the live view says "The browser isn't responding. Reconnecting…". The Docker message now appears only when the browser really can't be reached, and checking the browser's status never opens a page. (#544)
+- **No daily cap on Dev mode model calls.** Dev mode no longer stops at 30 model calls per space per day ("Today's 30 Dev mode model calls for this space are used up"). Its calls count toward the space's daily spending stop and each bot's monthly budget, like any other turn. Cards that failed on the old cap in the last 3 days are written again when kwant starts. A server can still set a cap with `KWANT_DEV_CALL_CAP`. (#550)
+- **Fix it works on a person's PR.** On a Dev mode card for a PR that a person wrote, **Fix it** and line notes used to go nowhere. Now they go to the lead of the team that owns the repo. The lead is told to push new commits and never rewrite the person's, or to open a draft PR that links the original when it can't push there. If no team owns the repo, the card says to add it under Manage team › Git Repo. (#546)
+- **Bots ask you to connect an app with a card.** When a bot needs an app you haven't connected through Composio, it posts a card for you to connect it instead of pasting a sign-in link into the chat. kwant's server can now also set up Composio from your API key alone and list Composio's whole app catalogue; a key Composio refuses gets a clear message and nothing is saved. (#548)
+
 ## [Mac 0.9.4] - 2026-11-12
 
 kwant 0.9.4: bots don't stop after a failed step. They try again or another way, and when nothing works they say what's blocked and what would unblock it.
