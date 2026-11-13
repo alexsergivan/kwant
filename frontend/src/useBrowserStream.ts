@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { browserStreamUrl } from './browserViewport';
-import { PageDialog, SelectRequest, Size, parseDialog, parseSelect, streamErrorText } from './browserInput';
+import { FileChooserFailure, FileChooserRequest, PageDialog, SelectRequest, Size, parseDialog, parseFileChooser, parseFileChooserFailure, parseSelect, streamErrorText } from './browserInput';
 import { onRecordingFrame } from './showOnce';
 import { POINT_TIMEOUT_MS, PointError, pointErrorCode } from './point';
 
@@ -50,6 +50,11 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
   const [viewport, setViewport] = useState<Size | null>(null);
   const [select, setSelect] = useState<SelectRequest | null>(null);
   const [dialog, setDialog] = useState<PageDialog | null>(null);
+  // The page's own file picker; a ref too, since ws.onmessage is set up once and never sees fresh state
+  const [fileChooser, setFileChooser] = useState<FileChooserRequest | null>(null);
+  const fileChooserRef = useRef<FileChooserRequest | null>(null);
+  const [fileChooserError, setFileChooserError] = useState<FileChooserFailure | null>(null);
+  const [fileChooserDone, setFileChooserDone] = useState<{ names: string[] } | null>(null);
   const [cursor, setCursor] = useState<string>('default');
   // The last resize was answered `ignored`: the page follows a real window and keeps its size
   const [resizeIgnored, setResizeIgnored] = useState(false);
@@ -67,6 +72,12 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
       w.reject(new PointError('failed'));
     }
     waiters.current.clear();
+  };
+  const resetFileChooser = () => {
+    fileChooserRef.current = null;
+    setFileChooser(null);
+    setFileChooserError(null);
+    setFileChooserDone(null);
   };
 
   useEffect(() => {
@@ -122,11 +133,33 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
             takingControl.current = false;
             setControlling(!!message.active);
             if (message.viewport && message.viewport.width > 0) setViewport({ width: message.viewport.width, height: message.viewport.height });
-            if (!message.active) { setSelect(null); setDialog(null); setCursor('default'); }
+            if (!message.active) { setSelect(null); setDialog(null); setCursor('default'); resetFileChooser(); }
             break;
           case 'select': setSelect(parseSelect(message)); break;
           case 'dialog': setDialog(parseDialog(message)); break;
           case 'dialog_closed': setDialog(null); break;
+          case 'file_chooser': {
+            const parsed = parseFileChooser(message);
+            if (parsed) {
+              fileChooserRef.current = parsed;
+              setFileChooser(parsed);
+              setFileChooserError(null);
+              setFileChooserDone(null);
+            }
+            break;
+          }
+          case 'file_chooser_done':
+            if (typeof message.id === 'number' && fileChooserRef.current?.id === message.id) {
+              fileChooserRef.current = null;
+              setFileChooser(null);
+            }
+            setFileChooserDone({ names: Array.isArray(message.names) ? message.names.filter((n: unknown) => typeof n === 'string') : [] });
+            break;
+          case 'file_chooser_error':
+            if (typeof message.id === 'number' && fileChooserRef.current?.id === message.id) {
+              setFileChooserError(parseFileChooserFailure(message));
+            }
+            break;
           case 'cursor': if (typeof message.cursor === 'string') setCursor(message.cursor); break;
           case 'clipboard':
             if (typeof message.text === 'string' && message.text) navigator.clipboard?.writeText(message.text).catch(() => {});
@@ -172,6 +205,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
         lastImage.current = null;
         setSelect(null);
         setDialog(null);
+        resetFileChooser();
         setResizeIgnored(false);
         setError((current) => current || 'Browser disconnected. Reconnecting…');
         reconnect = setTimeout(connect, Math.min(1000 * 2 ** attempts++, 10000));
@@ -196,6 +230,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
       setTapFocus(null);
       setSelect(null);
       setDialog(null);
+      resetFileChooser();
       setViewport(null);
       setResizeIgnored(false);
     };
@@ -260,11 +295,33 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
   const clearDialog = useCallback(() => setDialog(null), []);
   const clearError = useCallback(() => setError(null), []);
 
+  /**
+   * Answers the open file chooser with already-uploaded attachment ids. Its `id` is the server's
+   * own chooser id, not `sequence.current` — `send()` would stomp on it, so this talks to the
+   * socket directly, the same way `acknowledgeFrame` and `restoreViewport` do.
+   */
+  const answerFileChooser = useCallback((chooserId: number, attachmentIds: string[]) => {
+    const ws = socket.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'file_chooser', id: chooserId, attachment_ids: attachmentIds }));
+  }, []);
+
+  /** No reply is expected for a cancel, so the sheet closes right away. */
+  const cancelFileChooser = useCallback((chooserId: number) => {
+    const ws = socket.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'file_chooser', id: chooserId, cancel: true }));
+    if (fileChooserRef.current?.id === chooserId) resetFileChooser();
+  }, []);
+
+  const clearFileChooserError = useCallback(() => setFileChooserError(null), []);
+  const clearFileChooserDone = useCallback(() => setFileChooserDone(null), []);
+
   return {
     /** The page the connected stream shows, null for the server's default (meaningful while `connected`). */
     page: livePage,
     connected, controlling, busy, error, frame, location, tapFocus, viewport, select, dialog, cursor, unsupported, resizeIgnored, signIn,
+    fileChooser, fileChooserError, fileChooserDone,
     send, request, acknowledgeFrame, restoreViewport, clearSelect, clearDialog, clearError,
+    answerFileChooser, cancelFileChooser, clearFileChooserError, clearFileChooserDone,
   };
 }
 
