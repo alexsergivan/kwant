@@ -3,6 +3,8 @@ import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
 import { queuedText } from '../claudeVm';
 import { QueuedBeside } from './QueuedBeside';
+import { WaitingBanner } from './WaitingBanner';
+import { onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
@@ -340,6 +342,8 @@ export interface ChatViewProps {
   awaitingAnswer?: boolean;
   /** …and the pause is a browser step (sign-in, CAPTCHA) rather than a question. */
   awaitingBrowser?: boolean;
+  /** The bot whose question the open chat's turn waits on (its id and name), for the waiting banner. */
+  awaitingBot?: { id: string; name: string } | null;
   /** The running reply's steps so far (thinking, tools, waits). */
   liveActivity?: LiveActivity | null;
   /** Draws a bot's browser-step card (message meta kind "human_step"). */
@@ -553,6 +557,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   canRun = null,
   awaitingAnswer,
   awaitingBrowser,
+  awaitingBot,
   liveActivity,
   renderHumanStep,
   contextKey,
@@ -789,6 +794,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     card.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
   };
+  // Waiting state (UX audit #2): the only open thing is a question, so the chat waits for the person.
+  const askOnly = onlyAskOpen({
+    streaming: isStreaming,
+    awaitingAnswer: !!awaitingAnswer,
+    awaitingBrowser: !!awaitingBrowser,
+    approvalOpen: pendingApprovals.length > 0,
+    queued: !!queued,
+    writing: !!streamingText,
+  });
+  const teamChat = home?.kind !== 'bot';
+  const askRail = askOnly && teamChat ? turnRail(messages, awaitingBot?.id, (id) => botOf(id, knownBots)) : [];
   const showApproval = () => {
     const cards = scrollRef.current?.querySelectorAll<HTMLElement>('[data-approval-card]');
     const card = cards?.[cards.length - 1];
@@ -801,7 +817,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const { byBot: budgetsByBot } = useBudgets();
   const chatBudget = budgetBotId ? budgetsByBot[budgetBotId] : undefined;
   const budgetBanner = chatBudget?.state === 'paused' ? <BudgetPausedBanner budget={chatBudget} onRaise={onRaiseBudget} /> : null;
-  const workingStrip = (
+  // Waiting state: the banner says whose move it is, so no strip and no running clock.
+  const workingStrip = askOnly ? null : (
     <WorkingStrip
       active={isStreaming}
       name={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : streamingSpeakerName || title}
@@ -881,7 +898,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       return;
     }
     if (!messages.some((m) => m.id === highlightMessageId)) return;
-    const thread = groupDiscussionThreads(messages).find(
+    const thread = groupDiscussionThreads(messages, { foldOpen: askOnly }).find(
       (item) => item.kind === 'thread' && item.turns.some((t) => t.id === highlightMessageId),
     );
     if (thread && thread.kind === 'thread' && !openThoughts[`thread:${thread.id}`]) {
@@ -938,7 +955,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   useEffect(() => {
     if (!quoteJump) return;
-    const thread = groupDiscussionThreads(messages).find((item) => item.kind === 'thread' && item.turns.some((t) => t.id === quoteJump.id));
+    const thread = groupDiscussionThreads(messages, { foldOpen: askOnly }).find((item) => item.kind === 'thread' && item.turns.some((t) => t.id === quoteJump.id));
     if (thread && thread.kind === 'thread' && !openThoughts[`thread:${thread.id}`]) {
       setOpenThoughts((prev) => ({ ...prev, [`thread:${thread.id}`]: true }));
       return;
@@ -1110,7 +1127,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         });
       return;
     }
-    if (!canSend || (isStreaming && discussionState?.inProgress)) return;
+    // While the only open thing is a question, a typed message answers it (the server closes the question).
+    if (!canSend || (isStreaming && discussionState?.inProgress && !askOnly)) return;
     playSfx('click');
     stickRef.current = true;
     const replying = replyTo;
@@ -2005,8 +2023,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <PinnedInstructions items={pinned} onEdit={onEditInstructions} />
       </div>
 
+      {/* Waiting for the person: replaces the discussion banner while the only open thing is a question */}
+      {askOnly && (
+        <WaitingBanner
+          lines={[{ kind: 'answer', bot: awaitingBot?.name || streamingSpeakerName || title }]}
+          rail={askRail}
+          stopLabel={waitingStopLabel(teamChat)}
+          onStop={onCancelDiscussion}
+          onShow={() => showWaitingCard('question')}
+        />
+      )}
       {/* Discussion In-Flight Banner */}
-      {discussionState?.inProgress && (
+      {discussionState?.inProgress && !askOnly && (
         <div className="px-3 sm:px-6 pt-3 select-none flex-shrink-0">
           <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-sky-950/40 border border-sky-800/40 rounded-xl mb-3 text-xs">
             <div className="flex items-center gap-2 text-sky-200 min-w-0">
@@ -2068,7 +2096,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
           </div>
         )}
-        {groupDiscussionThreads(arranged.messages).map((item, n, items) => {
+        {groupDiscussionThreads(arranged.messages, { foldOpen: askOnly }).map((item, n, items) => {
           if (item.kind === 'message') {
             const trial = trialCards.get(item.message.id);
             const above = items[n - 1];
@@ -2128,7 +2156,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
-        {isStreaming && !deciding && routingState?.phase !== 'deciding' && (
+        {isStreaming && !deciding && routingState?.phase !== 'deciding' && !askOnly && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl">
             <ModernAvatar
               role={
@@ -2542,7 +2570,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
           )}
 
-          {isStreaming && (
+          {isStreaming && !askOnly && (
             <button
               type="button"
               onClick={onCancelDiscussion}
@@ -2578,10 +2606,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               <JarIcon size={phone ? 18 : 17} />
             </button>
-          ) : !(isStreaming && (discussionState?.inProgress || !canSend)) && (
+          ) : (askOnly || !(isStreaming && (discussionState?.inProgress || !canSend))) && (
             <button
               type="submit"
-              aria-label={stillUploading ? 'Send (waiting for uploads)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
+              aria-label={stillUploading ? 'Send (waiting for uploads)' : askOnly ? 'Send (answers the question)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
               title={stillUploading ? 'Waiting for uploads to finish' : undefined}
               disabled={!canSend}
               data-send-ready={canSend ? 'true' : 'false'}

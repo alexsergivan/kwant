@@ -1,9 +1,10 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, CheckCircle2, Clock, HelpCircle, Loader2, MinusCircle } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ViaTelegram } from './TelegramMarks';
 import { ANSWER_MAX, Question, QuestionMeta, answerTextError, questionView } from '../questions';
 import { whyYouText } from '../decideFirst';
+import { askedAgo } from '../waitingState';
 
 export interface QuestionCardProps {
   meta: QuestionMeta;
@@ -34,6 +35,14 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
   const choiceRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const open = view.status === 'open' && sent === null;
+  // "asked N min ago" on an open card: a quiet minute tick, no running timer (UX audit #2).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open || !live?.created_at) return;
+    const id = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, [open, live?.created_at]);
+  const ago = open ? askedAgo(live?.created_at, now) : null;
   const answer = view.answer ?? sent;
   const headingId = `q-${messageId}`;
   const whyYou = whyYouText(view.why_you);
@@ -113,13 +122,19 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
       <ModernAvatar role={kwantName} name={kwantName} size={34} kwantId={kwantId} />
       <div
         className={`flex-1 min-w-0 max-w-2xl rounded-2xl rounded-tl-sm border bg-zinc-900/60 shadow-sm ${
-          open ? 'border-amber-500/35' : 'border-zinc-800'
+          open ? 'border-amber-400/60' : 'border-zinc-800'
         }`}
       >
         <div className="px-4 pt-3 pb-2 space-y-1">
           <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
             <HelpCircle size={12} className="text-amber-300" aria-hidden="true" />
             <span className="text-zinc-200">{kwantName}</span> asks
+            {ago && (
+              <span className="text-zinc-500" data-asked-ago="">
+                {' · '}
+                {ago}
+              </span>
+            )}
           </span>
           <h3 id={headingId} className="text-sm font-semibold text-zinc-100 whitespace-pre-wrap break-words leading-snug">
             {view.question}
@@ -140,7 +155,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
                 aria-pressed={chosen}
                 onClick={() => submit({ choice: i })}
                 onKeyDown={(e) => onChoiceKey(e, i)}
-                className={`w-full sm:w-auto inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[48px] max-sm:!min-h-[48px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-base leading-[22px] sm:text-sm sm:leading-normal text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
+                className={`w-full sm:w-auto inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[48px] max-sm:!min-h-[48px] sm:min-h-[44px] px-3 py-1.5 rounded-xl text-base leading-[22px] sm:text-sm sm:leading-normal text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
                   chosen
                     ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-100'
                     : open
