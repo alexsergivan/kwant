@@ -328,17 +328,17 @@ async fn a_late_answer_in_a_delegation_reaches_the_lead() {
 #[tokio::test]
 async fn a_typed_reply_answers_the_open_question_in_a_direct_chat() {
     let env = setup().await;
-    send_direct(&env, &env.a, &format!("{} REPLYTAG:ta1", ask_marker("Which offer should the shop run?", &["15% off", "Free shipping"])), json!({})).await;
+    send_direct(&env, &env.a, &format!("{} REPLYTAG:ta1", ask_marker("Which offer should the shop run this week?", &["15% off", "Free shipping"])), json!({})).await;
     let q = open_question(&env, &env.a).await;
     let id = q["id"].as_str().unwrap();
 
-    let v = send_direct(&env, &env.a, "Free shipping over $35, please", json!({})).await;
+    let v = send_direct(&env, &env.a, "TYPED_DIRECT free shipping over $35, please", json!({})).await;
     assert_eq!((v["status"].as_str(), v["question_id"].as_str()), (Some("answered"), Some(id)), "{v}");
     let reply = wait_reply(&env, &env.a, "answer ta1").await;
-    assert!(reply.text.contains("The user answered: Free shipping over $35, please]"), "{}", reply.text);
+    assert!(reply.text.contains("The user answered: TYPED_DIRECT free shipping over $35, please]"), "{}", reply.text);
     let q = &question(&env, id).await["question"];
-    assert_eq!((q["status"].as_str(), q["answer"].as_str()), (Some("answered"), Some("Free shipping over $35, please")));
-    assert!(invocations_with("Free shipping over $35").is_empty(), "no second turn");
+    assert_eq!((q["status"].as_str(), q["answer"].as_str()), (Some("answered"), Some("TYPED_DIRECT free shipping over $35, please")));
+    assert!(invocations_with("TYPED_DIRECT").is_empty(), "no second turn");
 }
 
 /// The same in a team chat (`team_id` and the team's channel): the member's open question takes
@@ -357,18 +357,22 @@ async fn a_typed_reply_answers_the_open_question_in_a_team_chat() {
         async move { call(app, "POST", "/api/chat/send", Some(body)).await }
     };
 
-    let (s, v) = say(format!("{} REPLYTAG:tt1", ask_marker("Which offer should the shop run?", &["15% off", "Free shipping"]))).await;
+    // A's turn asks in the team chat (named, so it is A's turn whichever member the router would
+    // pick). Each test asks its own question: the fake CLI calls a given tool marker only once.
+    let a_name = env.state.db.get_kwant(&env.a).await.unwrap().unwrap().name;
+    let ask = format!("@{a_name} {} REPLYTAG:tt1", ask_marker("Which offer should the team shop run?", &["15% off", "Free shipping"]));
+    let (s, v) = call(app, "POST", "/api/chat/send", Some(json!({"channel_id": channel, "prompt": ask, "sender_id": "user"}))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let q = open_question(&env, &channel).await;
     let id = q["id"].as_str().unwrap();
-    assert!([env.a.as_str(), env.b.as_str()].contains(&q["kwant_id"].as_str().unwrap()), "{q}");
+    assert_eq!(q["kwant_id"], env.a.as_str(), "{q}");
 
-    let (s, v) = say("Free shipping over $35, please".into()).await;
+    let (s, v) = say("TYPED_TEAM free shipping over $35, please".into()).await;
     assert_eq!((s, v["status"].as_str(), v["question_id"].as_str()), (StatusCode::OK, Some("answered"), Some(id)), "{v}");
     let reply = wait_reply(&env, &channel, "answer tt1").await;
-    assert!(reply.text.contains("The user answered: Free shipping over $35, please]"), "{}", reply.text);
+    assert!(reply.text.contains("The user answered: TYPED_TEAM free shipping over $35, please]"), "{}", reply.text);
     assert_eq!(question(&env, id).await["question"]["status"], "answered");
-    assert!(invocations_with("Free shipping over $35").is_empty(), "the team router started no turn");
+    assert!(invocations_with("TYPED_TEAM").is_empty(), "the team router started no turn");
 }
 
 /// A direct chat only answers its own bot's question: another bot's open question (in its own
