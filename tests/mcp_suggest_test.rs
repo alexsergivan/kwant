@@ -659,6 +659,42 @@ async fn directory_install_adds_tests_and_never_echoes_secrets() {
     assert_eq!(servers(&e).await.len(), 2);
 }
 
+#[tokio::test]
+async fn directory_install_uses_the_forms_name() {
+    let e = setup().await;
+    let install = |body: Value| {
+        let app = e.app.clone();
+        async move { call(&app, "POST", "/api/mcp/registry/install", None, Some(body)).await }
+    };
+    let added = |v: &Value| v["server"]["name"].as_str().unwrap_or_default().to_string();
+    let signin = "io.github.kwnt-test/echo-signin";
+
+    // Name honoured (trimmed, case kept)
+    let (status, v) = install(json!({"registry_name": signin, "name": "  Echo_Login "})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(added(&v), "Echo_Login");
+    // A clash with it gets a suffix
+    let (status, v) = install(json!({"registry_name": signin, "name": "echo_login"})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(added(&v), "echo_login-2");
+    // Missing name: today's behaviour, the entry's own name
+    let (status, v) = install(json!({"registry_name": signin})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(added(&v), "echo-signin");
+    // Not the form's rule (or kwnt's own name): the entry's name, kept free
+    for (bad, want) in [("Echo Login!", "echo-signin-2"), ("   ", "echo-signin-3"), ("kwnt", "echo-signin-4"), ("a__b", "echo-signin-5")] {
+        let (status, v) = install(json!({"registry_name": signin, "name": bad})).await;
+        assert_eq!(status, StatusCode::OK, "{bad:?}: {v}");
+        assert_eq!(added(&v), want, "{bad:?}");
+    }
+    // A name that isn't text is refused like any bad body, and nothing is added
+    let (status, _) = install(json!({"registry_name": signin, "name": 5})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut names: Vec<String> = servers(&e).await.into_iter().map(|s| s.name).collect();
+    names.sort();
+    assert_eq!(names, ["Echo_Login", "echo-signin", "echo-signin-2", "echo-signin-3", "echo-signin-4", "echo-signin-5", "echo_login-2"]);
+}
+
 /// The real registry, by hand only: `cargo test --test mcp_suggest_test -- --ignored`.
 #[tokio::test]
 #[ignore = "talks to registry.modelcontextprotocol.io"]

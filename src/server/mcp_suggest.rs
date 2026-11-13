@@ -445,6 +445,20 @@ fn free_name(base: &str, taken: &[String]) -> String {
     }
 }
 
+/// The server name for an install: the person's `preferred` name when it is one the custom form
+/// accepts (letters, numbers, `-` or `_`, trimmed), else the entry's own name; either way kept
+/// free in the space (`name-2`, …). A preferred name that has no room left for a suffix falls
+/// back to the entry's name too.
+fn install_name(preferred: Option<&str>, registry_name: &str, taken: &[String]) -> String {
+    if let Some(p) = preferred.map(str::trim).filter(|p| mcp::usable_server_name(p)) {
+        let name = free_name(p, taken);
+        if mcp::usable_server_name(&name) {
+            return name;
+        }
+    }
+    free_name(&server_name_for(registry_name), taken)
+}
+
 /// A registry entry set up in a space: the server, its first test, and whether it needs sign-in.
 pub(super) struct Installed {
     pub server: McpServer,
@@ -463,11 +477,14 @@ pub(super) struct InstallFailed {
 /// directory): create the server from `plan` and the resolved values under a free name, test
 /// it, and keep it if it starts or only needs sign-in. A server that doesn't start is removed.
 /// `for_kwant` switches it on for that bot only; `None` adds it like any server the person adds.
+/// `preferred_name` is the Name the person saw on the form (see `install_name`).
 /// Values are never logged.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn create_and_test(
     state: &AppState,
     space: &SpaceId,
     registry_name: &str,
+    preferred_name: Option<&str>,
     plan: &InstallPlan,
     env: BTreeMap<String, String>,
     headers: BTreeMap<String, String>,
@@ -476,7 +493,7 @@ pub(super) async fn create_and_test(
     let failed = |status, error: String, test| InstallFailed { status, error, test };
     let taken: Vec<String> = state.db.list_mcp_servers(space).await.unwrap_or_default().into_iter().map(|s| s.name).collect();
     let input = McpServerInput {
-        name: free_name(&server_name_for(registry_name), &taken),
+        name: install_name(preferred_name, registry_name, &taken),
         transport: plan.transport.clone(),
         command: plan.command.clone(),
         args: Some(plan.args.clone()),
@@ -570,7 +587,7 @@ pub async fn install(
         }
     };
 
-    let done = match create_and_test(&state, &space, &s.registry_name, &plan, env, header_values, Some(&s.kwant_id)).await {
+    let done = match create_and_test(&state, &space, &s.registry_name, None, &plan, env, header_values, Some(&s.kwant_id)).await {
         Ok(done) => done,
         Err(InstallFailed { status, error, test }) => {
             if test.is_some() {
@@ -670,5 +687,27 @@ mod tests {
         assert_eq!(package_identifier(&oci).as_deref(), Some("ghcr.io/a/c"));
         assert!(same_server(&oci, &server("docker", &["run", "ghcr.io/a/c:latest"])));
         assert_eq!(free_name("echo", &["echo".into(), "Echo-2".into()]), "echo-3");
+    }
+
+    #[test]
+    fn install_name_honours_the_forms_name() {
+        let none: Vec<String> = Vec::new();
+        // Honoured, trimmed, case kept
+        assert_eq!(install_name(Some("Stripe"), "com.stripe/mcp", &none), "Stripe");
+        assert_eq!(install_name(Some("  my_tool-2 "), "com.stripe/mcp", &none), "my_tool-2");
+        // Missing or not the form's rule: the entry's own name, as before
+        assert_eq!(install_name(None, "com.stripe/mcp", &none), "stripe");
+        for bad in ["", "   ", "Stripe API", "stripé", "a/b", "-x", "a__b", "kwnt", "KWNT_tools", &"x".repeat(49)] {
+            assert_eq!(install_name(Some(bad), "com.stripe/mcp", &none), "stripe", "{bad:?}");
+        }
+        // A clash gets a suffix, case-insensitively
+        let taken: Vec<String> = vec!["stripe".into(), "Stripe-2".into()];
+        assert_eq!(install_name(Some("STRIPE"), "com.stripe/mcp", &taken), "STRIPE-3");
+        assert_eq!(install_name(None, "com.stripe/mcp", &taken), "stripe-3");
+        assert_eq!(install_name(Some("bad name"), "com.stripe/mcp", &taken), "stripe-3");
+        // No room for a suffix: the entry's name instead of a name build_server would refuse
+        let long = "a".repeat(48);
+        assert_eq!(install_name(Some(&long), "com.stripe/mcp", &none), long);
+        assert_eq!(install_name(Some(&long), "com.stripe/mcp", &[long.clone()]), "stripe");
     }
 }

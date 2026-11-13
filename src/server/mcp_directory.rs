@@ -129,6 +129,9 @@ pub async fn search(State(state): State<AppState>, headers: HeaderMap, Scope(spa
 #[derive(Deserialize)]
 pub struct InstallBody {
     pub registry_name: String,
+    /// The Name on the form; used when it is a valid server name (else the entry's own name).
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
@@ -145,11 +148,12 @@ fn scrub(v: Value, secrets: &[String]) -> Value {
     }
 }
 
-/// `POST /api/mcp/registry/install?space= {registry_name, env?, headers?}`: the person adds an
+/// `POST /api/mcp/registry/install?space= {registry_name, name?, env?, headers?}`: the person adds an
 /// entry from the directory. Its latest version is fetched again and planned from the registry's
 /// data only; `env` and `headers` fill its named inputs. The server is added like one the person
 /// typed in (for every bot), tested, and kept if it starts or only needs sign-in
-/// (`oauth_required: true`). The values typed are never echoed back or logged.
+/// (`oauth_required: true`). It is named `name` when that is a valid server name, else after the
+/// entry, with a suffix on a clash. The values typed are never echoed back or logged.
 pub async fn install(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -161,7 +165,7 @@ pub async fn install(
     }
     // A JSON error can quote what was sent, so it isn't passed on.
     let Ok(Json(body)) = body else {
-        return error(StatusCode::BAD_REQUEST, "send {registry_name, env, headers} as JSON, with text values");
+        return error(StatusCode::BAD_REQUEST, "send {registry_name, name, env, headers} as JSON, with text values");
     };
     let secrets: Vec<String> = body.env.values().chain(body.headers.values()).map(|v| v.trim().to_string()).filter(|v| v.len() >= 6).collect();
     let resp = install_inner(&state, &space, body).await;
@@ -194,7 +198,7 @@ async fn install_inner(state: &AppState, space: &crate::db::spaces::SpaceId, bod
         Ok(v) => v,
         Err(e) => return err(StatusCode::BAD_REQUEST, &e),
     };
-    match create_and_test(state, space, name, plan, env, header_values, None).await {
+    match create_and_test(state, space, name, body.name.as_deref(), plan, env, header_values, None).await {
         Ok(Installed { server, test, oauth_required }) => {
             tracing::info!(registry_name = %name, server_id = %server.id, oauth_required, "MCP server added from the directory");
             (
