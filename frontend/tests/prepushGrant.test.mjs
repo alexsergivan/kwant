@@ -137,11 +137,13 @@ test('needsYou: a card the person just pressed leaves at once, and comes back if
   assert.deepEqual(m.needsYou([c], new Set(['pp_needs'])), []);
   const { host, rerender } = await mount(m.PrepushNeedsYou, { cards: [c], names: { k_pixel: 'Pixel' }, onOpen: () => {}, acted: new Set() });
   assert.equal(host.querySelectorAll('[data-needs-prepush-item]').length, 1);
-  // The branch tells two items apart, so it is there on a phone too (under the line), not only beside it.
-  const phoneBranch = host.querySelector('[data-needs-branch-phone]');
-  assert.equal(phoneBranch?.textContent, c.branch);
-  assert.match(phoneBranch.className, /sm:hidden/);
-  assert.doesNotMatch(phoneBranch.className, /max-sm:hidden/);
+  // The branch tells two items apart, so it goes under the line at every width (Mira FIX 5): one chip, never hidden.
+  const branches = host.querySelectorAll('[data-needs-prepush-item] code');
+  assert.equal(branches.length, 1, 'no second, clipped chip beside the line');
+  const branch = host.querySelector('[data-needs-branch]');
+  assert.equal(branch?.textContent, c.branch);
+  assert.equal(branch.getAttribute('title'), c.branch, 'the full name on hover when it is truncated');
+  assert.doesNotMatch(branch.className, /hidden/);
   await rerender({ cards: [c], names: { k_pixel: 'Pixel' }, onOpen: () => {}, acted: new Set(['pp_needs']) });
   assert.equal(host.querySelector('[data-needs-prepush]'), null, 'gone before the server answers');
   await rerender({ cards: [c], names: { k_pixel: 'Pixel' }, onOpen: () => {}, acted: new Set() });
@@ -185,7 +187,7 @@ test('story after a retry: fixing → checking the new push → Pushed · HH:MM,
   const at = fx.PP_RETRIED_GRANT.grant.at;
   const s0 = m.storyOf(r, [r], 'Quant', null, at + 1000);
   assert.equal(s0.step, 'fixing');
-  assert.equal(s0.lead, 'You asked Quant to fix this and push again. Its next push of pixel/inbox-empty-state goes without asking you again, once the checks pass.');
+  assert.equal(s0.lead, 'You asked Quant to fix this and push again. That was your OK: once the checks pass, its next push of pixel/inbox-empty-state goes without asking you.');
   assert.equal(s0.now, 'Quant is fixing it…');
   const s1 = m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_CHECKING'), 'Quant', null, at);
   assert.equal(s1.step, 'checking');
@@ -198,7 +200,16 @@ test('story after a retry: fixing → checking the new push → Pushed · HH:MM,
   const s4 = m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_BLOCKED'), 'Quant', null, at);
   assert.equal(s4.step, 'blocked');
   assert.equal(s4.now, 'Blocked again: 1 finding. Nothing was pushed.');
-  assert.equal(m.storyOf(r, [r], 'Quant', null, fx.PP_RETRIED_GRANT.grant.expires_at + 1).step, 'expired', 'a window that ran out says so');
+  const sx = m.storyOf(r, [r], 'Quant', null, fx.PP_RETRIED_GRANT.grant.expires_at + 1);
+  assert.equal(sx.step, 'expired', 'a window that ran out says so');
+  assert.equal(sx.lead, 'You asked Quant to fix this and push again.', 'the lead stops promising (Mira FIX 7)');
+  assert.equal(sx.now, "No fixed push came within 2 hours, so your OK ran out. Quant's next push asks you as usual.");
+  const replacedNext = card({ ...fx.PP_NEXT_BLOCKED, status: 'superseded', needs_you: false });
+  const rp = m.storyOf(r, [r, replacedNext], 'Quant', null, at);
+  assert.equal(rp.step, 'replaced');
+  assert.equal(rp.now, 'Quant pushed again, so a newer check replaced this one.', 'says what replaced what (Mira FIX 6)');
+  const outR = html(m.PrepushCard, { card: r, bot: 'Quant', story: rp, onOpenCard: () => {} });
+  assert.match(outR, /See the newer check/);
   const old = card({ ...fx.PP_RETRIED_GRANT, grant: null });
   assert.match(m.storyOf(old, [old], 'Quant').lead, /is checked from try 1\.$/, 'without a grant the card promises nothing it can\'t keep');
   assert.equal(m.storyOf(card(fx.PP_NEEDS_YOU), [], 'Quant'), null, 'only pressed cards tell the story');
@@ -206,9 +217,15 @@ test('story after a retry: fixing → checking the new push → Pushed · HH:MM,
 
 test('story after Push anyway: pushing → Pushed · HH:MM', () => {
   const o = card(fx.PP_OVERRIDDEN_GRANT);
-  const s = m.storyOf(o, [o], 'Quant');
+  const s = m.storyOf(o, [o], 'Quant', null, fx.PP_OVERRIDDEN_GRANT.grant.at);
   assert.equal(s.step, 'pushing');
-  assert.match(s.lead, /goes without asking you again/);
+  assert.equal(s.lead, `You let this push go at ${HM(fx.PP_OVERRIDDEN_GRANT.override.at)} with 1 finding open. That was your OK: Quant's push of this commit goes without asking you.`);
+  assert.equal(s.lead, m.overriddenLine(o, 'Quant'), 'one source for the override line');
+  assert.equal(s.now, 'Quant can push it now.');
+  // Mira FIX 2: an override grant runs out too; the card says so instead of "can push it now" for ever.
+  const sx = m.storyOf(o, [o], 'Quant', null, fx.PP_OVERRIDDEN_GRANT.grant.expires_at);
+  assert.equal(sx.step, 'expired');
+  assert.equal(sx.now, "Quant didn't push within 2 hours, so your OK ran out. Its push asks you as usual.");
   const p = card(fx.PP_PUSHED);
   const sp = m.storyOf(p, [p], 'Quant');
   assert.equal(sp.step, 'pushed');
@@ -218,26 +235,29 @@ test('story after Push anyway: pushing → Pushed · HH:MM', () => {
 test('a floor or payment approval the push still needs gets one line with a link; an ordinary approval does not', () => {
   const r = card(fx.PP_RETRIED_GRANT);
   const after = new Date(fx.PP_RETRIED_GRANT.grant.at + 60_000).toISOString();
-  const floor = { id: 'ap1', tool_name: 'Bash', kwant_id: 'k_pixel', asked_at: after, details: { prod_floor: { kind: 'push_main', why: 'it pushes to main, a watched branch.' } } };
-  const pay = { id: 'ap2', tool_name: 'stripe', kwant_id: 'k_pixel', asked_at: after, details: { payment_reason: 'it charges a card' } };
+  const floor = { id: 'ap1', tool_name: 'Bash', kwant_id: 'k_pixel', asked_at: after, details: { prod_floor: { kind: 'push_main', why: 'This push goes to main, a watched branch.' } } };
+  const pay = { id: 'ap2', tool_name: 'stripe', kwant_id: 'k_pixel', asked_at: after, details: { payment_reason: 'It charges a card' } };
   const plain = { id: 'ap3', tool_name: 'Bash', kwant_id: 'k_pixel', asked_at: after, details: { command: 'git push' } };
   const otherBot = { ...floor, id: 'ap4', kwant_id: 'k_iris' };
   const before = { ...floor, id: 'ap5', asked_at: new Date(fx.PP_RETRIED_GRANT.grant.at - 600_000).toISOString() };
-  assert.deepEqual(m.pushApproval(r, [plain, otherBot, before, floor]), { id: 'ap1', reason: 'it pushes to main, a watched branch' });
-  assert.deepEqual(m.pushApproval(r, [pay]), { id: 'ap2', reason: 'it charges a card' });
+  assert.deepEqual(m.pushApproval(r, [plain, otherBot, before, floor]), { id: 'ap1', reason: 'This push goes to main, a watched branch' });
+  assert.deepEqual(m.pushApproval(r, [pay]), { id: 'ap2', reason: 'It charges a card' });
+  const bare = { ...floor, id: 'ap6', details: { prod_floor: { kind: 'push_main' } } };
+  assert.deepEqual(m.pushApproval(r, [bare]), { id: 'ap6', reason: null }, 'no made-up reason');
   assert.equal(m.pushApproval(r, [plain]), null);
   assert.equal(m.pushApproval(card(fx.PP_NEEDS_YOU), [floor]), null, 'only after a press');
   assert.equal(m.pushApproval(card(fx.PP_PUSHED), [floor]), null, 'a push that went needs nothing');
-  const s = m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_CLEAR'), 'Quant', { id: 'ap1', reason: 'it pushes to main' });
+  const s = m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_CLEAR'), 'Quant', { id: 'ap1', reason: 'This push goes to main' });
   assert.equal(s.step, 'asks');
-  assert.equal(s.now, "Quant's push needs your OK: it pushes to main");
+  assert.equal(s.now, "Quant's push still needs your OK. This push goes to main. Pushes like this always ask, every time.");
+  assert.equal(m.asksLine('Quant', { id: 'x', reason: null }), "Quant's push still needs your OK. Pushes like this always ask, every time.");
 });
 
 test('the retried card shows the new state at once and links to the new card', async () => {
   const r = card(fx.PP_RETRIED_GRANT);
   const out0 = html(m.PrepushCard, { card: r, bot: 'Quant', story: m.storyOf(r, [r], 'Quant', null, fx.PP_RETRIED_GRANT.grant.at) });
   assert.match(out0, /data-prepush-phase="RT"/);
-  assert.match(out0, /You asked Quant to fix this and push again\. Its next push of <code[^>]*>pixel\/inbox-empty-state<\/code> goes without asking you again, once the checks pass\./);
+  assert.match(out0, /You asked Quant to fix this and push again\. That was your OK: once the checks pass, its next push of <code[^>]*>pixel\/inbox-empty-state<\/code> goes without asking you\./);
   assert.match(out0, /data-story="fixing"/);
   assert.match(out0, /role="status"[^>]*>.*Quant is fixing it…/);
   const opened = [];
@@ -259,10 +279,11 @@ test('the story line follows the new push live, and a floor approval line opens 
   await rerender(props(all('PP_RETRIED_GRANT', 'PP_NEXT_CHECKING')));
   assert.equal(now(), "Checking Quant's new push…");
   assert.ok(host.querySelector('[data-story-next="pp_next"]'), 'links to the new card');
-  await rerender(props(all('PP_RETRIED_GRANT', 'PP_NEXT_CLEAR'), { id: 'ap1', reason: 'it pushes to main' }));
+  await rerender(props(all('PP_RETRIED_GRANT', 'PP_NEXT_CLEAR'), { id: 'ap1', reason: 'This push goes to main' }));
   const line = host.querySelector('[data-story-approval="ap1"]');
   assert.ok(line);
-  assert.match(text(line), /Quant's push needs your OK: it pushes to main/);
+  assert.equal(text(line).replace(/Open it.*$/, '').trim(), "Quant's push still needs your OK. This push goes to main. Pushes like this always ask, every time.");
+  assert.equal(line.querySelector('.dv-led')?.getAttribute('data-s'), 'warn', 'amber light in the amber box, not the running violet');
   // Said once: the amber line is the only status line, not a second "needs your OK." above it.
   assert.equal((text(host).match(/needs your OK/g) ?? []).length, 1);
   assert.equal(host.querySelectorAll('[role="status"]').length, 1);
@@ -285,12 +306,13 @@ test('the new card links back to the request, and once its push went it folds to
   const out = html(m.PrepushCard, { card: card(fx.PP_NEXT_PUSHED), bot: 'Quant', after: cards[0] });
   assert.match(out, /data-prepush-phase="P2b"/);
   assert.match(out, new RegExp(`Pushed · ${HM(fx.PP_NEXT_PUSHED.grant.used_at)}`));
-  assert.match(out, /with no second OK: you asked for the fix\./);
+  assert.match(out, /· your retry was the OK, so it didn&#x27;t ask again\.|· your retry was the OK, so it didn't ask again\./);
+  assert.doesNotMatch(out, /no second OK/);
 });
 
 test('Push anyway: the card follows its one push to "Pushed · HH:MM"', () => {
   const o = card(fx.PP_OVERRIDDEN_GRANT);
-  const out = html(m.PrepushCard, { card: o, bot: 'Quant', story: m.storyOf(o, [o], 'Quant') });
+  const out = html(m.PrepushCard, { card: o, bot: 'Quant', story: m.storyOf(o, [o], 'Quant', null, fx.PP_OVERRIDDEN_GRANT.grant.at) });
   assert.match(out, /data-story="pushing"/);
   assert.match(out, /Quant can push it now\./);
   const p = card(fx.PP_PUSHED);
@@ -305,4 +327,22 @@ test('PrepushThread wires the story: the retried card follows the new card from 
   const { host } = await mount(m.PrepushThread, { cards: every, all: every, bot: 'Quant', live: new Set(), approvals: [] });
   assert.equal(text(host.querySelector('#prepush-pp_rg [data-story-now]')), "Checking Quant's new push…");
   assert.ok(host.querySelector('#prepush-pp_next [data-after-retry="pp_rg"]'));
+});
+
+test('the chat messages to the bot say its next push needs no second OK (Mira FIX 8)', () => {
+  const c = card(fx.PP_NEEDS_YOU);
+  assert.equal(
+    m.retryMessage(c),
+    `Fix what the pre-push check found on ${c.branch}, commit, and push again. I've given my OK for that push, so once the checks pass it goes without asking me.`,
+  );
+  assert.equal(
+    m.overrideMessage(c),
+    `I let your push of ${c.branch} go anyway, for this commit only. That was my OK, so run the same push again without asking me.`,
+  );
+});
+
+test('the new card after an override push names Push anyway as the OK (Mira FIX 4)', () => {
+  const p = card({ ...fx.PP_NEXT_PUSHED, grant: { ...fx.PP_NEXT_PUSHED.grant, kind: 'override' } });
+  const out = html(m.PrepushCard, { card: p, bot: 'Quant' });
+  assert.match(out, /your Push anyway was the OK, so it didn(&#x27;|')t ask again\./);
 });

@@ -137,11 +137,11 @@ const withBranch = (text: string, branch: string): React.ReactNode => {
   );
 };
 
-const STORY_LED: Record<Story['step'], 'ok' | 'off' | 'run' | 'bad'> = {
+const STORY_LED: Record<Story['step'], 'ok' | 'off' | 'run' | 'bad' | 'warn'> = {
   fixing: 'run',
   checking: 'run',
   pushing: 'run',
-  asks: 'run',
+  asks: 'warn',
   pushed: 'ok',
   blocked: 'bad',
   expired: 'off',
@@ -183,7 +183,7 @@ const StoryLine: React.FC<{ story: Story; card: Card; bot: string; onOpenCard?: 
         </span>
         {story.next && onOpenCard && story.step !== 'asks' && (
           <button type="button" data-story-next={story.next.id} className={LINK} onClick={() => onOpenCard(story.next!.id)}>
-            {story.step === 'blocked' ? 'See what it found' : story.step === 'pushed' ? 'See the push' : 'See the new check'} <ArrowDown size={12} aria-hidden="true" />
+            {story.step === 'blocked' ? 'See what it found' : story.step === 'pushed' ? 'See the push' : story.step === 'replaced' ? 'See the newer check' : 'See the new check'} <ArrowDown size={12} aria-hidden="true" />
           </button>
         )}
       </p>
@@ -364,8 +364,11 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({
           if (used !== null)
             return (
               <span data-pushed>
+                {/* Mira FIX 4: keyed on the grant, so it reads the same when the pressed card is out of view. */}
                 <span className="font-medium text-emerald-300">{pushedLine(used)}</span> · <code className="dv-sha dv-sha-wrap">{p.branch}</code>
-                {after ? ', with no second OK: you asked for the fix.' : ', with no second OK.'}
+                {card.grant?.kind === 'override'
+                  ? " · your Push anyway was the OK, so it didn't ask again."
+                  : " · your retry was the OK, so it didn't ask again."}
               </span>
             );
           return (
@@ -595,7 +598,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({
 
       {phase === 'P6' && (
         <div className="mt-3 text-meta text-zinc-300">
-          <p>{overriddenLine(card)}</p>
+          <p>{overriddenLine(card, bot)}</p>
           {story && <StoryLine story={story} card={card} bot={bot} onOpenCard={onOpenCard} onOpenApproval={onOpenApproval} />}
           {card.override?.reason && (
             <blockquote className="mt-1.5 border-l-2 border-zinc-600 pl-2 italic text-zinc-300 [overflow-wrap:anywhere]">

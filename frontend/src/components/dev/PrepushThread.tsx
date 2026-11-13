@@ -230,10 +230,9 @@ export const PrepushNeedsYou: React.FC<{ cards: Card[]; names: Record<string, st
               <span className="kw-chip kw-chip-warn shrink-0">Needs you</span>
               <span className="min-w-0 flex-1">
                 <span className="block [overflow-wrap:anywhere]">{inboxLine(c, names[c.kwant_id] || 'A bot')}</span>
-                {/* One item per branch: on a phone the branch goes under the line, since it is what tells two items apart. */}
-                <code data-needs-branch-phone className="dv-sha mt-1 inline-block max-w-full truncate align-top sm:hidden">{c.branch}</code>
+                {/* One item per branch: the branch goes under the line at every width, since it is what tells two items apart (Mira FIX 5). */}
+                <code data-needs-branch title={c.branch} className="dv-sha mt-1 inline-block max-w-full truncate align-top">{c.branch}</code>
               </span>
-              <code className="dv-sha max-w-[40%] shrink truncate max-sm:hidden">{c.branch}</code>
             </button>
           </li>
         ))}

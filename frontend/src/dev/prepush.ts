@@ -423,10 +423,13 @@ export function clearedLine(c: PrepushCard): string {
   return `${p.before}${p.branch}${p.after}`;
 }
 
-export function overriddenLine(c: PrepushCard): string {
+export function overriddenLine(c: PrepushCard, bot: string): string {
   const at = hhmm(c.override?.at ?? null);
   const n = openCount(c);
-  return `You let this push go${at ? ` at ${at}` : ''} with ${plural(n, 'finding')} open. It covers this commit only.`;
+  const head = `You let this push go${at ? ` at ${at}` : ''} with ${plural(n, 'finding')} open.`;
+  // Mira FIX 2: with a grant, the press was the OK, and the card says so.
+  if (c.grant) return `${head} That was your OK: ${bot}'s push of this commit goes without asking you.`;
+  return `${head} It covers this commit only.`;
 }
 
 export function inboxLine(c: PrepushCard, bot: string): string {
@@ -437,10 +440,10 @@ export function inboxLine(c: PrepushCard, bot: string): string {
 
 /** What "Ask {bot} to try again" sends through the normal chat send after /retry. */
 export const retryMessage = (c: PrepushCard): string =>
-  `I asked for a new check of your push of ${c.branch}. Fix what the pre-push card found, commit, and run the same push again.`;
+  `Fix what the pre-push check found on ${c.branch}, commit, and push again. I've given my OK for that push, so once the checks pass it goes without asking me.`;
 
 export const overrideMessage = (c: PrepushCard): string =>
-  `I let your push of ${c.branch} go anyway, for this commit only. Run the same push again.`;
+  `I let your push of ${c.branch} go anyway, for this commit only. That was my OK, so run the same push again without asking me.`;
 
 /** Characters as the server counts them (code points, not UTF-16 units: Ada Later 6). */
 export const reasonLength = (s: string): number => [...s.trim()].length;
@@ -485,7 +488,8 @@ export function pressedBefore(c: PrepushCard, cards: PrepushCard[]): PrepushCard
 /** An approval still waiting for this push (production floor, payment): the card links to it. */
 export interface PushApproval {
   id: string;
-  reason: string;
+  /** Why this kind of push always asks (the floor's why, or the payment reason); null when neither says. */
+  reason: string | null;
 }
 
 export type StoryStep =
@@ -495,7 +499,7 @@ export type StoryStep =
   | 'asks' // a floor or payment approval still has to be answered
   | 'pushed' // the push went
   | 'blocked' // the new push was blocked again
-  | 'expired' // the retry's window ran out before a clear push
+  | 'expired' // the grant's window ran out before the push it covered
   | 'replaced'; // a newer push replaced this one before it went
 
 export interface Story {
@@ -526,16 +530,18 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
   const covered = !!c.grant;
   if (c.status === 'overridden' || c.status === 'pushed') {
     const at = c.status === 'pushed' ? (usedAt(c) ?? c.updated_at) : null;
-    const lead = covered
-      ? `You let this push go. ${bot}'s push of this commit goes without asking you again.`
-      : 'You let this push go.';
+    // One source for the override's first line: the card renders it as the lead (Mira FIX 2).
+    const lead = overriddenLine(c, bot);
     if (at !== null || c.status === 'pushed') return { step: 'pushed', lead, now: pushedLine(at), next: null, at, approval: null };
+    const exp = c.grant?.expires_at ?? null;
+    if (c.grant && c.grant.used_at === null && exp !== null && now >= exp)
+      return { step: 'expired', lead, now: `${bot} didn't push within 2 hours, so your OK ran out. Its push asks you as usual.`, next: null, at: null, approval: null };
     if (approval) return { step: 'asks', lead, now: asksLine(bot, approval), next: null, at: null, approval };
     return { step: 'pushing', lead, now: `${bot} can push it now.`, next: null, at: null, approval: null };
   }
   // retried
   const lead = covered
-    ? `You asked ${bot} to fix this and push again. Its next push of ${c.branch} goes without asking you again, once the checks pass.`
+    ? `You asked ${bot} to fix this and push again. That was your OK: once the checks pass, its next push of ${c.branch} goes without asking you.`
     : `You asked ${bot} to fix this and push again. Its next push of ${c.branch} is checked from try 1.`;
   const next = followUp(c, cards);
   const at = usedAt(next, c);
@@ -544,7 +550,13 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
   if (!next) {
     const exp = c.grant?.expires_at ?? null;
     if (covered && exp !== null && now >= exp)
-      return { ...base, step: 'expired', now: `${bot} didn't push a fix within 2 hours, so its next push asks you as usual.` };
+      return {
+        ...base,
+        // Mira FIX 7: the lead stops promising once the OK has run out.
+        lead: `You asked ${bot} to fix this and push again.`,
+        step: 'expired',
+        now: `No fixed push came within 2 hours, so your OK ran out. ${bot}'s next push asks you as usual.`,
+      };
     return { ...base, step: 'fixing', now: `${bot} is fixing it…` };
   }
   switch (next.status) {
@@ -560,14 +572,16 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
       return { ...base, step: 'blocked', now: `Blocked again: ${what}. Nothing was pushed.` };
     }
     case 'superseded':
-      return { ...base, step: 'replaced', now: `${bot} pushed again before this one went.` };
+      return { ...base, step: 'replaced', now: `${bot} pushed again, so a newer check replaced this one.` };
     default:
       return { ...base, step: 'checking', now: `Checking ${bot}'s new push…` };
   }
 }
 
 export const pushedLine = (at: number | null): string => (hhmm(at) ? `Pushed · ${hhmm(at)}` : 'Pushed');
-export const asksLine = (bot: string, a: PushApproval): string => `${bot}'s push needs your OK: ${a.reason}`;
+/** Mira FIX 3: "still" and "always ask" say the press covered the usual OK, not this kind. */
+export const asksLine = (bot: string, a: PushApproval): string =>
+  a.reason ? `${bot}'s push still needs your OK. ${a.reason}. Pushes like this always ask, every time.` : `${bot}'s push still needs your OK. Pushes like this always ask, every time.`;
 
 /** A follow-up card's own lead line, so the two cards read as one story. */
 export const afterRetryLine = (c: PrepushCard): string => {
@@ -594,8 +608,8 @@ export function pushApproval(
     const floor = isObj(a.details.prod_floor) ? a.details.prod_floor : null;
     const pay = str(a.details.payment_reason, 300);
     if (!floor && !pay) continue;
-    const reason = (floor && str(floor.why, 300)) || pay || 'this kind of push always asks you first';
-    return { id: a.id, reason: reason.replace(/[.\s]+$/, '') };
+    const reason = ((floor && str(floor.why, 300)) || pay || '').replace(/[.\s]+$/, '');
+    return { id: a.id, reason: reason || null };
   }
   return null;
 }

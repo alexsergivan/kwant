@@ -130,7 +130,7 @@ test('counts come from the server: open findings are its blockers, never a check
   assert.equal(m.requiredPassed(card(fx.PP_CLEAR)), 5, 'semgrep not installed is not a passed check');
   assert.equal(m.clearedLine(card(fx.PP_CLEAR)), 'Cleared to push pixel/inbox-empty-state after 5 checks passed · 14:02');
   assert.equal(m.foldLine(card(fx.PP_NEEDS_YOU)), '4 checks passed · registry · tamper · rules · review');
-  assert.equal(m.overriddenLine(card(fx.PP_OVERRIDDEN)), 'You let this push go at 14:09 with 1 finding open. It covers this commit only.');
+  assert.equal(m.overriddenLine(card(fx.PP_OVERRIDDEN), 'Pixel'), 'You let this push go at 14:09 with 1 finding open. It covers this commit only.', 'old server, no grant: unchanged');
 });
 
 test('a check that could not run never reads as passed', () => {
