@@ -6,7 +6,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpFromLine } from 'lucide-react';
 import { PrepushCard } from './PrepushCard';
-import { PREPUSH_EVENT, inboxLine, mergeList, needsYou, prepushApi, upsert, type PrepushCard as Card } from '../../dev/prepush';
+import {
+  PREPUSH_EVENT,
+  inboxLine,
+  mergeList,
+  needsYou,
+  prepushApi,
+  pressedBefore,
+  pushApproval,
+  storyOf,
+  upsert,
+  type PrepushCard as Card,
+} from '../../dev/prepush';
 
 export interface PrepushEventDetail {
   space_id: string;
@@ -22,6 +33,10 @@ export interface PrepushState {
   put: (c: Card) => void;
   /** Fetch one card again (after a 409, so the card shows where it really is). */
   refresh: (id: string) => Promise<void>;
+  /** 0.9.7: cards the person just retried or overrode. They leave Needs you at once, before the server answers. */
+  acted: ReadonlySet<string>;
+  /** Mark a card acted on (true) or put it back when the call failed (false). */
+  setActed: (id: string, on: boolean) => void;
 }
 
 type Api = Pick<typeof prepushApi, 'list' | 'get'>;
@@ -29,6 +44,16 @@ type Api = Pick<typeof prepushApi, 'list' | 'get'>;
 export function usePrepushCards(spaceId: string, on: boolean, api: Api = prepushApi): PrepushState {
   const [cards, setCards] = useState<Card[]>([]);
   const [live, setLive] = useState<ReadonlySet<string>>(new Set());
+  const [acted, setActedState] = useState<ReadonlySet<string>>(new Set());
+  const setActed = useCallback((id: string, on: boolean) => {
+    setActedState((s) => {
+      if (s.has(id) === on) return s;
+      const n = new Set(s);
+      if (on) n.add(id);
+      else n.delete(id);
+      return n;
+    });
+  }, []);
   const seen = useRef(new Map<string, string>());
   // A list or card load that failed: load the list again on the next event or window focus, so a
   // card waiting for the person doesn't stay hidden until its own next event (Ada Later 1).
@@ -58,6 +83,7 @@ export function usePrepushCards(spaceId: string, on: boolean, api: Api = prepush
   useEffect(() => {
     setCards([]);
     setLive(new Set());
+    setActedState(new Set());
     seen.current = new Map();
     stale.current = false;
     if (!on || !spaceId) {
@@ -110,7 +136,7 @@ export function usePrepushCards(spaceId: string, on: boolean, api: Api = prepush
     };
   }, [spaceId, on, api, put]);
 
-  return { cards, live, put, refresh };
+  return { cards, live, put, refresh, acted, setActed };
 }
 
 /** How many of a bot's cards the thread shows: the newest few, oldest first like the chat. */
@@ -125,28 +151,66 @@ export function threadCards(cards: Card[], kwantId: string): Card[] {
     .reverse();
 }
 
+type ApprovalLike = Parameters<typeof pushApproval>[1][number];
+
+/** Scroll to a card in the open chat and ring it, like an Inbox item does (none under reduced motion, in CSS). */
+export function jumpToCard(id: string): void {
+  const el = document.getElementById(`prepush-${id}`);
+  if (!el) return;
+  el.scrollIntoView?.({ block: 'center' });
+  el.classList.remove('kw-prepush-flash');
+  void el.offsetWidth;
+  el.classList.add('kw-prepush-flash');
+  window.setTimeout(() => el.classList.remove('kw-prepush-flash'), 1300);
+}
+
 export const PrepushThread: React.FC<{
   cards: Card[];
   bot: string;
   live: ReadonlySet<string>;
   onRetry?: (c: Card) => Promise<void>;
   onOverride?: (c: Card, reason: string) => Promise<void>;
-}> = ({ cards, bot, live, onRetry, onOverride }) => {
+  /** 0.9.7: every card of the space, so a pressed card can follow the new push its retry led to. */
+  all?: Card[];
+  /** The chat's pending approvals: a floor or payment approval the pressed push still needs is linked. */
+  approvals?: readonly ApprovalLike[];
+  onOpenApproval?: (id: string) => void;
+}> = ({ cards, bot, live, onRetry, onOverride, all, approvals = [], onOpenApproval }) => {
   if (cards.length === 0) return null;
+  const every = all ?? cards;
   return (
     <section aria-label={`Checks before ${bot} pushes`} data-prepush-thread className="space-y-2">
-      {cards.map((c) => (
-        <div key={c.id} id={`prepush-${c.id}`} className="relative max-w-[640px] scroll-mt-4 rounded-xl">
-          <PrepushCard card={c} bot={bot} live={live.has(c.id)} onRetry={onRetry} onOverride={onOverride} />
-        </div>
-      ))}
+      {cards.map((c) => {
+        const story = storyOf(c, every, bot, pushApproval(c, approvals));
+        const after = pressedBefore(c, every);
+        return (
+          <div key={c.id} id={`prepush-${c.id}`} className="relative max-w-[640px] scroll-mt-4 rounded-xl">
+            <PrepushCard
+              card={c}
+              bot={bot}
+              live={live.has(c.id)}
+              onRetry={onRetry}
+              onOverride={onOverride}
+              story={story}
+              after={after}
+              onOpenCard={jumpToCard}
+              onOpenApproval={onOpenApproval}
+            />
+          </div>
+        );
+      })}
     </section>
   );
 };
 
 /** The Inbox's "Needs you" rows for pushes waiting on the person (Mira P4). */
-export const PrepushNeedsYou: React.FC<{ cards: Card[]; names: Record<string, string>; onOpen: (c: Card) => void }> = ({ cards, names, onOpen }) => {
-  const list = needsYou(cards);
+export const PrepushNeedsYou: React.FC<{ cards: Card[]; names: Record<string, string>; onOpen: (c: Card) => void; acted?: ReadonlySet<string> }> = ({
+  cards,
+  names,
+  onOpen,
+  acted,
+}) => {
+  const list = needsYou(cards, acted);
   if (list.length === 0) return null;
   return (
     <section aria-labelledby="needs-prepush-h" data-needs-prepush data-needs-you>

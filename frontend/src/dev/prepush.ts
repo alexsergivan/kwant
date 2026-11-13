@@ -19,8 +19,8 @@ export const MAX_REASON = 2000;
 /** Server rule: needs_you once a blocked or failed card reaches this try. */
 export const NEEDS_YOU_TRIES = 2;
 
-export const PREPUSH_STATUSES = ['checking', 'clear', 'blocked', 'failed', 'overridden', 'retried'] as const;
-/** `unknown`: a status this build can't read yet (e.g. §4.4b `pushed`). Shown as a read-only grey line,
+export const PREPUSH_STATUSES = ['checking', 'clear', 'blocked', 'failed', 'overridden', 'pushed', 'retried', 'superseded'] as const;
+/** `unknown`: a status this build can't read yet. Shown as a read-only grey line,
  * never dropped, so a card doesn't vanish from the thread when the server learns a new state. */
 export type PrepushStatus = (typeof PREPUSH_STATUSES)[number] | 'unknown';
 export const CHECK_KEYS = ['secrets', 'pkgs', 'tests', 'risk', 'review', 'semgrep'] as const;
@@ -47,10 +47,29 @@ export interface PrepushFinding {
   open: boolean;
 }
 
+/**
+ * 0.9.7 prepush-grant: the person's press is the approval. "Ask {bot} to try again" (retry) covers the
+ * bot's next push of the branch once its card comes back clear; "Push anyway" (override) covers the one
+ * push of that commit. Both the card the person pressed and the card the covered push makes carry it.
+ */
+export interface PrepushGrant {
+  kind: 'retry' | 'override';
+  at: number | null;
+  expires_at: number | null;
+  /** When the push it covered went; null while it's still waiting. */
+  used_at: number | null;
+  /** The card the person pressed, when the server names it. */
+  card_id: string | null;
+  /** The newest card a push of the branch made while the grant waited, then the card of the push it let go. */
+  next_card_id: string | null;
+}
+
 export interface PrepushCard {
   id: string;
   space_id: string | null;
   kwant_id: string;
+  /** The folder the push runs in, when the server sends it (Needs you is one item per bot, folder, branch). */
+  folder: string | null;
   branch: string;
   head_sha: string | null;
   status: PrepushStatus;
@@ -65,6 +84,9 @@ export interface PrepushCard {
   reviewer: { name: string; engine: string | null; model: string | null } | null;
   fresh_eyes: FreshEyes | null;
   error: string | null;
+  grant: PrepushGrant | null;
+  /** On a superseded card: the newer card that replaced it. */
+  superseded_by: string | null;
   created_at: number | null;
   updated_at: number | null;
 }
@@ -106,6 +128,13 @@ function diffstat(v: unknown): PrepushCard['diffstat'] {
   return { files, add, del };
 }
 
+function grant(v: unknown): PrepushGrant | null {
+  if (!isObj(v)) return null;
+  const kind = v.kind === 'retry' || v.kind === 'override' ? v.kind : null;
+  if (!kind) return null;
+  return { kind, at: num(v.at), expires_at: num(v.expires_at), used_at: num(v.used_at), card_id: str(v.card_id, 120), next_card_id: str(v.next_card_id, 120) };
+}
+
 /** One card from the server, or null when it isn't one we can show honestly. */
 export function parsePrepush(raw: unknown): PrepushCard | null {
   if (!isObj(raw)) return null;
@@ -128,6 +157,7 @@ export function parsePrepush(raw: unknown): PrepushCard | null {
     id,
     space_id: str(raw.space_id, 120),
     kwant_id: kwant,
+    folder: str(raw.folder, 400),
     branch,
     head_sha: str(raw.head_sha, 64),
     status,
@@ -142,6 +172,8 @@ export function parsePrepush(raw: unknown): PrepushCard | null {
     reviewer: rv && str(rv.name, 80) ? { name: str(rv.name, 80)!, engine: str(rv.engine, 40), model: str(rv.model, 80) } : null,
     fresh_eyes: inner ? parseFreshEyes(inner.fresh_eyes) : null,
     error: inner ? str(inner.error, 400) : null,
+    grant: grant(raw.grant),
+    superseded_by: status === 'superseded' ? str(raw.superseded_by, 120) : null,
     created_at: num(raw.created_at),
     updated_at: num(raw.updated_at),
   };
@@ -161,9 +193,10 @@ export type Phase =
   | 'P2' // all clear
   | 'P3' // blocked, the bot is fixing
   | 'P4' // needs you
-  | 'P6' // pushed anyway (overridden)
+  | 'P6' // pushed anyway (overridden, or pushed: its one push went)
   | 'P7' // a check couldn't run (failed, before needs_you)
   | 'RT' // the person asked for a re-check (retried)
+  | 'SS' // superseded: a newer push of the branch replaced it
   | 'UN'; // a status this build can't read yet: a read-only line
 
 export function phaseOf(c: PrepushCard): Phase {
@@ -177,9 +210,12 @@ export function phaseOf(c: PrepushCard): Phase {
     case 'failed':
       return c.needs_you ? 'P4' : 'P7';
     case 'overridden':
+    case 'pushed':
       return 'P6';
     case 'retried':
       return 'RT';
+    case 'superseded':
+      return 'SS';
     case 'unknown':
       return 'UN';
   }
@@ -219,11 +255,12 @@ export function statusChip(c: PrepushCard): StatusChip | null {
     case 'P4':
       return { tone: 'warn', text: 'Needs you', led: null };
     case 'P6':
-      return { tone: 'plain', text: 'Pushed anyway', led: null };
+      return { tone: 'plain', text: c.status === 'pushed' ? 'Pushed' : 'Pushed anyway', led: null };
     case 'P7':
       return { tone: 'plain', text: "Couldn't check", led: null };
     case 'RT':
       return { tone: 'plain', text: 'Checking again', led: null };
+    case 'SS':
     case 'UN':
       return null;
   }
@@ -360,7 +397,9 @@ export function footer(c: PrepushCard, bot: string): string {
     case 'P7':
       return "A check couldn't run, so this push can't count as checked. Run the checks again, or push anyway with a reason.";
     case 'RT':
-      return `You asked for a new check. ${bot}'s next push of this commit is checked again from try 1.`;
+      return `You asked ${bot} to fix this and push again.`;
+    case 'SS':
+      return `Replaced by a newer push of ${c.branch}.`;
     case 'UN':
       return `This version of the app can't show where the check of ${c.branch} is yet. Update the app to see it.`;
   }
@@ -411,11 +450,176 @@ export const reasonOk = (s: string): boolean => reasonLength(s) >= MIN_REASON &&
 export const messageNotSent = (bot: string): string => `Done, but the message to ${bot} didn't send. Tell ${bot} in the chat.`;
 
 // ---------------------------------------------------------------------------------------------
+// After the press (0.9.7 prepush-grant): one story from the person's press to the push
+
+/** The cards of one push target: the same bot, folder (when the server sends it) and branch. */
+export const branchKey = (c: PrepushCard): string => JSON.stringify([c.space_id ?? '', c.kwant_id, c.folder ?? '', c.branch]);
+
+/** Whether the person pressed this card (retry, override) and the press still tells a story. */
+export const pressed = (c: PrepushCard): boolean => c.status === 'retried' || c.status === 'overridden' || c.status === 'pushed';
+
+/**
+ * The card the bot's next push made after the person pressed `c`: named by the grant's `card_id` when
+ * the server sends it, otherwise the newest later card of the same push target. Null while the bot is
+ * still fixing. An override's push goes on the same card, so it has none.
+ */
+export function followUp(c: PrepushCard, cards: PrepushCard[]): PrepushCard | null {
+  if (c.status !== 'retried') return null;
+  const named = c.grant?.next_card_id ? cards.find((x) => x.id === c.grant!.next_card_id && x.id !== c.id) : undefined;
+  if (named) return named;
+  const key = branchKey(c);
+  const after = c.grant?.at ?? c.updated_at ?? c.created_at ?? 0;
+  const later = cards
+    .filter((x) => x.id !== c.id && branchKey(x) === key)
+    .filter((x) => (x.grant?.card_id ? x.grant.card_id === c.id : (x.created_at ?? 0) >= after))
+    .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+  return later[0] ?? null;
+}
+
+/** The card a follow-up card came from, for its "after your retry" line. */
+export function pressedBefore(c: PrepushCard, cards: PrepushCard[]): PrepushCard | null {
+  if (pressed(c)) return null;
+  return cards.find((x) => x.status === 'retried' && followUp(x, cards)?.id === c.id) ?? null;
+}
+
+/** An approval still waiting for this push (production floor, payment): the card links to it. */
+export interface PushApproval {
+  id: string;
+  reason: string;
+}
+
+export type StoryStep =
+  | 'fixing' // retry: the bot hasn't pushed again yet
+  | 'checking' // its new push is being checked
+  | 'pushing' // clear (or overridden): the push goes now, no card asks
+  | 'asks' // a floor or payment approval still has to be answered
+  | 'pushed' // the push went
+  | 'blocked' // the new push was blocked again
+  | 'expired' // the retry's window ran out before a clear push
+  | 'replaced'; // a newer push replaced this one before it went
+
+export interface Story {
+  step: StoryStep;
+  /** The first line: what the person did, and what it lets happen. */
+  lead: string;
+  /** Where it is now. */
+  now: string;
+  /** The new card, to link to (retry only). */
+  next: PrepushCard | null;
+  /** When `step` is 'pushed'. */
+  at: number | null;
+  approval: PushApproval | null;
+}
+
+const usedAt = (...cs: (PrepushCard | null)[]): number | null => {
+  for (const c of cs) if (c?.grant?.used_at) return c.grant.used_at;
+  return null;
+};
+
+/**
+ * What the card says after the person pressed it, and how it follows the bot's new push live.
+ * Retry: fixing → checking the new push → Pushed · HH:MM, or blocked again. Override: pushing → Pushed.
+ * `now` is the clock (ms), so a retry window that ran out says so instead of "fixing" for ever.
+ */
+export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, approval: PushApproval | null = null, now = Date.now()): Story | null {
+  if (!pressed(c)) return null;
+  const covered = !!c.grant;
+  if (c.status === 'overridden' || c.status === 'pushed') {
+    const at = c.status === 'pushed' ? (usedAt(c) ?? c.updated_at) : null;
+    const lead = covered
+      ? `You let this push go. ${bot}'s push of this commit goes without asking you again.`
+      : 'You let this push go.';
+    if (at !== null || c.status === 'pushed') return { step: 'pushed', lead, now: pushedLine(at), next: null, at, approval: null };
+    if (approval) return { step: 'asks', lead, now: asksLine(bot, approval), next: null, at: null, approval };
+    return { step: 'pushing', lead, now: `${bot} can push it now.`, next: null, at: null, approval: null };
+  }
+  // retried
+  const lead = covered
+    ? `You asked ${bot} to fix this and push again. Its next push of ${c.branch} goes without asking you again, once the checks pass.`
+    : `You asked ${bot} to fix this and push again. Its next push of ${c.branch} is checked from try 1.`;
+  const next = followUp(c, cards);
+  const at = usedAt(next, c);
+  const base = { lead, next, approval: null, at: null };
+  if (at !== null) return { ...base, step: 'pushed', now: pushedLine(at), at };
+  if (!next) {
+    const exp = c.grant?.expires_at ?? null;
+    if (covered && exp !== null && now >= exp)
+      return { ...base, step: 'expired', now: `${bot} didn't push a fix within 2 hours, so its next push asks you as usual.` };
+    return { ...base, step: 'fixing', now: `${bot} is fixing it…` };
+  }
+  switch (next.status) {
+    case 'checking':
+      return { ...base, step: 'checking', now: `Checking ${bot}'s new push…` };
+    case 'clear':
+      if (approval) return { ...base, step: 'asks', now: asksLine(bot, approval), approval };
+      return { ...base, step: 'pushing', now: `The checks passed. ${bot} is pushing…` };
+    case 'blocked':
+    case 'failed': {
+      const n = openCount(next);
+      const what = next.status === 'failed' && n === 0 ? "a check couldn't run" : plural(Math.max(n, 1), 'finding');
+      return { ...base, step: 'blocked', now: `Blocked again: ${what}. Nothing was pushed.` };
+    }
+    case 'superseded':
+      return { ...base, step: 'replaced', now: `${bot} pushed again before this one went.` };
+    default:
+      return { ...base, step: 'checking', now: `Checking ${bot}'s new push…` };
+  }
+}
+
+export const pushedLine = (at: number | null): string => (hhmm(at) ? `Pushed · ${hhmm(at)}` : 'Pushed');
+export const asksLine = (bot: string, a: PushApproval): string => `${bot}'s push needs your OK: ${a.reason}`;
+
+/** A follow-up card's own lead line, so the two cards read as one story. */
+export const afterRetryLine = (c: PrepushCard): string => {
+  const at = hhmm(c.grant?.at ?? null);
+  return `After you asked for a fix${at ? ` at ${at}` : ''}.`;
+};
+
+/**
+ * The approval a push the person already let go still has to get (floor or payment), from the chat's
+ * pending approvals: the same bot, asked after the press, and one the floor raised. Never the ordinary
+ * approval: the grant replaces that one, so if one shows up it isn't this push's.
+ */
+export function pushApproval(
+  c: PrepushCard,
+  approvals: readonly { id: string; tool_name: string; details: Record<string, unknown>; asked_at?: string; kwant_id?: string | null }[],
+): PushApproval | null {
+  if (!pressed(c) || (c.status === 'pushed')) return null;
+  const after = c.grant?.at ?? c.updated_at ?? 0;
+  for (const a of approvals) {
+    const kw = a.kwant_id ?? (typeof a.details.kwant_id === 'string' ? a.details.kwant_id : null);
+    if (kw !== c.kwant_id) continue;
+    const asked = a.asked_at ? Date.parse(a.asked_at) : NaN;
+    if (Number.isFinite(asked) && asked + 5_000 < after) continue;
+    const floor = isObj(a.details.prod_floor) ? a.details.prod_floor : null;
+    const pay = str(a.details.payment_reason, 300);
+    if (!floor && !pay) continue;
+    const reason = (floor && str(floor.why, 300)) || pay || 'this kind of push always asks you first';
+    return { id: a.id, reason: reason.replace(/[.\s]+$/, '') };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Needs you (Inbox)
 
-/** One Inbox item per card that needs the person, newest first. Derived from the cards only. */
-export function needsYou(cards: PrepushCard[]): PrepushCard[] {
-  return cards.filter((c) => c.needs_you).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+/**
+ * The Inbox's pushes waiting for the person, newest first: at most one per push target (bot, folder,
+ * branch), and only when the newest card there is the one waiting. An older blocked card on a branch the
+ * bot has pushed again since (or that the server marked superseded) never shows. `hidden`: cards the
+ * person just retried or overrode, which leave at once, before the server answers. A superseded card never
+ * counts as the newest: the server can revive an older commit the bot pushes again and supersede the newer
+ * card instead (impl.md, server deviation 5), and the revived one is then the one waiting.
+ */
+export function needsYou(cards: PrepushCard[], hidden: ReadonlySet<string> = new Set()): PrepushCard[] {
+  const newest = new Map<string, PrepushCard>();
+  for (const c of cards) {
+    if (c.status === 'superseded') continue;
+    const k = branchKey(c);
+    const h = newest.get(k);
+    if (!h || (c.created_at ?? 0) > (h.created_at ?? 0) || ((c.created_at ?? 0) === (h.created_at ?? 0) && (c.updated_at ?? 0) > (h.updated_at ?? 0))) newest.set(k, c);
+  }
+  return [...newest.values()].filter((c) => c.needs_you && !hidden.has(c.id)).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
 }
 
 /**
