@@ -132,6 +132,12 @@ export function presetPublisher(p: McpPreset): string | null {
   }
 }
 
+/** The directory clips a maker's description at 100 characters; when it stops mid-sentence, show that it was cut. */
+export function markCutDescription(description: string): string {
+  const t = description.trimEnd();
+  return description.length >= 100 && !/[.!?)\u2026]$/.test(t) ? `${t}\u2026` : description;
+}
+
 /** The directory's key chips: "API key", "2 keys" or "Sign-in". */
 export function directoryNeeds(e: DirectoryEntry): string | null {
   const keys = (e.inputs ?? []).filter((i) => i.secret || /key|token|secret/i.test(i.name)).length;
@@ -891,7 +897,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
         data-active={isActive || undefined}
       >
         <div className={phone ? 'space-y-2.5' : 'flex items-center gap-3'}>
-          <div className="flex items-start gap-2.5 flex-1 min-w-0">
+          <div className={`flex ${description || meta ? 'items-start' : 'items-center'} gap-2.5 flex-1 min-w-0`}>
             <Mark name={r.name} slug={slug} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline gap-x-1.5">
@@ -900,7 +906,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
               </div>
               {description && (
                 <p className={`text-[13px] text-zinc-300 ${r.kind === 'directory' ? 'line-clamp-2' : 'truncate'}`} title={description}>
-                  {description}
+                  {r.kind === 'directory' ? markCutDescription(description) : description}
                 </p>
               )}
               {meta && <div className="mt-1 flex flex-wrap items-center gap-1.5">{meta}</div>}

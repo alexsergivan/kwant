@@ -600,7 +600,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     if (editing === 'new' && fromDirectory) {
       const pairs = (rows: SecretRow[]) => Object.fromEntries(rows.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value]));
       try {
-        const r = await connectionsApi.installFromDirectory(fromDirectory.registry_name, pairs(form.env), pairs(form.headers));
+        const r = await connectionsApi.installFromDirectory(fromDirectory.registry_name, form.name.trim(), pairs(form.env), pairs(form.headers));
         setEditing(null);
         setFromDirectory(null);
         await refresh();

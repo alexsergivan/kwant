@@ -16,8 +16,8 @@ g.window.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEv
 g.window.HTMLElement.prototype.scrollIntoView ??= () => {};
 
 const m = await loadBundled(`
-  export { FindTool, buildGroups, directoryNeeds, presetPublisher } from './src/components/FindTool';
-  export { ConnectionsError } from './src/connections';
+  export { FindTool, buildGroups, directoryNeeds, presetPublisher, markCutDescription } from './src/components/FindTool';
+  export { ConnectionsError, connectionsApi } from './src/connections';
   export { MCP_PRESETS } from './src/mcp';
   export { createRoot } from 'react-dom/client';
   export { createElement } from 'react';
@@ -368,4 +368,46 @@ test('a connected app offers Choose bots, and the live line counts suggestions',
   await key(input(host), 'Enter');
   assert.deepEqual(chosen, [{ kind: 'composio', slug: 'gmail', name: 'Gmail' }]);
   assert.match(text(host.querySelector('[data-find-live]')), /^\d+ suggestions?$/);
+});
+
+// Mira's design check FIX 1-3 (composio-simple/design-check.md, "Fixes, ranked").
+const CUT = 'The official Stripe server lets bots call the Stripe API (api.stripe.com), covers the entire d';
+test('a maker description cut at 100 characters ends in an ellipsis; a whole one is left alone', () => {
+  const cut = CUT.padEnd(100, 'x');
+  assert.equal(m.markCutDescription(cut), `${cut}\u2026`);
+  assert.equal(m.markCutDescription(`${cut}  `), `${cut}\u2026`);
+  for (const whole of [`${cut.slice(0, 99)}.`, `${cut.slice(0, 99)})`, `${cut.slice(0, 99)}\u2026`, 'Short and cut mid-wor']) assert.equal(m.markCutDescription(whole), whole);
+});
+
+test('directory rows show the cut, keep the full text in title; a one-line row centres its name on the mark', async () => {
+  const description = CUT.padEnd(100, 'x');
+  const entries = [{ registry_name: 'com.stripe/mcp', title: 'Stripe tools', description, publisher: { label: 'stripe.com' }, kind: 'remote', inputs: [] }];
+  const { api } = stubApi({
+    apps: async () => ({ apps: [...APPS, { slug: 'zebratool', name: 'Stripe Zebra' }], source: 'popular' }),
+    directory: async () => ({ entries, unavailable: false }),
+  });
+  const host = await mount({ api });
+  await type(host, 'stripe', 200);
+  const dir = host.querySelector('[data-row-key="directory-com.stripe/mcp"]');
+  const p = dir.querySelector('p[title]');
+  assert.equal(p.getAttribute('title'), description);
+  assert.equal(p.textContent, `${description}\u2026`);
+  assert.ok(dir.querySelector('.items-start'), 'a two-line row stays top-aligned');
+  const bare = host.querySelector('[data-row-key="composio-c-zebratool"]');
+  assert.ok(bare, 'the bare Composio row is listed');
+  assert.equal(bare.querySelector('p'), null);
+  assert.ok(bare.querySelector('.items-center > [data-row-name], .items-center [data-row-name]'));
+  assert.equal(bare.querySelector('.items-start'), null);
+});
+
+test('installing from the directory sends the Name from the form', async () => {
+  const sent = [];
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (url, init) => (sent.push([String(url), init?.method, JSON.parse(init?.body ?? 'null')]), new Response('{"server":{"id":"s1"}}', { status: 200, headers: { 'content-type': 'application/json' } }));
+  try {
+    await m.connectionsApi.installFromDirectory('com.stripe/mcp', 'Stripe', { A: '1' }, {});
+  } finally {
+    globalThis.fetch = prev;
+  }
+  assert.deepEqual(sent, [['/api/mcp/registry/install', 'POST', { registry_name: 'com.stripe/mcp', name: 'Stripe', env: { A: '1' }, headers: {} }]]);
 });
