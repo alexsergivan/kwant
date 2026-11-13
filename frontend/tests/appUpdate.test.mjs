@@ -152,7 +152,7 @@ test('unsupported (404 or supported=false) shows the version alone and never pol
     assert.equal(u.bannerView(h.ctrl.get(), null), null);
     assert.equal(u.versionLine(h.ctrl.get()).kind, 'off');
     const html = ui.card({ model: h.ctrl.get() });
-    assert.match(html, /doesn’t check for updates/);
+    assert.match(html, /Update checks are turned off here\./);
     assert.doesNotMatch(html, /latest version/);
     if (answer.status === 200) assert.match(html, /kwant bots <span[^>]*>0\.1\.2<\/span>/, 'the version from the answer');
     await h.ctrl.check();

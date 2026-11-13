@@ -35,7 +35,7 @@ const HowToUpdatePanel: React.FC<{ id: string; how: HowToUpdate | null; version:
       <p className="mb-0 mt-1 text-xs text-zinc-400">{how ? HOW_WHERE[how.kind] : 'Get the new version from its release page.'}</p>
       {command && (
         <div className="mt-2 flex items-start gap-2">
-          <pre className="m-0 min-w-0 flex-1 overflow-x-auto whitespace-pre rounded-md bg-black/40 px-2.5 py-2 font-mono text-[11.5px] leading-[18px] text-zinc-100 select-text">
+          <pre className="m-0 min-w-0 flex-1 whitespace-pre-wrap break-all rounded-md bg-black/40 px-2.5 py-2 font-mono text-[11.5px] leading-[18px] text-zinc-100 select-text">
             {command}
           </pre>
           <button
@@ -223,7 +223,7 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
           </span>
         );
       case 'off':
-        return <span className="text-zinc-400">This kwant bots doesn’t check for updates.</span>;
+        return <span className="text-zinc-400">Update checks are turned off here.</span>;
     }
   })();
 
