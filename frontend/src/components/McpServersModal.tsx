@@ -51,6 +51,7 @@ import {
   isSignedIn,
   readOAuthMessage,
   isBlankRequired,
+  directoryServerName,
 } from '../mcp';
 import { inDesktopApp, leaveForSignIn, pollUntil, signInChanged } from '../externalLinks';
 import { useEscapeLayer } from '../escape';
@@ -628,7 +629,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     const rows: SecretRow[] = (entry.inputs ?? []).map((i) => ({ key: i.name, value: '', saved: false, hint: i.description, required: !!i.required }));
     const start: McpFormState = {
       ...emptyMcpForm(remote ? 'http' : 'stdio'),
-      name: (entry.title || entry.registry_name.split('/').pop() || entry.registry_name).trim(),
+      name: directoryServerName(entry),
       url: remote ? entry.url ?? '' : '',
       commandLine: remote ? '' : entry.command ?? '',
       env: remote ? [] : rows,
