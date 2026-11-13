@@ -7,9 +7,11 @@
 //! registry's own (name-only) search instead. Only entries kwnt can set up in one click are kept.
 //!
 //! Ranking: entries from Smithery's proxy or with a `{placeholder}` address go last; then a
-//! publisher whose proven domain is the query (`stripe` → stripe.com); then how well the name
-//! matches (starts with > a word starts with > alias > a part of the registry name > contains >
-//! typo); then an exact name or title; then remote before stdio; then registry order.
+//! publisher whose proven name is the query (`stripe` → stripe.com, `github` → github.com/github);
+//! then how well the name matches (starts with > a word starts with > alias > a part of the
+//! registry name > contains > typo); then a publisher a typo away (`strpie` → stripe.com), which
+//! only orders entries within one of those tiers; then an exact name or title; then remote before
+//! stdio; then registry order. Typos are only looked for when closer matches leave room.
 
 use super::registry::{publisher_name, McpRegistry, RegistryEntry, GENERIC_SERVER_PARTS};
 use serde::Serialize;
@@ -106,8 +108,12 @@ pub struct DirEntry {
     words: Vec<String>,
     /// Dot and slash separated parts of the registry name.
     parts: Vec<String>,
-    /// The leftmost label of a domain publisher (`stripe` for stripe.com).
+    /// The publisher's own name: `stripe` for stripe.com (two-label domains only, so a subdomain
+    /// such as pg.ddx.io or stripecheckup.vercel.app isn't taken for its owner), `getsentry` for
+    /// github.com/getsentry.
     publisher_key: Option<String>,
+    /// The publisher label normalised (`stripecom`).
+    publisher_norm: String,
     demoted: bool,
 }
 
@@ -139,7 +145,7 @@ impl DirEntry {
                 ws.push(w);
             }
         }
-        let publisher_key = (publisher.kind == "domain").then(|| normalize(publisher.label.split('.').next().unwrap_or("")));
+        let publisher_key = publisher_key(&publisher);
         Some(Self {
             title_norm: normalize(&title),
             slug_norm: normalize(slug),
@@ -148,6 +154,7 @@ impl DirEntry {
             parts: entry.name.split(['.', '/']).map(normalize).filter(|p| !p.is_empty()).collect(),
             demoted: entry.name.to_ascii_lowercase().starts_with("ai.smithery/") || entry.placeholder_url,
             publisher_key,
+            publisher_norm: normalize(&publisher.label),
             publisher,
             title,
             entry,
@@ -158,8 +165,13 @@ impl DirEntry {
         self.entry.plan.as_ref().is_ok_and(|p| p.transport == "http")
     }
 
+    /// The publisher is the query itself (`stripe` → stripe.com).
+    fn publisher_is(&self, q: &str) -> bool {
+        self.publisher_key.as_deref() == Some(q) || self.publisher_norm == q
+    }
+
     fn direct_match(&self, q: &str) -> Option<Match> {
-        if self.title_norm.starts_with(q) || self.slug_norm.starts_with(q) || self.publisher_key.as_deref().is_some_and(|k| k.starts_with(q)) {
+        if self.title_norm.starts_with(q) || self.slug_norm.starts_with(q) || self.publisher_is(q) {
             Some(Match::Prefix)
         } else if self.words.iter().any(|w| w.starts_with(q)) {
             Some(Match::WordPrefix)
@@ -168,95 +180,176 @@ impl DirEntry {
         }
     }
 
-    /// How `q` (already normalised, 2+ characters) matches this entry, if at all.
-    pub fn matches(&self, q: &str) -> Option<Match> {
-        if let Some(m) = self.direct_match(q) {
+    /// Every match but a typo.
+    fn close_match(&self, q: &Query) -> Option<Match> {
+        if let Some(m) = self.direct_match(&q.text) {
             return Some(m);
         }
-        if let Some((_, canonical)) = ALIASES.iter().find(|(a, _)| *a == q) {
-            if self.direct_match(&normalize(canonical)).is_some() {
-                return Some(Match::Alias);
-            }
+        if q.alias.as_deref().is_some_and(|a| self.direct_match(a).is_some()) {
+            return Some(Match::Alias);
         }
-        if self.parts.iter().any(|p| p.starts_with(q)) {
+        if self.parts.iter().any(|p| p.starts_with(q.text.as_str())) {
             return Some(Match::NamePart);
         }
-        if self.title_norm.contains(q) || self.name_norm.contains(q) {
+        if self.title_norm.contains(q.text.as_str()) || self.name_norm.contains(q.text.as_str()) {
             return Some(Match::Contains);
         }
-        let allowed = typo_budget(q);
-        if allowed > 0 {
-            let n = q.chars().count();
-            let whole = |w: &String| osa_distance(q, w) <= allowed;
-            let start = |w: &String| w.chars().count() > n && osa_distance(q, &w.chars().take(n).collect::<String>()) <= allowed;
-            let all = || self.words.iter().chain([&self.title_norm, &self.slug_norm]);
-            if all().any(whole) {
-                return Some(Match::Typo);
-            }
-            if all().any(start) {
-                return Some(Match::TypoStart);
-            }
-        }
         None
+    }
+
+    fn typo_match(&self, q: &Query) -> Option<Match> {
+        if q.budget == 0 {
+            return None;
+        }
+        let all = || self.words.iter().chain([&self.title_norm, &self.slug_norm]).map(String::as_str);
+        if all().any(|w| osa_within(&q.text, w, q.budget)) {
+            return Some(Match::Typo);
+        }
+        let start = |w: &str| match w.char_indices().nth(q.chars) {
+            Some((end, _)) => osa_within(&q.text, &w[..end], q.budget),
+            None => false,
+        };
+        all().any(start).then_some(Match::TypoStart)
+    }
+
+    /// How `q` matches this entry, if at all.
+    pub fn matches(&self, q: &str) -> Option<Match> {
+        let q = Query::new(q)?;
+        self.close_match(&q).or_else(|| self.typo_match(&q))
     }
 
     fn exact(&self, q: &str) -> bool {
         self.title_norm == q || self.slug_norm == q
     }
+
+    /// The sort key; lower comes first.
+    fn key(&self, q: &Query, m: Match, order: usize) -> SortKey {
+        let publisher = self.publisher_is(&q.text);
+        let publisher_typo = !publisher && q.budget > 0 && self.publisher_key.as_deref().is_some_and(|k| osa_within(&q.text, k, q.budget));
+        (self.demoted, !publisher, m, !publisher_typo, !self.exact(&q.text), !self.is_remote(), order)
+    }
 }
 
-/// 1 edit from 4 letters, 2 from 8 (autocomplete.md §4).
-fn typo_budget(q: &str) -> usize {
-    match q.chars().count() {
+/// `stripe` for stripe.com, `getsentry` for github.com/getsentry; none for a longer domain.
+fn publisher_key(p: &Publisher) -> Option<String> {
+    let key = match p.kind {
+        "github" => normalize(p.label.strip_prefix("github.com/")?),
+        _ => match p.label.split('.').collect::<Vec<_>>()[..] {
+            [name, _tld] => normalize(name),
+            _ => return None,
+        },
+    };
+    (!key.is_empty()).then_some(key)
+}
+
+/// Demoted, not the publisher, match, no publisher a typo away, not exact, not remote, order.
+type SortKey = (bool, bool, Match, bool, bool, bool, usize);
+
+/// A typed query, worked out once per search.
+struct Query {
+    /// Normalised.
+    text: String,
+    chars: usize,
+    /// What an alias stands for, normalised (`pg` → `postgresql`).
+    alias: Option<String>,
+    budget: usize,
+}
+
+impl Query {
+    /// `None` below [`MIN_QUERY_CHARS`].
+    fn new(typed: &str) -> Option<Self> {
+        let text = normalize(typed);
+        let chars = text.chars().count();
+        if chars < MIN_QUERY_CHARS {
+            return None;
+        }
+        let alias = ALIASES.iter().find(|(a, _)| *a == text).map(|(_, canonical)| normalize(canonical));
+        Some(Self { budget: typo_budget(chars), text, chars, alias })
+    }
+}
+
+/// 1 edit from 4 letters, 2 from 8 (autocomplete.md §4); none past [`OSA_MAX`] letters.
+fn typo_budget(chars: usize) -> usize {
+    match chars {
         0..=3 => 0,
         4..=7 => 1,
-        _ => 2,
+        8..=OSA_MAX => 2,
+        _ => 0,
     }
 }
 
-/// Edits (insert, delete, substitute, swap two neighbours) between two short strings.
-pub fn osa_distance(a: &str, b: &str) -> usize {
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    if a.len().abs_diff(b.len()) > 2 {
-        return 3;
+/// The longest strings [`osa_bounded`] compares.
+const OSA_MAX: usize = 40;
+
+fn osa_within(a: &str, b: &str, max: usize) -> bool {
+    osa_bounded(a, b, max) <= max
+}
+
+/// Edits (insert, delete, substitute, swap two neighbours) between two short strings, without
+/// allocating; anything over `max`, or a string longer than [`OSA_MAX`], answers `max + 1`.
+fn osa_bounded(a: &str, b: &str, max: usize) -> usize {
+    fn fill(s: &str, buf: &mut [char; OSA_MAX]) -> Option<usize> {
+        let mut n = 0;
+        for c in s.chars() {
+            *buf.get_mut(n)? = c;
+            n += 1;
+        }
+        Some(n)
     }
-    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-    for (i, row) in d.iter_mut().enumerate() {
-        row[0] = i;
+    let (mut ab, mut bb) = (['\0'; OSA_MAX], ['\0'; OSA_MAX]);
+    let (Some(n), Some(m)) = (fill(a, &mut ab), fill(b, &mut bb)) else { return max + 1 };
+    if n.abs_diff(m) > max {
+        return max + 1;
     }
-    for (j, cell) in d[0].iter_mut().enumerate() {
+    let (a, b) = (&ab[..n], &bb[..m]);
+    let (mut before, mut prev, mut cur) = ([0usize; OSA_MAX + 1], [0usize; OSA_MAX + 1], [0usize; OSA_MAX + 1]);
+    for (j, cell) in prev.iter_mut().enumerate().take(m + 1) {
         *cell = j;
     }
-    for i in 1..=a.len() {
-        for j in 1..=b.len() {
+    for i in 1..=n {
+        cur[0] = i;
+        let mut row_min = i;
+        for j in 1..=m {
             let cost = usize::from(a[i - 1] != b[j - 1]);
-            d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            let mut d = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+                d = d.min(before[j - 2] + 1);
             }
+            cur[j] = d;
+            row_min = row_min.min(d);
         }
+        // A row's minimum never drops by more than one per row, so this can't come back under.
+        if row_min > max {
+            return max + 1;
+        }
+        std::mem::swap(&mut before, &mut prev);
+        std::mem::swap(&mut prev, &mut cur);
     }
-    d[a.len()][b.len()]
+    prev[m].min(max + 1)
 }
 
 /// The best `limit` entries for `query`, in order. `entries` is in registry order.
 pub fn rank<'a>(query: &str, entries: impl IntoIterator<Item = &'a DirEntry>, limit: usize) -> Vec<&'a DirEntry> {
-    let q = normalize(query);
-    if q.chars().count() < MIN_QUERY_CHARS {
-        return Vec::new();
+    let Some(q) = Query::new(query) else { return Vec::new() };
+    let mut hits = Vec::new();
+    let mut rest = Vec::new();
+    let mut shown = 0usize;
+    for (order, e) in entries.into_iter().enumerate() {
+        match e.close_match(&q) {
+            Some(m) => {
+                shown += usize::from(!e.demoted);
+                hits.push((e.key(&q, m, order), e));
+            }
+            None if q.budget > 0 => rest.push((order, e)),
+            None => {}
+        }
     }
-    let budget = typo_budget(&q);
-    let mut hits: Vec<_> = entries
-        .into_iter()
-        .enumerate()
-        .filter_map(|(order, e)| {
-            let m = e.matches(&q)?;
-            let publisher = e.publisher_key.as_deref().is_some_and(|k| k == q || (budget > 0 && osa_distance(k, &q) <= budget))
-                || normalize(&e.publisher.label) == q;
-            Some(((e.demoted, !publisher, m, !e.exact(&q), !e.is_remote(), order), e))
-        })
-        .collect();
-    hits.sort_by_key(|h| h.0);
+    // A typo match ranks below every closer match that isn't demoted, so typos are only
+    // looked for when those leave room.
+    if shown < limit {
+        hits.extend(rest.into_iter().filter_map(|(order, e)| e.typo_match(&q).map(|m| (e.key(&q, m, order), e))));
+    }
+    hits.sort_unstable_by_key(|h| h.0);
     hits.into_iter().take(limit).map(|(_, e)| e).collect()
 }
 
@@ -463,9 +556,15 @@ mod tests {
         assert_eq!(publisher_of("io.github.Alice/x"), Publisher { label: "github.com/alice".into(), kind: "github" });
         assert_eq!(publisher_of("app.vercel.stripecheckup/x").label, "stripecheckup.vercel.app");
         assert_eq!(normalize("Google-Sheets É"), "googlesheetse");
-        assert_eq!(osa_distance("notoin", "notion"), 1);
-        assert_eq!(osa_distance("gmial", "gmail"), 1);
-        assert_eq!(osa_distance("abc", "abcdefgh"), 3);
+        assert_eq!(osa_bounded("notoin", "notion", 2), 1);
+        assert_eq!(osa_bounded("gmial", "gmail", 2), 1);
+        assert_eq!(osa_bounded("kitten", "sitting", 5), 3);
+        assert_eq!(osa_bounded("ab", "ba", 2), 1);
+        assert_eq!(osa_bounded("abc", "abcdefgh", 2), 3);
+        assert_eq!(osa_bounded("abcdef", "uvwxyz", 1), 2, "stops early, past the limit");
+        assert_eq!(osa_bounded("café", "cafe", 2), 1);
+        assert_eq!(osa_bounded(&"a".repeat(41), &"a".repeat(41), 2), 3, "too long to compare");
+        assert_eq!((typo_budget(3), typo_budget(4), typo_budget(8), typo_budget(41)), (0, 1, 2, 0));
         let pg = fixture(
             &serde_json::json!({"servers": [{"server": {"name": "io.github.x/postgresql-tools", "description": "d", "version": "1",
                 "remotes": [{"type": "streamable-http", "url": "https://pg.example/mcp"}]}}]})
@@ -475,24 +574,98 @@ mod tests {
         assert_eq!(rank("pg", pg.iter(), 5)[0].matches("pg"), Some(Match::Alias));
     }
 
+    /// Remote entries named like the real registry's: `(registry name, title)`.
+    fn remotes(list: &[(&str, &str)]) -> Vec<DirEntry> {
+        let servers: Vec<_> = list
+            .iter()
+            .enumerate()
+            .map(|(i, (name, title))| {
+                serde_json::json!({"server": {"name": name, "title": title, "description": "d", "version": "1",
+                    "remotes": [{"type": "streamable-http", "url": format!("https://mcp{i}.example.com/mcp")}]}})
+            })
+            .collect();
+        fixture(&serde_json::json!({ "servers": servers }).to_string())
+    }
+
+    #[test]
+    fn a_publisher_a_typo_away_never_beats_a_closer_match() {
+        // From the real registry (Nov 13): stride.info and scripe.io are one letter from stripe
+        let list = remotes(&[
+            ("info.stride/stride", "Stride"),
+            ("io.scripe/mcp", "Scripe"),
+            ("com.insightfulpipe/stripe", "Stripe"),
+            ("com.stripe/mcp", "Stripe"),
+            ("io.github.someone/stripe-billing", "Stripe billing"),
+        ]);
+        let ranked = names("stripe", &list);
+        assert_eq!(&ranked[..3], ["com.stripe/mcp", "com.insightfulpipe/stripe", "io.github.someone/stripe-billing"], "{ranked:?}");
+        // A typo in the query: the publisher a typo away goes first among the typo matches
+        assert_eq!(names("strpie", &list)[0], "com.stripe/mcp");
+
+        let list = remotes(&[
+            ("fr.gentry/logement", "Gentry logement"),
+            ("fyi.entry/entry", "Entry"),
+            ("io.github.getsentry/sentry-mcp", "Sentry"),
+        ]);
+        assert_eq!(names("sentry", &list)[0], "io.github.getsentry/sentry-mcp");
+    }
+
+    #[test]
+    fn github_publishers_and_subdomains() {
+        let list = remotes(&[
+            ("com.robinsonaisystems/github", "GitHub"),
+            ("io.github.github/github-mcp-server", "GitHub"),
+            ("io.ddx.pg/archive", "Archive"),
+            ("io.github.x/postgresql-tools", "Postgres tools"),
+            ("app.vercel.stripecheckup/x", "Checkup"),
+        ]);
+        assert_eq!(names("github", &list)[0], "io.github.github/github-mcp-server");
+        assert_eq!(names("getsentry", &remotes(&[("io.github.getsentry/sentry-mcp", "Sentry")])).len(), 1);
+        // pg.ddx.io's owner is ddx.io, not "pg": the alias for PostgreSQL comes first
+        assert_eq!(names("pg", &list), ["io.github.x/postgresql-tools", "io.ddx.pg/archive"]);
+        // stripecheckup.vercel.app isn't Vercel's own
+        assert_eq!(list[4].publisher_key, None);
+        assert_eq!(list[1].publisher_key.as_deref(), Some("github"));
+        assert_eq!(list[0].publisher_key.as_deref(), Some("robinsonaisystems"));
+    }
+
+    #[test]
+    fn typos_are_skipped_when_closer_matches_fill_the_list() {
+        let mut named: Vec<(String, String)> = (0..20).map(|i| (format!("com.acme{i}/stripe-tools"), format!("Stripe tools {i}"))).collect();
+        named.push(("info.stride/stride".into(), "Stride".into()));
+        let list = remotes(&named.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect::<Vec<_>>());
+        let top = rank("stripe", list.iter(), MAX_RESULTS);
+        assert_eq!(top.len(), MAX_RESULTS);
+        assert!(top.iter().all(|e| e.entry.name.starts_with("com.acme")));
+        let ranked = names("stripe", &list);
+        assert_eq!((ranked.len(), ranked.last().map(String::as_str)), (21, Some("info.stride/stride")), "{ranked:?}");
+        // With room left, the typo match is there, last
+        assert_eq!(names("stride", &list)[0], "info.stride/stride");
+        assert_eq!(rank("stripe", list[15..].iter(), MAX_RESULTS).last().map(|e| e.entry.name.as_str()), Some("info.stride/stride"));
+    }
+
     #[test]
     fn ten_thousand_entries_answer_fast() {
-        let base = fixture(STRIPE);
-        let mut big = Vec::new();
-        for i in 0..700 {
-            for e in &base {
-                let mut e = e.clone();
-                e.entry.name = format!("{}{i}", e.entry.name);
-                big.push(e);
-            }
-        }
-        assert!(big.len() > 9000);
+        // Varied names, like the real copy (about 6,000 one-click entries on Nov 13)
+        let mut seed = 7u64;
+        let mut word = |len: usize| -> String {
+            (0..len)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    char::from(b'a' + ((seed >> 33) % 26) as u8)
+                })
+                .collect()
+        };
+        let named: Vec<(String, String)> =
+            (0..12_000).map(|i| (format!("io.github.{}/{}-mcp", word(8), word(3 + i % 9)), format!("{} {} tools", word(6), word(7)))).collect();
+        let list = remotes(&named.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect::<Vec<_>>());
+        assert_eq!(list.len(), 12_000);
         let started = std::time::Instant::now();
-        for q in ["st", "stripe", "strpie", "zzzzzzzz", "billing"] {
-            rank(q, big.iter(), MAX_RESULTS);
+        for q in ["st", "stripe", "strpie", "zqxw", "zzzzzzzz", "billing tools", "pg"] {
+            rank(q, list.iter(), MAX_RESULTS);
         }
-        // Five searches; release builds take a few ms each. Debug builds are slower, so this
-        // only guards against something going badly wrong.
+        // Seven searches; a release build takes a few ms each. Debug builds are many times slower,
+        // so this only guards against something going badly wrong.
         assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     }
 }
