@@ -6260,6 +6260,10 @@ pub struct InteractPayload {
     /// click (or type): a numbered ref from the page's clickable list instead of a label
     #[serde(default, rename = "ref")]
     pub ref_: Option<serde_json::Value>,
+    /// upload: each a workspace-relative path under `downloads/` (or elsewhere in the bot's
+    /// folder) or a chat attachment id, answering the currently open file picker.
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
 }
 
 pub async fn interact_sandbox(
@@ -6372,6 +6376,12 @@ async fn page_state_from(
     }
     if let Some(captcha) = captcha {
         page["captcha"] = json!(captcha);
+    }
+    if let Some(download) = ctrl.latest_download_report() {
+        page["download"] = download;
+    }
+    if let Some(chooser) = ctrl.open_chooser_report() {
+        page["file_chooser"] = chooser;
     }
     page
 }
@@ -6742,14 +6752,23 @@ pub async fn cite_sandbox(
 
 /// What a read of a page that still reads the same returns instead of it.
 pub fn unchanged_read(page: &serde_json::Value) -> serde_json::Value {
-    json!({
+    let mut out = json!({
         "url": page["url"],
         "title": page["title"],
         "hash": page["hash"],
         "blocked": page["blocked"],
         "unchanged": true,
         "note": crate::sandbox::reads::UNCHANGED_NOTE,
-    })
+    });
+    // A download or an open chooser is news on its own, never folded into the page's hash: say so
+    // even on an otherwise unchanged read, so it's never missed between two look-the-same reads.
+    if page.get("download").is_some() {
+        out["download"] = page["download"].clone();
+    }
+    if page.get("file_chooser").is_some() {
+        out["file_chooser"] = page["file_chooser"].clone();
+    }
+    out
 }
 
 /// Agent-facing action endpoint (`POST /api/sandbox/:id/act`, the shell bots' browser API):
@@ -6774,6 +6793,84 @@ pub async fn act_sandbox(
         return Ok(Json(page));
     }
     act_sandbox_allowed(State(state), Path(team_id), Json(payload)).await
+}
+
+/// Turns `browser_upload`'s file list into what [`crate::sandbox::browser_downloads`] needs to
+/// answer a chooser: each entry is a chat attachment id (any `source`, same read as
+/// `GET /api/attachments/:id/content`, refused only for a "document:" context a bot has no
+/// token for) or, failing that, a path under the bot's own folder (opened through
+/// [`safe_fs`](crate::sandbox::safe_fs), so `..` and a symlink out of the folder are refused).
+/// Remote delivery (no filesystem in common with this Chrome) reads every file's bytes, capped at
+/// 100 MB in all; local delivery passes a path Chrome can open directly.
+async fn resolve_upload_files(
+    state: &AppState,
+    workspace: &std::path::Path,
+    local: bool,
+    files: &[String],
+) -> Result<Vec<crate::sandbox::browser_downloads::UploadFile>, String> {
+    use crate::sandbox::browser_downloads::{UploadFile, UploadSource};
+    use crate::sandbox::safe_fs;
+    const REMOTE_CAP: u64 = 100 * 1024 * 1024;
+    const TOO_BIG: &str = "That's more than this browser can take over a remote connection: 100 MB in all. Pick a smaller file.";
+    let mut remaining = REMOTE_CAP;
+    let mut out = Vec::with_capacity(files.len());
+    for raw in files {
+        if let Some(a) = super::attachments::load(state, raw).await {
+            if a.context_id.as_deref().is_some_and(|c| c.starts_with("document:")) {
+                return Err(format!("{} can't be used this way.", a.name));
+            }
+            let root = super::attachments::root(state);
+            let blob = super::attachments::blob_path(&root, &a.sha256)
+                .ok_or_else(|| format!("{} is missing.", a.name))?;
+            let last_modified_ms = a.created_at.timestamp_millis();
+            if local {
+                let path = stage_upload_copy(workspace, &a.name, &blob)
+                    .await
+                    .map_err(|_| format!("Couldn't read {}.", a.name))?;
+                out.push(UploadFile { name: a.name, mime: a.mime, last_modified_ms, source: UploadSource::Path(path) });
+            } else {
+                let size = a.size.max(0) as u64;
+                if size > remaining {
+                    return Err(TOO_BIG.to_string());
+                }
+                let bytes = tokio::fs::read(&blob).await.map_err(|_| format!("Couldn't read {}.", a.name))?;
+                remaining -= size;
+                out.push(UploadFile { name: a.name, mime: a.mime, last_modified_ms, source: UploadSource::Bytes(bytes) });
+            }
+            continue;
+        }
+        let rel = std::path::Path::new(raw.trim_start_matches('/'));
+        let dir = safe_fs::Dir::open_strict(workspace).map_err(|_| "Your folder couldn't be opened.".to_string())?;
+        let mut file = dir.open_file(rel).map_err(|_| format!("{raw} isn't a file in your folder."))?;
+        let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        let last_modified_ms = chrono::Utc::now().timestamp_millis();
+        if local {
+            out.push(UploadFile { name, mime: String::new(), last_modified_ms, source: UploadSource::Path(workspace.join(rel)) });
+        } else {
+            let bytes = safe_fs::read_capped(&mut file, remaining).map_err(|_| TOO_BIG.to_string())?;
+            remaining -= bytes.len() as u64;
+            let mime = mime_guess::from_path(rel).first_or_octet_stream().to_string();
+            out.push(UploadFile { name, mime, last_modified_ms, source: UploadSource::Bytes(bytes) });
+        }
+    }
+    Ok(out)
+}
+
+/// A copy of an attachment blob (named by its sha256, not its real name) under a short-lived
+/// folder of its own, named for upload: `DOM.setFileInputFiles` names the file from its path's
+/// own basename, so the copy needs the attachment's real name. Swept up on its own after a couple
+/// of minutes rather than right after the call, since the page may only read it once the person
+/// acts on it (e.g. only once a form is submitted).
+async fn stage_upload_copy(workspace: &std::path::Path, name: &str, blob: &std::path::Path) -> std::io::Result<PathBuf> {
+    let dir = workspace.join(".upload-tmp").join(uuid::Uuid::new_v4().to_string());
+    tokio::fs::create_dir_all(&dir).await?;
+    let dest = dir.join(name);
+    tokio::fs::copy(blob, &dest).await?;
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    });
+    Ok(dest)
 }
 
 /// [`act_sandbox`] without the payment check: for `browser_act`, whose approver already asked.
@@ -6840,9 +6937,33 @@ pub async fn act_sandbox_allowed(
             .await
             .map(|_| "scrolled".to_string())
             .map_err(|e| e.to_string()),
+        ("upload", _) => {
+            let files = payload.files.clone().unwrap_or_default();
+            if files.is_empty() {
+                Err("files is required: a path in your folder or a chat attachment id.".to_string())
+            } else {
+                // `team_id` here is the page key: a job page (bot+chat) key for the common case,
+                // not a team/channel/kwant id by itself, so it's resolved the same way
+                // `controller_for` resolves this very controller's own workspace (open_page ->
+                // controller_for both strip the page key down to its team/bot id first).
+                match resolve_sandbox_target_info(&state, super::browser_pages::page_team(&team_id)).await {
+                    Some((_, workspace)) => {
+                        let local = state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local;
+                        match resolve_upload_files(&state, &workspace, local, &files).await {
+                            Ok(resolved) => ctrl
+                                .answer_upload(local, resolved)
+                                .await
+                                .map(|names| format!("uploaded {}", names.join(", "))),
+                            Err(e) => Err(e),
+                        }
+                    }
+                    None => Err("Couldn't find your folder.".to_string()),
+                }
+            }
+        }
         ("click_text" | "click", None) => Err("click needs ref (a number from the clickable list) or text (a label).".to_string()),
         (other, _) => Err(format!(
-            "Unknown action \"{}\". Use click (with ref or text), type (with text), key (with key) or scroll (with delta_y).",
+            "Unknown action \"{}\". Use click (with ref or text), type (with text), key (with key), scroll (with delta_y) or upload (with files).",
             other
         )),
     };

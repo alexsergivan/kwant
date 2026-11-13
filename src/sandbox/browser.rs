@@ -1258,6 +1258,9 @@ pub struct BrowserController {
     needs_wake: Arc<AtomicBool>,
     /// How many live views show this page now: a watched page is never frozen.
     watchers: Arc<AtomicUsize>,
+    /// The bot session's own download/chooser connection (see [`super::browser_downloads`]),
+    /// started once this controller has a working folder to land downloads in.
+    downloads: Arc<std::sync::Mutex<Option<super::browser_downloads::DownloadCenter>>>,
 }
 
 /// Stops media in a page that is put to rest, so a feed or video doesn't keep decoding. Media it
@@ -1346,6 +1349,7 @@ impl BrowserController {
             ws_generation: Arc::default(),
             needs_wake: Arc::default(),
             watchers: Arc::default(),
+            downloads: Arc::default(),
         }
     }
 
@@ -1448,6 +1452,38 @@ impl BrowserController {
         ctrl.target_id = target_id;
         ctrl.browser_level = browser_level;
         ctrl
+    }
+
+    /// Starts this session's own download/chooser connection, landing downloads under
+    /// `workspace/downloads/` and reporting (but not auto-answering) file pickers it opens.
+    /// Idempotent: a session already running its own connection keeps it.
+    pub fn configure_downloads(&self, workspace: std::path::PathBuf) {
+        let mut guard = self.downloads.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            *guard = Some(super::browser_downloads::DownloadCenter::start(self.clone(), workspace));
+        }
+    }
+
+    /// One line worth telling the bot about its most recent download, if the session has its own
+    /// connection running and there's something new to say.
+    pub fn latest_download_report(&self) -> Option<serde_json::Value> {
+        self.downloads.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.report()
+    }
+
+    /// The currently open file picker on this session, if any.
+    pub fn open_chooser_report(&self) -> Option<serde_json::Value> {
+        self.downloads.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.open_chooser()
+    }
+
+    /// Answers the currently open chooser on this session with `files`. Refuses with a plain
+    /// message if no download/chooser connection is running (the session was never configured)
+    /// or no picker is open.
+    pub async fn answer_upload(&self, local: bool, files: Vec<super::browser_downloads::UploadFile>) -> Result<Vec<String>, String> {
+        let center = self.downloads.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(center) = center else {
+            return Err("This session isn't set up to answer file pickers yet.".into());
+        };
+        center.answer_chooser(local, files).await
     }
 
     /// The person's control for one live view. Refused with [`BrowserError::HeldByPerson`] while

@@ -567,7 +567,7 @@ impl BrowserService {
         self.rested.lock().unwrap_or_else(|e| e.into_inner()).get(key).copied()
     }
 
-    async fn open_session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
+    async fn open_session(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
         let mut lock = self.state.lock().await;
         if lock.is_none() { *lock = Some(self.connect().await?); }
         let mut targets = lock.as_ref().unwrap().browser.send_cdp_command("Target.getTargets", json!({})).await;
@@ -642,6 +642,7 @@ impl BrowserService {
             ctrl.set_viewport(1280, 800).await?;
         }
         ctrl.refresh_location().await?;
+        ctrl.configure_downloads(workspace.to_path_buf());
         Ok(ctrl)
     }
 

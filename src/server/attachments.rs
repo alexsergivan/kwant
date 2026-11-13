@@ -423,7 +423,7 @@ pub fn view(a: &Attachment) -> Value {
     v
 }
 
-async fn load(state: &AppState, id: &str) -> Option<Attachment> {
+pub async fn load(state: &AppState, id: &str) -> Option<Attachment> {
     uuid::Uuid::parse_str(id).ok()?;
     state.db.get_attachment(id).await.ok().flatten()
 }

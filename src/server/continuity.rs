@@ -730,6 +730,21 @@ fn browser_tools() -> Vec<Value> {
                 "required": ["action"],
             },
         }),
+        json!({
+            "name": BROWSER_UPLOAD,
+            "description": "Answer a file picker your browser has open (browser_page says so with a note starting \"A file picker opened\"). Give one or more files, each either a path in your own folder (for instance a file you downloaded earlier, downloads/clip.mp4) or a chat attachment's id. Refused if no picker is open.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Each a path under your folder, or a chat attachment id.",
+                    },
+                },
+                "required": ["files"],
+            },
+        }),
     ]
 }
 
@@ -738,6 +753,7 @@ pub const BROWSER_PAGE: &str = "browser_page";
 pub const BROWSER_ACT: &str = "browser_act";
 pub const BROWSER_SCREENSHOT: &str = "browser_screenshot";
 pub const BROWSER_CITE: &str = "browser_cite";
+pub const BROWSER_UPLOAD: &str = "browser_upload";
 
 /// `browser_screenshot`: MCP content blocks (a text line and the JPEG), and whether it is an error.
 /// Same holds as the other browser tools: the person's sign-in/CAPTCHA step or their control.
@@ -937,6 +953,25 @@ async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, na
             let payload = CitePayload { text: args["text"].as_str().map(str::to_string), block: args["block"].as_str().map(str::to_string) };
             cite_sandbox(state, target, Json(payload)).await
         }
+        BROWSER_UPLOAD => {
+            let files: Vec<String> = args["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
+            if files.is_empty() {
+                return ("files is required: a path in your folder or a chat attachment id, one or more".into(), true, false);
+            }
+            let payload = InteractPayload {
+                action: "upload".to_string(),
+                x: None,
+                y: None,
+                text: None,
+                key: None,
+                code: None,
+                delta_x: None,
+                delta_y: None,
+                ref_: None,
+                files: Some(files),
+            };
+            act_sandbox_allowed(state, target, Json(payload)).await
+        }
         _ => {
             let Some(action) = args["action"].as_str() else {
                 return ("action is required: click, type, key or scroll".into(), true, false);
@@ -951,6 +986,7 @@ async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, na
                 delta_x: None,
                 delta_y: args["delta_y"].as_f64(),
                 ref_: Some(args["ref"].clone()).filter(|r| !r.is_null()),
+                files: None,
             };
             // SelfToolsApprover already gave a payment its card (browser_act_payment)
             act_sandbox_allowed(state, target, Json(payload)).await
@@ -1339,7 +1375,7 @@ async fn call_tool(
         }
         // on the turn's own page (its job page in a chat), so a page held for another job's
         // sign-in doesn't stop this one
-        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE => match super::browser_pages::scope_page(scope) {
+        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE | BROWSER_UPLOAD => match super::browser_pages::scope_page(scope) {
             Some(target) => call_browser_tool(state, scope, &target, name, args).await,
             None => (format!("Unknown tool {name}."), true),
         },

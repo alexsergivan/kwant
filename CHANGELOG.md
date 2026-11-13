@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- A bot's own browser now saves what it downloads straight into its folder (`downloads/`, never overwriting an existing file) and reports progress as it reads the page; a new `browser_upload` tool answers a file picker the page itself opens, with a file from the bot's folder or a chat attachment.
+
 ### Fixed
 - In the live browser view, a page's own file picker (TikTok Studio's "Select video", for one) now opens kwant's own **Choose file…** sheet instead of doing nothing, since the screencast can't show Chrome's native dialog. Choose a file, watch it upload, and the page gets it as if you'd picked it yourself.
 - The page's own file picker: dropping a file onto the sheet, a focused OK when the page itself closed the picker, a Cancel while uploading, a byte-count progress bar, and a failed answer (not just a lost picker) can now be retried instead of always going "gone". (#578)
