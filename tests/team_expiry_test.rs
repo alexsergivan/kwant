@@ -47,7 +47,7 @@ async fn undo_closes_after_24_hours_and_a_suggestion_after_1_hour() {
     clock::set_test_offset(0);
 
     // Undo: open at 23 h 59 min, closed at 24 h 1 min
-    let (s, made) = call(&app, "POST", "/api/teams/from-template", Some(json!({"template_id": "inbox"}))).await;
+    let (s, made) = call(&app, "POST", "/api/teams/from-template", Some(json!({"template_id": "inbox", "names": {"Researcher": "Finder"}}))).await;
     assert_eq!(s, StatusCode::CREATED, "{made}");
     let team = made["team"]["id"].as_str().unwrap();
     let action = made["action_id"].as_str().unwrap();

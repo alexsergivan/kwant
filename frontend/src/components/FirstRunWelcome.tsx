@@ -27,10 +27,10 @@ export const FirstRunWelcome: React.FC<Props> = ({ bots, actionLabel, onAction }
       ))}
     </div>
     <h2 id="kw-welcome-title" className="text-lg font-semibold text-zinc-100">
-      Welcome to kwant bots
+      Welcome to kwant
     </h2>
     <p className="mt-1.5 text-sm text-zinc-400">
-      These are your bots. Ask anything here and Laya picks who answers.
+      These are your bots. Ask anything here and the best fit answers.
     </p>
     {bots.length > 0 && (
       <ul className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-zinc-400">

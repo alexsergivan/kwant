@@ -21,6 +21,8 @@ interface ModernAvatarProps {
   kwantId?: string;
   /** The AI model badge (bottom-left) on avatars of 24 px and up; off for reply avatars in the chat. */
   modelBadge?: boolean;
+  /** Eyes shut and still: the empty chat while nothing can run yet (first-screen E). */
+  asleep?: boolean;
 }
 
 const noopUnsubscribe = () => undefined;
@@ -433,6 +435,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   className = '',
   kwantId,
   modelBadge = true,
+  asleep = false,
 }) => {
   const working = useKwantWorking(kwantId);
   // Never green (or idle grey) while a turn runs: the turn stream wins over a stale status.
@@ -480,7 +483,15 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
           <g className="kw-avatar-body">
             {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
             {/* One blink when the person sends this bot a message: the eyes close for 160 ms. */}
-            {notices > 0 && (
+            {asleep && (
+              <g data-asleep>
+                {px(10, 10, 2, 2, creature.body, 'sl1')}
+                {px(14, 10, 2, 2, creature.body, 'sl2')}
+                {px(10, 12, 2, 1, creature.shade, 'sl3')}
+                {px(14, 12, 2, 1, creature.shade, 'sl4')}
+              </g>
+            )}
+            {!asleep && notices > 0 && (
               <g key={notices} className="kw-avatar-blink">
                 {px(10, 10, 2, 3, creature.body, 'bl1')}
                 {px(14, 10, 2, 3, creature.body, 'bl2')}
