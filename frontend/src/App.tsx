@@ -9,6 +9,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -26,6 +27,8 @@ import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
 import { liveNamingOrder, namesToFill } from './workingStrip';
+import { doneLines } from './waitingState';
+import { botOf } from './sharedFiles';
 import {
   HumanStep,
   HumanStepMeta,
@@ -159,7 +162,7 @@ import { isNotificationOpen, placeOfNotification, showDeviceNotification } from 
 import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { BudgetNeedsYou } from './components/BotBudget';
-import { budgetStore, isBudgetMessage, requestBudgetFocus } from './botBudget';
+import { budgetStore, isBudgetMessage, requestBudgetFocus, sendWaitsForBudget } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
@@ -372,6 +375,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(tab);
     playSfx('click');
   };
+  // First-screen A: the "moved" pointer under the space header, until Open or ✕ (0.9.8 and 0.9.9).
+  const [movedHidden, setMovedHidden] = useState(movedSeen);
+  const hideMoved = () => {
+    markMovedSeen();
+    setMovedHidden(true);
+  };
+  const openMoved = () => {
+    openSpaceSettings('general');
+    ringDevSettings();
+    hideMoved();
+  };
   // Settings › All spaces: what applies to every space and to the app.
   const openAppSettings = () => {
     setSettingsScope('app');
@@ -569,7 +583,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const devOn = useDevModeOn(space.id);
   // 0.8.0 B3: the space's pre-push cards (Dev mode only): the bot's thread and the Inbox read them.
   const prepush = usePrepushCards(space.id, devOn);
-  const prepushWaiting = prepushNeedsYou(prepush.cards).length;
+  const prepushWaiting = prepushNeedsYou(prepush.cards, prepush.acted).length;
   const kwantNames = useMemo(() => Object.fromEntries(kwants.map((k) => [k.id, k.name])), [kwants]);
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
@@ -1855,13 +1869,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setDiscussionState({ inProgress: false });
       setRoutingState(null);
     }
-    streamingContextIdRef.current = targetId;
-    if (!(targetId in liveRef.current)) {
-      streamsRef.current[targetId] = { text: '', thinking: '' };
-      setStreamingText('');
-      setStreamingThinking('');
+    // A bot paused at its monthly budget: the message is saved and waits, and nothing starts (QA F1), so
+    // no "getting started", timer or Stop. Continue starts the turn, and its events show it working.
+    const budgetWait = (): boolean => !threadId && !isTargetChannel && sendWaitsForBudget(budgetStore.get().byBot, targetId);
+    if (!budgetWait()) {
+      streamingContextIdRef.current = targetId;
+      if (!(targetId in liveRef.current)) {
+        streamsRef.current[targetId] = { text: '', thinking: '' };
+        setStreamingText('');
+        setStreamingThinking('');
+      }
+      markLive(targetId, speakerName);
     }
-    markLive(targetId, speakerName);
 
     // Optimistically add user message
     const tempId = `temp-${Date.now()}`;
@@ -1911,6 +1930,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         throw new Error(message);
       }
       const reply = await res.json().catch(() => null);
+      // Paused while this was on its way (the list caught up since): drop the working state it started
+      if (budgetWait() && turnsIn(turnsRef.current, targetId).length === 0) {
+        clearLive(targetId);
+        if (streamingContextIdRef.current === targetId) streamingContextIdRef.current = null;
+      }
       const held = heldFromReply(reply, tempId);
       if (held) {
         // H3: saved, but no turn starts yet, so no "thinking" for it; the line under the message says why.
@@ -2304,10 +2328,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // The card call first; a 409 means the card moved on, so fetch it again (Rigel QA 1). Then the
   // chat message: if only that fails, say the change applied (Ada Later 7).
+  // 0.9.7 prepush-grant: the Inbox item goes the moment the person presses, before the server answers;
+  // it comes back only if the press didn't apply.
   const prepushAct = async (c: PrepushCardData, act: () => Promise<PrepushCardData>, message: string) => {
+    prepush.setActed(c.id, true);
     try {
       prepush.put(await act());
     } catch (e) {
+      prepush.setActed(c.id, false);
       if (e instanceof DevModeError && e.status === 409) void prepush.refresh(c.id);
       throw e;
     }
@@ -3260,7 +3288,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const chatSubtitle = !isChannel
     ? currentKwant?.title || 'Kwant bot'
     : isGeneral
-      ? `Laya picks who answers, from the ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} in ${space.name}`
+      ? `The best fit of your ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} answers`
       : currentTeam?.description || currentChannel?.description || `A team in ${space.name}`;
 
   // "Suggested:" prompts from who is in this chat, so a kitchen team isn't offered developer prompts
@@ -3454,6 +3482,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const awaitingTurns = new Set([...turnsAwaitingAnswer(questions), ...browserTurns]);
   const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
   const awaitingBrowserHere = awaitingHere && openTurns.some((t) => t.state === 'running' && browserTurns.has(t.turn_id));
+  // The bot whose question the chat waits on, for the waiting banner (UX audit #2).
+  const awaitingTurnHere = awaitingHere ? openTurns.find((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) : undefined;
+  const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
   // The open chat's running turn's live steps (the newest, when several reply at once).
   const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
   const needsYouByKwant = openStepsByKwant(humanSteps);
@@ -3590,6 +3621,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
+  // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
+  const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
 
   // Avatar moods and the background-tab signal come from the same state as the sidebar's dots.
@@ -3794,10 +3827,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         bots={kwants}
         engines={engines.engines}
         reloadEngines={engines.reload}
-        onDismissed={() => undefined}
+        // Someone who finishes Get started in 0.9.8 never saw the old sidebar controls: no "moved" pointer.
+        onDismissed={hideMoved}
         spaceName={space.name}
         onImported={reloadAfterImport}
         mainSpace={space.is_default}
+        teams={teams}
       />
     ) : null;
   const setupChecklist = (
@@ -3875,6 +3910,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      doneKwants={doneKwants}
       browsingOwners={globes.owners}
       browsingBots={globes.bots}
       browserNeedsYou={browserNeedsYou}
@@ -3943,6 +3979,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         playSfx('click');
       }}
       onConnectDevGitHub={connectDevGitHub}
+      movedPointer={movedPointerShows({ established: whatsNewEstablished, seen: movedHidden })}
+      onOpenMoved={openMoved}
+      onHideMoved={hideMoved}
       ideaJarCount={ideaJarCount}
       ideaJarActive={page === 'jar'}
       onOpenIdeaJar={() => {
@@ -3972,7 +4011,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       top={
         <>
-          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
+          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} acted={prepush.acted} />
           <SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />
           <BudgetNeedsYou onRaise={raiseBudget} />
         </>
@@ -4064,7 +4103,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           pendingApprovals={approvalsHere}
           prepush={
             devOn && currentKwant && !viewingHistory ? (
-              <PrepushThread cards={threadCards(prepush.cards, currentKwant.id)} bot={currentKwant.name} live={prepush.live} onRetry={prepushRetry} onOverride={prepushOverride} />
+              <PrepushThread
+                cards={threadCards(prepush.cards, currentKwant.id)}
+                all={prepush.cards}
+                bot={currentKwant.name}
+                live={prepush.live}
+                onRetry={prepushRetry}
+                onOverride={prepushOverride}
+                approvals={approvalsHere}
+                onOpenApproval={setHighlightMessageId}
+              />
             ) : devOn && isChannel && !viewingHistory && pointerMemberIds.length > 0 ? (
               // 0.8.1 F3: team chats and channels get one pointer line per member bot; the card stays in the 1:1.
               <PrepushPointers
@@ -4203,6 +4251,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onSendToOtherBot={openThreadId ? undefined : handleSendToOtherBot}
           awaitingAnswer={awaitingHere}
           awaitingBrowser={awaitingBrowserHere}
+          awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
           renderHumanStep={renderHumanStep}
           contextKey={openCtx}

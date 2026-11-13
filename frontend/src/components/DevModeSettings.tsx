@@ -3,7 +3,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Check, Code } from 'lucide-react';
-import { DevModeState, DevTeamRef, approvalsWord, devApi, devStore, normaliseRepo } from '../devMode';
+import { DevModeState, DevTeamRef, devApi, devStore, normaliseRepo } from '../devMode';
 import { JiraSettings } from './JiraSettings';
 import { useDevMode } from './DevModeSwitch';
 
@@ -13,7 +13,7 @@ const rowBtn =
 const primaryBtn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50';
 const input = 'w-full bg-zinc-950 border rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 focus:outline-none border-zinc-800 focus:border-sky-500';
 
-export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; approvals?: string; save?: typeof devApi.put; teams?: DevTeamRef[] }> = ({ spaceId, spaceName, approvals, save = devApi.put, teams }) => {
+export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; approvals?: string; save?: typeof devApi.put; teams?: DevTeamRef[] }> = ({ spaceId, spaceName, save = devApi.put, teams }) => {
   const state = useDevMode(spaceId);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('');
@@ -31,9 +31,9 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
     setBackup(state?.backup_command ?? '');
   }, [state?.repo, state?.branch, state?.backup_command]);
 
+  // 0.9.8 (first-screen A): the header switch is gone, so this card is where Dev mode is turned on, the
+  // first time too. It shows as soon as the space's state has loaded.
   if (!state) return null;
-  // Before the first switch-on there's nothing to set: the switch in the header opens the setup.
-  if (!state.on && !state.last_seen_sha && !state.polled_at) return null;
 
   const normal = repo.trim() ? normaliseRepo(repo) : null;
   const repoErr = repo.trim() && !normal ? 'Paste a GitHub repo, like owner/name or its URL.' : null;
@@ -74,7 +74,7 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
       <p className="text-[11px] text-zinc-500">
         {state.on
           ? `${spaceName} reads this repo to show what landed, review PRs and guard deploys. Only you can change it.`
-          : `Off. Reviews, the ship gate and the production floor are stopped; approvals stay on ${approvalsWord(approvals)}. Turn it on with the switch next to the space’s name.`}
+          : 'Off. Reviews, the ship gate and the production floor are stopped. Approvals stay as you set them above.'}
       </p>
       <div>
         <label htmlFor="dv-set-repo" className="block text-xs font-medium text-zinc-300 mb-1">
@@ -116,9 +116,13 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
         </p>
       )}
       <div className="flex items-center gap-2">
-        {state.on && (
+        {state.on ? (
           <button type="button" className={rowBtn} disabled={busy} onClick={() => put({ on: false })} data-dev-turn-off>
             Turn off Dev mode
+          </button>
+        ) : (
+          <button type="button" className={rowBtn} disabled={busy} onClick={() => put({ on: true })} data-dev-turn-on>
+            Turn on Dev mode
           </button>
         )}
         <span className="flex-1" />

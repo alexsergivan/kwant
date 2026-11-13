@@ -45,6 +45,8 @@ async fn card_from_before_the_restart(env: &Env, args: Value) -> String {
         conversation: env.a.clone(),
         chat: Some(json!({"direct_kwant_id": env.a})),
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     };
     let req = ToolApprovalRequest {
         kwant_id: env.a.clone(),
@@ -230,6 +232,8 @@ async fn card_by(env: &Env, kwant: &str) -> String {
         conversation: kwant.to_string(),
         chat: Some(json!({"direct_kwant_id": kwant})),
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     };
     let req = ToolApprovalRequest {
         kwant_id: kwant.to_string(),

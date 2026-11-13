@@ -9,6 +9,12 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 pub async fn execute_shell(workspace: &Path, args: &Value) -> Result<Value, ToolError> {
+    execute_shell_env(workspace, args, &[]).await
+}
+
+/// [`execute_shell`] with extra environment variables, for kwant's own callers (outcome checks
+/// pass KWANT_TASK_ID and friends). Bots reach only [`execute_shell`], which adds none.
+pub async fn execute_shell_env(workspace: &Path, args: &Value, env: &[(String, String)]) -> Result<Value, ToolError> {
     let command_str = args["command"]
         .as_str()
         .ok_or_else(|| ToolError::InvalidArgs("Missing 'command' argument".into()))?;
@@ -18,6 +24,9 @@ pub async fn execute_shell(workspace: &Path, args: &Value) -> Result<Value, Tool
     let mut cmd = Command::new(shell_program()?);
     cmd.arg("-c").arg(command_str);
     cmd.current_dir(workspace);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     // A cancelled turn drops this future; neither bash nor anything it started may outlive it
     cmd.kill_on_drop(true);

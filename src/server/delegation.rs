@@ -571,7 +571,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
         // boxed, so the retry loop around the turn adds no stack to it
         async move {
             let outcome = Box::pin(try_kwant_turn(scope, specialist, p, opts)).await;
-            Box::pin(continue_once_if_capped_into(scope, specialist, outcome, false, Some(&slot))).await
+            Box::pin(continue_once_if_capped_into(scope, specialist, outcome, None, Some(&slot))).await
         }
     })
     .await;
@@ -949,7 +949,7 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
             Err(_) => return,
         };
         let outcome = try_kwant_turn(&scope, &specialist, prompt, TurnOpts::default()).await;
-        let outcome = continue_once_if_capped(&scope, &specialist, outcome, false).await;
+        let outcome = continue_once_if_capped(&scope, &specialist, outcome, None).await;
         let stopped = job.token.is_cancelled();
         drop(job);
         let reply = match outcome {

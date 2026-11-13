@@ -4,7 +4,7 @@
 // never an "always allow" or "skip this check": an override covers one push of one commit.
 
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { ArrowUpFromLine, ChevronDown, ChevronRight, GitBranch } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpFromLine, ChevronDown, ChevronRight, GitBranch } from 'lucide-react';
 import { DiffStat, Led } from './parts';
 import { DevModeError } from '../../devMode';
 import {
@@ -16,6 +16,7 @@ import {
   foldLine,
   foldable,
   footer,
+  storyOf,
   needsYouLead,
   openCount,
   overriddenLine,
@@ -26,6 +27,9 @@ import {
   rowFindings,
   statusChip,
   toolLine,
+  afterRetryLine,
+  pushedLine,
+  type Story,
   MIN_REASON,
   MAX_REASON,
   type PrepushCard as Card,
@@ -57,6 +61,14 @@ export interface PrepushCardProps {
   startOverride?: boolean;
   /** Start with the folded passing rows open on phone (screenshots and tests). */
   startUnfolded?: boolean;
+  /** 0.9.7: after a retry or override, what happens next, following the bot's new push live. */
+  story?: Story | null;
+  /** 0.9.7: this card is the new push after the person's retry on `after`: one story, linked both ways. */
+  after?: Card | null;
+  /** Scroll to another pre-push card in this thread. */
+  onOpenCard?: (id: string) => void;
+  /** Open the approval the push still needs (floor, payment) in this chat. */
+  onOpenApproval?: (id: string) => void;
 }
 
 const where = (f: PrepushFinding) => (f.file ? `${f.file}${f.line !== null ? `:${f.line}` : ''}` : null);
@@ -112,6 +124,82 @@ const Row: React.FC<{ k: PrepushCheck; card: Card; hidePhone: boolean }> = ({ k,
   );
 };
 
+/** Text with the branch rendered as code (Mira Later 6), at its first appearance. */
+const withBranch = (text: string, branch: string): React.ReactNode => {
+  const i = text.indexOf(branch);
+  if (i < 0) return text;
+  return (
+    <>
+      {text.slice(0, i)}
+      <code className="dv-sha dv-sha-wrap">{branch}</code>
+      {text.slice(i + branch.length)}
+    </>
+  );
+};
+
+const STORY_LED: Record<Story['step'], 'ok' | 'off' | 'run' | 'bad' | 'warn'> = {
+  fixing: 'run',
+  checking: 'run',
+  pushing: 'run',
+  asks: 'warn',
+  pushed: 'ok',
+  blocked: 'bad',
+  expired: 'off',
+  replaced: 'off',
+};
+
+/**
+ * 0.9.7: where the push is after the person's press. One live line under the lead; the new card and an
+ * approval the floor still needs are one link away, so the person never has to hunt for them.
+ */
+const StoryLine: React.FC<{ story: Story; card: Card; bot: string; onOpenCard?: (id: string) => void; onOpenApproval?: (id: string) => void }> = ({
+  story,
+  card,
+  bot,
+  onOpenCard,
+  onOpenApproval,
+}) => (
+  <div data-story={story.step} className="mt-1.5 flex min-w-0 flex-col gap-1">
+    {story.step === 'asks' && story.approval ? (
+      // One amber line that says it and links to the approval (no second status line repeating it).
+      <p
+        role="status"
+        data-story-approval={story.approval.id}
+        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-amber-400/40 bg-amber-400/[.06] px-2.5 py-1.5 text-meta text-zinc-200"
+      >
+        <Led s={STORY_LED.asks} className="shrink-0 dv-led-still" />
+        <span data-story-now className="min-w-0 flex-1 [overflow-wrap:anywhere]">{withBranch(story.now, card.branch)}</span>
+        {onOpenApproval && (
+          <button type="button" className={LINK} onClick={() => onOpenApproval(story.approval!.id)}>
+            Open it <ArrowDown size={12} aria-hidden="true" />
+          </button>
+        )}
+      </p>
+    ) : (
+      <p role="status" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta">
+        {/* The light stays beside the first line of text when a long line wraps on a phone (round 2). */}
+        <span data-story-text className="flex min-w-0 items-start gap-2">
+          <Led s={STORY_LED[story.step]} className={`mt-[5px] shrink-0 ${story.step === 'pushed' || story.step === 'blocked' ? '' : 'dv-led-still'}`} />
+          <span data-story-now className={`min-w-0 [overflow-wrap:anywhere] ${story.step === 'pushed' ? 'font-medium text-emerald-300' : story.step === 'blocked' ? 'text-rose-300' : 'text-zinc-200'}`}>
+            {story.step === 'asks' ? `${bot}'s push still needs your OK.` : story.now}
+          </span>
+        </span>
+        {story.approval && onOpenApproval && story.step !== 'asks' && (
+          // Round 3: an expired story still links the approval that waits for this push.
+          <button type="button" data-story-approval={story.approval.id} className={LINK} onClick={() => onOpenApproval(story.approval!.id)}>
+            Open it <ArrowDown size={12} aria-hidden="true" />
+          </button>
+        )}
+        {story.next && onOpenCard && story.step !== 'asks' && !(story.approval && onOpenApproval) && (
+          <button type="button" data-story-next={story.next.id} className={LINK} onClick={() => onOpenCard(story.next!.id)}>
+            {story.step === 'blocked' ? 'See what it found' : story.step === 'pushed' ? 'See the push' : story.step === 'replaced' ? 'See the newer check' : 'See the new check'} <ArrowDown size={12} aria-hidden="true" />
+          </button>
+        )}
+      </p>
+    )}
+  </div>
+);
+
 /** A one-line card (P0, retried, cleared and folded). */
 const Line: React.FC<{ children: React.ReactNode; led?: 'ok' | 'off'; status?: boolean; extra?: React.ReactNode; phase: string; error?: string }> = ({
   children,
@@ -138,7 +226,19 @@ const Line: React.FC<{ children: React.ReactNode; led?: 'ok' | 'off'; status?: b
   </div>
 );
 
-export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, onOverride, live = false, startOverride = false, startUnfolded = false }) => {
+export const PrepushCard: React.FC<PrepushCardProps> = ({
+  card,
+  bot,
+  onRetry,
+  onOverride,
+  live = false,
+  startOverride = false,
+  startUnfolded = false,
+  story = null,
+  after = null,
+  onOpenCard,
+  onOpenApproval,
+}) => {
   const phase = phaseOf(card);
   const [form, setForm] = useState(startOverride && canOverride(card));
   const [reason, setReason] = useState('');
@@ -221,11 +321,39 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
       </Line>
     );
   }
-  if (phase === 'RT') {
+  if (phase === 'SS') {
     return (
-      <Line phase="RT" error={error?.text}>
-        You asked for a new check of <code className="dv-sha dv-sha-wrap">{card.branch}</code>. {bot}'s next push of this commit is checked again from try 1.
+      <Line
+        phase="SS"
+        extra={
+          card.superseded_by && onOpenCard ? (
+            <button type="button" data-superseded-by={card.superseded_by} className={LINK} onClick={() => onOpenCard(card.superseded_by!)}>
+              See the newer push <ArrowDown size={12} aria-hidden="true" />
+            </button>
+          ) : undefined
+        }
+      >
+        Replaced by a newer push of <code className="dv-sha dv-sha-wrap">{card.branch}</code>. Nothing waits for you here.
       </Line>
+    );
+  }
+  if (phase === 'RT') {
+    // 0.9.7: the press is the approval. The card says at once what happens next and follows the new push.
+    const lead = story?.lead ?? storyOf(card, [card], bot)?.lead ?? footer(card, bot);
+    return (
+      <div
+        data-prepush-phase="RT"
+        className="flex max-w-[640px] flex-col rounded-xl border border-hairline bg-surface-main px-3 py-2 text-meta text-zinc-400"
+      >
+        <p className="min-w-0 text-zinc-300 [overflow-wrap:anywhere]">{withBranch(lead, card.branch)}</p>
+        {story && <StoryLine story={story} card={card} bot={bot} onOpenCard={onOpenCard} onOpenApproval={onOpenApproval} />}
+        {error && (
+          // A retry that applied but whose chat message failed lands here, on the retried line (#475 review 2).
+          <p role="alert" className="mt-1 w-full text-meta text-bad [overflow-wrap:anywhere]">
+            {error.text}
+          </p>
+        )}
+      </div>
     );
   }
   if (phase === 'P2' && collapsed) {
@@ -241,6 +369,17 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
       >
         {(() => {
           const p = clearedParts(card);
+          const used = card.grant?.used_at ?? null;
+          if (used !== null)
+            return (
+              <span data-pushed>
+                {/* Mira FIX 4: keyed on the grant, so it reads the same when the pressed card is out of view. */}
+                <span className="font-medium text-emerald-300">{pushedLine(used)}</span> · <code className="dv-sha dv-sha-wrap">{p.branch}</code>
+                {card.grant?.kind === 'override'
+                  ? " · your Push anyway was the OK, so it didn't ask again."
+                  : " · your retry was the OK, so it didn't ask again."}
+              </span>
+            );
           return (
             <>
               {p.before}
@@ -287,6 +426,16 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
       aria-labelledby={titleId}
       className="kw-card w-full max-w-[640px] p-3 sm:p-4"
     >
+      {after && (
+        <p data-after-retry={after.id} className="-mt-0.5 mb-2 flex min-w-0 flex-wrap items-center gap-x-1.5 text-meta text-zinc-400">
+          <span className="min-w-0 [overflow-wrap:anywhere]">{afterRetryLine(card)}</span>
+          {onOpenCard && (
+            <button type="button" className={LINK} onClick={() => onOpenCard(after.id)}>
+              See your request <ArrowUp size={12} aria-hidden="true" />
+            </button>
+          )}
+        </p>
+      )}
       <header className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-zinc-300" aria-hidden="true">
           <ArrowUpFromLine size={15} />
@@ -458,7 +607,8 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
 
       {phase === 'P6' && (
         <div className="mt-3 text-meta text-zinc-300">
-          <p>{overriddenLine(card)}</p>
+          <p>{story ? story.lead : overriddenLine(card, bot)}</p>
+          {story && <StoryLine story={story} card={card} bot={bot} onOpenCard={onOpenCard} onOpenApproval={onOpenApproval} />}
           {card.override?.reason && (
             <blockquote className="mt-1.5 border-l-2 border-zinc-600 pl-2 italic text-zinc-300 [overflow-wrap:anywhere]">
               <span className="sr-only">Your reason: </span>

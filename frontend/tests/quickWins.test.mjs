@@ -94,7 +94,7 @@ test('first-run welcome: what kwant bots are, the bots, one action', () => {
     onAction: () => clicked++,
   });
   assert.match(html, /data-first-run-welcome/);
-  assert.match(html, /Laya picks who answers/);
+  assert.match(html, /the best fit answers/);
   assert.match(html, /Architect<\/span><span[^>]*> · Systems Architect/);
   assert.match(html, />TechLead</);
   assert.equal(html.split('<button').length, 2, 'exactly one button');

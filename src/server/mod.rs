@@ -566,6 +566,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tasks/:id/checks", post(missions::routes::add_task_check))
         .route("/api/tasks/:id/checks/run", post(missions::routes::run_task_checks))
         .route("/api/checks/:id/approve", post(missions::routes::approve_check))
+        .route("/api/checks/:id/wait-more", post(missions::routes::wait_more))
         .route("/api/questions/:id/cancel", post(questions::cancel))
         .route("/api/human-steps", get(human_steps::list))
         .route("/api/human-steps/:id", get(human_steps::get))

@@ -619,10 +619,16 @@ test('DOM: a failed Turn on keeps the sheet open with the server’s reason', as
 // ---------------------------------------------------------------------------
 // Settings, Connections, the desk, the looks
 
-test('Settings › Dev mode: hidden before the first switch-on; saves repo, branch, backup command; Turn off', async () => {
+test('Settings › Dev mode: shown before the first switch-on with Turn on (0.9.8); saves repo, branch, backup command; Turn off', async () => {
   reset();
   let v = await mount(h(m.DevModeSettings, { spaceId: 'spc_demo', spaceName: 'Demo' }));
-  assert.equal(!!v.host.querySelector('[data-dev-settings]'), false);
+  const first = v.host.querySelector('[data-dev-settings]');
+  assert.ok(first, 'the header switch is gone, so the card must be there to turn it on the first time');
+  assert.doesNotMatch(first.textContent, /switch next to/);
+  assert.equal(first.querySelector('[data-dev-turn-off]'), null);
+  await click(first.querySelector('[data-dev-turn-on]'));
+  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').at(-1)[2], { on: true });
+  assert.equal(m.devStore.isOn('spc_demo'), true);
   v.root.unmount();
 
   reset({ ...off, on: true, repo: 'demo-org/demo-app', branch: 'main', polled_at: 'x' });
@@ -645,7 +651,8 @@ test('Settings › Dev mode: hidden before the first switch-on; saves repo, bran
   await click(form.querySelector('[data-dev-turn-off]'));
   assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').at(-1)[2], { on: false });
   assert.equal(m.devStore.isOn('spc_demo'), false);
-  assert.match(form.textContent, /Off\. Reviews, the ship gate and the production floor are stopped/);
+  assert.match(form.textContent, /Off\. Reviews, the ship gate and the production floor are stopped\. Approvals stay as you set them above\./);
+  assert.doesNotMatch(form.textContent, /approvals stay on/);
   v.root.unmount();
 });
 

@@ -18,6 +18,8 @@ use kwnt::{
         spaces::SpaceId,
         Database,
     },
+    drivers::engines::EngineId,
+    profiles::classify::{FailClass, ProviderFailure},
     router::LayaRouter,
     server::{
         continuity::{SelfScope, TurnOrigin},
@@ -206,6 +208,99 @@ async fn other_channels_lean_to_their_own_members() {
     let (to, basis) = routed_to(&app, &state, c["id"].as_str().unwrap(), "Best place to eat corn dogs in Munich tomorrow?").await;
     assert_eq!((to.as_str(), basis.as_deref()), (a.as_str(), Some("lead")));
     assert!(concierges(&state).await.is_empty());
+}
+
+/// Turns every engine off but `keep`, as on a fresh install where nothing is signed in.
+fn engines_off_except(state: &AppState, keep: &[EngineId]) {
+    state.engines.set_disabled(EngineId::ALL.into_iter().filter(|e| !keep.contains(e)).collect());
+}
+
+/// The `concierge:<space>` setting: unset until the Concierge is made (or adopted).
+async fn concierge_setting(state: &AppState) -> Option<String> {
+    state.db.get_setting(&format!("concierge:{}", SpaceId::default_space().as_str())).await.unwrap()
+}
+
+/// How many "added Concierge" cards the space has.
+async fn concierge_cards(app: &Router) -> usize {
+    let actions = ok(app, "GET", "/api/bot-actions", None).await;
+    let list = actions.as_array().cloned().or_else(|| actions["actions"].as_array().cloned()).unwrap_or_default();
+    list.iter().filter(|a| a["action"] == "concierge_create").count()
+}
+
+/// Sends `prompt` and waits for its turn to end, whatever it said.
+async fn send_and_wait(app: &Router, state: &AppState, channel: &str, prompt: &str) {
+    let mut events = state.event_sender.subscribe();
+    ok(app, "POST", "/api/chat/send", Some(json!({"channel_id": channel, "prompt": prompt, "sender_id": "user"}))).await;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Ok(RuntimeEvent::TurnEnded { .. }) = events.recv().await.map(|e| e.unscoped().clone()) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the turn ended");
+}
+
+/// Mira's audit #6: on a fresh install the first message made the Concierge ("Concierge changed
+/// something… Undo") and its reply then said no account can run bots. With no AI account nothing
+/// is made, no card, the setting stays unset, and today's pick shows the one setup card; the
+/// first unmatched message after an account is connected makes the Concierge once, with its card.
+#[tokio::test]
+async fn no_concierge_until_an_ai_account_can_answer() {
+    let (app, state, _tmp) = setup().await;
+    let script = ok(&app, "POST", "/api/kwants", Some(specialist("Scriptwriter", "TikTok Scriptwriter & Hook Specialist",
+        "You write short TikTok video scripts and scroll-stopping hooks for book content."))).await["id"].as_str().unwrap().to_string();
+    let atlas = ok(&app, "POST", "/api/kwants", Some(specialist("Atlas", "Technical SEO", "You audit sites for crawl errors, sitemaps and page speed."))).await["id"].as_str().unwrap().to_string();
+    only(&app, &state, &[&script, &atlas]).await;
+    let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
+
+    // No AI account: nothing is made, nothing to undo, and the setting stays unset
+    engines_off_except(&state, &[]);
+    send_and_wait(&app, &state, &general, "Best place to eat corn dogs in Munich tomorrow?").await;
+    assert!(concierges(&state).await.is_empty(), "no Concierge before an account can answer");
+    assert_eq!(concierge_cards(&app).await, 0, "no concierge_create card");
+    assert_eq!(concierge_setting(&state).await, None, "the setting stays unset");
+    // What the person sees: the setup card from today's pick (meta kind setup_needed), not a raw error
+    let msgs = state.db.list_messages(&general, 50).await.unwrap();
+    let reply = msgs.iter().rev().find(|m| m.sender_role == "kwant").expect("a reply");
+    let meta: Value = reply.meta.as_deref().and_then(|m| serde_json::from_str(m).ok()).unwrap_or(Value::Null);
+    assert_eq!((meta["kind"].as_str(), meta["reason"].as_str()), (Some("setup_needed"), Some("no_account")), "{meta}");
+    assert!(reply.text.contains(kwnt::drivers::engines::NO_ENGINE_MESSAGE), "{}", reply.text);
+    assert!(["Scriptwriter", "Atlas"].contains(&reply.sender_id.as_str()), "today's pick answers, not a Concierge: {reply:?}");
+
+    // An account is connected: the next unmatched message makes the Concierge once, with its card
+    engines_off_except(&state, &EngineId::ALL);
+    let (to, basis) = routed_to(&app, &state, &general, "Best place to eat corn dogs in Munich tomorrow?").await;
+    let made = concierges(&state).await;
+    assert_eq!(made.len(), 1);
+    assert_eq!((to.as_str(), basis.as_deref()), (made[0].as_str(), Some("concierge")));
+    assert_eq!(concierge_cards(&app).await, 1);
+    assert_eq!(concierge_setting(&state).await.as_deref(), Some(made[0].as_str()));
+    let (to, _) = routed_to(&app, &state, &general, "Any good everyday questions to ask at a dinner party?").await;
+    assert_eq!(to, made[0]);
+    assert_eq!((concierges(&state).await.len(), concierge_cards(&app).await), (1, 1), "made once");
+}
+
+/// An account that is only out of usage counts as connected: the Concierge is made as before
+/// (its turn then waits for the reset like any other).
+#[tokio::test]
+async fn an_account_out_of_usage_still_gets_the_concierge() {
+    let (app, state, _tmp) = setup().await;
+    let script = ok(&app, "POST", "/api/kwants", Some(specialist("Scriptwriter", "TikTok Scriptwriter", "Scripts and hooks for book content."))).await["id"].as_str().unwrap().to_string();
+    let atlas = ok(&app, "POST", "/api/kwants", Some(specialist("Atlas", "Technical SEO", "Crawl errors, sitemaps and page speed."))).await["id"].as_str().unwrap().to_string();
+    only(&app, &state, &[&script, &atlas]).await;
+    let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
+
+    engines_off_except(&state, &[EngineId::Claude]);
+    let until = chrono::Utc::now() + chrono::Duration::hours(3);
+    state.db.record_profile_failure("prf_system_claude", "quota", Some(until)).await.unwrap();
+    state.engines.record_failure(EngineId::Claude, &ProviderFailure { class: FailClass::Quota, retry_at: Some(until), detail: String::new() });
+    send_and_wait(&app, &state, &general, "Best place to eat corn dogs in Munich tomorrow?").await;
+    let made = concierges(&state).await;
+    assert_eq!(made.len(), 1, "an account out of usage is still connected");
+    assert_eq!(concierge_cards(&app).await, 1);
+    assert_eq!(concierge_setting(&state).await.as_deref(), Some(made[0].as_str()));
 }
 
 async fn call_as(app: &Router, uri: &str, token: &str, body: Value) -> (StatusCode, Value) {

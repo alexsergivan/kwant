@@ -14,7 +14,7 @@ export const POINTER_LINES = 3;
 export const POINTER_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** P2, P6 and P0 lines leave 10 min after the card's last update. */
 export const POINTER_SETTLED_MS = 10 * 60 * 1000;
-const SETTLED: ReadonlySet<Phase> = new Set(['P2', 'P6', 'P0']);
+const SETTLED: ReadonlySet<Phase> = new Set(['P2', 'P6', 'P0', 'SS']);
 
 export interface PointerPick {
   lines: Card[];
@@ -91,6 +91,8 @@ export function pointerParts(c: Card, bot: string): Part[] {
       return [T('You let '), Bs, T(' push of '), R, T(' go anyway')];
     case 'P0':
       return [T('Nothing to push: '), R, T(' has no new commits')];
+    case 'SS':
+      return [Bs, T(' push of '), R, T(' was replaced by a newer push')];
     case 'UN':
       return [B, T(" has a push check this version can't show · update the app to see where it is")];
   }
@@ -110,6 +112,7 @@ const LED: Record<Phase, 'run' | 'bad' | 'warn' | 'ok' | 'off'> = {
   P2: 'ok',
   P6: 'off',
   P0: 'off',
+  SS: 'off',
   UN: 'off',
 };
 

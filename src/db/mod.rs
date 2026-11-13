@@ -63,8 +63,10 @@ pub mod mission_watch;
 pub mod verifier;
 pub mod last_ran_on;
 
-/// What a space's #general says about itself.
-pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
+/// What a space's #general says about itself. New channels only: stored descriptions keep their text.
+pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. The best fit answers.";
+/// #general's text before 0.9.8. Upgrading an install still writes it, so old installs read as they did.
+pub const LEGACY_GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
 /// Default's #general description before the "kwant bots" wording; replaced only if unchanged.
 const OLD_GENERAL_DESCRIPTION: &str = "Main collaboration hub for all agents";
 /// How long a connection waits for SQLite's write lock (sqlx's default, kept explicit).
@@ -114,8 +116,19 @@ pub struct Database {
     dev_on: std::sync::Arc<dev_mode::DevOn>,
 }
 
-/// Built-in kwants: (name, title, persona, soul, avatar).
-const STARTERS: [(&str, &str, &str, &str, &str); 3] = [
+/// The template a fresh install's default space is seeded from: @helpers (Assistant, Researcher
+/// and Writer). The bots, their lead, the team's description and instructions all come from its
+/// entry in `src/teams/templates.json`, so the seed and the Get started tile can't drift apart.
+pub const STARTER_TEMPLATE: &str = "helpers";
+
+/// The template a fresh install is seeded from.
+pub fn starter_template() -> &'static crate::teams::templates::Template {
+    crate::teams::templates::get(STARTER_TEMPLATE).expect("src/teams/templates.json has the starter template")
+}
+
+/// The starters seeded before 0.9.8: (name, title, persona, soul, avatar). Nothing new is made from
+/// them; they are how an old install is recognised (the soul backfill, the core-engineering team).
+const LEGACY_STARTERS: [(&str, &str, &str, &str, &str); 3] = [
     (
         "Architect",
         "Systems Architect",
@@ -252,6 +265,8 @@ impl Database {
         db.migrate_flight_school().await?;
         // Last: it rebuilds `tasks` and `missions` from their stored SQL, columns and triggers included
         db.migrate_opt_in_budgets().await?;
+        // 0.9.7: waiting checks; rebuilds `outcome_checks` and `task_failures` once, triggers included
+        db.migrate_waiting_checks().await?;
         db.migrate_chain_budget_default().await?;
         // After it: observes finished tasks once (their class comes from Flight School)
         db.migrate_performance().await?;
@@ -312,8 +327,10 @@ impl Database {
     }
 
     async fn seed_defaults(&self) -> Result<(), DbError> {
-        // Starters seeded before souls existed get one, unless the user has rewritten them
-        for (name, _, persona_prompt, soul, _) in STARTERS {
+        // Starters seeded before souls existed get one, unless the user has rewritten them. Only the
+        // legacy ones: today's starters are made with their soul, and a person's own bot that happens
+        // to share a starter's name has another persona, so it never matches.
+        for (name, _, persona_prompt, soul, _) in LEGACY_STARTERS {
             sqlx::query("UPDATE kwants SET soul = ? WHERE name = ? AND persona_prompt = ? AND soul = ''")
                 .bind(soul)
                 .bind(name)
@@ -329,32 +346,40 @@ impl Database {
             .fetch_one(&self.pool)
             .await?;
 
-        if count.0 == 0 {
-            let starters: Vec<NewKwant> = STARTERS
-                .iter()
-                .map(|(name, title, persona_prompt, soul, avatar_sprite)| NewKwant {
-                    name: (*name).into(),
-                    title: (*title).into(),
-                    persona_prompt: (*persona_prompt).into(),
-                    soul: (*soul).into(),
-                    avatar_sprite: (*avatar_sprite).into(),
-                    driver_type: "api".into(),
-                    preferred_model: "auto".into(),
-                })
-                .collect();
-
-            for starter in starters {
-                self.create_kwant(&space, &starter).await?;
+        // A fresh install: nothing in the default space yet. Everything else is an old install and
+        // keeps what it has (and, below, today's core-engineering fallback).
+        let fresh = count.0 == 0;
+        if fresh {
+            let template = starter_template();
+            let mut made: Vec<Kwant> = Vec::with_capacity(template.bots.len());
+            for b in &template.bots {
+                let kwant = self
+                    .create_kwant(
+                        &space,
+                        &NewKwant {
+                            name: b.name.clone(),
+                            title: b.title.clone(),
+                            persona_prompt: b.persona.clone(),
+                            soul: b.soul.clone(),
+                            avatar_sprite: b.avatar_sprite.clone(),
+                            driver_type: "api".into(),
+                            preferred_model: "auto".into(),
+                        },
+                    )
+                    .await?;
+                // What each one is for, as a bot made from the template gets it (routing reads it)
+                self.set_scope(&kwant.id, Some(b.good_for.as_slice()), Some(b.not_for.as_slice())).await?;
+                made.push(kwant);
             }
 
-            // Create initial general channel
-            let kwants = self.list_kwants(&space).await?;
-            if let Some(lead) = kwants.first() {
+            // Create initial general channel, led by the template's lead
+            let lead_name = &template.lead().name;
+            if let Some(lead) = made.iter().find(|k| &k.name == lead_name).or(made.first()) {
                 let chan = NewChannel {
                     name: "general".into(),
                     description: Some(GENERAL_DESCRIPTION.into()),
                     lead_kwant_id: lead.id.clone(),
-                    member_kwants: kwants.iter().map(|k| k.id.clone()).collect(),
+                    member_kwants: made.iter().map(|k| k.id.clone()).collect(),
                     routing_mode: "auto".into(),
                 };
                 self.create_channel(&space, &chan).await?;
@@ -362,7 +387,7 @@ impl Database {
         } else {
             // The old seeded #general text, if nobody edited it
             let _ = sqlx::query("UPDATE channels SET description = ? WHERE name = 'general' AND description = ?")
-                .bind(GENERAL_DESCRIPTION)
+                .bind(LEGACY_GENERAL_DESCRIPTION)
                 .bind(OLD_GENERAL_DESCRIPTION)
                 .execute(&self.pool)
                 .await;
@@ -379,8 +404,34 @@ impl Database {
             .await
             .unwrap_or((0,));
 
-        if team_count.0 == 0 {
-            let kwants = self.list_kwants(&space).await?;
+        let template = starter_template();
+        let kwants = if team_count.0 == 0 { self.list_kwants(&space).await? } else { Vec::new() };
+        // Also a fresh install whose first start stopped before the team was made: its lead still
+        // has the template's own persona, which no bot from before 0.9.8 can have.
+        let starter_lead = template.lead();
+        let seeded_here = fresh || kwants.iter().any(|k| k.name == starter_lead.name && k.persona_prompt == starter_lead.persona);
+        if team_count.0 == 0 && seeded_here {
+            // A fresh install's team: @helpers, with the template's lead, description and instructions
+            if let Some(lead) = kwants.iter().find(|k| k.name == starter_lead.name).or_else(|| kwants.first()) {
+                let team = self
+                    .create_team(
+                        &space,
+                        &NewTeam {
+                            name: template.handle.clone(),
+                            description: Some(template.card_line.clone()),
+                            icon: Some(template.icon.clone()),
+                            lead_kwant_id: lead.id.clone(),
+                            member_kwants: kwants.iter().map(|k| k.id.clone()).collect(),
+                            workspace_path: None,
+                            repo_url: None,
+                        },
+                    )
+                    .await?;
+                self.set_team_instructions(&team.id, &template.instructions).await?;
+            }
+        } else if team_count.0 == 0 {
+            // An old install with no team: today's fallback, unchanged (found, not fixed: it also
+            // brings core-engineering back after a person deletes every team)
             if let Some(lead) = kwants.iter().find(|k| k.name == "Architect").or_else(|| kwants.first()) {
                 let member_ids: Vec<String> = kwants.iter().map(|k| k.id.clone()).collect();
                 let default_team = NewTeam {

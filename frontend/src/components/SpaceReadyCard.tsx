@@ -83,7 +83,7 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
           action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: onAddAccount },
         },
     botsStep,
-    { done: false, title: 'Message #general', detail: `Laya picks who answers, only from ${spaceName}'s bots.` },
+    { done: false, title: 'Message #general', detail: `The best fit answers, only from ${spaceName}'s bots.` },
   ];
 
   return (
