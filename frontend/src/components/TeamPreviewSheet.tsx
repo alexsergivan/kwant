@@ -1242,7 +1242,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           ? 'Undo takes them out of the team again.'
           : 'Undo removes the team. Your bots stay.'
         : `Undo removes the ${plural(nNew, 'new bot')}.`
-      : 'Undo removes all of it.');
+      : 'Undo removes it all.');
 
   const btnH = phone ? 'h-11 flex-1' : 'h-9';
   const panel = (
@@ -1284,7 +1284,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           <h3 id={titleId} className="text-[17px] leading-6 font-semibold text-zinc-50 truncate">
             {title}
           </h3>
-          <p id={subId} className="text-xs text-zinc-400 truncate">
+          <p id={subId} className={`text-xs text-zinc-400 ${phone ? 'line-clamp-2' : 'truncate'}`}>
             {sub}
           </p>
         </div>
@@ -1309,13 +1309,14 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         )}
         {isD ? dBody() : tBody()}
       </div>
-      {/* Phone, team from words: Cancel and Try again share a row; Create gets its own full-width row. */}
+      {/* Phone, team from words: Cancel and Try again share a row as equal halves (Cancel's transparent border matches
+          Try again's), and Create gets its own full-width row: basis-full, since flex-1's 0% basis never wraps. */}
       <footer className={`flex ${phone ? 'flex-wrap' : 'items-center'} gap-2 ${phone ? 'px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]' : 'px-5 py-3.5'} border-t border-zinc-800 bg-zinc-900`}>
-        <p className={`${phone ? 'w-full' : 'flex-1 min-w-0'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
+        <p className={`${phone ? 'w-full' : 'flex-1 min-w-0 whitespace-nowrap'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
           {!fallbackFooter && !sNote && footNote && <Undo2 size={13} aria-hidden="true" />}
           {fallbackFooter ? null : footNote}
         </p>
-        <button type="button" onClick={close} disabled={creating} className={`${btnH} ${phoneN ? 'flex-1' : ''} px-3.5 rounded-lg text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}>
+        <button type="button" onClick={close} disabled={creating} className={`${btnH} ${phoneN ? 'flex-1 border border-transparent' : ''} px-3.5 rounded-lg text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}>
           Cancel
         </button>
         {isN && dPhase === 'ready' && (
@@ -1326,7 +1327,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
               void read();
             }}
             disabled={creating || !online}
-            className={`${btnH} ${phoneN ? 'flex-1' : ''} inline-flex items-center justify-center gap-1.5 px-3.5 rounded-lg border border-zinc-700 text-sm text-zinc-100 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}
+            className={`${btnH} ${phoneN ? 'flex-1' : ''} whitespace-nowrap inline-flex items-center justify-center gap-1.5 px-3.5 rounded-lg border border-zinc-700 text-sm text-zinc-100 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}
           >
             <RefreshCw size={14} aria-hidden="true" />
             Try again
@@ -1343,7 +1344,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             type="button"
             onClick={onPrimary}
             disabled={primaryDisabled}
-            className={`${btnH} ${phoneN ? 'w-full' : ''} whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
+            className={`${btnH} ${phoneN ? 'basis-full' : ''} whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
           >
             {creating && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             {pickOther && !creating && <FolderOpen size={14} aria-hidden="true" />}

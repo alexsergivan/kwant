@@ -42,7 +42,7 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
             <TeamNeedBox label="What should your bots do?" register />
             {/* flex-wrap: on a touch phone each link is a 44 px target, so wrapped rows stay even. */}
             <p className="flex flex-wrap items-center gap-x-1 text-[11.5px] leading-[18px] text-zinc-400" data-ready-made-line>
-              <span>Or start from a ready-made team: </span>
+              <span className="basis-full">Or start from a ready-made team:</span>
               {picks.map((t) => (
                 <React.Fragment key={t.id}>
                   <button type="button" data-template={t.id} onClick={() => rt!.open({ kind: 'template', templateId: t.id })} className={quiet}>

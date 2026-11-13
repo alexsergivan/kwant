@@ -169,7 +169,7 @@ test('Get ready card: step 2 is "Add your bots" with the box, the ready-made lin
   assert.equal(ta.placeholder, 'e.g. I run a small bakery: answer customer emails, post on Instagram, keep track of orders');
   assert.equal(submitBtn().textContent, 'Suggest a team');
   const line = c.querySelector('[data-ready-made-line]');
-  assert.match(line.textContent, /^Or start from a ready-made team: Inbox · Sales · Coding · or add one bot$/);
+  assert.match(line.textContent, /^Or start from a ready-made team:Inbox · Sales · Coding · or add one bot$/);
   assert.equal(byText(c, 'button', /^New bot$/), undefined, 'New bot moved into the line');
   await click(byText(line, 'button', /^add one bot$/));
   assert.equal(out.newBot, 1);

@@ -177,7 +177,7 @@ export const TeamNeedBox: React.FC<TeamNeedBoxProps> = ({ label, register, autoF
           e.preventDefault();
           if (!noAccount) void submit();
         }}
-        className={`block w-full min-h-[84px] max-h-[220px] resize-y rounded-lg border bg-zinc-950/60 px-3 py-2 text-sm leading-5 text-zinc-50 placeholder:text-zinc-500 outline-none ${
+        className={`block w-full min-h-[84px] max-md:min-h-[104px] max-h-[220px] resize-y rounded-lg border bg-zinc-950/60 px-3 py-2 text-sm leading-5 text-zinc-50 placeholder:text-zinc-500 outline-none ${
           problem ? 'border-amber-300/70' : 'border-zinc-700 focus:border-sky-400'
         } ${busy ? 'opacity-70' : ''}`}
       />
