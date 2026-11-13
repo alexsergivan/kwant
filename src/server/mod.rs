@@ -430,6 +430,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/servers/:id/oauth/start", post(mcp_oauth::start))
         .route("/api/mcp/servers/:id/oauth", delete(mcp_oauth::disconnect))
         .route("/api/mcp/oauth/callback", get(mcp_oauth::callback))
+        .route("/api/mcp/oauth/client.json", get(mcp_oauth::client_document))
         .route("/api/kwants/:id/mcp-servers", get(mcp_routes::get_kwant_servers).put(mcp_routes::set_kwant_servers))
         .route("/api/mcp/permission/:token", post(mcp_runtime::permission_endpoint))
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))

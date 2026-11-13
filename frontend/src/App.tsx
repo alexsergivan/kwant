@@ -38,7 +38,8 @@ import {
   turnsAwaitingStep,
 } from './humanSteps';
 import { notifyBrowserPages, pageTeam, stepPage } from './browserPages';
-import { McpSuggestionCard } from './components/McpSuggestionCard';
+import { McpSuggestionCard, type SuggestionSignInResult } from './components/McpSuggestionCard';
+import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
 import type { ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
@@ -2507,7 +2508,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // Same flow as the servers screen: the window opens inside the click, the address comes after.
   // In the Mac app the sign-in opens in the default browser and the server is watched instead.
-  const handleSuggestionSignIn = async (serverId: string): Promise<string | void> => {
+  const handleSuggestionSignIn = async (serverId: string): Promise<SuggestionSignInResult> => {
     const macApp = inDesktopApp();
     const popup = macApp ? null : window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
     const before = macApp ? await mcpSignIn(serverId).catch(() => undefined) : undefined;
@@ -2519,6 +2520,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         body: JSON.stringify({ origin: window.location.origin }),
       });
       const data = await res.json().catch(() => null);
+      // A code means retrying can't help: the card swaps its button for a next step.
+      if (!res.ok && isSignInDeadEndCode(data?.code)) {
+        popup?.close();
+        return { code: data.code };
+      }
       if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : `Request failed (HTTP ${res.status}).`);
       if (typeof data?.authorize_url !== 'string' || !/^https?:\/\//.test(data.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
       url = data.authorize_url;

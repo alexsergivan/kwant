@@ -96,19 +96,42 @@ An http server that answers 401 while kwnt has no usable sign-in (and the user s
 http servers that require sign-in (e.g. `https://mcp.notion.com/mcp`) use the MCP authorization
 spec (2025-06-18): kwnt reads the 401's `WWW-Authenticate: Bearer resource_metadata=…` (or
 `/.well-known/oauth-protected-resource`), then the authorization server's metadata
-(`/.well-known/oauth-authorization-server`, falling back to OpenID discovery), registers itself
-as client `kwnt` (dynamic client registration, RFC 7591), and runs the authorization code flow
-with PKCE S256 and the `resource` parameter (RFC 8707). Authorization-server endpoints must be
-https (plain http only on loopback).
+(`/.well-known/oauth-authorization-server`, falling back to OpenID discovery), gets a client
+(below), and runs the authorization code flow with PKCE S256 and the `resource` parameter
+(RFC 8707). Authorization-server endpoints must be https (plain http only on loopback).
+
+How kwnt gets a client, in order:
+1. A client stored earlier for this server, callback URL and authorization server.
+2. Dynamic client registration (RFC 7591) as client `kwnt`, when the server has a
+   `registration_endpoint`.
+3. A client ID metadata document (MCP spec 2025-11-25), when the server says
+   `client_id_metadata_document_supported: true` and has no registration endpoint, or refused
+   the registration. The client_id is the document's https URL, with no client secret:
+   - kwant opened on this computer (`127.0.0.1`, `localhost`, `[::1]`):
+     `https://kwant.si/oauth/client.json`. It lists the callback on those hosts without a port
+     and on port 8799; servers that match the port exactly only work on port 8799.
+   - kwant on a public https address: `<origin>/api/mcp/oauth/client.json`, served by kwnt
+     itself (below), so the server must be able to reach that address.
+   - kwant on plain http elsewhere (a LAN address): no document; `502` with
+     `"code": "cimd_needs_https"`.
+4. Neither: `502` with `"code": "no_client_registration"`. The server only accepts clients registered with it in advance, and kwnt has no field for a client ID made that way, so retrying can't help.
 
 ### `POST /api/mcp/servers/:id/oauth/start`
 Body: `{"origin": "https://kwnt.example.com"}`: the browser's `location.origin`. It must be http(s)
 with no path, and its host must equal the request's `Host` or `X-Forwarded-Host`. The callback is
 `<origin>/api/mcp/oauth/callback`, so the same build works on localhost and behind a proxy.
 `200` → `{"authorize_url": "https://…"}`: open it in a popup. `400` bad origin or a stdio server,
-`404` unknown server, `502` discovery or registration failed (`{"error": "…"}`).
+`404` unknown server, `502` discovery or registration failed (`{"error": "…"}`). A `502` with a
+`code` (`no_client_registration`, `cimd_needs_https`) can't succeed on retry; without one it may.
 The sign-in must finish within 10 minutes; starting again for the same server replaces the
 earlier attempt. Registrations are reused per server, callback URL and authorization server.
+
+### `GET /api/mcp/oauth/client.json`
+kwnt's client ID metadata document for a self-hosted kwant, fetched by authorization servers
+without an API token. Built from `X-Forwarded-Host` (first value) or `Host`, always as https:
+`{"client_id": "https://<host>/api/mcp/oauth/client.json", "redirect_uris":
+["https://<host>/api/mcp/oauth/callback"], "token_endpoint_auth_method": "none", …}`. `404` on a
+loopback or malformed host (kwant on this computer uses kwant.si's document).
 
 ### `GET /api/mcp/oauth/callback?code=…&state=…` (or `?error=…&state=…`)
 Where the provider redirects the popup. kwnt exchanges the code and stores the tokens, then

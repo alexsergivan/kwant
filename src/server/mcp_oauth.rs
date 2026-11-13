@@ -194,7 +194,13 @@ pub async fn start(
     let origin = oauth::validate_origin(&body.origin, &host_refs).map_err(|m| err(StatusCode::BAD_REQUEST, m))?;
     let redirect_uri = oauth::callback_url(&origin);
     let http = &state.mcp_oauth.http;
-    let upstream = |e: OAuthError| err(StatusCode::BAD_GATEWAY, e.to_string());
+    let upstream = |e: OAuthError| {
+        let mut body = json!({ "error": e.to_string() });
+        if let Some(code) = e.code() {
+            body["code"] = json!(code);
+        }
+        (StatusCode::BAD_GATEWAY, Json(body))
+    };
 
     let challenge = oauth::probe_challenge(http, &server_url).await;
     let discovery = oauth::discover(http, &server_url, challenge.as_ref()).await.map_err(upstream)?;
@@ -205,7 +211,7 @@ pub async fn start(
             auth_method: c.auth_method,
         },
         None => {
-            let reg = oauth::register_client(http, &discovery.metadata, &redirect_uri).await.map_err(upstream)?;
+            let reg = oauth::obtain_client(http, &discovery.metadata, &origin, &redirect_uri).await.map_err(upstream)?;
             state
                 .db
                 .save_mcp_oauth_client(&McpOAuthClient {
@@ -226,6 +232,33 @@ pub async fn start(
     let state_param = state.mcp_oauth.pending.insert(pending);
     let authorize_url = oauth::authorize_url(&discovery, &client.client_id, &redirect_uri, &state_param, &pkce).map_err(upstream)?;
     Ok(Json(json!({ "authorize_url": authorize_url })))
+}
+
+/// `GET /api/mcp/oauth/client.json`: this kwant's client ID metadata document, fetched by
+/// authorization servers that use them (no login). Only on a public https name; kwant on
+/// loopback uses the document on kwant.si instead.
+pub async fn client_document(headers: HeaderMap) -> Response {
+    // The public name: a proxy's X-Forwarded-Host (its first value), else Host
+    let host = ["x-forwarded-host", header::HOST.as_str()]
+        .iter()
+        .find_map(|name| headers.get(*name)?.to_str().ok()?.split(',').next().map(|h| h.trim().to_string()))
+        .filter(|h| !h.is_empty() && !h.contains(['/', '\\', '@', '?', '#']));
+    let document = host.and_then(|h| oauth::self_hosted_client_document(&format!("https://{h}")));
+    match document {
+        Some(doc) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "public, max-age=300"),
+                // Built from the request's host, so a shared cache must not hand one name's
+                // document to another
+                (header::VARY, "Host, X-Forwarded-Host"),
+            ],
+            doc.to_string(),
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no client document on this address" }))).into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
