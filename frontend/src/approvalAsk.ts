@@ -3,7 +3,7 @@
 // sentences count, so an OK asked for early on and then settled doesn't light the row up.
 
 const ASKS: RegExp[] = [
-  /\b(once|when|after|if) you(?:'ve|’ve| have)? (approve|confirm|ok|okay|sign off on|give (me )?the go[- ]ahead)\b/i,
+  /\b(once|when|after|if) you(?:'ve|’ve| have)? (approve|confirm(?:ed)?|ok|okay|sign off on|give (me )?the go[- ]ahead)\b/i,
   /\bwaiting (for|on) your (approval|ok|okay|go[- ]ahead|sign[- ]off)\b/i,
   /\b(shall|should|can) i (go ahead|send|schedule|publish|post|launch)\b[^.?!]*\?/i,
   /\b(ok|okay) to (send|schedule|publish|post|go ahead)\b[^.?!]*\?/i,
