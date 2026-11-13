@@ -7,7 +7,7 @@ import { canRunNow, engineTip, isUsable, type RunsOn } from '../engines';
 import { statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
-import { Space, spaceSummary, spaceSummaryTitle } from '../spaces';
+import { Space } from '../spaces';
 import { SpaceSwitcher, SpaceTile } from './Spaces';
 import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
@@ -18,10 +18,8 @@ import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
 import { type AttentionRow, type NeedsYouRow, PINNED_RANK, workingIds, directIds, rollupLabel } from '../chatsTab';
 import type { InboxItem } from '../api/inbox';
-import { DevFlipNote, useDevMode } from './DevModeSwitch';
-import { SpaceControls } from './SpaceControls';
-import { DevOnToast } from './DevOnToast';
-import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
+import { useDevMode } from './DevModeSwitch';
+import { MovedPointer, SpaceSubline } from './FirstScreenBits';
 import { DevDeskRow } from './DevDesk';
 import { GlobeSlot, WatchGlobe, useFadeOut, useLingeringIds } from './WatchLive';
 import type { Browsing } from '../watchLive';
@@ -167,6 +165,10 @@ export interface SidebarProps {
   onOpenDevDesk?: () => void;
   /** Dev mode Connect (flow F5): opens Loose ends on the GitHub form; after connecting the app returns to the Dev desk. */
   onConnectDevGitHub?: () => void;
+  /** First-screen A (0.9.8 and 0.9.9): "Dev mode and Approvals moved to this space's settings." for past users. */
+  movedPointer?: boolean;
+  onOpenMoved?: () => void;
+  onHideMoved?: () => void;
   /** Idea jar (0.7): ready takes for the violet badge, whether its page is open, how to open it, and the quick-add. Hidden on phone, which has the Jar tab. */
   ideaJarCount?: number;
   ideaJarActive?: boolean;
@@ -387,7 +389,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   missionsActive = false,
   devDeskActive = false,
   onOpenDevDesk,
-  onConnectDevGitHub,
+  movedPointer = false,
+  onOpenMoved,
+  onHideMoved,
   onOpenMissions,
   ideaJarCount = 0,
   ideaJarActive = false,
@@ -496,50 +500,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return selectedId === c.id;
   };
 
-  // Dev mode and Approvals live in the space controls block under the header (explainer spec §1).
+  // Dev mode and Approvals live in Space settings › General (first-screen A); the header names them.
   const dev = useDevMode(space.id);
   const devOn = !!dev?.on;
-  // The off note under the header (flow copy §7: HEAD → main, with Turn back on).
-  const [devOffNote, setDevOffNote] = useState(false);
-  const dismissDevOff = useCallback(() => setDevOffNote(false), []);
-  useEffect(() => setDevOffNote(false), [space.id]);
-  // Flow F3: switching on keeps the person where they are; a toast says what was found, with one next
-  // step and Undo. It replaces the HEAD → dev note. The toast reads the live store, so a "checking"
-  // toast updates in place when the status arrives.
-  const [devOnToast, setDevOnToast] = useState<DevModeState | null>(null);
-  const closeDevOnToast = useCallback(() => setDevOnToast(null), []);
-  useEffect(() => setDevOnToast(null), [space.id]);
-  const showOn = (s: DevModeState) => {
-    setDevOffNote(false);
-    setDevOnToast(s);
-  };
-  const focusDevSwitch = () => setTimeout(() => document.querySelector<HTMLElement>('[data-dev-switch]')?.focus(), 0);
-  const connectDev = onConnectDevGitHub ? () => onConnectDevGitHub() : undefined;
-  const typeDevRepo = () => {
-    deskIntent.set(space.id, 'type');
-    onOpenDevDesk?.();
-  };
-  const seeDevRepos = () => {
-    deskIntent.set(space.id, 'repos');
-    onOpenDevDesk?.();
-  };
-  const spaceControls = (
-    <SpaceControls
-      space={{ id: space.id, name: space.name, approvals: space.approvals }}
-      phone={phone}
-      bots={kwants}
-      onTurnedOn={showOn}
-      onTurnedOff={() => {
-        setDevOnToast(null);
-        setDevOffNote(true);
-      }}
-      onOpenDevDesk={onOpenDevDesk}
-      onSeeRepos={onOpenDevDesk ? seeDevRepos : undefined}
-      onLinkRepo={onOpenDevDesk ? typeDevRepo : undefined}
-      onConnect={connectDev}
-      onOpenSettings={onOpenSpaceSettings}
-    />
-  );
   // Phones: section titles stay pinned while their list scrolls, so they are never cut off
   const sectionHead = `px-2 py-1 min-w-0 flex items-center justify-between gap-2 text-2xs font-semibold text-zinc-400 uppercase tracking-wider${
     phone ? ' kw-sticky-head sticky top-0 z-10' : ''
@@ -937,7 +900,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside
       ref={asideRef}
-      aria-label={`${space.name} chats and kwant bots`}
+      aria-label={`${space.name} chats and bots`}
       data-kw-sidebar
       className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-hairline'} bg-surface-side flex flex-col select-none flex-shrink-0`}
     >
@@ -960,7 +923,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <SpaceTile space={space} size={32} dev={false} />
             <span className="flex-1 min-w-0">
               <span className="block text-body font-semibold text-zinc-50 truncate">{space.name}</span>
-              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
+              <SpaceSubline counts={space.counts} devOn={devOn} approvals={space.approvals} />
             </span>
             <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
@@ -970,7 +933,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <SpaceTile space={space} size={32} dev={false} />
             <span className="flex-1 min-w-0">
               <h1 className="text-body font-semibold text-zinc-50 truncate">{space.name}</h1>
-              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
+              <SpaceSubline counts={space.counts} devOn={devOn} approvals={space.approvals} />
             </span>
             <button
               type="button"
@@ -987,24 +950,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
         )}
-        {spaceControls}
-        {devOffNote && <DevFlipNote on={false} approvals={space.approvals} onDismiss={dismissDevOff} onTurnBackOn={() => turnDevMode(space.id, true).then(showOn)} />}
-        {devOnToast && devOn && (
-          <DevOnToast
-            state={dev ?? devOnToast}
-            phone={phone}
-            onOpenDesk={() => onOpenDevDesk?.()}
-            onConnect={connectDev}
-            onTypeRepo={typeDevRepo}
-            onUndo={() =>
-              turnDevMode(space.id, false).then(() => {
-                setDevOffNote(true);
-                focusDevSwitch();
-              })
-            }
-            onClose={closeDevOnToast}
-          />
-        )}
+        {movedPointer && onOpenMoved && onHideMoved && <MovedPointer phone={phone} onOpen={onOpenMoved} onHide={onHideMoved} />}
         {phone && switcherOpen && (
           <SpaceSwitcher
             spaces={spaces}
@@ -1119,7 +1065,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   key={c.id}
                   onClick={() => onSelectChannel(c)}
                   // The channel's header says it too; no pill on every row
-                  title={layaRoutes(c, kwants.length) ? 'Laya picks who answers here' : undefined}
+                  title={layaRoutes(c, kwants.length) ? 'The best fit answers here' : undefined}
                   className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-body font-medium transition-colors text-left ${
                     active
                       ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'

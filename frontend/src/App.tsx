@@ -9,6 +9,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -371,6 +372,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSettingsScope('space');
     setSpaceSettingsTab(tab);
     playSfx('click');
+  };
+  // First-screen A: the "moved" pointer under the space header, until Open or ✕ (0.9.8 and 0.9.9).
+  const [movedHidden, setMovedHidden] = useState(movedSeen);
+  const hideMoved = () => {
+    markMovedSeen();
+    setMovedHidden(true);
+  };
+  const openMoved = () => {
+    openSpaceSettings('general');
+    ringDevSettings();
+    hideMoved();
   };
   // Settings › All spaces: what applies to every space and to the app.
   const openAppSettings = () => {
@@ -3260,7 +3272,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const chatSubtitle = !isChannel
     ? currentKwant?.title || 'Kwant bot'
     : isGeneral
-      ? `Laya picks who answers, from the ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} in ${space.name}`
+      ? `The best fit of your ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} answers`
       : currentTeam?.description || currentChannel?.description || `A team in ${space.name}`;
 
   // "Suggested:" prompts from who is in this chat, so a kitchen team isn't offered developer prompts
@@ -3798,6 +3810,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         spaceName={space.name}
         onImported={reloadAfterImport}
         mainSpace={space.is_default}
+        teams={teams}
       />
     ) : null;
   const setupChecklist = (
@@ -3943,6 +3956,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         playSfx('click');
       }}
       onConnectDevGitHub={connectDevGitHub}
+      movedPointer={movedPointerShows({ established: whatsNewEstablished, seen: movedHidden })}
+      onOpenMoved={openMoved}
+      onHideMoved={hideMoved}
       ideaJarCount={ideaJarCount}
       ideaJarActive={page === 'jar'}
       onOpenIdeaJar={() => {

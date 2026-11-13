@@ -35,7 +35,7 @@ test('the card offers Add an account, and says where it is', () => {
   assert.doesNotMatch(html, /Settings → Engines/);
 
   const off = card({ meta: { reason: 'host_off' } });
-  assert.match(off, /This machine is off in Default/);
+  assert.match(off, /This computer(’|&#x27;|')s AI accounts are off in Default/);
   assert.match(off, /Add an account/);
 });
 

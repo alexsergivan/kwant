@@ -20,7 +20,8 @@ const BAD = /\b(kwants?|kwnt|agents?)\b/i;
 // The product term (headings, tagline), the CLI commands and token file shown on the sign-in screen, and
 // Agent Maestro, the VS Code extension's own name (a Custom API preset), and "coding agent", what
 // Claude Code, Codex and Cursor are called in Settings → Coding agents (0.7.4).
-const ALLOWED = /\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
+// 0.9.8 first screen (Mira, first-screen F): the product's own name in the welcome and the claude.ai step.
+const ALLOWED = /\bWelcome to kwant\b|\ballow kwant\.|\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
 const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // T/D preview sheet (0.7.7): Mira's review-396-397 must-fix 7 and Ada's deviation-4 ruling keep "kwant"
 // as the subject in these three sentences only.

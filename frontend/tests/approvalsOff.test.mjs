@@ -215,27 +215,26 @@ test('the marker has an icon and words, not colour alone', () => {
   assert.match(m.badge({ onClick: () => {} }), /^<button type="button"/);
 });
 
-test('sidebar: the bot list marks only bots that run without asking, and the Approvals row says so', () => {
+test('sidebar: the bot list marks only bots that run without asking; the Approvals control lives in Space settings (first-screen A)', () => {
   const html = m.sidebar({ space: space('ask'), kwants: [bot('k1', 'Dev', 'off', 'off'), bot('k2', 'Writer', 'inherit', 'ask')] });
   const rows = html.split('group/fleet').slice(1);
   assert.equal(rows.length, 2);
   assert.match(rows[0], /Dev[\s\S]*sr-only">Approvals off/);
   assert.doesNotMatch(rows[1], /Approvals off/);
-  assert.match(html, /data-approvals-value="ask"/);
-  assert.match(html, /data-approvals-sub="true"><span[^>]*>Off for 1 bot</);
+  assert.doesNotMatch(html, /data-approvals-value|data-space-controls/, 'no Approvals row under the header any more');
+  assert.doesNotMatch(html, /data-subline-status="off"/, 'the space asks, so the header names nothing');
   assert.doesNotMatch(text(html), /Approvals off for/, 'the amber header pill is gone (spec §5)');
 });
 
-test('sidebar: space off shows Off in the Approvals row; Ask with no sub-line while every bot asks; no row on an older server', () => {
+test('sidebar: space off says "Approvals off" in the header sub-line; Ask and an older server say nothing (first-screen A)', () => {
   const off = m.sidebar({ space: space('off'), kwants: [bot('k1', 'Dev', 'inherit', 'off')] });
-  assert.match(off, /data-approvals-value="off"/);
-  assert.match(text(off), /Approvals Off Bots act without asking/);
+  assert.match(off, /data-subline-status="off"[^>]*>Approvals off</);
+  assert.doesNotMatch(off, /data-approvals-value/);
   const asking = m.sidebar({ space: space('ask'), kwants: [bot('k1', 'Dev', 'inherit', 'ask')] });
-  assert.match(asking, /data-approvals-value="ask"/);
-  assert.doesNotMatch(asking, /data-approvals-sub/);
+  assert.doesNotMatch(asking, /data-subline-status/);
   assert.doesNotMatch(text(asking), /Approvals off/);
   const older = m.sidebar({ space: space(undefined), kwants: [bot('k1', 'Dev', undefined, undefined)] });
-  assert.doesNotMatch(older, /data-sc-row="approvals"/);
+  assert.doesNotMatch(older, /data-sc-row="approvals"|data-subline-status/);
   assert.doesNotMatch(text(older), /Approvals off/);
 });
 
@@ -243,7 +242,7 @@ test('every approvals-off hover hint says payments still ask: badge, sidebar row
   assert.match(m.badge({}), /title="[^"]*Payments still ask you\.[^"]*"/);
   const html = m.sidebar({ space: space('off'), kwants: [bot('k1', 'Dev', 'inherit', 'off')] });
   const tips = [...html.matchAll(/title="([^"]*without asking[^"]*)"/g)].map((x) => x[1]);
-  assert.equal(tips.length, 1, 'said once, on the Approvals row value: a bot that matches the space adds no icon');
+  assert.equal(tips.length, 0, 'a bot that matches the space adds no icon; the header only names the state, the settings card explains it');
   for (const t of tips) assert.match(t, /Payments still ask you\./);
   const differing = m.sidebar({ space: space('ask'), kwants: [bot('k1', 'Dev', 'off', 'off')] });
   const botTips = [...differing.matchAll(/title="([^"]*without asking[^"]*)"/g)].map((x) => x[1]);
