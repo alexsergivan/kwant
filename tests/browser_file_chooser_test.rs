@@ -92,7 +92,7 @@ async fn upload(state: &AppState, name: &str, bytes: &'static [u8]) -> String {
         .body(Body::from(bytes))
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::CREATED);
     let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap();
     v["id"].as_str().expect("attachment id").to_string()
@@ -160,7 +160,7 @@ async fn picking_a_visible_input_uploads_and_delivers_the_file() {
     ctrl.navigate(&format!("{base}/visible")).await.unwrap();
     assert_eq!(title_becomes(&ctrl, "visible").await, "visible");
 
-    let attachment_id = upload(&e.state, "clip.mp4", b"not really a video, just test bytes").await;
+    let attachment_id = upload(&e.state, "clip.mp4", b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2mp41 not really a video, just test bytes").await;
     let (mut ws, server) = connect(&e.state, &e.bot.id).await;
     assert!(next_message(&mut ws, "frame", |_| true).await.is_some());
     take_control(&mut ws).await;
@@ -193,7 +193,7 @@ async fn a_tiktok_style_hidden_input_behind_a_button_is_intercepted_too() {
     ctrl.navigate(&format!("{base}/hidden")).await.unwrap();
     assert_eq!(title_becomes(&ctrl, "hidden").await, "hidden");
 
-    let attachment_id = upload(&e.state, "post.mov", b"more test bytes, still not a real video").await;
+    let attachment_id = upload(&e.state, "post.mov", b"\0\0\0\x18ftypqt  \0\0\x02\0qt  more test bytes, still not a real video").await;
     let (mut ws, server) = connect(&e.state, &e.bot.id).await;
     assert!(next_message(&mut ws, "frame", |_| true).await.is_some());
     take_control(&mut ws).await;
@@ -256,7 +256,7 @@ async fn navigating_away_while_the_sheet_is_open_clears_it() {
     ctrl.navigate(&format!("{base}/visible")).await.unwrap();
     assert_eq!(title_becomes(&ctrl, "visible").await, "visible");
 
-    let attachment_id = upload(&e.state, "late.mp4", b"arrives after the page already moved on").await;
+    let attachment_id = upload(&e.state, "late.mp4", b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2mp41 arrives after the page already moved on").await;
     let (mut ws, server) = connect(&e.state, &e.bot.id).await;
     assert!(next_message(&mut ws, "frame", |_| true).await.is_some());
     take_control(&mut ws).await;
@@ -264,7 +264,7 @@ async fn navigating_away_while_the_sheet_is_open_clears_it() {
     ws.send(WsMessage::Text(json!({"action": "click", "x": 40, "y": 40, "id": 1}).to_string())).await.unwrap();
     let opened = next_message(&mut ws, "file_chooser", |_| true).await.expect("chooser opened");
 
-    ctrl.navigate(&format!("{base}/plain")).await.expect("navigate away while the sheet is still open");
+    ctrl.send_cdp_command("Page.navigate", json!({"url": format!("{base}/plain")})).await.expect("navigate away while the sheet is still open");
     let gone = next_message(&mut ws, "file_chooser_error", |_| true).await.expect("the sheet is told the chooser is gone");
     assert_eq!(gone["code"], "gone");
 
