@@ -179,3 +179,74 @@ test('earlier replies fold into the existing "Team discussed" row only while the
   const two = [...ms.slice(0, 2), { id: 'x', sender_id: 'me', sender_role: 'user' }, ...ms.slice(2)];
   assert.deepEqual(d.groupDiscussionThreads(two, { foldOpen: true }).map((i) => i.kind), ['message', 'message', 'message', 'thread', 'message']);
 });
+
+// Round 2 (Mira's design check, autonomy/waiting-state/design-check.md "Verdict: FIX").
+test('copy is true while waiting: the card footer and the composer say a message here answers it', () => {
+  const card = ui.question({ meta, messageId: 'm1', kwantName: 'Ann', live: true, waiting: true, onAnswer: () => {}, onDismiss: () => {} });
+  assert.match(card, /Ann is waiting for your answer\. A message you send here answers it\./);
+  assert.doesNotMatch(card, /keep chatting meanwhile/);
+  assert.match(chat(chatProps()), /placeholder="Type your answer to Ann…"/);
+  // Every other state keeps today's words.
+  assert.doesNotMatch(chat(chatProps({ awaitingAnswer: false })), /Type your answer/);
+  assert.equal(w.answerPlaceholder('Ann'), 'Type your answer to Ann…');
+  assert.equal(w.answerPlaceholder(' '), 'Type your answer to the bot…');
+});
+
+test('phone placeholder falls back to "Your answer…" when the long one does not fit', async () => {
+  const c = await loadBundled(`export * from './src/composer';`);
+  const m = (t) => t.length * 9;
+  assert.equal(c.fitPlaceholder('Type your answer to Ann…', 'Your answer…', 400, m), 'Type your answer to Ann…');
+  assert.equal(c.fitPlaceholder('Type your answer to Ann…', 'Your answer…', 150, m), 'Your answer…');
+  assert.equal(c.fitPlaceholder('Type your answer to Ann…', 'Your answer…', 0, m), 'Your answer…');
+  assert.equal(c.phonePlaceholder('Ann', 0, m), 'Message', 'the other states are unchanged');
+  const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  assert.match(src, /fitPlaceholder\(answerPlaceholder\([^)]*\), 'Your answer…', fieldWidth/);
+});
+
+test('screen readers: only the lines are a live region; the box is a labelled group; Answer says where it goes', () => {
+  const html = ui.banner({ lines: [{ kind: 'answer', bot: 'Ann' }], rail: [{ name: 'Ben', state: 'done' }, { name: 'You pick', state: 'you' }], stopLabel: 'Stop team', onStop: () => {}, onShow: () => {} });
+  assert.match(html, /role="group" aria-label="Waiting for you"/);
+  assert.equal(html.match(/role="status"/g).length, 1);
+  const status = /<div role="status"[^>]*>([\s\S]*?)<\/div>/.exec(html)[1];
+  assert.match(status, /Waiting for you: Ann needs one answer/);
+  assert.doesNotMatch(status, /<button|<ol|Replied|Stop team/, 'rail and buttons sit outside the live region');
+  assert.match(html, /aria-label="Go to Ann&#x27;s question"[^>]*>.*Answer<\/button>/);
+});
+
+test('phone layout: short text below sm, buttons right-aligned on the rail row, 44 px targets; Stop is a ghost', () => {
+  assert.equal(w.waitingBannerShortText({ kind: 'answer', bot: 'Ann' }), 'Waiting for you: Ann needs one answer');
+  const html = ui.banner({ lines: [{ kind: 'answer', bot: 'Ann' }], rail: [{ name: 'Ben', state: 'done' }], stopLabel: 'Stop team', onStop: () => {}, onShow: () => {} });
+  assert.match(html, /class="min-w-0 max-sm:hidden">Waiting for you: Ann needs one answer to finish</);
+  assert.match(html, /class="min-w-0 sm:hidden">Waiting for you: Ann needs one answer</);
+  assert.match(html, /role="status" class="basis-full/, 'the text takes the whole first row on a phone');
+  assert.match(html, /<ol[^>]*class="flex-1/, 'the rail fills the second row and wraps');
+  assert.match(html, /class="ml-auto[^"]*sm:row-span-2/, 'buttons right-aligned');
+  assert.equal(html.match(/max-sm:min-h-\[44px\]/g).length, 2);
+  const stop = /<button[^>]*data-waiting-stop=""[^>]*>/.exec(html)[0];
+  assert.doesNotMatch(stop, /border/, 'a ghost: no border');
+  assert.match(stop, /text-zinc-300 hover:text-zinc-100 hover:bg-white\/5/);
+  assert.match(stop, /outline-rose-400/);
+  const solo = ui.banner({ lines: [{ kind: 'answer', bot: 'Ann' }], stopLabel: 'Stop', onStop: () => {}, onShow: () => {} });
+  assert.doesNotMatch(solo, /row-span-2|data-waiting-rail/);
+});
+
+test('Answer moves keyboard focus to the open card: first choice, else its answer field, without a second scroll', () => {
+  const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const fn = /const showWaitingCard = [\s\S]*?\n  \};/.exec(src)[0];
+  assert.match(fn, /scrollIntoView[\s\S]*querySelector<HTMLElement>\('button\[aria-pressed\]'\) \?\? card\.querySelector<HTMLElement>\('textarea'\)/);
+  assert.match(fn, /focus\(\{ preventScroll: true \}\)/);
+  assert.match(ui.question({ meta, messageId: 'm1', kwantName: 'Ann', live: true, waiting: true, onAnswer: () => {}, onDismiss: () => {} }), /aria-pressed/, 'the choices the selector finds');
+});
+
+test('a single bot asking in a channel: "Stop", no rail; a team turn keeps the team words', () => {
+  assert.equal(w.isTeamTurn('channel', false), false);
+  assert.equal(w.isTeamTurn('general', false), false);
+  assert.equal(w.isTeamTurn('team', false), true);
+  assert.equal(w.isTeamTurn('channel', true), true, 'a discussion running in a channel');
+  const html = chat(chatProps({ title: 'general', discussionState: null, home: { kind: 'channel' } }));
+  assert.match(html, /Waiting for you: Ann needs one answer to finish/);
+  assert.match(html, /data-waiting-stop=""[^>]*>.*>Stop<\/button>/);
+  assert.doesNotMatch(html, /Stop team|data-waiting-rail/);
+  const team = chat(chatProps({ title: 'spring-launch', discussionState: null, home: { kind: 'team' } }));
+  assert.match(team, /Stop team<\/button>/);
+});

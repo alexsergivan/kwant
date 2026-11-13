@@ -104,7 +104,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
     ) : waiting ? (
       // Not on a phone: the working strip under the chat already says the bot waits, and says it once (spec C2).
       <span className="inline-flex items-center gap-1.5 text-amber-300 max-md:hidden" data-question-waiting="">
-        <Clock size={13} aria-hidden="true" /> {kwantName} is waiting for your answer. You can keep chatting meanwhile.
+        <Clock size={13} aria-hidden="true" /> {kwantName} is waiting for your answer. A message you send here answers it.
       </span>
     ) : (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">

@@ -31,6 +31,23 @@ export function waitingBannerText(line: WaitingLine): string {
   return `Waiting for you: ${bot} needs one answer to finish`;
 }
 
+/** The banner line on a phone (below sm): the same words without "to finish". */
+export function waitingBannerShortText(line: WaitingLine): string {
+  const bot = line.bot.trim() || 'A bot';
+  return `Waiting for you: ${bot} needs one answer`;
+}
+
+/** A team turn (a team chat, or a discussion running in a channel) gets "Stop team" and the rail; a
+ *  single bot asking in a channel or its own chat does not. */
+export function isTeamTurn(homeKind: string | undefined, discussionInProgress: boolean): boolean {
+  return homeKind === 'team' || discussionInProgress;
+}
+
+/** The composer's placeholder while the chat waits on a bot's answer: a message sent here answers it. */
+export function answerPlaceholder(bot: string | undefined): string {
+  return `Type your answer to ${bot?.trim() || 'the bot'}…`;
+}
+
 /** The banner's Stop button: a team turn stops the team, a single bot's turn stops that reply. */
 export function waitingStopLabel(team: boolean): string {
   return team ? 'Stop team' : 'Stop';

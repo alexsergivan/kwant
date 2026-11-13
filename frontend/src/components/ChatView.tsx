@@ -4,7 +4,7 @@ import { flushSync } from 'react-dom';
 import { queuedText } from '../claudeVm';
 import { QueuedBeside } from './QueuedBeside';
 import { WaitingBanner } from './WaitingBanner';
-import { onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
+import { answerPlaceholder, isTeamTurn, onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
@@ -19,7 +19,7 @@ import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
-import { composerStacked, keyboardMode, measureText16, phonePlaceholder } from '../composer';
+import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
 import { markNewSeen } from '../whatsNew';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -793,6 +793,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!card) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     card.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
+    // Keyboard users land on the card: its first choice, else its answer field (the amber ring shows where).
+    const target = card.querySelector<HTMLElement>('button[aria-pressed]') ?? card.querySelector<HTMLElement>('textarea');
+    target?.focus({ preventScroll: true });
   };
   // Waiting state (UX audit #2): the only open thing is a question, so the chat waits for the person.
   const askOnly = onlyAskOpen({
@@ -803,7 +806,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     queued: !!queued,
     writing: !!streamingText,
   });
-  const teamChat = home?.kind !== 'bot';
+  // Team words ("Stop team", the rail) only for a team turn; a single bot asking in a channel gets "Stop".
+  const teamChat = isTeamTurn(home?.kind, !!discussionState?.inProgress);
   const askRail = askOnly && teamChat ? turnRail(messages, awaitingBot?.id, (id) => botOf(id, knownBots)) : [];
   const showApproval = () => {
     const cards = scrollRef.current?.querySelectorAll<HTMLElement>('[data-approval-card]');
@@ -1859,7 +1863,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // obvious (channels and team chats, or a direct chat with an @mention typed).
   const showAnswers = !ideaMode && (!phone || home?.kind !== 'bot' || target.kind === 'mention');
   const showHintText = !(phone && touch);
-  const placeholder = phone
+  const measure16 = (t: string) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : '');
+  const placeholder = askOnly
+    ? phone
+      ? fitPlaceholder(answerPlaceholder(awaitingBot?.name || streamingSpeakerName || title), 'Your answer…', fieldWidth, measure16)
+      : answerPlaceholder(awaitingBot?.name || streamingSpeakerName || title)
+    : phone
     ? phonePlaceholder(title, fieldWidth, (t) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : ''))
     : spaceName && !narrow
       ? `Message ${title} in ${spaceName}`
