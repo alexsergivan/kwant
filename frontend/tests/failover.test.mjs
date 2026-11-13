@@ -72,18 +72,20 @@ test('moving rewrites only the priorities that change', () => {
 
 const markup = (props) => m.renderToStaticMarkup(h(m.AccountPriority, { profiles: list, engines: [engine('claude'), engine('codex'), engine('grok')], onChanged: async () => {}, now: NOW, ...props }));
 
-test('the list is an ordered list with the caption, a status per row and labelled arrow buttons', () => {
-  const html = markup();
-  assert.match(html, /When one runs out, kwant bots move to the next that still works, in this order\./);
-  assert.equal((html.match(/<li /g) ?? []).length, 5);
-  assert.match(html, /<ol /);
-  assert.match(html, /Claude API key/);
-  assert.match(html, /Custom API/);
-  assert.match(html, /Out until/);
-  assert.match(html, /Signed out/);
-  assert.match(html, /disabled="" aria-label="Move Work \(Claude\) up"/, 'the first row can not go up');
-  assert.match(html, /disabled="" aria-label="Move Copilot \(Custom API\) down"/, 'the last row can not go down');
-  assert.doesNotMatch(html, /disabled="" aria-label="Move Personal \(Codex\) up"/);
+test('the list groups accounts by how bots use them, titled by the AI, with a status per row', () => {
+  const html = markup({ spaceName: 'Home' });
+  assert.match(html, /Your bots in Home use the first account that’s ready\./);
+  assert.doesNotMatch(html, /<ol |draggable|aria-label="Move /, 'no numbers, grip or arrows');
+  const first = html.slice(html.indexOf('data-group="first"'), html.indexOf('data-group="backup"'));
+  assert.equal((first.match(/<li /g) ?? []).length, 1);
+  assert.match(first, /Out until/);
+  const backup = html.slice(html.indexOf('data-group="backup"'), html.indexOf('data-group="not-used"'));
+  assert.equal((backup.match(/data-use-first/g) ?? []).length, 3, 'Codex, Claude API key, Custom API');
+  assert.match(backup, /Claude API key/);
+  assert.match(backup, /Custom API/);
+  const notUsed = html.slice(html.indexOf('data-group="not-used"'));
+  assert.match(notUsed, /Grok/);
+  assert.match(notUsed, /Signed out/);
   assert.match(html, /role="status"/);
   assert.doesNotMatch(html, /[\u{1F300}-\u{1FAFF}]/u, 'no emoji');
 });
@@ -203,16 +205,15 @@ test('a signed-out account between ranked ones ends up after all of them once an
   assert.equal(m.priorityUpdates(many.slice(0, 1000), many.slice(1000)).at(-1).priority, 10_000);
 });
 
-test('the list shows Grok under the ranked rows, with its status, no number and no arrows', () => {
+test('a not-installed Grok sits under "Not used" with Set up, outside the order', () => {
   const html = m.renderToStaticMarkup(h(m.AccountPriority, { profiles: sysList, engines: sysEngines, onChanged: async () => {}, now: NOW }));
-  assert.equal((html.match(/<ol /g) ?? []).length, 1);
-  const ranked = html.slice(html.indexOf('<ol '), html.indexOf('</ol>'));
-  assert.equal((ranked.match(/<li /g) ?? []).length, 2, 'two ranked rows');
-  assert.doesNotMatch(ranked, /Grok|Not installed/);
-  const rest = html.slice(html.indexOf('</ol>'));
-  assert.match(rest, /Not in the order/);
+  const used = html.slice(0, html.indexOf('data-group="not-used"'));
+  assert.equal((used.match(/data-used-index=/g) ?? []).length, 2, 'two used rows');
+  assert.doesNotMatch(used, /Grok|Not installed/);
+  const rest = html.slice(html.indexOf('data-group="not-used"'));
+  assert.match(rest, /Not used/);
   assert.match(rest, /Grok/);
   assert.match(rest, /Not installed/);
-  assert.doesNotMatch(rest, /aria-label="Move /, 'not reorderable');
-  assert.doesNotMatch(rest, /draggable/);
+  assert.match(rest, /data-set-up/);
+  assert.doesNotMatch(rest, /data-use-first|data-row-menu/, 'not reorderable');
 });

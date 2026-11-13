@@ -1,15 +1,22 @@
 // Where you are inside a space besides a chat: Inbox, Mission board, Parallel Universe, the Dev
 // desk or Settings. Each has its own address under /s/<space>/, so a reload, a bookmark or a link
 // lands on the same place. Older names (While you were away, Loose ends, Connections,
-// Routines) still resolve and are rewritten to the new address.
+// Routines, and Settings' old Accounts, Connections and Tools tabs) still resolve and are
+// rewritten to the new address.
 
 export type InboxTab = 'new' | 'loose';
 
 /** Settings › This space tabs. Kept here, not in the component, so routing stays pure. */
-export const SPACE_SETTINGS_TABS = ['general', 'accounts', 'bots', 'teams', 'connections', 'tools', 'skills', 'routines', 'import'] as const;
+export const SPACE_SETTINGS_TABS = ['general', 'apps', 'bots', 'teams', 'skills', 'routines', 'import'] as const;
 export type SpaceSettingsTab = (typeof SPACE_SETTINGS_TABS)[number];
 
 export type SettingsScope = 'space' | 'app';
+
+/** Where Apps & accounts opens; the address stays settings/apps. */
+export type AppsSection = 'apps' | 'accounts' | 'advanced';
+
+/** Settings' old tabs (0.9.4 and before), now sections of Apps & accounts. */
+const OLD_APPS_TABS: Record<string, AppsSection> = { accounts: 'accounts', connections: 'advanced', tools: 'advanced' };
 
 export type SpaceView =
   | { kind: 'inbox'; tab: InboxTab }
@@ -17,7 +24,7 @@ export type SpaceView =
   | { kind: 'parallel' }
   | { kind: 'dev' }
   | { kind: 'jar' }
-  | { kind: 'settings'; scope: 'space'; tab: SpaceSettingsTab }
+  | { kind: 'settings'; scope: 'space'; tab: SpaceSettingsTab; section?: AppsSection }
   | { kind: 'settings'; scope: 'app' };
 
 /** The address segment after /s/<space>/ for a view. */
@@ -43,7 +50,7 @@ const LEGACY: Record<string, SpaceView> = {
   away: { kind: 'inbox', tab: 'new' },
   'while-you-were-away': { kind: 'inbox', tab: 'new' },
   'loose-ends': { kind: 'inbox', tab: 'loose' },
-  connections: { kind: 'settings', scope: 'space', tab: 'connections' },
+  connections: { kind: 'settings', scope: 'space', tab: 'apps', section: 'advanced' },
   routines: { kind: 'settings', scope: 'space', tab: 'routines' },
   'mission-board': { kind: 'board' },
   missions: { kind: 'board' },
@@ -78,6 +85,7 @@ export function parseView(segment: string): { view: SpaceView; legacy: boolean }
     if ((SPACE_SETTINGS_TABS as readonly string[]).includes(sub)) {
       return { view: { kind: 'settings', scope: 'space', tab: sub as SpaceSettingsTab }, legacy: false };
     }
+    if (OLD_APPS_TABS[sub]) return { view: { kind: 'settings', scope: 'space', tab: 'apps', section: OLD_APPS_TABS[sub] }, legacy: true };
     return null;
   }
   return null;

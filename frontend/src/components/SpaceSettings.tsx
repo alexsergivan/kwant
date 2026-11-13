@@ -9,11 +9,9 @@ import {
   Download,
   FileUp,
   Globe,
-  KeyRound,
-  Link2,
+  LayoutGrid,
   Loader2,
   Pencil,
-  Plug,
   Plus,
   Settings2,
   Sparkles,
@@ -23,10 +21,9 @@ import {
 import { ScrollRow } from './ScrollRow';
 import { playSfx } from '../audio/chiptune';
 import { SPACE_COLORS, SPACE_ICONS, Space, spaceColor, spaceNameError, spacesApi } from '../spaces';
-import { useEngines } from '../useEngines';
-import { useProfiles } from '../useProfiles';
+import type { EnginesApi } from '../useEngines';
+import type { ProfilesState } from '../useProfiles';
 import type { Profile } from '../profiles';
-import { AccountPriority } from './AccountPriority';
 import { EnginesPanel } from './EnginesPanel';
 import { ApiKeysPanel } from './ApiKeysPanel';
 import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
@@ -39,7 +36,8 @@ import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
 import { SpaceApprovalsSetting } from './ApprovalsSetting';
 import { DevModeSettings } from './DevModeSettings';
 
-import type { SettingsScope, SpaceSettingsTab } from '../nav';
+import type { AppsSection, SettingsScope, SpaceSettingsTab } from '../nav';
+import { AppsAccounts } from './AppsAccounts';
 import { InstallAppButton } from './InstallAppButton';
 import { editorProps, useEscapeLayer } from '../escape';
 import { devTeamRefs } from '../devMode';
@@ -48,11 +46,9 @@ export type { SettingsScope, SpaceSettingsTab };
 
 const TABS: Array<{ id: SpaceSettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <Settings2 size={15} /> },
-  { id: 'accounts', label: 'Accounts', icon: <KeyRound size={15} /> },
+  { id: 'apps', label: 'Apps & accounts', icon: <LayoutGrid size={15} /> },
   { id: 'bots', label: 'Kwant bots', icon: <Bot size={15} /> },
   { id: 'teams', label: 'Teams', icon: <Users size={15} /> },
-  { id: 'connections', label: 'Connections', icon: <Link2 size={15} /> },
-  { id: 'tools', label: 'Tools', icon: <Plug size={15} /> },
   { id: 'skills', label: 'Skills', icon: <Sparkles size={15} /> },
   { id: 'routines', label: 'Routines', icon: <CalendarClock size={15} /> },
   { id: 'import', label: 'Import & export', icon: <FileUp size={15} /> },
@@ -68,15 +64,19 @@ interface Props {
   tab: SpaceSettingsTab;
   onTab: (tab: SpaceSettingsTab) => void;
   onClose: () => void;
-  /** This space › Connections: the space's connected apps and tools. */
-  connections: React.ReactNode;
+  /** Apps & accounts › Advanced: tool servers, Telegram and notes from bots; gets Composio's "Choose bots". */
+  connections: (chooseComposioBots: () => void) => React.ReactNode;
+  /** Apps & accounts opens at this section (seq changes to scroll there again). */
+  appsSection?: { section: AppsSection; seq: number } | null;
+  /** A bot's tool note was asked for: Advanced opens on it. */
+  toolNoteOpen?: boolean;
   /** All spaces: the app-wide settings. */
   appSettings: React.ReactNode;
   onOpenArchived: () => void;
   kwants: Kwant[];
   channels: Channel[];
   teams: Team[];
-  /** Changes to focus "Sign in with Claude" in Accounts. */
+  /** Changes to focus "Sign in with Claude" in Apps & accounts. */
   focusClaudeSignIn?: number;
   onProfilesChanged?: (profiles: Profile[]) => void;
   pendingSkills?: Record<string, number>;
@@ -142,7 +142,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
       className={`${p.isPhone ? 'fixed' : 'absolute'} inset-0 z-40 bg-zinc-950 text-zinc-100 flex flex-col md:flex-row overflow-hidden`}
     >
       {/* Tab list: a column on desktop, scrolling chips on phones */}
-      <div className="md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-zinc-800/80 bg-zinc-900/40 flex flex-col">
+      <div className="md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-zinc-800/80 bg-zinc-900/40 flex flex-col md:sticky md:top-0 md:max-h-full md:overflow-y-auto" data-settings-nav>
         <div className="flex items-center gap-2.5 p-3 md:p-4 pb-2 md:pb-3">
           <button type="button" onClick={onClose} aria-label="Back to chats" className="p-1.5 -ml-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
             <ArrowLeft size={17} />
@@ -230,18 +230,23 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           ) : (
             <>
               {tab === 'general' && <GeneralTab {...p} />}
-              {tab === 'accounts' && <AccountsTab {...p} />}
+              {tab === 'apps' && (
+                <AppsAccounts
+                  key={space.id}
+                  spaceName={space.name}
+                  spaceMode={space.approvals}
+                  kwants={p.kwants}
+                  section={p.appsSection?.section}
+                  sectionSeq={p.appsSection?.seq}
+                  focusClaudeSignIn={p.focusClaudeSignIn}
+                  openAdvanced={p.toolNoteOpen}
+                  onProfilesChanged={p.onProfilesChanged}
+                  manageAccounts={(shared) => <AccountsTab {...p} {...shared} />}
+                  advanced={p.connections}
+                />
+              )}
               {tab === 'bots' && <BotsTab {...tp} />}
               {tab === 'teams' && <TeamsTab {...p} />}
-              {tab === 'connections' && <div data-settings-connections>{p.connections}</div>}
-              {tab === 'tools' && (
-                <div className={`${card} p-4 space-y-3`}>
-                  <p className="text-xs text-zinc-300">Tool servers (MCP) give the bots in {space.name} abilities like files, web pages or GitHub.</p>
-                  <button type="button" onClick={p.onOpenTools} className={primaryBtn}>
-                    <Plug size={13} /> Manage tools
-                  </button>
-                </div>
-              )}
               {tab === 'skills' && <SkillsTab {...p} />}
               {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={toApp} />}
               {tab === 'import' && <ImportTab {...tp} />}
@@ -527,16 +532,12 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
   );
 };
 
-const AccountsTab: React.FC<Props> = ({ space, focusClaudeSignIn, onProfilesChanged }) => {
-  const engines = useEngines(true);
-  const accounts = useProfiles(true, onProfilesChanged);
+// Apps & accounts › Sign-ins and settings: each AI's sign-in, install and API keys. The order lives in the
+// AI accounts list above (AccountPriority), so it isn't repeated here.
+const AccountsTab: React.FC<Props & { engines: EnginesApi; accounts: ProfilesState }> = ({ focusClaudeSignIn, engines, accounts }) => {
   return (
     <div className="space-y-3">
-      <p className="text-xs text-zinc-400">What runs your kwant bots in {space.name}: the accounts here, and This machine when it’s on.</p>
-      {accounts.profiles && accounts.profiles.length > 1 && (
-        <AccountPriority profiles={accounts.profiles} engines={engines.engines} onChanged={accounts.reload} />
-      )}
-      <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} />
+      <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} hideRoutes />
       <ApiKeysPanel
         onSaved={() => {
           // Saving a key or the Ollama address re-checks engines on the server; show the result.

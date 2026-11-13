@@ -194,16 +194,11 @@ impl ActivityLog {
             RuntimeEvent::ToolCallCompleted { id, result } => {
                 changed.extend(self.close_thinking());
                 if let Some(i) = self.tools.remove(id) {
-                    let failed = matches!(result["status"].as_str(), Some("error" | "failed" | "denied" | "cancelled"));
-                    if failed {
-                        let why = ["error", "content", "message"]
-                            .iter()
-                            .find_map(|k| result[*k].as_str().filter(|s| !s.trim().is_empty()));
-                        if let Some(why) = why {
-                            self.steps[i].detail = Some(cut(&self.redact(why.trim()), MAX_DETAIL));
-                        }
+                    let failed = failed_reason(result);
+                    if let Some(Some(why)) = failed {
+                        self.steps[i].detail = Some(cut(&self.redact(why), MAX_DETAIL));
                     }
-                    changed.push(self.end(i, if failed { "failed" } else { "ok" }));
+                    changed.push(self.end(i, if failed.is_some() { "failed" } else { "ok" }));
                 }
             }
             _ => {}
@@ -502,6 +497,23 @@ const TOKEN_PREFIXES: [&str; 12] = [
 
 /// Masks secrets in text shown to people: the exact `secrets`, then credentials written as
 /// `key=value`, `Bearer …`, URL passwords and provider-looking tokens.
+/// A finished tool call's result: `None` when it went fine, `Some(why)` when its step is
+/// `failed` (error, failed, denied or cancelled), with the reason it gave, trimmed, if any. The
+/// one rule for "a tool failed", shared with the chat's failure line (`server::tool_failures`).
+pub fn failed_reason(result: &Value) -> Option<Option<&str>> {
+    if !matches!(
+        result["status"].as_str(),
+        Some("error" | "failed" | "denied" | "cancelled")
+    ) {
+        return None;
+    }
+    Some(
+        ["error", "content", "message"]
+            .iter()
+            .find_map(|k| result[*k].as_str().map(str::trim).filter(|s| !s.is_empty())),
+    )
+}
+
 pub fn redact(text: &str, secrets: &[String]) -> String {
     let text = crate::mcp::redact(text, secrets);
     let text = crate::profiles::classify::mask_credentials(&text);

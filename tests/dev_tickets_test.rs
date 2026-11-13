@@ -463,17 +463,19 @@ async fn the_person_answers_on_the_card_and_edits_the_brief() {
     assert_eq!(hooks::work_seam(st, sp, "TRAIL-999").await, hooks::WorkSeam::default(), "no brief, no work");
 }
 
-/// J13: with the space's model calls used up, the brief fails and says why; no turn runs.
+/// J13 (0.9.5): Dev mode has no daily model call cap unless KWANT_DEV_CALL_CAP sets one, so a
+/// space that already made more than the old 30 calls today still gets its brief.
 #[tokio::test]
-async fn the_call_cap_fails_the_brief() {
-    let marker = call_tool_marker("submit_brief", brief_args("Capped goal", &["x"], json!({})));
-    let w = world("Capped", fixture(&marker, "", ""), false).await;
-    while w.env.state.db.take_dev_call(w.space.as_str()).await.unwrap() {}
+async fn a_busy_day_does_not_stop_the_brief() {
+    let marker = call_tool_marker("submit_brief", brief_args("Busy goal", &["x"], json!({})));
+    let w = world("Busy", fixture(&marker, "", ""), false).await;
+    for _ in 0..40 {
+        assert!(w.env.state.db.take_dev_call(w.space.as_str()).await.unwrap(), "no cap by default");
+    }
     w.start("TRAIL-101").await;
     let b = w.state_is("TRAIL-101", &["failed", "working"]).await;
-    assert_eq!(b["state"], "failed", "{b}");
-    assert!(b["note"].as_str().unwrap().contains("cap"), "{b}");
-    assert!(invocations_with(&marker).is_empty(), "no turn ran");
+    assert_eq!(b["state"], "working", "{b}");
+    assert!(!invocations_with(&marker).is_empty(), "the brief's turn ran");
 }
 
 /// With Jira off (no site), nothing happens: no row, no turn, no brief route.

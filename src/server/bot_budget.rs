@@ -158,11 +158,16 @@ pub async fn status(state: &AppState, kwant: &Kwant) -> Budget {
     }
 }
 
-/// Short token counts: 950, 61k, 2.04M.
+/// Short token counts: 950, 1.5k, 61k, 2.04M. One decimal below 100k, like the app's `compactTokens`,
+/// so 1,500 of 1,800 reads "1.5k of 1.8k", not "1k of 1k".
 fn short(n: u64) -> String {
     match n {
         0..=999 => n.to_string(),
-        1_000..=999_999 => format!("{}k", n / 1_000),
+        1_000..=99_999 => {
+            let k = format!("{:.1}", n as f64 / 1_000.0);
+            format!("{}k", k.trim_end_matches('0').trim_end_matches('.'))
+        }
+        100_000..=999_999 => format!("{}k", (n as f64 / 1_000.0).round() as u64),
         _ => {
             let m = format!("{:.2}", n as f64 / 1_000_000.0);
             format!("{}M", m.trim_end_matches('0').trim_end_matches('.'))
@@ -194,7 +199,7 @@ fn next_month_name(b: &Budget) -> String {
 
 pub fn stop_text(b: &Budget) -> String {
     format!(
-        "{} stopped at its monthly budget. It finished what it was doing and won't start anything new until you raise the budget, continue, or {} starts.",
+        "{} stopped at its monthly budget. It finished what it was doing and won't start anything new until you raise the limit, continue, or {} starts.",
         b.kwant_name,
         next_month_name(b)
     )
@@ -325,7 +330,7 @@ pub async fn book(state: &AppState, kwant_id: &str, fresh_tokens: u64, usd: f64,
         let key = budget_key(&after.month, after.budget_tokens, after.budget_usd);
         if state.db.mark_bot_warned(&kwant.id, &key).await.unwrap_or(false) {
             let text = format!(
-                "{} has used 80% of its {} budget. At 100% it stops starting new work.",
+                "{} has used 80% of its {} budget. At 100% it finishes what it's doing and starts nothing new.",
                 kwant.name,
                 month_name(&after.month)
             );
@@ -571,7 +576,7 @@ pub async fn continue_month(State(state): State<AppState>, Path(id): Path<String
         "Continued for {}. {} can start new work again; the budget applies again on {}.",
         month_name(&b.month),
         kwant.name,
-        b.resets_at.format("%b %-d")
+        b.resets_at.format("%B %-d")
     );
     release(&state, &kwant, Some((text, "bot_budget_continued"))).await;
     tracing::info!(kwant = %kwant.id, month = %b.month, "bot budget continued for the month");
@@ -675,6 +680,13 @@ mod tests {
     fn short_counts() {
         assert_eq!(short(2_040_000), "2.04M");
         assert_eq!(short(2_000_000), "2M");
+        assert_eq!(short(61_000), "61k");
+    }
+
+    #[test]
+    fn short_counts_keep_one_decimal_below_100k() {
+        assert_eq!(short(1_500), "1.5k");
+        assert_eq!(short(1_800), "1.8k");
         assert_eq!(short(61_000), "61k");
     }
 
