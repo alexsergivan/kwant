@@ -114,6 +114,9 @@ pub struct DirEntry {
     publisher_key: Option<String>,
     /// The publisher label normalised (`stripecom`).
     publisher_norm: String,
+    /// `title_norm` NUL `name_norm`: every closer match is a piece of it, so one search of it
+    /// rules most entries out.
+    hay: String,
     demoted: bool,
 }
 
@@ -146,10 +149,12 @@ impl DirEntry {
             }
         }
         let publisher_key = publisher_key(&publisher);
+        let (title_norm, name_norm) = (normalize(&title), normalize(&entry.name));
         Some(Self {
-            title_norm: normalize(&title),
+            hay: format!("{title_norm}\0{name_norm}"),
+            title_norm,
             slug_norm: normalize(slug),
-            name_norm: normalize(&entry.name),
+            name_norm,
             words: ws,
             parts: entry.name.split(['.', '/']).map(normalize).filter(|p| !p.is_empty()).collect(),
             demoted: entry.name.to_ascii_lowercase().starts_with("ai.smithery/") || entry.placeholder_url,
@@ -182,6 +187,12 @@ impl DirEntry {
 
     /// Every match but a typo.
     fn close_match(&self, q: &Query) -> Option<Match> {
+        // The title, its words, the registry name, its parts and the publisher's name are all
+        // pieces of `hay`; only the publisher label (`stripecom`) isn't.
+        let may = |t: &str| self.hay.contains(t) || self.publisher_norm == t;
+        if !may(&q.text) && !q.alias.as_deref().is_some_and(may) {
+            return None;
+        }
         if let Some(m) = self.direct_match(&q.text) {
             return Some(m);
         }
@@ -202,10 +213,12 @@ impl DirEntry {
             return None;
         }
         let all = || self.words.iter().chain([&self.title_norm, &self.slug_norm]).map(String::as_str);
-        if all().any(|w| osa_within(&q.text, w, q.budget)) {
+        let whole = |w: &str| char_count(w).abs_diff(q.chars) <= q.budget && osa_within(&q.text, w, q.budget);
+        if all().any(whole) {
             return Some(Match::Typo);
         }
         let start = |w: &str| match w.char_indices().nth(q.chars) {
+            Some((end, _)) if q.budget == 1 => one_edit_same_length(&q.text, &w[..end]),
             Some((end, _)) => osa_within(&q.text, &w[..end], q.budget),
             None => false,
         };
@@ -275,6 +288,33 @@ fn typo_budget(chars: usize) -> usize {
         4..=7 => 1,
         8..=OSA_MAX => 2,
         _ => 0,
+    }
+}
+
+fn char_count(s: &str) -> usize {
+    if s.is_ascii() {
+        s.len()
+    } else {
+        s.chars().count()
+    }
+}
+
+/// Two strings of the same length one substitution or one swap of neighbours apart (or equal):
+/// [`osa_bounded`] ≤ 1 for them, without the table.
+fn one_edit_same_length(a: &str, b: &str) -> bool {
+    let (mut a, mut b) = (a.chars(), b.chars());
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if x == y => {}
+            (Some(x), Some(y)) => {
+                if a.clone().eq(b.clone()) {
+                    return true;
+                }
+                return matches!((a.next(), b.next()), (Some(x2), Some(y2)) if x2 == y && y2 == x) && a.eq(b);
+            }
+            _ => return false,
+        }
     }
 }
 
@@ -565,6 +605,10 @@ mod tests {
         assert_eq!(osa_bounded("café", "cafe", 2), 1);
         assert_eq!(osa_bounded(&"a".repeat(41), &"a".repeat(41), 2), 3, "too long to compare");
         assert_eq!((typo_budget(3), typo_budget(4), typo_budget(8), typo_budget(41)), (0, 1, 2, 0));
+        for (a, b) in [("abcd", "abcd"), ("abcd", "abxd"), ("abcd", "bacd"), ("abcd", "abdc"), ("strpie", "stripe"), ("cafe", "café"), ("abcd", "abcde"), ("abcd", "xbcy"), ("abcd", "badc"), ("abcd", "acdb"), ("abcd", "dbca")] {
+            assert_eq!(one_edit_same_length(a, b), osa_bounded(a, b, 1) <= 1 && char_count(a) == char_count(b), "{a} {b}");
+        }
+        assert_eq!((char_count("café"), char_count("cafe")), (4, 4));
         let pg = fixture(
             &serde_json::json!({"servers": [{"server": {"name": "io.github.x/postgresql-tools", "description": "d", "version": "1",
                 "remotes": [{"type": "streamable-http", "url": "https://pg.example/mcp"}]}}]})
