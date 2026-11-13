@@ -680,7 +680,7 @@ async fn on_a_task(env: &Env, space: &str, turn: &str) -> String {
         .db
         .exec_raw_for_test(&format!(
             "INSERT INTO tasks (id, space_id, title, state, budget_tokens, source_kind, created_by, created_at, updated_at) \
-             VALUES ('{task}', '{space}', 'Fix the widgets', 'working', 0, 'person', 'person', '{at}', '{at}')"
+             VALUES ('{task}', '{space}', 'Fix the widgets', 'ready', 0, 'person', 'person', '{at}', '{at}')"
         ))
         .await
         .unwrap();
@@ -692,6 +692,12 @@ async fn on_a_task(env: &Env, space: &str, turn: &str) -> String {
             env.a,
             ms + 3_600_000
         ))
+        .await
+        .unwrap();
+    // A new task can't start as working; it moves there under the live lease above.
+    env.state
+        .db
+        .exec_raw_for_test(&format!("UPDATE tasks SET state = 'working' WHERE id = '{task}'"))
         .await
         .unwrap();
     task
