@@ -1078,6 +1078,19 @@ pub fn summary(tool_name: &str, args: &Value) -> String {
 
 /// Records one permission decision of a task turn (D9: a turn without a task records nothing).
 pub async fn log_call(db: &crate::db::Database, data_dir: &FsPath, req: &crate::mcp::ToolApprovalRequest, decision: &'static str, approval_id: Option<&str>) {
+    log_call_noted(db, data_dir, req, decision, approval_id, None).await
+}
+
+/// [`log_call`] with a note after the call's summary: who approved it, when it wasn't a card
+/// (0.9.7: "approved by the person's retry on pre-push card X").
+pub async fn log_call_noted(
+    db: &crate::db::Database,
+    data_dir: &FsPath,
+    req: &crate::mcp::ToolApprovalRequest,
+    decision: &'static str,
+    approval_id: Option<&str>,
+    note: Option<&str>,
+) {
     let Ok(Some(task_id)) = db.task_of_turn(&req.kwant_id, &req.turn_id).await else { return };
     let folder = match db.get_task(&task_id).await {
         Ok(Some(t)) => super::task_folder_in(db, data_dir, &t).await,
@@ -1085,7 +1098,10 @@ pub async fn log_call(db: &crate::db::Database, data_dir: &FsPath, req: &crate::
     };
     let effect = effect(req, folder.as_deref());
     let path = if effect == "workspace" { workspace_path(req, folder.as_deref()) } else { None };
-    let summary = summary(&req.tool_name, &req.arguments);
+    let mut summary = summary(&req.tool_name, &req.arguments);
+    if let Some(note) = note {
+        summary = format!("{summary} ({note})");
+    }
     if let Err(e) = db.log_tool_call(&req.turn_id, &req.kwant_id, &task_id, &req.tool_name, effect, &summary, decision, approval_id, path.as_deref()).await {
         tracing::warn!(error = %e, "could not log a tool call");
     }

@@ -113,7 +113,8 @@ test("each phase's copy matches Mira's table", () => {
   assert.equal(T(fx.PP_CLEAR), 'Cleared: Ann can push qa-skip · 5 checks passed');
   assert.equal(T(fx.PP_OVERRIDDEN), "You let Ann's push of qa-skip go anyway");
   assert.equal(T(fx.PP_NO_CHANGE), 'Nothing to push: qa-skip has no new commits');
-  assert.equal(T(fx.PP_CHECKING, { status: 'pushed' }), "Ann has a push check this version can't show · update the app to see where it is");
+  assert.equal(T(fx.PP_OVERRIDDEN, { status: 'pushed' }), "You let Ann's push of qa-skip go anyway", '0.9.7: pushed is known now');
+  assert.equal(T(fx.PP_CHECKING, { status: 'merged_later' }), "Ann has a push check this version can't show · update the app to see where it is");
   const two = card({ ...fx.PP_BLOCKED, branch: 'qa-skip', blockers: [fx.PP_BLOCKED.blockers[0], { ...fx.PP_BLOCKED.blockers[0], id: 'f2' }] });
   assert.equal(m.openCount(two), 2);
   assert.equal(m.pointerText(two, 'Ann'), 'Ann is fixing 2 findings before pushing qa-skip · Try 1 of 2');

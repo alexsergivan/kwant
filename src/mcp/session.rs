@@ -252,11 +252,15 @@ impl McpToolSession {
                 // B2: a write to a GitHub branch waits for its pre-push card before any card or rule
                 match self.ctx.approver.prepush_gate(&req).await {
                     Err(why) => ("denied", why),
-                    Ok(overrides) => {
-                        let outcome = self.ctx.approver.decide(req).await;
+                    Ok(pass) => {
+                        // A push the person's Retry or Override covers skips the ordinary card (0.9.7)
+                        let outcome = match &pass.grant {
+                            Some(g) => self.ctx.approver.decide_granted(req, g).await,
+                            None => self.ctx.approver.decide(req).await,
+                        };
                         if !outcome.allowed() {
                             (outcome.record_status(), outcome.refusal_text().to_string())
-                        } else if let Some(why) = self.ctx.approver.prepush_use(&overrides).await {
+                        } else if let Some(why) = self.ctx.approver.prepush_use(&pass.overrides).await {
                             ("denied", why)
                         } else {
                             match client.call_tool(&t.tool.name, arguments.clone()).await {

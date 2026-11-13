@@ -21,6 +21,8 @@ fn approver(env: &Env, timeout: Duration) -> Arc<BrokerApprover> {
         conversation: env.a.clone(),
         chat: Some(json!({"direct_kwant_id": env.a})),
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     })
 }
 
@@ -102,6 +104,8 @@ async fn a_grant_runs_once_only_in_its_own_conversation() {
         conversation: "some-other-thread".into(),
         chat: Some(json!({"thread_id": "some-other-thread"})),
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     };
     assert_eq!(elsewhere.decide(request(&env, args.clone())).await, ApprovalOutcome::Unanswered);
     // Its own conversation can, once (a new description is fine), and only that call
@@ -201,6 +205,8 @@ async fn a_late_allow_on_an_audit_card_runs_nothing() {
             conversation: env.a.clone(),
             chat: Some(chat),
             always_ask: true,
+            strict_ask: false,
+            started_by: None,
         });
         let mut req = request(&env, json!({"command": "ls AUDIT_LATE_MARK", "description": "list"}));
         (req.tool_name, req.tool) = (tool.into(), tool.into());

@@ -530,6 +530,14 @@ impl ToolApprover for SelfToolsApprover {
     async fn tier_gate(&self, req: &ToolApprovalRequest) -> Option<String> {
         self.inner.tier_gate(req).await
     }
+
+    /// A push the person's grant covers is never one of kwant's own tools (0.9.7)
+    async fn decide_granted(&self, req: ToolApprovalRequest, grant: &crate::mcp::PrepushGrant) -> crate::mcp::ApprovalOutcome {
+        if req.server == SELF_SERVER_NAME {
+            return self.decide(req).await;
+        }
+        self.inner.decide_granted(req, grant).await
+    }
 }
 
 /// The turn's id when it read outside text: its notes land `outside`/`proposed` in the Truth Ledger.
