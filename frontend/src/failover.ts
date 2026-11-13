@@ -1,4 +1,4 @@
-// Failover order (Settings › This space › Accounts) and the switch notice in chat. Pure helpers, so the
+// Failover order (Settings › This space › Apps & accounts) and the switch notice in chat. Pure helpers, so the
 // components and the node tests share them. Every word and time shown comes from the server's data;
 // nothing here makes up a number.
 
@@ -8,6 +8,10 @@ import { Engine, Profile, ProfileSwitchedEvent, accountState, activeLimit } from
 import { parseMetaObject } from './questions';
 
 export const FAILOVER_CAPTION = 'When one runs out, kwant bots move to the next that still works, in this order.';
+
+/** The AI accounts intro: what the order means for the person's bots. */
+export const orderIntro = (space: string) =>
+  `Your bots in ${space} use the first account that’s ready. If it runs out, they switch to the next one by themselves.`;
 
 export const ENGINE_NAMES: Record<Engine, string> = { claude: 'Claude', codex: 'Codex', grok: 'Grok', custom: 'Custom API' };
 
@@ -74,6 +78,39 @@ export function splitRanked(
   for (const p of order) (isRanked(p, engineOf(p), now) ? ranked : unranked).push(p);
   return { ranked, unranked };
 }
+
+/** Why an account sits under "Not used", and so its one button: Turn on, Sign in or Set up. */
+export type NotUsedReason = 'off' | 'signed_out' | 'not_installed';
+
+export interface AccountGroups {
+  /** On and able to take a turn, in failover order: [0] is "Used first", the rest "If it runs out". */
+  used: Profile[];
+  /** Off, signed out or not installed: never in the order, each with its reason. */
+  notUsed: Array<{ p: Profile; reason: NotUsedReason; engineOff: boolean }>;
+}
+
+/** The order split the way the AI accounts list shows it. An account out of usage keeps its place: it
+ * comes back by itself. Display only: nothing here changes an account's saved priority. */
+export function accountGroups(order: Profile[], engineOf: (p: Profile) => EngineInfo | undefined, now = Date.now()): AccountGroups {
+  const used: Profile[] = [];
+  const notUsed: AccountGroups['notUsed'] = [];
+  for (const p of order) {
+    const e = engineOf(p);
+    const engineOff = !!e && (e.enabled === false || e.status === 'disabled');
+    if (!p.enabled || engineOff) {
+      notUsed.push({ p, reason: 'off', engineOff });
+      continue;
+    }
+    const { label } = priorityStatus(p, e, now);
+    if (label === 'Not installed') notUsed.push({ p, reason: 'not_installed', engineOff });
+    else if (label === 'Signed out') notUsed.push({ p, reason: 'signed_out', engineOff });
+    else used.push(p);
+  }
+  return { used, notUsed };
+}
+
+/** Which account a row is, under the AI's name: "Signed in on this computer", or the account's own name. */
+export const accountWhere = (p: Pick<Profile, 'kind' | 'name'>): string => (p.kind === 'system' ? 'Signed in on this computer' : p.name);
 
 /** Where a drag or an arrow press puts an account: the new order, or null when nothing moves. */
 export function moveAccount(order: Profile[], from: number, to: number): Profile[] | null {

@@ -3,7 +3,7 @@ import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
-import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
+import { AppsSection, InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
 import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
@@ -354,7 +354,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [claudeSignInFocus, setClaudeSignInFocus] = useState(0);
   // Set by a routine card's Edit or Pause, so Routines opens at that routine.
   const [routineFocus, setRoutineFocus] = useState<RoutineFocus | null>(null);
-  const openSpaceSettings = (tab: SpaceSettingsTab = 'general') => {
+  // Apps & accounts opens at a section (AI accounts, Advanced); seq re-scrolls on a second ask.
+  const [appsSection, setAppsSection] = useState<{ section: AppsSection; seq: number } | null>(() =>
+    initialView?.kind === 'settings' && initialView.scope === 'space' && initialView.section ? { section: initialView.section, seq: 1 } : null,
+  );
+  const openSpaceSettings = (tab: SpaceSettingsTab = 'general', section?: AppsSection) => {
+    setAppsSection(section ? { section, seq: Date.now() } : null);
     setClaudeSignInFocus(0);
     if (tab !== 'routines') setRoutineFocus(null);
     setSettingsScope('space');
@@ -367,7 +372,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab((t) => t ?? 'general');
     playSfx('click');
   };
-  const openSettings = () => openSpaceSettings('accounts');
+  const openSettings = () => openSpaceSettings('apps', 'accounts');
   // Settings › All spaces › Usage, at the daily spending stop's fields.
   const openUsageSettings = () => {
     setSettingsFocusRow('spend-stop');
@@ -378,7 +383,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSettingsFocusRow('claude-isolation');
     openAppSettings();
   };
-  const openConnections = () => openSpaceSettings('connections');
+  const openConnections = () => openSpaceSettings('apps', 'advanced');
   // 0.9.0 P5: "See the note" in a chat opens Connections on that one note.
   const [toolNoteFocus, setToolNoteFocus] = useState<string | null>(null);
   const openToolNote = (noteId: string) => {
@@ -387,8 +392,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
+    setAppsSection({ section: 'accounts', seq: Date.now() });
     setSettingsScope('space');
-    setSpaceSettingsTab('accounts');
+    setSpaceSettingsTab('apps');
   };
   // This space's engine checks, shared with the sidebar: the setup banner, the "can't answer"
   // card and the bots' online dots all read whether anything can run.
@@ -3735,7 +3741,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       tile={<SpaceTile space={space} size={40} />}
       readyAccounts={readyAccounts}
       botCount={kwants.length}
-      onAddAccount={() => openSpaceSettings('accounts')}
+      onAddAccount={() => openSpaceSettings('apps', 'accounts')}
       onNewBot={() => {
         setNewAgentTeam(null);
         setIsNewAgentOpen(true);
@@ -3904,9 +3910,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   inboxNav.go = () => showPage('inbox', 'new');
   const backToList = isPhone ? () => { setPage('chat'); setPhoneView('list'); } : undefined;
   const parallel = <ParallelPage onBack={backToList} />;
-  const connectionsPage = (
+  // Apps & accounts › Advanced: tool servers, Telegram and notes from bots (AI accounts have their own section).
+  const connectionsPage = (chooseComposioBots: () => void) => (
     <ConnectionsPage
       embedded
+      hideAccounts
+      onChooseComposioBots={chooseComposioBots}
       onOpenTools={() => setIsMcpOpen(true)}
       onAddTool={() => { setMcpStartAdding(true); setIsMcpOpen(true); }}
       onOpenAccounts={openSettings}
@@ -4151,7 +4160,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setPage('chat');
       return;
     }
-    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings() : openSpaceSettings(v.tab);
+    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings() : openSpaceSettings(v.tab, v.section);
     showPage(v.kind, v.kind === 'inbox' ? v.tab : 'new');
   };
   useEffect(() => {
@@ -4235,7 +4244,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenTeam={(t, channelId) => void openNewTeamChat(t, channelId)}
       onUndone={handleTeamUndone}
       readyAccounts={readyAccounts}
-      onOpenAccounts={() => openSpaceSettings('accounts')}
+      onOpenAccounts={() => openSpaceSettings('apps', 'accounts')}
     >
     {/* overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
         once slid the whole chat under its header (P1-7). Browsers without clip keep hidden. */}
@@ -4283,7 +4292,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                   }
                   if (id === 'space') {
                     // Nothing can run yet: the fix is in Accounts, so start there
-                    openSpaceSettings(canRun === false ? 'accounts' : 'general');
+                    canRun === false ? openSpaceSettings('apps', 'accounts') : openSpaceSettings('general');
                     return;
                   }
                   if (id === 'jar') {
@@ -4440,6 +4449,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onScope={setSettingsScope}
           onOpenArchived={onOpenArchived}
           connections={connectionsPage}
+          appsSection={appsSection}
+          toolNoteOpen={!!toolNoteFocus}
           appSettings={
             <Suspense
               fallback={
@@ -4453,7 +4464,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 isOpen
                 onClose={closeSpaceSettings}
                 tokensUsed={tokensUsed}
-                onOpenApiKeys={() => openSpaceSettings('accounts')}
+                onOpenApiKeys={() => openSpaceSettings('apps', 'accounts')}
                 focusRow={settingsFocusRow}
               />
             </Suspense>

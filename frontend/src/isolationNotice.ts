@@ -251,9 +251,9 @@ export function isolationCard(m: IsolationFailedMeta, savedText?: string | null)
     case 'relay_down':
       return std('relay_down', couldnt, 'kwant couldn’t connect Claude to your sign-in. Restart kwant, then Retry.');
     case 'sign_in_expired':
-      return std('sign_in_expired', `${bot} didn’t reply: your Claude sign-in has expired.`, 'Sign in again in Settings › This space › Accounts, then Retry.', ['retry', 'accounts'], null);
+      return std('sign_in_expired', `${bot} didn’t reply: your Claude sign-in has expired.`, 'Sign in again in Settings › This space › Apps & accounts, then Retry.', ['retry', 'accounts'], null);
     case 'no_credential':
-      return std('no_credential', `${bot} didn’t reply: there’s no Claude sign-in for it on this computer.`, 'Sign in to Claude in Settings › This space › Accounts, then Retry.', ['retry', 'accounts'], null);
+      return std('no_credential', `${bot} didn’t reply: there’s no Claude sign-in for it on this computer.`, 'Sign in to Claude in Settings › This space › Apps & accounts, then Retry.', ['retry', 'accounts'], null);
     case 'host_is_root':
       return std('host_is_root', couldnt, 'kwant is running as root, so Claude’s sealed box can’t run as you. Start kwant as your normal user, then Retry.');
     case 'folder_name_unsupported':

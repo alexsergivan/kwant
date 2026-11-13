@@ -10,7 +10,8 @@ export interface EnginesApi {
   recheck: () => Promise<void>;
   /** Reads the cached status again, without re-running the checks. */
   reload: () => Promise<void>;
-  setEnabled: (id: EngineInfo['id'], enabled: boolean) => Promise<void>;
+  /** True once the server took it; false when it said no (the switch is put back and `error` set). */
+  setEnabled: (id: EngineInfo['id'], enabled: boolean) => Promise<boolean>;
   /** Shows a list the server already answered with (e.g. after signing out). */
   apply: (engines: EngineInfo[]) => void;
 }
@@ -73,7 +74,7 @@ export function useEngines(active: boolean): EnginesApi {
   }, []);
 
   const setEnabled = useCallback(
-    async (id: EngineInfo['id'], enabled: boolean) => {
+    async (id: EngineInfo['id'], enabled: boolean): Promise<boolean> => {
       // Shown at once; put back if the server says no.
       setEngines((list) => list?.map((e) => (e.id === id ? { ...e, enabled } : e)) ?? list);
       try {
@@ -86,10 +87,12 @@ export function useEngines(active: boolean): EnginesApi {
         const d = await r.json().catch(() => null);
         if (alive.current && Array.isArray(d?.engines)) setEngines(d.engines);
         else await load();
+        return true;
       } catch {
-        if (!alive.current) return;
+        if (!alive.current) return false;
         setEngines((list) => list?.map((e) => (e.id === id ? { ...e, enabled: !enabled } : e)) ?? list);
         setError(`Couldn't switch ${enabled ? 'on' : 'off'} that engine.`);
+        return false;
       }
     },
     [load],
