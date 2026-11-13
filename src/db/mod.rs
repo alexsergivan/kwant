@@ -66,7 +66,7 @@ pub mod last_ran_on;
 /// What a space's #general says about itself. New channels only: stored descriptions keep their text.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. The best fit answers.";
 /// #general's text before 0.9.8. Upgrading an install still writes it, so old installs read as they did.
-const LEGACY_GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
+pub const LEGACY_GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
 /// Default's #general description before the "kwant bots" wording; replaced only if unchanged.
 const OLD_GENERAL_DESCRIPTION: &str = "Main collaboration hub for all agents";
 /// How long a connection waits for SQLite's write lock (sqlx's default, kept explicit).

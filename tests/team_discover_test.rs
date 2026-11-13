@@ -174,8 +174,13 @@ async fn a_folder_is_read_once_and_its_team_is_made_with_one_undo() {
 }
 
 #[tokio::test]
-async fn the_default_names_clash_with_the_seeded_lead_and_nothing_is_made() {
+async fn the_default_names_clash_with_an_existing_bot_and_nothing_is_made() {
     let e = setup().await;
+    // An old install's seeded TechLead (fresh installs seed Assistant, Researcher and Writer)
+    let techlead = json!({"name": "TechLead", "title": "Staff Engineer", "persona_prompt": "Test persona",
+        "avatar_sprite": "tech_lead", "driver_type": "cli", "preferred_model": "claude"});
+    let (s, v) = call(&e.app, "POST", "/api/kwants", Some(techlead)).await;
+    assert!(s.is_success(), "{s} {v}");
     let tmp = tempdir().unwrap();
     let shop = folder(tmp.path(), "shop", &shop_files(None));
     let (_, sug) = suggest(&e, json!({ "workspace_path": shop.to_str().unwrap() })).await;
