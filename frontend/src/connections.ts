@@ -52,7 +52,21 @@ export interface CatalogEntry {
   /** Composio only: the Composio URL names a user, so kwant can start an app's sign-in. */
   can_connect?: boolean;
   search?: string;
+  /** Composio only (#548): `session` (an ak_ key), `connect` (a ck_ key), `url` (a pasted link), null when not added. */
+  mode?: 'session' | 'connect' | 'url' | null;
+  user_id?: string | null;
+  apps_connected?: Array<{ slug: string; name: string }>;
+  /** What's wrong with the setup and the one action that fixes it. */
+  problem?: { message: string; action: ComposioAction } | null;
+  can_switch?: boolean;
+  /** Where a person copies a Composio key: open it, never a hard-coded address. */
+  key_url?: string;
+  switch?: string;
+  replace_key?: string;
 }
+
+/** The one action that fixes a Composio error (#548). */
+export type ComposioAction = 'add_composio' | 'replace_key' | 'try_again' | 'switch' | 'turn_on' | string;
 
 /** One app from Composio's catalogue (Composio calls it a toolkit). */
 export interface ComposioApp {
@@ -62,6 +76,39 @@ export interface ComposioApp {
   logo: string | null;
   tools_count: number | null;
   no_auth: boolean;
+}
+
+/** One row of GET /composio/apps without `q`: the popular 120 (no tool count) or the whole catalogue. */
+export interface ComposioListedApp {
+  slug: string;
+  name: string;
+  logo?: string | null;
+  tools_count?: number | null;
+  connected?: boolean;
+}
+
+export interface ComposioAppList {
+  apps: ComposioListedApp[];
+  /** `popular`: kwant's bundled top apps (before setup, and with a ck_ key); `all`: Composio's whole catalogue. */
+  source: 'popular' | 'all' | string;
+  mode: 'session' | 'connect' | 'url' | null;
+  can_connect: boolean;
+  connected_checked?: boolean;
+}
+
+/** One entry of the public directory (mcp-finder/brief.md). Text is plain text, never HTML. */
+export interface DirectoryEntry {
+  registry_name: string;
+  version?: string;
+  title: string;
+  description: string;
+  publisher: { label: string; kind?: string };
+  kind: 'remote' | 'stdio' | string;
+  url?: string | null;
+  transport?: string | null;
+  command?: string | null;
+  inputs: Array<{ name: string; description?: string; required?: boolean; secret?: boolean }>;
+  already_added?: boolean;
 }
 
 export interface VaultSummary {
@@ -78,7 +125,13 @@ export interface ConnectionsList {
 }
 
 export class ConnectionsError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(
+    message: string,
+    public status: number,
+    /** #548: the one action that fixes it, and where to copy a key. */
+    public action: ComposioAction | null = null,
+    public keyUrl: string | null = null,
+  ) {
     super(message);
   }
 }
@@ -108,10 +161,66 @@ async function call<T>(url: string, method = 'GET', body?: unknown, missing = 'T
   }
   const answer = await res.json().catch(() => null);
   if (res.ok) return answer as T;
-  const err = answer && typeof answer === 'object' ? (answer as Record<string, unknown>).error : null;
-  if (res.status === 403) throw new ConnectionsError('Only you can see and change connections.', 403);
-  if (res.status === 404 && !err) throw new ConnectionsError(missing, 404);
-  throw new ConnectionsError(typeof err === 'string' && err.trim() ? sentence(err) : `Something went wrong (HTTP ${res.status}).`, res.status);
+  throw errorOf(res.status, answer, missing);
+}
+
+function errorOf(status: number, answer: unknown, missing: string): ConnectionsError {
+  const o = answer && typeof answer === 'object' ? (answer as Record<string, unknown>) : {};
+  const err = o.error;
+  if (status === 403) return new ConnectionsError('Only you can see and change connections.', 403);
+  if (status === 404 && !err) return new ConnectionsError(missing, 404);
+  const action = typeof o.action === 'string' ? o.action : null;
+  const keyUrl = typeof o.key_url === 'string' && /^https:\/\//.test(o.key_url) ? o.key_url : null;
+  return new ConnectionsError(typeof err === 'string' && err.trim() ? sentence(err) : `Something went wrong (HTTP ${status}).`, status, action, keyUrl);
+}
+
+let appListCache: { etag: string; list: ComposioAppList } | null = null;
+
+/**
+ * GET /composio/apps without `q`, once per open, with the last answer's ETag: a 304 reuses it.
+ * Matched in the browser on every key (autocomplete.md), so there's no call per key.
+ */
+async function composioAppList(): Promise<ComposioAppList> {
+  let res: Response;
+  try {
+    res = await personFetch('/api/connections/composio/apps', {
+      cache: 'no-store',
+      headers: appListCache ? { 'If-None-Match': appListCache.etag } : undefined,
+    });
+  } catch (e) {
+    if (e instanceof PersonCancelledError) throw new ConnectionsError(e.message, 401);
+    throw new ConnectionsError('Couldn’t reach the server. Check your connection and try again.', 0, 'try_again');
+  }
+  if (res.status === 304 && appListCache) return appListCache.list;
+  const answer = await res.json().catch(() => null);
+  if (!res.ok) throw errorOf(res.status, answer, 'This server can’t list Composio’s apps yet.');
+  const o = (answer ?? {}) as Partial<ComposioAppList>;
+  const list: ComposioAppList = {
+    apps: Array.isArray(o.apps) ? o.apps.filter((a) => a && typeof a.slug === 'string' && typeof a.name === 'string') : [],
+    source: typeof o.source === 'string' ? o.source : 'all',
+    mode: (o.mode ?? null) as ComposioAppList['mode'],
+    can_connect: !!o.can_connect,
+    connected_checked: !!o.connected_checked,
+  };
+  const etag = res.headers.get('ETag');
+  appListCache = etag ? { etag, list } : null;
+  return list;
+}
+
+/** The public directory, from 2 letters. `null` when this server has no directory yet (404): the group hides. */
+async function searchDirectory(q: string, signal?: AbortSignal): Promise<{ entries: DirectoryEntry[]; unavailable: boolean } | null> {
+  let res: Response;
+  try {
+    res = await personFetch(`/api/mcp/registry/search?q=${encodeURIComponent(q)}`, { cache: 'no-store', signal });
+  } catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e;
+    return { entries: [], unavailable: true };
+  }
+  if (res.status === 404) return null;
+  const answer = (await res.json().catch(() => null)) as { entries?: unknown; unavailable?: unknown } | null;
+  if (!res.ok || !answer) return { entries: [], unavailable: true };
+  const entries = Array.isArray(answer.entries) ? (answer.entries as DirectoryEntry[]).filter((e) => e && typeof e.registry_name === 'string') : [];
+  return { entries: entries.slice(0, 12), unavailable: answer.unavailable === true };
 }
 
 const enc = encodeURIComponent;
@@ -121,6 +230,19 @@ export const connectionsApi = {
   raw: <T>(url: string, method = 'GET', body?: unknown, missing?: string) => call<T>(url, method, body, missing),
   list: () => call<ConnectionsList>('/api/connections'),
   addComposio: (body: ComposioBody) => call<{ connection_id: string; warning: string }>('/api/connections/composio', 'POST', body),
+  /** #548: one Composio key (ck_ or ak_), Composio added off for every bot. */
+  addComposioKey: (apiKey: string) =>
+    call<{ connection_id: string; mode?: string; warning: string }>('/api/connections/composio', 'POST', { api_key: apiKey.trim(), enabled: false }),
+  /** #548: a new key for the saved setup. */
+  replaceComposioKey: (apiKey: string) => call<{ mode?: string }>('/api/connections/composio/key', 'PUT', { api_key: apiKey.trim() }),
+  /** #548: moves a pasted-link setup to the one-key setup; the key only when none is saved. */
+  switchComposio: (apiKey?: string) =>
+    call<{ mode?: string }>('/api/connections/composio/switch', 'POST', apiKey?.trim() ? { api_key: apiKey.trim() } : {}),
+  composioAppList,
+  searchDirectory,
+  /** Adds a public-directory entry with the values the person filled in. */
+  installFromDirectory: (registryName: string, name: string, env: Record<string, string>, headers: Record<string, string>) =>
+    call<{ server?: { id: string } }>('/api/mcp/registry/install', 'POST', { registry_name: registryName, name, env, headers }),
   /** Searches Composio's apps with the person's own Composio key (only once Composio is added). */
   searchComposioApps: (q: string) =>
     call<{ apps: ComposioApp[]; can_connect: boolean; warning: string }>(`/api/connections/composio/apps?q=${enc(q)}`),
@@ -235,7 +357,7 @@ export const isComposioUrl = (raw: string): boolean => {
 };
 
 export interface ComposioBody {
-  url: string;
+  url?: string;
   api_key?: string;
   enabled: boolean;
 }

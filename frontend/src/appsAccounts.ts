@@ -159,6 +159,23 @@ export async function giveServerTo(serverId: string, kwantIds: string[], chosen:
   });
 }
 
+/** Turns a tool server on or off, as Tools' switch does (the masks go back, so stored secrets stay). */
+export async function setServerEnabled(serverId: string, enabled: boolean, f: Fetch = (u, i) => personFetch(u, i)): Promise<void> {
+  const url = `/api/mcp/servers/${encodeURIComponent(serverId)}`;
+  const server = await json<McpServer>(f, url);
+  if (server.enabled === enabled) return;
+  await json(f, url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...formToPayload(serverToForm(server)), enabled }),
+  });
+}
+
+/** Removes a tool server (Composio's included): every bot loses it. */
+export async function removeServer(serverId: string, f: Fetch = (u, i) => personFetch(u, i)): Promise<void> {
+  await json(f, `/api/mcp/servers/${encodeURIComponent(serverId)}`, { method: 'DELETE' });
+}
+
 /** What the page's header says: things that need the person, and what's connected. */
 export function pageCounts(connections: Connection[]): string {
   const apps = connections.filter((c) => c.kind === 'mcp' && c.status === 'connected').length;
