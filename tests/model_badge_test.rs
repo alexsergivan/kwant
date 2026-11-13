@@ -186,13 +186,18 @@ async fn turns_say_what_they_run_on_and_the_bot_list_remembers_it() {
         assert_eq!(s, StatusCode::OK, "{v}");
     }
 
-    // 1. A new bot has never run: last_ran_on is there, and null
+    // 1. A new bot has never run: last_ran_on is there, and null (so is a starter bot's)
     let (s, created) = call(&app, "POST", "/api/kwants", Some(json!({"name": "Badge", "title": "Badge tester", "persona_prompt": "Test persona",
-        "avatar_sprite": "s", "preferred_model": "auto"}))).await;
+        "avatar_sprite": "s", "driver_type": "api", "preferred_model": "auto"}))).await;
     assert!(s.is_success(), "{s} {created}");
-    let kid = created["id"].as_str().unwrap().to_string();
+    let new_id = created["id"].as_str().unwrap().to_string();
+    let fresh = kwant(&app, &new_id).await;
+    assert!(fresh.as_object().unwrap().contains_key("last_ran_on") && fresh["last_ran_on"].is_null(), "{fresh}");
+    let (_, list) = call(&app, "GET", "/api/kwants", None).await;
+    let kid = list[0]["id"].as_str().unwrap().to_string();
+    assert_ne!(kid, new_id);
     let before = kwant(&app, &kid).await;
-    assert!(before.as_object().unwrap().contains_key("last_ran_on") && before["last_ran_on"].is_null(), "{before}");
+    assert!(before["last_ran_on"].is_null(), "{before}");
     pin(&app, &kid, "auto").await;
 
     // 2. Auto: one turn_runs_on with Laya's pick (Laya offline: "hi" is the fast tier, Haiku),
@@ -293,5 +298,5 @@ async fn turns_say_what_they_run_on_and_the_bot_list_remembers_it() {
     let (_, list) = call(&app2, "GET", "/api/kwants", None).await;
     let all_after: Vec<(Value, Value)> = list.as_array().unwrap().iter().map(|k| (k["id"].clone(), k["last_ran_on"].clone())).collect();
     assert_eq!(all_after, all_before);
-    assert!(all_after.iter().any(|(id, v)| id != &json!(kid) && v.is_null()), "bots that never ran stay null: {all_after:?}");
+    assert_eq!(kwant(&app2, &new_id).await["last_ran_on"], Value::Null, "a bot that never ran stays null");
 }
