@@ -1,0 +1,39 @@
+{
+ "successful": true,
+ "data": {
+  "message": "Processed 3 toolkits: 1 active, 2 initiated",
+  "results": {
+   "elevenlabs": {
+    "toolkit": "elevenlabs",
+    "status": "active",
+    "accounts": [
+     {
+      "id": "elevenlabs_redacted",
+      "alias": "Personal",
+      "status": "active",
+      "is_default": true,
+      "account_type": "PRIVATE"
+     }
+    ]
+   },
+   "heygen": {
+    "toolkit": "heygen",
+    "status": "initiated",
+    "accounts": []
+   },
+   "notarealapp123": {
+    "toolkit": "notarealapp123",
+    "status": "initiated",
+    "accounts": []
+   }
+  },
+  "summary": {
+   "total_toolkits": 3,
+   "active_connections": 1,
+   "initiated_connections": 2,
+   "failed_connections": 0
+  }
+ },
+ "error": null,
+ "log_id": "log_recorded"
+}

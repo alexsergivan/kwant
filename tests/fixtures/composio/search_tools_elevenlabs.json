@@ -1,0 +1,61 @@
+{
+ "successful": true,
+ "data": {
+  "results": [
+   {
+    "index": 1,
+    "use_case": "elevenlabs",
+    "execution_guidance": "Found 4 tools for this query. Look at the schemas to know how to use them.",
+    "primary_tool_slugs": [
+     "ELEVENLABS_TEXT_TO_SPEECH"
+    ],
+    "related_tool_slugs": [
+     "ELEVENLABS_TEXT_TO_SPEECH_STREAM",
+     "ELEVENLABS_GET_VOICES",
+     "ELEVENLABS_GET_MODELS"
+    ],
+    "toolkits": [
+     "elevenlabs"
+    ]
+   }
+  ],
+  "toolkit_connection_statuses": [
+   {
+    "toolkit": "elevenlabs",
+    "description": "Create natural AI voices instantly in any language - perfect for video creators, developers, and businesses.",
+    "has_active_connection": true,
+    "accounts": [
+     {
+      "id": "elevenlabs_redacted",
+      "alias": "Personal",
+      "status": "ACTIVE",
+      "created_at": "2026-10-10T22:23:17.641Z",
+      "is_default": true,
+      "account_type": "PRIVATE"
+     }
+    ],
+    "status_message": "Connection is active and ready to use"
+   }
+  ],
+  "tool_schemas": {
+   "ELEVENLABS_GET_VOICES": {
+    "toolkit": "ELEVENLABS",
+    "tool_slug": "ELEVENLABS_GET_VOICES",
+    "description": "Retrieves a list of all available voices along with their detailed attributes and settings.",
+    "input_schema": {
+     "type": "object",
+     "properties": {}
+    },
+    "hasFullSchema": true
+   }
+  },
+  "session": {
+   "id": "size",
+   "generate_id": true
+  },
+  "success": true,
+  "error": null
+ },
+ "error": null,
+ "log_id": "log_recorded"
+}

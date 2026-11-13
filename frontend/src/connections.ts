@@ -123,7 +123,7 @@ export const connectionsApi = {
   addComposio: (body: ComposioBody) => call<{ connection_id: string; warning: string }>('/api/connections/composio', 'POST', body),
   /** Searches Composio's apps with the person's own Composio key (only once Composio is added). */
   searchComposioApps: (q: string) =>
-    call<{ apps: ComposioApp[]; can_connect: boolean; warning: string }>(`/api/connections/composio/apps?q=${enc(q)}`),
+    call<{ apps: ComposioApp[]; can_connect: boolean; warning: string; hint?: string }>(`/api/connections/composio/apps?q=${enc(q)}`),
   /** Starts signing in to one Composio app; the answer is the address to open. */
   connectComposioApp: (slug: string) =>
     call<{ redirect_url: string; warning: string }>(`/api/connections/composio/apps/${enc(slug)}/connect`, 'POST'),

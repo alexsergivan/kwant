@@ -1203,23 +1203,190 @@ fn popular_rows<'a>(apps: impl Iterator<Item = &'a composio::PopularApp>, connec
     .collect()
 }
 
-/// Before Composio is added: Composio's popular apps from kwant itself, no Composio call.
-fn popular_before_setup(q: Option<&str>) -> Response {
+/// Before Composio is added: Composio's popular apps from kwant itself, no Composio API call.
+/// A typed name the popular list doesn't have is checked against Composio's public app pages
+/// (see [`apps_by_name`]): the app's slug only, no key.
+async fn popular_before_setup(state: &AppState, q: Option<&str>) -> Response {
     let apps: Vec<&composio::PopularApp> = match q {
         Some(q) => composio::search_popular(q, SEARCH_POPULAR_LIMIT),
         None => composio::popular_apps().iter().collect(),
     };
-    let count = apps.len();
-    Json(json!({
-        "apps": popular_rows(apps.into_iter(), None),
+    let by_name = match q {
+        Some(q) => apps_by_name(state, q, &apps, None).await,
+        None => ByName::default(),
+    };
+    let mut rows = popular_rows(apps.into_iter(), None);
+    rows.extend(by_name.rows);
+    let count = rows.len();
+    let mut body = json!({
+        "apps": rows,
         "count": count,
         "connected_checked": false,
         "mode": Value::Null,
         "can_connect": false,
         "source": "popular",
         "warning": COMPOSIO_WARNING,
-    }))
-    .into_response()
+    });
+    add_hint(&mut body, q, by_name.asked);
+    Json(body).into_response()
+}
+
+// Apps by name. The popular list is Composio's top 120 apps; Composio has many more, and a
+// Composio Connect key can't list them. When the list barely matches what the person typed, kwant
+// asks about the name itself: its slug candidates (`composio::slug_candidates`, at most 3), first
+// with Composio Connect's search when there's a Connect key, else (or when that can't answer)
+// Composio's public app page for each. Answers are kept a while, so typing the same name again
+// costs nothing.
+
+/// Fewer popular matches than this, and none of them the typed name itself: ask about the name.
+const FEW_POPULAR: usize = 3;
+/// How long one name's answer is kept.
+const BY_NAME_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// The most a search waits for Composio Connect's answer about a name.
+const BY_NAME_CONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(6);
+
+/// Answers about names, by source and slug candidates: when, and the apps found.
+type ByNameSeen = HashMap<String, (std::time::Instant, Vec<composio::FoundApp>)>;
+
+fn by_name_seen() -> &'static Mutex<ByNameSeen> {
+    static SEEN: OnceLock<Mutex<ByNameSeen>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
+#[derive(Default)]
+struct ByName {
+    /// Rows for apps found by name, after the popular matches.
+    rows: Vec<Value>,
+    /// Composio was asked about the name and answered (even with nothing).
+    asked: bool,
+}
+
+/// The name an app found by name is shown with: what the person typed when it is the slug in
+/// other case ("ElevenLabs"), else a known name, else the slug in words.
+fn typed_name(q: &str, slug: &str) -> String {
+    let q = q.split_whitespace().collect::<Vec<_>>().join(" ");
+    let compact: String = q.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    let known = app_names().lock().unwrap_or_else(|e| e.into_inner()).get(slug).cloned();
+    match known {
+        Some(n) => n,
+        None if compact == slug.replace(['_', '-'], "") && q.chars().any(|c| c.is_ascii_uppercase()) && q.chars().count() <= 60 => q,
+        None => app_name(slug),
+    }
+}
+
+/// Apps called `q` that the popular matches `popular` don't show, as rows. `key` is a Composio
+/// Connect key, or `None` before Composio is added.
+async fn apps_by_name(state: &AppState, q: &str, popular: &[&composio::PopularApp], key: Option<&str>) -> ByName {
+    let candidates = composio::slug_candidates(q);
+    if candidates.is_empty() || popular.iter().any(|a| candidates.contains(&a.slug)) {
+        return ByName::default();
+    }
+    // A popular app typed another way ("Google Search Console" with spaces): no call needed.
+    let bundled: Vec<&composio::PopularApp> = candidates
+        .iter()
+        .filter_map(|c| composio::popular_apps().iter().find(|a| &a.slug == c))
+        .collect();
+    if !bundled.is_empty() {
+        return ByName { rows: popular_rows(bundled.into_iter(), None), asked: false };
+    }
+    if popular.len() >= FEW_POPULAR {
+        return ByName::default();
+    }
+    let ck = format!(
+        "{:p}:{}:{}",
+        Arc::as_ptr(&state.composio_api),
+        key.map(|k| format!("{:x}", fingerprint(k, ""))).unwrap_or_default(),
+        candidates.join(",")
+    );
+    let cached = {
+        let mut seen = by_name_seen().lock().unwrap_or_else(|e| e.into_inner());
+        seen.retain(|_, (at, _)| at.elapsed() < BY_NAME_TTL);
+        if seen.len() > 1000 {
+            seen.clear();
+        }
+        seen.get(&ck).map(|(_, found)| found.clone())
+    };
+    let found = match cached {
+        Some(found) => Some(found),
+        None => {
+            let found = find_by_name(state, q, &candidates, key).await;
+            if let Some(f) = &found {
+                by_name_seen().lock().unwrap_or_else(|e| e.into_inner()).insert(ck, (std::time::Instant::now(), f.clone()));
+            }
+            found
+        }
+    };
+    let Some(found) = found else {
+        return ByName::default();
+    };
+    let rows = found
+        .iter()
+        .map(|f| {
+            let name = typed_name(q, &f.slug);
+            app_names().lock().unwrap_or_else(|e| e.into_inner()).entry(f.slug.clone()).or_insert_with(|| name.clone());
+            let mut row = json!({
+                "slug": f.slug,
+                "name": name,
+                "logo": format!("https://logos.composio.dev/api/{}", f.slug),
+                "connected": f.connected.unwrap_or(false),
+                "found_by_name": true,
+            });
+            if let Some(d) = &f.description {
+                row["description"] = json!(d);
+            }
+            row
+        })
+        .collect();
+    ByName { rows, asked: true }
+}
+
+/// Asks Composio which of `candidates` exist: Composio Connect's search with `key`, else (or when
+/// it can't answer or finds none of them) each candidate's public app page. `None` when neither
+/// could say.
+async fn find_by_name(state: &AppState, q: &str, candidates: &[String], key: Option<&str>) -> Option<Vec<composio::FoundApp>> {
+    let started = std::time::Instant::now();
+    let mut answered = false;
+    if let Some(key) = key {
+        match tokio::time::timeout(BY_NAME_CONNECT_BUDGET, state.composio_api.connect_find_apps(key, q, candidates)).await {
+            Ok(Ok(found)) if !found.is_empty() => {
+                tracing::debug!(found = found.len(), ms = started.elapsed().as_millis() as u64, "connections: Composio Connect found apps by name");
+                return Some(found);
+            }
+            Ok(Ok(_)) => answered = true,
+            Ok(Err(e)) => tracing::warn!(error = %e.message(), "connections: Composio Connect couldn't search for an app by name"),
+            Err(_) => tracing::warn!("connections: Composio Connect took too long to search for an app by name"),
+        }
+    }
+    let checks = futures::future::join_all(candidates.iter().map(|c| state.composio_api.toolkit_page_exists(c))).await;
+    answered |= checks.iter().any(Option::is_some);
+    let found: Vec<composio::FoundApp> = candidates
+        .iter()
+        .zip(checks)
+        .filter(|(_, exists)| *exists == Some(true))
+        .map(|(c, _)| composio::FoundApp { slug: c.clone(), description: None, connected: None })
+        .take(1)
+        .collect();
+    tracing::debug!(found = found.len(), ms = started.elapsed().as_millis() as u64, "connections: Composio app pages checked by name");
+    (answered || !found.is_empty()).then_some(found)
+}
+
+/// The line a search with no apps shows. Words: Mira (provisional, Nov 13).
+fn no_apps_hint(q: &str, asked: bool) -> String {
+    let q: String = q.split_whitespace().collect::<Vec<_>>().join(" ");
+    if asked {
+        format!("Composio has no app called “{q}”. Check the spelling or try the app's full name, or ask a bot to connect it.")
+    } else {
+        format!("No app called “{q}” in Composio's top apps. Type its exact name, or ask a bot to connect it.")
+    }
+}
+
+/// Adds `hint` to a search answer with no apps.
+fn add_hint(body: &mut Value, q: Option<&str>, asked: bool) {
+    if let Some(q) = q {
+        if body["apps"].as_array().is_some_and(|a| a.is_empty()) {
+            body["hint"] = json!(no_apps_hint(q, asked));
+        }
+    }
 }
 
 /// At most this many popular apps answer a search; their status is one Composio call.
@@ -1270,7 +1437,8 @@ async fn connect_search_status(state: &AppState, space: &SpaceId, key: &str, slu
 }
 
 /// With a Composio Connect key: Composio's popular apps (Composio Connect has no catalogue
-/// call), each with `connected`.
+/// call), each with `connected`, and for a search, apps found by the typed name after them
+/// (`found_by_name`).
 async fn connect_popular(state: &AppState, space: &SpaceId, setup: &ComposioSetup, key: &str, q: Option<&str>) -> Response {
     let (apps, connected) = match q {
         None => {
@@ -1280,8 +1448,22 @@ async fn connect_popular(state: &AppState, space: &SpaceId, setup: &ComposioSetu
         Some(q) => {
             let apps = composio::search_popular(q, SEARCH_POPULAR_LIMIT);
             let slugs: Vec<&str> = apps.iter().map(|a| a.slug.as_str()).collect();
-            let connected = connect_search_status(state, space, key, &slugs).await;
-            (apps, connected)
+            // The popular matches' status and the name lookup are separate Composio Connect calls.
+            let (connected, by_name) = tokio::join!(connect_search_status(state, space, key, &slugs), apps_by_name(state, q, &apps, Some(key)));
+            let mut rows = popular_rows(apps.into_iter(), connected.as_ref());
+            rows.extend(by_name.rows);
+            let count = rows.len();
+            let mut body = json!({
+                "apps": rows,
+                "count": count,
+                "connected_checked": connected.is_some(),
+                "mode": "connect",
+                "can_connect": true,
+                "source": "popular",
+                "warning": COMPOSIO_WARNING,
+            });
+            add_hint(&mut body, Some(q), by_name.asked);
+            return Json(body).into_response();
         }
     };
     let count = apps.len();
@@ -1456,8 +1638,10 @@ async fn list_composio_apps(state: &AppState, headers: &HeaderMap, space: &Space
 /// searched with the person's own Composio key, each with `connected` for the space's Composio
 /// user (one account call per search). `source` says where the apps come from: `"all"` is
 /// Composio's catalogue (a project key); `"popular"` is Composio's top apps bundled with kwant,
-/// served before Composio is added (no Composio call, `mode: null`) and with a Composio Connect
-/// key. 409 when Composio is added without a key.
+/// served before Composio is added (no Composio API call, `mode: null`) and with a Composio Connect
+/// key; a search there also asks about the typed name (rows with `found_by_name: true`, after the
+/// popular ones). A search with no apps carries `hint`, the line to show. 409 when Composio is
+/// added without a key.
 pub async fn search_composio_apps(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1472,7 +1656,7 @@ pub async fn search_composio_apps(
         return error(StatusCode::BAD_REQUEST, "type an app name, up to 60 characters");
     }
     if composio_setup(&state, &space).await.is_none() {
-        return popular_before_setup(q);
+        return popular_before_setup(&state, q).await;
     }
     let (setup, key) = match composio_with_key(&state, &space).await {
         Ok(found) => found,
