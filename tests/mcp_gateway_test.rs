@@ -186,6 +186,8 @@ async fn gateway_calls_wait_for_the_approval_card() {
         conversation: "conv-test".into(),
         chat: None,
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     });
     register(&state, "card-tok", approver).await;
     let mut events = state.event_sender.subscribe();
@@ -246,6 +248,8 @@ async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
         conversation: "conv-test".into(),
         chat: None,
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     });
     let marker = format!("KWNT_TEST_MARK_{}", uuid::Uuid::new_v4().simple());
     let mut server = echo_server();

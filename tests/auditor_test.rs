@@ -826,6 +826,8 @@ async fn in_audit_turn(e: &Env, bot: &Kwant, tool: &str, args: Value) -> Approva
         conversation: e.general.clone(),
         chat: None,
         always_ask: true,
+        strict_ask: false,
+        started_by: None,
     };
     let approver = SelfToolsApprover { inner: std::sync::Arc::new(broker), always_ask: true, browser: None };
     let req = ToolApprovalRequest {
@@ -850,7 +852,7 @@ async fn approval_rows(e: &Env) -> Vec<(String, String)> {
 }
 
 /// With Approvals off, `audit_challenge` and `audit_rebut` run without a card (logged
-/// `auto_allowed`); every other tool of an audit turn still asks. With approvals on or "Ask only
+/// `auto_allowed`), and so does every other tool of an audit turn (0.9.7). With approvals on or "Ask only
 /// when risky", each audit call asks.
 #[tokio::test]
 async fn audit_calls_follow_the_approval_mode() {
@@ -879,8 +881,9 @@ async fn audit_calls_follow_the_approval_mode() {
     let auto = |tool: &str| (tool.to_string(), "auto_allowed".to_string());
     assert_eq!(approval_rows(&e).await, vec![auto("audit_challenge"), auto("audit_rebut")], "no card, both on record");
 
-    // Every other tool of an audit turn still asks, approvals off or not
-    assert_eq!(in_audit_turn(&e, &challenger, "memory_add", json!({"text": "x"})).await, ApprovalOutcome::Unanswered);
+    // Every other tool of an audit turn follows approvals off too (0.9.7: off means off, also in
+    // a turn kwnt started on its own)
+    assert_eq!(in_audit_turn(&e, &challenger, "memory_add", json!({"text": "x"})).await, ApprovalOutcome::Allowed);
 
     // Approvals on, or "Ask only when risky": one card per audit call, as before
     for mode in ["ask", "smart"] {
@@ -890,7 +893,7 @@ async fn audit_calls_follow_the_approval_mode() {
     }
     let rows = approval_rows(&e).await;
     let cards: Vec<&str> = rows.iter().filter(|(_, s)| s != "auto_allowed").map(|(t, _)| t.as_str()).collect();
-    assert_eq!(cards, ["memory_add", "audit_challenge", "audit_challenge"], "{rows:?}");
+    assert_eq!(cards, ["audit_challenge", "audit_challenge"], "{rows:?}");
 }
 
 #[tokio::test]
