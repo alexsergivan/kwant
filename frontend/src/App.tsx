@@ -569,7 +569,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const devOn = useDevModeOn(space.id);
   // 0.8.0 B3: the space's pre-push cards (Dev mode only): the bot's thread and the Inbox read them.
   const prepush = usePrepushCards(space.id, devOn);
-  const prepushWaiting = prepushNeedsYou(prepush.cards).length;
+  const prepushWaiting = prepushNeedsYou(prepush.cards, prepush.acted).length;
   const kwantNames = useMemo(() => Object.fromEntries(kwants.map((k) => [k.id, k.name])), [kwants]);
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
@@ -2304,10 +2304,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // The card call first; a 409 means the card moved on, so fetch it again (Rigel QA 1). Then the
   // chat message: if only that fails, say the change applied (Ada Later 7).
+  // 0.9.7 prepush-grant: the Inbox item goes the moment the person presses, before the server answers;
+  // it comes back only if the press didn't apply.
   const prepushAct = async (c: PrepushCardData, act: () => Promise<PrepushCardData>, message: string) => {
+    prepush.setActed(c.id, true);
     try {
       prepush.put(await act());
     } catch (e) {
+      prepush.setActed(c.id, false);
       if (e instanceof DevModeError && e.status === 409) void prepush.refresh(c.id);
       throw e;
     }
@@ -3972,7 +3976,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       top={
         <>
-          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
+          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} acted={prepush.acted} />
           <SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />
           <BudgetNeedsYou onRaise={raiseBudget} />
         </>
@@ -4064,7 +4068,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           pendingApprovals={approvalsHere}
           prepush={
             devOn && currentKwant && !viewingHistory ? (
-              <PrepushThread cards={threadCards(prepush.cards, currentKwant.id)} bot={currentKwant.name} live={prepush.live} onRetry={prepushRetry} onOverride={prepushOverride} />
+              <PrepushThread
+                cards={threadCards(prepush.cards, currentKwant.id)}
+                all={prepush.cards}
+                bot={currentKwant.name}
+                live={prepush.live}
+                onRetry={prepushRetry}
+                onOverride={prepushOverride}
+                approvals={approvalsHere}
+                onOpenApproval={setHighlightMessageId}
+              />
             ) : devOn && isChannel && !viewingHistory && pointerMemberIds.length > 0 ? (
               // 0.8.1 F3: team chats and channels get one pointer line per member bot; the card stays in the 1:1.
               <PrepushPointers

@@ -127,6 +127,24 @@ export const PP_OVERRIDDEN = {
 
 export const PP_RETRIED = { ...PP_NEEDS_YOU, id: 'pp_retried', status: 'retried', needs_you: false };
 
+// 0.9.7 prepush-grant: the person's press is the approval (autonomy/prepush-retry/brief.md).
+const GRANT_AT = PP_T0 + 10 * min;
+const grant = (kind: 'retry' | 'override', card_id: string, used_at: number | null = null) => ({ kind, at: GRANT_AT, expires_at: GRANT_AT + 120 * min, used_at, card_id });
+const NEXT_SHA = '9d8c7b6a5f4e3d2c1b0a99887766554433221100';
+
+/** The person pressed "Ask Pixel to try again" on PP_NEEDS_YOU. */
+export const PP_RETRIED_GRANT = { ...PP_NEEDS_YOU, id: 'pp_rg', status: 'retried', needs_you: false, updated_at: GRANT_AT, grant: grant('retry', 'pp_rg') };
+const nextBase = { head_sha: NEXT_SHA, tries: 1, created_at: GRANT_AT + 4 * min, updated_at: GRANT_AT + 4 * min, grant: grant('retry', 'pp_rg') };
+export const PP_NEXT_CHECKING = { ...PP_CHECKING, ...nextBase, id: 'pp_next', updated_at: GRANT_AT + 4 * min };
+export const PP_NEXT_CLEAR = { ...PP_CLEAR, ...nextBase, id: 'pp_next', updated_at: GRANT_AT + 5 * min };
+export const PP_NEXT_PUSHED = { ...PP_NEXT_CLEAR, grant: grant('retry', 'pp_rg', GRANT_AT + 5 * min + 20_000) };
+export const PP_NEXT_BLOCKED = { ...PP_BLOCKED, ...nextBase, id: 'pp_next', updated_at: GRANT_AT + 5 * min };
+/** An older blocked card on the branch, replaced by a newer push. */
+export const PP_SUPERSEDED = { ...PP_BLOCKED, id: 'pp_super', status: 'superseded', needs_you: false };
+/** "Push anyway" on PP_NEEDS_YOU, before and after its one push went. */
+export const PP_OVERRIDDEN_GRANT = { ...PP_OVERRIDDEN, id: 'pp_og', grant: { ...grant('override', 'pp_og'), at: PP_T0 + 9 * min } };
+export const PP_PUSHED = { ...PP_OVERRIDDEN_GRANT, status: 'pushed', updated_at: PP_T0 + 9 * min + 30_000, grant: { ...PP_OVERRIDDEN_GRANT.grant, used_at: PP_T0 + 9 * min + 30_000 } };
+
 export const PP_ALL = { PP_CHECKING, PP_NO_CHANGE, PP_CLEAR, PP_BLOCKED, PP_NEEDS_YOU, PP_MANY, PP_FAILED, PP_REVIEW_ERROR, PP_FAILED_NEEDS_YOU, PP_OVERRIDDEN, PP_RETRIED };
 
 // Fresh-eyes labels (contract §3.2)
