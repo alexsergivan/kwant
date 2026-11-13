@@ -27,6 +27,7 @@ import type { Profile } from '../profiles';
 import { EnginesPanel } from './EnginesPanel';
 import { ApiKeysPanel } from './ApiKeysPanel';
 import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
+import type { MessageTarget } from './DoneDetail';
 import { HirePolicyPanel } from './HirePolicyPanel';
 import { ModernAvatar } from './ModernAvatar';
 import { SpaceTile } from './Spaces';
@@ -90,6 +91,8 @@ interface Props {
   onOpenTools: () => void;
   /** Set by a routine card's Edit or Pause: opens that routine in Routines. */
   routineFocus?: RoutineFocus | null;
+  /** 0.9.5 F: a routine run's History row opens its answer in the chat. */
+  onOpenRunResult?: (t: MessageTarget) => void;
   /** Phones get a full-screen dialog; desktop keeps the space rail beside Settings. */
   isPhone?: boolean;
   /** After an import or its undo: load bots, teams and chats again. */
@@ -248,7 +251,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
               {tab === 'bots' && <BotsTab {...tp} />}
               {tab === 'teams' && <TeamsTab {...p} />}
               {tab === 'skills' && <SkillsTab {...p} />}
-              {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={toApp} />}
+              {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={toApp} onOpenRunResult={p.onOpenRunResult} />}
               {tab === 'import' && <ImportTab {...tp} />}
             </>
           )}

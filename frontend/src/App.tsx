@@ -3,6 +3,7 @@ import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
+import type { MessageTarget } from './components/DoneDetail';
 import { AppsSection, InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
 import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
@@ -2763,6 +2764,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  /** 0.9.5 F: a done item's Open in chat, and a routine run's History row: the chat, at the answer. */
+  const openRunResult = (t: MessageTarget) => {
+    if (spaceSettingsTab) closeSpaceSettings();
+    if (t.thread_id) {
+      openThread(t.kwant_id, t.thread_id);
+      return;
+    }
+    setPage('chat');
+    void handleJump({ message_id: t.message_id, channel_id: t.channel_id, channel_name: null, kwant_id: t.kwant_id, author: '', snippet: '', created_at: null });
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
@@ -3984,6 +3996,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onApprovalResolved={dropApproval}
       onOpenConnections={openConnections}
       onCrumb={(c) => showPage(c === 'board' ? 'board' : 'dev')}
+      onOpenMessage={openRunResult}
+      onEditRoutine={(id) => handleOpenRoutine(id, 'edit')}
+      placeName={(id) => {
+        const c = id ? channels.find((x) => x.id === id) : null;
+        return c ? channelLabel(c.name) : null;
+      }}
       top={
         <>
           <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
@@ -4559,6 +4577,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             </Suspense>
           }
           routineFocus={routineFocus}
+          onOpenRunResult={openRunResult}
           isPhone={isPhone}
           onApprovalsChanged={refreshRoster}
           onImported={reloadAfterImport}

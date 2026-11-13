@@ -107,7 +107,11 @@ test('Inbox › New, wide: 392px queue, item pane with the first review selected
   s.select(null);
   const d = doc(html(React.createElement(m.InboxNew, { noLoad: true, wide: true, now: Date.parse(m.INBOX_FIXTURE.now) })));
   assert.ok(d.querySelector('[data-inbox-new="wide"] .w-\\[392px\\]'));
-  assert.deepEqual([...d.querySelectorAll('[data-section]')].map((n) => n.getAttribute('data-section')), ['waiting_on_you', 'failed_or_stuck', 'to_review', 'finished']);
+  // 0.9.5 F: two sections; rows keep the server's group order inside them.
+  assert.deepEqual([...d.querySelectorAll('[data-section]')].map((n) => n.getAttribute('data-section')), ['needs', 'done']);
+  const groupsIn = (k) => [...new Set([...d.querySelectorAll(`[data-section="${k}"] [data-group]`)].map((n) => n.getAttribute('data-group')))];
+  assert.deepEqual(groupsIn('needs'), ['waiting_on_you', 'failed_or_stuck']);
+  assert.deepEqual(groupsIn('done'), ['to_review', 'finished']);
   const card = d.querySelector('[data-batch-card]');
   assert.ok(card);
   assert.match(d.querySelector('[data-approve-all]').textContent, /Approve all 5/);
