@@ -57,10 +57,19 @@ test('pinned: the model is named like the reply\'s ran-on line, with the server\
 });
 
 test('pinned, signed in but out of usage for now: not greyed (failover still runs it), and a bare model id reads as a name', () => {
-  const out = [{ ...ready('claude'), ready: false, models: [] }, ready('codex')];
+  // The real server shape (drivers/engines.rs): status 'error', "Quota exceeded until … UTC", no models.
+  const out = [{ ...ready('claude'), status: 'error', detail: 'Quota exceeded until 08:15 UTC', ready: false, models: [] }, ready('codex')];
   const b = m.modelBadgeFor({ preferred_model: 'claude/sonnet' }, null, out);
   assert.equal(b.cantRun, null);
   assert.equal(b.label, 'Runs on Claude · Sonnet');
+  // The older shape (status 'ready', not ready now) still counts the same.
+  const old = [{ ...ready('claude'), ready: false, models: [] }, ready('codex')];
+  assert.equal(m.modelBadgeFor({ preferred_model: 'claude/sonnet' }, null, old).cantRun, null);
+});
+
+test('pinned, a failed check that is not about usage still reads as needing a sign-in', () => {
+  const failed = [{ ...ready('claude'), status: 'error', detail: 'claude exited with code 1', ready: false, models: [] }, ready('codex')];
+  assert.equal(m.modelBadgeFor({ preferred_model: 'claude/sonnet' }, null, failed).cantRun, 'signed_out');
 });
 
 test('pinned, working: the same mark; on failover the mark it moved to', () => {

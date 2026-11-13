@@ -404,6 +404,9 @@ export function runsOnLabel(r: RunsOn, engines: EngineInfo[] | null = null): str
   return ranOnLabel(JSON.stringify({ ran_on: { ...r, family: family ?? r.family } }), engines) ?? (family ? familyLabel(family).replace(/ \(.*\)$/, '') : r.engine);
 }
 
+/** The server's words for an engine that is signed in but out of usage ("Quota exceeded until 08:15 UTC"). */
+const isQuotaDetail = (detail: string | null | undefined): boolean => /quota exceeded|usage limit|out of usage/i.test(detail ?? '');
+
 /** Whether a family's engines can run now; why not when they can't. null while unknown. */
 function familyCantRun(family: Family, engines: EngineInfo[] | null): ModelBadge['cantRun'] {
   if (!engines?.length) return null;
@@ -412,6 +415,9 @@ function familyCantRun(family: Family, engines: EngineInfo[] | null): ModelBadge
   if (mine.some((e) => e.enabled !== false && e.status === 'checking')) return null;
   // Signed in but not ready right now (out of usage until it resets): failover still runs the bot, so it isn't greyed.
   if (mine.some((e) => e.enabled !== false && e.status === 'ready')) return null;
+  // The server reports an engine that is signed in but out of usage as status 'error' with "Quota exceeded …"
+  // (drivers/engines.rs): it isn't signed out, and it runs again when the usage resets.
+  if (mine.some((e) => e.enabled !== false && e.status === 'error' && isQuotaDetail(e.detail))) return null;
   // Off when every one that's here at all is switched off; otherwise it needs a sign-in (or a key).
   const here = mine.filter((e) => e.status !== 'not_installed' || e.enabled === false);
   if (!here.length) return 'not_set_up';
