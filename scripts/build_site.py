@@ -17,6 +17,7 @@ Shortcodes in the HTML:
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
   {{CONTACT_EMAIL}}                       the contact address, from OPERATOR below (marked placeholder while empty)
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
+  {{char:ROLE}}                           the same creature without its frame (hero and footer crew)
   {{releases}}                            the release line under the hero: latest Mac version and date, release count
                                           since the first one, licence (from CHANGELOG.md, see release_line)
   {{windows_exe}}                         the latest release's Windows (beta) installer URL (from CHANGELOG.md, see
@@ -45,6 +46,7 @@ import datetime
 import hashlib
 import html
 import json
+import os
 import pathlib
 import posixpath
 import re
@@ -52,6 +54,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import urllib.request
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -176,6 +179,65 @@ def avatar(role):
     parts += [r(3.5, 4.5 + i, 19, 0.25, AV_SCAN) for i in range(16)]
     parts += [r(*a) for a in avatar_rects(role)]
     return f'<svg class="av" viewBox="0 0 26 26" width="34" height="34" shape-rendering="crispEdges" aria-hidden="true">{"".join(parts)}</svg>'
+
+
+def char(role):
+    """{{char:role}}: the avatar creature alone, no frame or screen (the redesign's hero and footer crew)."""
+    rects = "".join(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{c}"/>' for x, y, w, h, c in avatar_rects(role))
+    return f'<svg class="char-svg" viewBox="5 1 16 20" shape-rendering="crispEdges" aria-hidden="true">{rects}</svg>'
+
+
+def px_icon(rows, cls="pi", label=None):
+    """A pixel icon from strings of '#' and '.', one rect per run, drawn in currentColor."""
+    h, w = len(rows), max(len(r) for r in rows)
+    rects = "".join(
+        f'<rect x="{m.start()}" y="{y}" width="{m.end() - m.start()}" height="1"/>'
+        for y, row in enumerate(rows) for m in re.finditer(r"#+", row)
+    )
+    aria = f'role="img" aria-label="{label}"' if label else 'aria-hidden="true"'
+    return f'<svg class="{cls}" viewBox="0 0 {w} {h}" shape-rendering="crispEdges" fill="currentColor" {aria}>{rects}</svg>'
+
+
+# Pixel icons (Mira's site redesign, Nov 2026). One string per row, '#' is a filled pixel.
+IC = {
+    "handoff": [".........", "....#....", "....##...", "#######..", "########.", "#######..", "....##...", "....#....", "........."],
+    "shield": [".#######.", ".#######.", ".##...##.", ".##...##.", ".##...##.", "..##.##..", "..##.##..", "...###...", "....#...."],
+    "cursor": ["#........", "##.......", "###......", "####.....", "#####....", "######...", "###......", "#..##....", "....##..."],
+    "moon": ["...####..", "..##.....", ".##......", ".##......", ".##......", ".##......", "..##...#.", "...#####.", "........."],
+    "check": [".........", ".......##", "......##.", ".....##..", "##..##...", ".####....", "..##.....", ".........", "........."],
+    "down": ["...##...", "...##...", "...##...", "#..##..#", "##.##.##", ".######.", "..####..", "...##...", "########"],
+    "star": ["....#....", "...###...", "#########", ".#######.", "..#####..", "..##.##..", ".##...##.", "........."],
+    "heart": [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."],
+    "pause": ["##..##", "##..##", "##..##", "##..##", "##..##", "##..##"],
+    "play": ["#.....", "###...", "#####.", "#####.", "###...", "#....."],
+    "arrow": ["....#...", ".....#..", "########", ".....#..", "....#..."],
+}
+
+# The GitHub star count in the nav, read once per build. The build never needs the network: offline, rate-limited or
+# slow, it falls back to STARS_FALLBACK. KWANT_STARS=<n> pins it (KWANT_STARS=off skips the call).
+STARS_FALLBACK = 522
+_STARS = None
+
+
+def stars():
+    global _STARS
+    if _STARS is None:
+        pinned = os.environ.get("KWANT_STARS", "")
+        n = STARS_FALLBACK
+        if pinned.isdigit():
+            n = int(pinned)
+        elif pinned != "off":
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/alexsergivan/kwant",
+                    headers={"Accept": "application/vnd.github+json", "User-Agent": "kwant-site-build"},
+                )
+                with urllib.request.urlopen(req, timeout=4) as r:
+                    n = int(json.load(r)["stargazers_count"]) or STARS_FALLBACK
+            except Exception:
+                n = STARS_FALLBACK
+        _STARS = f"{n / 1000:.1f}k".replace(".0k", "k") if n >= 1000 else str(n)
+    return _STARS
 
 
 def parse(path):
@@ -311,6 +373,8 @@ def expand(body, root):
     if "{{windows_exe}}" in body:
         body = body.replace("{{windows_exe}}", windows_installer())
     body = re.sub(r"\{\{avatar:([a-z_]+)\}\}", lambda m: avatar(m[1]), body)
+    body = re.sub(r"\{\{char:([a-z_]+)\}\}", lambda m: char(m[1]), body)
+    body = re.sub(r"\{\{icon:([a-z]+)\}\}", lambda m: px_icon(IC[m[1]]), body)
     body = re.sub(r"\{\{shot:([^|}]+)\|([^|}]+)(?:\|([^}]*))?\}\}", lambda m: shot(root, m[1], m[2], m[3]), body)
     body = re.sub(
         r"\{\{video(!?):([^|}]+)\|([^}]+)\}\}", lambda m: video(root, m[2], m[3], eager=m[1] == "!"), body
@@ -319,33 +383,39 @@ def expand(body, root):
 
 
 def header(root, active):
+    """The floating pill nav (Mira's site redesign): brand, Features, Docs, Blog once it is live, the GitHub star
+    count written at build time, and Get started."""
     home = root or "./"
-    def cur(name):
-        return ' aria-current="page"' if active == name else ""
-    blog = f'      <a href="{root}blog/index.html"{cur("blog")}>Blog</a>\n' if BLOG_LIVE else ""
-
+    def nl(href, text, name):
+        cur = ' aria-current="page"' if active == name else ""
+        return f'<a class="nl" href="{href}"{cur}>{text}</a>'
+    blog = nl(f"{root}blog/index.html", "Blog", "blog") + "\n    " if BLOG_LIVE else ""
+    n = stars()
     return f"""<a class="skip" href="#main">Skip to content</a>
-<header class="site-header">
-  <div class="wrap">
+<header class="topbar">
+  <nav class="pill px" aria-label="Main">
     <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
-    <nav class="nav" aria-label="Main">
-      <a href="{root}features.html"{cur("features")}>Features</a>
-      <a href="{root}docs/quickstart.html"{cur("docs")}>Docs</a>
-{blog}      <a class="btn btn-soft" href="{GITHUB}" rel="noopener">{GH_ICON}<span>GitHub</span></a>
-    </nav>
-  </div>
+    {nl(f"{root}features.html", "Features", "features")}
+    {nl(f"{root}docs/quickstart.html", "Docs", "docs")}
+    {blog}<a class="nl stars" href="{GITHUB}" rel="noopener" aria-label="kwant on GitHub, {n} stars">{GH_ICON}<b>★ {n}</b></a>
+    <a class="btn btn-solid btn-get px" href="{root}docs/quickstart.html">Get started</a>
+  </nav>
 </header>"""
 
 
-def footer(root):
+def footer(root, home_page=False):
     home = root or "./"
     blog = f'      <a href="{root}blog/index.html">Blog</a>\n' if BLOG_LIVE else ""
+    crew = "".join(char(r) for r in ("research", "designer", "brand", "tech_lead", "qa"))
+    hero_js = f'\n<script src="{root}assets/js/hero.js" defer></script>' if home_page else ""
     return f"""<footer class="site-footer">
+  <div class="ground" aria-hidden="true"><div class="crew">{crew}</div></div>
   <div class="wrap">
+    <div class="foot-grid">
     <div class="foot-brand">
       <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
       <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
-      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="{GITHUB}" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="{GITHUB}" rel="noopener">Toss one our way {px_icon(IC["star"])}</a></p>
     </div>
     <nav aria-label="Product">
       <h2>Product</h2>
@@ -376,11 +446,14 @@ def footer(root):
       <a href="{root}terms.html">Terms of use</a>
       <a href="{root}terms.html#license">License</a>
     </nav>
-    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
-    <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
-    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+    </div>
+    <div class="foot-base">
+      <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+      <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
+      <p class="foot-made">Made in Germany with {px_icon(IC["heart"], label="love")}</p>
+    </div>
   </div>
-</footer>
+</footer>{hero_js}
 <script src="{root}assets/js/site.js" defer></script>
 <script src="{root}assets/js/pixel.js" defer></script>"""
 
@@ -400,16 +473,24 @@ def docs_shell(root, current, body):
     prev_link = next_link = ""
     if idx > 0:
         s, l = DOCS[idx - 1]
-        prev_link = f'<a class="prev" href="{root}docs/{s}.html"><small>Previous</small>{html.escape(l)}</a>'
+        prev_link = f'<a class="prev px" href="{root}docs/{s}.html"><small>Previous</small>{html.escape(l)}</a>'
     if idx < len(DOCS) - 1:
         s, l = DOCS[idx + 1]
-        next_link = f'<a class="next" href="{root}docs/{s}.html"><small>Next</small>{html.escape(l)}</a>'
+        next_link = f'<a class="next px" href="{root}docs/{s}.html"><small>Next</small>{html.escape(l)}</a>'
+    # Phones: the same groups in a <details> at the top of the article (Mira's docs-menu-390).
+    here_label = html.escape(DOCS[idx][1])
     return f"""<div class="wrap docs">
   <nav class="docs-nav" aria-label="Docs">
     <h2>Docs</h2>
 {items}
   </nav>
   <article class="prose">
+    <details class="crumb-mobile">
+      <summary class="px">{here_label} <span>Docs menu</span></summary>
+      <nav aria-label="Docs (menu)">
+{items.replace('<h3>', '<p class="docs-h">').replace('</h3>', '</p>')}
+      </nav>
+    </details>
 {body}
     <nav class="pager" aria-label="Docs pages">{prev_link}{next_link}</nav>
   </article>
@@ -559,8 +640,8 @@ def page(meta, body, root, dates):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(full_title)}</title>
 <meta name="description" content="{desc}">
-<meta name="theme-color" content="#f4f1ff">
-<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#0d0a1f">
+<meta name="color-scheme" content="dark">
 {robots}<link rel="canonical" href="{url}">
 <meta property="og:type" content="{"article" if meta.get("nav") or meta.get("kind") == "post" else "website"}">
 <meta property="og:site_name" content="kwant">
@@ -583,7 +664,6 @@ def page(meta, body, root, dates):
 <link rel="icon" href="{root}favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="{root}apple-touch-icon.png">
 <link rel="preload" href="{root}assets/fonts/pixelify-sans.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="{root}assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
 <body class="page-{meta.get("active", "docs" if meta.get("nav") else "home") if not is404 else "404"}">
@@ -591,7 +671,7 @@ def page(meta, body, root, dates):
 <main id="main">
 {body}
 </main>
-{footer(root)}
+{footer(root, meta["path"] == "index.html")}
 {structured_data(meta, url, title, image, dates, body)}{CF_ANALYTICS}
 </body>
 </html>

@@ -1,0 +1,160 @@
+// kwant.si hero: the dithered pixel nebula and the "kwant moments" toolbar.
+// Mira's design (Nov 13 2026), built by Pixel. Runs after first paint, needs no library. Home page only.
+// Nebula: 8 fps, 2 fps below 640 px, paused off screen or in a hidden tab, one still frame under reduced motion.
+// Moments: an ARIA tablist; it never switches by itself.
+(function () {
+  "use strict";
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+  var narrow = window.matchMedia("(max-width: 639px)");
+
+  /* ---------- Nebula ----------
+     One canvas cell = 4 CSS px (PX). A warped value-noise field picks a level 0..4 on one of three ladders
+     (violet, teal, pink), and a 4x4 Bayer matrix dithers both the level and the ladder choice.
+     Teal = --v4 mixed 45% with --ok; pink = --v5 mixed 50% with the avatar coral #ff8a7a, then 80% toward --scan. Nothing else. */
+  var PX = 4;
+  var LADDERS = {
+    violet: ["#0d0a1f", "#160c3a", "#22125c", "#2f1a80", "#4024a8"],
+    teal:   ["#0d0a1f", "#19243b", "#263e56", "#325772", "#3e718e"],
+    pink:   ["#0d0a1f", "#2d1c3a", "#4e2e54", "#6e406f", "#8e528a"]
+  };
+  var BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  function rgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+  var LAD = {}; Object.keys(LADDERS).forEach(function (k) { LAD[k] = LADDERS[k].map(rgb); });
+
+  function hash(x, y) { var h = x * 374761393 + y * 668265263; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967295; }
+  function smooth(t) { return t * t * (3 - 2 * t); }
+  function noise(x, y) {
+    var xi = Math.floor(x), yi = Math.floor(y), xf = smooth(x - xi), yf = smooth(y - yi);
+    var a = hash(xi, yi), b = hash(xi + 1, yi), c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
+    return a + (b - a) * xf + (c - a) * yf + (a - b - c + d) * xf * yf;
+  }
+  function fbm(x, y) { var s = 0, amp = 0.5; for (var i = 0; i < 4; i++) { s += amp * noise(x, y); x *= 2.03; y *= 2.03; amp *= 0.5; } return s / 0.9375; }
+  function clamp(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+  function sstep(a, b, v) { return smooth(clamp((v - a) / (b - a))); }
+
+  function draw(cv, t) {
+    var w = cv.width, h = cv.height, ctx = cv.getContext("2d"), img = ctx.createImageData(w, h), p = img.data;
+    var cx = parseFloat(cv.dataset.cx || 0.5), cy = parseFloat(cv.dataset.cy || 0.3);
+    var rx = parseFloat(cv.dataset.rx || 0.34), ry = parseFloat(cv.dataset.ry || 0.30);
+    var aspect = (w / h);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var u = x / w, v = y / h;
+        var sx = u * 3.2 * aspect, sy = v * 3.2;
+        // domain warp: smoke, not blobs
+        var wx = fbm(sx + t * 0.05, sy - t * 0.03), wy = fbm(sx - 4.1, sy + 2.7 + t * 0.04);
+        var n = fbm(sx + 1.8 * wx, sy + 1.8 * wy);
+        // quiet middle behind the headline, smoke at the edges and top
+        var dx = (u - cx) / rx, dy = (v - cy) / ry, r = Math.sqrt(dx * dx + dy * dy);
+        var edge = sstep(0.55, 1.35, r);
+        var floor = 1 - sstep(0.55, 0.95, v); // fade out toward the window
+        var d = clamp(sstep(0.30, 0.82, n) * edge * (0.35 + 0.65 * floor) * 1.15);
+        var th = (BAYER[(y & 3) * 4 + (x & 3)] + 0.5) / 16;
+        // hue: teal on the left, pink on the right, violet over the top; dithered between ladders
+        var side = (u - 0.5) * 2.4 + (wx - 0.5) * 0.9;
+        var lad = LAD.violet;
+        if (Math.abs(side) > 0.35 + th * 0.9) lad = side < 0 ? LAD.teal : LAD.pink;
+        var lv = Math.floor(d * 4 + th);
+        if (lv > 4) lv = 4;
+        var c = lad[lv], i = (y * w + x) * 4;
+        p[i] = c[0]; p[i + 1] = c[1]; p[i + 2] = c[2]; p[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function startNebula(cv) {
+    var box = cv.parentNode;
+    function size() { cv.width = Math.ceil(box.clientWidth / PX); cv.height = Math.ceil(box.clientHeight / PX); }
+    size();
+    var t = parseFloat(cv.dataset.t || 7), visible = true, last = 0, raf = 0;
+    draw(cv, t); cv.classList.add("live");
+    if (reduce.matches || cv.dataset.still !== undefined) return;
+    function tick(now) {
+      raf = requestAnimationFrame(tick);
+      var step = narrow.matches ? 500 : 125; // 8 fps is enough for smoke; 2 fps on phones
+      if (!visible || now - last < step) return;
+      last = now; t += (step / 1000) * 0.35; draw(cv, t);
+    }
+    var onScreen = true;
+    function run() {
+      visible = onScreen && !document.hidden;
+      if (visible && !raf) raf = requestAnimationFrame(tick);
+      if (!visible && raf) { cancelAnimationFrame(raf); raf = 0; }
+    }
+    if ("IntersectionObserver" in window) new IntersectionObserver(function (e) { onScreen = e[0].isIntersecting; run(); }).observe(box);
+    document.addEventListener("visibilitychange", run);
+    var rz = 0;
+    window.addEventListener("resize", function () { clearTimeout(rz); rz = setTimeout(function () { size(); draw(cv, t); }, 150); });
+    run();
+  }
+
+  /* ---------- Moments toolbar (ARIA tablist) ---------- */
+  function startMoments(root) {
+    var tabs = [].slice.call(root.querySelectorAll('[role="tab"]'));
+    var cap = root.querySelector("[data-caption]");
+    var video = root.querySelector("video");
+    var poster = root.querySelector(".win-poster");
+    var panel = root.querySelector('[role="tabpanel"]');
+    var pause = root.querySelector("[data-pause]");
+    function paused() { return pause.getAttribute("aria-pressed") === "true"; }
+    // The poster image stays under the video; the video shows once it has a frame to show.
+    video.addEventListener("playing", function () { video.classList.add("on"); });
+    video.addEventListener("loadeddata", function () { video.classList.add("on"); });
+    var chars = [].slice.call(root.querySelectorAll("[data-char]"));
+    function select(tab, focus) {
+      tabs.forEach(function (t) {
+        var on = t === tab; t.setAttribute("aria-selected", on); t.tabIndex = on ? 0 : -1;
+      });
+      cap.textContent = tab.dataset.text;
+      poster.srcset = tab.dataset.srcset; poster.src = tab.dataset.poster; poster.alt = tab.dataset.text;
+      video.classList.remove("on");
+      if (video.dataset.ready) { video.src = tab.dataset.clip; if (!paused()) video.play().catch(function () {}); }
+      panel.setAttribute("aria-labelledby", tab.id);
+      chars.forEach(function (c) { c.classList.toggle("on", c.dataset.char === tab.dataset.bot); });
+      if (focus) tab.focus();
+    }
+    tabs.forEach(function (t, i) {
+      t.addEventListener("click", function () { select(t); });
+      t.addEventListener("keydown", function (e) {
+        var j = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+        if (j === undefined) return;
+        e.preventDefault(); select(tabs[(j + tabs.length) % tabs.length], true);
+      });
+    });
+    pause.addEventListener("click", function () {
+      if (paused()) {
+        pause.setAttribute("aria-pressed", "false"); pause.setAttribute("aria-label", "Pause clip");
+        if (!video.dataset.ready) arm(true); else video.play().catch(function () {});
+      } else {
+        pause.setAttribute("aria-pressed", "true"); pause.setAttribute("aria-label", "Play clip");
+        video.pause();
+      }
+    });
+    if (reduce.matches) { pause.setAttribute("aria-pressed", "true"); pause.setAttribute("aria-label", "Play clip"); }
+    // Load the clip only after first paint and only when the window is on screen.
+    // Under reduced motion nothing loads until the visitor presses play.
+    function arm(force) {
+      if (video.dataset.ready || (paused() && !force)) return;
+      video.dataset.ready = "1";
+      var cur = tabs.filter(function (t) { return t.getAttribute("aria-selected") === "true"; })[0];
+      video.src = cur.dataset.clip;
+      if (!paused()) video.play().catch(function () {});
+    }
+    // Wait for the page's load event so the clip never competes with the poster (the LCP image) for bandwidth.
+    function watch() {
+      if ("IntersectionObserver" in window) new IntersectionObserver(function (e) { if (e[0].isIntersecting) arm(); }, { rootMargin: "200px" }).observe(video);
+      else arm();
+    }
+    if (document.readyState === "complete") watch(); else window.addEventListener("load", watch, { once: true });
+    var start = new URLSearchParams(location.search).get("tab");
+    if (start && tabs[+start]) select(tabs[+start]);
+  }
+
+  function go() {
+    var cv = document.querySelector("canvas[data-nebula]"); if (cv) startNebula(cv);
+    var m = document.querySelector("[data-moments]"); if (m) startMoments(m);
+  }
+  // after first paint, so the headline paints first
+  if ("requestIdleCallback" in window) requestIdleCallback(go, { timeout: 600 }); else setTimeout(go, 50);
+})();
