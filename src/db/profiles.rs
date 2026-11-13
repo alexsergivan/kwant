@@ -39,6 +39,13 @@ impl Database {
         )
         .execute(&self.pool)
         .await;
+        // account-usage: each account's last 5-hour/weekly reading, kept apart from its failure
+        for sql in [
+            "ALTER TABLE llm_profile_state ADD COLUMN usage_json TEXT;",
+            "ALTER TABLE llm_profile_state ADD COLUMN usage_checked_at TIMESTAMP;",
+        ] {
+            let _ = sqlx::query(sql).execute(&self.pool).await;
+        }
         for engine in PROFILE_ENGINES {
             sqlx::query(
                 "INSERT OR IGNORE INTO llm_profiles (id, engine, name, kind, home_dir, priority, enabled, is_default)
@@ -207,9 +214,11 @@ impl Database {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
+    /// Profiles with a recorded failure. A row that only holds a usage reading isn't one.
     pub async fn list_profile_states(&self) -> Result<HashMap<String, LlmProfileState>, DbError> {
         let rows = sqlx::query_as::<_, LlmProfileState>(
-            "SELECT profile_id, limited_until, last_error FROM llm_profile_state",
+            "SELECT profile_id, limited_until, last_error FROM llm_profile_state
+             WHERE limited_until IS NOT NULL OR last_error IS NOT NULL",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -240,7 +249,56 @@ impl Database {
         Ok(())
     }
 
-    /// Forgets a profile's failure after it served a turn, or after a new login or key.
+    /// Forgets a profile's failure after it served a turn, keeping its usage reading.
+    pub async fn clear_profile_failure(&self, id: &str) -> Result<(), DbError> {
+        sqlx::query(
+            "UPDATE llm_profile_state SET limited_until = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE profile_id = ?",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Saves a profile's latest 5-hour/weekly reading. Leaves its failure as it is.
+    pub async fn record_profile_usage(
+        &self,
+        id: &str,
+        usage: &crate::profiles::usage::AccountUsage,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO llm_profile_state (profile_id, usage_json, usage_checked_at, updated_at)
+             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(profile_id) DO UPDATE SET usage_json = excluded.usage_json,
+                 usage_checked_at = excluded.usage_checked_at, updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(id)
+        .bind(usage.to_stored())
+        .bind(usage.checked_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Each profile's latest usage reading, by profile id.
+    pub async fn list_profile_usage(
+        &self,
+    ) -> Result<HashMap<String, crate::profiles::usage::AccountUsage>, DbError> {
+        let rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT profile_id, usage_json, usage_checked_at FROM llm_profile_state
+             WHERE usage_json IS NOT NULL AND usage_checked_at IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, json, at)| crate::profiles::usage::AccountUsage::from_stored(&json, at).map(|u| (id, u)))
+            .collect())
+    }
+
+    /// Forgets a profile's failure and usage reading, after a new login or key (the account
+    /// may be another one now).
     pub async fn clear_profile_state(&self, id: &str) -> Result<(), DbError> {
         sqlx::query("DELETE FROM llm_profile_state WHERE profile_id = ?")
             .bind(id)
