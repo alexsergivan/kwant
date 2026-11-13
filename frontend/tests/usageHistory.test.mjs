@@ -74,7 +74,9 @@ test('the panel shows the window total, a bar per day, models and the day list',
   // One tab stop for the bars: today's.
   assert.equal(html.match(/<li tabindex="0"/g).length, 1);
   assert.match(html, /aria-pressed="true"[^>]*data-usage-range="7"/);
-  assert.match(html, /By model.*claude-opus-5-5.*\$1\.75.*100%.*gpt-5.*no cost reported.*0%/s);
+  assert.match(html, /By model.*claude-opus-5-5.*\$1\.75.*100%.*gpt-5.*No cost reported/s);
+  assert.doesNotMatch(html, /No cost reported<\/span>[^<]*·/, "no share after a model with no cost");
+  assert.match(html, /<span class="shrink-0 text-\[11px\] text-zinc-500">No cost reported<\/span><\/div>/, "plain words, no 0% share");
   assert.match(html, /By day.*Today/s);
   // An older server without `models`: no By model block, the rest works.
   assert.doesNotMatch(m.view({ rows: costRows, now }), /By model/);

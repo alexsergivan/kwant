@@ -160,7 +160,7 @@ const Trend: React.FC<{ days: TrendDay[]; metric: Metric; now?: Date }> = ({ day
           );
         })}
       </ul>
-      <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-500 tabular-nums" aria-hidden="true">
+      <div className="mt-1 flex items-center gap-2 text-[11px] text-zinc-500 tabular-nums" aria-hidden="true">
         <span className="flex-1 truncate">{dayLabel(days[0].day, now)}</span>
         <span className="text-zinc-300 truncate" data-usage-readout>
           {at ? label(at) : ''}
@@ -186,11 +186,15 @@ const ByModel: React.FC<{ models: ModelTotals[]; metric: Metric; engines?: Engin
                 <span className="flex-1 min-w-0 truncate text-[11px] text-zinc-300" title={r.model}>
                   {name}
                 </span>
-                <span className="shrink-0 font-mono text-[11px] tabular-nums text-zinc-400">
-                  {metric === 'cost' && r.value === 0 ? 'no cost reported' : metricText(metric, r.value)}
-                  <span className="text-zinc-600"> · </span>
-                  <span className="text-zinc-200">{r.share}%</span>
-                </span>
+                {metric === 'cost' && r.value === 0 ? (
+                  <span className="shrink-0 text-[11px] text-zinc-500">No cost reported</span>
+                ) : (
+                  <span className="shrink-0 font-mono text-[11px] tabular-nums text-zinc-400">
+                    {metricText(metric, r.value)}
+                    <span className="text-zinc-600"> · </span>
+                    <span className="text-zinc-200">{r.share}%</span>
+                  </span>
+                )}
               </div>
               <span
                 aria-hidden="true"
