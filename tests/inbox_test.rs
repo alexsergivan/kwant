@@ -308,6 +308,14 @@ async fn inbox_joins_away_and_review_tasks_with_fallbacks() {
             for key in DONE_KEYS {
                 assert_eq!(o.remove(key).is_some(), section != "waiting", "{key} on {a}");
             }
+            // done-check (0.9.7): a plain delegation has nothing that verified it
+            let checked = o.remove("checked");
+            if section == "waiting" {
+                assert_eq!(checked, None, "{a}");
+            } else {
+                let not_checked = json!({"state": "not_checked", "items": [], "items_dropped": 0, "line": "Not checked: nothing verified this result."});
+                assert_eq!(checked, Some(not_checked), "{a}");
+            }
             assert_eq!(&i, a);
         }
     }

@@ -20,7 +20,8 @@ const BAD = /\b(kwants?|kwnt|agents?)\b/i;
 // The product term (headings, tagline), the CLI commands and token file shown on the sign-in screen, and
 // Agent Maestro, the VS Code extension's own name (a Custom API preset), and "coding agent", what
 // Claude Code, Codex and Cursor are called in Settings → Coding agents (0.7.4).
-const ALLOWED = /\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
+// 0.9.8 first screen (Mira, first-screen F): the product's own name in the welcome and the claude.ai step.
+const ALLOWED = /\bWelcome to kwant\b|\ballow kwant\.|\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
 const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // T/D preview sheet (0.7.7): Mira's review-396-397 must-fix 7 and Ada's deviation-4 ruling keep "kwant"
 // as the subject in these three sentences only.
@@ -31,7 +32,8 @@ const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // the https-only reason ("kwant only downloads from github.com").
 // Worktrees tab (0.9.0 H1): Mira's h1-worktrees.md names kwant, the program that makes and cleans the folders, in its
 // status and inline-error copy.
-const RULED = /\bkwant (?:can remove it|won’t delete it|won’t write into it|suggests one from the task|cleans build output)\b|\bmade outside kwant\b|\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass|can’t fetch|can’t download|only downloads)\b|\b[Rr]estart kwant\b|\bStart kwant as\b|\bkwant (?:looked|never follows|downloads it|found nothing|doesn’t fetch)\b|\bNothing kwant can bring\b|\bwhere kwant looked\b|\bsent kwant somewhere\b/g;
+// Done-check card (0.9.8): Mira's done-check/design.md keeps kwant as the subject of the server's `how` 'kwant compared the reply with what you asked for'.
+const RULED = /\bkwant compared the reply with what you asked for\b|\bkwant (?:can remove it|won’t delete it|won’t write into it|suggests one from the task|cleans build output)\b|\bmade outside kwant\b|\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass|can’t fetch|can’t download|only downloads)\b|\b[Rr]estart kwant\b|\bStart kwant as\b|\bkwant (?:looked|never follows|downloads it|found nothing|doesn’t fetch)\b|\bNothing kwant can bring\b|\bwhere kwant looked\b|\bsent kwant somewhere\b/g;
 
 /** Whether a literal reads like text a person sees (a sentence, or a capitalised word). */
 const looksVisible = (text, node) => {

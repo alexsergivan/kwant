@@ -12,7 +12,8 @@ import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
-import { BotHome } from './BotHome';
+import { AccountCard, BotHome } from './BotHome';
+import { accountCardShows } from '../firstScreen';
 import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
@@ -1700,6 +1701,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // The empty chat shows the bot home (a bot's own chat, or #general) instead of a bare pane and a row of chips
   const showHome =
     !!home && (home.kind === 'bot' || home.kind === 'general') && !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
+  // first-screen E: nothing can run and Get started (the welcome) isn't on screen. A bot's chat and #general
+  // show it inside the home; an empty team chat shows it on its own.
+  const accountCard = accountCardShows({ canRun, getStartedShowing: !!welcome });
+  const teamAccountCard =
+    accountCard && home?.kind === 'team' && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
   // Who answers what's typed: the chat decides, an @mention overrides
   const target = answerTarget({
     kind: home?.kind ?? 'channel',
@@ -2083,7 +2089,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (
           <div className="flex min-h-full items-center justify-center">
-            <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
+            <BotHome
+              home={home}
+              spaceName={spaceName}
+              team={activeKwants}
+              prompts={suggestions}
+              canRun={canRun}
+              onPick={handlePromptSuggestion}
+              accountCard={accountCard}
+              onOpenAccounts={onOpenAccounts}
+            />
+          </div>
+        )}
+        {teamAccountCard && (
+          <div className="mx-auto flex w-full max-w-3xl px-1">
+            <AccountCard onOpenAccounts={onOpenAccounts} />
           </div>
         )}
         {groupDiscussionThreads(arranged.messages).map((item, n, items) => {

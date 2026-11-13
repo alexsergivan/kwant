@@ -103,7 +103,7 @@ export function answerTarget(opts: {
     return { kind: 'bot', label: `@${opts.botName ?? 'bot'}`, detail: `${opts.botName ?? 'This bot'} answers in this chat.` };
   }
   if (opts.kind === 'general') {
-    return { kind: 'laya', label: 'Laya picks', detail: 'Laya picks the best bot to answer. Type @ and a name to choose one yourself.' };
+    return { kind: 'laya', label: 'Best fit', detail: 'The best bot for each message answers. Type @ and a name to choose one yourself.' };
   }
   if (opts.kind === 'team') {
     const t = opts.teamName ? `@${opts.teamName} team` : 'The team';
