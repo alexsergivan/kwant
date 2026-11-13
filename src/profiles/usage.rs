@@ -36,7 +36,7 @@ impl UsageReading {
     pub fn keep_unreported(&mut self, last: &[UsageWindow], now: DateTime<Utc>) {
         for w in last {
             let reported = self.windows.iter().any(|n| n.kind == w.kind);
-            let live = w.resets_at.map_or(true, |at| at > now);
+            let live = w.resets_at.is_none_or(|at| at > now);
             if !reported && live {
                 self.windows.push(w.clone());
             }

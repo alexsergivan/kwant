@@ -24,12 +24,11 @@ pub fn has_windows(p: &LlmProfile) -> bool {
 }
 
 /// Saves what a turn or check read for this account. API-key and Custom API accounts keep none.
-pub async fn record(state: &AppState, p: &LlmProfile, reading: UsageReading, source: &str) -> Option<AccountUsage> {
+pub async fn record(state: &AppState, p: &LlmProfile, mut reading: UsageReading, source: &str) -> Option<AccountUsage> {
     if !has_windows(p) || reading.windows.is_empty() && reading.status.is_none() {
         return None;
     }
     let now = chrono::Utc::now();
-    let mut reading = reading;
     if let Ok(Some(last)) = state.db.get_profile_usage(&p.id).await {
         reading.keep_unreported(&last.windows, now);
     }
