@@ -109,7 +109,7 @@ fn rows(s: &Value) -> Vec<Value> {
     s["bots"].as_array().unwrap().iter().chain(s["also_possible"].as_array().unwrap()).cloned().collect()
 }
 
-/// Edits that give every suggested bot a name no seeded bot has (the space starts with a TechLead).
+/// Edits that give every suggested bot a name no seeded bot has (the space starts with Assistant, Researcher and Writer).
 fn renamed(s: &Value, prefix: &str) -> Map<String, Value> {
     s["bots"].as_array().unwrap().iter().map(|r| (r["key"].as_str().unwrap().to_string(), json!({ "name": format!("{prefix}{}", r["key"].as_str().unwrap()) }))).collect()
 }
@@ -371,7 +371,7 @@ async fn bad_sources_are_refused_and_nothing_is_read() {
     assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("team_not_found")), "{v}");
 
     // A team without a folder or repo has nothing to read
-    let (s, inbox) = create(&e, json!({ "template_id": "inbox" })).await;
+    let (s, inbox) = create(&e, json!({ "template_id": "inbox", "names": { "Researcher": "Finder" } })).await;
     assert_eq!(s, StatusCode::CREATED, "{inbox}");
     let (s, v) = suggest(&e, json!({ "team_id": inbox["team"]["id"] })).await;
     assert_eq!((s, v["code"].as_str()), (StatusCode::CONFLICT, Some("team_has_no_project")), "{v}");

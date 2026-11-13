@@ -385,7 +385,8 @@ impl Database {
         Ok(candidate)
     }
 
-    /// Whether a live team of this space was made from `template_id` (catalogue `used_in_space`).
+    /// Whether a live team of this space was made from `template_id` (catalogue `used_in_space`),
+    /// including the seeded starter team.
     pub async fn template_used_in_space(&self, space: &SpaceId, template_id: &str) -> Result<bool, DbError> {
         let (n,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM team_creations c JOIN teams t ON t.id = c.team_id
@@ -395,7 +396,22 @@ impl Database {
         .bind(template_id)
         .fetch_one(&self.pool)
         .await?;
-        Ok(n > 0)
+        if n > 0 {
+            return Ok(true);
+        }
+        // The seeded starter team (a fresh install's @helpers) has no creation row: it counts when a
+        // team here is led by a bot that still has the template lead's own persona.
+        if template_id == super::STARTER_TEMPLATE {
+            let (seeded,): (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM teams t JOIN kwants k ON k.id = t.lead_kwant_id WHERE t.space_id = ? AND k.persona_prompt = ?",
+            )
+            .bind(space.as_str())
+            .bind(&super::starter_template().lead().persona)
+            .fetch_one(&self.pool)
+            .await?;
+            return Ok(seeded > 0);
+        }
+        Ok(false)
     }
 
     /// The create answered for `key` in the last 24 hours, if any (Idempotency-Key).

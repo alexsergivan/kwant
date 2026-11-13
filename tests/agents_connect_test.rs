@@ -262,7 +262,7 @@ async fn ask_round_trip_with_the_mock_engine() {
     assert!(prompt[0].contains(NOTE), "{}", prompt[0]);
 
     // The same standing thread next time; the earlier message is framed as the agent's
-    let (_, _, r2) = tool(&env, &token, "ask", json!({"bot": "Architect", "message": "Again REPLYTAG:ag2", "wait_seconds": 60})).await;
+    let (_, _, r2) = tool(&env, &token, "ask", json!({"bot": "Assistant", "message": "Again REPLYTAG:ag2", "wait_seconds": 60})).await;
     let r2 = if r2["status"].is_null() { panic!("{r2}") } else { r2 };
     assert_eq!(r2["status"], "done", "{r2}");
     assert_eq!(r2["thread_id"], thread_id.as_str());
@@ -292,7 +292,7 @@ async fn ask_round_trip_with_the_mock_engine() {
     let (s, err, v) = tool(&env, &token, "ask", json!({"bot": env.b, "message": "hi REPLYTAG:no1"})).await;
     assert_eq!((s, err), (StatusCode::OK, true), "{v}");
     assert!(v.as_str().unwrap().contains("can't ask that bot"));
-    let (_, err, _) = tool(&env, &token, "ask", json!({"bot": "TechLead", "message": "hi REPLYTAG:no2"})).await;
+    let (_, err, _) = tool(&env, &token, "ask", json!({"bot": "Researcher", "message": "hi REPLYTAG:no2"})).await;
     assert!(err);
 
     // Someone else's thread is refused: another connection's, and the person's own
@@ -330,7 +330,7 @@ async fn ask_round_trip_with_the_mock_engine() {
     let (s, act) = call(&env.app, "GET", &format!("/api/agent-connections/{conn_id}/activity"), None).await;
     assert_eq!(s, StatusCode::OK);
     let calls = act["calls"].as_array().unwrap();
-    assert!(calls.iter().any(|c| c["tool"] == "ask" && c["outcome"] == "ok" && c["bot"] == "Architect"), "{act}");
+    assert!(calls.iter().any(|c| c["tool"] == "ask" && c["outcome"] == "ok" && c["bot"] == "Assistant"), "{act}");
     assert!(calls.iter().any(|c| c["tool"] == "ask" && c["outcome"] == "refused"), "{act}");
     assert!(calls.iter().all(|c| c["connection_name"] == "Claude Code"));
     // What the agent typed is kept short in the trail
@@ -370,7 +370,7 @@ async fn an_approval_card_or_a_question_returns_waiting_on_person() {
     });
     let req = ToolApprovalRequest {
         kwant_id: env.a.clone(),
-        kwant_name: "Architect".into(),
+        kwant_name: "Assistant".into(),
         turn_id: running.turn_id.clone(),
         tool_name: "Bash".into(),
         server: String::new(),
