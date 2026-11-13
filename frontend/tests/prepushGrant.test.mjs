@@ -252,7 +252,8 @@ test('a floor or payment approval the push still needs gets one line with a link
   assert.equal(m.pushApproval(r, [plain]), null);
   assert.equal(m.pushApproval(card(fx.PP_NEEDS_YOU), [floor]), null, 'only after a press');
   assert.equal(m.pushApproval(card(fx.PP_PUSHED), [floor]), null, 'a push that went needs nothing');
-  const s = m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_CLEAR'), 'Quant', { id: 'ap1', reason: 'This push goes to main' });
+  const s = m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_CLEAR'), 'Quant', { id: 'ap1', reason: 'This push goes to main' }, fx.PP_RETRIED_GRANT.grant.at + 600_000);
+  assert.equal(s.lead, 'You asked Quant to fix this and push again.', 'an asking push promises nothing in the lead (round 3)');
   assert.equal(s.step, 'asks');
   assert.equal(s.now, "Quant's push still needs your OK. This push goes to main. Pushes like this always ask, every time.");
   assert.equal(m.asksLine('Quant', { id: 'x', reason: null }), "Quant's push still needs your OK. Pushes like this always ask, every time.");
@@ -328,7 +329,9 @@ test('Push anyway: the card follows its one push to "Pushed · HH:MM"', () => {
 });
 
 test('PrepushThread wires the story: the retried card follows the new card from the whole list', async () => {
-  const every = all('PP_RETRIED_GRANT', 'PP_NEXT_CHECKING');
+  // The thread reads the real clock, so keep the retry's window open for this test (round 3 expires late pushes).
+  const open = card({ ...fx.PP_RETRIED_GRANT, grant: { ...fx.PP_RETRIED_GRANT.grant, expires_at: Date.now() + 3_600_000 } });
+  const every = [open, card(fx.PP_NEXT_CHECKING)];
   const { host } = await mount(m.PrepushThread, { cards: every, all: every, bot: 'Quant', live: new Set(), approvals: [] });
   assert.equal(text(host.querySelector('#prepush-pp_rg [data-story-now]')), "Checking Quant's new push…");
   assert.ok(host.querySelector('#prepush-pp_next [data-after-retry="pp_rg"]'));
@@ -356,4 +359,97 @@ test('a long story line keeps its light beside the text, so it never sits alone 
   const r = card(fx.PP_RETRIED_GRANT);
   const out = html(m.PrepushCard, { card: r, bot: 'Quant', story: m.storyOf(r, [r], 'Quant', null, fx.PP_RETRIED_GRANT.grant.expires_at + 1) });
   assert.match(out, /<span data-story-text="true" class="flex min-w-0 items-start gap-2"><span aria-hidden="true" data-s="off" class="dv-led mt-\[5px\] shrink-0 dv-led-still"><\/span><span data-story-now/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 3 (Rigel QA, Nov 13): floor after a retry, a late push after the window, the replaced chain.
+
+const floorAfter = (c, extra = 60_000) => ({
+  id: 'ap_floor', tool_name: 'Bash', kwant_id: c.kwant_id, asked_at: new Date(c.grant.at + extra).toISOString(),
+  details: { command: 'git push origin HEAD:main', prod_floor: { kind: 'push_main', why: 'git push sends new commits to main' } },
+});
+
+test('round 3: a production-floor push after a retry makes no card, and the retried card shows the amber line with Open it', async () => {
+  const r = card(fx.PP_RETRIED_GRANT);
+  const at = fx.PP_RETRIED_GRANT.grant.at + 120_000;
+  const ap = m.pushApproval(r, [floorAfter(r)]);
+  assert.deepEqual(ap, { id: 'ap_floor', reason: 'git push sends new commits to main' });
+  const s = m.storyOf(r, [r], 'Quant', ap, at);
+  assert.equal(s.step, 'asks', 'not "fixing": the floor approval is the follow-up');
+  assert.equal(s.now, "Quant's push still needs your OK. Git push sends new commits to main. Pushes like this always ask, every time.");
+  assert.equal(s.lead, 'You asked Quant to fix this and push again.');
+  assert.doesNotMatch(s.lead, /without asking/);
+  const sc = m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_CHECKING'), 'Quant', ap, at);
+  assert.equal(sc.step, 'asks', 'a check still running does not hide the floor approval');
+  assert.equal(m.storyOf(r, [r], 'Quant', null, at).step, 'fixing', 'no approval: still fixing');
+  const opened = [];
+  const { host } = await mount(m.PrepushCard, { card: r, bot: 'Quant', story: s, onOpenCard: () => {}, onOpenApproval: (id) => opened.push(id) });
+  assert.doesNotMatch(text(host), /without asking/);
+  assert.equal(host.querySelector('[data-story="asks"] .dv-led')?.getAttribute('data-s'), 'warn', 'amber light, not a spinner');
+  await click(button(host, 'Open it'));
+  assert.deepEqual(opened, ['ap_floor']);
+  // An override with a floor approval waiting: the lead drops its promise too.
+  const o = card(fx.PP_OVERRIDDEN_GRANT);
+  const so = m.storyOf(o, [o], 'Quant', ap, fx.PP_OVERRIDDEN_GRANT.grant.at);
+  assert.equal(so.step, 'asks');
+  assert.equal(so.lead, `You let this push go at ${HM(fx.PP_OVERRIDDEN_GRANT.override.at)} with 1 finding open.`);
+});
+
+test('round 3: the asks line capitalises the reason it is given', () => {
+  assert.equal(m.asksLine('Quant', { id: 'x', reason: 'a stripe CLI command that changes something' }),
+    "Quant's push still needs your OK. A stripe CLI command that changes something. Pushes like this always ask, every time.");
+});
+
+test('round 3: an unused grant past its window is expired even when a later push made a card, and links the approval', async () => {
+  const r = card(fx.PP_RETRIED_GRANT);
+  const late = fx.PP_RETRIED_GRANT.grant.expires_at + 60_000;
+  for (const k of ['PP_NEXT_CLEAR', 'PP_NEXT_CHECKING']) {
+    const s = m.storyOf(r, all('PP_RETRIED_GRANT', k), 'Quant', null, late);
+    assert.equal(s.step, 'expired', `${k} after the window: not "pushing"`);
+    assert.equal(s.lead, 'You asked Quant to fix this and push again.');
+    assert.doesNotMatch(s.lead, /without asking/);
+    assert.equal(s.now, "No fixed push came within 2 hours, so your OK ran out. Quant's next push asks you as usual.");
+  }
+  assert.equal(m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_BLOCKED'), 'Quant', null, late).step, 'blocked', 'blocked again still says so');
+  assert.equal(m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_PUSHED'), 'Quant', null, late).step, 'pushed', 'a used grant never expires');
+  const ap = m.pushApproval(r, [floorAfter(r, 125 * 60_000)]);
+  const s = m.storyOf(r, all('PP_RETRIED_GRANT', 'PP_NEXT_CLEAR'), 'Quant', ap, late);
+  assert.equal(s.step, 'expired');
+  assert.equal(s.approval.id, 'ap_floor');
+  const opened = [];
+  const { host } = await mount(m.PrepushCard, { card: r, bot: 'Quant', story: s, onOpenCard: () => {}, onOpenApproval: (id) => opened.push(id) });
+  assert.match(text(host), /your OK ran out/);
+  assert.doesNotMatch(text(host), /without asking|is pushing/);
+  await click(button(host, 'Open it'));
+  assert.deepEqual(opened, ['ap_floor']);
+});
+
+test('round 3: "See the newer check" follows superseded_by to the live card, at most 10 hops, and stops on a cycle', () => {
+  const r = card({ ...fx.PP_RETRIED_GRANT, grant: { ...fx.PP_RETRIED_GRANT.grant, next_card_id: 'pp_next' } });
+  const mid = card({ ...fx.PP_NEXT_BLOCKED, status: 'superseded', needs_you: false, superseded_by: 'pp_live' });
+  const live = card({ ...fx.PP_NEXT_BLOCKED, id: 'pp_live', created_at: (fx.PP_NEXT_BLOCKED.created_at ?? 0) + 1 });
+  const s = m.storyOf(r, [r, mid, live], 'Quant', null, fx.PP_RETRIED_GRANT.grant.at + 600_000);
+  assert.equal(s.step, 'replaced');
+  assert.equal(s.next.id, 'pp_live', 'the link lands on the live card, not on one that is itself replaced');
+  const sup = (id, to) => card({ ...fx.PP_SUPERSEDED, id, superseded_by: to });
+  const a = sup('a', 'b');
+  assert.equal(m.liveCard(a, [a, sup('b', 'c'), sup('c', 'a')]).id, 'c', 'a cycle stops at the last new card');
+  const chain = Array.from({ length: 15 }, (_, i) => sup(`n${i}`, `n${i + 1}`));
+  assert.equal(m.liveCard(chain[0], chain).id, 'n10', 'at most 10 hops');
+  assert.equal(m.liveCard(sup('x', 'gone'), []).id, 'x', 'a missing card keeps the last one found');
+});
+
+test('round 3: in the thread, a "newer" link lands on the live card at the end of the chain', async () => {
+  const r = card({ ...fx.PP_RETRIED_GRANT, grant: { ...fx.PP_RETRIED_GRANT.grant, next_card_id: 'pp_next', expires_at: Date.now() + 3_600_000 } });
+  const mid = card({ ...fx.PP_NEXT_BLOCKED, status: 'superseded', needs_you: false, superseded_by: 'pp_mid' });
+  const mid2 = card({ ...fx.PP_NEXT_BLOCKED, id: 'pp_mid', status: 'superseded', needs_you: false, superseded_by: 'pp_live', created_at: (fx.PP_NEXT_BLOCKED.created_at ?? 0) + 1 });
+  const live = card({ ...fx.PP_NEXT_BLOCKED, id: 'pp_live', created_at: (fx.PP_NEXT_BLOCKED.created_at ?? 0) + 2 });
+  const every = [r, mid, mid2, live];
+  const { host } = await mount(m.PrepushThread, { cards: every, all: every, bot: 'Quant', live: new Set(), approvals: [] });
+  await click(button(host.querySelector('#prepush-pp_rg'), 'See the newer check'));
+  assert.ok(host.querySelector('#prepush-pp_live').classList.contains('kw-prepush-flash'), 'the live card rings');
+  assert.ok(!host.querySelector('#prepush-pp_mid').classList.contains('kw-prepush-flash'), 'not a card that is itself replaced');
+  host.querySelector('#prepush-pp_live').classList.remove('kw-prepush-flash');
+  const ss = host.querySelector('#prepush-pp_next [data-superseded-by]');
+  if (ss) { await click(ss); assert.ok(host.querySelector('#prepush-pp_live').classList.contains('kw-prepush-flash'), 'the Replaced card\'s own link too'); }
 });

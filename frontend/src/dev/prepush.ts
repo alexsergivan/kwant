@@ -541,7 +541,8 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
     if (c.grant && c.grant.used_at === null && exp !== null && now >= exp)
       // Ada (Nov 13), Mira's FIX 7 rule: in an expired step the lead drops its promise.
       return { step: 'expired', lead: overriddenHead(c), now: `${bot} didn't push within 2 hours, so your OK ran out. Its push asks you as usual.`, next: null, at: null, approval: null };
-    if (approval) return { step: 'asks', lead, now: asksLine(bot, approval), next: null, at: null, approval };
+    // Round 3: while a floor or payment approval waits, the lead promises nothing (same rule as expired).
+    if (approval) return { step: 'asks', lead: overriddenHead(c), now: asksLine(bot, approval), next: null, at: null, approval };
     return { step: 'pushing', lead, now: `${bot} can push it now.`, next: null, at: null, approval: null };
   }
   // retried
@@ -552,23 +553,29 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
   const at = usedAt(next, c);
   const base = { lead, next, approval: null, at: null };
   if (at !== null) return { ...base, step: 'pushed', now: pushedLine(at), at };
-  if (!next) {
-    const exp = c.grant?.expires_at ?? null;
-    if (covered && exp !== null && now >= exp)
-      return {
-        ...base,
-        // Mira FIX 7: the lead stops promising once the OK has run out.
-        lead: `You asked ${bot} to fix this and push again.`,
-        step: 'expired',
-        now: `No fixed push came within 2 hours, so your OK ran out. ${bot}'s next push asks you as usual.`,
-      };
-    return { ...base, step: 'fixing', now: `${bot} is fixing it…` };
-  }
+  // The lead says only what the person did once its promise no longer holds (Mira FIX 7, Ada round 3).
+  const plain = `You asked ${bot} to fix this and push again.`;
+  const exp = c.grant?.expires_at ?? null;
+  const blockedNext = next !== null && (next.status === 'blocked' || next.status === 'failed');
+  // Round 3 (Rigel QA 5): an unused grant past its window has run out, even when a later push made a card
+  // (that push asked as usual). A blocked follow-up still says "Blocked again": that card needs the person anyway.
+  if (covered && c.grant!.used_at === null && exp !== null && now >= exp && !blockedNext)
+    return {
+      ...base,
+      lead: plain,
+      step: 'expired',
+      now: `No fixed push came within 2 hours, so your OK ran out. ${bot}'s next push asks you as usual.`,
+      approval,
+    };
+  // Round 3 (Rigel QA 4): a production-floor push makes no pre-push card, so the floor's own approval is
+  // the only sign of it. Show it while the card would otherwise still say "fixing" or "checking".
+  if (approval && (!next || next.status === 'checking' || next.status === 'clear'))
+    return { ...base, lead: plain, step: 'asks', now: asksLine(bot, approval), approval };
+  if (!next) return { ...base, step: 'fixing', now: `${bot} is fixing it…` };
   switch (next.status) {
     case 'checking':
       return { ...base, step: 'checking', now: `Checking ${bot}'s new push…` };
     case 'clear':
-      if (approval) return { ...base, step: 'asks', now: asksLine(bot, approval), approval };
       return { ...base, step: 'pushing', now: `The checks passed. ${bot} is pushing…` };
     case 'blocked':
     case 'failed': {
@@ -577,16 +584,33 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
       return { ...base, step: 'blocked', now: `Blocked again: ${what}. Nothing was pushed.` };
     }
     case 'superseded':
-      return { ...base, step: 'replaced', now: `${bot} pushed again, so a newer check replaced this one.` };
+      // Round 3: link the live end of the chain, not a card that is itself "Replaced".
+      return { ...base, next: liveCard(next, cards), step: 'replaced', now: `${bot} pushed again, so a newer check replaced this one.` };
     default:
       return { ...base, step: 'checking', now: `Checking ${bot}'s new push…` };
   }
 }
 
+/**
+ * The live card at the end of a superseded chain: follows `superseded_by` at most 10 hops and stops on a
+ * cycle or a card the list doesn't have, returning the last card it reached.
+ */
+export function liveCard(c: PrepushCard, cards: PrepushCard[]): PrepushCard {
+  const seen = new Set<string>([c.id]);
+  let cur = c;
+  for (let i = 0; i < 10 && cur.superseded_by; i++) {
+    const nx = cards.find((x) => x.id === cur.superseded_by);
+    if (!nx || seen.has(nx.id)) break;
+    seen.add(nx.id);
+    cur = nx;
+  }
+  return cur;
+}
+
 export const pushedLine = (at: number | null): string => (hhmm(at) ? `Pushed · ${hhmm(at)}` : 'Pushed');
 /** Mira FIX 3: "still" and "always ask" say the press covered the usual OK, not this kind. */
 export const asksLine = (bot: string, a: PushApproval): string =>
-  a.reason ? `${bot}'s push still needs your OK. ${a.reason}. Pushes like this always ask, every time.` : `${bot}'s push still needs your OK. Pushes like this always ask, every time.`;
+  a.reason ? `${bot}'s push still needs your OK. ${a.reason.charAt(0).toUpperCase()}${a.reason.slice(1)}. Pushes like this always ask, every time.` : `${bot}'s push still needs your OK. Pushes like this always ask, every time.`;
 
 /** A follow-up card's own lead line, so the two cards read as one story. */
 export const afterRetryLine = (c: PrepushCard): string => {

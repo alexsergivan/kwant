@@ -184,7 +184,13 @@ const StoryLine: React.FC<{ story: Story; card: Card; bot: string; onOpenCard?: 
             {story.step === 'asks' ? `${bot}'s push still needs your OK.` : story.now}
           </span>
         </span>
-        {story.next && onOpenCard && story.step !== 'asks' && (
+        {story.approval && onOpenApproval && story.step !== 'asks' && (
+          // Round 3: an expired story still links the approval that waits for this push.
+          <button type="button" data-story-approval={story.approval.id} className={LINK} onClick={() => onOpenApproval(story.approval!.id)}>
+            Open it <ArrowDown size={12} aria-hidden="true" />
+          </button>
+        )}
+        {story.next && onOpenCard && story.step !== 'asks' && !(story.approval && onOpenApproval) && (
           <button type="button" data-story-next={story.next.id} className={LINK} onClick={() => onOpenCard(story.next!.id)}>
             {story.step === 'blocked' ? 'See what it found' : story.step === 'pushed' ? 'See the push' : story.step === 'replaced' ? 'See the newer check' : 'See the new check'} <ArrowDown size={12} aria-hidden="true" />
           </button>

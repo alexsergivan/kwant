@@ -14,6 +14,7 @@ import {
   prepushApi,
   pressedBefore,
   pushApproval,
+  liveCard,
   storyOf,
   upsert,
   type PrepushCard as Card,
@@ -193,7 +194,11 @@ export const PrepushThread: React.FC<{
               onOverride={onOverride}
               story={story}
               after={after}
-              onOpenCard={jumpToCard}
+              onOpenCard={(id) => {
+                // Round 3: a "newer" link lands on the live card, never on one that is itself replaced.
+                const t = every.find((x) => x.id === id);
+                jumpToCard(t ? liveCard(t, every).id : id);
+              }}
               onOpenApproval={onOpenApproval}
             />
           </div>
