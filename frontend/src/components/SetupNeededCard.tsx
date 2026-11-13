@@ -29,8 +29,8 @@ export const SetupNeededCard: React.FC<Props> = ({ meta, botName, spaceName, can
   const detail = fixed
     ? `An account works in ${spaceName} now. Send your message again to get a reply.`
     : meta.reason === 'host_off'
-      ? `This machine is off in ${spaceName} and no other account is on. Turn one on, or add an account.`
-      : `No account can run bots in ${spaceName} yet. Sign in with Claude, Codex or Grok, or add an API key.`;
+      ? `This computer's AI accounts are off in ${spaceName} and no other account is on. Turn one on, or add an account.`
+      : `No account can run bots in ${spaceName} yet. Sign in with Claude, ChatGPT or Grok, or add an API key.`;
   return (
     <div className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`} data-setup-card={meta.reason}>
       <div

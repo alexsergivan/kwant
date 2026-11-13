@@ -29,6 +29,8 @@ import {
   trailHeading,
   whyLead,
 } from '../doneAway';
+import { knownChecked } from '../doneCheck';
+import { DoneCheck } from './DoneCheck';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModernAvatar } from './ModernAvatar';
 
@@ -134,14 +136,17 @@ const label = 'text-[11px] font-semibold uppercase tracking-[0.06em] text-zinc-4
 // 44×44 tap area, so the chip and the Why line keep their own height.
 const linkBtn = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded text-meta font-semibold text-violet-300 hover:text-violet-200';
 
-/** "Read only · changed nothing" and "No checks set · Add one". */
+/**
+ * "Read only · changed nothing" and "No checks set · Add one". With a done-check box (the item has `checked`),
+ * the box says "Not checked" and carries "Add a check", so the chip is left out.
+ */
 export const DoneChips: React.FC<{
   item: InboxItem;
   d: DoneDetailData;
   onAddCheck?: () => void;
 }> = ({ item, d, onAddCheck }) => {
   const changed = changedState(item, d.message);
-  const noChecks = noChecksSet(item);
+  const noChecks = noChecksSet(item) && !knownChecked(item.checked);
   if (changed !== false && !noChecks) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5" data-done-chips>
@@ -170,6 +175,21 @@ export const DoneChips: React.FC<{
         </span>
       )}
     </div>
+  );
+};
+
+/** The chips, then the done-check box when the server sent `checked` (design.md: the trust line before the answer). */
+export const DoneChipsAndCheck: React.FC<{
+  item: InboxItem;
+  d: DoneDetailData;
+  onAddCheck?: () => void;
+}> = ({ item, d, onAddCheck }) => {
+  const checked = knownChecked(item.checked);
+  return (
+    <>
+      <DoneChips item={item} d={d} onAddCheck={onAddCheck} />
+      {checked && <DoneCheck key={item.id} checked={checked} onAddCheck={onAddCheck} />}
+    </>
   );
 };
 
@@ -344,7 +364,7 @@ export const DoneItemView: React.FC<{
           </p>
         </div>
       </header>
-      <DoneChips item={item} d={d} onAddCheck={d.routine && onEditRoutine ? () => onEditRoutine(d.routine!.id) : undefined} />
+      <DoneChipsAndCheck item={item} d={d} onAddCheck={d.routine && onEditRoutine ? () => onEditRoutine(d.routine!.id) : undefined} />
       <DoneSections item={item} d={d} place={place} onOpenChat={onOpenChat} onEditRoutine={onEditRoutine} />
       {onOpenChat && (
         <div className={phone ? 'grid gap-2' : 'flex flex-wrap gap-2'} data-actions>

@@ -4351,6 +4351,35 @@ async fn send_chat_routed(
             }
         }
     }
+    // A direct chat (`kwant_id`) or a team chat (`team_id` and its channel) with no @mention: an
+    // open question card of that bot, or of one of the team's members, takes the typed message as
+    // its answer, as the card promises. Only the answer step below uses this; routing is unchanged.
+    let mut typed_answer: Option<(String, String)> = None;
+    if let (None, None) = (kwant_mention, team_mention) {
+        let chat: Option<(&str, Vec<Kwant>)> = match (payload.kwant_id.as_deref(), payload.team_id.as_deref(), payload.channel_id.as_deref()) {
+            (Some(kid), None, None) => all_kwants.iter().find(|k| k.id == kid).map(|k| (kid, vec![k.clone()])),
+            (None, Some(tid), Some(cid)) => all_teams.iter().find(|t| t.id == tid || t.name.eq_ignore_ascii_case(tid)).map(|t| {
+                let ids: Vec<String> = serde_json::from_str(&t.member_kwants).unwrap_or_default();
+                (cid, all_kwants.iter().filter(|k| ids.contains(&k.id)).cloned().collect())
+            }),
+            _ => None,
+        };
+        if let Some((ctx, members)) = chat {
+            let recent = state.db.list_messages(ctx, 30).await.unwrap_or_default();
+            let open = state.db.list_questions(Some("open"), Some(ctx), None).await.unwrap_or_default();
+            let direct = payload.kwant_id.is_some();
+            let open: Vec<_> = open
+                .into_iter()
+                .filter(|q| q.thread_id.is_none())
+                .filter(|q| if direct { q.channel_id.is_none() && q.direct_kwant_id.as_deref() == Some(ctx) } else { q.channel_id.as_deref() == Some(ctx) })
+                .collect();
+            if let Some(a) = crate::router::sticky::awaiting_answer(&recent, &open, &members) {
+                if let (true, Some(qid)) = (a.card, a.question_id) {
+                    typed_answer = Some((a.kwant.name.clone(), qid));
+                }
+            }
+        }
+    }
 
     // Detect if a team is targeted
     let target_team = if let Some(tid) = payload.team_id.as_ref().filter(|_| reply_bot.is_none()) {
@@ -4511,12 +4540,16 @@ async fn send_chat_routed(
 
     // Typed instead of tapped: the answer closes the bot's open question, and a turn still waiting
     // on it carries on with it (no second turn)
-    if let Some((asker, Some(qid))) = &awaiting {
+    let asked = match &awaiting {
+        Some((asker, Some(qid))) => Some((asker.name.clone(), qid.clone())),
+        _ => typed_answer,
+    };
+    if let Some((asker, qid)) = &asked {
         if super::questions::answer_by_message(&state, qid, &payload.prompt).await {
             return Ok(Json(json!({
                 "status": "answered",
                 "user_message_id": saved_user_msg.id,
-                "kwant": asker.name,
+                "kwant": asker,
                 "question_id": qid,
             })));
         }

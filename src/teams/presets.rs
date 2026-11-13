@@ -33,7 +33,7 @@ mod tests {
     fn loads_and_ids_are_unique() {
         let ids: std::collections::HashSet<_> = all().iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids.len(), all().len());
-        for id in ["frontend", "backend", "qa", "sre", "data", "writer", "security", "designer", "support", "copywriter", "research", "sales"] {
+        for id in ["frontend", "backend", "qa", "sre", "data", "writer", "security", "designer", "support", "copywriter", "research", "sales", "assistant"] {
             assert!(get(id).is_some(), "{id}");
         }
     }
