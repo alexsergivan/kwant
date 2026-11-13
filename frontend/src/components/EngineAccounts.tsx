@@ -219,7 +219,7 @@ export const AccountUsageBars: React.FC<{ profile: Profile; canCheck: boolean; d
           ) : (
             <button
               {...btnProps}
-              className="ml-auto inline-flex items-center justify-center w-6 h-6 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400 max-sm:w-11 max-sm:h-11 max-sm:-my-2.5 max-sm:-mr-2.5"
+              className="ml-auto inline-flex items-center justify-center w-6 h-6 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 max-sm:hover:bg-transparent disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400 max-sm:w-11 max-sm:h-11 max-sm:-my-2.5 max-sm:-mr-2.5"
             >
               <RefreshCw size={12} aria-hidden="true" className={spin} />
             </button>
