@@ -799,7 +799,7 @@ const TeamStep: React.FC<{
         >
           <span className="flex -space-x-2 shrink-0" aria-hidden="true">
             {start.members.slice(0, 3).map((b) => (
-              <span key={b.id} className="rounded-[7px] ring-2 ring-[#16122b]">
+              <span key={b.id} className="flex rounded-[7px] ring-2 ring-[#16122b]">
                 <ModernAvatar role={b.avatar_sprite} name={b.name} size={26} />
               </span>
             ))}
