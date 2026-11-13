@@ -319,6 +319,28 @@ test('a directory entry that is a built-in tool is listed once, as built in', ()
   assert.deepEqual(groups.map((g) => [g.key, g.rows.length]), [['builtin', 1], ['composio', 0], ['directory', 0]]);
 });
 
+test('a server named like a built-in tool at another address is not that tool', () => {
+  // QA (mcp-finder/qa.md): a directory "Stripe" at https://api.mcp.ai/p_stripe made the built-in Stripe read "Added".
+  const groupsWith = (query, detail) =>
+    m.buildGroups({
+      query,
+      composioApps: [],
+      composioAdded: false,
+      directory: null,
+      connections: [{ id: 'mcp:s1', kind: 'mcp', name: 'Stripe', detail, status: 'ok', used_by: [] }],
+      expanded: new Set(),
+    });
+  const stripeRow = (detail) => groupsWith('stripe', detail).find((g) => g.key === 'builtin').rows.find((r) => r.preset?.id === 'stripe');
+  assert.equal(stripeRow('api.mcp.ai').added, null, 'another host is not the built-in Stripe');
+  assert.equal(stripeRow('npx').added, null, 'a local server named Stripe is not the hosted one');
+  assert.equal(stripeRow('mcp.stripe.com').added?.id, 'mcp:s1', 'the same host is');
+  assert.equal(stripeRow('MCP.Stripe.com ').added?.id, 'mcp:s1', 'host case and spaces do not matter');
+  assert.equal(stripeRow(null).added?.id, 'mcp:s1', 'no address: the name alone decides, as before');
+  const connected = (detail) => groupsWith('', detail).find((g) => g.key === 'connected');
+  assert.equal(connected('api.mcp.ai'), undefined, 'not listed under Connected as the built-in Stripe');
+  assert.deepEqual(connected('mcp.stripe.com').rows.map((r) => r.preset?.id), ['stripe']);
+});
+
 test('more than five in a group: a Show more row that is itself an option', () => {
   const composioApps = Array.from({ length: 8 }, (_, i) => ({ slug: `g${i}`, name: `Gapp ${i}`, description: '', tools: null, connected: false }));
   // No built-in tool matches "gapp", so Built in is left out and the group is found by its key.

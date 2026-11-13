@@ -146,10 +146,29 @@ export function directoryNeeds(e: DirectoryEntry): string | null {
   return null;
 }
 
-const addedServer = (p: McpPreset, connections: Connection[]): Connection | null =>
-  connections.find(
-    (c) => c.kind === 'mcp' && (c.name.toLowerCase() === p.form.name.toLowerCase() || c.name.toLowerCase() === p.label.toLowerCase()),
-  ) ?? null;
+/** A remote built-in tool's host, as the server shows an added tool's address (connections.rs: the host, or a local tool's command). */
+const presetHost = (p: McpPreset): string => {
+  if (p.form.transport !== 'http') return '';
+  try {
+    return new URL(p.form.url.trim()).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+};
+
+/** The added server that is this built-in tool: same name, and for a remote tool the same host. A server a person named
+ *  "Stripe" at another address is not the built-in Stripe; only a server with no address falls back to the name alone. */
+const addedServer = (p: McpPreset, connections: Connection[]): Connection | null => {
+  const names = [p.form.name.toLowerCase(), p.label.toLowerCase()];
+  const host = presetHost(p);
+  return (
+    connections.find((c) => {
+      if (c.kind !== 'mcp' || !names.includes(c.name.toLowerCase())) return false;
+      const at = (c.detail ?? '').trim().toLowerCase();
+      return !host || !at || at === host;
+    }) ?? null
+  );
+};
 
 /** Every group for `query`, in order, before the Show more rows are cut. */
 export function buildGroups(opts: {
