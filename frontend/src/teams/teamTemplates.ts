@@ -372,6 +372,12 @@ export const teamsApi = {
     call<TemplatePreview>(`/api/team-templates/${enc(templateId)}/preview?space=${enc(space)}`),
   suggest: ({ space, ...src }: SuggestRequest, source: string) =>
     call<WireSuggestion>(`/api/teams/suggest?space=${enc(space)}`, 'POST', src).then((s) => normSuggestion(s, source)),
+  /** Stops a running suggest (decisions-1112 §2: `DELETE /api/teams/suggest?space=`, 204 also when idle).
+   *  Fire and forget: a 404 from a server without the route, or any other failure, is ignored; the
+   *  409 `busy` copy on the next ask stays the fallback. */
+  cancelSuggest: (space: string): void => {
+    call(`/api/teams/suggest?space=${enc(space)}`, 'DELETE').catch(() => {});
+  },
   templateInfo: (teamId: string, space: string) =>
     call<WireTemplateInfo>(`/api/teams/${enc(teamId)}/template?space=${enc(space)}`).then(normInfo),
 };

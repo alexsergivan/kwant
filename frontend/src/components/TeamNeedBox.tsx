@@ -73,6 +73,8 @@ export const TeamNeedBox: React.FC<TeamNeedBoxProps> = ({ label, register, autoF
 
   const cancel = () => {
     seq.current += 1;
+    // Decisions 11-12 §2: stop the server's ask too, not only stop listening for it.
+    teamsApi.cancelSuggest(rt.space);
     setPhase('idle');
     setSlow(false);
     setLive('Stopped. Your words are kept.');
