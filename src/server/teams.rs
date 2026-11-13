@@ -12,6 +12,7 @@ use crate::db::spaces::SpaceId;
 use crate::db::team_templates::{self as tt, Clash, ClashKind, CreateError, Creation, Plan, PlanBot, PlanRoutine, PlanSkill, Target};
 use crate::server::dev::git::{self, GitError, Repo};
 use crate::teams::discover::{self, Listing, Mode, Role, Row, Stops};
+use crate::teams::packs;
 use crate::teams::templates::{self, CatalogueEntry, Template};
 use crate::teams::names;
 use axum::{
@@ -164,7 +165,7 @@ pub async fn from_template(State(state): State<AppState>, headers: HeaderMap, ur
         return fail(StatusCode::BAD_REQUEST, "bad_request", "the body must be a JSON object");
     };
     for k in req.keys() {
-        if !["template_id", "handle", "names", "suggestion_id", "edits"].contains(&k.as_str()) {
+        if !["template_id", "handle", "names", "answers", "suggestion_id", "edits"].contains(&k.as_str()) {
             return fail_at(StatusCode::BAD_REQUEST, "unknown_field", format!("unknown field {k}"), k);
         }
     }
@@ -198,6 +199,9 @@ pub async fn from_template(State(state): State<AppState>, headers: HeaderMap, ur
             // T1: the Coding template with a project posts the suggestion; no other template does
             if tid.as_deref().is_some_and(|t| t != "coding") {
                 return fail(StatusCode::BAD_REQUEST, "bad_request", "only the Coding template goes with a suggestion");
+            }
+            if req.contains_key("answers") {
+                return fail_at(StatusCode::BAD_REQUEST, "unknown_field", "answers only goes with template_id", "answers");
             }
             for k in ["handle", "names"] {
                 if req.contains_key(k) {
@@ -314,9 +318,7 @@ async fn created_response(state: &AppState, c: &Creation) -> Response {
         .iter()
         .map(|b| json!({ "slot": b.slot, "id": b.id, "name": b.name, "preset": b.preset, "lead": b.lead, "existing": b.existing }))
         .collect();
-    (
-        StatusCode::CREATED,
-        Json(json!({
+    let mut body = json!({
             "team": team,
             "channel_id": c.created.channel_id,
             "action_id": c.action_id,
@@ -325,9 +327,12 @@ async fn created_response(state: &AppState, c: &Creation) -> Response {
             "skills": c.created.skills,
             "routine": c.created.routine,
             "undo_until": c.undo_until(),
-        })),
-    )
-        .into_response()
+        });
+    // A pack with several routines also lists them all; `routine` stays the first (0.9 shape)
+    if c.created.routines.len() > 1 {
+        body["routines"] = json!(c.created.routines);
+    }
+    (StatusCode::CREATED, Json(body)).into_response()
 }
 
 fn scope_list(items: &[String]) -> Vec<String> {
@@ -338,9 +343,12 @@ fn scope_list(items: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// 3a: a template with the person's handle and names; every other text is the template's.
+/// 3a: a template with the person's handle, names and answers; every other text is the
+/// template's.
 #[allow(clippy::result_large_err)]
 fn template_plan(t: &Template, req: &Map<String, Value>, key: Option<String>, tz: String) -> Result<Plan, Response> {
+    let answers = template_answers(t, req.get("answers"))?;
+    let t = &t.filled(&answers);
     let handle = match req.get("handle") {
         None | Some(Value::Null) => t.handle.clone(),
         Some(Value::String(h)) if names::valid_handle(h) => h.clone(),
@@ -398,9 +406,35 @@ fn template_plan(t: &Template, req: &Map<String, Value>, key: Option<String>, tz
         },
         bots,
         skills: template_skills(t, |slot| Some(slot.to_string())),
-        routine: t.routine.as_ref().map(|r| PlanRoutine { owner_slot: r.bot.clone(), name: r.name.clone(), instructions: r.prompt.clone(), cron: r.cron.clone() }),
+        routines: t.routines.iter().map(|r| PlanRoutine { owner_slot: r.bot.clone(), name: r.name.clone(), instructions: r.prompt.clone(), cron: r.cron.clone() }).collect(),
         tz,
     })
+}
+
+/// The create's `answers`: `{ask id: text}` for the template's `asks`. An empty answer counts as
+/// none; a line of the template that needs a missing answer is left out.
+#[allow(clippy::result_large_err)]
+fn template_answers(t: &Template, v: Option<&Value>) -> Result<HashMap<String, String>, Response> {
+    let mut out = HashMap::new();
+    match v {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(m)) => {
+            for (id, v) in m {
+                let field = format!("answers.{id}");
+                if !t.asks.iter().any(|a| &a.id == id) {
+                    return Err(fail_at(StatusCode::BAD_REQUEST, "unknown_field", format!("{id} isn't asked by this template"), &field));
+                }
+                let bad = || fail_at(StatusCode::BAD_REQUEST, "bad_answer", format!("an answer is text of at most {} characters", packs::MAX_ANSWER_CHARS), &field);
+                let Value::String(text) = v else { return Err(bad()) };
+                let Some(text) = packs::clean_answer(text) else { return Err(bad()) };
+                if !text.is_empty() {
+                    out.insert(id.clone(), text);
+                }
+            }
+        }
+        Some(_) => return Err(fail_at(StatusCode::BAD_REQUEST, "bad_request", "answers must be an object", "answers")),
+    }
+    Ok(out)
 }
 
 /// A template's starter skills, each given to the plan slot `owner` maps its bot to.
@@ -509,7 +543,7 @@ async fn suggestion_plan(
         }
     }
 
-    let coding_t = templates::get("coding").expect("the Coding template exists");
+    let coding_t = &templates::get("coding").expect("the Coding template exists").filled(&HashMap::new());
     let mut bots = Vec::new();
     for c in &on {
         let r = c.row;
@@ -573,7 +607,7 @@ async fn suggestion_plan(
         target,
         bots,
         skills,
-        routine: None,
+        routines: Vec::new(),
         tz,
     })
 }

@@ -94,6 +94,12 @@ pub enum Commands {
         bare: bool,
     },
 
+    /// Business packs: ready-made teams as folders (pack.json, skills/*.md, README.md)
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
+
     /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
     #[command(hide = true)]
     McpEchoServer,
@@ -111,6 +117,18 @@ pub enum Commands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum PackCommand {
+    /// Check a pack folder before you share or import it: no secrets, tools, MCP servers,
+    /// approvals or Dev mode, routines off, known presets, skills with owners and within the
+    /// size limit, every {{placeholder}} declared. Prints one line per problem and exits 1 if
+    /// there is any
+    Check {
+        /// The pack folder (the one holding pack.json)
+        dir: std::path::PathBuf,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -119,6 +137,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // A test helper that holds nothing: left dumpable so tests can find it by its environment
         kwnt::mcp::echo_server::run_stdio().await?;
         return Ok(());
+    }
+    // Reads only the folder it is given: no config, data folder or server
+    if let Some(Commands::Pack { command: PackCommand::Check { dir } }) = &cli.command {
+        let (lines, ok) = kwnt::teams::packs::check_report(dir);
+        for l in lines {
+            println!("{l}");
+        }
+        std::process::exit(if ok { 0 } else { 1 });
     }
     kwnt::harden_process();
     tracing_subscriber::fmt::init();
@@ -232,6 +258,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
         Some(Commands::McpOauthMockServer { .. }) => unreachable!("handled before config loading"),
+        Some(Commands::Pack { .. }) => unreachable!("handled before config loading"),
         None => {
             println!("⚡ kwant bots: your team of super-intelligent bots");
             println!("Run `kwnt serve` to start the server, or `kwnt --help` for options.");

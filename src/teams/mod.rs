@@ -4,5 +4,6 @@
 
 pub mod discover;
 pub mod names;
+pub mod packs;
 pub mod presets;
 pub mod templates;

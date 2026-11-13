@@ -335,3 +335,73 @@ fn uploads_still_refuse_nested_archives() {
     let bytes = zip_of(&[("a/SKILL.md", "---\nname: a\ndescription: b\n---\nc"), ("a/inner.zip", "PK")], None);
     assert!(matches!(parse_file(&bytes, Some("x.zip")), Err(ImportError::Invalid(_))));
 }
+
+// ── Business packs (`teams::packs`) ───────────────────────────────────────
+
+/// The built-in Sales pack's files from `packs/sales/`, each path under `top`.
+fn sales_pack_files(top: &str) -> Vec<(String, String)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packs/sales");
+    let mut out = vec![
+        (format!("{top}pack.json"), std::fs::read_to_string(dir.join("pack.json")).unwrap()),
+        (format!("{top}README.md"), std::fs::read_to_string(dir.join("README.md")).unwrap()),
+    ];
+    for e in std::fs::read_dir(dir.join("skills")).unwrap() {
+        let p = e.unwrap().path();
+        out.push((format!("{top}skills/{}", p.file_name().unwrap().to_string_lossy()), std::fs::read_to_string(&p).unwrap()));
+    }
+    out
+}
+
+fn as_refs(files: &[(String, String)]) -> Vec<(&str, &str)> {
+    files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect()
+}
+
+fn assert_sales_bundle(b: &Bundle) {
+    assert_eq!(b.source.kind, "kwant-pack");
+    assert_eq!(b.bots.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["SalesLead", "Prospector", "OutreachWriter"]);
+    assert_eq!(b.bots.iter().map(|x| x.skills.len()).sum::<usize>(), 2);
+    let routines: Vec<_> = b.bots.iter().flat_map(|x| &x.routines).collect();
+    assert_eq!(routines.len(), 1);
+    assert!(routines[0].schedule_text.as_deref().is_some_and(|c| c.split_whitespace().count() == 5));
+    assert_eq!(b.teams.len(), 1);
+    let team = &b.teams[0];
+    assert_eq!(team.name, "sales");
+    assert_eq!(team.lead.as_deref(), Some("sales:SalesLead"));
+    assert_eq!(team.members, ["sales:Prospector", "sales:OutreachWriter"]);
+    let instructions = team.instructions.as_deref().unwrap();
+    assert!(instructions.starts_with("This team finds and warms up sales leads") && !instructions.contains("{{") && !instructions.contains("in their words"), "{instructions}");
+    assert!(b.omitted.iter().any(|o| o.contains("What do you sell")), "{:?}", b.omitted);
+    assert!(b.bots.iter().all(|x| x.covers.len() + x.avoids.len() > 0));
+}
+
+#[test]
+fn a_pack_folder_imports_as_its_team() {
+    let files = sales_pack_files("sales/");
+    let b = parse_file(&zip_of(&as_refs(&files), None), Some("sales.zip")).unwrap();
+    assert_sales_bundle(&b);
+    // The same pack inside a GitHub repository archive, next to code and other docs
+    let mut repo = sales_pack_files("kwant-HEAD/packs/sales/");
+    repo.push(("kwant-HEAD/README.md".into(), "# kwant".into()));
+    repo.push(("kwant-HEAD/src/main.rs".into(), "fn main() {}".into()));
+    let (b, _) = parse_repo_zip(&zip_of(&as_refs(&repo), None), None).unwrap();
+    assert_sales_bundle(&b);
+    let (b, _) = parse_repo_zip(&zip_of(&as_refs(&repo), None), Some("packs/sales")).unwrap();
+    assert_sales_bundle(&b);
+}
+
+#[test]
+fn a_pack_with_a_problem_is_refused_whole() {
+    let mut files = sales_pack_files("");
+    let pack = &mut files[0].1;
+    let mut v: serde_json::Value = serde_json::from_str(pack).unwrap();
+    v["routines"][0]["enabled"] = serde_json::json!(true);
+    v["bots"][0]["mcp_servers"] = serde_json::json!({"x": {"command": "curl"}});
+    *pack = v.to_string();
+    match parse_file(&zip_of(&as_refs(&files), None), Some("sales.zip")) {
+        Err(ImportError::Invalid(m)) => {
+            assert!(m.starts_with("This pack can't be imported: "), "{m}");
+            assert!(m.contains("is switched on") && m.contains("mcp_servers") && m.contains("kwnt pack check"), "{m}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}

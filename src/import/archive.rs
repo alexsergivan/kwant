@@ -94,6 +94,33 @@ pub fn is_licence_file(lower_base: &str) -> bool {
     matches!(stem, "license" | "licence" | "copying") && (lower_base == stem || lower_base.ends_with(".md") || lower_base.ends_with(".txt"))
 }
 
+/// The folders of a repository archive (after `top`) that hold a business pack's `pack.json`.
+fn pack_dirs<R: Read + std::io::Seek>(zip: &zip::ZipArchive<R>, top: Option<&str>) -> Vec<String> {
+    let mut dirs = Vec::new();
+    for name in zip.file_names() {
+        let Some(path) = name.ok().and_then(|n| safe_path(&n)) else { continue };
+        let path = match top {
+            Some(t) if path.len() > t.len() => path[t.len() + 1..].to_lowercase(),
+            Some(_) => continue,
+            None => path.to_lowercase(),
+        };
+        let (dir, base) = path.rsplit_once('/').unwrap_or(("", &path));
+        if base == "pack.json" {
+            dirs.push(dir.to_string());
+        }
+    }
+    dirs
+}
+
+/// A pack's README.md or skills/*.md, which a repo import reads only next to a `pack.json`
+/// (elsewhere they are a repo's docs and notes, as before).
+fn in_pack(lower: &str, pack_dirs: &[String]) -> bool {
+    pack_dirs.iter().any(|d| {
+        let rest = if d.is_empty() { Some(lower) } else { lower.strip_prefix(d.as_str()).and_then(|r| r.strip_prefix('/')) };
+        rest.is_some_and(|r| r == "readme.md" || r.strip_prefix("skills/").is_some_and(|f| !f.contains('/') && f.ends_with(".md")))
+    })
+}
+
 /// Files of a repository archive that some import format reads. Everything else in a repo
 /// (code, docs, a skill's reference notes) is skipped without being inflated.
 pub fn wanted_in_repo(lower: &str) -> bool {
@@ -133,6 +160,7 @@ pub fn read_zip_as(bytes: &[u8], kind: ZipKind<'_>) -> Result<Unzipped, ImportEr
         });
     }
     let top = if repo { common_top(&zip) } else { None };
+    let packs = if repo { pack_dirs(&zip, top.as_deref()) } else { Vec::new() };
     let mut out = Unzipped::default();
     let mut total: u64 = 0;
     let mut read = 0usize;
@@ -171,7 +199,7 @@ pub fn read_zip_as(bytes: &[u8], kind: ZipKind<'_>) -> Result<Unzipped, ImportEr
             || lower.starts_with("__macosx/")
             || CHAT_FILES.contains(&base)
             || !readable
-            || (repo && !wanted_in_repo(&lower))
+            || (repo && !wanted_in_repo(&lower) && !in_pack(&lower, &packs))
         {
             out.skipped.push(path);
             continue;

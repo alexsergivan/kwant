@@ -1,14 +1,23 @@
-//! The three ready-made teams (spec T1/T2): Inbox, Sales and Coding. The data is Mira's generated
-//! `design/templates.js`, converted byte for byte into `templates.json` by
-//! `scripts/gen-team-data.mjs`; nothing here rewrites it.
+//! The ready-made teams (spec T1/T2): the built-in business packs in `packs/` (Inbox, Sales and
+//! Coding), embedded at build time by `build.rs` and read through the same check as
+//! `kwnt pack check` (`teams::packs`). Nothing is read from disk for them at run time.
 
+use super::packs::{self, Ask};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+include!(concat!(env!("OUT_DIR"), "/builtin_packs.rs"));
+
+/// One ready-made team: a checked pack.
+#[derive(Debug, Clone, Serialize)]
 pub struct Template {
     pub id: String,
+    /// The pack's own version (`1.0.0`) and business field (`Sales`).
+    #[serde(skip_serializing)]
+    pub version: String,
+    #[serde(skip_serializing)]
+    pub field: String,
     pub label: String,
     pub icon: String,
     pub handle: String,
@@ -17,12 +26,19 @@ pub struct Template {
     /// The team's pinned instructions. Written at create, not served in the catalogue.
     #[serde(skip_serializing)]
     pub instructions: String,
+    /// What the create asks the person; text uses each as `{{id}}`.
+    pub asks: Vec<Ask>,
     pub needs: Vec<Need>,
     pub never: Vec<String>,
+    /// The first of `routines`, as 0.9 served it.
     pub routine: Option<Routine>,
+    #[serde(skip_serializing)]
+    pub routines: Vec<Routine>,
     pub first_prompts: Vec<String>,
     pub bots: Vec<TemplateBot>,
     pub skills: Vec<TemplateSkill>,
+    #[serde(skip_serializing)]
+    pub readme: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -86,7 +102,17 @@ pub struct TemplateSkill {
 
 pub fn all() -> &'static [Template] {
     static ALL: OnceLock<Vec<Template>> = OnceLock::new();
-    ALL.get_or_init(|| serde_json::from_str(include_str!("templates.json")).expect("src/teams/templates.json is valid"))
+    ALL.get_or_init(|| {
+        BUILTIN_PACKS
+            .iter()
+            .map(|(id, files)| {
+                let files: BTreeMap<String, Vec<u8>> = files.iter().map(|(p, b)| (p.to_string(), b.to_vec())).collect();
+                let t = packs::check_files(&files).unwrap_or_else(|problems| panic!("built-in pack {id} fails its check:\n{}", problems.join("\n")));
+                assert_eq!(t.id, *id, "packs/{id}/pack.json has another id");
+                t
+            })
+            .collect()
+    })
 }
 
 pub fn get(id: &str) -> Option<&'static Template> {
@@ -114,7 +140,21 @@ pub struct CatalogueTemplate<'a> {
     pub never: &'a [String],
     pub skills: &'a [TemplateSkill],
     pub routine: Option<&'a Routine>,
+    /// Only for a pack with more than one routine; `routine` is the first.
+    #[serde(skip_serializing_if = "more_than_one_not")]
+    pub routines: &'a [Routine],
+    /// Only for a pack that asks something (the create's `answers`).
+    #[serde(skip_serializing_if = "no_asks")]
+    pub asks: &'a [Ask],
     pub first_prompts: &'a [String],
+}
+
+fn more_than_one_not(r: &&[Routine]) -> bool {
+    r.len() < 2
+}
+
+fn no_asks(a: &&[Ask]) -> bool {
+    a.is_empty()
 }
 
 #[derive(Serialize)]
@@ -138,6 +178,8 @@ impl Template {
             never: &self.never,
             skills: &self.skills,
             routine: self.routine.as_ref(),
+            routines: &self.routines,
+            asks: &self.asks,
             first_prompts: &self.first_prompts,
         }
     }

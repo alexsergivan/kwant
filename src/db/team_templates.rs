@@ -31,8 +31,9 @@ pub struct Plan {
     pub target: Target,
     pub bots: Vec<PlanBot>,
     pub skills: Vec<PlanSkill>,
-    pub routine: Option<PlanRoutine>,
-    /// The person's time zone for the routine's cron.
+    /// Inserted paused, in order.
+    pub routines: Vec<PlanRoutine>,
+    /// The person's time zone for the routines' cron.
     pub tz: String,
 }
 
@@ -109,7 +110,15 @@ pub struct Created {
     pub template_id: Option<String>,
     pub bots: Vec<CreatedBot>,
     pub skills: Vec<CreatedSkill>,
+    /// The first routine made (the 0.9 shape).
     pub routine: Option<CreatedRoutine>,
+    /// Every routine made, kept only when there are more than one.
+    #[serde(default, skip_serializing_if = "one_or_none")]
+    pub routines: Vec<CreatedRoutine>,
+}
+
+fn one_or_none(r: &[CreatedRoutine]) -> bool {
+    r.len() < 2
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -770,8 +779,8 @@ async fn create_in(tx: &mut Tx, space: &SpaceId, plan: &Plan, fail_after: Option
     }
     seam(fail_after, Step::Skills)?;
 
-    // The routine, paused until the person turns it on (T5).
-    if let Some(r) = &plan.routine {
+    // The routines, paused until the person turns them on (T5).
+    for r in &plan.routines {
         if let Some(owner) = bot_id(&r.owner_slot).filter(|o| !created.bots.iter().any(|b| &b.id == o && b.existing)) {
             let schedule = crate::routines::Schedule::Cron { expression: r.cron.clone(), tz: plan.tz.clone() };
             schedule.validate().map_err(|e| CreateError::Db(DbError::Conflict(format!("routine schedule: {e}"))))?;
@@ -790,7 +799,9 @@ async fn create_in(tx: &mut Tx, space: &SpaceId, plan: &Plan, fail_after: Option
             .bind(space.as_str())
             .execute(&mut **tx)
             .await?;
-            created.routine = Some(CreatedRoutine { id, name: r.name.clone(), enabled: false });
+            let made = CreatedRoutine { id, name: r.name.clone(), enabled: false };
+            created.routine.get_or_insert_with(|| made.clone());
+            created.routines.push(made);
         }
     }
     seam(fail_after, Step::Routine)?;

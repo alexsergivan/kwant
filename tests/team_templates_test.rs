@@ -502,7 +502,7 @@ fn plan(e: &Env, handle: &str, key: Option<&str>) -> Plan {
         },
         bots: vec![bot("lead", &format!("{handle}-lead"), true), bot("one", &format!("{handle}-one"), false), bot("two", &format!("{handle}-two"), false)],
         skills: vec![PlanSkill { owner_slot: "lead".into(), name: format!("{handle}-plan"), description: "Plans a change".into(), body: "Write a plan.".into() }],
-        routine: Some(PlanRoutine { owner_slot: "one".into(), name: "Morning check".into(), instructions: "Check the queue.".into(), cron: "0 9 * * 1-5".into() }),
+        routines: vec![PlanRoutine { owner_slot: "one".into(), name: "Morning check".into(), instructions: "Check the queue.".into(), cron: "0 9 * * 1-5".into() }],
         tz: "UTC".into(),
     }
 }
@@ -525,4 +525,46 @@ async fn a_create_that_fails_at_any_step_leaves_nothing() {
     assert_eq!(c.created.bots.len(), 3);
     let after = counts(&e).await;
     assert_eq!((after.bots, after.teams, after.skills, after.routines), (before.bots + 3, before.teams + 1, before.skills + 1, before.routines + 1));
+}
+
+/// 0.10.0 business packs: Sales asks what the person sells; the answer goes into the team's
+/// pinned instructions, and a create without it makes the 0.9 team.
+#[tokio::test]
+async fn sales_answers_fill_the_instructions_and_bad_answers_make_nothing() {
+    let e = setup().await;
+    let (s, cat) = call(&e.app, "GET", "/api/team-templates", &[], None).await;
+    assert_eq!(s, StatusCode::OK);
+    let entries = cat["templates"].as_array().unwrap();
+    let sales = entries.iter().find(|t| t["id"] == "sales").unwrap();
+    assert_eq!(sales["asks"], json!([{"id": "what_you_sell", "label": "What do you sell, and who buys it?", "example": "Hand-made leather bags, sold to small outdoor shops in the UK"}]));
+    assert!(entries.iter().filter(|t| t["id"] != "sales").all(|t| t.get("asks").is_none() && t.get("routines").is_none()));
+
+    let before = counts(&e).await;
+    for (body, status, code, field) in [
+        (json!({"template_id": "sales", "answers": {"budget": "10k"}}), StatusCode::BAD_REQUEST, "unknown_field", "answers.budget"),
+        (json!({"template_id": "inbox", "answers": {"what_you_sell": "bags"}}), StatusCode::BAD_REQUEST, "unknown_field", "answers.what_you_sell"),
+        (json!({"template_id": "sales", "answers": {"what_you_sell": 5}}), StatusCode::BAD_REQUEST, "bad_answer", "answers.what_you_sell"),
+        (json!({"template_id": "sales", "answers": {"what_you_sell": "x".repeat(1001)}}), StatusCode::BAD_REQUEST, "bad_answer", "answers.what_you_sell"),
+        (json!({"template_id": "sales", "answers": "bags"}), StatusCode::BAD_REQUEST, "bad_request", "answers"),
+        (json!({"template_id": "coding", "suggestion_id": "s1", "answers": {}}), StatusCode::BAD_REQUEST, "unknown_field", "answers"),
+    ] {
+        let (s, v) = create(&e, body.clone()).await;
+        assert_eq!((s, v["code"].as_str(), v["field"].as_str()), (status, Some(code), Some(field)), "{body} → {v}");
+    }
+    assert_eq!(counts(&e).await, before);
+
+    let (s, v) = create(&e, json!({"template_id": "sales", "answers": {"what_you_sell": "  Hand-made leather bags\u{200B}, sold to outdoor shops  "}})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let instructions = v["team"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("\n- What the person sells, in their words: Hand-made leather bags, sold to outdoor shops\n"), "{instructions}");
+    assert!(!instructions.contains("{{"));
+    assert!(v.get("routines").is_none(), "one routine: only `routine`");
+    assert_eq!(v["routine"]["enabled"], false);
+
+    // Without answers: the 0.9 instructions, the answer's line left out
+    let (s, v) = create(&e, json!({"template_id": "sales", "handle": "sales-two", "names": {"SalesLead": "Lead2", "Prospector": "Prospector2", "OutreachWriter": "Writer2"}, "answers": {"what_you_sell": "   "}})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let plain = v["team"]["instructions"].as_str().unwrap();
+    assert!(!plain.contains("What the person sells, in their words") && !plain.contains("{{"), "{plain}");
+    assert!(plain.contains("How we work\n- Start from what the person sells"), "{plain}");
 }
