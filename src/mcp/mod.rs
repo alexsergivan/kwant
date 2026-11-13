@@ -396,11 +396,12 @@ pub trait ToolApprover: Send + Sync {
     }
 
     /// The pre-push card (B2) for an MCP call that writes to a GitHub branch: `Ok` with the
-    /// overridden cards it goes on (empty: not such a write, or nothing to use up), else the
+    /// overridden cards it goes on and the person's grant that covers it (empty: not such a
+    /// write, or nothing to use up), else the
     /// text the bot gets back instead of the call running. Asked before [`decide`](Self::decide).
     /// Default: no gate.
-    async fn prepush_gate(&self, _request: &ToolApprovalRequest) -> Result<Vec<String>, String> {
-        Ok(Vec::new())
+    async fn prepush_gate(&self, _request: &ToolApprovalRequest) -> Result<PrepushPass, String> {
+        Ok(PrepushPass::default())
     }
 
     /// Uses up the overrides [`prepush_gate`](Self::prepush_gate) found, once the call is
@@ -408,6 +409,36 @@ pub trait ToolApprover: Send + Sync {
     async fn prepush_use(&self, _overrides: &[String]) -> Option<String> {
         None
     }
+
+    /// [`decide`](Self::decide) for a push the person's Retry or Override on a pre-push card
+    /// already approved (`grant`, 0.9.7): the ordinary approval card is skipped and the grant used
+    /// up, but the payment floor, the production floor and Flight School still ask as in
+    /// [`decide`](Self::decide). Default: `grant` changes nothing.
+    async fn decide_granted(&self, request: ToolApprovalRequest, _grant: &PrepushGrant) -> ApprovalOutcome {
+        self.decide(request).await
+    }
+}
+
+/// The person's one-time approval of a bot's push, from Retry or Override on a pre-push card
+/// (0.9.7, `dev_prepush_grants`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrepushGrant {
+    pub id: String,
+    /// `retry` or `override`.
+    pub kind: String,
+    /// The card the person pressed.
+    pub pressed_card_id: String,
+    /// The card of the push it covers (clear, or the overridden card itself).
+    pub card_id: String,
+}
+
+/// What [`ToolApprover::prepush_gate`] found for a call that may run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrepushPass {
+    /// The `overridden` cards it goes on, for [`ToolApprover::prepush_use`].
+    pub overrides: Vec<String>,
+    /// The person's grant that covers it, for [`ToolApprover::decide_granted`].
+    pub grant: Option<PrepushGrant>,
 }
 
 /// What became of a call that may have needed a card.

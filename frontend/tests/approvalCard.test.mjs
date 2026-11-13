@@ -6,7 +6,7 @@ import { loadBundled } from './bundle.mjs';
 globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 
 const m = await loadBundled(`
-  export { ModernApprovalCard, localShellView } from './src/components/ModernApprovalCard';
+  export { ModernApprovalCard, localShellView, startedByNote } from './src/components/ModernApprovalCard';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createElement } from 'react';
 `);
@@ -132,4 +132,69 @@ test('a payment card in its summary form (after a reload) shows the reason and n
   // The same summary card without a reason still offers Always this session.
   const plain = render({ id: 'n4', tool_name: 'Bash', details: { source: 'summary', tool: 'Bash', summary: 'command: ls' } });
   assert.match(plain, /Always this session/);
+});
+
+// Shaped like BrokerApprover::classified for a turn kwant started on its own (loose ends, Watch).
+const startedTicket = (extra = {}) => ({
+  id: 's1',
+  tool_name: 'Bash',
+  details: { source: 'claude_builtin', tool: 'Bash', arguments: { command: 'touch x' }, kwant_name: 'Lin', always_ask: true, ...extra },
+});
+
+test('a card from a turn kwant started says who started it, in one line under the summary', () => {
+  const html = render(startedTicket({ started_by: 'Loose ends: prepare drafts and next steps' }));
+  assert.match(
+    html,
+    /data-started-by[^>]*>Started by Loose ends, not by you, so each change asks first\. Bots on Don’t ask \(Settings › This space\) run these without a card\.<\/p>/,
+  );
+  // Read order: summary, then this line, then the command
+  const summary = html.indexOf('data-approval-summary');
+  const line = html.indexOf('data-started-by');
+  const command = html.indexOf('aria-label="Command"');
+  assert.ok(summary < line && line < command, 'summary → started by → command');
+  assert.match(html, /data-started-by[^>]*class="mt-1 /);
+  assert.doesNotMatch(render(startedTicket()), /data-started-by/, 'no label, no line');
+  assert.equal(m.startedByNote(startedTicket({ started_by: '  ' })), null);
+  assert.equal(m.startedByNote({ id: 'x', tool_name: 'Bash', details: { started_by: 3 } }), null);
+  // A payment card keeps its own reason and doesn't add this line
+  assert.doesNotMatch(render(stripeTicket({ always_ask: true, started_by: 'Loose ends' })), /data-started-by/);
+});
+
+test('internal labels map to the names people know; an unknown one shows the part before ":"', () => {
+  const name = (started_by, extra = {}) => m.startedByNote(startedTicket({ started_by, ...extra }));
+  assert.match(name('Verify'), /^Started by a task check, not by you, so each change asks first\./);
+  assert.match(name('Audit'), /^Started by an audit, not by you/);
+  assert.match(name('Goal draft'), /^Started by a goal draft, not by you/);
+  assert.match(name('Watch'), /^Started by Watch, not by you/);
+  assert.match(name('Something new: details'), /^Started by Something new, not by you, so each change asks first\./);
+  assert.doesNotMatch(name('Loose ends: prepare drafts and next steps'), /prepare drafts/);
+});
+
+test('a strict turn (details.strict_ask) says skill drafts always ask, even on Don’t ask', () => {
+  assert.equal(
+    m.startedByNote(startedTicket({ started_by: 'Skill Foundry replay', strict_ask: true })),
+    'Started by a skill draft’s test run, not by you. Skill drafts always ask, even on Don’t ask.',
+  );
+  assert.equal(
+    m.startedByNote(startedTicket({ started_by: 'Skill Foundry', strict_ask: true })),
+    'Started by a skill draft, not by you. Skill drafts always ask, even on Don’t ask.',
+  );
+  // The sentence comes from the server's flag, not from the label
+  assert.match(m.startedByNote(startedTicket({ started_by: 'Skill Foundry' })), /so each change asks first/);
+});
+
+test('a card from a turn kwant started offers no "always"; an ordinary card still does', () => {
+  const write = (extra = {}) => ({
+    id: 'w1',
+    tool_name: 'Write',
+    details: { source: 'claude_builtin', tool: 'Write', arguments: { file_path: '/tmp/x', content: 'x' }, kwant_name: 'Lin', ...extra },
+  });
+  const plain = render(write());
+  assert.match(plain, /Always this session|Always allow/);
+  const started = render(write({ always_ask: true, started_by: 'Watch' }));
+  assert.doesNotMatch(started, /Always this session|Always allow/);
+  assert.match(started, /Allow once/);
+  assert.match(started, />Deny</);
+  assert.match(started, /grid-cols-1/);
+  assert.doesNotMatch(render(startedTicket({ started_by: 'Watch' })), /Always this session|Always allow/);
 });

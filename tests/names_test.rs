@@ -103,25 +103,25 @@ async fn team_names(app: &Router, space: &str) -> Vec<String> {
 async fn a_duplicate_team_name_is_a_readable_409_on_create_and_rename() {
     let (app, _tmp) = setup().await;
     let app = &app;
-    // Default's seed already has a core-engineering team
+    // Default's seed already has a helpers team
     let lead = new_bot(app, "spc_default", "Lead").await;
-    assert!(team_names(app, "spc_default").await.contains(&"core-engineering".to_string()));
+    assert!(team_names(app, "spc_default").await.contains(&"helpers".to_string()));
     let before = team_names(app, "spc_default").await;
 
-    let clash = "a team called core-engineering already exists in this space";
-    for name in ["core-engineering", "  core-engineering ", "Core-Engineering"] {
+    let clash = "a team called helpers already exists in this space";
+    for name in ["helpers", "  helpers ", "Helpers"] {
         let (s, text) = refused(app, "POST", "/api/teams", team(name, &lead)).await;
         assert_eq!(s, StatusCode::CONFLICT, "{name:?}");
         assert!(text.eq_ignore_ascii_case(clash), "{name:?}: {text}");
     }
-    let (s, text) = refused(app, "POST", "/api/teams?space=spc_default", team("core-engineering", &lead)).await;
+    let (s, text) = refused(app, "POST", "/api/teams?space=spc_default", team("helpers", &lead)).await;
     assert_eq!((s, text.as_str()), (StatusCode::CONFLICT, clash));
     assert_eq!(team_names(app, "spc_default").await, before);
 
     // Renaming another team onto it is refused; keeping a team's own name is not
     let other = ok(app, "POST", "/api/teams", Some(team("design", &lead))).await;
     let other_id = other["id"].as_str().unwrap();
-    let (s, text) = refused(app, "PUT", &format!("/api/teams/{other_id}"), team("core-engineering", &lead)).await;
+    let (s, text) = refused(app, "PUT", &format!("/api/teams/{other_id}"), team("helpers", &lead)).await;
     assert_eq!((s, text.as_str()), (StatusCode::CONFLICT, clash));
     ok(app, "PUT", &format!("/api/teams/{other_id}"), Some(team("design", &lead))).await;
     let renamed = ok(app, "PUT", &format!("/api/teams/{other_id}"), Some(team("Design", &lead))).await;
@@ -130,9 +130,9 @@ async fn a_duplicate_team_name_is_a_readable_409_on_create_and_rename() {
     // Another space may use the name
     let b = new_space(app, "Side").await;
     let b_lead = new_bot(app, &b, "Bea").await;
-    ok(app, "POST", &format!("/api/teams?space={b}"), Some(team("core-engineering", &b_lead))).await;
-    assert_eq!(team_names(app, &b).await, ["core-engineering"]);
-    let (s, text) = refused(app, "POST", &format!("/api/teams?space={b}"), team("core-engineering", &b_lead)).await;
+    ok(app, "POST", &format!("/api/teams?space={b}"), Some(team("helpers", &b_lead))).await;
+    assert_eq!(team_names(app, &b).await, ["helpers"]);
+    let (s, text) = refused(app, "POST", &format!("/api/teams?space={b}"), team("helpers", &b_lead)).await;
     assert_eq!((s, text.as_str()), (StatusCode::CONFLICT, clash));
 }
 

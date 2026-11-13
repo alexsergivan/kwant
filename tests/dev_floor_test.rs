@@ -23,6 +23,8 @@ fn approver(env: &Env) -> Arc<BrokerApprover> {
         conversation: env.a.clone(),
         chat: Some(json!({"direct_kwant_id": env.a})),
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     })
 }
 
@@ -159,4 +161,36 @@ async fn turning_dev_mode_on_applies_the_floor_at_once() {
     db.delete_dev_mode_of_space(&space).await.unwrap();
     assert!(!db.any_dev_mode_on());
     assert!(floor_of(7).await.is_none());
+}
+
+/// Approvals off now wins in a turn kwant started on its own (0.9.7), but not over the floor:
+/// a push to the watched branch still asks there, while an ordinary command runs.
+#[tokio::test]
+async fn the_floor_still_asks_with_approvals_off_in_a_kwant_started_turn() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    env.state.db.set_kwant_approvals(&env.a, "off").await.unwrap();
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    let started = BrokerApprover {
+        db: env.state.db.clone(),
+        data_dir: env.state.config.data_dir.clone(),
+        broker: env.state.broker.clone(),
+        events: env.state.event_sender.clone(),
+        timeout: Duration::from_millis(200),
+        conversation: env.a.clone(),
+        chat: Some(json!({"direct_kwant_id": env.a})),
+        always_ask: true,
+        strict_ask: false,
+        started_by: Some("Loose ends".into()),
+    };
+
+    assert_eq!(started.decide(request(&env, "touch notes.txt")).await, ApprovalOutcome::Allowed);
+    for command in ["git push origin main", "sqlite3 demo.db 'DROP TABLE demo_auto'"] {
+        assert_eq!(started.decide(request(&env, command)).await, ApprovalOutcome::Unanswered, "{command}");
+        let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("waiting"), Some(&env.a)).await.unwrap();
+        let row = rows.into_iter().find(|r| r.parameters.contains(command)).expect("a waiting card");
+        let details: Value = serde_json::from_str(&row.parameters).unwrap();
+        assert!(details["prod_floor"].is_object(), "{command}: {details}");
+        assert_eq!(details["started_by"], "Loose ends");
+    }
 }

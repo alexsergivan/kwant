@@ -83,7 +83,7 @@ async fn test_teams_api_endpoints() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let teams: Vec<Team> = serde_json::from_slice(&bytes).unwrap();
     assert!(!teams.is_empty());
-    assert_eq!(teams[0].name, "core-engineering");
+    assert_eq!(teams[0].name, "helpers");
     let team_id = teams[0].id.clone();
 
     // 2. GET /api/teams/:id
@@ -215,7 +215,7 @@ async fn test_chat_routing_with_kwant_mention() {
         "channel_id": null,
         "kwant_id": null,
         "team_id": null,
-        "prompt": "@DevOps please check system health status",
+        "prompt": "@Writer please check system health status",
         "sender_id": "player1"
     });
     let req = Request::builder()
@@ -229,7 +229,7 @@ async fn test_chat_routing_with_kwant_mention() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(val["status"], "dispatched");
-    assert_eq!(val["kwant"], "DevOps");
+    assert_eq!(val["kwant"], "Writer");
 }
 
 #[tokio::test]
@@ -246,12 +246,12 @@ async fn test_chat_routing_with_team_mention_and_cancellation() {
 
     let mut event_rx = state.event_sender.subscribe();
 
-    // Send complex discussion query to @core-engineering
+    // Send complex discussion query to @helpers
     let send_body = json!({
         "channel_id": null,
         "kwant_id": null,
         "team_id": null,
-        "prompt": "Hey @core-engineering, how should we design our zero-downtime database migration architecture tradeoff?",
+        "prompt": "Hey @helpers, how should we design our zero-downtime database migration architecture tradeoff?",
         "sender_id": "player1"
     });
     let req = Request::builder()
@@ -265,7 +265,7 @@ async fn test_chat_routing_with_team_mention_and_cancellation() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(val["status"], "dispatched");
-    assert_eq!(val["team"], "core-engineering");
+    assert_eq!(val["team"], "helpers");
 
     // Receive discussion started event (may follow ThinkingDelta)
     let mut started_event = None;
@@ -279,14 +279,14 @@ async fn test_chat_routing_with_team_mention_and_cancellation() {
     }
     match started_event.expect("Expected DiscussionStarted event") {
         kwnt::drivers::events::RuntimeEvent::DiscussionStarted { team_name, total_turns, .. } => {
-            assert_eq!(team_name, "core-engineering");
+            assert_eq!(team_name, "helpers");
             assert!(total_turns >= 2);
         }
         _ => unreachable!(),
     }
 
     // Cancel in-flight discussion
-    let cancel_body = json!({ "team_id": "core-engineering" });
+    let cancel_body = json!({ "team_id": "helpers" });
     let req = Request::builder()
         .method("POST")
         .uri("/api/chat/cancel")
@@ -797,8 +797,8 @@ async fn test_kwant_name_validation() {
             .unwrap()
     };
 
-    // Seeded "Architect" exists, so a case-insensitive duplicate is rejected
-    let resp = app.clone().oneshot(send("POST", "/api/kwants", "architect")).await.unwrap();
+    // Seeded "Assistant" exists, so a case-insensitive duplicate is rejected
+    let resp = app.clone().oneshot(send("POST", "/api/kwants", "assistant")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let resp = app.clone().oneshot(send("POST", "/api/kwants", "Ux Designer")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -813,6 +813,6 @@ async fn test_kwant_name_validation() {
     // Keeping its own name is fine; taking another kwant's isn't
     let resp = app.clone().oneshot(send("PUT", &format!("/api/kwants/{id}"), "Designer")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let resp = app.clone().oneshot(send("PUT", &format!("/api/kwants/{id}"), "TechLead")).await.unwrap();
+    let resp = app.clone().oneshot(send("PUT", &format!("/api/kwants/{id}"), "Researcher")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 }

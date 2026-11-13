@@ -276,19 +276,32 @@ async fn local_shell_approvals(state: &AppState, target_id: &str) -> String {
 /// Asks the person before a shell command runs on their own computer, with no conversation to
 /// remember "always allow" in (see [`approve_local_shell_in`]).
 pub async fn approve_local_shell(state: &AppState, target_id: &str, command: &str, cwd: &Path) -> bool {
-    approve_local_shell_in(state, target_id, command, cwd, None).await
+    approve_local_shell_with(state, target_id, command, cwd, None, None).await
+}
+
+/// [`approve_local_shell`] for a push the person's Retry or Override on a pre-push card may
+/// already have approved (0.9.7): with `grant`, no card unless a floor asks.
+pub async fn approve_local_shell_granted(state: &AppState, target_id: &str, command: &str, cwd: &Path, grant: Option<&crate::mcp::PrepushGrant>) -> bool {
+    approve_local_shell_with(state, target_id, command, cwd, None, grant).await
 }
 
 /// Asks the person before a shell command runs on their own computer. Approvals `off` run it;
 /// "Ask only when risky" runs it when [`crate::mcp::shell_risk`] finds it safe in `cwd`, and
 /// remembers "Always this session" for `execute_shell` in `conversation`. Under `ask` every
 /// command asks and "always allow" counts for this one command only.
-pub async fn approve_local_shell_in(
+pub async fn approve_local_shell_in(state: &AppState, target_id: &str, command: &str, cwd: &Path, conversation: Option<&str>) -> bool {
+    approve_local_shell_with(state, target_id, command, cwd, conversation, None).await
+}
+
+/// [`approve_local_shell_in`]; a `grant` (0.9.7) runs the command with no card when the payment
+/// floor, Flight School and the production floor don't ask, and is used up.
+async fn approve_local_shell_with(
     state: &AppState,
     target_id: &str,
     command: &str,
     cwd: &Path,
     conversation: Option<&str>,
+    grant: Option<&crate::mcp::PrepushGrant>,
 ) -> bool {
     use crate::db::approval_modes::{OFF, SMART};
     let mode = local_shell_approvals(state, target_id).await;
@@ -338,6 +351,18 @@ pub async fn approve_local_shell_in(
             tracing::warn!(error = %e, "could not record a refused command");
         }
         return false;
+    }
+    // The person's Retry or Override approved this push already: no card, and the grant is used up
+    if let Some(g) = grant.filter(|_| payment.is_none() && tier.is_none() && floor.is_none()) {
+        if super::dev::prepush::use_grant(&state.db, &state.event_sender, g).await {
+            tracing::info!(target = %target_id, grant = %g.id, card = %g.pressed_card_id, "ran a local push the person's {} approved", g.kind);
+            details["prepush_grant"] = super::mcp_runtime::grant_details(g);
+            let record = NewApproval { turn_id: String::new(), kwant_id: target_id.to_string(), tool_name: "execute_shell".into(), parameters: details };
+            if let Err(e) = state.db.save_granted(&record).await {
+                tracing::warn!(error = %e, "could not record a local push the person's grant approved");
+            }
+            return true;
+        }
     }
     if let Some(conversation) = remembered {
         if state.broker.is_allowed_for_session(target_id, conversation, "execute_shell").await {

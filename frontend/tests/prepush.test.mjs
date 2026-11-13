@@ -89,7 +89,7 @@ test('every fixture parses and maps to Mira\'s phase', () => {
 
 test('the parser refuses cards it cannot show honestly', () => {
   assert.equal(m.parsePrepush(null), null);
-  assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, status: 'pushed' }).status, 'unknown', 'a newer status is kept, read-only (Ada Later 2)');
+  assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, status: 'merged_later' }).status, 'unknown', 'a newer status is kept, read-only (Ada Later 2)');
   assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, status: 7 }), null, 'a status that is not a word is refused');
   assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, branch: '' }), null);
   assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, checks: [...fx.PP_CLEAR.checks, { key: 'osv', state: 'pass', text: 'x' }] }), null, 'an unknown row is never dropped silently');
@@ -130,7 +130,7 @@ test('counts come from the server: open findings are its blockers, never a check
   assert.equal(m.requiredPassed(card(fx.PP_CLEAR)), 5, 'semgrep not installed is not a passed check');
   assert.equal(m.clearedLine(card(fx.PP_CLEAR)), 'Cleared to push pixel/inbox-empty-state after 5 checks passed · 14:02');
   assert.equal(m.foldLine(card(fx.PP_NEEDS_YOU)), '4 checks passed · registry · tamper · rules · review');
-  assert.equal(m.overriddenLine(card(fx.PP_OVERRIDDEN)), 'You let this push go at 14:09 with 1 finding open. It covers this commit only.');
+  assert.equal(m.overriddenLine(card(fx.PP_OVERRIDDEN), 'Pixel'), 'You let this push go at 14:09 with 1 finding open. It covers this commit only.', 'old server, no grant: unchanged');
 });
 
 test('a check that could not run never reads as passed', () => {
@@ -284,7 +284,7 @@ test('P7 a check could not run: plain buttons, Run the checks again', async () =
 test('retried: one grey line', () => {
   const out = html(m.PrepushCard, { card: card(fx.PP_RETRIED), bot: 'Pixel' });
   assert.match(out, /data-prepush-phase="RT"/);
-  assert.match(out, /You asked for a new check of .*pixel\/inbox-empty-state.*Pixel&#x27;s next push of this commit is checked again from try 1\./);
+  assert.match(out, /You asked Pixel to fix this and push again\. Its next push of .*pixel\/inbox-empty-state.* is checked from try 1\./);
 });
 
 test('read-only cards (no handlers) show no buttons', () => {
@@ -348,10 +348,12 @@ test('threadCards: this bot only, newest three, oldest first', () => {
 
 test('Inbox: one amber item per card that needs you; it resolves when the card moves on', async () => {
   const opened = [];
-  const cards = [card(fx.PP_NEEDS_YOU), card(fx.PP_BLOCKED), card(fx.PP_CLEAR), card(fx.PP_FAILED_NEEDS_YOU)];
+  // 0.9.7: PP_FAILED_NEEDS_YOU is an older card on the same branch, so only the newest (PP_NEEDS_YOU) shows.
+  const cards = [card(fx.PP_NEEDS_YOU), card(fx.PP_BLOCKED), card(fx.PP_CLEAR), card(fx.PP_FAILED_NEEDS_YOU), card({ ...fx.PP_FAILED_NEEDS_YOU, id: 'pp_other', branch: 'pixel/other' })];
   const { host, rerender } = await mount(m.PrepushNeedsYou, { cards, names: { k_pixel: 'Pixel' }, onOpen: (c) => opened.push(c.id) });
   const items = [...host.querySelectorAll('[data-needs-prepush-item]')];
   assert.equal(items.length, 2);
+  assert.deepEqual(items.map((i) => i.getAttribute('data-needs-prepush-item')).sort(), ['pp_needs', 'pp_other']);
   assert.match(text(items[0]), /Needs you.*Pixel's push is waiting for you/);
   await click(items[0]);
   assert.equal(opened.length, 1);
@@ -558,12 +560,12 @@ test('Ada 6: the reason counts characters as the server does, not UTF-16 units',
 });
 
 test('Ada 2: an unknown status shows as a read-only grey line, never dropped or actionable', async () => {
-  const c = card({ ...fx.PP_OVERRIDDEN, status: 'pushed' });
+  const c = card({ ...fx.PP_OVERRIDDEN, status: 'merged_later' });
   assert.equal(m.phaseOf(c), 'UN');
   assert.equal(m.statusChip(c), null);
   assert.equal(m.canOverride(c), false);
   assert.equal(c.needs_you, false);
-  assert.equal(m.parsePrepushList({ cards: [{ ...fx.PP_CLEAR, status: 'pushed' }] }).length, 1);
+  assert.equal(m.parsePrepushList({ cards: [{ ...fx.PP_CLEAR, status: 'merged_later' }] }).length, 1);
   const out = html(m.PrepushCard, { card: c, bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
   assert.match(out, /data-prepush-phase="UN"/);
   assert.match(out, /can&#x27;t show where it is yet/);
@@ -746,7 +748,7 @@ test('#475 review 2: a retry that applied but whose message failed shows the ale
 
 test('#475 Mira must-fix 1: the branch on one-line cards wraps; "fixing it" with one blocker', async () => {
   const long = 'pixel/inbox-empty-state-for-new-spaces-with-no-bots';
-  for (const c of [fx.PP_NO_CHANGE, fx.PP_RETRIED, { ...fx.PP_CLEAR, status: 'pushed' }, fx.PP_CLEAR]) {
+  for (const c of [fx.PP_NO_CHANGE, fx.PP_RETRIED, { ...fx.PP_CLEAR, status: 'merged_later' }, fx.PP_CLEAR]) {
     const out = html(m.PrepushCard, { card: card({ ...c, branch: long }), bot: 'Pixel' });
     assert.match(out, new RegExp(`<code class="dv-sha dv-sha-wrap">${long}</code>`), c.id);
   }

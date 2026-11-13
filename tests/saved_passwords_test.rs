@@ -321,8 +321,8 @@ async fn f4_other_spaces_and_names_are_not_found() {
     let (s, _) = e.person("GET", &format!("/api/sandbox/{}/passwords?space=spc_default", general.id), None).await;
     assert_eq!(s, StatusCode::OK);
 
-    // Ids only: a team's name (the seeded core-engineering team) is not a password owner
-    let (s, _) = e.person("GET", "/api/sandbox/core-engineering/passwords", None).await;
+    // Ids only: a team's name (the seeded helpers team) is not a password owner
+    let (s, _) = e.person("GET", "/api/sandbox/helpers/passwords", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     let (s, _) = e.person("GET", "/api/sandbox/no-such-id/passwords", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
