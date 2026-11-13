@@ -1238,7 +1238,8 @@ async fn popular_before_setup(state: &AppState, q: Option<&str>) -> Response {
 // Composio's public app page for each. Answers are kept a while, so typing the same name again
 // costs nothing.
 
-/// Fewer popular matches than this, and none of them the typed name itself: ask about the name.
+/// Fewer popular matches than this, none of them the typed name itself and none starting with
+/// it: ask about the name.
 const FEW_POPULAR: usize = 3;
 /// How long one name's answer is kept.
 const BY_NAME_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -1281,7 +1282,7 @@ async fn apps_by_name(state: &AppState, q: &str, popular: &[&composio::PopularAp
     if candidates.is_empty() || popular.iter().any(|a| candidates.contains(&a.slug)) {
         return ByName::default();
     }
-    // A popular app typed another way ("Google Search Console" with spaces): no call needed.
+    // A popular app typed another way ("google-calendar", "Google  Calendar"): no call needed.
     let bundled: Vec<&composio::PopularApp> = candidates
         .iter()
         .filter_map(|c| composio::popular_apps().iter().find(|a| &a.slug == c))
@@ -1289,7 +1290,8 @@ async fn apps_by_name(state: &AppState, q: &str, popular: &[&composio::PopularAp
     if !bundled.is_empty() {
         return ByName { rows: popular_rows(bundled.into_iter(), None), asked: false };
     }
-    if popular.len() >= FEW_POPULAR {
+    // Enough popular matches, or a popular app's name still being typed ("gma" → Gmail): no call.
+    if popular.len() >= FEW_POPULAR || popular.iter().any(|a| composio::popular_starts_with(a, q)) {
         return ByName::default();
     }
     let ck = format!(

@@ -1028,10 +1028,17 @@ async fn composio_connect_finds_an_app_beyond_the_popular_list_by_its_name() {
     assert_eq!(v["apps"][0]["slug"], "gmail");
     assert!(v["apps"].as_array().unwrap().iter().all(|a| a.get("found_by_name").is_none()), "{v}");
     assert!(calls(&fake).iter().all(|c| c.1 != "/connect/mcp tools/call search" && c.0 != "HEAD"));
-    // A popular app typed as words: its popular row, no call.
-    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=Google%20Search%20Console", None).await;
+    // A popular app typed another way: its popular row, no call. (Round 1 used "Google Search
+    // Console" here, which isn't one of the 120 popular apps, so Composio was rightly asked.)
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=google-calendar", None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert!(v["apps"].as_array().unwrap().iter().any(|a| a["slug"] == "google_search_console"), "{v}");
+    assert!(v["apps"].as_array().unwrap().iter().any(|a| a["slug"] == "googlecalendar"), "{v}");
+    assert!(calls(&fake).iter().all(|c| c.1 != "/connect/mcp tools/call search" && c.0 != "HEAD"));
+    // A popular app's name half typed: its popular rows, no call.
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=gma", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["apps"][0]["slug"], "gmail", "{v}");
+    assert!(v.get("hint").is_none(), "{v}");
     assert!(calls(&fake).iter().all(|c| c.1 != "/connect/mcp tools/call search" && c.0 != "HEAD"));
 }
 

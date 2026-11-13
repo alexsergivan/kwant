@@ -106,17 +106,23 @@ pub fn popular_apps() -> &'static [PopularApp] {
     })
 }
 
+/// Whether `app`'s name, one of its name's words, or its slug starts with `query` (as typed,
+/// trimmed, any case): the person is likely still typing that app's name.
+pub fn popular_starts_with(app: &PopularApp, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    let name = app.name.to_lowercase();
+    name.starts_with(&q) || app.slug.starts_with(&q) || name.split(' ').any(|w| w.starts_with(&q))
+}
+
 /// Popular apps matching `query` (name or slug, any case): those starting with it first, then
 /// those containing it, each in popularity order; at most `limit`.
 pub fn search_popular(query: &str, limit: usize) -> Vec<&'static PopularApp> {
     let q = query.trim().to_lowercase();
-    let words = |a: &PopularApp| (a.name.to_lowercase(), a.slug.clone());
     let (mut first, mut then) = (Vec::new(), Vec::new());
     for a in popular_apps() {
-        let (name, slug) = words(a);
-        if name.starts_with(&q) || slug.starts_with(&q) || name.split(' ').any(|w| w.starts_with(&q)) {
+        if popular_starts_with(a, &q) {
             first.push(a);
-        } else if name.contains(&q) || slug.contains(&q) {
+        } else if a.name.to_lowercase().contains(&q) || a.slug.contains(&q) {
             then.push(a);
         }
     }
