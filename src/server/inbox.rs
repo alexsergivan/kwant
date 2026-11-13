@@ -539,6 +539,33 @@ fn watch_item(mut v: Value, last_seen: Option<DateTime<Utc>>) -> Value {
     v
 }
 
+/// 0.9.5: a connection only the person can fix (`tool_failures::needs_you`) as a Waiting-on-you
+/// row, "Gmail needs you to sign in again for Ben" or, for `cause` "reconnect", "Google Calendar
+/// needs to be connected again for TechLead"; the row's Reconnect opens Settings › Connections
+/// and the row itself opens the chat with the line. Its id is the line's message id.
+pub fn connection_item(at: DateTime<Utc>, v: &Value, last_seen: Option<DateTime<Utc>>) -> Value {
+    let unread = last_seen.is_none_or(|s| at > s);
+    let name = v["kwant_name"].as_str().unwrap_or("").to_string();
+    let id = v["message_id"].as_str().unwrap_or("").to_string();
+    let title = super::tool_failures::inbox_title(v["connection"].as_str().unwrap_or("A connection"), v["cause"].as_str().unwrap_or(""), &name);
+    json!({
+        "kind": "connection",
+        "id": id,
+        "kwant_id": v["kwant_id"],
+        "kwant_name": name,
+        "title": title,
+        "summary": "",
+        "status": "open",
+        "timestamp": rfc3339(at),
+        "link": {"thread_id": v["thread_id"], "channel_id": v["channel_id"], "direct_kwant_id": v["direct_kwant_id"]},
+        "connection": v["connection"],
+        "cause": v["cause"],
+        "fix": v["fix"],
+        "group": Group::WaitingOnYou.key(),
+        "sort_key": sort_key(Group::WaitingOnYou, None, at.timestamp_millis(), unread, &name, &id),
+    })
+}
+
 /// A review item, and the facts its group and buttons came from; `None` when it isn't listed.
 pub fn review_item(r: &ReviewInput, last_seen: Option<DateTime<Utc>>) -> Option<(Value, ReviewFacts)> {
     let t = &r.task;
@@ -791,11 +818,17 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     };
     // What a mission watcher left for the person (P1), listed and counted as on /api/away
     let watch = super::missions::watch::waiting_items(&state, &space).await;
-    let unseen_total = unseen_total + watch.len() as i64;
+    // A connection only the person can fix (0.9.5), as listed on /api/waiting
+    let connections = match state.db.list_kwants(&space).await {
+        Ok(kwants) => super::tool_failures::needs_you(&state, &kwants).await,
+        Err(_) => Vec::new(),
+    };
+    let unseen_total = unseen_total + watch.len() as i64 + connections.len() as i64;
 
     let mut items: Vec<Value> = Vec::new();
     items.extend(waiting.into_iter().map(|r| away_item(r, Group::WaitingOnYou, seen)));
     items.extend(watch.into_iter().map(|v| watch_item(v, seen)));
+    items.extend(connections.into_iter().map(|(at, v)| connection_item(at, &v, seen)));
     items.extend(failed.into_iter().map(|r| away_item(r, Group::FailedOrStuck, seen)));
     items.extend(finished.into_iter().map(|r| away_item(r, Group::Finished, seen)));
     items.extend(reviews.iter().filter_map(|r| review_item(r, seen)).map(|(v, _)| v));

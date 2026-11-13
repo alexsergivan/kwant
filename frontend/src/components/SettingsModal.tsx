@@ -4,6 +4,7 @@ import { AuditorModelSetting } from './AuditorModelSetting';
 import { Key, X, Settings, Check, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare, BellRing } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { DailyUsagePanel } from './DailyUsage';
+import { BudgetOverview } from './BotBudget';
 import { SpendStopFields, StopFields, forgetToday } from './SpendStop';
 import { stopBody, stopFieldsFromSettings } from '../spendStop';
 import { CodingAgents } from './CodingAgents';
@@ -259,6 +260,8 @@ interface SettingsModalProps {
   onOpenApiKeys?: () => void;
   /** A switch to scroll to and focus once loaded, by its row id ("idea-jar" from the jar's Settings button). */
   focusRow?: string | null;
+  /** 0.9.5: opens a bot's settings at its monthly budget (the overview's Set / Change). */
+  onOpenBotBudget?: (kwantId: string) => void;
 }
 
 /** App settings: shared by every space (keys, Laya, limits, notifications, sounds). Accounts,
@@ -305,7 +308,7 @@ const DiscoverySetting: React.FC<{ value: DiscoverySettings; onChange: (v: Disco
   );
 };
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys, focusRow = null }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys, focusRow = null, onOpenBotBudget }) => {
   const { authRequired, deviceLogin, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
   const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
@@ -808,7 +811,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </fieldset>
           )}
 
-          <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
+          <fieldset className="min-w-0 space-y-3 pt-2 border-t border-zinc-800">
             <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
               <Gauge size={14} className="text-sky-300" aria-hidden="true" />
               <span>Usage</span>
@@ -851,6 +854,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             )}
             {spendStop !== null && <SpendStopFields value={spendStop} onChange={setSpendStop} open={isOpen} savedKey={spendSaved} />}
             <DailyUsagePanel open={isOpen} />
+            <BudgetOverview open={isOpen} onOpenBot={onOpenBotBudget} />
           </fieldset>
 
           {agentTools !== null && (

@@ -13,6 +13,7 @@ import { MemoryPanel } from './MemoryPanel';
 import { RoutinesPanel } from './RoutinesPanel';
 import { SkillsPanel } from './SkillsPanel';
 import { UsagePanel } from './UsagePanel';
+import { BotBudgetSection } from './BotBudget';
 import type { Channel, Kwant } from './Sidebar';
 import { BotApprovalsSetting } from './ApprovalsSetting';
 import { FlightSchoolPanel } from './FlightSchoolPanel';
@@ -382,7 +383,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
           </div>
         )}
         {isEdit && kwantId && tab === 'usage' && (
-          <div role="tabpanel" id="agent-panel-usage" aria-labelledby="agent-tab-usage">
+          <div role="tabpanel" id="agent-panel-usage" aria-labelledby="agent-tab-usage" className="space-y-4">
+            <BotBudgetSection kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} />
             <UsagePanel kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} />
           </div>
         )}
