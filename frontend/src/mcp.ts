@@ -534,6 +534,16 @@ export const toServerName = (label: string): string =>
     .replace(/^[-_]+|[-_]+$/g, '')
     .slice(0, 48);
 
+/**
+ * The server name a public-directory listing starts with: its title made valid ("ElevenLabs Voices" →
+ * "elevenlabs-voices"), else the last part of its registry name, so Add & test works without a rename.
+ */
+export const directoryServerName = (entry: { title?: string | null; registry_name: string }): string =>
+  toServerName(entry.title ?? '') ||
+  toServerName(entry.registry_name.split('/').pop() ?? '') ||
+  toServerName(entry.registry_name) ||
+  'tool';
+
 /** Returns a friendly message for the first problem in the form, or null when it can be saved. */
 export const validateMcpForm = (form: McpFormState): string | null => {
   const name = form.name.trim();

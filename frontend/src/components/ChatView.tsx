@@ -14,7 +14,8 @@ import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
-import { BotHome } from './BotHome';
+import { AccountCard, BotHome } from './BotHome';
+import { accountCardShows } from '../firstScreen';
 import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
@@ -75,6 +76,8 @@ import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
 import { routeChipLabel, routeReasonText } from '../routeReason';
+import { RoutineRow } from './RoutineRow';
+import { routineOf } from '../routineRow';
 import { BudgetPausedNotice, ExpiredApprovalNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { parseSpendStopped } from '../spendStop';
@@ -1455,6 +1458,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
       );
     if (isSystemNotice(msg) && !parseAttachments(msg.meta).length)
       return <SystemNotice key={msg.id} messageId={msg.id} text={msg.text} flash={flashId === msg.id} />;
+    // UX audit #5: a routine's run is not the person speaking; it gets its own row, not a "You" bubble
+    const routine = routineOf(msg);
+    if (routine !== null)
+      return (
+        <RoutineRow
+          key={msg.id}
+          messageId={msg.id}
+          name={routine}
+          text={msg.text}
+          body={renderFormattedText(msg.text)}
+          at={msg.created_at}
+          flash={flashId === msg.id}
+        />
+      );
     const isUser = msg.sender_role === 'user';
     const files = msg.meta ? parseAttachments(msg.meta) : [];
     // A bot's share_file note: the file tiles say it all.
@@ -1706,6 +1723,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // The empty chat shows the bot home (a bot's own chat, or #general) instead of a bare pane and a row of chips
   const showHome =
     !!home && (home.kind === 'bot' || home.kind === 'general') && !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
+  // first-screen E: nothing can run and Get started (the welcome) isn't on screen. A bot's chat and #general
+  // show it inside the home; an empty team chat shows it on its own.
+  const accountCard = accountCardShows({ canRun, getStartedShowing: !!welcome });
+  const teamAccountCard =
+    accountCard && home?.kind === 'team' && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
   // Who answers what's typed: the chat decides, an @mention overrides
   const target = answerTarget({
     kind: home?.kind ?? 'channel',
@@ -2104,7 +2126,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (
           <div className="flex min-h-full items-center justify-center">
-            <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
+            <BotHome
+              home={home}
+              spaceName={spaceName}
+              team={activeKwants}
+              prompts={suggestions}
+              canRun={canRun}
+              onPick={handlePromptSuggestion}
+              accountCard={accountCard}
+              onOpenAccounts={onOpenAccounts}
+            />
+          </div>
+        )}
+        {teamAccountCard && (
+          <div className="mx-auto flex w-full max-w-3xl px-1">
+            <AccountCard onOpenAccounts={onOpenAccounts} />
           </div>
         )}
         {groupDiscussionThreads(arranged.messages, { foldOpen: askOnly }).map((item, n, items) => {

@@ -1,6 +1,8 @@
-//! The three ready-made teams (spec T1/T2): Inbox, Sales and Coding. The data is Mira's generated
-//! `design/templates.js`, converted byte for byte into `templates.json` by
-//! `scripts/gen-team-data.mjs`; nothing here rewrites it.
+//! The ready-made teams (spec T1/T2): Helpers, Inbox, Sales and Coding. Inbox, Sales and Coding are
+//! Mira's generated `design/templates.js`, converted byte for byte into `templates.json` by
+//! `scripts/gen-team-data.mjs`; Helpers (0.9.8, first-screen design B) was added to the JSON by
+//! hand and is also what a fresh install's default space is seeded with (`db::starter_template`).
+//! Nothing here rewrites it.
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -166,9 +168,9 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn three_templates_in_order() {
+    fn four_templates_in_order() {
         let ids: Vec<_> = all().iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["inbox", "sales", "coding"]);
+        assert_eq!(ids, ["helpers", "inbox", "sales", "coding"]);
         assert!(get("coding").unwrap().routine.is_none());
         assert!(get("nope").is_none());
     }
@@ -192,8 +194,44 @@ mod tests {
                     assert!(list.iter().all(|s| !s.trim().is_empty() && s.chars().count() <= MAX_SCOPE_CHARS), "{}: {list:?}", b.name);
                 }
             }
-            assert_eq!(t.never.len(), 3, "{}", t.id);
+            // Helpers needs nothing and has nothing to promise it won't do (design.md B); every
+            // other template names exactly three things
+            let nevers = if t.id == "helpers" { 0 } else { 3 };
+            assert_eq!(t.never.len(), nevers, "{}", t.id);
         }
+    }
+
+    #[test]
+    fn helpers_is_the_everyday_starter_team() {
+        // first-screen design.md B: the seeded starter team, as the template Get started offers
+        let h = get("helpers").unwrap();
+        assert_eq!((h.label.as_str(), h.icon.as_str(), h.handle.as_str()), ("Helpers", "users", "helpers"));
+        assert_eq!(h.card_line, "Everyday help: plans, looks things up and writes.");
+        assert!(h.needs.is_empty() && h.never.is_empty() && h.routine.is_none() && h.skills.is_empty());
+        assert_eq!(h.first_prompts, ["Plan my week", "Research my top 3 competitors", "Outline a blog post"]);
+        let bots: Vec<_> = h
+            .bots
+            .iter()
+            .map(|b| (b.name.as_str(), b.lead, b.title.as_str(), b.preset.as_str(), b.avatar_sprite.as_str(), b.line.as_str()))
+            .collect();
+        assert_eq!(
+            bots,
+            [
+                ("Assistant", true, "Personal Assistant", "assistant", "product", "Plans what to do and hands out the work."),
+                ("Researcher", false, "Research Analyst", "research", "research", "Looks things up and checks the facts."),
+                ("Writer", false, "Writer & Editor", "copywriter", "writer", "Drafts emails, posts and documents."),
+            ]
+        );
+        assert_eq!(h.lead().name, "Assistant");
+        // The titles are what suggestedPrompts.ts ROLES matches for the three "For example" asks
+        for (b, word) in h.bots.iter().zip(["assistant", "research", "writer"]) {
+            assert!(b.title.to_lowercase().contains(word), "{}", b.title);
+        }
+        // The new preset exists on both sides (agentPresets.ts → presets.json)
+        let p = presets::get("assistant").unwrap();
+        assert_eq!((p.name.as_str(), p.title.as_str(), p.avatar_sprite.as_str()), ("Assistant", "Personal Assistant", "product"));
+        assert_eq!(p.soul, "You turn loose asks into a short plan, do the simple parts yourself and hand research or writing to the right teammate. You say what you need from the person in one line.");
+        assert!(!h.instructions.trim().is_empty() && !h.mission.trim().is_empty());
     }
 
     #[test]
