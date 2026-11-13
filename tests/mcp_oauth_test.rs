@@ -463,8 +463,10 @@ async fn client_document_sign_in_self_hosted() {
     let id = create_http_server(&e).await;
     let authorize_url = start_at(&e, &id, ORIGIN, HOST).await;
     assert_eq!(client_id_of(&authorize_url), format!("{ORIGIN}/api/mcp/oauth/client.json"));
+    // Starting only builds the link; the server fetches the document when the link is opened
+    assert_eq!(e.mock.document_fetches.load(Ordering::SeqCst), 0);
     assert!(sign_in(&e, &id).await.contains("\"ok\":true"));
-    assert_eq!(e.mock.document_fetches.load(Ordering::SeqCst), 2);
+    assert_eq!(e.mock.document_fetches.load(Ordering::SeqCst), 1);
     assert_eq!(e.mock.registrations.load(Ordering::SeqCst), 0);
     assert_eq!(stored_token(&e, &id).await.unwrap().client_id, format!("{ORIGIN}/api/mcp/oauth/client.json"));
 }
