@@ -256,7 +256,7 @@ interface SettingsModalProps {
   tokensUsed?: number;
   /** Inside Settings › All spaces: no dialog frame, no close button, Escape is the parent's. */
   embedded?: boolean;
-  /** Opens Settings › This space › Accounts, where the API keys and Ollama address live. */
+  /** Opens Settings › This space › Apps & accounts, where the API keys and Ollama address live. */
   onOpenApiKeys?: () => void;
   /** A switch to scroll to and focus once loaded, by its row id ("idea-jar" from the jar's Settings button). */
   focusRow?: string | null;
@@ -692,7 +692,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         {/* Saves at once, so it sits outside the Settings form (its own Create form can't nest). */}
         <CodingAgents currentSpace={getCurrentSpace()} />
 
-        {/* App settings form; API keys moved to Settings › This space › Accounts */}
+        {/* App settings form; API keys moved to Settings › This space › Apps & accounts */}
         <form onSubmit={handleSave} onChange={(e) => isTextField(e.target) && setTyped(true)} {...editorProps(typed)} className="space-y-4">
           {onOpenApiKeys && (
             <button
@@ -707,7 +707,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               <Key size={14} className="text-violet-400" aria-hidden="true" />
               <span className="flex-1">
                 <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
-                <span className="block text-[11px] text-zinc-500">Now in Settings › This space › Accounts, next to the accounts that use them.</span>
+                <span className="block text-[11px] text-zinc-500">Now in Settings › This space › Apps & accounts, next to the accounts that use them.</span>
               </span>
               <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />
             </button>

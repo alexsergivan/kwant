@@ -328,7 +328,7 @@ export const App: React.FC = () => {
           onCreated={(s, addAccounts) => {
             setCreating(null);
             setSpaces((prev) => (prev ? [...prev, s] : [s]));
-            open(s.id, null, false, addAccounts ? { kind: 'settings', scope: 'space', tab: 'accounts' } : null);
+            open(s.id, null, false, addAccounts ? { kind: 'settings', scope: 'space', tab: 'apps', section: 'accounts' } : null);
             reload();
           }}
         />

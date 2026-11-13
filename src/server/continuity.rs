@@ -242,7 +242,8 @@ pub fn offers_browser_sign_in(scope: &SelfScope) -> bool {
 /// A connection card is an extra only when the space's Composio is `ready`. Ends in a newline.
 pub fn browser_sign_in_rule(composio: super::connection_suggest::ComposioReady) -> String {
     let extra = if composio == super::connection_suggest::ComposioReady::Ready {
-        "If the app also has a Composio integration, you may add a `connection_suggest` card as an extra, after the sign-in step."
+        "If the app also has a Composio integration, you may add a `connection_suggest` card as an extra, after the sign-in step. \
+        When a Composio tool gives you a sign-in link, post a `connection_suggest` card instead of pasting the link."
     } else {
         "Composio isn't set up in this space, so don't post a `connection_suggest` card or Composio setup steps for a website you can open in the browser."
     };
@@ -2254,6 +2255,7 @@ mod tests {
         }
         // A connection card is only an extra, and only when Composio can start a sign-in
         assert!(browser_sign_in_rule(ComposioReady::Ready).contains("may add a `connection_suggest` card as an extra, after the sign-in step"));
+        assert!(browser_sign_in_rule(ComposioReady::Ready).contains("instead of pasting the link"));
         for ready in [ComposioReady::NotAdded, ComposioReady::NeedsKey, ComposioReady::Off] {
             let rule = browser_sign_in_rule(ready);
             assert!(rule.contains("don't post a `connection_suggest` card or Composio setup steps"), "{rule}");

@@ -30,7 +30,8 @@ pub fn tools() -> Vec<Value> {
             (google_search_console, google_analytics, googleads, hubspot). This connects nothing: the user signs in \
             themselves, so post it rather than offering to or asking whether to. Use it instead of reporting that something is \
             impossible for lack of access, then carry on \
-            with everything you can do without it. At most 3 per turn.",
+            with everything you can do without it. When a Composio tool (such as COMPOSIO_MANAGE_CONNECTIONS) gives you \
+            a sign-in link, don't paste the link: call this instead, so the user connects from the card. At most 3 per turn.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -66,9 +67,9 @@ impl ComposioReady {
     fn first_step(self) -> Option<&'static str> {
         match self {
             Self::Ready => None,
-            Self::Off => Some("switch the Composio connector on in Connections"),
-            Self::NeedsKey => Some("add your Composio API key to the Composio connector in Connections"),
-            Self::NotAdded => Some("add Composio in Connections (free account at composio.dev)"),
+            Self::Off => Some("switch Composio on in Apps & accounts"),
+            Self::NeedsKey => Some("paste your Composio API key on the Composio tile in Apps & accounts (Replace key)"),
+            Self::NotAdded => Some("add Composio with your free key in Apps & accounts (press Add Composio and paste the API key)"),
         }
     }
 }
@@ -94,8 +95,8 @@ fn one_line(text: &str) -> String {
 /// The card's text, readable without a card: what, why, and the steps.
 pub fn card_text(name: &str, reason: &str, ready: ComposioReady) -> String {
     let steps = match ready.first_step() {
-        Some(first) => format!("To connect it, {first}, then open Connections → Composio apps, find {name} and press Connect."),
-        None => format!("To connect it, open Connections → Composio apps, find {name} and press Connect."),
+        Some(first) => format!("To connect it, {first}, then find {name} under Composio in Apps & accounts and press Connect."),
+        None => format!("To connect it, find {name} under Composio in Apps & accounts and press Connect."),
     };
     format!("Suggested connection: {name}. {reason} {steps} You sign in on the app's own page; nothing is connected until you do.")
 }
@@ -139,7 +140,7 @@ pub async fn tool_call(state: &AppState, scope: &SelfScope, args: &Value) -> (St
     }
     let Some(origin) = scope.origin.as_ref() else {
         return (
-            "There is no chat to show a card in. Say in your reply which connection you need and that the user adds it in Connections.".into(),
+            "There is no chat to show a card in. Say in your reply which connection you need and that the user adds it in Apps & accounts.".into(),
             true,
         );
     };
@@ -205,12 +206,15 @@ mod tests {
     fn the_card_text_names_the_app_the_reason_and_the_steps() {
         let t = card_text("Google Search Console", "It shows which pages Google indexed.", ComposioReady::Ready);
         assert!(t.starts_with("Suggested connection: Google Search Console. It shows which pages Google indexed."));
-        assert!(t.contains("Connections → Composio apps, find Google Search Console and press Connect"));
+        assert!(t.contains("find Google Search Console under Composio in Apps & accounts and press Connect"), "{t}");
         assert!(!t.contains("API key"));
         let t = card_text("Google Search Console", "x", ComposioReady::NotAdded);
-        assert!(t.contains("add Composio in Connections"), "{t}");
+        assert!(t.contains("add Composio with your free key in Apps & accounts"), "{t}");
+        assert!(!t.contains("Connections"), "the old page name is gone: {t}");
         assert!(card_text("A", "x", ComposioReady::NeedsKey).contains("Composio API key"));
-        assert!(card_text("A", "x", ComposioReady::Off).contains("switch the Composio connector on"));
+        assert!(card_text("A", "x", ComposioReady::Off).contains("switch Composio on in Apps & accounts"));
+        let d = tools()[0]["description"].as_str().unwrap().to_string();
+        assert!(d.contains("don't paste the link: call this instead"), "{d}");
     }
 
     #[test]

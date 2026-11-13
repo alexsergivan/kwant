@@ -42,7 +42,7 @@ const withCode = (text: string) =>
 const summaryAccounts = (accounts: Profile[], now: number) =>
   accounts.map((p) => {
     const limit = activeLimit(p.limited_until, now);
-    return { name: p.kind === 'system' ? 'This machine' : p.name, usable: accountUsable(p, now), is_default: p.is_default, priority: p.priority, outUntil: limit ? formatUntil(limit, now) : null };
+    return { name: p.kind === 'system' ? 'the sign-in on this computer' : p.name, usable: accountUsable(p, now), is_default: p.is_default, priority: p.priority, outUntil: limit ? formatUntil(limit, now) : null };
   });
 
 /** One engine: its status, switch and models up top, and the accounts it can run on underneath. */
@@ -214,12 +214,14 @@ export const RouteSummary: React.FC<{ rows: RouteRow[]; pending: boolean }> = ({
 
 /** Settings → "Engines & accounts": one card per engine with the accounts it runs on, ready ones first.
  *  `focusClaudeSignIn` changes to bring "Sign in with Claude" into view and focus it. */
-export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState; now?: number; focusClaudeSignIn?: number }> = ({
-  api,
-  accounts,
-  now = Date.now(),
-  focusClaudeSignIn,
-}) => {
+export const EnginesPanel: React.FC<{
+  api: EnginesApi;
+  accounts?: ProfilesState;
+  now?: number;
+  focusClaudeSignIn?: number;
+  /** Apps & accounts: the AI accounts list above already says what runs the bots, so skip "What runs your kwant bots". */
+  hideRoutes?: boolean;
+}> = ({ api, accounts, now = Date.now(), focusClaudeSignIn, hideRoutes = false }) => {
   const { engines, error, rechecking, recheck, setEnabled, reload } = api;
   const [showAbsent, setShowAbsent] = useState(false);
   const profiles = accounts?.profiles ?? null;
@@ -286,7 +288,7 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
       </div>
 
       {routes.length > 0 ? (
-        <RouteSummary rows={routes} pending={!!accounts && !profiles && !accounts.error} />
+        hideRoutes ? null : <RouteSummary rows={routes} pending={!!accounts && !profiles && !accounts.error} />
       ) : (
         <p className="text-[11px] text-zinc-400 leading-relaxed" aria-live="polite">
           {engines === null
