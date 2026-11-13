@@ -29,6 +29,22 @@ pub struct UsageReading {
     pub windows: Vec<UsageWindow>,
 }
 
+impl UsageReading {
+    /// Keeps the last reading's window of any kind this one doesn't report, while that window
+    /// hasn't reset yet (or has no reset time): Claude can send a `rate_limit_event` with only its
+    /// weekly window, and the 5-hour bar shouldn't vanish until the next full report.
+    pub fn keep_unreported(&mut self, last: &[UsageWindow], now: DateTime<Utc>) {
+        for w in last {
+            let reported = self.windows.iter().any(|n| n.kind == w.kind);
+            let live = w.resets_at.map_or(true, |at| at > now);
+            if !reported && live {
+                self.windows.push(w.clone());
+            }
+        }
+        self.windows = sorted(std::mem::take(&mut self.windows));
+    }
+}
+
 /// An account's last reading, as `GET /api/profiles` shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountUsage {
@@ -178,6 +194,38 @@ mod tests {
         assert_eq!(r.status.as_deref(), Some("warning"));
         assert_eq!(r.windows.len(), 1);
         assert_eq!((r.windows[0].kind.as_str(), r.windows[0].used_pct), ("weekly", 83));
+    }
+
+    #[test]
+    fn a_one_window_event_keeps_the_other_window_until_it_resets() {
+        let now = Utc.timestamp_opt(1794600000, 0).single().unwrap();
+        let both = from_claude_event(&serde_json::json!({"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{
+            "five_hour":{"utilization":0.14,"resetsAt":1794605400},"seven_day":{"utilization":0.56,"resetsAt":1794960000}}}}))
+        .unwrap();
+        let weekly_only = serde_json::json!({"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","unifiedWindows":{
+            "seven_day":{"utilization":0.83,"resetsAt":1794960000}}}});
+        let mut r = from_claude_event(&weekly_only).unwrap();
+        r.keep_unreported(&both.windows, now);
+        assert_eq!(r.status.as_deref(), Some("warning"));
+        assert_eq!(
+            r.windows,
+            vec![
+                UsageWindow { kind: "five_hour".into(), used_pct: 14, resets_at: Utc.timestamp_opt(1794605400, 0).single() },
+                UsageWindow { kind: "weekly".into(), used_pct: 83, resets_at: Utc.timestamp_opt(1794960000, 0).single() },
+            ]
+        );
+        // A reported window wins over the kept one, and keeping twice adds nothing
+        r.keep_unreported(&both.windows, now);
+        assert_eq!(r.windows.len(), 2);
+        assert_eq!(r.windows[1].used_pct, 83);
+        // Once the 5-hour window has reset, its old numbers are gone
+        let mut r = from_claude_event(&weekly_only).unwrap();
+        r.keep_unreported(&both.windows, Utc.timestamp_opt(1794605400, 0).single().unwrap());
+        assert_eq!(r.windows.iter().map(|w| w.kind.as_str()).collect::<Vec<_>>(), vec!["weekly"]);
+        // A window with no reset time is kept
+        let mut r = UsageReading { status: None, windows: vec![] };
+        r.keep_unreported(&[UsageWindow { kind: "weekly".into(), used_pct: 40, resets_at: None }], now);
+        assert_eq!(r.windows.len(), 1);
     }
 
     #[test]

@@ -532,7 +532,7 @@ pub async fn usage(State(state): State<AppState>, Path(id): Path<String>) -> Res
         return err(StatusCode::BAD_REQUEST, "only Claude and Codex sign-ins have 5-hour and weekly limits");
     }
     if !state.profiles.claim_usage_check(&id) {
-        let last = state.db.list_profile_usage().await.unwrap_or_default().remove(&id);
+        let last = state.db.get_profile_usage(&id).await.ok().flatten();
         return match last {
             Some(u) => Json(u).into_response(),
             None => {

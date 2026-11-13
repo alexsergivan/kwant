@@ -28,7 +28,12 @@ pub async fn record(state: &AppState, p: &LlmProfile, reading: UsageReading, sou
     if !has_windows(p) || reading.windows.is_empty() && reading.status.is_none() {
         return None;
     }
-    let usage = AccountUsage::new(reading, source, chrono::Utc::now());
+    let now = chrono::Utc::now();
+    let mut reading = reading;
+    if let Ok(Some(last)) = state.db.get_profile_usage(&p.id).await {
+        reading.keep_unreported(&last.windows, now);
+    }
+    let usage = AccountUsage::new(reading, source, now);
     if let Err(e) = state.db.record_profile_usage(&p.id, &usage).await {
         tracing::warn!(profile = %p.id, error = %e, "couldn't save account usage");
     }
@@ -80,7 +85,10 @@ async fn claude(state: &AppState, p: &LlmProfile) -> Result<UsageReading, CheckE
         .and_then(|e| choose_model(&known_models(&state.engines, e), None, Tier::Fast))
         .and_then(|c| c.run_id().map(str::to_string));
     let dir = state.profiles.data_dir.join("tmp").join(format!("usage-check-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::create_dir_all(&dir).map_err(|e| CheckError::Failed(format!("couldn't make a scratch folder: {e}")))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        tracing::warn!(profile = %p.id, error = %e, "usage check: couldn't make a scratch folder");
+        CheckError::Failed("couldn't make a scratch folder for the check".into())
+    })?;
     let input = TurnInput {
         thread_id: format!("usage-check-{}", uuid::Uuid::new_v4().simple()),
         kwant: Kwant {
@@ -127,7 +135,10 @@ async fn claude(state: &AppState, p: &LlmProfile) -> Result<UsageReading, CheckE
     let _ = std::fs::remove_dir_all(&dir);
     let out = match out {
         Err(_) => return Err(CheckError::Failed(format!("no answer within {} s", CLAUDE_CHECK_TIMEOUT.as_secs()))),
-        Ok(Err(e)) => return Err(CheckError::Failed(e.to_string())),
+        Ok(Err(e)) => {
+            tracing::warn!(profile = %p.id, error = %e, "usage check: claude failed");
+            return Err(CheckError::Failed("couldn't run Claude for this account".into()));
+        }
         Ok(Ok(o)) => o,
     };
     if let Some(failure) = &out.failure {
@@ -159,7 +170,10 @@ async fn codex(state: &AppState, p: &LlmProfile) -> Result<UsageReading, CheckEr
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
     let read = async move {
-        let mut child = cmd.spawn().map_err(|e| format!("couldn't start codex: {e}"))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            tracing::warn!(error = %e, "usage check: couldn't start codex");
+            "couldn't start codex".to_string()
+        })?;
         let mut stdin = child.stdin.take().ok_or("codex has no input")?;
         let stdout = child.stdout.take().ok_or("codex has no output")?;
         let requests = [
@@ -168,11 +182,11 @@ async fn codex(state: &AppState, p: &LlmProfile) -> Result<UsageReading, CheckEr
             serde_json::json!({"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read"}),
         ];
         for r in requests {
-            stdin.write_all(format!("{r}\n").as_bytes()).await.map_err(|e| e.to_string())?;
+            stdin.write_all(format!("{r}\n").as_bytes()).await.map_err(|_| "codex stopped answering")?;
         }
-        stdin.flush().await.map_err(|e| e.to_string())?;
+        stdin.flush().await.map_err(|_| "codex stopped answering")?;
         let mut lines = BufReader::new(stdout).lines();
-        while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+        while let Some(line) = lines.next_line().await.map_err(|_| "codex stopped answering")? {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
             if v["id"] != 2 {
                 continue;

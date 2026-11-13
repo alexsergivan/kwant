@@ -241,3 +241,43 @@ async fn clearing_a_failure_keeps_the_usage_reading() {
     db.clear_profile_state(id).await.unwrap();
     assert!(db.list_profile_usage().await.unwrap().is_empty());
 }
+
+/// D1: Claude can report one window alone (a weekly-only warning). The other bar stays, with its
+/// last numbers, until it resets; a window past its reset time is dropped.
+#[tokio::test]
+async fn a_one_window_turn_keeps_the_other_bar() {
+    use kwnt::profiles::usage::{UsageReading, UsageWindow};
+    use kwnt::server::account_usage::record;
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let db = Database::init(&data).await.unwrap();
+    let config = Config { data_dir: data.clone(), laya_url: "http://127.0.0.1:9".into(), ..Config::default() };
+    let state = AppState::new(
+        config.clone(),
+        db,
+        ToolRunner::new(data.join("workspace")),
+        PermissionBroker::new(),
+        LayaRouter::new(config.laya_url.clone()),
+    );
+    let app = create_router(state.clone());
+    let p = state.db.get_profile("prf_system_claude").await.unwrap().expect("the built-in Claude account");
+    let at = |h: i64| chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp() + h * 3600, 0);
+    let window = |kind: &str, used_pct: u8, resets_at| UsageWindow { kind: kind.into(), used_pct, resets_at };
+
+    let both = UsageReading { status: Some("ok".into()), windows: vec![window("five_hour", 14, at(2)), window("weekly", 56, at(90))] };
+    record(&state, &p, both, "turn").await.unwrap();
+    let weekly_only = UsageReading { status: Some("warning".into()), windows: vec![window("weekly", 83, at(90))] };
+    record(&state, &p, weekly_only, "turn").await.unwrap();
+    let u = profile(&app, &p.id).await["usage"].clone();
+    assert_eq!(u["status"], "warning", "{u}");
+    assert_eq!(u["windows"].as_array().unwrap().len(), 2, "{u}");
+    assert_eq!((u["windows"][0]["kind"].as_str(), u["windows"][0]["used_pct"].as_u64()), (Some("five_hour"), Some(14)));
+    assert_eq!((u["windows"][1]["kind"].as_str(), u["windows"][1]["used_pct"].as_u64()), (Some("weekly"), Some(83)));
+
+    // A 5-hour window past its reset time isn't carried over
+    let stale = UsageReading { status: Some("ok".into()), windows: vec![window("five_hour", 99, at(-1)), window("weekly", 60, at(90))] };
+    record(&state, &p, stale, "turn").await.unwrap();
+    record(&state, &p, UsageReading { status: Some("ok".into()), windows: vec![window("weekly", 61, at(90))] }, "turn").await.unwrap();
+    let u = profile(&app, &p.id).await["usage"].clone();
+    assert_eq!(u["windows"], json!([{"kind": "weekly", "used_pct": 61, "resets_at": u["windows"][0]["resets_at"]}]), "{u}");
+}

@@ -281,6 +281,18 @@ impl Database {
         Ok(())
     }
 
+    /// One profile's latest usage reading, if it has one this version can read.
+    pub async fn get_profile_usage(&self, id: &str) -> Result<Option<crate::profiles::usage::AccountUsage>, DbError> {
+        let row: Option<(String, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT usage_json, usage_checked_at FROM llm_profile_state
+             WHERE profile_id = ? AND usage_json IS NOT NULL AND usage_checked_at IS NOT NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|(json, at)| crate::profiles::usage::AccountUsage::from_stored(&json, at)))
+    }
+
     /// Each profile's latest usage reading, by profile id.
     pub async fn list_profile_usage(
         &self,
