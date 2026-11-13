@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
-import { ModernAvatar } from './ModernAvatar';
+import { ModernAvatar, useModelBadge } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
-import { canRunNow, engineTip, isUsable } from '../engines';
+import { canRunNow, engineTip, isUsable, type RunsOn } from '../engines';
 import { statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
@@ -30,6 +30,16 @@ import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
 import { BudgetMeter, useBudgets } from './BotBudget';
 import { PAUSED_ROW_LINE } from '../botBudget';
 
+/** A bot's name in its row; the tooltip says what it runs on in the same words as its avatar's model badge. */
+const BotName: React.FC<{ kwant: Kwant; className: string }> = ({ kwant: k, className }) => {
+  const badge = useModelBadge(k.id);
+  return (
+    <span data-bot-name className={className} title={`${k.name} · ${badge?.label ?? engineTip(k.preferred_model)}`}>
+      {k.name}
+    </span>
+  );
+};
+
 export interface Kwant {
   id: string;
   name: string;
@@ -39,6 +49,8 @@ export interface Kwant {
   avatar_sprite: string;
   driver_type: string;
   preferred_model: string;
+  /** What its newest reply ran on (GET /api/kwants, 0.9.6+); null when it never replied. */
+  last_ran_on?: RunsOn | null;
   /** Pinned LLM profile; null uses the engine's default. */
   profile_id?: string | null;
   /** Whether turns may move to the engine's next profile when this one is out of usage. */
@@ -628,9 +640,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* The full name, on up to two lines (QA a), wrapping only between words or after a hyphen:
                 never inside a word ("Researche / r"). A word too long for the line ends in "…"; the
                 whole name and what it runs on are in the tooltip */}
-            <span data-bot-name className={`min-w-0 text-body font-semibold leading-5 text-zinc-100 ${NAME_WRAP}`} title={`${k.name} · ${engineTip(k.preferred_model)}`}>
-              {k.name}
-            </span>
+            <BotName kwant={k} className={`min-w-0 text-body font-semibold leading-5 text-zinc-100 ${NAME_WRAP}`} />
             {isLead && (
               <span className="shrink-0 flex items-center gap-0.5 h-5 text-2xs uppercase tracking-wide text-amber-300" title={`Leads @${team!.name}`}>
                 <Crown size={10} aria-hidden="true" />

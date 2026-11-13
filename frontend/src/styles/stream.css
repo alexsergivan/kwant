@@ -207,3 +207,123 @@
 @media (prefers-reduced-motion: reduce) {
   .kw-viewer-in { animation: none; }
 }
+
+/* The bot at work (Mira, autonomy/working-avatar/design.md). Transform and opacity only; one inline SVG; no JS
+   timers. The resting state of every element IS the reduced-motion still frame: lines full, paw down, spark hidden. */
+:root {
+  --kw-wa-ground: #261d4a;
+  --kw-wa-lid: #4a3f8a;
+  --kw-wa-rim: #6d5fc0;
+  --kw-wa-screen: #0d0a1f;
+  --kw-wa-type: #b8adff;
+  --kw-wa-deck: #5a5383;
+  --kw-wa-key: #8d87b8;
+  --kw-wa-edge: #3f3868;
+  --kw-wa-spark: #e1d6ff;
+  --kw-wa-spark-core: #ffffff;
+  --kw-wa-text: #9a94c4;
+  --kw-wa-name: #ecebfa;
+}
+/* Light values, for when the app gets a light theme (it is dark only today). */
+[data-theme="light"] {
+  --kw-wa-ground: #e3e0f5;
+  --kw-wa-rim: #6d5fc0;
+  --kw-wa-screen: #15112e;
+  --kw-wa-deck: #bcb7de;
+  --kw-wa-key: #8d87b8;
+  --kw-wa-edge: #9a94c4;
+  --kw-wa-spark: #9d8fff;
+  --kw-wa-spark-core: #6c58e0;
+  --kw-wa-text: #5a5383;
+  --kw-wa-name: #1d1840;
+}
+
+/* The bubble body keeps this height while the reply is live, so the first words land without a jump. */
+.kw-wa-hold { min-height: 62px; }
+
+.kw-wa {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 62px;
+  animation: kw-wa-in 150ms var(--kw-ease, cubic-bezier(0.2, 0.7, 0.2, 1)) both;
+}
+.kw-wa[hidden] { display: none; }
+.kw-wa-scene { flex: none; display: block; width: 108px; height: 54px; shape-rendering: crispEdges; image-rendering: pixelated; }
+.kw-wa-text {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--kw-wa-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kw-wa-name { color: var(--kw-wa-name); font-weight: 500; }
+.kw-wa-dots { display: inline-block; width: 1.1em; }
+
+/* The first words fade in over the place the scene held. */
+@keyframes kw-wa-in { from { opacity: 0; } to { opacity: 1; } }
+.kw-wa-in { animation: kw-wa-in 150ms var(--kw-ease, cubic-bezier(0.2, 0.7, 0.2, 1)) both; }
+
+/* 1. The bot bobs 1 px (a third of a cell) twice per 2.4 s loop. */
+@keyframes kw-wa-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-0.3333px); } }
+.kw-wa-bob { animation: kw-wa-bob 1.2s ease-in-out infinite; }
+
+/* 2. The screen types three lines left to right, one cell per step, holds, then clears. */
+.kw-wa-l { transform-box: fill-box; transform-origin: left center; }
+@keyframes kw-wa-l1 {
+  0% { transform: scaleX(0); opacity: 1; }
+  6% { transform: scaleX(0); animation-timing-function: steps(11, end); }
+  28% { transform: scaleX(1); }
+  88% { transform: scaleX(1); opacity: 1; animation-timing-function: step-end; }
+  89%, 100% { transform: scaleX(1); opacity: 0; }
+}
+@keyframes kw-wa-l2 {
+  0% { transform: scaleX(0); opacity: 1; }
+  33% { transform: scaleX(0); animation-timing-function: steps(9, end); }
+  49% { transform: scaleX(1); }
+  88% { transform: scaleX(1); opacity: 1; animation-timing-function: step-end; }
+  89%, 100% { transform: scaleX(1); opacity: 0; }
+}
+@keyframes kw-wa-l3 {
+  0% { transform: scaleX(0); opacity: 1; }
+  54% { transform: scaleX(0); animation-timing-function: steps(6, end); }
+  64% { transform: scaleX(1); }
+  88% { transform: scaleX(1); opacity: 1; animation-timing-function: step-end; }
+  89%, 100% { transform: scaleX(1); opacity: 0; }
+}
+.kw-wa-l1 { animation: kw-wa-l1 2.4s linear infinite; }
+.kw-wa-l2 { animation: kw-wa-l2 2.4s linear infinite; }
+.kw-wa-l3 { animation: kw-wa-l3 2.4s linear infinite; }
+
+/* 3. The paw taps a key (up one cell) while a line types, and rests while the screen holds. */
+@keyframes kw-wa-paw {
+  0% { transform: translateY(0); }
+  8% { transform: translateY(-1px); } 11% { transform: translateY(0); }
+  14% { transform: translateY(-1px); } 17% { transform: translateY(0); }
+  20% { transform: translateY(-1px); } 23% { transform: translateY(0); }
+  25% { transform: translateY(-1px); } 28% { transform: translateY(0); }
+  35% { transform: translateY(-1px); } 38% { transform: translateY(0); }
+  42% { transform: translateY(-1px); } 45% { transform: translateY(0); }
+  56% { transform: translateY(-1px); } 59% { transform: translateY(0); }
+  61% { transform: translateY(-1px); } 63%, 100% { transform: translateY(0); }
+}
+.kw-wa-paw { animation: kw-wa-paw 2.4s step-end infinite; }
+
+/* 4. A spark pops above its head when line 3 is done, every third loop (7.2 s): centre, then the plus
+      at +60 ms, the tips at +120 ms, held, then a 160 ms fade. Hidden at rest. */
+.kw-wa-spark rect { opacity: 0; }
+@keyframes kw-wa-s1 { 0%, 21.4% { opacity: 0; } 21.41%, 29.6% { opacity: 1; } 31.8%, 100% { opacity: 0; } }
+@keyframes kw-wa-s2 { 0%, 22.23% { opacity: 0; } 22.24%, 29.6% { opacity: 1; } 31.8%, 100% { opacity: 0; } }
+@keyframes kw-wa-s3 { 0%, 23.06% { opacity: 0; } 23.07%, 29.6% { opacity: 1; } 31.8%, 100% { opacity: 0; } }
+.kw-wa-s1 { animation: kw-wa-s1 7.2s linear infinite; }
+.kw-wa-s2 { animation: kw-wa-s2 7.2s linear infinite; }
+.kw-wa-s3 { animation: kw-wa-s3 7.2s linear infinite; }
+
+/* Reduced motion: the resting frame. Lines full, paw down, no spark, no bob, dots still ("…"). */
+@media (prefers-reduced-motion: reduce) {
+  .kw-wa, .kw-wa-in, .kw-wa-scene *, .kw-wa-dots > * { animation: none !important; }
+  .kw-wa-dots > * { opacity: 0.8; }
+}

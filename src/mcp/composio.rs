@@ -49,6 +49,18 @@ pub const MANAGE_TOOL: &str = "COMPOSIO_MANAGE_CONNECTIONS";
 const CONNECT_TIMEOUT_SECS: i64 = 15;
 /// Most apps one `list` call asks about.
 pub const MAX_STATUS_SLUGS: usize = 120;
+/// The Composio Connect tool kwnt asks whether an app exists, by the name the person typed.
+/// (`COMPOSIO_MANAGE_CONNECTIONS` `list` can't tell: it answers "initiated" for a made-up app too;
+/// checked 2026-11-13.)
+pub const SEARCH_TOOL: &str = "COMPOSIO_SEARCH_TOOLS";
+/// Composio's public app pages: `<this>/<slug>` answers 200 for an app Composio has and 404 for
+/// one it hasn't (checked 2026-11-13: elevenlabs 200, google_search_console 200, notarealapp123
+/// 404). kwnt asks with `HEAD`, no key and nothing about the person: only the app's slug.
+pub const TOOLKITS_PAGE_URL: &str = "https://composio.dev/toolkits";
+/// How long one app page check may take.
+const PAGE_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
+/// Most app names one search asks Composio about.
+pub const MAX_CANDIDATES: usize = 3;
 
 /// Which kind of Composio key, from its prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,23 +106,109 @@ pub fn popular_apps() -> &'static [PopularApp] {
     })
 }
 
+/// Whether `app`'s name, one of its name's words, or its slug starts with `query` (as typed,
+/// trimmed, any case): the person is likely still typing that app's name.
+pub fn popular_starts_with(app: &PopularApp, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    let name = app.name.to_lowercase();
+    name.starts_with(&q) || app.slug.starts_with(&q) || name.split(' ').any(|w| w.starts_with(&q))
+}
+
 /// Popular apps matching `query` (name or slug, any case): those starting with it first, then
 /// those containing it, each in popularity order; at most `limit`.
 pub fn search_popular(query: &str, limit: usize) -> Vec<&'static PopularApp> {
     let q = query.trim().to_lowercase();
-    let words = |a: &PopularApp| (a.name.to_lowercase(), a.slug.clone());
     let (mut first, mut then) = (Vec::new(), Vec::new());
     for a in popular_apps() {
-        let (name, slug) = words(a);
-        if name.starts_with(&q) || slug.starts_with(&q) || name.split(' ').any(|w| w.starts_with(&q)) {
+        if popular_starts_with(a, &q) {
             first.push(a);
-        } else if name.contains(&q) || slug.contains(&q) {
+        } else if a.name.to_lowercase().contains(&q) || a.slug.contains(&q) {
             then.push(a);
         }
     }
     first.extend(then);
     first.truncate(limit);
     first
+}
+
+/// The slugs an app the person typed by name could have, most likely first, at most
+/// [`MAX_CANDIDATES`]: "ElevenLabs" and "elevenlabs" → `elevenlabs`; "Eleven Labs" →
+/// `elevenlabs`, `eleven_labs`, `eleven-labs`. None for a name with letters outside ASCII (no
+/// Composio slug has them) or under two characters.
+pub fn slug_candidates(query: &str) -> Vec<String> {
+    if query.chars().any(|c| c.is_alphanumeric() && !c.is_ascii()) {
+        return vec![];
+    }
+    let words: Vec<String> = query
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let compact = words.concat();
+    if compact.len() < 2 {
+        return vec![];
+    }
+    let mut out = vec![compact];
+    if words.len() > 1 {
+        out.push(words.join("_"));
+        out.push(words.join("-"));
+    }
+    out.retain(|s| valid_slug(s));
+    out.dedup();
+    out.truncate(MAX_CANDIDATES);
+    out
+}
+
+/// An app Composio Connect's search named that is one of the slugs kwnt asked about.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FoundApp {
+    pub slug: String,
+    pub description: Option<String>,
+    /// Whether the person has a working account for it, when the answer says.
+    pub connected: Option<bool>,
+}
+
+/// The apps among `candidates` that a `COMPOSIO_SEARCH_TOOLS` answer names, in `candidates`
+/// order. Only exact slugs count: the search always answers with something ("notarealapp123"
+/// gets Google and a design tool), so a looser match would offer apps the person didn't type.
+/// Nothing else in the answer (accounts, the person's details, tool schemas) is kept.
+pub fn found_toolkits(text: &str, candidates: &[String]) -> Result<Vec<FoundApp>, ComposioError> {
+    let body: Value = serde_json::from_str(text.trim())
+        .map_err(|_| ComposioError::Upstream(200, "Composio Connect answered something kwant can't read".into()))?;
+    if body["successful"] == json!(false) || body["success"] == json!(false) {
+        let why = body["error"].as_str().or_else(|| body["data"]["message"].as_str()).unwrap_or_default();
+        return Err(ComposioError::Upstream(200, clip(why, 200)));
+    }
+    let data = if body["data"].is_object() { &body["data"] } else { &body };
+    let mut named: BTreeSet<String> = BTreeSet::new();
+    for r in data["results"].as_array().into_iter().flatten() {
+        for t in r["toolkits"].as_array().into_iter().flatten() {
+            if let Some(t) = t.as_str() {
+                named.insert(t.to_ascii_lowercase());
+            }
+        }
+    }
+    let statuses: Vec<&Value> = data["toolkit_connection_statuses"].as_array().into_iter().flatten().collect();
+    for s in &statuses {
+        if let Some(t) = s["toolkit"].as_str() {
+            named.insert(t.to_ascii_lowercase());
+        }
+    }
+    Ok(candidates
+        .iter()
+        .filter(|c| named.contains(c.as_str()))
+        .map(|c| {
+            let status = statuses.iter().find(|s| s["toolkit"].as_str().is_some_and(|t| t.eq_ignore_ascii_case(c)));
+            FoundApp {
+                slug: c.clone(),
+                description: status
+                    .and_then(|s| s["description"].as_str())
+                    .map(|d| clip(d.trim(), 240))
+                    .filter(|d| !d.is_empty()),
+                connected: status.and_then(|s| s["has_active_connection"].as_bool()),
+            }
+        })
+        .collect())
 }
 
 /// The `results` of a `COMPOSIO_MANAGE_CONNECTIONS` answer (`{"successful", "data": {"results":
@@ -289,6 +387,8 @@ pub struct ComposioApi {
     base_url: String,
     /// Composio Connect's MCP address, for `ck_` keys.
     connect_url: String,
+    /// Composio's public app pages, for the keyless check.
+    toolkits_url: String,
     client: reqwest::Client,
 }
 
@@ -374,9 +474,12 @@ impl ComposioApi {
     /// else `<base_url>/connect/mcp`, so a fake Composio serves both.
     pub fn new(base_url: &str) -> Self {
         let base_url = base_url.trim_end_matches('/').to_string();
-        let connect_url = if base_url == DEFAULT_API_URL { CONNECT_MCP_URL.to_string() } else { format!("{base_url}/connect/mcp") };
+        let ours = base_url == DEFAULT_API_URL;
+        let connect_url = if ours { CONNECT_MCP_URL.to_string() } else { format!("{base_url}/connect/mcp") };
+        let toolkits_url = if ours { TOOLKITS_PAGE_URL.to_string() } else { format!("{base_url}/toolkits") };
         Self {
             connect_url,
+            toolkits_url,
             base_url,
             client: reqwest::Client::builder()
                 .timeout(TIMEOUT)
@@ -436,16 +539,51 @@ impl ComposioApi {
         Ok(tools)
     }
 
-    /// One `COMPOSIO_MANAGE_CONNECTIONS` call on Composio Connect; its `results`.
-    async fn manage(&self, key: &str, toolkits: Value) -> Result<Value, ComposioError> {
+    /// One tool call on Composio Connect; the answer's text.
+    async fn connect_call(&self, key: &str, tool: &str, arguments: Value) -> Result<String, ComposioError> {
         let mut client = McpClient::connect(&self.connect_server(key), None).await.map_err(connect_error)?;
-        let result = client.call_tool(MANAGE_TOOL, json!({"toolkits": toolkits})).await.map_err(connect_error);
+        let result = client.call_tool(tool, arguments).await.map_err(connect_error);
         client.shutdown().await;
         let result = result?;
         if result.is_error {
             return Err(ComposioError::Upstream(200, clip(&result.text, 200)));
         }
-        manage_results(&result.text)
+        Ok(result.text)
+    }
+
+    /// One `COMPOSIO_MANAGE_CONNECTIONS` call on Composio Connect; its `results`.
+    async fn manage(&self, key: &str, toolkits: Value) -> Result<Value, ComposioError> {
+        manage_results(&self.connect_call(key, MANAGE_TOOL, json!({"toolkits": toolkits})).await?)
+    }
+
+    /// Which of `candidates` are apps Composio has, from one `COMPOSIO_SEARCH_TOOLS` call on
+    /// Composio Connect with the name the person typed (no side effects: it finds tools, it runs
+    /// none). See [`found_toolkits`].
+    pub async fn connect_find_apps(&self, key: &str, query: &str, candidates: &[String]) -> Result<Vec<FoundApp>, ComposioError> {
+        if candidates.is_empty() {
+            return Ok(vec![]);
+        }
+        let args = json!({
+            "queries": [{"use_case": clip(query.trim(), MAX_QUERY_CHARS)}],
+            "session": {"generate_id": true},
+        });
+        found_toolkits(&self.connect_call(key, SEARCH_TOOL, args).await?, candidates)
+    }
+
+    /// Whether Composio has an app with this exact slug, from its public app page: `Some(true)`
+    /// for 2xx, `Some(false)` for 404 or 410, `None` when it can't be told (a timeout, another
+    /// status, a redirect). No key and no cookies go with it; it never follows a redirect.
+    pub async fn toolkit_page_exists(&self, slug: &str) -> Option<bool> {
+        if !valid_slug(slug) {
+            return Some(false);
+        }
+        let url = format!("{}/{slug}", self.toolkits_url.trim_end_matches('/'));
+        let res = self.client.head(url).timeout(PAGE_CHECK_TIMEOUT).send().await.ok()?;
+        match res.status().as_u16() {
+            200..=299 => Some(true),
+            404 | 410 => Some(false),
+            _ => None,
+        }
     }
 
     /// Starts signing in to the app `slug` through Composio Connect (`add`): the address the
@@ -677,6 +815,53 @@ impl ComposioApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_typed_name_gives_at_most_three_slugs() {
+        for q in ["ElevenLabs", "elevenlabs", " ELEVENLABS "] {
+            assert_eq!(slug_candidates(q), vec!["elevenlabs"], "{q}");
+        }
+        assert_eq!(slug_candidates("Eleven Labs"), vec!["elevenlabs", "eleven_labs", "eleven-labs"]);
+        assert_eq!(slug_candidates("Google  Search-Console"), vec!["googlesearchconsole", "google_search_console", "google-search-console"]);
+        assert_eq!(slug_candidates("x.com!"), vec!["xcom", "x_com", "x-com"]);
+        for none in ["", "a", "?!", "Café", "日本"] {
+            assert!(slug_candidates(none).is_empty(), "{none}");
+        }
+        assert!(slug_candidates(&"word ".repeat(30)).iter().all(|s| valid_slug(s)), "too long ones are left out");
+    }
+
+    fn recorded(name: &str) -> String {
+        std::fs::read_to_string(format!("{}/tests/fixtures/composio/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    }
+
+    #[test]
+    fn composio_search_finds_only_the_slugs_asked_about() {
+        let el = |q: &str| slug_candidates(q);
+        let found = found_toolkits(&recorded("search_tools_elevenlabs.json"), &el("ElevenLabs")).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].slug, "elevenlabs");
+        assert_eq!(found[0].connected, Some(true));
+        assert!(found[0].description.as_deref().unwrap().starts_with("Create natural AI voices"));
+        assert!(!format!("{found:?}").contains("redacted"), "nothing about the person's accounts is kept: {found:?}");
+        let found = found_toolkits(&recorded("search_tools_eleven_labs.json"), &el("Eleven Labs")).unwrap();
+        assert_eq!(found.iter().map(|f| f.slug.as_str()).collect::<Vec<_>>(), vec!["elevenlabs"]);
+        // A made-up name still gets apps back (Google, a design tool): none of them is the one typed.
+        let text = recorded("search_tools_notarealapp123.json");
+        assert!(text.contains("googlesuper"));
+        assert_eq!(found_toolkits(&text, &el("notarealapp123")).unwrap(), vec![]);
+        // A failed search is an error, not "no such app".
+        assert!(found_toolkits(r#"{"successful": false, "error": "rate limited"}"#, &el("x y")).is_err());
+        assert!(found_toolkits("not json", &el("x y")).is_err());
+    }
+
+    #[test]
+    fn manage_list_cannot_tell_a_real_app_from_a_made_up_one() {
+        // Why kwant asks COMPOSIO_SEARCH_TOOLS instead: heygen is real, notarealapp123 isn't, and
+        // `list` answers both the same.
+        let results = manage_results(&recorded("manage_list_real_and_made_up.json")).unwrap();
+        assert!(result_active(&results["elevenlabs"]));
+        assert_eq!(results["heygen"]["status"], results["notarealapp123"]["status"]);
+    }
 
     #[test]
     fn slugs_are_plain_lowercase_words() {

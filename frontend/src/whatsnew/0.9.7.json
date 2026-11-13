@@ -1,0 +1,31 @@
+{
+  "version": "0.9.7",
+  "date": "2026-11-13",
+  "highlights": [
+    {
+      "id": "working-avatar",
+      "title": "See your bot at work",
+      "text": "While a reply is on its way, the bot's own avatar types at a little laptop, next to a line like \"Ben is working on it\". The words then take its place without a jump.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "model-badge",
+      "title": "See which AI each bot runs on",
+      "text": "A small mark on each bot's avatar shows its AI. When Laya picks the model, the mark shows the pick while the bot works. Hover it for the model, or why a bot can't run.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "find-a-tool",
+      "title": "Find a tool in one search box",
+      "text": "Type a tool's name in Add a tool or on Apps & accounts. Results come built in, through Composio, or from the public directory, and typos are fine.",
+      "image": null,
+      "open": "settings/apps"
+    }
+  ],
+  "fixes": [
+    "Through Composio now finds any app Composio has, such as ElevenLabs, not only the popular ones.",
+    "Signing in to tool servers such as ElevenLabs now works, where it failed with \"does not support automatic client registration\"."
+  ]
+}

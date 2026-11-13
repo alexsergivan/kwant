@@ -29,3 +29,9 @@
 /install.sh
   Content-Type: text/plain; charset=utf-8
   Cache-Control: public, max-age=300, must-revalidate
+
+# kwant's OAuth client ID metadata document (MCP sign-in, src/mcp/oauth.rs static_client_document):
+# authorization servers fetch it, so JSON, and a change reaches them within minutes
+/oauth/client.json
+  Content-Type: application/json
+  Cache-Control: public, max-age=300

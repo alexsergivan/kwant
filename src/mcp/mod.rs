@@ -11,6 +11,7 @@ pub mod oauth;
 pub mod payment_floor;
 pub mod prod_floor;
 pub mod oauth_mock;
+pub mod directory;
 pub mod registry;
 pub mod session;
 pub mod shell_risk;
@@ -110,6 +111,11 @@ pub struct McpServerInput {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub timeout_secs: Option<i64>,
+}
+
+/// A name `build_server` accepts: the shape below and not one of kwnt's own names.
+pub fn usable_server_name(name: &str) -> bool {
+    valid_server_name(name) && !name.eq_ignore_ascii_case(RESERVED_SERVER_NAME) && !name.eq_ignore_ascii_case(SELF_SERVER_NAME)
 }
 
 fn valid_server_name(name: &str) -> bool {

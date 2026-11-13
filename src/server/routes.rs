@@ -69,7 +69,8 @@ pub(crate) fn db_status(e: &DbError) -> StatusCode {
     }
 }
 
-/// The space's kwants, each with `runs_on`: the account its next turn would use.
+/// The space's kwants, each with `runs_on`: the account its next turn would use, and
+/// `last_ran_on`: what its newest reply ran on, or null (see `crate::db::last_ran_on`).
 pub async fn list_kwants(
     State(state): State<AppState>,
     Scope(space): Scope,
@@ -79,11 +80,14 @@ pub async fn list_kwants(
         .kwant_views(&space)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // What each bot's newest reply ran on: the model badge on a resting row
+    let mut last_ran_on = state.db.last_ran_on_all().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut out = Vec::with_capacity(views.len());
     for v in views {
         let runs_on = super::profile_turn::runs_on(&state, &v.kwant).await;
         let mut item = serde_json::to_value(&v).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         item["runs_on"] = runs_on;
+        item["last_ran_on"] = last_ran_on.remove(&v.kwant.id).unwrap_or(serde_json::Value::Null);
         let mode = state
             .db
             .kwant_approvals_in(&space, &v.kwant.id)
@@ -2742,6 +2746,25 @@ impl RanOn {
     }
 }
 
+/// The `turn_runs_on` event for the attempt that is about to run on `r`; its model fields are the
+/// ones the saved reply's `meta.ran_on` gets.
+fn turn_runs_on(r: &RanOn, tag: &crate::drivers::events::TurnTag, picked_by: &str) -> RuntimeEvent {
+    let v = r.to_json(None, picked_by, "");
+    let text = |key: &str| v[key].as_str().map(str::to_string);
+    RuntimeEvent::TurnRunsOn {
+        kwant_id: tag.kwant_id.clone(),
+        turn_id: tag.turn_id.clone(),
+        context_id: Some(tag.context_id.clone()),
+        thread_id: tag.thread_id.clone(),
+        engine: r.engine.as_str().to_string(),
+        family: text("family").unwrap_or_default(),
+        model: text("model"),
+        model_label: text("model_label"),
+        tier: text("tier"),
+        picked_by: picked_by.to_string(),
+    }
+}
+
 /// Setting: seconds a streaming model may stay silent (outside tool runs) before its turn is stopped.
 pub const STALL_SETTING: &str = "turn_stall_secs";
 pub const DEFAULT_STALL_SECS: u64 = 120;
@@ -3312,6 +3335,12 @@ async fn run_kwant_turn_inner(
             model: None,
             profile: p,
         });
+        // `turn_runs_on`'s `picked_by`: who chose what the first account runs; "fallback" once
+        // the turn has left it (or skipped it as known to be out)
+        let picked_first = if pinned_model.is_some() || pinned_family { "pinned" } else { "laya" };
+        let mut left_first = moved_from.is_some();
+        // The last `turn_runs_on` sent, so a stall retry on the same account doesn't repeat it
+        let mut sent_runs_on: Option<RuntimeEvent> = None;
         // The switches as the reply's `meta.failover` (one object per switch), so they survive a reload
         let mut switch_meta: Vec<serde_json::Value> = Vec::new();
         let chat_key = format!("{}|{:?}|{:?}", target_kwant.id, scope.channel_id, scope.thread_id);
@@ -3343,6 +3372,7 @@ async fn run_kwant_turn_inner(
                 (pinned_model.clone(), tier)
             };
             let (driver_key, driver_endpoint) = if cross { (None, None) } else { (configured_key.clone(), endpoint.clone()) };
+            left_first |= i > 0;
             let (driver, host_engine) = match super::profile_turn::driver_for(
                 state,
                 profile.as_ref(),
@@ -3476,6 +3506,14 @@ async fn run_kwant_turn_inner(
                 account: super::profile_turn::account_name(profile.as_ref(), e),
                 choice: if unlisted_api { None } else { choice.clone() },
             });
+            if let Some(r) = &ran_on {
+                let picked_by = if left_first { "fallback" } else { picked_first };
+                let event = turn_runs_on(r, tag, picked_by);
+                if sent_runs_on.as_ref() != Some(&event) {
+                    let _ = state.event_sender.send(event.clone());
+                    sent_runs_on = Some(event);
+                }
+            }
             let stall_limit = if driver.streams_progress() { stall_after } else { None };
             state.turns.note_driver(&tag.turn_id, driver.streams_progress(), runs_on.map(super::bot_status::engine_label));
             let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -3896,6 +3934,13 @@ async fn run_kwant_turn_inner(
                 let mut meta = ran_on
                     .as_ref()
                     .map(|r| serde_json::json!({ "ran_on": r.to_json(output.model.as_deref(), pick, &effort_level) }));
+                // The badge's resting value, kept for the bot list before the reply goes out
+                if let Some(r) = meta.as_ref().map(|m| &m["ran_on"]) {
+                    let last = crate::db::last_ran_on::last_ran_on(r, left_first, chrono::Utc::now());
+                    if let Err(e) = state.db.set_last_ran_on(&target_kwant.id, &last).await {
+                        tracing::warn!(kwant = %target_kwant.id, error = %e, "could not save last_ran_on");
+                    }
+                }
                 if let Some(usage) = &output.usage {
                     meta.get_or_insert_with(|| serde_json::json!({}))["usage"] = serde_json::json!(usage);
                 }

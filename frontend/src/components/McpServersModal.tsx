@@ -22,9 +22,7 @@ import {
   ShieldCheck,
   LogOut,
   Users,
-  Search,
   ExternalLink,
-  AlertTriangle,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -36,11 +34,8 @@ import {
   SecretRow,
   StoredStatus,
   McpPreset,
-  ComposioOnlyApp,
-  searchComposioOnly,
-  COMPOSIO_ONLY_APPS,
+  OpenAddTool,
   MCP_PRESETS,
-  searchPresets,
   groupPresets,
   emptyMcpForm,
   formToPayload,
@@ -59,6 +54,9 @@ import {
 } from '../mcp';
 import { inDesktopApp, leaveForSignIn, pollUntil, signInChanged } from '../externalLinks';
 import { useEscapeLayer } from '../escape';
+import { signInDeadEnd } from '../mcpSignInDeadEnd';
+import { ChooseBotsTarget, FindTool, FindToolApi } from './FindTool';
+import { DirectoryEntry, connectionsApi } from '../connections';
 
 interface McpServersModalProps {
   isOpen: boolean;
@@ -69,6 +67,11 @@ interface McpServersModalProps {
   onOpenConnections?: () => void;
   /** Opens straight on "Add a tool server" instead of the list. */
   startAdding?: boolean;
+  /** Tests and shots: Find a tool's data, and text already typed. */
+  findApi?: FindToolApi;
+  initialQuery?: string;
+  /** Opened from Apps & accounts' Find a tool: straight on this tool's form. */
+  startWith?: OpenAddTool | null;
 }
 
 const inputCls =
@@ -87,6 +90,59 @@ const readError = async (res: Response) => {
     // not JSON
   }
   return `Something went wrong (HTTP ${res.status}).`;
+};
+
+/** A sign-in that couldn't start: the server's message, and its `code` when retrying can't help. */
+export interface OAuthFailure {
+  message: string;
+  code?: string;
+}
+
+/**
+ * The amber "asks you to sign in" box on a server card. When the start call returned a dead-end code
+ * (no_client_registration, cimd_needs_https) there is no Connect or Retry: one grey next step instead.
+ */
+export const SignInBox: React.FC<{
+  serverName: string;
+  isConnecting: boolean;
+  macApp: boolean;
+  failure?: OAuthFailure;
+  onConnect: () => void;
+}> = ({ serverName, isConnecting, macApp, failure, onConnect }) => {
+  const deadEnd = failure && !isConnecting ? signInDeadEnd(failure.code, serverName, 'servers') : null;
+  return (
+    <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] space-y-2">
+      <div className="flex items-start gap-2 text-amber-100/90">
+        <KeyRound size={13} className="flex-shrink-0 mt-px text-amber-400" />
+        <span>
+          {isConnecting
+            ? macApp
+              ? 'Finish signing in in your browser. This updates by itself when you’re done.'
+              : 'Waiting for you to approve access in the sign-in window…'
+            : 'This server asks you to sign in and approve access.'}
+        </span>
+      </div>
+      {failure && !isConnecting && (
+        <p role="alert" className="flex items-start gap-1.5 text-rose-300">
+          <AlertCircle size={12} className="flex-shrink-0 mt-px" />
+          <span>{deadEnd ? deadEnd.error : failure.message}</span>
+        </p>
+      )}
+      {deadEnd ? (
+        <p className="text-zinc-400">{deadEnd.next}</p>
+      ) : (
+        <button
+          type="button"
+          onClick={onConnect}
+          disabled={isConnecting && !macApp}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
+        >
+          {isConnecting && !macApp ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
+          {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : failure ? 'Retry' : 'Connect'}
+        </button>
+      )}
+    </div>
+  );
 };
 
 const StatusPill: React.FC<{ server: McpServer; status?: StoredStatus; testing: boolean }> = ({ server, status, testing }) => {
@@ -223,80 +279,24 @@ const ToolChips: React.FC<{ tools: Array<{ name: string; description?: string }>
 };
 
 /** A Composio-only app picked in the catalog: why it goes through Composio, and where to set it up. */
-const ComposioOnlyNote: React.FC<{ app: ComposioOnlyApp; onOpenConnections?: () => void; onClose: () => void }> = ({ app, onOpenConnections, onClose }) => (
-  <div role="status" className="space-y-2 p-3 rounded-xl border border-amber-500/30 bg-amber-500/5 text-xs text-zinc-300" data-composio-note={app.id}>
-    <p>
-      <span className="font-medium text-zinc-100">{app.label}</span> goes through Composio. {app.why} This app doesn’t offer unofficial servers for it.
-    </p>
-    <p className="flex items-start gap-1.5 text-amber-100">
-      <AlertTriangle size={12} className="mt-px shrink-0 text-amber-300" aria-hidden="true" />
-      <span>Composio keeps your {app.label} sign-in on Composio’s servers, not in this app’s vault.</span>
-    </p>
-    <p className="text-zinc-400">
-      Add Composio under Connections, then use “Find an app” there and search for “{app.toolkit}”.
-    </p>
-    <div className="flex flex-wrap gap-2">
-      {onOpenConnections && (
-        <button type="button" onClick={onOpenConnections} className="px-2.5 py-1 rounded-lg bg-sky-500 text-zinc-950 hover:bg-sky-400 text-xs font-medium">
-          Open Connections
-        </button>
-      )}
-      <a href={app.source} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-sky-300 hover:text-sky-200 hover:underline underline-offset-2">
-        {app.label} on Composio
-        <ExternalLink size={10} aria-hidden="true" />
-        <span className="sr-only">(opens in a new tab)</span>
-      </a>
-      <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-200">
-        Close
-      </button>
-    </div>
-  </div>
-);
-
-export const PresetCatalog: React.FC<{
-  query: string;
-  onQuery: (q: string) => void;
-  onPick: (preset: McpPreset) => void;
-  onCustom: () => void;
-  onOpenConnections?: () => void;
-  autoFocus?: boolean;
-  /** Tests open a Composio-only note. */
-  initialComposioApp?: string;
-}> = ({ query, onQuery, onPick, onCustom, onOpenConnections, autoFocus, initialComposioApp }) => {
-  const [composioApp, setComposioApp] = useState<string | null>(initialComposioApp ?? null);
-  const groups = groupPresets(searchPresets(query), searchComposioOnly(query));
-  const total = MCP_PRESETS.length + COMPOSIO_ONLY_APPS.length;
+/** The built-in tools by category, under "All built-in tools" while Find a tool is empty. */
+export const BuiltInGrid: React.FC<{ onPick: (preset: McpPreset) => void }> = ({ onPick }) => {
+  const groups = groupPresets(MCP_PRESETS, []);
   return (
-    <div className="space-y-4 text-left">
-      <div className="relative">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" aria-hidden="true" />
-        <input
-          type="search"
-          aria-label="Search servers"
-          value={query}
-          autoFocus={autoFocus}
-          onChange={(e) => onQuery(e.target.value)}
-          placeholder={`Search ${total} apps and servers, like gmail or database`}
-          className={`${inputCls} pl-8`}
-        />
-      </div>
-      {groups.length === 0 && (
-        <p className="py-4 text-center text-xs text-zinc-500">
-          Nothing matches “{query.trim()}”. You can still add it as a custom server.
-        </p>
-      )}
+    <div className="space-y-4 text-left" data-builtin-grid>
       {groups.map((g) => (
         <section key={g.id} aria-labelledby={`mcp-cat-${g.id}`}>
-          <h4 id={`mcp-cat-${g.id}`} className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+          <h5 id={`mcp-cat-${g.id}`} className="mb-1.5 text-[11px] font-medium text-zinc-400">
             {g.label}
-          </h4>
+          </h5>
           <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {g.presets.map((p) => (
               <li key={p.id}>
                 <button
                   type="button"
                   onClick={() => onPick(p)}
-                  className="group w-full h-full p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:border-sky-500/60 focus-visible:outline-none text-left transition-all"
+                  data-preset={p.id}
+                  className="group w-full h-full p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 text-left transition-colors motion-reduce:transition-none"
                 >
                   <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200 group-hover:text-sky-200">
                     <span className="text-sky-400" aria-hidden="true">
@@ -304,66 +304,62 @@ export const PresetCatalog: React.FC<{
                     </span>
                     {p.label}
                   </span>
-                  <span className="mt-1 block text-[11px] text-zinc-500 leading-snug">{p.blurb}</span>
+                  <span className="mt-1 block text-[11px] text-zinc-400 leading-snug">{p.blurb}</span>
                   <span className="mt-2 flex flex-wrap gap-1">
-                    {(p.needs.length ? p.needs : ['Nothing to install']).map((n) => (
-                      <span
-                        key={n}
-                        className={`px-1.5 py-px rounded border text-[10px] ${
-                          n === 'Sign-in' || n === 'Token' || n === 'API key'
-                            ? 'border-amber-500/25 text-amber-300/90'
-                            : 'border-zinc-700/70 text-zinc-400'
-                        }`}
-                      >
-                        {n}
-                      </span>
-                    ))}
+                    <span className="px-1.5 py-px rounded border text-[10px] border-zinc-700/70 text-zinc-400">{p.form.transport === 'http' ? 'Remote' : 'Runs on this computer'}</span>
+                    {p.needs.includes('Sign-in') && <span className="px-1.5 py-px rounded border text-[10px] border-amber-500/25 text-amber-300/90">Sign in after adding</span>}
                   </span>
                 </button>
-              </li>
-            ))}
-            {g.composio.map((a) => (
-              <li key={a.id} className={composioApp === a.id ? 'sm:col-span-2 flex flex-col gap-2' : 'flex flex-col'}>
-                {/* flex-1, not h-full: h-full made the card as tall as the whole item and pushed the note over the next section. */}
-                <button
-                  type="button"
-                  onClick={() => setComposioApp(composioApp === a.id ? null : a.id)}
-                  aria-expanded={composioApp === a.id}
-                  className="group w-full flex-1 p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:border-sky-500/60 focus-visible:outline-none text-left transition-all"
-                >
-                  <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200 group-hover:text-sky-200">
-                    <span className="text-sky-400" aria-hidden="true">
-                      <Plug size={13} />
-                    </span>
-                    {a.label}
-                  </span>
-                  <span className="mt-1 block text-[11px] text-zinc-500 leading-snug">{a.blurb}</span>
-                  <span className="mt-2 flex flex-wrap gap-1">
-                    <span className="px-1.5 py-px rounded border text-[10px] border-amber-500/25 text-amber-300/90">via Composio</span>
-                  </span>
-                </button>
-                {composioApp === a.id && <ComposioOnlyNote app={a} onOpenConnections={onOpenConnections} onClose={() => setComposioApp(null)} />}
               </li>
             ))}
           </ul>
         </section>
       ))}
-      <button
-        type="button"
-        onClick={onCustom}
-        className="w-full flex items-center gap-2.5 p-3 rounded-xl border border-dashed border-zinc-700 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:border-sky-500/60 focus-visible:outline-none text-left transition-all"
-      >
-        <Plus size={16} className="flex-shrink-0 text-sky-400" />
-        <span>
-          <span className="block text-xs font-medium text-zinc-200">Custom server</span>
-          <span className="block text-[11px] text-zinc-500">Paste a command or URL from any server’s README.</span>
-        </span>
-      </button>
     </div>
   );
 };
 
-export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [], onOpenConnections, startAdding = false }) => {
+/** Add a tool: Find a tool, the built-in grid while it's empty, and Add by address. */
+export const AddToolPicker: React.FC<{
+  onPick: (preset: McpPreset) => void;
+  onCustom: () => void;
+  onDirectory: (entry: DirectoryEntry) => void;
+  onChooseBots: (target: ChooseBotsTarget) => void;
+  onOpenConnections?: () => void;
+  autoFocus?: boolean;
+  findApi?: FindToolApi;
+  initialQuery?: string;
+}> = ({ onPick, onCustom, onDirectory, onChooseBots, onOpenConnections, autoFocus, findApi, initialQuery }) => (
+  <div className="space-y-4 text-left" data-add-tool>
+    <FindTool
+      browseWhenEmpty
+      autoFocus={autoFocus}
+      api={findApi}
+      initialQuery={initialQuery}
+      onAddPreset={onPick}
+      onAddDirectory={onDirectory}
+      onAddByAddress={onCustom}
+      onChooseBots={onChooseBots}
+      onComposioElsewhere={() => onOpenConnections?.()}
+    >
+      <BuiltInGrid onPick={onPick} />
+    </FindTool>
+    <button
+      type="button"
+      onClick={onCustom}
+      data-add-by-address
+      className="w-full flex items-center gap-2.5 p-3 rounded-xl border border-dashed border-zinc-700 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 text-left transition-colors motion-reduce:transition-none"
+    >
+      <Plus size={16} className="flex-shrink-0 text-sky-400" aria-hidden="true" />
+      <span>
+        <span className="block text-xs font-medium text-zinc-200">Add by address</span>
+        <span className="block text-[11px] text-zinc-400">Paste a command or web address from any tool’s instructions.</span>
+      </span>
+    </button>
+  </div>
+);
+
+export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [], onOpenConnections, startAdding = false, findApi, initialQuery, startWith }) => {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, StoredStatus>>({});
@@ -376,13 +372,14 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const [formStart, setFormStart] = useState<McpFormState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Catalog step before the form when adding, its search, and the preset the form came from.
+  // Find a tool before the form when adding, and the preset the form came from.
   const [picking, setPicking] = useState(false);
-  const [query, setQuery] = useState('');
   const [presetId, setPresetId] = useState<string | null>(null);
+  // Added from the public directory: Save installs it by its directory name.
+  const [fromDirectory, setFromDirectory] = useState<DirectoryEntry | null>(null);
   // Sign-in: the server whose popup is open, sign-in errors per server, and a pending disconnect.
   const [connecting, setConnecting] = useState<string | null>(null);
-  const [oauthErrors, setOauthErrors] = useState<Record<string, string>>({});
+  const [oauthErrors, setOauthErrors] = useState<Record<string, OAuthFailure>>({});
   const [confirmDisconnect, setConfirmDisconnect] = useState<string | null>(null);
   const popupRef = useRef<Window | null>(null);
   const popupWatch = useRef<number | null>(null);
@@ -450,7 +447,6 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     if (!isOpen) return;
     setEditing(null);
     setPicking(startAdding);
-    setQuery('');
     setConfirmDelete(null);
     setConfirmDisconnect(null);
     setTestResults({});
@@ -459,6 +455,14 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     // Also catches a sign-in finished elsewhere, like the same-tab fallback when popups are blocked.
     refresh().then(() => checkNewSignIns());
   }, [isOpen, startAdding, refresh, checkNewSignIns]);
+
+  useEffect(() => {
+    if (!isOpen || !startWith) return;
+    const preset = startWith.preset ? MCP_PRESETS.find((p) => p.id === startWith.preset) : undefined;
+    if (preset) openForm('new', preset);
+    else if (startWith.directory) openDirectoryForm(startWith.directory);
+    else if (startWith.address) openForm('new');
+  }, [isOpen, startWith]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // If a provider cuts the popup's link back to this window, no message arrives: coming back to
   // this window is the cue to look again.
@@ -483,7 +487,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         refresh();
         runTest(id);
       } else {
-        setOauthErrors((e) => ({ ...e, [id]: msg.error || 'Sign-in didn’t finish. Try again.' }));
+        setOauthErrors((e) => ({ ...e, [id]: { message: msg.error || 'Sign-in didn’t finish. Try again.' } }));
         playSfx('alert');
       }
     };
@@ -518,20 +522,26 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     }
     setConnecting(server.id);
     let url: string;
+    let code: string | undefined;
     try {
       const res = await fetch(`/api/mcp/servers/${server.id}/oauth/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ origin: window.location.origin }),
       });
-      if (!res.ok) throw new Error(await readError(res));
-      const body = await res.json();
+      // Read the body once: a failed start carries `error` and, when retrying can't help, `code`.
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        if (typeof body?.code === 'string') code = body.code;
+        throw new Error(body?.error ? String(body.error) : `Something went wrong (HTTP ${res.status}).`);
+      }
       if (typeof body?.authorize_url !== 'string' || !/^https?:\/\//.test(body.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
       url = body.authorize_url;
     } catch (err) {
       popup?.close();
       setConnecting(null);
-      setOauthErrors((e) => ({ ...e, [server.id]: err instanceof Error ? err.message : 'Could not reach the server.' }));
+      const message = err instanceof Error ? err.message : 'Could not reach the server.';
+      setOauthErrors((e) => ({ ...e, [server.id]: { message, code } }));
       playSfx('alert');
       return;
     }
@@ -592,7 +602,6 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const openCatalog = () => {
     playSfx('click');
     setEditing(null);
-    setQuery('');
     setPicking(true);
   };
 
@@ -601,11 +610,42 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     setFormError(null);
     setPicking(false);
     setPresetId(preset?.id ?? null);
+    setFromDirectory(null);
     const f = preset?.form;
     const start = target !== 'new' ? serverToForm(target) : f ? { ...f, env: f.env.map((r) => ({ ...r })), headers: f.headers.map((r) => ({ ...r })) } : emptyMcpForm();
     setEditing(target === 'new' ? 'new' : target.id);
     setForm(start);
     setFormStart(start);
+  };
+
+  /** A tool from the public directory: the form filled in from its listing, its keys still to add. */
+  const openDirectoryForm = (entry: DirectoryEntry) => {
+    playSfx('click');
+    setFormError(null);
+    setPicking(false);
+    setPresetId(null);
+    const remote = entry.kind === 'remote';
+    const rows: SecretRow[] = (entry.inputs ?? []).map((i) => ({ key: i.name, value: '', saved: false, hint: i.description, required: !!i.required }));
+    const start: McpFormState = {
+      ...emptyMcpForm(remote ? 'http' : 'stdio'),
+      name: (entry.title || entry.registry_name.split('/').pop() || entry.registry_name).trim(),
+      url: remote ? entry.url ?? '' : '',
+      commandLine: remote ? '' : entry.command ?? '',
+      env: remote ? [] : rows,
+      headers: remote ? rows : [],
+    };
+    setFromDirectory(entry);
+    setEditing('new');
+    setForm(start);
+    setFormStart(start);
+  };
+
+  /** "Choose bots" from Find a tool: a tool server's card shows who has it; Composio's bots are on Apps & accounts. */
+  const chooseBots = (target: ChooseBotsTarget) => {
+    if (target.kind === 'composio') return onOpenConnections?.();
+    setPicking(false);
+    setEditing(null);
+    window.setTimeout(() => document.querySelector<HTMLElement>(`[data-server-card="${CSS.escape(target.connectionId.replace(/^mcp:/, ''))}"]`)?.scrollIntoView({ block: 'nearest' }), 50);
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -617,6 +657,24 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     }
     setSaving(true);
     setFormError(null);
+    if (editing === 'new' && fromDirectory) {
+      const pairs = (rows: SecretRow[]) => Object.fromEntries(rows.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value]));
+      try {
+        const r = await connectionsApi.installFromDirectory(fromDirectory.registry_name, form.name.trim(), pairs(form.env), pairs(form.headers));
+        setEditing(null);
+        setFromDirectory(null);
+        await refresh();
+        if (r?.server?.id) {
+          setStatus(r.server.id, null);
+          runTest(r.server.id);
+        }
+      } catch (err) {
+        setFormError(err instanceof Error ? err.message : 'Could not reach the server.');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     try {
       const isNew = editing === 'new';
       const res = await fetch(isNew ? '/api/mcp/servers' : `/api/mcp/servers/${editing}`, {
@@ -677,9 +735,19 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const parsed = splitCommandLine(form.commandLine);
   const preset = editing === 'new' && presetId ? MCP_PRESETS.find((p) => p.id === presetId) : undefined;
 
-  const renderPicker = () => (
-    <PresetCatalog query={query} onQuery={setQuery} onPick={(p) => openForm('new', p)} onCustom={() => openForm('new')} onOpenConnections={onOpenConnections} autoFocus />
+  const picker = (autoFocus: boolean) => (
+    <AddToolPicker
+      onPick={(p) => openForm('new', p)}
+      onCustom={() => openForm('new')}
+      onDirectory={openDirectoryForm}
+      onChooseBots={chooseBots}
+      onOpenConnections={onOpenConnections}
+      autoFocus={autoFocus}
+      findApi={findApi}
+      initialQuery={initialQuery}
+    />
   );
+  const renderPicker = () => picker(true);
 
   const renderEmpty = () => (
     <div className="text-center py-6 px-2 space-y-5">
@@ -689,12 +757,11 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       <div className="space-y-1.5 max-w-md mx-auto">
         <h3 className="text-sm font-semibold text-zinc-100">Give your bots new abilities</h3>
         <p className="text-xs text-zinc-400 leading-relaxed">
-          MCP servers are small add-ons that hand your bots tools, like reading files, browsing the web or working with GitHub.
+          Tools give your bots new abilities, like reading mail, browsing the web or working with GitHub.
           Add one here and every bot in this space can use it; switch it off for a bot in that bot’s edit screen. They always ask you before using a tool.
-          Pick a popular one below and just add your key or sign in.
         </p>
       </div>
-      <PresetCatalog query={query} onQuery={setQuery} onPick={(p) => openForm('new', p)} onCustom={() => openForm('new')} onOpenConnections={onOpenConnections} />
+      {picker(false)}
     </div>
   );
 
@@ -712,6 +779,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     return (
       <li
         key={server.id}
+        data-server-card={server.id}
         className={`p-3.5 rounded-xl border bg-zinc-950/50 transition-colors ${server.enabled ? 'border-zinc-800' : 'border-zinc-800/60 opacity-75'}`}
       >
         <div className="flex items-start gap-3">
@@ -766,33 +834,13 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
           </div>
         )}
         {(kind === 'needs_sign_in' || oauthError) && server.transport === 'http' && server.enabled && (
-          <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] space-y-2">
-            <div className="flex items-start gap-2 text-amber-100/90">
-              <KeyRound size={13} className="flex-shrink-0 mt-px text-amber-400" />
-              <span>
-                {isConnecting
-                  ? macApp
-                    ? 'Finish signing in in your browser. This updates by itself when you’re done.'
-                    : 'Waiting for you to approve access in the sign-in window…'
-                  : 'This server asks you to sign in and approve access.'}
-              </span>
-            </div>
-            {oauthError && !isConnecting && (
-              <p role="alert" className="flex items-start gap-1.5 text-rose-300">
-                <AlertCircle size={12} className="flex-shrink-0 mt-px" />
-                <span>{oauthError}</span>
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => connect(server)}
-              disabled={isConnecting && !macApp}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
-            >
-              {isConnecting && !macApp ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
-              {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : oauthError ? 'Retry' : 'Connect'}
-            </button>
-          </div>
+          <SignInBox
+            serverName={server.name}
+            isConnecting={isConnecting}
+            macApp={macApp}
+            failure={oauthError}
+            onConnect={() => connect(server)}
+          />
         )}
         {result && !result.ok && kind !== 'needs_sign_in' && (
           <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-rose-500/5 border border-rose-500/20 text-[11px] text-rose-200 space-y-1">
@@ -970,7 +1018,11 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         </div>
         {editing === 'new' && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-            {preset ? (
+            {fromDirectory ? (
+              <span className="text-zinc-400" data-from-directory>
+                Filled in from the public directory, listed by {fromDirectory.publisher?.label || 'its maker'}. Add any keys it needs below.
+              </span>
+            ) : preset ? (
               <span className="text-zinc-400">
                 Filled in for <span className="text-zinc-200">{preset.label}</span>.{' '}
                 {preset.needs.includes('Sign-in')
@@ -993,7 +1045,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
               </span>
             ) : null}
             <button type="button" onClick={openCatalog} className="text-sky-300 hover:text-sky-200 hover:underline underline-offset-2">
-              {preset ? 'Pick a different one' : 'Or pick a popular server'}
+              {preset || fromDirectory ? 'Pick a different one' : 'Or find a tool by name'}
             </button>
           </div>
         )}
@@ -1177,11 +1229,11 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             )}
             <div className="min-w-0">
               <h2 id="mcp-title" className="text-sm font-semibold text-zinc-100 truncate">
-                {editing === 'new' || picking ? 'Add a tool server' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwant bots'}
+                {editing === 'new' || picking ? 'Add a tool' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwant bots'}
               </h2>
               <p className="text-xs text-zinc-400 truncate">
                 {picking
-                  ? 'Pick a popular server or add your own'
+                  ? 'Find one by name, or add one by its address'
                   : editing === 'new'
                   ? 'Pick how it connects, then fill in the details'
                   : editing

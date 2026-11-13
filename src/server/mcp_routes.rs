@@ -40,7 +40,7 @@ async fn opt_outs(state: &AppState, space: &SpaceId) -> std::collections::HashMa
 }
 
 /// The API view of `server`, with its sign-in status.
-async fn view(state: &AppState, server: &McpServer) -> McpServerView {
+pub(super) async fn view(state: &AppState, server: &McpServer) -> McpServerView {
     let mut view = McpServerView::from(server);
     view.oauth = mcp_oauth::statuses(state).await.remove(&server.id).unwrap_or_default();
     let space = state.db.space_of_mcp_server(&server.id).await.ok().flatten().unwrap_or_else(SpaceId::default_space);
