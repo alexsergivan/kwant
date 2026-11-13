@@ -269,7 +269,7 @@ async fn warns_once_when_a_turn_crosses_80_percent() {
     assert_eq!(b["percent"].as_f64(), Some(83.3));
     let warns = env.direct("bot_budget_warn").await;
     assert_eq!(warns.len(), 1);
-    assert_eq!(warns[0].text, "Ann has used 80% of its November budget. At 100% it stops starting new work.");
+    assert_eq!(warns[0].text, "Ann has used 80% of its November budget. At 100% it finishes what it's doing and starts nothing new.");
 
     // Raised, then set back and lowered: still past 80%, but no second note
     env.set_budget(&env.ann, json!({"budget_tokens": 10 * FRESH})).await;
@@ -300,9 +300,9 @@ async fn crossing_turn_finishes_next_is_held_until_continue_or_raise() {
     assert_eq!(stops.len(), 1, "one notice when the pause starts");
     assert_eq!(
         stops[0].text,
-        "Ann stopped at its monthly budget. It finished what it was doing and won't start anything new until you raise the budget, continue, or December starts."
+        "Ann stopped at its monthly budget. It finished what it was doing and won't start anything new until you raise the limit, continue, or December starts."
     );
-    assert_eq!(meta(&stops[0])["detail"], "8k of 8k fresh tokens in November");
+    assert_eq!(meta(&stops[0])["detail"], "8.7k of 8.7k fresh tokens in November");
 
     env.held("second").await;
     env.held("third").await;
@@ -323,7 +323,9 @@ async fn crossing_turn_finishes_next_is_held_until_continue_or_raise() {
     // Continue this month
     let b = ok(&env.app, "POST", &format!("/api/kwants/{}/budget/continue", env.ann), None).await;
     assert_eq!((b["state"].as_str(), b["continued_month"].as_str()), (Some("continued"), Some("2026-11")), "{b}");
-    assert_eq!(env.direct("bot_budget_continued").await.len(), 1);
+    let continued = env.direct("bot_budget_continued").await;
+    assert_eq!(continued.len(), 1);
+    assert_eq!(continued[0].text, "Continued for November. Ann can start new work again; the budget applies again on December 1.");
     assert!(env.waiting_items().await.is_empty());
     env.run_parked().await;
     env.turn("fourth").await;

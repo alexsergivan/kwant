@@ -3,7 +3,7 @@ import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
-import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
+import { AppsSection, InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
 import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
@@ -153,6 +153,8 @@ import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
 import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
+import { BudgetNeedsYou } from './components/BotBudget';
+import { budgetStore, isBudgetMessage, requestBudgetFocus } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
@@ -353,7 +355,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [claudeSignInFocus, setClaudeSignInFocus] = useState(0);
   // Set by a routine card's Edit or Pause, so Routines opens at that routine.
   const [routineFocus, setRoutineFocus] = useState<RoutineFocus | null>(null);
-  const openSpaceSettings = (tab: SpaceSettingsTab = 'general') => {
+  // Apps & accounts opens at a section (AI accounts, Advanced); seq re-scrolls on a second ask.
+  const [appsSection, setAppsSection] = useState<{ section: AppsSection; seq: number } | null>(() =>
+    initialView?.kind === 'settings' && initialView.scope === 'space' && initialView.section ? { section: initialView.section, seq: 1 } : null,
+  );
+  const openSpaceSettings = (tab: SpaceSettingsTab = 'general', section?: AppsSection) => {
+    setAppsSection(section ? { section, seq: Date.now() } : null);
     setClaudeSignInFocus(0);
     if (tab !== 'routines') setRoutineFocus(null);
     setSettingsScope('space');
@@ -366,7 +373,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab((t) => t ?? 'general');
     playSfx('click');
   };
-  const openSettings = () => openSpaceSettings('accounts');
+  const openSettings = () => openSpaceSettings('apps', 'accounts');
   // Settings › All spaces › Usage, at the daily spending stop's fields.
   const openUsageSettings = () => {
     setSettingsFocusRow('spend-stop');
@@ -377,7 +384,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSettingsFocusRow('claude-isolation');
     openAppSettings();
   };
-  const openConnections = () => openSpaceSettings('connections');
+  const openConnections = () => openSpaceSettings('apps', 'advanced');
   // 0.9.0 P5: "See the note" in a chat opens Connections on that one note.
   const [toolNoteFocus, setToolNoteFocus] = useState<string | null>(null);
   const openToolNote = (noteId: string) => {
@@ -386,8 +393,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
+    setAppsSection({ section: 'accounts', seq: Date.now() });
     setSettingsScope('space');
-    setSpaceSettingsTab('accounts');
+    setSpaceSettingsTab('apps');
   };
   // This space's engine checks, shared with the sidebar: the setup banner, the "can't answer"
   // card and the bots' online dots all read whether anything can run.
@@ -474,6 +482,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpendStopSeq((n) => n + 1);
     showPage('inbox', 'new');
   };
+  // 0.9.5 monthly budgets: one shared list, re-read on a space switch and every minute (and on a budget notice, below)
+  useEffect(() => {
+    budgetStore.reset();
+    void budgetStore.refresh();
+    const t = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') void budgetStore.refresh();
+    }, 60_000);
+    return () => window.clearInterval(t);
+  }, [space.id]);
+  // Raise the limit: the bot's settings at Usage, the budget's first field focused
+  const raiseBudgetRef = useRef<(kwantId: string) => void>(() => {});
+  const raiseBudget = useCallback((kwantId: string) => raiseBudgetRef.current(kwantId), []);
   // Home: the chat list on a phone, the open chat elsewhere, with nothing on top.
   const openHome = () => {
     if (spaceSettingsTab) closeSpaceSettings();
@@ -1229,6 +1249,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'message_added':
           case 'MessageAdded': {
             const m: ChatMessage | undefined = event.data?.message;
+            if (m && isBudgetMessage(m)) void budgetStore.refresh();
             const ctx = m ? messageContextId(m) : null;
             if (!m?.id || !ctx) break;
             if (m.thread_id) knownThreadsRef.current.add(m.thread_id);
@@ -2065,6 +2086,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setEditingTab(tab);
     setEditingKwant(kwant);
     playSfx('click');
+  };
+  raiseBudgetRef.current = (kwantId: string) => {
+    const k = kwants.find((x) => x.id === kwantId);
+    if (!k) return;
+    requestBudgetFocus(kwantId);
+    openAgentSettings(k, 'usage');
   };
   openQuestionRef.current = (kwantId: string) => {
     const q = latestOpenQuestion(questionsRef.current, kwantId);
@@ -3747,13 +3774,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                   keepAction: true,
                   title: readyAccounts === 1 ? '1 account ready' : `${readyAccounts} accounts ready`,
                   detail: 'Add another Claude, Codex or Grok sign-in, or an API key.',
-                  action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('accounts') },
+                  action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('apps', 'accounts') },
                 }
               : {
                   done: false,
                   title: 'Add an account',
                   detail: 'Sign in with Claude, Codex or Grok, add an API key, or use this machine.',
-                  action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('accounts') },
+                  action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('apps', 'accounts') },
                 },
             {
               done: kwants.length > 0,
@@ -3953,11 +3980,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpen={openAwayItem}
       onCounts={setAwayCount}
       onApprovalResolved={dropApproval}
+      onOpenConnections={openConnections}
       onCrumb={(c) => showPage(c === 'board' ? 'board' : 'dev')}
       top={
         <>
           <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
           <SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />
+          <BudgetNeedsYou onRaise={raiseBudget} />
         </>
       }
     />
@@ -3966,9 +3995,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   inboxNav.go = () => showPage('inbox', 'new');
   const backToList = isPhone ? () => { setPage('chat'); setPhoneView('list'); } : undefined;
   const parallel = <ParallelPage onBack={backToList} />;
-  const connectionsPage = (
+  // Apps & accounts › Advanced: tool servers, Telegram and notes from bots (AI accounts have their own section).
+  const connectionsPage = (chooseComposioBots: () => void) => (
     <ConnectionsPage
       embedded
+      hideAccounts
+      onChooseComposioBots={chooseComposioBots}
       onOpenTools={() => setIsMcpOpen(true)}
       onAddTool={() => { setMcpStartAdding(true); setIsMcpOpen(true); }}
       onOpenAccounts={openSettings}
@@ -4143,6 +4175,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           welcome={getStartedCard && messages.length === 0 ? getStartedCard : undefined}
           onOpenAccounts={openSettings}
           onOpenUsage={openUsageSettings}
+          budgetBotId={!isChannel ? currentKwant?.id ?? null : null}
+          onRaiseBudget={raiseBudget}
           onOpenComputerSettings={openComputerSettings}
           onChangeTeamFolder={(teamId) => {
             const t = teams.find((x) => x.id === teamId);
@@ -4173,6 +4207,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderConnectionSuggestion={renderConnectionSuggestion}
           renderBotAction={renderBotAction}
           onOpenToolNote={openToolNote}
+          onOpenConnections={openConnections}
           renderWatchReport={renderWatchReport}
           renderHire={renderHire}
           renderRouteChoice={renderRouteChoice}
@@ -4213,7 +4248,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setPage('chat');
       return;
     }
-    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings() : openSpaceSettings(v.tab);
+    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings() : openSpaceSettings(v.tab, v.section);
     showPage(v.kind, v.kind === 'inbox' ? v.tab : 'new');
   };
   useEffect(() => {
@@ -4343,7 +4378,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                   }
                   if (id === 'space') {
                     // Nothing can run yet: the fix is in Accounts, so start there
-                    openSpaceSettings(canRun === false ? 'accounts' : 'general');
+                    canRun === false ? openSpaceSettings('apps', 'accounts') : openSpaceSettings('general');
                     return;
                   }
                   if (id === 'jar') {
@@ -4500,6 +4535,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onScope={setSettingsScope}
           onOpenArchived={onOpenArchived}
           connections={connectionsPage}
+          appsSection={appsSection}
+          toolNoteOpen={!!toolNoteFocus}
           appSettings={
             <Suspense
               fallback={
@@ -4513,8 +4550,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 isOpen
                 onClose={closeSpaceSettings}
                 tokensUsed={tokensUsed}
-                onOpenApiKeys={() => openSpaceSettings('accounts')}
+                onOpenApiKeys={() => openSpaceSettings('apps', 'accounts')}
                 focusRow={settingsFocusRow}
+                onOpenBotBudget={raiseBudget}
               />
             </Suspense>
           }

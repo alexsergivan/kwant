@@ -339,7 +339,7 @@ export function engineSummary(e: EngineInfo, accounts: SummaryAccount[] = []): {
     if (next) return { text: `Off · Turn on to use ${next.name}`, tone: 'muted' };
     return { text: e.kind === 'local' || accounts.length === 0 ? 'Off · Turn on to use it' : 'Off · Turn on, then sign in to an account', tone: 'muted' };
   }
-  if (isUsable(e)) return e.uses ? { text: `Bots use ${e.uses.label}`, tone: 'ok' } : { text: 'Bots can use it', tone: 'ok' };
+  if (isUsable(e)) return e.uses ? { text: `Bots use ${e.uses.label === 'This machine' ? 'the sign-in on this computer' : e.uses.label}`, tone: 'ok' } : { text: 'Bots can use it', tone: 'ok' };
   switch (e.status) {
     case 'checking':
       return { text: 'Checking…', tone: 'busy' };
@@ -354,7 +354,7 @@ export function engineSummary(e: EngineInfo, accounts: SummaryAccount[] = []): {
       return { text: `${e.detail ?? 'The check failed'} · Try Re-check`, tone: 'error' };
     default: {
       const out = accounts.find((a) => a.outUntil);
-      if (out) return { text: `${out.name} is out of usage, back ${out.outUntil} · Sign in to another account below`, tone: 'warn' };
+      if (out) return { text: `${out.name.charAt(0).toUpperCase()}${out.name.slice(1)} is out of usage, back ${out.outUntil} · Sign in to another account below`, tone: 'warn' };
       if (accounts.length === 0) return { text: e.detail ?? 'Not signed in', tone: 'warn' };
       return { text: 'No account is signed in · Sign in to one below', tone: 'warn' };
     }

@@ -140,7 +140,7 @@ test('D1: opening Settings moves focus to its title; Close, Back to chats and Es
 });
 
 test('D1: Settings opened from a link puts focus in it, and closing lands on the composer', async () => {
-  const v = await mountSpace({ initialView: { kind: 'settings', scope: 'space', tab: 'accounts' } });
+  const v = await mountSpace({ initialView: { kind: 'settings', scope: 'space', tab: 'apps' } });
   assert.ok(q('[data-space-settings]'));
   focused(title(), 'focus starts in Settings, not on the page');
   assert.ok(q('[data-composer]').closest('[inert]'), 'the chat under it is inert from the start');

@@ -72,8 +72,13 @@ impl PermissionSession {
         }
         let cwd = self.cwd.as_deref().filter(|d| d.exists());
         let (session, problems) = McpToolSession::open(&self.ctx, cwd).await;
+        let watch = super::tool_failures::TurnWatch::find(&self.turn_id);
         for problem in problems {
             tracing::warn!(kwant = %self.kwant_name, %problem, "MCP gateway could not reach a server");
+            // The chat says so (0.9.5)
+            if let Some(w) = &watch {
+                w.server_problem(&problem).await;
+            }
         }
         let session = Arc::new(session);
         *slot = Some(session.clone());
@@ -1200,6 +1205,14 @@ async fn gateway_rpc(
                     return rpc_result(id, json!({"content": [{"type": "text", "text": "The turn ended before the call finished."}], "isError": true}));
                 }
             };
+            // The chat's failure line (0.9.5): codex and grok calls are reported here, by their real server
+            if let Some(w) = super::tool_failures::TurnWatch::find(&session.turn_id) {
+                match outcome.status {
+                    "ok" => w.call_done(&tool_name, &arguments, None).await,
+                    "error" => w.call_done(&tool_name, &arguments, Some(&outcome.text)).await,
+                    _ => {}
+                }
+            }
             rpc_result(
                 id,
                 json!({"content": [{"type": "text", "text": outcome.text}], "isError": outcome.status != "ok"}),

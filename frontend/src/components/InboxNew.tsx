@@ -16,6 +16,7 @@ import {
   List,
   Loader2,
   MinusCircle,
+  Plug,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
@@ -165,9 +166,11 @@ interface RowProps {
   onResolve: (i: InboxItem, d: ApprovalDecision) => void;
   /** 0.9.5: Retry on a stopped item whose approval expired unanswered. */
   onRetry?: (i: InboxItem, approvalId: string) => void;
+  /** 0.9.5: a connection row's Reconnect opens Settings › Connections. */
+  onOpenConnections?: () => void;
 }
 
-const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry }) => {
+const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, onOpenConnections }) => {
   const stopped = isReview(item) ? null : stoppedAction(item as AwayItem);
   const review = isReview(item) ? item : null;
   const title = rowTitle(item);
@@ -264,6 +267,15 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
       {item.kind === 'approval' && (
         <div className="px-3 pb-1 pl-[54px] [&>div]:my-0 [&>div]:mb-2">
           <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} onResolve={(_, d) => onResolve(item, d)} />
+        </div>
+      )}
+
+      {item.kind === 'connection' && onOpenConnections && (
+        <div className="px-3 pb-3 pl-[54px]">
+          <button type="button" onClick={onOpenConnections} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-reconnect={item.id}>
+            <Plug size={12} aria-hidden="true" />
+            {item.fix?.label || 'Reconnect'}
+          </button>
         </div>
       )}
 
@@ -485,7 +497,7 @@ export const BatchPane: React.FC<{ wide: boolean; onOpenItem: (id: string) => vo
 };
 
 const EmptyQueue: React.FC = () => (
-  <div className="py-16 flex flex-col items-center text-center gap-2" data-all-clear>
+  <div className="py-16 flex flex-col items-center text-center gap-2 [[data-needs-you]~&]:hidden" data-all-clear>
     <CheckCircle2 size={30} className="text-teal-300" aria-hidden="true" />
     <p className="text-sm font-semibold text-zinc-100">You’re all caught up</p>
     <p className="text-xs text-zinc-400 max-w-xs">Nothing waits on you and nothing is left to review. Questions, approvals and finished work will show up here.</p>
@@ -510,6 +522,8 @@ export interface InboxNewProps {
   onApprovalResolved?: (id: string) => void;
   /** Phone: back to the chat list. */
   onBack?: () => void;
+  /** 0.9.5: a connection row's Reconnect opens Settings › Connections. */
+  onOpenConnections?: () => void;
   /** The back crumb: return to the page the item was opened from. */
   onCrumb?: (c: Exclude<Crumb, null>) => void;
   top?: React.ReactNode;
@@ -533,7 +547,7 @@ function writeItemParam(id: string | null) {
   }, 0);
 }
 
-export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApprovalResolved, onBack, onCrumb, top, now = Date.now(), noLoad = false, wide: forceWide }) => {
+export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApprovalResolved, onBack, onOpenConnections, onCrumb, top, now = Date.now(), noLoad = false, wide: forceWide }) => {
   const st = useInbox();
   const mqWide = useWide();
   const wide = forceWide ?? mqWide;
@@ -754,6 +768,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
                           onAnswer={onAnswer}
                           onResolve={onResolve}
                           onRetry={onRetry}
+                          onOpenConnections={onOpenConnections}
                         />
                       ))}
                       {withBatch && <BatchCard items={bItems} selected={wide && selectedId === 'batch'} focusable={firstFocusable === 'batch'} wide={wide} onPick={() => select('batch')} />}

@@ -242,7 +242,8 @@ pub fn offers_browser_sign_in(scope: &SelfScope) -> bool {
 /// A connection card is an extra only when the space's Composio is `ready`. Ends in a newline.
 pub fn browser_sign_in_rule(composio: super::connection_suggest::ComposioReady) -> String {
     let extra = if composio == super::connection_suggest::ComposioReady::Ready {
-        "If the app also has a Composio integration, you may add a `connection_suggest` card as an extra, after the sign-in step."
+        "If the app also has a Composio integration, you may add a `connection_suggest` card as an extra, after the sign-in step. \
+        When a Composio tool gives you a sign-in link, post a `connection_suggest` card instead of pasting the link."
     } else {
         "Composio isn't set up in this space, so don't post a `connection_suggest` card or Composio setup steps for a website you can open in the browser."
     };
@@ -757,7 +758,7 @@ pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope,
         Value::Bool(b) => *b,
         _ => return (text("share must be true or false"), true),
     };
-    let ctrl = match super::routes::open_page(state, target, state.job_pages.wait()).await {
+    let ctrl = match super::routes::open_page_steady(state, target, state.job_pages.wait()).await {
         Ok(ctrl) => ctrl,
         Err(refusal) => return (text(&page_refusal_text(state, refusal)), true),
     };
@@ -832,8 +833,10 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     // This bot drives the browser now, so its site rules are the ones that hold. Its job page
     // opens here (waiting for room when its team's pages are all in use), so the tool below
     // finds it open
-    let opened = super::routes::open_page(state, target, state.job_pages.wait()).await;
-    // 0.9.5: a page refused because the browser is busy (its answer's `code`, see
+    // A browser that doesn't answer is retried here for up to a minute (VM mode), so the tool
+    // below doesn't wait all over again
+    let opened = super::routes::open_page_steady(state, target, state.job_pages.wait()).await;
+    // 0.9.5: a page still refused because the browser is busy (its answer's `code`, see
     // [`super::busy_retry`]) is a step kwnt retries by itself if the reply ends on it
     if let Err(refusal) = &opened {
         let (_, Json(body)) = super::routes::page_refused(state, *refusal);
@@ -841,7 +844,9 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     }
     match opened {
         Ok(ctrl) => ctrl.site_guard.set_driver(&scope.kwant_id),
-        Err(refusal @ super::routes::PageRefusal::PagesFull) => return (page_refusal_text(state, refusal), true),
+        Err(refusal @ (super::routes::PageRefusal::PagesFull | super::routes::PageRefusal::Busy)) => {
+            return (page_refusal_text(state, refusal), true)
+        }
         Err(super::routes::PageRefusal::Unavailable) => {}
     }
     let (text, is_error, busy) = run_browser_tool_coded(state, target, &reader, name, args).await;
@@ -884,6 +889,7 @@ fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> S
     match refusal {
         super::routes::PageRefusal::PagesFull => super::browser_pages::pages_full_message(),
         super::routes::PageRefusal::Unavailable => state.browser_service.unavailable_reason(),
+        super::routes::PageRefusal::Busy => crate::sandbox::service::BROWSER_BUSY.to_string(),
     }
 }
 
@@ -2272,6 +2278,7 @@ mod tests {
         }
         // A connection card is only an extra, and only when Composio can start a sign-in
         assert!(browser_sign_in_rule(ComposioReady::Ready).contains("may add a `connection_suggest` card as an extra, after the sign-in step"));
+        assert!(browser_sign_in_rule(ComposioReady::Ready).contains("instead of pasting the link"));
         for ready in [ComposioReady::NotAdded, ComposioReady::NeedsKey, ComposioReady::Off] {
             let rule = browser_sign_in_rule(ready);
             assert!(rule.contains("don't post a `connection_suggest` card or Composio setup steps"), "{rule}");
