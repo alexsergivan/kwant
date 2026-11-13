@@ -24,9 +24,9 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-/// The `code` of a browser call that failed because the browser is there but overloaded.
-// TODO(#544): use `crate::sandbox::service::BROWSER_BUSY_CODE` once #544 is on main.
-pub const BROWSER_BUSY_CODE: &str = "BROWSER_BUSY";
+/// The `code` of a browser call that failed because the browser is there but overloaded: the
+/// browser recovery's own (#544), so the two can't drift apart.
+pub use crate::sandbox::service::BROWSER_BUSY_CODE;
 
 /// How many times kwnt runs a reply again by itself after it ended on a busy browser step.
 pub const MAX_RETRIES: u8 = 2;
@@ -330,8 +330,11 @@ mod tests {
 
     #[test]
     fn the_code_matches_the_browser_recovery_constant() {
-        // TODO(#544): assert_eq!(BROWSER_BUSY_CODE, crate::sandbox::service::BROWSER_BUSY_CODE)
-        assert_eq!(BROWSER_BUSY_CODE, "BROWSER_BUSY");
+        assert_eq!(BROWSER_BUSY_CODE, crate::sandbox::service::BROWSER_BUSY_CODE);
+        // ...so #544's busy answer, built from its own constants, is what `is_busy` matches
+        let body = json!({"error": crate::sandbox::service::BROWSER_BUSY, "code": crate::sandbox::service::BROWSER_BUSY_CODE,
+            "retryable": true, "is_running": true});
+        assert!(is_busy(&body));
     }
 
     #[test]
