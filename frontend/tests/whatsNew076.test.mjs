@@ -63,7 +63,7 @@ test('validator: every bundled whatsnew file keeps the limits, its name matches 
     for (const h of e.highlights) if (h.open) assert.ok(s.highlightView(h), `${v} ${h.id}: ${h.open}`);
   }
   assert.equal(real['0.7.5'].highlights.find((h) => h.id === 'teams').open, 'settings/teams');
-  assert.equal(real['0.7.5'].highlights.find((h) => h.id === 'telegram').open, 'settings/connections');
+  assert.equal(real['0.7.5'].highlights.find((h) => h.id === 'telegram').open, 'settings/apps');
 });
 
 test('validator: names each broken limit', () => {

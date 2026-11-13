@@ -162,7 +162,7 @@ export function stoppedLine(a: AgentVmState): Extract<RowStatus, { kind: 'stoppe
     case 'relay_down':
       return { kind: 'stopped', text: 'kwant couldn’t connect Claude to your sign-in. Restart kwant; if it keeps happening, turn this off.', action: null };
     case 'sign_in_expired':
-      return { kind: 'stopped', text: 'Your Claude sign-in has expired, so Claude can’t reply. Sign in again in Settings › This space › Accounts.', action: null };
+      return { kind: 'stopped', text: 'Your Claude sign-in has expired, so Claude can’t reply. Sign in again in Settings › This space › Apps & accounts.', action: null };
     default: {
       const why = a.detail ? sentence(a.detail) : a.reason ? `code ${a.reason}` : null;
       return {
