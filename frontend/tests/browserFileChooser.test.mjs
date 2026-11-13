@@ -41,6 +41,10 @@ test('fileChooserTitle reads the accept attribute per the brief’s draft wordin
   assert.equal(b.fileChooserTitle('VIDEO/MP4'), 'Choose a video', 'case-insensitive');
   assert.equal(b.fileChooserTitle(''), 'Choose a file');
   assert.equal(b.fileChooserTitle('application/pdf'), 'Choose a file');
+  assert.equal(b.fileChooserTitle('image/*,video/*'), 'Choose a file', 'mixed kinds agree on neither, so it falls back');
+  assert.equal(b.fileChooserTitle('video/*', true), 'Choose videos', 'multiple pluralizes');
+  assert.equal(b.fileChooserTitle('image/*', true), 'Choose photos');
+  assert.equal(b.fileChooserTitle('', true), 'Choose files');
 });
 
 test('parseFileChooser needs a numeric id; accept/multiple default safely', () => {
@@ -51,8 +55,8 @@ test('parseFileChooser needs a numeric id; accept/multiple default safely', () =
 });
 
 test('parseFileChooserFailure needs a numeric id; code/error default to the generic failure text', () => {
-  assert.deepEqual(b.parseFileChooserFailure({ id: 3, code: 'too_big', error: "That's bigger than kwnt can send here (100 MB)." }), { code: 'too_big', error: "That's bigger than kwnt can send here (100 MB)." });
-  assert.deepEqual(b.parseFileChooserFailure({ id: 3 }), { code: 'failed', error: 'Couldn’t send that file.' });
+  assert.deepEqual(b.parseFileChooserFailure({ id: 3, code: 'too_big', error: 'That’s more than this browser can take: 100 MB in all. Pick a smaller file.' }), { code: 'too_big', error: 'That’s more than this browser can take: 100 MB in all. Pick a smaller file.' });
+  assert.deepEqual(b.parseFileChooserFailure({ id: 3 }), { code: 'failed', error: 'Couldn’t send that file to the page.' });
   assert.equal(b.parseFileChooserFailure({ code: 'gone' }), null, 'no id: ignored, same as a stray ack would be');
 });
 
@@ -119,9 +123,9 @@ test('file_chooser_error shows inline on the sheet it belongs to, and is ignored
   assert.equal(ref.stream.fileChooserError, null);
   assert.ok(ref.stream.fileChooser, 'the open sheet is untouched');
 
-  ws.receive({ type: 'file_chooser_error', id: 3, code: 'too_big', error: "That's bigger than kwnt can send here (100 MB)." });
+  ws.receive({ type: 'file_chooser_error', id: 3, code: 'too_big', error: 'That’s more than this browser can take: 100 MB in all. Pick a smaller file.' });
   await settle();
-  assert.deepEqual(ref.stream.fileChooserError, { code: 'too_big', error: "That's bigger than kwnt can send here (100 MB)." });
+  assert.deepEqual(ref.stream.fileChooserError, { code: 'too_big', error: 'That’s more than this browser can take: 100 MB in all. Pick a smaller file.' });
   assert.ok(ref.stream.fileChooser, 'the sheet itself stays open so Try again can retry');
 
   ref.stream.clearFileChooserError();
@@ -133,7 +137,7 @@ test('file_chooser_error shows inline on the sheet it belongs to, and is ignored
 test('a newer file_chooser push supersedes an older one and clears its error', async () => {
   const { ref, ws, root } = await mountStream();
   ws.receive({ type: 'file_chooser', id: 4, accept: '', multiple: false });
-  ws.receive({ type: 'file_chooser_error', id: 4, code: 'failed', error: "Couldn't send that file." });
+  ws.receive({ type: 'file_chooser_error', id: 4, code: 'failed', error: 'Couldn’t send that file to the page.' });
   await settle();
   assert.ok(ref.stream.fileChooserError);
 
