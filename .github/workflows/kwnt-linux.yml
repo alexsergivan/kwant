@@ -60,8 +60,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -111,7 +111,7 @@ jobs:
           chmod 755 pkg/kwnt
           tar -czf "out/$name" -C pkg --owner=0 --group=0 kwnt
           (cd out && sha256sum "$name" > "$name.sha256" && cat "$name.sha256")
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kwnt-linux-${{ matrix.arch }}
           path: out/
@@ -132,10 +132,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: shellcheck
         run: shellcheck -s sh site/install.sh scripts/test_install_sh.sh scripts/test_install_sh.inner.sh
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: kwnt-linux-${{ matrix.arch }}
           path: dist
@@ -157,8 +157,8 @@ jobs:
       # build-push-action's .dockerbuild build records: that broke the mac-v0.7.6 publish (Nov 8, 12:20).
       DOCKER_BUILD_RECORD_UPLOAD: false
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: kwnt-linux-*
           path: dist
