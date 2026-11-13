@@ -805,7 +805,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               </h3>
               <ul className="space-y-2">
                 <TelegramConnection />
-                {data.catalog.map((entry) => (
+                {data.catalog.map((entry) =>
                   entry.id === 'composio' ? (
                     <ComposioTile
                       key={entry.id}
@@ -821,17 +821,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                       initialOpen={composioOpen && !entry.added ? 'add' : undefined}
                     />
                   ) : (
-                  <ComposioCard
-                    key={entry.id}
-                    entry={entry}
-                    initialOpen={composioOpen}
-                    onAdd={onAddComposio}
-                    onOpenTools={links.onOpenTools}
-                    onChooseBots={entry.id === 'composio' ? onChooseComposioBots : undefined}
-                    openRequest={entry.id === 'composio' ? composioRequest : 0}
-                  />
+                    <ComposioCard key={entry.id} entry={entry} initialOpen={composioOpen} onAdd={onAddComposio} onOpenTools={links.onOpenTools} />
                   ),
-                ))}
+                )}
               </ul>
             </section>
           )}
