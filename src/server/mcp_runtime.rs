@@ -186,9 +186,59 @@ impl ToolApprover for BrokerApprover {
         // Boxed: keeps this future (and every caller's) small
         Box::pin(super::missions::flight_school::tier_gate(&self.db, &self.data_dir, req)).await
     }
+
+    async fn decide_granted(&self, req: ToolApprovalRequest, grant: &mcp::PrepushGrant) -> ApprovalOutcome {
+        match Box::pin(self.granted(&req, grant)).await {
+            Some(approval_id) => {
+                if super::missions::truth_ledger::request_reads_outside(&req) {
+                    super::missions::truth_ledger::taint(&req.turn_id);
+                }
+                let note = super::dev::prepush::grant_note(grant);
+                super::missions::checkpoints::log_call_noted(&self.db, &self.data_dir, &req, "approved", approval_id.as_deref(), Some(&note)).await;
+                ApprovalOutcome::Allowed
+            }
+            None => self.decide(req).await,
+        }
+    }
 }
 
 impl BrokerApprover {
+    /// A push the person's Retry or Override covers (0.9.7): uses the grant up and records the call
+    /// as approved by it (`Some(approval id)`), with no card. `None` when it must ask as usual: the
+    /// payment floor, Flight School or the production floor wants a card (exactly as in
+    /// [`Self::classified`]), it names kwnt's secrets, or the grant was used or expired.
+    async fn granted(&self, req: &ToolApprovalRequest, grant: &mcp::PrepushGrant) -> Option<Option<String>> {
+        if req.payment.is_some() || mcp::payment_floor::reason(req, None).is_some() {
+            return None;
+        }
+        if self.tier_gate(req).await.is_some() || super::dev::floor::for_call(&self.db, req).await.is_some() {
+            return None;
+        }
+        let cwd = req.builtin.as_ref().and_then(|b| b.cwd.as_deref()).map(std::path::Path::new);
+        if crate::sandbox::credentials::call_touches_kwnt_secrets(&req.arguments, cwd) {
+            return None;
+        }
+        if !super::dev::prepush::use_grant(&self.db, &self.events, grant).await {
+            return None;
+        }
+        tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, grant = %grant.id, card = %grant.pressed_card_id, "ran a push the person's {} approved", grant.kind);
+        let mut details = match &req.builtin {
+            Some(b) => json!({"source": "claude_builtin", "tool": req.tool, "arguments": req.arguments, "cwd": b.cwd, "outside_folder": b.outside_folder}),
+            None => json!({"source": "mcp", "server": req.server, "tool": req.tool, "arguments": req.arguments}),
+        };
+        details["kwant_id"] = json!(req.kwant_id);
+        details["kwant_name"] = json!(req.kwant_name);
+        details["prepush_grant"] = grant_details(grant);
+        let record = NewApproval { turn_id: req.turn_id.clone(), kwant_id: req.kwant_id.clone(), tool_name: req.tool_name.clone(), parameters: details };
+        match self.db.save_granted(&record).await {
+            Ok(id) => Some(Some(id)),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not record a push the person's grant approved");
+                Some(None)
+            }
+        }
+    }
+
     /// [`ToolApprover::decide`], with the ledger's decision class and the card's id.
     async fn classified(&self, req: ToolApprovalRequest) -> (ApprovalOutcome, &'static str, Option<String>) {
         // Approvals the person switched off: run, and keep a record of what ran. A setting that
@@ -743,13 +793,30 @@ impl ToolApprover for PrepushApprover {
         self.inner.tier_gate(req).await
     }
 
-    async fn prepush_gate(&self, req: &ToolApprovalRequest) -> Result<Vec<String>, String> {
-        Box::pin(super::dev::prepush::check_mcp(&self.state, &req.kwant_id, &req.server, &req.tool, &req.arguments)).await.map(|p| p.overrides)
+    async fn prepush_gate(&self, req: &ToolApprovalRequest) -> Result<mcp::PrepushPass, String> {
+        Box::pin(super::dev::prepush::check_mcp(&self.state, &req.kwant_id, &req.server, &req.tool, &req.arguments))
+            .await
+            .map(|p| mcp::PrepushPass { overrides: p.overrides, grant: p.grant })
     }
 
     async fn prepush_use(&self, overrides: &[String]) -> Option<String> {
-        super::dev::prepush::use_up(&self.state, &super::dev::prepush::Pass { overrides: overrides.to_vec(), pinned: None }).await
+        super::dev::prepush::use_up(&self.state, &super::dev::prepush::Pass { overrides: overrides.to_vec(), ..Default::default() }).await
     }
+
+    async fn decide_granted(&self, req: ToolApprovalRequest, grant: &mcp::PrepushGrant) -> ApprovalOutcome {
+        self.inner.decide_granted(req, grant).await
+    }
+}
+
+/// What an approval record keeps about the grant that approved its call (0.9.7).
+pub fn grant_details(grant: &mcp::PrepushGrant) -> Value {
+    json!({
+        "id": grant.id,
+        "kind": grant.kind,
+        "card_id": grant.pressed_card_id,
+        "push_card_id": grant.card_id,
+        "note": super::dev::prepush::grant_note(grant),
+    })
 }
 
 /// [`prepare_turn_with_self`] with [`TurnApprovalOpts`].
@@ -949,7 +1016,7 @@ fn noted_request(session: &PermissionSession, tool_name: &str, server: &str, too
 /// Answers one claude permission prompt. MCP tools from the kwant's own servers get their
 /// approval card; claude's own tools follow [`mcp::builtin_tools`]; tools from servers the
 /// kwant doesn't have are denied.
-async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value {
+async fn decide(session: &PermissionSession, args: &Value, smart: bool, grant: Option<&mcp::PrepushGrant>) -> Value {
     let tool_name = args["tool_name"].as_str().unwrap_or("");
     let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
     let tool_use_id = args["tool_use_id"].as_str().unwrap_or("").to_string();
@@ -1016,7 +1083,7 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
             }
         }
     };
-    let approval = session.ctx.approver.decide(ToolApprovalRequest {
+    let req = ToolApprovalRequest {
         kwant_id: session.kwant_id.clone(),
         kwant_name: session.kwant_name.clone(),
         turn_id: session.turn_id.clone(),
@@ -1027,7 +1094,14 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
         builtin,
         smart: verdict,
         payment: None,
-    });
+    };
+    // A push the person's Retry or Override covers skips the ordinary card (0.9.7)
+    let approval = async {
+        match grant {
+            Some(g) => session.ctx.approver.decide_granted(req, g).await,
+            None => session.ctx.approver.decide(req).await,
+        }
+    };
     // Dropping the approval withdraws its card when the turn ends first
     let outcome = tokio::select! {
         outcome = approval => outcome,
@@ -1107,7 +1181,7 @@ pub async fn permission_endpoint(
             let decision = match prepush {
                 Err(why) => json!({"behavior": "deny", "message": why}),
                 Ok(pass) => {
-                    let mut decision = decide(&session, args, smart).await;
+                    let mut decision = decide(&session, args, smart, pass.grant.as_ref()).await;
                     if decision["behavior"] == "allow" {
                         // The override goes with the push that runs, never one the person declined
                         if let Some(why) = super::dev::prepush::use_up(&state, &pass).await {
