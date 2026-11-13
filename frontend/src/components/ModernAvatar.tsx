@@ -35,7 +35,7 @@ type Accessory =
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
   | 'partyhat' | 'hardhat' | 'flower' | 'none';
 
-interface Creature {
+export interface Creature {
   body: string;
   shade: string;
   light: string;
@@ -332,6 +332,13 @@ function renderCreature(c: Creature) {
     ...renderOverlay(c),
   ];
 }
+
+/** The bot's creature, resolved exactly as ModernAvatar resolves it, for scenes that draw the bot outside its frame. */
+export function useCreatureFor(role: string | undefined, name: string, kwantId?: string): Creature {
+  useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
+  return pickCreature(avatarStyleFor(role, kwantId, name, isStyleId) ?? 'default', name);
+}
+export { renderCreature };
 
 export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   role,
