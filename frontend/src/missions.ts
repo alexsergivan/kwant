@@ -15,7 +15,7 @@ export type TaskState = 'backlog' | 'ready' | 'working' | 'needs_you' | 'review'
 export type MissionStatus = 'draft' | 'active' | 'done' | 'cancelled';
 export type SourceKind = 'mission' | 'person' | 'delegation' | 'routine' | 'zombie' | 'work_ahead' | 'chat';
 export type CheckKind = 'command' | 'http' | 'file_exists' | 'file_contains' | 'file_sha256' | 'peer_review' | 'person';
-export type CheckStatus = 'pending' | 'needs_approval' | 'running' | 'passed' | 'failed' | 'error';
+export type CheckStatus = 'pending' | 'needs_approval' | 'running' | 'waiting' | 'passed' | 'failed' | 'error';
 export type ChecksStatus = 'not_checked' | 'pending' | 'passed' | 'failed';
 
 export type StateCounts = Record<TaskState, number>;
@@ -63,6 +63,7 @@ export interface NeedsYouItem {
     | 'approval'
     | 'human_step'
     | 'check_approval'
+    | 'check_timed_out'
     | 'may_be_invalid'
     | 'autofix_suggested'
     | 'fix_needed'
@@ -72,6 +73,9 @@ export interface NeedsYouItem {
     | 'rests_on_disputed_fact';
   id: string;
   text: string;
+  /** check_timed_out: what the person can do ("wait_more", "verify") and how long Wait adds. */
+  actions?: string[];
+  wait_more_hours?: number;
   /** fact_changed, rests_on_disputed_fact: the fact (id = fact_id), its status now and what replaced it. */
   fact_id?: string;
   status?: string;
@@ -95,6 +99,8 @@ export interface ChecksSummary {
   needs_approval?: number;
   /** How many of `needs_approval` are required, so hold the task (older servers leave it out). */
   required_needs_approval?: number;
+  /** Checks that count and wait on an outside service, or waited too long (older servers leave it out). */
+  waiting?: number;
   total: number;
 }
 
@@ -385,6 +391,14 @@ export interface Check {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** A check waiting on an outside service (exit 75): the round's first "not yet", its next run and
+   * its deadline. `timed_out_at` is set when it stopped at the deadline (status `error`). Older
+   * servers leave them out. */
+  waiting_since?: string | null;
+  next_run_at?: string | null;
+  wait_until?: string | null;
+  runs?: number;
+  timed_out_at?: string | null;
 }
 
 export type EvidenceKind = 'file' | 'url' | 'note' | 'screenshot' | 'check_output';
@@ -832,6 +846,7 @@ export function checksText(s: ChecksSummary): { text: string; tone: Tone } {
   if (approvalHolds(s)) return { text: n(s.required_needs_approval ?? 0, '1 check needs your OK', '# checks need your OK'), tone: 'amber' };
   if (s.status === 'not_checked') return { text: 'Not checked', tone: 'zinc' };
   if (s.status === 'failed') return { text: n(s.failed, '1 check failed', '# checks failed'), tone: 'rose' };
+  if (s.status === 'pending' && (s.waiting ?? 0) > 0) return { text: n(s.waiting ?? 0, '1 check waiting', '# checks waiting'), tone: 'zinc' };
   if (s.status === 'pending') return { text: s.passed > 0 ? n(s.passed, '1 check passed, still checking', '# checks passed, still checking') : 'Checking', tone: 'zinc' };
   return { text: s.passed > 1 ? `${s.passed} checks passed` : 'Check passed', tone: 'emerald' };
 }
@@ -1395,6 +1410,7 @@ export const CHECK_STATUS: Record<CheckStatus, { label: string; tone: Tone }> = 
   failed: { label: 'Failed', tone: 'rose' },
   error: { label: 'Couldn’t run', tone: 'rose' },
   running: { label: 'Running', tone: 'violet' },
+  waiting: { label: 'Waiting', tone: 'sky' },
   pending: { label: 'Not run yet', tone: 'zinc' },
   needs_approval: { label: 'Needs your OK', tone: 'amber' },
 };
@@ -1439,7 +1455,7 @@ export function buildReceipt(d: Pick<TaskDetail, 'task' | 'checks' | 'evidence'>
     .sort((a, b) => Date.parse(b.finished_at ?? b.created_at) - Date.parse(a.finished_at ?? a.created_at))
     .map<ReceiptLine>((c) => ({
       check: c,
-      status: checkStatusLabel(c.status),
+      status: c.status === 'error' && c.timed_out_at ? { label: 'Stopped waiting', tone: 'amber' } : checkStatusLabel(c.status),
       target: checkTarget(c),
       by: c.checked_by ? actorName(c.checked_by, c.checked_by_name, names) : null,
       output: c.evidence_id ? byId.get(c.evidence_id) ?? null : null,

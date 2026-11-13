@@ -175,6 +175,8 @@ import { ScrollRow } from './ScrollRow';
 import { MissionWatchControls, WatchBoardContext, type WatchBoard } from './MissionWatch';
 import { watchApi, type WatchApi } from '../missionWatch';
 import { usePhoneLayout } from '../usePhoneLayout';
+import { CardWaitingChecks, WaitingCheckLine } from './WaitingCheckLine';
+import { waitLine } from '../waitingChecks';
 
 const TONES: Record<Tone, string> = {
   emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
@@ -768,6 +770,7 @@ export const TaskCard: React.FC<{
             </span>
           </span>
         )}
+        <CardWaitingChecks task={t} now={now} />
         {t.forked_from && <span className="block text-[11px] text-zinc-500" data-forked-from>A copy, made to redo an earlier task</span>}
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-400">
           {owner ? (
@@ -1386,6 +1389,11 @@ export const EvidenceReceipt: React.FC<{
                   {!l.check.required && <span className="text-[10px] text-zinc-500">Optional</span>}
                 </p>
                 {l.target && <code className="block mt-1 text-[11px] text-zinc-300 break-all whitespace-pre-wrap">{l.target}</code>}
+                {waitLine(l.check) && (
+                  <span className="block mt-1">
+                    <WaitingCheckLine line={waitLine(l.check)!} />
+                  </span>
+                )}
                 <p className="mt-1 text-[10px] text-zinc-500">
                   {[l.by ? `Checked by ${l.by}` : null, l.check.finished_at ? ago(l.check.finished_at) : null].filter(Boolean).join(' · ') || 'Hasn’t run yet'}
                 </p>
