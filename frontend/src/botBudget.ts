@@ -292,6 +292,15 @@ export function budgetsNeedingYou(list: readonly BotBudget[]): BotBudget[] {
   return list.filter((b) => b.state === 'paused' || b.state === 'warn').sort((a, b) => (a.state === b.state ? b.percent - a.percent : a.state === 'paused' ? -1 : 1));
 }
 
+/**
+ * A message to this bot waits for its budget: the server saves and parks it, and no turn starts until
+ * Continue, a raise or next month (0.9.5 QA F1). The chat shows no working state for it (no timer, no
+ * Stop); the pause bar is what's on screen. A channel or team message isn't one bot's, so never.
+ */
+export function sendWaitsForBudget(byBot: Readonly<Record<string, BotBudget>>, kwantId: string | null | undefined): boolean {
+  return !!kwantId && isPaused(byBot[kwantId]);
+}
+
 // ---------------------------------------------------------------- chat lines
 
 export const BUDGET_KINDS = ['bot_budget_stopped', 'bot_budget_warn', 'bot_budget_resumed', 'bot_budget_continued'] as const;
@@ -304,7 +313,11 @@ export interface BudgetNoticeMeta {
   month: string;
   percent: number;
   detail: string;
+  /** The counts when the line was posted (the server's meta), so the 80% line keeps "3k of 3.8k" after more turns. */
+  at: UsedAt | null;
 }
+
+export type UsedAt = Pick<BotBudget, 'over' | 'used_tokens' | 'budget_tokens' | 'used_usd' | 'budget_usd' | 'month' | 'estimated'>;
 
 function metaObject(meta: unknown): Record<string, unknown> | null {
   if (!meta) return null;
@@ -322,7 +335,19 @@ function metaObject(meta: unknown): Record<string, unknown> | null {
 export function parseBudgetNotice(meta: unknown): BudgetNoticeMeta | null {
   const o = metaObject(meta);
   if (!o || !BUDGET_KINDS.includes(o.kind as BudgetKind) || typeof o.kwant_id !== 'string') return null;
-  return { kind: o.kind as BudgetKind, kwant_id: o.kwant_id, kwant_name: str(o.kwant_name), month: str(o.month), percent: num(o.percent), detail: str(o.detail) };
+  const at: UsedAt | null =
+    typeof o.used_tokens === 'number' || typeof o.used_usd === 'number'
+      ? {
+          over: o.over === 'tokens' || o.over === 'usd' ? o.over : null,
+          used_tokens: num(o.used_tokens),
+          budget_tokens: num(o.budget_tokens),
+          used_usd: num(o.used_usd),
+          budget_usd: num(o.budget_usd),
+          month: str(o.month),
+          estimated: o.estimated === true,
+        }
+      : null;
+  return { kind: o.kind as BudgetKind, kwant_id: o.kwant_id, kwant_name: str(o.kwant_name), month: str(o.month), percent: num(o.percent), detail: str(o.detail), at };
 }
 
 /** True for any message that changes a bot's budget state, so the shared list is re-read. */
