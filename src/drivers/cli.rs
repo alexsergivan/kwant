@@ -1107,6 +1107,22 @@ struct ClaudeStream {
     offered: Option<Vec<String>>,
 }
 
+/// Longest reason kept from a failed tool result.
+const CLAUDE_ERROR_MAX: usize = 600;
+
+/// A `tool_result`'s text: a string, or the text blocks of an array.
+fn tool_result_text(content: &serde_json::Value) -> String {
+    match content {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 impl ClaudeStream {
     fn line(&mut self, line: &str, now: Instant) -> Vec<RuntimeEvent> {
         let line = line.trim();
@@ -1130,6 +1146,27 @@ impl ClaudeStream {
                     for item in v[key].as_array().map(Vec::as_slice).unwrap_or_default() {
                         offered.push(item.as_str().or_else(|| item["name"].as_str()).map_or_else(|| item.to_string(), str::to_string));
                     }
+                }
+                // A server claude couldn't start, or that wants a sign-in: said like the API
+                // driver says it, so the chat gets its failure line (`server::tool_failures`)
+                for s in v["mcp_servers"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                {
+                    let (Some(name), Some(status)) = (s["name"].as_str(), s["status"].as_str())
+                    else {
+                        continue;
+                    };
+                    let why = match status {
+                        "failed" => "it failed to start",
+                        "needs-auth" | "needs_auth" => "authentication required",
+                        _ => continue,
+                    };
+                    events.push(RuntimeEvent::ThinkingDelta(format!(
+                        "{}{name}: {why}\n",
+                        crate::mcp::UNAVAILABLE_PREFIX
+                    )));
                 }
             }
             Some("stream_event") => {
@@ -1179,8 +1216,13 @@ impl ClaudeStream {
                     let Some(id) = b["tool_use_id"].as_str().filter(|id| self.running.remove(*id)) else {
                         continue;
                     };
-                    let status = if b["is_error"] == true { "error" } else { "ok" };
-                    events.push(RuntimeEvent::ToolCallCompleted { id: id.to_string(), result: serde_json::json!({ "status": status }) });
+                    let result = if b["is_error"] == true {
+                        // Why it failed, cut short: the activity step's detail and the failure line read it
+                        serde_json::json!({ "status": "error", "error": crate::mcp::truncate_text(&tool_result_text(&b["content"]), CLAUDE_ERROR_MAX) })
+                    } else {
+                        serde_json::json!({ "status": "ok" })
+                    };
+                    events.push(RuntimeEvent::ToolCallCompleted { id: id.to_string(), result });
                 }
             }
             _ => {}
@@ -2178,6 +2220,41 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
         let parsed = ClaudeResult::parse(&s.into_stdout()).unwrap();
         assert_eq!(parsed.result, "all done");
         assert_eq!(parsed.tokens(), Some(7));
+    }
+
+    /// 0.9.5: claude's init line names servers that failed or want a sign-in (said like the API
+    /// driver says them), and a failed tool result keeps why it failed.
+    #[test]
+    fn claude_stream_says_which_servers_failed_and_why_a_call_failed() {
+        let t0 = Instant::now();
+        let mut s = ClaudeStream::default();
+        let init = r#"{"type":"system","subtype":"init","tools":[],"mcp_servers":[{"name":"gmail","status":"needs-auth"},{"name":"notion","status":"failed"},{"name":"kwnt_tools","status":"connected"}]}"#;
+        let said: Vec<String> = s
+            .line(init, t0)
+            .into_iter()
+            .filter_map(|e| match e {
+                RuntimeEvent::ThinkingDelta(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "MCP server unavailable: gmail: authentication required\n",
+                "MCP server unavailable: notion: it failed to start\n"
+            ]
+        );
+        s.line(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_9","name":"mcp__gmail__send","input":{}}]}}"#, t0);
+        let done = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_9","is_error":true,"content":[{"type":"text","text":"HTTP 401 Unauthorized"}]}]}}"#;
+        match s.line(done, t0).as_slice() {
+            [RuntimeEvent::ToolCallCompleted { result, .. }] => {
+                assert_eq!(
+                    (result["status"].as_str(), result["error"].as_str()),
+                    (Some("error"), Some("HTTP 401 Unauthorized"))
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

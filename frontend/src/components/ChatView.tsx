@@ -63,6 +63,8 @@ import { DropBot, DropLayer, DropPhase } from './DropLayer';
 import { EarlierCopies, FileTiles, PointChip, UploadChip } from './Attachments';
 import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
 import { parseToolNoteMeta } from '../toolNotes';
+import { ToolFailureLine } from './ToolFailureLine';
+import { parseToolFailureMeta } from '../toolFailures';
 import { ToolNoteLine } from './ToolNoteLine';
 import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
@@ -74,6 +76,8 @@ import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotic
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { parseSpendStopped } from '../spendStop';
 import { SpendStoppedNotice } from './SpendStop';
+import { parseBudgetNotice } from '../botBudget';
+import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
@@ -301,6 +305,8 @@ export interface ChatViewProps {
   renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
   /** 0.9.0 P5: a bot's tool-note line (meta kind "tool_note"); "See the note" opens it on Connections. */
   onOpenToolNote?: (noteId: string) => void;
+  /** 0.9.5: a connection-failure line's fix button (meta kind "tool_failure") opens Connections. */
+  onOpenConnections?: () => void;
   /** A mission watcher's check report (message meta kind "watch"). */
   renderWatchReport?: (msg: ChatMessage, meta: WatchMeta, flash: boolean) => React.ReactNode;
   /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */
@@ -319,6 +325,10 @@ export interface ChatViewProps {
   onOpenUsage?: () => void;
   /** Opens App settings at the Computer card, "Run Claude inside the VM" focused (isolation notices). */
   onOpenComputerSettings?: () => void;
+  /** 0.9.5: the bot this 1:1 chat is with; its monthly-budget pause shows above the box. */
+  budgetBotId?: string | null;
+  /** 0.9.5: opens a bot's settings at its monthly budget, the first field focused. */
+  onRaiseBudget?: (kwantId: string) => void;
   /** Opens Manage Team with its folder input focused (isolation notices 6 and 7). */
   onChangeTeamFolder?: (teamId: string) => void;
   /** Opens the named bot's Edit modal on Profile, where its AI is picked (notice 7). */
@@ -526,6 +536,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderConnectionSuggestion,
   renderBotAction,
   onOpenToolNote,
+  onOpenConnections,
   renderWatchReport,
   renderHire,
   renderRouteChoice,
@@ -534,6 +545,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onOpenAccounts,
   onOpenUsage,
   onOpenComputerSettings,
+  budgetBotId = null,
+  onRaiseBudget,
   onChangeTeamFolder,
   onEditBot,
   canRun = null,
@@ -784,6 +797,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setApprovalOffscreen(false);
   };
   // The running turn's summary line (WorkingStrip): inside the composer section, right above the box.
+  const { byBot: budgetsByBot } = useBudgets();
+  const chatBudget = budgetBotId ? budgetsByBot[budgetBotId] : undefined;
+  const budgetBanner = chatBudget?.state === 'paused' ? <BudgetPausedBanner budget={chatBudget} onRaise={onRaiseBudget} /> : null;
   const workingStrip = (
     <WorkingStrip
       active={isStreaming}
@@ -1247,7 +1263,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => onContinuity('trial_ended', (t) => setEndedTrials((prev) => (prev.has(t.skill_id) ? prev : new Set(prev).add(t.skill_id)))), []);
   const trialCards = useMemo(() => trialCardsAfter(messages, endedTrials), [messages, endedTrials]);
 
-  const renderMessage = (msg: ChatMessage) => {
+  // `prev`: the message shown just above, so a kwant line under another sits close to it (0.9.5 F5)
+  const renderMessage = (msg: ChatMessage, prev?: ChatMessage) => {
     const interruption = parseInterruption(msg);
     if (interruption)
       return (
@@ -1307,6 +1324,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (watch && renderWatchReport) return <React.Fragment key={msg.id}>{renderWatchReport(msg, watch, flashId === msg.id)}</React.Fragment>;
     const botAction = msg.meta && renderBotAction ? parseBotActionMeta(msg.meta) : null;
     if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
+    const toolFailure = msg.meta ? parseToolFailureMeta(msg.meta) : null;
+    if (toolFailure)
+      return (
+        <ToolFailureLine
+          key={msg.id}
+          meta={toolFailure}
+          messageId={msg.id}
+          flash={flashId === msg.id}
+          tight={!!prev?.meta && !!(parseToolFailureMeta(prev.meta) || parseToolNoteMeta(prev.meta))}
+          onFix={onOpenConnections}
+        />
+      );
     const toolNote = msg.meta ? parseToolNoteMeta(msg.meta) : null;
     if (toolNote)
       return (
@@ -1339,6 +1368,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
             flash={flashId === msg.id}
           />
         </div>
+      );
+    const budgetNote = parseBudgetNotice(msg.meta);
+    if (budgetNote && (budgetNote.kind === 'bot_budget_stopped' || budgetNote.kind === 'bot_budget_warn'))
+      return (
+        <BudgetNotice
+          key={msg.id}
+          messageId={msg.id}
+          text={msg.text}
+          meta={budgetNote}
+          onRaise={onRaiseBudget}
+          canAct={!(budgetBotId === budgetNote.kwant_id && chatBudget?.state === 'paused')}
+          flash={flashId === msg.id}
+        />
       );
     const spend = parseSpendStopped(msg.meta);
     if (spend)
@@ -2013,13 +2055,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
           </div>
         )}
-        {groupDiscussionThreads(arranged.messages).map((item) => {
+        {groupDiscussionThreads(arranged.messages).map((item, n, items) => {
           if (item.kind === 'message') {
             const trial = trialCards.get(item.message.id);
-            if (!trial) return renderMessage(item.message);
+            const above = items[n - 1];
+            const prev = above?.kind === 'message' && !trialCards.has(above.message.id) ? above.message : undefined;
+            if (!trial) return renderMessage(item.message, prev);
             return (
               <Fragment key={item.message.id}>
-                {renderMessage(item.message)}
+                {renderMessage(item.message, prev)}
                 <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
               </Fragment>
             );
@@ -2045,7 +2089,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </button>
               {isThreadOpen && (
                 <div className="mt-4 ml-2 pl-3 sm:ml-[30px] sm:pl-4 border-l border-zinc-800 space-y-6">
-                  {item.turns.map(renderMessage)}
+                  {item.turns.map((t, i, all) => renderMessage(t, all[i - 1]))}
                 </div>
               )}
             </div>
@@ -2158,7 +2202,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* P4: the running bot's shares, already in the place its saved reply will give them */}
-        {liveRowShown && arranged.live.map(renderMessage)}
+        {liveRowShown && arranged.live.map((m) => renderMessage(m))}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
         {settledApprovals.map((approval) => (
@@ -2292,6 +2336,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* Phone and desktop (0.8.1 F4): the quiet line sits inside the composer section, right above the box. */}
+        {budgetBanner}
         {workingStrip}
 
         <form
@@ -2466,7 +2511,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <AtSign size={phone ? 18 : 17} aria-hidden="true" />
             {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
             {phone && !isStreaming && (
-              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`} />
+              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`} />
             )}
           </button>
           {stacked && <span className="flex-1" aria-hidden="true" />}
@@ -2479,7 +2524,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {!phone && !isStreaming && (
             <NewTag
               id="mention"
-              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`}
+              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`}
               style={{ right: 'calc(11px + var(--kw-cbtn-step))' }}
             />
           )}

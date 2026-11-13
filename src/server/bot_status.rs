@@ -158,10 +158,29 @@ pub struct GaveUp {
     pub thread_id: Option<String>,
 }
 
+/// One of the bot's connections failed in a way only the person can fix (its sign-in expired or
+/// was refused, a Composio app needs connecting again), see `tool_failures`. Cleared when a later
+/// call through that connection works.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignInMark {
+    pub at: DateTime<Utc>,
+    /// The connection's key (`mcp:<id>`, `composio:<toolkit>`).
+    pub key: String,
+    /// Its name, e.g. "Gmail".
+    pub connection: String,
+    pub context_id: String,
+    pub thread_id: Option<String>,
+}
+
+/// Most sign-in marks kept per bot (the newest).
+const MAX_SIGN_IN_MARKS: usize = 8;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BotMarks {
     pub gave_up: Option<GaveUp>,
     pub last_finished_at: Option<DateTime<Utc>>,
+    /// Connections waiting for the person to sign in again, oldest first.
+    pub sign_in: Vec<SignInMark>,
 }
 
 /// A send that waits for its bot (H3): the person's message, or a bot's hand-off.
@@ -205,6 +224,31 @@ impl Board {
 
     pub fn take_nudged(&mut self) -> HashSet<String> {
         std::mem::take(&mut self.nudged)
+    }
+
+    /// Marks the bot as needing the person to sign in to a connection again (one mark per connection).
+    pub fn mark_sign_in(&mut self, kwant_id: &str, mark: SignInMark) {
+        let marks = &mut self.marks.entry(kwant_id.to_string()).or_default().sign_in;
+        marks.retain(|m| m.key != mark.key);
+        marks.push(mark);
+        if marks.len() > MAX_SIGN_IN_MARKS {
+            marks.remove(0);
+        }
+        self.nudge(kwant_id);
+    }
+
+    /// The connection works again: its mark goes. True when there was one.
+    pub fn clear_sign_in(&mut self, kwant_id: &str, key: &str) -> bool {
+        let Some(m) = self.marks.get_mut(kwant_id) else {
+            return false;
+        };
+        let before = m.sign_in.len();
+        m.sign_in.retain(|s| s.key != key);
+        let cleared = m.sign_in.len() != before;
+        if cleared {
+            self.nudge(kwant_id);
+        }
+        cleared
     }
 
     /// Reserves `key` (chat + client message id) for one send, whose message will be saved as
@@ -555,6 +599,25 @@ pub fn compute(b: &BotInput, now: DateTime<Utc>) -> Status {
             let mut s = Status::new(&b.kwant_id, "needs_you", "asked_question", Some(q.asked_at));
             s.question = Some(q.clone());
             s.waits_on = Some(WaitsOn { kind: "person", label: None });
+            parts.push(s);
+        }
+    }
+    // A connection only the person can fix (0.9.5): the bot needs them until it works again
+    if !parts.iter().any(|p| p.status == "needs_you") {
+        let shows = Span::days(super::tool_failures::NEEDS_YOU_DAYS);
+        if let Some(m) = b
+            .marks
+            .sign_in
+            .iter()
+            .filter(|m| now - m.at < shows)
+            .max_by_key(|m| m.at)
+        {
+            let mut s = Status::new(&b.kwant_id, "needs_you", "needs_sign_in", Some(m.at));
+            s.reason_text = Some(m.connection.clone());
+            s.waits_on = Some(WaitsOn {
+                kind: "person",
+                label: Some(m.connection.clone()),
+            });
             parts.push(s);
         }
     }
@@ -1118,6 +1181,74 @@ mod tests {
         t.wait = Some(Wait::Browser(at(4)));
         let s = compute(&bot(vec![t]), at(30));
         assert_eq!((s.reason_code, s.since), ("needs_browser", Some(at(4))));
+    }
+
+    fn sign_in(key: &str, conn: &str, at: DateTime<Utc>) -> SignInMark {
+        SignInMark {
+            at,
+            key: key.into(),
+            connection: conn.into(),
+            context_id: "c1".into(),
+            thread_id: None,
+        }
+    }
+
+    /// 0.9.5: a connection only the person can fix keeps an idle bot in "needs you", naming it,
+    /// until it works again (or a week passes); a question asked outranks it.
+    #[test]
+    fn a_failed_sign_in_needs_you_until_the_connection_works() {
+        let mut board = Board::default();
+        board.mark_sign_in("k1", sign_in("mcp:s1", "Gmail", at(1)));
+        board.mark_sign_in("k1", sign_in("mcp:s1", "Gmail", at(2)));
+        assert_eq!(
+            board.marks["k1"].sign_in.len(),
+            1,
+            "one mark per connection"
+        );
+        assert!(board.take_nudged().contains("k1"));
+        let mut b = bot(Vec::new());
+        b.marks = board.marks["k1"].clone();
+        let s = compute(&b, at(3));
+        assert_eq!(
+            (s.status, s.reason_code, s.since),
+            ("needs_you", "needs_sign_in", Some(at(2)))
+        );
+        assert_eq!(s.reason_text.as_deref(), Some("Gmail"));
+        assert_eq!(
+            s.waits_on.as_ref().and_then(|w| w.label.as_deref()),
+            Some("Gmail")
+        );
+        // Still needs you while it works on something else
+        let busy = compute(
+            &BotInput {
+                turns: vec![running("t1", at(3))],
+                ..b.clone()
+            },
+            at(4),
+        );
+        assert_eq!(
+            (busy.status, busy.reason_code),
+            ("needs_you", "needs_sign_in")
+        );
+        assert_eq!(busy.also.first().map(|a| a.status), Some("working"));
+        // A question it asked comes first
+        let mut asked = b.clone();
+        asked.questions = vec![question("q1", "c9", at(3), None)];
+        assert_eq!(compute(&asked, at(4)).reason_code, "asked_question");
+        // A week later it's gone
+        assert_eq!(
+            compute(
+                &b,
+                at(2) + Span::days(super::super::tool_failures::NEEDS_YOU_DAYS)
+            )
+            .status,
+            "available"
+        );
+        // Working again clears it
+        assert!(!board.clear_sign_in("k1", "mcp:other"));
+        assert!(board.clear_sign_in("k1", "mcp:s1"));
+        b.marks = board.marks["k1"].clone();
+        assert_eq!(compute(&b, at(4)).status, "available");
     }
 
     #[test]
