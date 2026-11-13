@@ -59,6 +59,7 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-096">New in 0.9.6</a></li>
         <li><a href="#new-095">New in 0.9.5</a></li>
         <li><a href="#new-09">New in 0.9.4</a></li>
         <li><a href="#new-08">New in 0.8.2</a></li>
@@ -95,6 +96,24 @@
     </div>
   </div>
 </nav>
+
+<section id="new-096" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.6</p>
+      <h2>A team from your own words, and what your bots did while you were away</h2>
+      <p>Describe what you need and kwant suggests a team. The Inbox shows what your bots finished while you were away, with the answer, what they did and why. A bot that stops either continues by itself or asks you once. Settings says in one card whether you're on the latest kwant. kwant's Chrome looks like normal Chrome, and opens a window when Google insists on one.</p>
+    </div>
+    <ul class="flist">
+      <li id="team-from-words" class="span3"><h3>A team from your words</h3><p>Write what your bots should do in the "What should your bots do?" box on the Get ready card, from <strong>Describe your own</strong> in the sidebar, or with "Describe what this team should do" in New team, and press <strong>Suggest a team</strong>. One of your ready AI accounts drafts it, without tools, usually in under a minute. The <strong>Suggested team</strong> sheet shows 2 to 6 bots with the lead first: untick or rename them, or <strong>Try again</strong> with the same words, then <strong>Create team</strong>, with Undo. The draft never gives a bot tools, accounts or routines, and the team's pinned instructions quote your words.</p></li>
+      <li id="inbox-away" class="span3"><h3>Done while you were away</h3><p>The Inbox has two groups: <strong>Needs you</strong> and <strong>Done while you were away</strong>. Done items stay for 7 days, seen or not, and the badge counts only the ones you haven't read. Open one and you see what ran, when and why, the answer with <strong>Open in chat</strong>, a <strong>What Ben did</strong> trail with times, and <strong>Why</strong>: what was asked, or the routine's instruction with <strong>Edit routine</strong>. Chips say "Read only · changed nothing" or "No checks set · Add one". Answer with <strong>Looks good</strong> or <strong>Ask Ben to redo…</strong>; Roll back is hidden when nothing changed. In a routine's History, each run has <strong>Open result ›</strong>.</p></li>
+      <li id="no-silent-stops" class="span3"><h3>A stopped bot carries on or asks you</h3><p>When a reply in your own chat stops before it's done, it either continues by itself, a limited number of times, or leaves you exactly one ask: one line in the chat with <strong>Retry</strong> or <strong>Continue</strong>, and one item in <strong>Needs you</strong> that says what stopped and why. The item closes when you write in that chat or when the bot's next reply there finishes. When kwant restarts in the middle of a reply in your own chat, that reply continues by itself once; if it can't, you get "Ben's reply was cut off when kwant restarted. Retry in the chat sends your message again." A failed hand-off or routine run keeps its one Inbox entry, and a mission task kwant stops gets one line in its chat.</p></li>
+      <li id="version-card" class="span3"><h3>Your kwant version in one card</h3><p>Settings has one <strong>kwant bots</strong> card in place of About and the list of earlier versions. It says "You're on the latest version" with <strong>Check again</strong>, "kwant bots X is available" with <strong>Update</strong>, or "Couldn't check for updates" with <strong>Try again</strong>, and never says you're on the latest version when it couldn't check. In the Mac app, Update installs it. On a server it opens <strong>How to update</strong>, with one command and <strong>Copy</strong>; on the Windows beta it links the new installer. A server checks 5 seconds after it starts and then every 6 hours (<code>KWNT_UPDATE_CHECK=off</code> turns that off); the Mac app checks every hour and when you open Settings.</p></li>
+      <li id="real-chrome" class="span3"><h3>Sign in to Google in kwant's Chrome</h3><p>kwant's Chrome now tells sites it is Chrome, with Chrome's own version details, and no longer marks itself as automated. It prefers an installed Google Chrome over Chromium, and nothing is injected into pages. Google still refuses sign-ins in a Chrome without a window, so the live view then says "Google only allows sign-in in a normal Chrome window." with <strong>Sign in in Chrome</strong>. On a computer with a screen, that opens Chrome in a window for the sign-in, and it goes back to no window once you're signed in. <a href="/docs/browser">Browser</a></p></li>
+      <li id="fixes-096" class="span3"><h3>Smaller changes in 0.9.6</h3><p>A new space's Get started card names that space's own bots (<strong>Keep the bots you have</strong>) instead of the main space's starter bots. If kwant's Chrome closes right after it starts, you're told why at once, with Chrome's last lines. A mission task that finds the browser busy tries again twice by itself.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-095" class="fgroup">
   <div class="wrap">
