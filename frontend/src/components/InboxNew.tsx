@@ -30,7 +30,7 @@ import { type DoneApi, type DoneDetailData, type MessageTarget, DoneChips, DoneI
 import { DONE_EMPTY, DONE_FOOTER, changedState, doneTitle, isDoneGroup, isRoutineItem, isUnread, metaLine, rowKicker, sectionItems, teamSize, unreadLine } from '../doneAway';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
-import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, windowLabel } from '../away';
+import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
 import { InboxGroup, InboxItem, ReviewItem, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
 import {
   BatchRow,
@@ -186,7 +186,7 @@ const AwaySubline: React.FC<{ item: InboxItem }> = ({ item }) => {
   const { label, tone } = itemLabel(item as AwayItem);
   const toneText = tone === 'amber' ? 'text-amber-300' : tone === 'rose' ? 'text-rose-300' : tone === 'emerald' ? 'text-teal-300' : tone === 'sky' ? 'text-sky-300' : 'text-zinc-400';
   const sum = awaySummary(item as AwayItem);
-  const showSum = sum && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length);
+  const showSum = sum && item.kind !== 'approval' && item.kind !== 'stopped' && !(item.kind === 'question' && item.choices?.length);
   // F6: an approval titled with its own question still says what the bot wants to use: "Needs approval · use gmail".
   const asked = item.kind === 'approval' && typeof item.question === 'string' && !!item.question.trim();
   const use = asked ? awayTitle(item as AwayItem) : '';
@@ -212,6 +212,8 @@ interface RowProps {
   onPick: (i: InboxItem) => void;
   onAnswer: (i: InboxItem, choice: number) => void;
   onResolve: (i: InboxItem, d: ApprovalDecision) => void;
+  /** 0.9.5: Retry on a stopped item whose approval expired unanswered. */
+  onRetry?: (i: InboxItem, approvalId: string) => void;
   /** A routine's review task in Done: its run's first line, as the run's own row would show it. */
   doneSummary?: string | null;
   /** The conversation it happened in ("@Spring launch"), said before the bot's name like the mockup. */
@@ -220,7 +222,8 @@ interface RowProps {
   onOpenConnections?: () => void;
 }
 
-const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, doneSummary, place, onOpenConnections }) => {
+const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, doneSummary, place, onOpenConnections }) => {
+  const stopped = isReview(item) ? null : stoppedAction(item as AwayItem);
   const review = isReview(item) ? item : null;
   const title = rowTitle(item);
   // The server decides one_tap; an item with no verdict (Not checked yet, Being checked) never gets inline Approve.
@@ -328,6 +331,21 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
               {c}
             </button>
           ))}
+        </div>
+      )}
+
+      {stopped?.kind === 'retry_approval' && onRetry && (
+        <div className="px-3 pb-3 pl-[54px]">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onRetry(item, stopped.approvalId)}
+            className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`}
+            data-stopped-retry={item.id}
+          >
+            <RotateCcw size={12} aria-hidden="true" />
+            Retry
+          </button>
         </div>
       )}
 
@@ -794,6 +812,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
   };
 
   const onAnswer = (item: InboxItem, choice: number) => act(item, () => awayApi.answer(item.id, choice));
+  const onRetry = (item: InboxItem, approvalId: string) => act(item, () => awayApi.retryApproval(approvalId));
   const onResolve = (item: InboxItem, decision: ApprovalDecision) =>
     act(
       item,
@@ -922,6 +941,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   onPick={pick}
                   onAnswer={onAnswer}
                   onResolve={onResolve}
+                  onRetry={onRetry}
                   doneSummary={sections.runFor[i.id]?.summary || null}
                   place={i.link?.channel_id ? (placeName?.(i.link.channel_id) ?? null) : null}
                   onOpenConnections={onOpenConnections}

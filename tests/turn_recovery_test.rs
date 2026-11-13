@@ -33,8 +33,20 @@ case "$1" in
   auth) echo '{"loggedIn":true}'; exit 0 ;;
 esac
 echo '{"type":"system","subtype":"init"}'
-case "$*" in
+# Only the person's own words choose (the last line of -p): earlier chat lines may ride along
+prompt=""; prev=""
+for a in "$@"; do [ "$prev" = "-p" ] && prompt="$a"; prev="$a"; done
+[ -n "$prompt" ] || prompt="$*"
+last=$(printf '%s\n' "$prompt" | awk 'NF { l = $0 } END { print l }')
+[ -n "$FAKE_ARGS_LOG" ] && printf '%s\n=====\n' "$*" >> "$FAKE_ARGS_LOG"
+# A reply a restart cut off, continued with kwnt's note on what was cut off
+case "$prompt" in
+  *"Check first whether it took effect"*) echo '{"type":"result","is_error":false,"num_turns":1,"result":"RESUMED: checked first"}'; exit 0 ;;
+  *"It only reads, so run it again"*) echo '{"type":"result","is_error":false,"num_turns":1,"result":"RESUMED: read again"}'; exit 0 ;;
+esac
+case "$last" in
   *GO_SILENT*) exec sleep 3600 ;;
+  *CRASH_NOW*) echo 'the engine crashed' >&2; exit 3 ;;
   *LONG_TOOL*)
     echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"sleep 5"}}]}}'
     sleep 5
@@ -247,6 +259,65 @@ async fn a_silent_claude_is_stopped_with_a_visible_reason() {
     assert_eq!(meta["stall_secs"], 2);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(env.state.db.take_running_turns().await.unwrap().is_empty(), "the running row is cleared");
+
+    // 0.9.5: one ask in Needs you, in the notice's own words, pointing at it
+    let stopped_items = |away: &Value| -> Vec<Value> { away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").cloned().collect() };
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    let items = stopped_items(&away);
+    assert_eq!(items.len(), 1, "{away}");
+    assert_eq!(items[0]["message_id"], stopped["id"]);
+    assert_eq!(items[0]["retry"], Value::Null);
+    let title = items[0]["title"].as_str().unwrap();
+    assert!(title.contains("sent nothing for 2 s") && title.ends_with("Retry in the chat sends your message again."), "{title}");
+    // The bot is Stuck (gave up): the dot says so until something resumes it
+    let (_, st) = call(&env.app, "GET", "/api/bots/status", None).await;
+    let mine = |st: &Value| st["bots"].as_array().unwrap().iter().find(|b| b["kwant_id"] == kid.as_str()).cloned().unwrap_or_else(|| panic!("{st}"));
+    assert_eq!((mine(&st)["status"].as_str(), mine(&st)["reason_code"].as_str()), (Some("stuck"), Some("stalled_gave_up")), "{st}");
+    // The person writes again (what the notice's Retry does): one press runs it now, not held
+    // until "Try again" is pressed too, and the reply finishes: the ask is gone
+    let mut rx = env.state.event_sender.subscribe();
+    let (s, sent) = call(&env.app, "POST", "/api/chat/send", Some(json!({"kwant_id": kid, "prompt": "hi again", "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK, "{sent}");
+    assert_eq!(sent["status"], "dispatched", "the Retry must not be held behind the stall: {sent}");
+    assert!(sent.get("held").is_none(), "{sent}");
+    let ended = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut text = String::new();
+        while let Ok(e) = rx.recv().await {
+            if let RuntimeEvent::TextDelta(t) = e.unscoped() {
+                text.push_str(t);
+            }
+            if matches!(e.unscoped(), RuntimeEvent::TurnEnded { kwant_id: k, .. } if k == &kid) {
+                return text;
+            }
+        }
+        text
+    })
+    .await
+    .expect("the retried reply did not run");
+    assert!(ended.contains("answer ok"), "{ended}");
+    let (_, st) = call(&env.app, "GET", "/api/bots/status", None).await;
+    assert_ne!(mine(&st)["status"], "stuck", "{st}");
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    assert!(stopped_items(&away).is_empty(), "{away}");
+}
+
+/// 0.9.5: an engine that crashes mid-reply leaves the failed reply in the chat (with Retry) and
+/// one ask in Needs you; a hand-off's turn would be reported in the Inbox instead.
+#[tokio::test]
+async fn a_reply_whose_engine_crashed_asks_the_person_once() {
+    let env = setup().await;
+    let kid = env.claude_bot().await;
+    env.turn_with(&kid, "please CRASH_NOW", Duration::from_secs(60)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_, msgs) = call(&env.app, "GET", &format!("/api/channels/{kid}/messages"), None).await;
+    let failed = msgs.as_array().unwrap().iter().rev().find(|m| m["sender_role"] == "kwant").cloned().unwrap_or_else(|| panic!("{msgs}"));
+    let meta: Value = serde_json::from_str(failed["meta"].as_str().unwrap_or("null")).unwrap();
+    assert!(matches!(meta["kind"].as_str(), Some("turn_failed")), "the chat offers Retry on it: {failed}");
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    let items: Vec<&Value> = away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").collect();
+    assert_eq!(items.len(), 1, "{away}");
+    assert_eq!(items[0]["message_id"], failed["id"]);
+    assert!(items[0]["title"].as_str().unwrap().ends_with("Retry in the chat sends your message again."), "{away}");
 }
 
 #[tokio::test]
@@ -340,6 +411,8 @@ async fn replies_cut_short_by_a_restart_are_marked_interrupted() {
             direct_kwant_id: Some(kid.clone()),
             thread_id: None,
             started_at: chrono::Utc::now(),
+            asks: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -363,4 +436,199 @@ async fn replies_cut_short_by_a_restart_are_marked_interrupted() {
     assert_eq!(meta["interrupted"], true);
     assert_eq!(meta["kwant_id"], kid.as_str());
     assert_eq!(meta["turn_id"], "turn-1");
+
+    // 0.9.5: and one ask in Needs you, pointing at that notice (its Retry resends the message)
+    let (s, away) = call(&env.app, "GET", "/api/away", None).await;
+    assert_eq!(s, StatusCode::OK, "{away}");
+    let stopped: Vec<&Value> = away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").collect();
+    assert_eq!(stopped.len(), 1, "{away}");
+    assert_eq!(stopped[0]["message_id"], marked[0]["id"]);
+    assert_eq!(stopped[0]["kwant_id"], kid.as_str());
+    assert_eq!(stopped[0]["retry"], Value::Null, "the chat's own Retry resumes it");
+    assert_eq!(
+        stopped[0]["title"].as_str().map(|t| t.starts_with("Ivy's reply was cut off when kwant restarted.")),
+        Some(true),
+        "{away}"
+    );
+    let (_, waiting) = call(&env.app, "GET", "/api/waiting", None).await;
+    assert!(waiting.to_string().contains("\"stopped\""), "{waiting}");
+
+    // A turn that said it asks nothing (a hand-off, a routine run) gets no item
+    env.state
+        .db
+        .add_running_turn(&RunningTurn {
+            turn_id: "turn-2".into(),
+            kwant_id: kid.clone(),
+            kwant_name: "Ivy".into(),
+            channel_id: Some("some-channel".into()),
+            direct_kwant_id: None,
+            thread_id: None,
+            started_at: chrono::Utc::now(),
+            asks: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(routes::interrupt_running_turns(&env.state).await, 1);
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    assert_eq!(away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").count(), 1, "{away}");
+
+    // The person writes in that chat (or presses Retry, which sends): the ask closes
+    env.state.db.close_waiting_in_chat(None, Some(&kid), None).await.unwrap();
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    assert!(!away["waiting"].as_array().unwrap().iter().any(|i| i["kind"] == "stopped"), "{away}");
+}
+
+/// The steps a running turn recorded, as `server::restart_resume::Step` JSON.
+fn steps_json(cut_off: &str, read_only: bool) -> String {
+    json!([
+        {"id": "s1", "name": "Read", "args": "{\"file_path\":\"notes.md\"}", "read_only": true, "done": true},
+        {"id": "s2", "name": cut_off, "args": "{\"text\":\"We launched\"}", "read_only": read_only, "done": false},
+    ])
+    .to_string()
+}
+
+fn cut_off_turn(turn_id: &str, kid: &str, steps: String, resumed: bool) -> RunningTurn {
+    RunningTurn {
+        turn_id: turn_id.into(),
+        kwant_id: kid.into(),
+        kwant_name: "Clio".into(),
+        direct_kwant_id: Some(kid.into()),
+        started_at: chrono::Utc::now(),
+        asks: Some(true),
+        prompt: Some("post the launch note".into()),
+        steps: Some(steps),
+        resumed: Some(resumed),
+        ..Default::default()
+    }
+}
+
+async fn wait_turn_end(rx: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>, kid: &str) -> Vec<RuntimeEvent> {
+    let mut events = Vec::new();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while let Ok(e) = rx.recv().await {
+            let end = matches!(&e, RuntimeEvent::TurnEnded { kwant_id: k, .. } if k == kid);
+            events.push(e.unscoped().clone());
+            if end {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the continued turn did not end: {events:?}"));
+    events
+}
+
+/// 0.9.5: kwnt restarted while a reply was in the middle of a step that could change something
+/// locally (a shell command). The reply continues by itself, once, and the bot is told that step was cut off
+/// mid-call and to check whether it took effect before running it again. A second restart of
+/// that continuation asks the person instead of continuing again.
+#[tokio::test]
+async fn a_reply_cut_off_mid_step_by_a_restart_continues_by_itself_once() {
+    let env = setup().await;
+    let kid = env.claude_bot().await;
+    env.state.db.add_running_turn(&cut_off_turn("turn-mid", &kid, steps_json("Bash", false), false)).await.unwrap();
+    let mut rx = env.state.event_sender.subscribe();
+    assert_eq!(routes::interrupt_running_turns(&env.state).await, 1);
+
+    // The chat says it continues, naming the step; nobody is asked
+    let (_, msgs) = call(&env.app, "GET", &format!("/api/channels/{kid}/messages"), None).await;
+    let notes: Vec<&Value> = msgs.as_array().unwrap().iter().filter(|m| m["sender_role"] == "system").collect();
+    assert_eq!(notes.len(), 1, "{msgs}");
+    let text = notes[0]["text"].as_str().unwrap();
+    assert!(text.contains("in the middle of `Bash`") && text.contains("continuing it now"), "{text}");
+    assert!(!text.contains("Send your message again"), "{text}");
+    let meta: Value = serde_json::from_str(notes[0]["meta"].as_str().unwrap()).unwrap();
+    assert_eq!(meta["kind"], "turn_resumed_after_restart");
+    assert_eq!(meta["cut_off_step"], "Bash");
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    assert!(!away["waiting"].as_array().unwrap().iter().any(|i| i["kind"] == "stopped"), "{away}");
+
+    // The scheduler's next tick runs it, and the bot is told to check before running it again
+    assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 1);
+    let events = wait_turn_end(&mut rx, &kid).await;
+    // The ended turn's own running record is removed in the background after TurnEnded; clear it
+    // now so the next "restart" sees only the record this test adds
+    let _ = env.state.db.take_running_turns().await;
+    assert!(shown(&events).contains("RESUMED: checked first"), "{}", shown(&events));
+    assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 0, "once");
+
+    // kwnt restarts again during that continuation: this time the person is asked
+    env.state.db.add_running_turn(&cut_off_turn("turn-mid-2", &kid, steps_json("Bash", false), true)).await.unwrap();
+    assert_eq!(routes::interrupt_running_turns(&env.state).await, 1);
+    assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 0, "not continued twice");
+    let (_, msgs) = call(&env.app, "GET", &format!("/api/channels/{kid}/messages"), None).await;
+    assert!(msgs.to_string().contains("This reply from Clio was interrupted by a restart. Send your message again to retry."), "{msgs}");
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    assert_eq!(away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").count(), 1, "{away}");
+}
+
+/// 0.9.5 (deer-flow row): kwnt restarted in the middle of a step that reaches outside (a Slack
+/// send). It may already have gone out, so nothing runs it again by itself: the reply isn't
+/// continued, the chat says what stopped and why with no Retry (that would resend the whole
+/// request), and Needs you has one item whose action is telling the bot in the chat.
+#[tokio::test]
+async fn a_reply_cut_off_mid_send_by_a_restart_asks_the_person_instead_of_continuing() {
+    let env = setup().await;
+    let kid = env.claude_bot().await;
+    env.state.db.add_running_turn(&cut_off_turn("turn-send", &kid, steps_json("mcp__slack__send_message", false), false)).await.unwrap();
+    assert_eq!(routes::interrupt_running_turns(&env.state).await, 1);
+    assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 0, "never continued by itself");
+
+    let (_, msgs) = call(&env.app, "GET", &format!("/api/channels/{kid}/messages"), None).await;
+    let notes: Vec<&Value> = msgs.as_array().unwrap().iter().filter(|m| m["sender_role"] == "system").collect();
+    assert_eq!(notes.len(), 1, "{msgs}");
+    let text = notes[0]["text"].as_str().unwrap();
+    assert!(text.contains("in the middle of `mcp__slack__send_message`, which may already have gone out"), "{text}");
+    assert!(text.contains("kwant won't run it again by itself"), "{text}");
+    assert!(text.ends_with("tell Clio in the chat whether to do it again."), "{text}");
+    assert!(!text.contains("Send your message again"), "no blind resend is offered: {text}");
+    let meta: Value = serde_json::from_str(notes[0]["meta"].as_str().unwrap()).unwrap();
+    assert_eq!(meta["kind"], "turn_interrupted");
+    assert_eq!(meta["outward_step"], "mcp__slack__send_message", "the chat hides Retry on it");
+
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    let items: Vec<&Value> = away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").collect();
+    assert_eq!(items.len(), 1, "{away}");
+    assert_eq!(items[0]["message_id"], notes[0]["id"]);
+    assert_eq!(items[0]["retry"], Value::Null, "its action opens the chat");
+    assert!(items[0]["title"].as_str().unwrap().ends_with("whether to do it again."), "{away}");
+
+    // The person answers in the chat: the bot runs with that, and the ask is gone
+    let events = env.turn_with(&kid, "it didn't go out, send it", Duration::from_secs(30)).await;
+    assert!(shown(&events).contains("answer ok"), "{}", shown(&events));
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    assert!(!away["waiting"].as_array().unwrap().iter().any(|i| i["kind"] == "stopped"), "{away}");
+}
+
+/// 0.9.5: a step that only reads, cut off by a restart, is simply run again; a reply whose card
+/// still waits on the person isn't continued (answering the card resumes the work).
+#[tokio::test]
+async fn a_read_cut_off_by_a_restart_runs_again_and_a_waiting_card_is_left_to_the_person() {
+    let env = setup().await;
+    let kid = env.claude_bot().await;
+    env.state.db.add_running_turn(&cut_off_turn("turn-read", &kid, steps_json("mcp__browser__agent_browser_snapshot", true), false)).await.unwrap();
+    let mut rx = env.state.event_sender.subscribe();
+    assert_eq!(routes::interrupt_running_turns(&env.state).await, 1);
+    assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 1);
+    let events = wait_turn_end(&mut rx, &kid).await;
+    // The ended turn's own running record is removed in the background after TurnEnded; clear it
+    // now so the next "restart" sees only the record this test adds
+    let _ = env.state.db.take_running_turns().await;
+    assert!(shown(&events).contains("RESUMED: read again"), "{}", shown(&events));
+
+    // A card of the cut-off turn is still waiting: not continued, the old notice and ask stand
+    let card = env
+        .state
+        .db
+        .save_approval(&kwnt::db::models::NewApproval { turn_id: "turn-card".into(), kwant_id: kid.clone(), tool_name: "Bash".into(), parameters: json!({}) })
+        .await
+        .unwrap();
+    env.state.db.add_running_turn(&cut_off_turn("turn-card", &kid, steps_json("Bash", false), false)).await.unwrap();
+    assert_eq!(kwnt::server::mcp_runtime::keep_cards_after_restart(&env.state).await, 1);
+    assert_eq!(env.state.db.get_approval(&card.id).await.unwrap().unwrap().status, "waiting");
+    assert_eq!(routes::interrupt_running_turns(&env.state).await, 1);
+    assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 0, "the card's Allow resumes it");
+    let (_, msgs) = call(&env.app, "GET", &format!("/api/channels/{kid}/messages"), None).await;
+    assert!(msgs.to_string().contains("interrupted by a restart"), "{msgs}");
 }

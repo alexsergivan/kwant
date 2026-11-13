@@ -222,6 +222,24 @@ impl Board {
         self.nudged.insert(kwant_id.to_string());
     }
 
+    /// 0.9.5 (no silent stops): the person writing to `kwant_id` in the chat where it gave up after
+    /// a stall is that stop's Retry (the notice's Retry button resends their message; the notice
+    /// says "Send your message again to retry"). It ends the gave-up Stuck like "Try again" does,
+    /// so the one press runs it now instead of holding it until "Try again" is pressed as well.
+    /// True when it ended one. The gave-up mark is a status hold, not a safety guard: failure
+    /// streaks, budget and spending stops live elsewhere and keep their own one resume button.
+    pub fn person_retries_in(&mut self, kwant_id: &str, context_id: &str) -> bool {
+        let Some(m) = self.marks.get_mut(kwant_id) else {
+            return false;
+        };
+        if !m.gave_up.as_ref().is_some_and(|g| g.context_id == context_id || g.thread_id.as_deref() == Some(context_id)) {
+            return false;
+        }
+        m.gave_up = None;
+        self.nudge(kwant_id);
+        true
+    }
+
     pub fn take_nudged(&mut self) -> HashSet<String> {
         std::mem::take(&mut self.nudged)
     }
@@ -788,6 +806,22 @@ pub async fn status_of(state: &AppState, kwant_id: &str) -> Option<Status> {
 /// stuck or waits on the person elsewhere; the `held` object the response carries, or `None`
 /// to send it now. Run its turn after [`wait_released`].
 pub async fn hold(state: &AppState, kwant: &crate::db::models::Kwant, context_id: &str, kind: &'static str, item_id: &str) -> Option<Value> {
+    hold_from(state, kwant, context_id, kind, item_id, false).await
+}
+
+/// [`hold`] for a send that may be the person's own: their message in the chat where the bot gave
+/// up after a stall is its Retry and goes now ([`Board::person_retries_in`]).
+pub async fn hold_from(
+    state: &AppState,
+    kwant: &crate::db::models::Kwant,
+    context_id: &str,
+    kind: &'static str,
+    item_id: &str,
+    from_person: bool,
+) -> Option<Value> {
+    if from_person && kind == "message" && state.turns.board(|b| b.person_retries_in(&kwant.id, context_id)) {
+        tracing::info!(kwant = %kwant.id, "the person retried in the chat where the bot stalled: it runs now");
+    }
     let input = inputs(state, &SpaceId::new(&kwant.space_id), std::slice::from_ref(&kwant.id)).await.pop()?;
     let r = hold_reason(&input, context_id, Utc::now())?;
     state.turns.board(|b| {
@@ -1324,6 +1358,29 @@ mod tests {
         b.marks.gave_up = Some(GaveUp { at: at(0), tries: 2, secs: 120, turn_id: "t1".into(), context_id: "c1".into(), thread_id: None });
         assert_eq!(hold_reason(&b, "c1", at(5)).unwrap().reason_code, "stuck", "gave up, even in its own chat");
         assert!(hold_reason(&b, "c1", at(30)).is_none(), "the gave-up window ended");
+    }
+
+    /// 0.9.5: after a stall gave up, the person's Retry in that chat (their message sent again)
+    /// resumes it in one press; anywhere else, or a second time, it changes nothing.
+    #[test]
+    fn the_persons_retry_in_the_stalled_chat_ends_the_gave_up_hold() {
+        let gave_up = |thread: Option<&str>| GaveUp { at: at(0), tries: 2, secs: 120, turn_id: "t1".into(), context_id: "c1".into(), thread_id: thread.map(str::to_string) };
+        let mut board = Board::default();
+        board.marks.entry("k1".into()).or_default().gave_up = Some(gave_up(None));
+        assert!(!board.person_retries_in("k1", "c2"), "another chat isn't this stop's Retry");
+        assert!(!board.person_retries_in("k2", "c1"), "nor another bot");
+        assert!(board.marks["k1"].gave_up.is_some());
+        assert!(board.take_nudged().is_empty());
+        assert!(board.person_retries_in("k1", "c1"));
+        assert!(board.marks["k1"].gave_up.is_none());
+        assert!(board.take_nudged().contains("k1"), "the status is pushed again");
+        let mut b = bot(Vec::new());
+        b.marks = board.marks["k1"].clone();
+        assert!(hold_reason(&b, "c1", at(1)).is_none(), "so the resent message isn't held");
+        assert!(!board.person_retries_in("k1", "c1"), "nothing left to end");
+        // A thread's stop: its thread id is the chat
+        board.marks.entry("k1".into()).or_default().gave_up = Some(gave_up(Some("th1")));
+        assert!(board.person_retries_in("k1", "th1"));
     }
 
     #[test]

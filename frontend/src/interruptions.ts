@@ -1,16 +1,32 @@
 // Replies that ended without an answer: cut off by a restart (system note with
-// `turn_interrupted` meta) or stopped by the stall watchdog (the bot's own message with
-// `turn_stalled` meta). Both get a notice with Retry, which resends the person's message.
+// `turn_interrupted` meta), stopped by the stall watchdog (the bot's own message with
+// `turn_stalled` meta) or failed (the bot's own message with `turn_failed` meta, 0.9.5). Each gets
+// a notice with Retry, which resends the person's message.
 import type { ChatMessage } from './components/ChatView';
 import { AttachmentRef, parseAttachments } from './attachments';
 import { parseMetaObject } from './questions';
 import { isIsolationNotice } from './isolationNotice';
 
 export interface Interruption {
-  kind: 'restart' | 'stall';
+  kind: 'restart' | 'stall' | 'failed';
   botName: string;
   /** Seconds of silence before the watchdog stopped the reply (stall only). */
   secs?: number;
+  /** What went wrong, in the saved message's own words without its "⚠️ [Bot]" tag (failed, and a restart mid outward step). */
+  detail?: string;
+  /**
+   * 0.9.5: the restart cut off a step that reaches outside (a send, a post, a push, a payment). It may
+   * already have gone out, so there's no Retry (that resends the whole request): the notice asks the
+   * person to tell the bot in the chat whether to do it again.
+   */
+  outwardStep?: string;
+}
+
+/** A failed reply's text without its leading "⚠️ [Bot] " tag. */
+export function failedDetail(text: string, botName: string): string {
+  const t = text.trim().replace(/^⚠️\s*/u, '');
+  const tag = `[${botName}] `;
+  return (t.startsWith(tag) ? t.slice(tag.length) : t.replace(/^\[[^\]\n]{1,80}\] /, '')).trim();
 }
 
 // Rows saved before the watchdog tagged its message with `turn_stalled` meta carry only this text.
@@ -21,6 +37,9 @@ export function parseInterruption(msg: ChatMessage): Interruption | null {
     const m = parseMetaObject(msg.meta);
     if (m?.kind !== 'turn_interrupted' || m.interrupted !== true) return null;
     const name = typeof m.kwant_name === 'string' && m.kwant_name.trim() ? m.kwant_name : 'The bot';
+    if (typeof m.outward_step === 'string' && m.outward_step) {
+      return { kind: 'restart', botName: name, outwardStep: m.outward_step, detail: msg.text.trim() || undefined };
+    }
     return { kind: 'restart', botName: name };
   }
   if (msg.sender_role === 'kwant') {
@@ -31,6 +50,12 @@ export function parseInterruption(msg: ChatMessage): Interruption | null {
       const secs = typeof m.stall_secs === 'number' && m.stall_secs > 0 ? m.stall_secs : undefined;
       return { kind: 'stall', botName: name, secs };
     }
+    // 0.9.5: a reply that failed (a driver error, the model gave up): Retry like the others
+    if (m?.kind === 'turn_failed') {
+      const name = typeof m.kwant_name === 'string' && m.kwant_name.trim() ? m.kwant_name : msg.sender_id || 'The bot';
+      const detail = failedDetail(msg.text, name);
+      return { kind: 'failed', botName: name, detail: detail || undefined };
+    }
     const s = STALL_RE.exec(msg.text.trim());
     if (s) return { kind: 'stall', botName: s[1], secs: Number(s[2]) };
   }
@@ -38,6 +63,8 @@ export function parseInterruption(msg: ChatMessage): Interruption | null {
 }
 
 export function interruptionText(i: Interruption): string {
+  if (i.kind === 'failed') return i.detail || `${i.botName} couldn't finish this reply.`;
+  if (i.outwardStep) return i.detail || `${i.botName}'s reply was cut off when the app restarted, in the middle of a step that may already have gone out. Tell ${i.botName} in the chat whether to do it again.`;
   return i.kind === 'restart'
     ? `${i.botName}'s reply was cut off when the app restarted.`
     : i.secs
@@ -60,7 +87,10 @@ export function retryTargets(messages: ChatMessage[]): Map<string, RetryTarget> 
     const msg = messages[i];
     if (msg.sender_role === 'user') return out;
     // Isolation refusals and the request limit end a reply too (agents-in-vm notices 1–7).
-    if (!parseInterruption(msg) && !isIsolationNotice(msg)) continue;
+    const parsed = parseInterruption(msg);
+    if (!parsed && !isIsolationNotice(msg)) continue;
+    // A step that may already have gone out is never resent blindly: no Retry (0.9.5)
+    if (parsed?.outwardStep) return out;
     for (let j = i - 1; j >= 0; j--) {
       const prev = messages[j];
       if (prev.sender_role !== 'user') continue;
@@ -98,6 +128,21 @@ export async function runRetryOnce(
     setState('idle');
     return false;
   }
+}
+
+/** 0.9.5: an approval card that expired unanswered, so its step didn't run; Retry asks again. */
+export interface ExpiredApproval {
+  approvalId: string;
+  botName: string;
+  toolName: string | null;
+}
+
+export function parseExpiredApproval(msg: ChatMessage): ExpiredApproval | null {
+  if (msg.sender_role !== 'system') return null;
+  const m = parseMetaObject(msg.meta);
+  if (m?.kind !== 'approval_expired' || typeof m.approval_id !== 'string' || !m.approval_id) return null;
+  const name = typeof m.kwant_name === 'string' && m.kwant_name.trim() ? m.kwant_name : 'The bot';
+  return { approvalId: m.approval_id, botName: name, toolName: typeof m.tool_name === 'string' ? m.tool_name : null };
 }
 
 /** kwnt's own notes (sender "system"): drawn as a notice line, never as a bot's reply. */

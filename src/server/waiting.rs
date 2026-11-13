@@ -49,6 +49,8 @@ fn last_line(text: &str) -> &str {
 /// delegation) a reply that ends by asking the person something without handing on to a teammate.
 pub(super) async fn turn_ended(scope: &TurnScope, kwant: &Kwant, turn_id: &str, reply: &str) {
     let state = &scope.state;
+    // A reply finished here: what stopped in this chat before has moved on (0.9.5)
+    super::stopped::recovered(state, &super::stopped::Place::of_turn(scope, &kwant.id)).await;
     let hours = follow_up_hours(state).await;
     let due_at = (hours > 0).then(|| Utc::now() + Duration::hours(hours));
     let open = state.db.list_questions(Some("open"), None, None).await.unwrap_or_default();
@@ -196,8 +198,15 @@ pub async fn list(State(state): State<AppState>, super::spaces::Scope(space): su
             }
             seen.insert(q.clone());
         }
+        let kind = match (&w.question_id, w.kind.as_deref()) {
+            (Some(_), _) => "question",
+            (None, Some(crate::db::waiting::STOPPED)) => "stopped",
+            _ => "reply",
+        };
         items.push((w.created_at, json!({
-            "kind": if w.question_id.is_some() { "question" } else { "reply" },
+            "kind": kind,
+            "id": w.id,
+            "retry": w.retry.as_deref().and_then(|r| serde_json::from_str::<Value>(r).ok()),
             "kwant_id": w.kwant_id,
             "kwant_name": name(&w.kwant_id),
             "channel_id": w.channel_id,

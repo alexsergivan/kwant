@@ -268,34 +268,72 @@ impl Database {
         Ok(done.rows_affected())
     }
 
+    /// Whether a card of that turn is still `waiting` for an answer (its Allow resumes the work).
+    pub async fn turn_has_waiting_approval(&self, turn_id: &str) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM approvals WHERE turn_id = ?1 AND status = 'waiting'")
+            .bind(turn_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n > 0)
+    }
+
     /// Answers a `waiting` card once: sets `status` and returns the ticket with its chat. `None`
-    /// when it isn't waiting (answered, or never parked) or is older than [`WAITING_APPROVAL_HOURS`],
-    /// which is then marked `expired`. Two answers at once: only one gets the ticket.
+    /// when it isn't waiting (answered, or never parked) or is older than [`WAITING_APPROVAL_HOURS`]
+    /// (it stays `waiting` until [`Self::expire_waiting_approvals`] marks it `expired` and the
+    /// person is told). Two answers at once: only one gets the ticket.
     pub async fn claim_waiting_approval(
         &self,
         id: &str,
         status: &str,
     ) -> Result<Option<(super::models::Approval, serde_json::Value)>, DbError> {
         let window = format!("-{WAITING_APPROVAL_HOURS} hours");
-        sqlx::query("UPDATE approvals SET status = 'expired' WHERE id = ? AND status = 'waiting' AND created_at <= datetime('now', ?)")
-            .bind(id)
-            .bind(&window)
-            .execute(&self.pool)
-            .await?;
-        let done = sqlx::query("UPDATE approvals SET status = ? WHERE id = ? AND status = 'waiting'")
+        let done = sqlx::query("UPDATE approvals SET status = ? WHERE id = ? AND status = 'waiting' AND created_at > datetime('now', ?)")
             .bind(status)
             .bind(id)
+            .bind(&window)
             .execute(&self.pool)
             .await?;
         if done.rows_affected() != 1 {
             return Ok(None);
         }
+        let chat = self.resume_of(id).await?;
+        Ok(self.get_approval(id).await?.map(|a| (a, chat)))
+    }
+
+    async fn resume_of(&self, id: &str) -> Result<serde_json::Value, DbError> {
         let resume: Option<(Option<String>,)> =
             sqlx::query_as("SELECT resume FROM approvals WHERE id = ?").bind(id).fetch_optional(&self.pool).await?;
-        let chat = resume
-            .and_then(|r| r.0)
-            .and_then(|r| serde_json::from_str(&r).ok())
-            .unwrap_or(serde_json::Value::Null);
+        Ok(resume.and_then(|r| r.0).and_then(|r| serde_json::from_str(&r).ok()).unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Cards that waited [`WAITING_APPROVAL_HOURS`] without an answer become `expired`, each once
+    /// (whoever else sweeps), returned with the chat they were in so the person can be told.
+    pub async fn expire_waiting_approvals(&self) -> Result<Vec<(super::models::Approval, serde_json::Value)>, DbError> {
+        let window = format!("-{WAITING_APPROVAL_HOURS} hours");
+        let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM approvals WHERE status = 'waiting' AND created_at <= datetime('now', ?) ORDER BY created_at")
+            .bind(&window)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::new();
+        for (id,) in ids {
+            let done = sqlx::query("UPDATE approvals SET status = 'expired' WHERE id = ? AND status = 'waiting'").bind(&id).execute(&self.pool).await?;
+            if done.rows_affected() == 1 {
+                if let Some(a) = self.get_approval(&id).await? {
+                    out.push((a, self.resume_of(&id).await?));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The person pressed Retry on an expired card: `expired` → `retried`, once. Returns the
+    /// ticket with its chat; `None` when it isn't expired (already retried, or never expired).
+    pub async fn claim_expired_approval(&self, id: &str) -> Result<Option<(super::models::Approval, serde_json::Value)>, DbError> {
+        let done = sqlx::query("UPDATE approvals SET status = 'retried' WHERE id = ? AND status = 'expired'").bind(id).execute(&self.pool).await?;
+        if done.rows_affected() != 1 {
+            return Ok(None);
+        }
+        let chat = self.resume_of(id).await?;
         Ok(self.get_approval(id).await?.map(|a| (a, chat)))
     }
 

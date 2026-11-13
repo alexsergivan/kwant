@@ -244,11 +244,11 @@ pub async fn transition(
     if matches!(from, "working" | "needs_you") && !matches!(to, "working" | "needs_you") {
         checkpoints::after_run(state, &task).await;
     }
-    after_move(state, &task, to).await;
+    after_move(state, &task, to, actor).await;
     Ok(task)
 }
 
-async fn after_move(state: &AppState, task: &Task, to: &str) {
+async fn after_move(state: &AppState, task: &Task, to: &str, actor: Actor) {
     // The Performance Market observes a settled task in the background (report-only, D1)
     if crate::db::performance::result_of(to).is_some() {
         performance::record_soon(state, &task.id);
@@ -267,8 +267,11 @@ async fn after_move(state: &AppState, task: &Task, to: &str) {
     autofix::settle(state, task, to).await;
     // A task parked for AutoFix isn't done failing: no "failed" line until it is
     let to = if to == "failed" && autofix::parked(state, task).await { "parked" } else { to };
+    // 0.9.5: a task kwnt stopped (budget, failure streak) says so in its chat, not only on the
+    // board; one the person blocked needs no telling
+    let to = if to == "blocked" && matches!(actor, Actor::Person) { "blocked_by_person" } else { to };
     let Some(mid) = task.mission_id.clone() else {
-        if matches!(to, "verified" | "failed") {
+        if matches!(to, "verified" | "failed" | "blocked") {
             task_chat_line(state, task, None).await;
         }
         if to == "verified" {
@@ -279,7 +282,7 @@ async fn after_move(state: &AppState, task: &Task, to: &str) {
         return;
     };
     let mission = state.db.get_mission(&mid).await.ok().flatten();
-    if matches!(to, "verified" | "failed") {
+    if matches!(to, "verified" | "failed" | "blocked") {
         task_chat_line(state, task, mission.as_ref()).await;
     }
     if to == "verified" || to == "cancelled" {
@@ -834,10 +837,19 @@ pub async fn mission_chat_line(state: &AppState, m: &Mission, text: String) {
     post_line(state, m.channel_id.clone(), m.direct_kwant_id.clone(), m.thread_id.clone(), &m.lead_kwant_id, text, meta).await;
 }
 
+/// The chat line for a task kwnt stopped: what, why, and what carries it on.
+pub fn blocked_line(title: &str, reason: Option<&str>) -> String {
+    match reason.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => format!("Blocked: \"{title}\" stopped ({r}). Move it back to the backlog on the board to carry on."),
+        None => format!("Blocked: \"{title}\" stopped. Move it back to the backlog on the board to carry on."),
+    }
+}
+
 async fn task_chat_line(state: &AppState, t: &Task, m: Option<&Mission>) {
     let text = match t.state.as_str() {
         "verified" => format!("Verified: \"{}\" passed its checks.", t.title),
         "failed" => format!("Failed: \"{}\" didn't pass its checks after {} attempts. Retry it on the board.", t.title, t.attempts),
+        "blocked" => blocked_line(&t.title, t.blocked_reason.as_deref()),
         _ => return,
     };
     let meta = json!({"kind": "mission", "task_id": t.id, "mission_id": t.mission_id, "state": t.state});
@@ -1223,6 +1235,16 @@ mod tests {
         assert!(http(json!({"waiting_status": 42})).is_err());
         assert!(http(json!({"waiting_contains": ""})).is_err());
         assert!(http(json!({"recheck_mins": 0})).is_err());
+    }
+
+    #[test]
+    fn a_blocked_task_says_what_stopped_and_how_to_carry_on() {
+        assert_eq!(
+            blocked_line("Ship the page", Some("the build failed")),
+            "Blocked: \"Ship the page\" stopped (the build failed). Move it back to the backlog on the board to carry on."
+        );
+        assert_eq!(blocked_line("T", Some("  ")), blocked_line("T", None));
+        assert!(blocked_line("T", None).ends_with("Move it back to the backlog on the board to carry on."));
     }
 
     #[test]

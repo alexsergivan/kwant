@@ -404,6 +404,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // person's; the status stays readable
         ["", "api", "app", "update", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
+        // Retry on a card that expired unanswered asks the person again: theirs to press (0.9.5)
+        ["", "api", "approvals", _, "retry"] => *method == Method::POST,
         // Dev mode (0.7): the watched repo, its cards, Fix it and Dismiss, release notes and the
         // backup command are the person's; bots never read the desk either (D3)
         ["", "api", "spaces", _, "dev_mode" | "dev", ..] => true,
@@ -1086,6 +1088,7 @@ mod tests {
         assert!(person_only(&post, "/api/documents"));
         assert!(person_only(&get, "/api/documents/d1"));
         assert!(person_only(&post, "/api/approvals/a1/resolve"));
+        assert!(person_only(&post, "/api/approvals/a1/retry"));
         assert!(person_only(&put, "/api/spaces/s1/approvals"));
         assert!(person_only(&put, "/api/kwants/k1/approvals"));
         assert!(!person_only(&get, "/api/kwants/k1/approvals"));
