@@ -92,13 +92,53 @@ test('out: an empty amber-tinted track; reset passed: "reset at", no %; stale: d
   done();
 });
 
-test('no numbers yet: Claude says when they come, Codex shows nothing', async () => {
+test('no numbers yet: Claude says when they come; a Codex sign-in gets the block and Check now', async () => {
   const { host, done } = await mount([acct({ usage: null }), acct({ id: 'prf_c', engine: 'codex', name: 'Codex', usage: null }), acct({ id: 'prf_out', name: 'Signed out', signed_in: false })]);
   assert.equal(rowOf(host, 'prf_w').querySelector('[data-usage]').textContent, 'Usage· shows after its next reply');
   assert.equal(rowOf(host, 'prf_w').querySelectorAll('[role="meter"]').length, 0);
-  assert.equal(rowOf(host, 'prf_c').querySelector('[data-usage]'), null);
+  assert.equal(rowOf(host, 'prf_w').querySelector('[data-usage-check]').title, 'Check now. This uses a tiny bit of this account.');
+  // Codex numbers come only from Check now (PR #604: its turns report none), so the button must be there.
+  const codex = rowOf(host, 'prf_c');
+  assert.equal(codex.querySelector('[data-usage-note]').textContent, '· press Check now');
+  assert.equal(codex.querySelectorAll('[role="meter"]').length, 0);
+  const btn = codex.querySelector('[data-usage-check]');
+  assert.ok(btn, 'Codex sign-in with no numbers has a Check now button');
+  assert.equal(btn.disabled, false);
+  assert.equal(btn.title, 'Check now', 'no "uses a tiny bit" for Codex: its read makes no model call');
   assert.equal(rowOf(host, 'prf_out').querySelector('[data-usage]'), null);
   done();
+  // A Codex row that can't check (turned off) still shows nothing.
+  const off = await mount([acct({ id: 'prf_c', engine: 'codex', name: 'Codex', usage: null, enabled: false })]);
+  assert.equal(rowOf(off.host, 'prf_c').querySelector('[data-usage]'), null);
+  off.done();
+});
+
+test('a failed check shows the server reason; a 429 or no reason keeps the generic line', async () => {
+  calls.length = 0;
+  reply = async () => new Response('{"error":"Codex is signed out"}', { status: 502, headers: { 'Content-Type': 'application/json' } });
+  const a = await mount([acct({ id: 'prf_c', engine: 'codex', name: 'Codex', usage: null })]);
+  a.host.querySelector('[data-usage-check]').click();
+  await settle(10);
+  assert.deepEqual(calls, ['POST /api/profiles/prf_c/usage']);
+  const note = a.host.querySelector('[data-usage-note]');
+  assert.equal(note.textContent, '· Codex is signed out');
+  assert.match(note.className, /text-rose-300/);
+  a.done();
+
+  reply = async () => new Response('{"error":"Wait a minute before checking again."}', { status: 429, headers: { 'Retry-After': '60', 'Content-Type': 'application/json' } });
+  const b = await mount([acct({ usage: null })]);
+  b.host.querySelector('[data-usage-check]').click();
+  await settle(10);
+  assert.equal(b.host.querySelector('[data-usage-note]').textContent, '· couldn’t check, try again in a minute');
+  b.done();
+
+  reply = async () => new Response('', { status: 502 });
+  const c = await mount([acct({ usage: null })]);
+  c.host.querySelector('[data-usage-check]').click();
+  await settle(10);
+  assert.equal(c.host.querySelector('[data-usage-note]').textContent, '· couldn’t check, try again in a minute');
+  c.done();
+  reply = null;
 });
 
 test('Check now posts once, shows checking…, then the new numbers; a failure keeps the old bars', async () => {
@@ -125,7 +165,7 @@ test('Check now posts once, shows checking…, then the new numbers; a failure k
   assert.equal(host.querySelector('[data-usage-check]').title, 'You can check again in a minute');
   done();
 
-  reply = async () => new Response('{"error":"boom"}', { status: 502 });
+  reply = async () => new Response('', { status: 502 });
   const second = await mount([acct({ usage: usage(7, 56, 5) })]);
   second.host.querySelector('[data-usage-check]').click();
   await settle(10);

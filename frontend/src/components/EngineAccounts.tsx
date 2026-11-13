@@ -140,19 +140,33 @@ const UsageMeter: React.FC<{ row: UsageRow }> = ({ row: r }) => {
   );
 };
 
+/** What a failed Check now says: the server's own reason (PR #604 sends plain words, e.g. "Codex is signed out"),
+ *  or '' for the generic "couldn't check" line when there is none, or on a 429 (pressed again within the minute). */
+export function usageCheckError(e: unknown): string {
+  const err = e as { message?: unknown; status?: unknown } | null;
+  // Only an HTTP answer carries a reason meant for people; a dropped connection's TypeError does not.
+  if (!err || typeof err.status !== 'number' || err.status === 429) return '';
+  const msg = typeof err.message === 'string' ? err.message.trim() : '';
+  if (!msg || msg.startsWith('Request failed')) return '';
+  return msg.replace(/[.\s]+$/, '');
+}
+
 /**
  * A Claude or Codex sign-in's 5-hour and weekly limits (autonomy/account-usage/design.md): when they were read, a
- * thin bar each, and Check now (POST /api/profiles/:id/usage, one tiny model call, so only when pressed). Nothing for
- * API keys or Custom API, and nothing for a Codex account with no numbers (codex may never report them).
+ * thin bar each, and Check now (POST /api/profiles/:id/usage, only when pressed). Claude's check is one tiny model
+ * call; Codex's reads `codex app-server` and is the only way Codex numbers arrive (its turns report none, PR #604), so
+ * a Codex sign-in with no numbers still gets the block and its button. Nothing for API keys or Custom API.
  */
 export const AccountUsageBars: React.FC<{ profile: Profile; canCheck: boolean; dim?: boolean; onChanged: () => Promise<void> }> = ({ profile: p, canCheck, dim, onChanged }) => {
   const clock = useClock();
   const [fresh, setFresh] = useState<AccountUsage | null>(null);
   const [checking, setChecking] = useState(false);
-  const [failed, setFailed] = useState(false);
+  // A failed check: the server's reason (plain words, PR #604's 502), or '' for the generic line.
+  const [failed, setFailed] = useState<string | null>(null);
   if (!hasUsageLimits(p)) return null;
   const usage = newerUsage(p.usage, fresh);
-  if (!usage && !(p.engine === 'claude' && canCheck)) return null;
+  if (!usage && !canCheck) return null;
+  const codex = p.engine === 'codex';
   const now = Math.max(clock, Date.now());
   const rows = usageRows({ ...p, usage }, now);
   const stale = usageStale(usage, now);
@@ -161,24 +175,32 @@ export const AccountUsageBars: React.FC<{ profile: Profile; canCheck: boolean; d
     if (checking || wait) return;
     playSfx('click');
     setChecking(true);
-    setFailed(false);
+    setFailed(null);
     try {
       setFresh(await profilesApi.usage(p.id));
       await onChanged();
-    } catch {
-      setFailed(true);
+    } catch (e) {
+      setFailed(usageCheckError(e));
     } finally {
       setChecking(false);
     }
   };
-  const note = checking ? '· checking…' : failed ? '· couldn’t check, try again in a minute' : usage ? `· ${usageCheckedText(usage, now)}` : '· shows after its next reply';
+  const note = checking
+    ? '· checking…'
+    : failed !== null
+      ? `· ${failed || 'couldn’t check, try again in a minute'}`
+      : usage
+        ? `· ${usageCheckedText(usage, now)}`
+        : codex
+          ? '· press Check now'
+          : '· shows after its next reply';
   const btnProps = {
     type: 'button' as const,
     onClick: check,
     disabled: checking || wait,
     'aria-busy': checking || undefined,
     'aria-label': 'Check usage now',
-    title: wait ? 'You can check again in a minute' : 'Check now. This uses a tiny bit of this account.',
+    title: wait ? 'You can check again in a minute' : codex ? 'Check now' : 'Check now. This uses a tiny bit of this account.',
     'data-usage-check': true,
   };
   const spin = checking ? 'animate-spin motion-reduce:animate-none' : '';
@@ -186,7 +208,7 @@ export const AccountUsageBars: React.FC<{ profile: Profile; canCheck: boolean; d
     <div data-usage data-usage-stale={stale || undefined} className={`space-y-1.5 ${dim ? 'opacity-70' : ''}`}>
       <div className="flex items-center gap-1 min-h-6 text-[11px]">
         <span className="font-medium text-zinc-300">Usage</span>
-        <span role="status" data-usage-note className={failed && !checking ? 'text-rose-300' : 'text-zinc-500'}>
+        <span role="status" data-usage-note className={failed !== null && !checking ? 'text-rose-300' : 'text-zinc-500'}>
           {note}
         </span>
         {canCheck &&

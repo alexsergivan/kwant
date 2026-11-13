@@ -370,7 +370,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
       // no JSON body
     }
     if (res.status === 409 && message.startsWith('Request failed')) message = 'A profile with that name or folder already exists.';
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status: res.status });
   }
   if (res.status === 204) return undefined as T;
   return res.json();
