@@ -51,7 +51,7 @@ fn fake_cli() {
     DONE.get_or_init(|| {
         let bin = tempfile::tempdir().unwrap().keep().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        exe::write_executable(&bin.join("claude"), FAKE_CLAUDE);
+        exe::write_executable(bin.join("claude"), FAKE_CLAUDE);
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
         bin
     });
