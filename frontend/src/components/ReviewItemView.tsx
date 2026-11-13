@@ -394,7 +394,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   const lockAll = done || busy !== null;
   const changed = doneView ? doneView.changed : typeof item.changed === 'boolean' ? item.changed : null;
   const rollbackShown = rollbackFor(item, changed);
-  const showVerdict = !doneView || checking || v.result !== 'none';
+  const showVerdict = checking || v.result !== 'none' || (!doneView && !checkBox);
   // The done layout (0.9.5 F) leaves out what has nothing to say: a low risk chip, no criteria, no evidence.
   const showRisk = !!item.risk.level && !(doneView && item.risk.level === 'low');
   const showCriteria = !doneView || (item.criteria.length > 0 && !doneView.hideCriteria);

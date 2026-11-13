@@ -295,3 +295,30 @@ test('a plain to-review task in Done keeps the full review layout and gets the b
   if (verdict) assert.ok(boxEl.compareDocumentPosition(verdict) & Node.DOCUMENT_POSITION_FOLLOWING, 'box before the verdict');
   r.root.unmount();
 });
+
+test('full review layout with the box: no "Not checked yet" panel under it, a real verdict still follows it', async () => {
+  const data = withChecked('r-prices', cx.CHECKED_PARTLY);
+  const it = data.items.find((i) => i.id === 'r-prices');
+  it.title = 'Refresh the pricing page';
+  it.verdict = { ...it.verdict, result: 'none' };
+  const r = await mountInbox({}, data);
+  await click(r.q('[data-option="r-prices"]'));
+  assert.ok(r.q('[data-done-check="partly"]'), 'the box is drawn');
+  assert.equal(r.q('[data-done-answer]'), null, 'not the done layout');
+  assert.equal(r.q('[data-verdict]'), null, 'verdict none is not stacked under the box');
+  r.root.unmount();
+});
+
+test('full review layout with the box: a pass verdict still shows, after the box', async () => {
+  const data = withChecked('r-prices', cx.CHECKED_PARTLY);
+  const it = data.items.find((i) => i.id === 'r-prices');
+  it.title = 'Refresh the pricing page';
+  it.verdict = { ...it.verdict, result: 'pass' };
+  const r = await mountInbox({}, data);
+  await click(r.q('[data-option="r-prices"]'));
+  const boxEl = r.q('[data-done-check="partly"]');
+  const verdict = r.q('[data-verdict="pass"]');
+  assert.ok(boxEl && verdict, 'box and pass verdict both drawn');
+  assert.ok(boxEl.compareDocumentPosition(verdict) & Node.DOCUMENT_POSITION_FOLLOWING, 'box before the verdict');
+  r.root.unmount();
+});

@@ -112,7 +112,7 @@ export const DoneCheck: React.FC<{
           )}
         </>
       ) : (
-        <p className="ml-[26px] text-meta text-zinc-400" data-check-help>
+        <p className="ml-[26px] text-meta leading-6 text-zinc-400" data-check-help>
           {EMPTY_HELP}
           {onAddCheck && (
             <>
