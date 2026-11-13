@@ -6870,7 +6870,7 @@ pub async fn execute_tool(
             .map_err(crate::tools::ToolError::Execution)?;
         // What runs (and what the person approves) is the push pinned to the checked commit
         let command = pass.pinned.clone().unwrap_or_else(|| command.to_string());
-        if !super::computer::approve_local_shell(state, team_id.unwrap_or("default"), &command, &workspace).await {
+        if !super::computer::approve_local_shell_granted(state, team_id.unwrap_or("default"), &command, &workspace, pass.grant.as_ref()).await {
             return Err(crate::tools::ToolError::Execution(
                 "The person did not approve this command, so it was not run.".into(),
             ));

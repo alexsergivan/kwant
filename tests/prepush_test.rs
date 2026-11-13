@@ -10,7 +10,9 @@ mod common;
 
 use base64::Engine;
 use common::*;
-use kwnt::db::dev_prepush::{BLOCKED, CHECKING, CLEAR, OVERRIDDEN, PUSHED};
+use kwnt::db::dev_prepush::{BLOCKED, CHECKING, CLEAR, GRANT_MS, OVERRIDDEN, PREPUSH_FAILED, PUSHED, SUPERSEDED};
+use kwnt::mcp::{ApprovalOutcome, ToolApprovalRequest, ToolApprover};
+use kwnt::server::mcp_runtime::BrokerApprover;
 use kwnt::drivers::events::RuntimeEvent;
 use kwnt::server::dev::prepush;
 use serde_json::{json, Value};
@@ -558,9 +560,13 @@ async fn kwants_own_github_tools_go_through_the_pre_push_card() {
         smart: None,
         payment: None,
     };
-    let overrides = approver.prepush_gate(&req).await.expect("the override lets it go");
-    assert_eq!(overrides, std::slice::from_ref(&row.id));
-    assert_eq!(approver.prepush_use(&overrides).await, None);
+    let pass = approver.prepush_gate(&req).await.expect("the override lets it go");
+    assert_eq!(pass.overrides, std::slice::from_ref(&row.id));
+    // 0.9.7: the override is also the person's approval of that one write
+    let grant = pass.grant.clone().expect("the override's grant");
+    assert_eq!((grant.kind.as_str(), grant.pressed_card_id.as_str(), grant.card_id.as_str()), ("override", row.id.as_str(), row.id.as_str()));
+    assert_eq!(approver.decide_granted(req.clone(), &grant).await, kwnt::mcp::ApprovalOutcome::Allowed);
+    assert_eq!(approver.prepush_use(&pass.overrides).await, None);
     assert_eq!(env.state.db.prepush_card(&row.id).await.unwrap().unwrap().status, PUSHED);
     // The same write again waits for the person again, on the permission prompt too
     let d = decision(&call(&env.app, "POST", "/api/mcp/permission/gh-tok", Some(ask(&args))).await.1);
@@ -631,4 +637,291 @@ async fn a_real_review_finding_is_never_run_again_on_its_own() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(invocations_with("FOUNDMARK").len(), 1, "one reviewer turn, no second roll");
     assert!(prepush::gate(&env.state, &env.a, "git push origin juno-found", &folder).await.unwrap().contains("blocked this push"));
+}
+
+// 0.9.7, prepush-retry brief: the person's Retry or Override is their approval of the one push it
+// lets go. The approver below is the real one (cards, floors, Flight School); a card nobody
+// answers comes back `Unanswered` after 200 ms.
+
+fn broker(env: &Env) -> BrokerApprover {
+    BrokerApprover {
+        db: env.state.db.clone(),
+        data_dir: env.state.config.data_dir.clone(),
+        broker: env.state.broker.clone(),
+        events: env.state.event_sender.clone(),
+        timeout: std::time::Duration::from_millis(200),
+        conversation: env.a.clone(),
+        chat: Some(json!({"direct_kwant_id": env.a})),
+        always_ask: false,
+    }
+}
+
+fn bash(env: &Env, turn: &str, command: &str, folder: &Path) -> ToolApprovalRequest {
+    ToolApprovalRequest {
+        kwant_id: env.a.clone(),
+        kwant_name: "A".into(),
+        turn_id: turn.into(),
+        tool_name: "Bash".into(),
+        server: String::new(),
+        tool: "Bash".into(),
+        arguments: json!({"command": command, "description": "push", "cwd": folder}),
+        builtin: None,
+        smart: None,
+        payment: None,
+    }
+}
+
+/// The bot's turn `turn` works on a task, so its calls land in the checkpoints log.
+async fn on_a_task(env: &Env, space: &str, turn: &str) -> String {
+    let task = format!("tsk_{}", uuid::Uuid::new_v4().simple());
+    let now = chrono::Utc::now();
+    let at = now.to_rfc3339();
+    env.state
+        .db
+        .exec_raw_for_test(&format!(
+            "INSERT INTO tasks (id, space_id, title, state, budget_tokens, source_kind, created_by, created_at, updated_at) \
+             VALUES ('{task}', '{space}', 'Fix the widgets', 'working', 0, 'person', 'person', '{at}', '{at}')"
+        ))
+        .await
+        .unwrap();
+    let ms = now.timestamp_millis();
+    env.state
+        .db
+        .exec_raw_for_test(&format!(
+            "INSERT INTO agent_claims (id, task_id, kwant_id, turn_id, claimed_at, expires_at) VALUES ('clm_{task}', '{task}', '{}', '{turn}', {ms}, {})",
+            env.a,
+            ms + 3_600_000
+        ))
+        .await
+        .unwrap();
+    task
+}
+
+/// The approval cards still waiting on `command`.
+async fn waiting_on(env: &Env, command: &str) -> usize {
+    let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("waiting"), Some(&env.a)).await.unwrap();
+    rows.iter().filter(|r| r.parameters.contains(command)).count()
+}
+
+/// A blocked card on `branch`: a commit that switches the test off.
+async fn blocked_card(env: &Env, space: &str, folder: &Path, branch: &str, marker: &str) -> kwnt::db::dev_prepush::PrepushRow {
+    git(folder, &["checkout", "-q", "-b", branch]);
+    commit(folder, "src/widgets.rs", &format!("{}pub fn count() -> u32 {{ 4 }}\n", clean_review(marker)), "Count widgets");
+    commit(folder, TEST_FILE, &TEST_BODY.replace("#[test]\n", "#[test]\n#[ignore]\n"), "Skip the slow test");
+    let push = format!("git push origin {branch}");
+    assert!(prepush::gate(&env.state, &env.a, &push, folder).await.is_some(), "the first push waits for its card");
+    let row = settled(env, space, branch).await;
+    assert_eq!(row.status, BLOCKED, "{row:?}");
+    row
+}
+
+#[tokio::test]
+async fn a_retry_lets_the_next_clear_push_go_once_with_no_approval_card() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    let folder = repo(&env, "granted");
+    let blocked = blocked_card(&env, &space, &folder, "juno-grant", "GRANTMARK").await;
+    let push = "git push origin juno-grant";
+    let task = on_a_task(&env, &space, "t-grant").await;
+    let approver = broker(&env);
+
+    // Without a grant, a clear push still gets the ordinary approval card (approvals ask)
+    // The person presses Retry: a grant on the card, unused, for 2 hours
+    let (s, v) = call(&env.app, "POST", &format!("/api/dev/prepush/{}/retry", blocked.id), None).await;
+    assert_eq!((s.as_u16(), v["status"].as_str()), (200, Some("retried")), "{v}");
+    let g = &v["grant"];
+    assert_eq!((g["kind"].as_str(), g["card_id"].as_str(), g["used_at"].clone()), (Some("retry"), Some(blocked.id.as_str()), Value::Null), "{v}");
+    assert_eq!(g["expires_at"].as_i64().unwrap() - g["at"].as_i64().unwrap(), GRANT_MS, "{v}");
+
+    // The bot fixes the test and pushes: checked first, and a push still checking uses nothing
+    let fixed = commit(&folder, TEST_FILE, TEST_BODY, "Bring the test back");
+    let why = prepush::check_command(&env.state, &env.a, push, &folder).await.unwrap_err();
+    assert!(why.contains("is checking"), "{why}");
+    let card = settled_sha(&env, &space, &fixed).await;
+    assert_eq!(card.status, CLEAR, "{card:?}");
+    let grant_id = env.state.db.prepush_grant_of_card(&blocked.id).await.unwrap().unwrap().id;
+    assert_eq!(env.state.db.prepush_grant(&grant_id).await.unwrap().unwrap().used_at, None);
+
+    // Clear: the push goes with no approval card, once
+    let pass = prepush::check_command(&env.state, &env.a, push, &folder).await.unwrap();
+    let grant = pass.grant.clone().expect("the retry covers the next clear push");
+    assert_eq!((grant.kind.as_str(), grant.pressed_card_id.as_str(), grant.card_id.as_str()), ("retry", blocked.id.as_str(), card.id.as_str()));
+    let mut rx = env.state.event_sender.subscribe();
+    assert_eq!(approver.decide_granted(bash(&env, "t-grant", push, &folder), &grant).await, ApprovalOutcome::Allowed);
+    assert_eq!(waiting_on(&env, push).await, 0, "no approval card");
+    let mut seen = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        if let RuntimeEvent::DevPrepush { id, .. } = e {
+            seen.push(id);
+        }
+    }
+    assert!(seen.contains(&blocked.id) && seen.contains(&card.id), "both cards show the grant was used: {seen:?}");
+    // The approval record and the checkpoints log say who approved it
+    let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("allowed_once"), Some(&env.a)).await.unwrap();
+    let rec = rows.iter().find(|r| r.parameters.contains("prepush_grant")).expect("an approval record");
+    let details: Value = serde_json::from_str(&rec.parameters).unwrap();
+    assert_eq!(details["prepush_grant"]["card_id"], json!(blocked.id), "{details}");
+    assert_eq!(details["prepush_grant"]["push_card_id"], json!(card.id), "{details}");
+    let note = format!("approved by the person's retry on pre-push card {}", blocked.id);
+    assert_eq!(details["prepush_grant"]["note"], json!(note));
+    let calls = env.state.db.tool_calls_of(&task).await.unwrap();
+    let logged = calls.iter().find(|c| c.summary.contains(&note)).expect("the checkpoints log names the grant");
+    assert_eq!((logged.decision.as_str(), logged.approval_id.as_deref()), ("approved", Some(rec.id.as_str())));
+
+    // Both cards show it: the pressed one and the push's own
+    for id in [&blocked.id, &card.id] {
+        let (_, v) = call(&env.app, "GET", &format!("/api/dev/prepush/{id}"), None).await;
+        assert_eq!(v["grant"]["kind"], "retry", "{v}");
+        assert!(v["grant"]["used_at"].is_i64(), "{v}");
+        assert_eq!(v["grant"]["next_card_id"], json!(card.id), "{v}");
+    }
+    let (_, list) = call(&env.app, "GET", &format!("/api/spaces/{space}/dev/prepush"), None).await;
+    assert!(list["cards"].as_array().unwrap().iter().all(|c| c["grant"]["kind"] == "retry"), "{list}");
+
+    // A second push in the window gets the ordinary card: the grant is used up
+    assert_eq!(prepush::check_command(&env.state, &env.a, push, &folder).await.unwrap().grant, None);
+    assert_eq!(approver.decide_granted(bash(&env, "t-grant", push, &folder), &grant).await, ApprovalOutcome::Unanswered, "a used grant asks as usual");
+    assert_eq!(waiting_on(&env, push).await, 1);
+}
+
+#[tokio::test]
+async fn a_grant_never_skips_a_blocked_push_a_floor_or_an_expired_window() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    let folder = repo(&env, "ungranted");
+    let blocked = blocked_card(&env, &space, &folder, "juno-nogrant", "NOGRANTMARK").await;
+    let push = "git push origin juno-nogrant";
+    let approver = broker(&env);
+    let (s, _) = call(&env.app, "POST", &format!("/api/dev/prepush/{}/retry", blocked.id), None).await;
+    assert_eq!(s.as_u16(), 200);
+    let live = env.state.db.prepush_grant_of_card(&blocked.id).await.unwrap().unwrap();
+
+    // The bot pushes again without fixing it: blocked, and the grant stays unused
+    let still = commit(&folder, "src/more.rs", "pub fn more() {}\n", "More");
+    assert!(prepush::check_command(&env.state, &env.a, push, &folder).await.is_err());
+    let again = settled_sha(&env, &space, &still).await;
+    assert_eq!(again.status, BLOCKED, "{again:?}");
+    let err = prepush::check_command(&env.state, &env.a, push, &folder).await.unwrap_err();
+    assert!(err.contains("blocked this push"), "{err}");
+    assert_eq!(env.state.db.prepush_grant(&live.id).await.unwrap().unwrap().used_at, None, "a blocked push uses no grant");
+
+    // A push to the protected branch is the production floor's: no grant, and one handed in
+    // anyway still gets the floor's card and stays unused
+    assert_eq!(prepush::check_command(&env.state, &env.a, "git push origin HEAD:main", &folder).await.unwrap().grant, None);
+    let forged = kwnt::mcp::PrepushGrant { id: live.id.clone(), kind: "retry".into(), pressed_card_id: blocked.id.clone(), card_id: again.id.clone() };
+    let floor = "git push origin HEAD:main";
+    assert_eq!(approver.decide_granted(bash(&env, "t-nogrant", floor, &folder), &forged).await, ApprovalOutcome::Unanswered);
+    assert_eq!(waiting_on(&env, floor).await, 1, "the floor asks");
+    assert_eq!(env.state.db.prepush_grant(&live.id).await.unwrap().unwrap().used_at, None);
+
+    // The window passes: the fixed, clear push asks as usual
+    env.state.db.age_prepush_grant(&live.id, GRANT_MS + 1).await.unwrap();
+    let fixed = commit(&folder, TEST_FILE, TEST_BODY, "Bring the test back");
+    assert!(prepush::check_command(&env.state, &env.a, push, &folder).await.is_err());
+    assert_eq!(settled_sha(&env, &space, &fixed).await.status, CLEAR);
+    let pass = prepush::check_command(&env.state, &env.a, push, &folder).await.unwrap();
+    assert_eq!(pass.grant, None, "an expired grant covers nothing");
+    assert_eq!(approver.decide_granted(bash(&env, "t-nogrant", push, &folder), &forged).await, ApprovalOutcome::Unanswered);
+    assert_eq!(env.state.db.prepush_grant(&live.id).await.unwrap().unwrap().used_at, None, "nor is it used");
+}
+
+#[tokio::test]
+async fn an_override_lets_its_one_push_go_with_no_second_card() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    let folder = repo(&env, "overgrant");
+    let row = blocked_card(&env, &space, &folder, "juno-over", "OVERGRANTMARK").await;
+    let push = "git push origin juno-over";
+    let approver = broker(&env);
+
+    let (s, v) = call(&env.app, "POST", &format!("/api/dev/prepush/{}/override", row.id), Some(json!({"reason": "the slow test is flaky, tracked in #12"}))).await;
+    assert_eq!((s.as_u16(), v["status"].as_str()), (200, Some(OVERRIDDEN)), "{v}");
+    assert_eq!((v["grant"]["kind"].as_str(), v["grant"]["card_id"].as_str()), (Some("override"), Some(row.id.as_str())), "{v}");
+
+    let pass = prepush::check_command(&env.state, &env.a, push, &folder).await.unwrap();
+    let grant = pass.grant.clone().expect("the override covers its push");
+    assert_eq!((grant.kind.as_str(), grant.pressed_card_id.as_str(), grant.card_id.as_str()), ("override", row.id.as_str(), row.id.as_str()));
+    assert_eq!(approver.decide_granted(bash(&env, "t-over", push, &folder), &grant).await, ApprovalOutcome::Allowed);
+    assert_eq!(waiting_on(&env, push).await, 0, "no second card");
+    assert_eq!(prepush::use_up(&env.state, &pass).await, None);
+    let (_, v) = call(&env.app, "GET", &format!("/api/dev/prepush/{}", row.id), None).await;
+    assert_eq!(v["status"], PUSHED, "{v}");
+    assert!(v["grant"]["used_at"].is_i64(), "{v}");
+
+    // The same commit again: blocked again, the card asks the person again, and no grant
+    assert!(prepush::check_command(&env.state, &env.a, push, &folder).await.is_err());
+    assert_eq!(approver.decide_granted(bash(&env, "t-over", push, &folder), &grant).await, ApprovalOutcome::Unanswered);
+}
+
+#[tokio::test]
+async fn a_newer_commit_supersedes_the_older_cards_and_only_the_newest_needs_you() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    let folder = repo(&env, "superseded");
+    let first = blocked_card(&env, &space, &folder, "juno-sup", "SUPMARK").await;
+    let push = "git push origin juno-sup";
+
+    let mut rx = env.state.event_sender.subscribe();
+    let next_sha = commit(&folder, "src/more.rs", "pub fn more() {}\n", "More");
+    assert!(prepush::gate(&env.state, &env.a, push, &folder).await.is_some());
+    let older = env.state.db.prepush_card(&first.id).await.unwrap().unwrap();
+    assert_eq!(older.status, SUPERSEDED, "{older:?}");
+    let next = settled_sha(&env, &space, &next_sha).await;
+    assert_eq!((next.status.as_str(), next.tries), (BLOCKED, 2), "{next:?}");
+    assert_eq!(older.superseded_by.as_deref(), Some(next.id.as_str()));
+    let mut seen = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        if let RuntimeEvent::DevPrepush { id, status, .. } = e {
+            seen.push((id, status));
+        }
+    }
+    assert!(seen.contains(&(first.id.clone(), SUPERSEDED.to_string())), "{seen:?}");
+    let (_, v) = call(&env.app, "GET", &format!("/api/dev/prepush/{}", first.id), None).await;
+    assert_eq!((v["status"].as_str(), v["needs_you"].as_bool(), v["superseded_by"].as_str()), (Some(SUPERSEDED), Some(false), Some(next.id.as_str())), "{v}");
+    // Nothing to do on a superseded card
+    let (s, _) = call(&env.app, "POST", &format!("/api/dev/prepush/{}/retry", first.id), None).await;
+    assert_eq!(s.as_u16(), 409);
+    let (_, list) = call(&env.app, "GET", &format!("/api/spaces/{space}/dev/prepush"), None).await;
+    let needs: Vec<&str> = list["cards"].as_array().unwrap().iter().filter(|c| c["needs_you"] == true).map(|c| c["id"].as_str().unwrap()).collect();
+    assert_eq!(needs, [next.id.as_str()], "{list}");
+
+    // The bot goes back to the older commit: its card comes back and the newer one steps aside
+    git(&folder, &["reset", "-q", "--hard", &first.head_sha]);
+    let why = prepush::gate(&env.state, &env.a, push, &folder).await.expect("still blocked");
+    assert!(why.contains("blocked this push"), "{why}");
+    assert_eq!(env.state.db.prepush_card(&first.id).await.unwrap().unwrap().status, BLOCKED);
+    assert_eq!(env.state.db.prepush_card(&next.id).await.unwrap().unwrap().status, SUPERSEDED);
+}
+
+/// Cards from before 0.9.7: the migration leaves only the newest of each branch waiting.
+#[tokio::test]
+async fn the_migration_collapses_old_cards_to_the_newest_per_branch() {
+    let env = setup().await;
+    let db = &env.state.db;
+    let mut ids = Vec::new();
+    for (i, status) in [BLOCKED, PREPUSH_FAILED, BLOCKED].into_iter().enumerate() {
+        let r = db.insert_prepush_card("spc_c", &env.a, "/f", "juno-c", &format!("{i}").repeat(40), CHECKING, None, false).await.unwrap().unwrap();
+        db.finish_prepush_card(&r.id, status, "{}").await.unwrap().unwrap();
+        ids.push(r.id);
+    }
+    let other = db.insert_prepush_card("spc_c", &env.a, "/f", "juno-d", &"9".repeat(40), CHECKING, None, false).await.unwrap().unwrap();
+    db.finish_prepush_card(&other.id, BLOCKED, "{}").await.unwrap().unwrap();
+    let clear = db.insert_prepush_card("spc_c", &env.a, "/g", "juno-c", &"8".repeat(40), CHECKING, None, false).await.unwrap().unwrap();
+    db.finish_prepush_card(&clear.id, CLEAR, "{}").await.unwrap().unwrap();
+
+    assert_eq!(db.collapse_prepush_cards().await.unwrap(), 2);
+    let newest = ids.last().unwrap();
+    for id in &ids[..2] {
+        let r = db.prepush_card(id).await.unwrap().unwrap();
+        assert_eq!((r.status.as_str(), r.superseded_by.as_deref()), (SUPERSEDED, Some(newest.as_str())), "{r:?}");
+    }
+    assert_eq!(db.prepush_card(&ids[1]).await.unwrap().unwrap().superseded_status.as_deref(), Some(PREPUSH_FAILED));
+    assert_eq!(db.prepush_card(newest).await.unwrap().unwrap().status, BLOCKED);
+    assert_eq!(db.prepush_card(&other.id).await.unwrap().unwrap().status, BLOCKED, "another branch keeps its card");
+    assert_eq!(db.prepush_card(&clear.id).await.unwrap().unwrap().status, CLEAR, "another folder too");
+    assert_eq!(db.collapse_prepush_cards().await.unwrap(), 0, "once");
 }
