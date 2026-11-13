@@ -11,6 +11,7 @@ pub mod oauth;
 pub mod payment_floor;
 pub mod prod_floor;
 pub mod oauth_mock;
+pub mod directory;
 pub mod registry;
 pub mod session;
 pub mod shell_risk;

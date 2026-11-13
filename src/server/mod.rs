@@ -40,6 +40,7 @@ pub mod spaces;
 pub mod asks;
 pub mod away;
 pub mod computer;
+pub mod mcp_directory;
 pub mod mcp_suggest;
 pub mod page_source;
 pub mod tool_notes;
@@ -135,6 +136,8 @@ pub struct AppState {
     pub grok_login: Arc<engine_login::EngineLogin>,
     /// The MCP Registry agents search and suggest servers from (`KWNT_MCP_REGISTRY_URL`).
     pub mcp_registry: Arc<crate::mcp::registry::McpRegistry>,
+    /// The local copy of the MCP Registry people search (mcp-finder), synced in the background.
+    pub mcp_directory: Arc<crate::mcp::directory::Directory>,
     /// Composio's app catalogue (`KWNT_COMPOSIO_API_URL`), called only once Composio is added.
     pub composio_api: Arc<crate::mcp::composio::ComposioApi>,
     /// Saved website passwords, outside every bot's folder (see `sandbox::credentials`).
@@ -201,6 +204,7 @@ impl AppState {
             codex_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Codex)),
             grok_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Grok)),
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
+            mcp_directory: Arc::default(),
             composio_api: Arc::new(crate::mcp::composio::ComposioApi::from_env()),
             credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
             zombie: Default::default(),
@@ -430,6 +434,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/agent-connections", get(agents_connect::list_connections).post(agents_connect::create_connection))
         .route("/api/agent-connections/:id", delete(agents_connect::revoke_connection))
         .route("/api/agent-connections/:id/activity", get(agents_connect::connection_activity))
+        .route("/api/mcp/registry/search", get(mcp_directory::search))
+        .route("/api/mcp/registry/install", post(mcp_directory::install))
         .route("/api/mcp/suggestions", get(mcp_suggest::list))
         .route("/api/mcp/suggestions/:id/install", post(mcp_suggest::install))
         .route("/api/mcp/suggestions/:id/dismiss", post(mcp_suggest::dismiss))

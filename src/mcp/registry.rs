@@ -75,6 +75,10 @@ pub struct RegistryEntry {
     pub website_url: Option<String>,
     /// The plan, or why the entry can't be set up in one click.
     pub plan: Result<InstallPlan, String>,
+    /// One of its remote addresses has a `{placeholder}` (a per-person address): ranked last in
+    /// the directory even when a package makes it installable.
+    #[serde(skip)]
+    pub placeholder_url: bool,
 }
 
 // Raw registry JSON (only the fields kwnt uses)
@@ -83,6 +87,15 @@ pub struct RegistryEntry {
 struct RawList {
     #[serde(default)]
     servers: Option<Vec<RawResponse>>,
+    #[serde(default)]
+    metadata: Option<RawMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawMetadata {
+    #[serde(default)]
+    next_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -457,6 +470,7 @@ fn entry(r: RawResponse) -> Option<RegistryEntry> {
     }
     let s = r.server;
     let plan = plan_for(&s);
+    let placeholder_url = s.remotes.as_deref().unwrap_or(&[]).iter().any(|r| r.url.as_deref().is_some_and(templated));
     Some(RegistryEntry {
         title: clip(s.title.as_deref().filter(|t| !t.trim().is_empty()).unwrap_or(&s.name), 100),
         description: clip(&s.description, 300),
@@ -465,6 +479,7 @@ fn entry(r: RawResponse) -> Option<RegistryEntry> {
         website_url: s.website_url.filter(|u| u.starts_with("https://")).map(|u| clip(&u, 300)),
         name: s.name,
         plan,
+        placeholder_url,
     })
 }
 
@@ -472,6 +487,27 @@ fn entry(r: RawResponse) -> Option<RegistryEntry> {
 pub fn parse_list(body: &[u8]) -> Result<Vec<RegistryEntry>, String> {
     let list: RawList = serde_json::from_slice(body).map_err(|_| "the registry sent an answer kwnt can't read".to_string())?;
     Ok(list.servers.unwrap_or_default().into_iter().filter_map(entry).collect())
+}
+
+/// One page of a `GET /v0.1/servers` walk: every listed name with its entry, `None` for an entry
+/// that is no longer active (deleted or deprecated), so a copy can drop it; and the next cursor.
+pub struct Page {
+    pub items: Vec<(String, Option<RegistryEntry>)>,
+    pub next_cursor: Option<String>,
+}
+
+pub fn parse_page(body: &[u8]) -> Result<Page, String> {
+    let list: RawList = serde_json::from_slice(body).map_err(|_| "the registry sent an answer kwnt can't read".to_string())?;
+    let items = list
+        .servers
+        .unwrap_or_default()
+        .into_iter()
+        // An older version that changed says nothing about the latest one.
+        .filter(|r| r.meta["io.modelcontextprotocol.registry/official"]["isLatest"].as_bool() != Some(false))
+        .map(|r| (r.server.name.clone(), entry(r)))
+        .collect();
+    let next_cursor = list.metadata.and_then(|m| m.next_cursor).filter(|c| !c.is_empty() && c.len() <= 400);
+    Ok(Page { items, next_cursor })
 }
 
 /// Parses a `GET /v0.1/servers/{name}/versions/latest` answer.
@@ -492,9 +528,20 @@ pub fn valid_registry_name(name: &str) -> bool {
         && server.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
-/// A kwnt server name for a registry entry: its part after the slash, cleaned up.
+/// Server parts that say nothing about whose server it is (`com.stripe/mcp`).
+pub const GENERIC_SERVER_PARTS: [&str; 6] = ["mcp", "server", "mcp-server", "remote", "official", "api"];
+
+/// The name a publisher's namespace proves: `com.stripe` → `stripe`, `io.github.alice` → `alice`.
+pub fn publisher_name(registry_name: &str) -> &str {
+    let ns = registry_name.split('/').next().unwrap_or(registry_name);
+    ns.strip_prefix("io.github.").unwrap_or_else(|| ns.rsplit('.').next().unwrap_or(ns))
+}
+
+/// A kwnt server name for a registry entry: its part after the slash, cleaned up; for a generic
+/// part (`com.stripe/mcp`), the publisher's name (`stripe`).
 pub fn server_name_for(registry_name: &str) -> String {
     let base = registry_name.rsplit('/').next().unwrap_or(registry_name);
+    let base = if GENERIC_SERVER_PARTS.contains(&base.to_ascii_lowercase().as_str()) { publisher_name(registry_name) } else { base };
     let mut name = String::new();
     for c in base.chars() {
         let c = if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' };
@@ -669,6 +716,26 @@ impl McpRegistry {
         Ok(hits)
     }
 
+    /// One page of every server's latest version (100 per page), for the directory copy. With
+    /// `updated_since` (RFC 3339), only servers changed since then.
+    pub async fn page(&self, cursor: Option<&str>, updated_since: Option<&str>) -> Result<Page, String> {
+        let mut url = self.url(&["v0.1", "servers"])?;
+        {
+            let mut q = url.query_pairs_mut();
+            q.append_pair("version", "latest").append_pair("limit", "100");
+            if let Some(c) = cursor {
+                q.append_pair("cursor", c);
+            }
+            if let Some(t) = updated_since {
+                q.append_pair("updated_since", t);
+            }
+        }
+        match self.get(url).await? {
+            Some(body) => parse_page(&body),
+            None => Ok(Page { items: Vec::new(), next_cursor: None }),
+        }
+    }
+
     /// The latest version of one entry; `None` when the registry doesn't know it.
     pub async fn get_latest(&self, name: &str) -> Result<Option<RegistryEntry>, String> {
         if !valid_registry_name(name) {
@@ -805,6 +872,9 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(server_name_for("io.github.Foo/Echo.Server_v2"), "echo-server-v2");
         assert_eq!(server_name_for("a.b/kwnt"), "mcp-server");
+        assert_eq!(server_name_for("com.stripe/mcp"), "stripe");
+        assert_eq!(server_name_for("io.github.alice/MCP"), "alice");
+        assert_eq!(server_name_for("com.notion/notion-mcp"), "notion-mcp");
         assert!(valid_registry_name("io.github.x/echo"));
         assert!(!valid_registry_name("../etc/passwd"));
         assert!(!valid_registry_name("noslash"));
