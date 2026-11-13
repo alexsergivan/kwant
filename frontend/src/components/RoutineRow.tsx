@@ -41,7 +41,7 @@ export const RoutineRow: React.FC<RoutineRowProps> = ({ messageId, name, text, b
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
           aria-controls={bodyId}
-          className="flex w-full min-w-0 min-h-[44px] items-start gap-2.5 px-3 py-2 text-left rounded-xl cursor-pointer hover:bg-zinc-800/40 transition-colors motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kw-info)]"
+          className={`flex w-full min-w-0 min-h-[44px] items-start gap-2.5 px-3 py-2 text-left ${open ? 'rounded-t-xl' : 'rounded-xl'} cursor-pointer hover:bg-zinc-800/40 transition-colors motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--kw-info)]`}
         >
           <Clock size={15} aria-hidden="true" className="mt-[3px] shrink-0 text-[var(--kw-muted)]" />
           <span className="flex min-w-0 flex-1 flex-col">
@@ -50,7 +50,7 @@ export const RoutineRow: React.FC<RoutineRowProps> = ({ messageId, name, text, b
                 {label}
               </span>
               {time && (
-                <time dateTime={at ?? undefined} className="shrink-0 whitespace-nowrap text-[11px] text-[var(--kw-muted)]">
+                <time dateTime={at ?? undefined} className="shrink-0 whitespace-nowrap text-meta text-[var(--kw-muted)]">
                   {time}
                 </time>
               )}
@@ -61,13 +61,13 @@ export const RoutineRow: React.FC<RoutineRowProps> = ({ messageId, name, text, b
               </span>
             )}
           </span>
-          <span className="shrink-0 mt-[1px] inline-flex items-center gap-1 text-[11px] text-[var(--kw-muted)]">
+          <span className="shrink-0 mt-[1px] inline-flex items-center gap-1 text-meta text-[var(--kw-muted)]">
             <span className="hidden sm:inline">{open ? 'Hide' : 'Show'}</span>
             <ChevronDown size={14} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
             <span className="sr-only sm:hidden">{open ? 'Hide instructions' : 'Show instructions'}</span>
           </span>
         </button>
-        <div id={bodyId} hidden={!open} data-routine-body="" className="px-3 pb-3 pl-[37px] text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap break-words">
+        <div id={bodyId} hidden={!open} data-routine-body="" className="px-3 pb-3 pl-[37px] text-sm leading-relaxed text-zinc-300 whitespace-pre-wrap break-words">
           {open && (body ?? text)}
         </div>
       </div>

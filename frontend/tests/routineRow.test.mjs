@@ -50,6 +50,10 @@ test('RoutineRow: collapsed is one button with aria-expanded=false, label, time 
   assert.match(html, /data-routine-line="">Check the team is still working as planned\. List anything stuck/);
   assert.match(html, /data-routine-body=""[^>]*hidden=""|hidden=""[^>]*data-routine-body=""/, 'body hidden while collapsed');
   assert.doesNotMatch(html, />You</);
+  // Mira's design check: 12 px meta type for time and Show/Hide, ring inside the card, full rounding when folded
+  assert.match(html, /<time[^>]*class="[^"]*\btext-meta\b/);
+  assert.doesNotMatch(html, /text-\[11px\]/);
+  assert.match(html, /<button[^>]*class="[^"]*\brounded-xl\b[^"]*outline-offset-\[-2px\]/);
 });
 
 test('RoutineRow: expanded shows the full instructions and aria-expanded=true', () => {
@@ -58,6 +62,10 @@ test('RoutineRow: expanded shows the full instructions and aria-expanded=true', 
   assert.doesNotMatch(html, /data-routine-line/);
   assert.match(html, /data-routine-body=""[^>]*>Check the team is still working as planned\.\nList anything stuck/);
   assert.doesNotMatch(html, /data-routine-body=""[^>]*hidden/);
+  // Open: header rounds only its top corners; quoted instructions are quieter than the answer (zinc-300)
+  assert.match(html, /<button[^>]*class="[^"]*\brounded-t-xl\b/);
+  assert.doesNotMatch(html, /<button[^>]*class="[^"]*\brounded-xl\b/);
+  assert.match(html, /data-routine-body=""[^>]*class="[^"]*\btext-zinc-300\b|class="[^"]*\btext-zinc-300\b[^"]*"[^>]*data-routine-body/);
 });
 
 const chatProps = (messages) => ({
