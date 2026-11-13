@@ -424,8 +424,11 @@ function shortPickLabel(value: string, engines: EngineInfo[] | null): string {
   const at = full.indexOf(' · ');
   if (at < 0) return full;
   const model = shortModelLabel(full.slice(at + 3), full.slice(0, at));
+  // An id that starts with the family's own name ("grok-4") reads as "Grok 4".
+  const fam = full.slice(0, at);
+  const m = model.toLowerCase().startsWith(fam.toLowerCase() + '-') ? `${fam} ${model.slice(fam.length + 1)}` : model;
   // A bare id the engine list doesn't know yet ("sonnet") reads as a name.
-  return `${full.slice(0, at)} · ${/^[a-z]+$/.test(model) ? model[0].toUpperCase() + model.slice(1) : model}`;
+  return `${fam} · ${/^[a-z]+$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m}`;
 }
 
 /**

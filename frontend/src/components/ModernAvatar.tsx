@@ -63,7 +63,7 @@ const prefersReducedMotion = () => typeof window !== 'undefined' && !!window.mat
 
 const BadgeFace: React.FC<{ badge: ModelBadge; glyph: number; className?: string }> = ({ badge, glyph, className = '' }) => (
   <span
-    className={`kw-mb-layer ${badge.cantRun ? 'text-zinc-500' : badge.mark === 'laya' ? 'text-violet-300' : 'text-zinc-100'} ${className}`}
+    className={`kw-mb-layer ${badge.cantRun ? 'text-zinc-600' : badge.mark === 'laya' ? 'text-violet-300' : 'text-zinc-100'} ${className}`}
     style={badge.resting ? { opacity: 0.6 } : undefined}
   >
     <EngineMark mark={badge.mark} size={glyph} />
@@ -94,7 +94,7 @@ export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ 
   const glyph = Math.round(d * (badge.mark === 'custom' ? 0.7 : 0.64));
   return (
     <span
-      className={`kw-model-badge ring-2 ring-zinc-950 ${badge.cantRun ? 'bg-zinc-800' : 'bg-zinc-900'}`}
+      className={`kw-model-badge ring-2 ring-zinc-950 ${badge.cantRun ? 'bg-zinc-950' : 'bg-zinc-900'}`}
       style={{ width: d, height: d }}
       role="img"
       aria-label={badge.label}
@@ -106,7 +106,7 @@ export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ 
       {leaving && <BadgeFace key={`out:${leaving.key}`} badge={leaving} glyph={glyph} className="kw-mb-out" />}
       <BadgeFace key={badge.key} badge={badge} glyph={glyph} className={leaving ? 'kw-mb-in' : ''} />
       {badge.resting && badge.auto && (
-        <span className="kw-mb-spark text-violet-300" style={{ fontSize: Math.max(7, Math.round(d * 0.5)) }} aria-hidden="true" data-badge-spark>
+        <span className="kw-mb-spark text-violet-300" style={{ fontSize: Math.max(8, Math.round(d * 0.55)) }} aria-hidden="true" data-badge-spark>
           ✦
         </span>
       )}

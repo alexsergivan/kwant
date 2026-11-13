@@ -110,7 +110,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
       aria-labelledby={headingId}
       className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`}
     >
-      <ModernAvatar role={kwantName} name={kwantName} size={34} kwantId={kwantId} />
+      <ModernAvatar role={kwantName} name={kwantName} size={34} kwantId={kwantId} modelBadge={false} />
       <div
         className={`flex-1 min-w-0 max-w-2xl rounded-2xl rounded-tl-sm border bg-zinc-900/60 shadow-sm ${
           open ? 'border-amber-500/35' : 'border-zinc-800'

@@ -109,6 +109,9 @@ test('can\'t run: greyed, and the tooltip says signed out, off or not set up', (
   const ns = m.modelBadgeFor({ preferred_model: 'grok' }, null, none);
   assert.equal(ns.cantRun, 'not_set_up');
   assert.equal(ns.label, 'Runs on Grok · not set up');
+  // An id that starts with the family's name reads as a name: "grok-4" → "Grok 4".
+  const gout = ENGINES.map((e) => (e.id === 'grok' ? { ...e, status: 'signed_out', ready: false } : e));
+  assert.equal(m.modelBadgeFor({ preferred_model: 'grok/grok-4' }, null, gout).label, 'Runs on Grok · Grok 4 · signed out');
   // Still checking, or not loaded, isn't can't-run yet.
   assert.equal(m.modelBadgeFor({ preferred_model: 'claude' }, null, null).cantRun, null);
   assert.equal(m.modelBadgeFor({ preferred_model: 'claude' }, null, out.map((e) => (e.id === 'claude' ? { ...e, status: 'checking' } : e))).cantRun, null);
@@ -230,6 +233,13 @@ test('hidden under 24 px, and on reply avatars in the chat', () => {
   const replyAvatars = chat.match(/kwantId=\{replyKwantId\}[^/>]*/g) ?? [];
   assert.ok(replyAvatars.length >= 2);
   for (const a of replyAvatars) assert.match(a, /modelBadge=\{false\}/);
+  // The cards shown inside the chat stream (a question, a bot action, a connection suggestion) opt out too.
+  for (const f of ['QuestionCard', 'BotActionCard', 'ConnectionSuggestionCard']) {
+    const src = readFileSync(new URL(`../src/components/${f}.tsx`, import.meta.url), 'utf8');
+    const avatars = src.match(/<ModernAvatar\b[^>]*kwantId=[^>]*>/g) ?? [];
+    assert.ok(avatars.length >= 1, `${f} has a bot avatar`);
+    for (const a of avatars) assert.match(a, /modelBadge=\{false\}/, `${f}: no badge in the chat`);
+  }
 });
 
 test('dev mode: the hard hat (top-left) and the badge (bottom-left) never overlap', () => {
@@ -263,7 +273,8 @@ test('can\'t run: the avatar\'s badge is greyed out', () => {
   m.setBadgeBots([{ id: 'k1', preferred_model: 'claude/sonnet', last_ran_on: null }]);
   draw();
   assert.equal(badge().getAttribute('data-badge-cant-run'), 'signed_out');
-  assert.ok(host.querySelector('[data-model-badge] .text-zinc-500'));
+  assert.ok(host.querySelector('[data-model-badge] .text-zinc-600'));
+  assert.ok(badge().classList.contains('bg-zinc-950'), 'darker than the resting badge');
   assert.equal(badge().getAttribute('title'), 'Runs on Claude · Sonnet · signed out');
   flushSync(() => m.setBadgeEngines(ENGINES));
   assert.equal(badge().hasAttribute('data-badge-cant-run'), false);
