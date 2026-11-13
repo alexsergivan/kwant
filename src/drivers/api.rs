@@ -1280,7 +1280,7 @@ impl Driver for ApiDriver {
                     let own = format!("{}:", crate::mcp::SELF_SERVER_NAME);
                     for problem in problems {
                         self_failed |= problem.starts_with(&own);
-                        let _ = event_tx.send(RuntimeEvent::ThinkingDelta(format!("MCP server unavailable: {problem}"))).await;
+                        let _ = event_tx.send(RuntimeEvent::ThinkingDelta(format!("{}{problem}", crate::mcp::UNAVAILABLE_PREFIX))).await;
                     }
                     Some(session)
                 }

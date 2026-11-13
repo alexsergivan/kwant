@@ -3980,6 +3980,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpen={openAwayItem}
       onCounts={setAwayCount}
       onApprovalResolved={dropApproval}
+      onOpenConnections={openConnections}
       onCrumb={(c) => showPage(c === 'board' ? 'board' : 'dev')}
       top={
         <>
@@ -4206,6 +4207,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderConnectionSuggestion={renderConnectionSuggestion}
           renderBotAction={renderBotAction}
           onOpenToolNote={openToolNote}
+          onOpenConnections={openConnections}
           renderWatchReport={renderWatchReport}
           renderHire={renderHire}
           renderRouteChoice={renderRouteChoice}
