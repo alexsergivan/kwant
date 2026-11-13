@@ -94,7 +94,7 @@ async fn usage_is_kept_from_turns_and_checked_at_most_once_a_minute() {
     let tmp = tempfile::tempdir().unwrap();
     let bin = tmp.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    exe::write_executable(&bin.join("claude"), FAKE_CLAUDE);
+    exe::write_executable(bin.join("claude"), FAKE_CLAUDE);
     std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
     std::env::set_var("FAKE_RESET", (chrono::Utc::now().timestamp() + 2 * 3600).to_string());
 
