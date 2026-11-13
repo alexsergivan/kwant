@@ -642,7 +642,11 @@ impl BrowserService {
             ctrl.set_viewport(1280, 800).await?;
         }
         ctrl.refresh_location().await?;
-        ctrl.configure_downloads(workspace.to_path_buf());
+        // Next to #578's attachments root/chooser-tmp: one folder shared by every session's
+        // download staging, outside any bot's workspace (see `browser_downloads.rs`'s doc).
+        let download_staging = self.root.join("attachments").join("download-tmp");
+        let context_id = (!session.context.is_empty()).then_some(session.context.clone());
+        ctrl.configure_downloads(workspace.to_path_buf(), local, context_id, download_staging);
         Ok(ctrl)
     }
 

@@ -10,8 +10,18 @@
 //! DevTools connection or to the whole target was not verified against real Chrome (the earlier
 //! harness run was stopped rather than risk the shared server's memory); this follows the
 //! `Browser.*` methods' own CDP domain (browser-level, not page-level) and is documented as an
-//! assumption. Reconnecting to follow a popup polls `get_ws_url()` every few seconds rather than
+//! assumption. Because of that assumption, every session sets `Browser.setDownloadBehavior` to
+//! the *same* shared staging folder (outside every bot's workspace) and claims a finished
+//! download only once its `downloadWillBegin.frameId` shows up in this page's own frame tree —
+//! regardless of whether the setting turns out to be per-connection or browser-wide, only the
+//! center whose page the download actually started on ever moves the file into its own
+//! `downloads/`. Reconnecting to follow a popup polls `get_ws_url()` every few seconds rather than
 //! reacting the instant a popup opens, so capture on a brand new popup can lag by that long.
+//!
+//! Remote Chrome (`KWNT_BROWSER_CDP_URL`) has no filesystem in common with this server, so a
+//! staging path means nothing there: `local` sessions get `allowAndName` at the shared staging
+//! path; every other session gets `deny` with `eventsEnabled: true`, and a download attempt is
+//! reported back as failed rather than tracked.
 
 use super::browser::{connect_cdp, BrowserController, BrowserError, WsStream};
 use super::safe_fs;
@@ -36,6 +46,11 @@ const UPLOAD_CHUNK_BYTES: usize = 1024 * 1024;
 const FOLLOW_EVERY: Duration = Duration::from_secs(2);
 const RETRY_WAIT: Duration = Duration::from_secs(3);
 const JOB_WAIT: Duration = Duration::from_secs(20);
+/// A staged download left in the shared incoming folder this long without being landed (no
+/// center's frame tree ever claimed it, or a crash interrupted the move) is swept as an orphan.
+const INCOMING_ORPHAN_AGE: Duration = Duration::from_secs(3600);
+/// Remote Chrome has no filesystem in common with this server, so a download can't be kept.
+const REMOTE_DOWNLOAD_REFUSAL: &str = "Downloads need the browser on this computer for now.";
 
 #[derive(Clone)]
 enum DlStatus {
@@ -67,6 +82,10 @@ struct ChooserInfo {
 struct Shared {
     download: Option<DownloadEntry>,
     chooser: Option<ChooserInfo>,
+    /// Frame ids belonging to this page, seeded from `Page.getFrameTree` at setup and kept
+    /// current from `Page.frameAttached`/`Page.frameNavigated`: the set a `downloadWillBegin`
+    /// event's `frameId` is checked against before this center claims the download as its own.
+    frames: HashSet<String>,
 }
 
 struct Job {
@@ -111,11 +130,15 @@ pub struct DownloadCenter {
 }
 
 impl DownloadCenter {
-    pub fn start(ctrl: BrowserController, workspace: PathBuf) -> Self {
+    /// `local`: whether this Chrome shares a filesystem with this server (see the module doc).
+    /// `browser_context_id`: the session's own context, for a non-default context (VM / job
+    /// pages); `None` for a local page, which shares the kwant profile's default context.
+    /// `staging_root`: one folder shared by every session, outside any bot's workspace.
+    pub fn start(ctrl: BrowserController, workspace: PathBuf, local: bool, browser_context_id: Option<String>, staging_root: PathBuf) -> Self {
         let shared = Arc::new(StdMutex::new(Shared::default()));
         let (tx, rx) = mpsc::channel(8);
         let center = Self { shared: shared.clone(), jobs: tx };
-        tokio::spawn(run(ctrl, workspace, shared, rx));
+        tokio::spawn(run(ctrl, workspace, local, browser_context_id, staging_root, shared, rx));
         center
     }
 
@@ -310,10 +333,18 @@ impl DownloadCenter {
     }
 }
 
-async fn run(ctrl: BrowserController, workspace: PathBuf, shared: Arc<StdMutex<Shared>>, mut jobs: mpsc::Receiver<Job>) {
-    let incoming = workspace.join("downloads").join(".incoming");
-    let _ = tokio::fs::create_dir_all(&incoming).await;
+async fn run(
+    ctrl: BrowserController,
+    workspace: PathBuf,
+    local: bool,
+    browser_context_id: Option<String>,
+    staging_root: PathBuf,
+    shared: Arc<StdMutex<Shared>>,
+    mut jobs: mpsc::Receiver<Job>,
+) {
+    let _ = tokio::fs::create_dir_all(&staging_root).await;
     loop {
+        sweep_incoming(&staging_root).await;
         let ws_url = match ctrl.get_ws_url().await {
             Ok(u) => u,
             Err(_) => {
@@ -329,7 +360,7 @@ async fn run(ctrl: BrowserController, workspace: PathBuf, shared: Arc<StdMutex<S
             }
         };
         let msg_id = AtomicU64::new(1);
-        if setup(&mut ws, &msg_id, &workspace).await.is_err() {
+        if setup(&mut ws, &msg_id, &shared, &staging_root, local, browser_context_id.as_deref()).await.is_err() {
             tokio::time::sleep(RETRY_WAIT).await;
             continue;
         }
@@ -340,13 +371,13 @@ async fn run(ctrl: BrowserController, workspace: PathBuf, shared: Arc<StdMutex<S
                 biased;
                 job = jobs.recv() => {
                     let Some(job) = job else { return };
-                    let result = job_call(&mut ws, &msg_id, &shared, &workspace, &job.method, job.params).await;
+                    let result = job_call(&mut ws, &msg_id, &shared, &workspace, local, &job.method, job.params).await;
                     let failed = result.is_err();
                     let _ = job.reply.send(result);
                     if failed { break; }
                 }
                 msg = ws.next() => {
-                    if on_message(msg, &mut ws, &msg_id, &shared, &workspace).await.is_err() { break; }
+                    if on_message(msg, &mut ws, &msg_id, &shared, &workspace, local).await.is_err() { break; }
                 }
                 _ = follow.tick() => {
                     if let Ok(fresh) = ctrl.get_ws_url().await {
@@ -358,18 +389,58 @@ async fn run(ctrl: BrowserController, workspace: PathBuf, shared: Arc<StdMutex<S
     }
 }
 
-async fn setup(ws: &mut WsStream, msg_id: &AtomicU64, workspace: &Path) -> Result<(), BrowserError> {
-    let incoming = workspace.join("downloads").join(".incoming");
+/// `incoming`: the shared staging folder (outside any workspace) every session points
+/// `Browser.setDownloadBehavior` at, so the global setting can't single out one bot's folder.
+/// `local`: allow downloads there; otherwise deny them but keep hearing about attempts. Also
+/// seeds `shared.frames` from this page's own frame tree, for `handle_event` to claim a download
+/// only once it sees a `frameId` that's actually this page's.
+async fn setup(
+    ws: &mut WsStream,
+    msg_id: &AtomicU64,
+    shared: &Arc<StdMutex<Shared>>,
+    incoming: &Path,
+    local: bool,
+    browser_context_id: Option<&str>,
+) -> Result<(), BrowserError> {
     call_raw(ws, msg_id, "Page.enable", json!({})).await?;
-    call_raw(
-        ws,
-        msg_id,
-        "Browser.setDownloadBehavior",
-        json!({"behavior": "allowAndName", "downloadPath": incoming.to_string_lossy(), "eventsEnabled": true}),
-    )
-    .await?;
+    let behavior = download_behavior_params(local, incoming, browser_context_id);
+    call_raw(ws, msg_id, "Browser.setDownloadBehavior", behavior).await?;
     call_raw(ws, msg_id, "Page.setInterceptFileChooserDialog", json!({"enabled": true})).await?;
+    if let Ok(tree) = call_raw(ws, msg_id, "Page.getFrameTree", json!({})).await {
+        let mut frames = HashSet::new();
+        collect_frame_ids(&tree["frameTree"], &mut frames);
+        shared.lock().unwrap_or_else(|e| e.into_inner()).frames = frames;
+    }
     Ok(())
+}
+
+/// Builds `Browser.setDownloadBehavior`'s params for the Fix #4 mode switch: a `local` session
+/// (one with a filesystem in common with this server) gets `allowAndName` at the shared staging
+/// path; every other session (remote Chrome, with none) gets `deny`, kept to `eventsEnabled` so a
+/// download attempt is still reported rather than silently vanishing.
+fn download_behavior_params(local: bool, incoming: &Path, browser_context_id: Option<&str>) -> Value {
+    let mut behavior = json!({
+        "behavior": if local { "allowAndName" } else { "deny" },
+        "eventsEnabled": true,
+    });
+    if local {
+        behavior["downloadPath"] = json!(incoming.to_string_lossy());
+    }
+    if let Some(ctx) = browser_context_id {
+        behavior["browserContextId"] = json!(ctx);
+    }
+    behavior
+}
+
+/// Recurses through a `Page.getFrameTree` result (`{frame: {id}, childFrames: [...]}`), collecting
+/// every frame id belonging to this page.
+fn collect_frame_ids(node: &Value, out: &mut HashSet<String>) {
+    if let Some(id) = node["frame"]["id"].as_str() {
+        out.insert(id.to_string());
+    }
+    for child in node["childFrames"].as_array().into_iter().flatten() {
+        collect_frame_ids(child, out);
+    }
 }
 
 /// Sends one request and waits only for its own reply, dropping anything else read in the
@@ -411,6 +482,7 @@ async fn job_call(
     msg_id: &AtomicU64,
     shared: &Arc<StdMutex<Shared>>,
     workspace: &Path,
+    local: bool,
     method: &str,
     params: Value,
 ) -> Result<Value, BrowserError> {
@@ -429,7 +501,7 @@ async fn job_call(
                 }
             }
         }
-        on_message(msg, ws, msg_id, shared, workspace).await?;
+        on_message(msg, ws, msg_id, shared, workspace, local).await?;
     }
 }
 
@@ -439,13 +511,14 @@ async fn on_message(
     msg_id: &AtomicU64,
     shared: &Arc<StdMutex<Shared>>,
     workspace: &Path,
+    local: bool,
 ) -> Result<(), BrowserError> {
     match msg {
         Some(Ok(Message::Text(txt))) => {
             let Ok(v) = serde_json::from_str::<Value>(&txt) else { return Ok(()) };
             if let Some(method) = v.get("method").and_then(Value::as_str) {
                 let params = v.get("params").cloned().unwrap_or(Value::Null);
-                handle_event(ws, msg_id, method, params, shared, workspace).await;
+                handle_event(ws, msg_id, method, params, shared, workspace, local).await;
             }
             Ok(())
         }
@@ -462,22 +535,38 @@ async fn handle_event(
     params: Value,
     shared: &Arc<StdMutex<Shared>>,
     workspace: &Path,
+    local: bool,
 ) {
     match method {
         "Browser.downloadWillBegin" => {
             let Some(guid) = params["guid"].as_str().map(str::to_string) else { return };
+            let frame_id = params["frameId"].as_str().unwrap_or_default();
             let name = sanitize_name(params["suggestedFilename"].as_str().unwrap_or("download"));
             let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+            // Another bot's session may see this event too (see the module doc's accepted gap):
+            // only claim it when the frame it started on is actually this page's own.
+            if !s.frames.contains(frame_id) {
+                return;
+            }
             s.download = Some(DownloadEntry {
                 guid,
                 name,
                 total: None,
                 received: 0,
-                status: DlStatus::InProgress,
+                status: if local {
+                    DlStatus::InProgress
+                } else {
+                    DlStatus::Failed(REMOTE_DOWNLOAD_REFUSAL.into())
+                },
                 reported_terminal: false,
             });
         }
         "Browser.downloadProgress" => {
+            // Remote mode already answered `downloadWillBegin` as failed and never allowed the
+            // download to start: nothing here is this center's to track.
+            if !local {
+                return;
+            }
             let Some(guid) = params["guid"].as_str().map(str::to_string) else { return };
             let state = params["state"].as_str().unwrap_or_default().to_string();
             let received = params["receivedBytes"].as_u64().unwrap_or(0);
@@ -487,17 +576,12 @@ async fn handle_event(
             let mut over_cap = false;
             {
                 let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
-                if !matches!(&s.download, Some(e) if e.guid == guid) {
-                    s.download = Some(DownloadEntry {
-                        guid: guid.clone(),
-                        name: sanitize_name("download"),
-                        total,
-                        received,
-                        status: DlStatus::InProgress,
-                        reported_terminal: false,
-                    });
-                }
-                let entry = s.download.as_mut().expect("just set above");
+                // `downloadProgress` carries no `frameId`, so unlike `downloadWillBegin` there's
+                // nothing here to check frame ownership against. Rather than adopt an unrecognized
+                // guid outright (which would hand another bot's progress to this center whenever
+                // the setting turns out to be browser-wide), only ever update a guid this center
+                // already claimed via a frame-checked `downloadWillBegin`; anything else is ignored.
+                let Some(entry) = s.download.as_mut().filter(|e| e.guid == guid) else { return };
                 if let Some(t) = total {
                     entry.total = Some(t);
                 }
@@ -527,10 +611,21 @@ async fn handle_event(
             let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
             s.chooser = Some(ChooserInfo { backend_node_id, frame_id, accept, multiple });
         }
-        "Page.frameNavigated" => {
-            if params["frame"]["parentId"].is_null() {
-                shared.lock().unwrap_or_else(|e| e.into_inner()).chooser = None;
+        "Page.frameAttached" => {
+            if let Some(id) = params["frameId"].as_str() {
+                shared.lock().unwrap_or_else(|e| e.into_inner()).frames.insert(id.to_string());
             }
+        }
+        "Page.frameNavigated" => {
+            let Some(id) = params["frame"]["id"].as_str() else { return };
+            let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+            if params["frame"]["parentId"].is_null() {
+                s.chooser = None;
+                // A top-level navigation leaves any earlier subframes behind; keep the set from
+                // growing forever and start it over with just the new main frame.
+                s.frames.clear();
+            }
+            s.frames.insert(id.to_string());
         }
         _ => {}
     }
@@ -557,6 +652,7 @@ async fn describe_accept(ws: &mut WsStream, msg_id: &AtomicU64, backend_node_id:
 /// a collision-free name there (Chrome already made the staged name collision-free on its own
 /// side via `allowAndName`, so this is the one place a name actually has to be chosen).
 async fn land_download(workspace: PathBuf, shared: Arc<StdMutex<Shared>>, guid: String, name: String, staged_path: String) {
+    let landing_guid = guid.clone();
     let result = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
         let root = safe_fs::Dir::open_strict(&workspace)?;
         let dir = root.make_dirs(Path::new("downloads"))?;
@@ -568,7 +664,7 @@ async fn land_download(workspace: PathBuf, shared: Arc<StdMutex<Shared>>, guid: 
             .map(|e| e.name.to_string_lossy().to_string())
             .collect();
         let final_name = collision_safe_name(&existing, &name);
-        dir.replace_file(OsStr::new(&final_name), &format!(".landing-{guid}"), &mut src, 0o600)?;
+        dir.replace_file(OsStr::new(&final_name), &format!(".landing-{landing_guid}"), &mut src, 0o600)?;
         drop(src);
         let _ = std::fs::remove_file(&staged_path);
         Ok(final_name)
@@ -582,6 +678,19 @@ async fn land_download(workspace: PathBuf, shared: Arc<StdMutex<Shared>>, guid: 
                 Ok(Err(e)) => DlStatus::Failed(e.to_string()),
                 Err(_) => DlStatus::Failed("something went wrong landing the download".into()),
             };
+        }
+    }
+}
+
+/// Deletes any file left in the shared incoming folder older than `INCOMING_ORPHAN_AGE`: a
+/// backstop for a staged download no center's frame tree ever claimed, or one `land_download`
+/// never got to finish moving before a restart.
+async fn sweep_incoming(incoming: &Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(incoming).await else { return };
+    let cutoff = std::time::SystemTime::now() - INCOMING_ORPHAN_AGE;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.metadata().await.ok().and_then(|m| m.modified().ok()).is_some_and(|m| m < cutoff) {
+            let _ = tokio::fs::remove_file(entry.path()).await;
         }
     }
 }
@@ -629,4 +738,40 @@ fn human_size(bytes: u64) -> String {
         unit += 1;
     }
     format!("{size:.1} {}", UNITS[unit])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Fix #4: local sessions (a filesystem in common with this server) get downloads kept at the
+    // shared staging path; every other session (remote Chrome) gets them refused up front, since
+    // there's nowhere in common to land the bytes.
+    #[test]
+    fn local_sessions_allow_and_name_at_the_staging_path() {
+        let incoming = Path::new("/tmp/kwnt-download-tmp");
+        let params = download_behavior_params(true, incoming, None);
+        assert_eq!(params["behavior"], "allowAndName");
+        assert_eq!(params["eventsEnabled"], true);
+        assert_eq!(params["downloadPath"], "/tmp/kwnt-download-tmp");
+        assert!(params.get("browserContextId").is_none());
+    }
+
+    #[test]
+    fn remote_sessions_deny_but_keep_hearing_about_attempts() {
+        let incoming = Path::new("/tmp/kwnt-download-tmp");
+        let params = download_behavior_params(false, incoming, None);
+        assert_eq!(params["behavior"], "deny");
+        assert_eq!(params["eventsEnabled"], true);
+        assert!(params.get("downloadPath").is_none(), "a remote session has no filesystem in common with this server");
+    }
+
+    #[test]
+    fn a_non_default_browser_context_is_passed_through_either_way() {
+        let incoming = Path::new("/tmp/kwnt-download-tmp");
+        let local = download_behavior_params(true, incoming, Some("ctx-123"));
+        assert_eq!(local["browserContextId"], "ctx-123");
+        let remote = download_behavior_params(false, incoming, Some("ctx-123"));
+        assert_eq!(remote["browserContextId"], "ctx-123");
+    }
 }

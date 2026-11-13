@@ -794,7 +794,7 @@ async fn task_origin(state: &AppState, scope: &SelfScope) -> Option<String> {
 
 /// The turn may see files of its own chat, of the chat its delegated task came from, and files
 /// this agent shared anywhere.
-async fn visible(state: &AppState, scope: &SelfScope, id: &str) -> Option<Attachment> {
+pub(crate) async fn visible(state: &AppState, scope: &SelfScope, id: &str) -> Option<Attachment> {
     let a = load(state, id).await?;
     let own_chat = a.context_id.is_some() && a.context_id == context_of(scope);
     let own_file = a.source == "agent" && a.kwant_id.as_deref() == Some(scope.kwant_id.as_str());
@@ -803,6 +803,16 @@ async fn visible(state: &AppState, scope: &SelfScope, id: &str) -> Option<Attach
     }
     let origin = task_origin(state, scope).await;
     (origin.is_some() && a.context_id == origin).then_some(a)
+}
+
+/// As [`visible`], for a caller that has a chat id and an owning bot but no full turn to check
+/// against: the browser API's curl path, keyed only on the page (and so the chat and bot) it was
+/// called on. Same rule, minus the "chat a delegated task came from" leg, which needs a turn.
+pub(crate) async fn visible_to(state: &AppState, chat: Option<&str>, owner_kwant: Option<&str>, id: &str) -> Option<Attachment> {
+    let a = load(state, id).await?;
+    let own_chat = chat.is_some() && a.context_id.as_deref() == chat;
+    let own_file = owner_kwant.is_some() && a.source == "agent" && a.kwant_id.as_deref() == owner_kwant;
+    (own_chat || own_file).then_some(a)
 }
 
 pub async fn tool_list(state: &AppState, scope: &SelfScope) -> (String, bool) {

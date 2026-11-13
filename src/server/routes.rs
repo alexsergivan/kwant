@@ -6459,6 +6459,22 @@ impl BotCall {
     }
 }
 
+/// Who a `browser_upload` call may answer a chat attachment id for. Not every path that reaches
+/// [`act_sandbox_allowed`] has a full turn to check an id against: a turn (the MCP path, which
+/// also honors the chat a delegated task came from — see [`super::attachments::visible`]), the
+/// bot (and chat, when the route names one) a curl call came in as, or neither, when no id can
+/// match and only a workspace path is accepted.
+#[derive(Clone, Copy, Default)]
+pub enum UploadCaller<'a> {
+    #[default]
+    None,
+    Turn(&'a super::continuity::SelfScope),
+    Bot {
+        kwant: &'a str,
+        chat: Option<&'a str>,
+    },
+}
+
 /// `POST /api/sandbox/:id/bot/:kwant_id/navigate`: the browser API a bot's prompt gave it before
 /// the address named its chat. Still served: a bot copying it out of history is asked in its
 /// newest turn on the browser.
@@ -6571,7 +6587,11 @@ async fn act_as(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let page = by.as_ref().map_or_else(|| team_id.clone(), BotCall::page_in(&team_id));
     refuse_while_held(&state, &page, by.is_some()).await?;
-    let result = act_sandbox(State(state.clone()), Path(page.clone()), payload).await;
+    let caller = match &by {
+        Some(b) => UploadCaller::Bot { kwant: &b.kwant, chat: b.chat.as_deref() },
+        None => UploadCaller::None,
+    };
+    let result = act_sandbox(State(state.clone()), Path(page.clone()), payload, caller).await;
     ask_on_wall(&state, &team_id, &page, by.as_ref().map(BotCall::caller), result).await
 }
 
@@ -6780,6 +6800,7 @@ pub async fn act_sandbox(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
+    caller: UploadCaller<'_>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let args = json!({"action": payload.action, "text": payload.text, "key": payload.key, "ref": payload.ref_});
@@ -6792,21 +6813,28 @@ pub async fn act_sandbox(
         ));
         return Ok(Json(page));
     }
-    act_sandbox_allowed(State(state), Path(team_id), Json(payload)).await
+    act_sandbox_allowed(State(state), Path(team_id), Json(payload), caller).await
 }
 
 /// Turns `browser_upload`'s file list into what [`crate::sandbox::browser_downloads`] needs to
-/// answer a chooser: each entry is a chat attachment id (any `source`, same read as
-/// `GET /api/attachments/:id/content`, refused only for a "document:" context a bot has no
-/// token for) or, failing that, a path under the bot's own folder (opened through
-/// [`safe_fs`](crate::sandbox::safe_fs), so `..` and a symlink out of the folder are refused).
-/// Remote delivery (no filesystem in common with this Chrome) reads every file's bytes, capped at
-/// 100 MB in all; local delivery passes a path Chrome can open directly.
+/// answer a chooser: each entry is a chat attachment id visible to `caller` (same rule as
+/// `read_attachment`/`share_file`: the turn's own chat, the chat a delegated task came from, and
+/// files this bot shared — see [`super::attachments::visible`]; an id outside that falls through
+/// to the plain "isn't a file in your folder" refusal below, same as an id that doesn't exist, so
+/// a call never learns that an id exists in another chat) or, failing that, a path under the
+/// bot's own folder (opened through [`safe_fs`](crate::sandbox::safe_fs), so `..` and a symlink
+/// out of the folder are refused). Remote delivery (no filesystem in common with this Chrome)
+/// reads every file's bytes, capped at 100 MB in all; local delivery stages a copy made from the
+/// handle already opened and checked above (see [`stage_upload_copy`]) and passes that copy's
+/// path, rather than the original attachment blob or workspace path — Chrome may not actually
+/// read the file until well after this call returns, and by then a path handed back by name alone
+/// could point at something else.
 async fn resolve_upload_files(
     state: &AppState,
     workspace: &std::path::Path,
     local: bool,
     files: &[String],
+    caller: UploadCaller<'_>,
 ) -> Result<Vec<crate::sandbox::browser_downloads::UploadFile>, String> {
     use crate::sandbox::browser_downloads::{UploadFile, UploadSource};
     use crate::sandbox::safe_fs;
@@ -6815,7 +6843,12 @@ async fn resolve_upload_files(
     let mut remaining = REMOTE_CAP;
     let mut out = Vec::with_capacity(files.len());
     for raw in files {
-        if let Some(a) = super::attachments::load(state, raw).await {
+        let found = match caller {
+            UploadCaller::Turn(scope) => super::attachments::visible(state, scope, raw).await,
+            UploadCaller::Bot { kwant, chat } => super::attachments::visible_to(state, chat, Some(kwant), raw).await,
+            UploadCaller::None => None,
+        };
+        if let Some(a) = found {
             if a.context_id.as_deref().is_some_and(|c| c.starts_with("document:")) {
                 return Err(format!("{} can't be used this way.", a.name));
             }
@@ -6824,9 +6857,8 @@ async fn resolve_upload_files(
                 .ok_or_else(|| format!("{} is missing.", a.name))?;
             let last_modified_ms = a.created_at.timestamp_millis();
             if local {
-                let path = stage_upload_copy(workspace, &a.name, &blob)
-                    .await
-                    .map_err(|_| format!("Couldn't read {}.", a.name))?;
+                let src = std::fs::File::open(&blob).map_err(|_| format!("{} is missing.", a.name))?;
+                let path = stage_upload_copy(state, &a.name, src).await.map_err(|_| format!("Couldn't read {}.", a.name))?;
                 out.push(UploadFile { name: a.name, mime: a.mime, last_modified_ms, source: UploadSource::Path(path) });
             } else {
                 let size = a.size.max(0) as u64;
@@ -6845,7 +6877,8 @@ async fn resolve_upload_files(
         let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
         let last_modified_ms = chrono::Utc::now().timestamp_millis();
         if local {
-            out.push(UploadFile { name, mime: String::new(), last_modified_ms, source: UploadSource::Path(workspace.join(rel)) });
+            let path = stage_upload_copy(state, &name, file).await.map_err(|_| format!("Couldn't read {raw}."))?;
+            out.push(UploadFile { name, mime: String::new(), last_modified_ms, source: UploadSource::Path(path) });
         } else {
             let bytes = safe_fs::read_capped(&mut file, remaining).map_err(|_| TOO_BIG.to_string())?;
             remaining -= bytes.len() as u64;
@@ -6856,21 +6889,51 @@ async fn resolve_upload_files(
     Ok(out)
 }
 
-/// A copy of an attachment blob (named by its sha256, not its real name) under a short-lived
-/// folder of its own, named for upload: `DOM.setFileInputFiles` names the file from its path's
-/// own basename, so the copy needs the attachment's real name. Swept up on its own after a couple
-/// of minutes rather than right after the call, since the page may only read it once the person
-/// acts on it (e.g. only once a form is submitted).
-async fn stage_upload_copy(workspace: &std::path::Path, name: &str, blob: &std::path::Path) -> std::io::Result<PathBuf> {
-    let dir = workspace.join(".upload-tmp").join(uuid::Uuid::new_v4().to_string());
+const UPLOAD_TMP_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+const UPLOAD_TMP_ORPHAN_AGE: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A copy of `src` (an attachment blob, or a workspace file — in both cases a handle
+/// [`resolve_upload_files`] already opened and checked, read from directly rather than by
+/// re-opening its path afterward) under a short-lived folder of kwnt's own, outside every bot's
+/// workspace: same pattern as `browser_stream.rs`'s `chooser-tmp` for the live-view sheet.
+/// `DOM.setFileInputFiles` names the file from its path's own basename, so the copy is named
+/// after the real name, sanitized through [`super::attachments::clean_name`]. Staging outside the
+/// workspace, from the handle rather than the path, closes the window between the check already
+/// done on `src` and whenever Chrome actually reads the staged copy (the page may only do that
+/// once the person acts on it, e.g. only once a form is submitted, so the copy can't be removed
+/// right after this call returns either — it's swept up after `UPLOAD_TMP_TTL`, with
+/// `sweep_upload_tmp` as a backstop for an orphan left behind by a restart).
+async fn stage_upload_copy(state: &AppState, name: &str, mut src: std::fs::File) -> std::io::Result<PathBuf> {
+    let tmp_root = super::attachments::root(state).join("upload-tmp");
+    sweep_upload_tmp(&tmp_root).await;
+    let dir = tmp_root.join(uuid::Uuid::new_v4().to_string());
     tokio::fs::create_dir_all(&dir).await?;
-    let dest = dir.join(name);
-    tokio::fs::copy(blob, &dest).await?;
+    let dest = dir.join(super::attachments::clean_name(name));
+    let dest_for_copy = dest.clone();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let mut out = std::fs::File::create(&dest_for_copy)?;
+        std::io::copy(&mut src, &mut out)?;
+        Ok(())
+    })
+    .await
+    .map_err(std::io::Error::other)??;
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        tokio::time::sleep(UPLOAD_TMP_TTL).await;
         let _ = tokio::fs::remove_dir_all(&dir).await;
     });
     Ok(dest)
+}
+
+/// Deletes any `upload-tmp` directory older than `UPLOAD_TMP_ORPHAN_AGE`, a backstop for the
+/// scheduled cleanup in [`stage_upload_copy`] if the process restarted before it ran.
+async fn sweep_upload_tmp(tmp_root: &std::path::Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(tmp_root).await else { return };
+    let cutoff = std::time::SystemTime::now() - UPLOAD_TMP_ORPHAN_AGE;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.metadata().await.ok().and_then(|m| m.modified().ok()).is_some_and(|m| m < cutoff) {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
 }
 
 /// [`act_sandbox`] without the payment check: for `browser_act`, whose approver already asked.
@@ -6878,6 +6941,7 @@ pub async fn act_sandbox_allowed(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
+    caller: UploadCaller<'_>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
@@ -6949,7 +7013,7 @@ pub async fn act_sandbox_allowed(
                 match resolve_sandbox_target_info(&state, super::browser_pages::page_team(&team_id)).await {
                     Some((_, workspace)) => {
                         let local = state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local;
-                        match resolve_upload_files(&state, &workspace, local, &files).await {
+                        match resolve_upload_files(&state, &workspace, local, &files, caller).await {
                             Ok(resolved) => ctrl
                                 .answer_upload(local, resolved)
                                 .await

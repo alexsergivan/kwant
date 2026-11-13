@@ -16,7 +16,12 @@ use kwnt::{
     db::{spaces::SpaceId, Database},
     router::LayaRouter,
     sandbox::computer,
-    server::{continuity::SelfScope, create_router, mcp_runtime, routes::resolve_sandbox_target_info, AppState},
+    server::{
+        continuity::{SelfScope, TurnOrigin},
+        create_router, mcp_runtime,
+        routes::resolve_sandbox_target_info,
+        AppState,
+    },
     tools::ToolRunner,
 };
 use serde_json::{json, Value};
@@ -33,6 +38,12 @@ const DOWNLOAD_PAGE: &str = "<!doctype html><title>dl</title><body>\
 const UPLOAD_PAGE: &str = "<!doctype html><html><head><title>pick</title></head><body style=margin:0>\
 <input type=file id=f style=display:none>\
 <button onclick=f.click() style='position:fixed;inset:0'>Pick a file</button>\
+<script>f.onchange=function(){document.title='picked:'+Array.from(f.files).map(function(x){return x.name}).join(',')}</script>\
+</body></html>";
+/// Same shape as `UPLOAD_PAGE`, but the input takes more than one file at once (non-blocking item 2).
+const MULTI_UPLOAD_PAGE: &str = "<!doctype html><html><head><title>pick</title></head><body style=margin:0>\
+<input type=file id=f multiple style=display:none>\
+<button onclick=f.click() style='position:fixed;inset:0'>Pick files</button>\
 <script>f.onchange=function(){document.title='picked:'+Array.from(f.files).map(function(x){return x.name}).join(',')}</script>\
 </body></html>";
 const NOTE_BYTES: &[u8] = b"hello from the download test, not a real document";
@@ -62,6 +73,13 @@ async fn serve() -> String {
                         let reply = format!(
                             "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{UPLOAD_PAGE}",
                             UPLOAD_PAGE.len()
+                        );
+                        reply.into_bytes()
+                    }
+                    "/multi-upload" => {
+                        let reply = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{MULTI_UPLOAD_PAGE}",
+                            MULTI_UPLOAD_PAGE.len()
                         );
                         reply.into_bytes()
                     }
@@ -230,6 +248,48 @@ async fn a_second_download_with_the_same_name_never_overwrites_the_first() {
 }
 
 #[tokio::test]
+async fn a_download_in_one_bots_session_never_reaches_another() {
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let e = setup().await;
+    let _chrome = ChromeGuard(e.state.config.data_dir.join("local-chrome"));
+    let kwants = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap();
+    let (bot_a, bot_b) = (&kwants[0], &kwants[1]);
+    let scope_a = SelfScope { kwant_id: bot_a.id.clone(), kwant_name: bot_a.name.clone(), sandbox_target: Some(bot_a.id.clone()), ..Default::default() };
+    let scope_b = SelfScope { kwant_id: bot_b.id.clone(), kwant_name: bot_b.name.clone(), sandbox_target: Some(bot_b.id.clone()), ..Default::default() };
+    let (_ctx_a, token_a) = mcp_runtime::prepare_turn_with_self(&e.state, bot_a, None, None, Some(scope_a)).await.unwrap();
+    let (_ctx_b, token_b) = mcp_runtime::prepare_turn_with_self(&e.state, bot_b, None, None, Some(scope_b)).await.unwrap();
+
+    let base = serve().await;
+    // Both sessions share the one local Chrome: open B's page first, so its own dedicated
+    // DevTools connection and frame tree are already up before A's download ever begins.
+    let (page, is_error) = self_tool(&e.app, &token_b, "browser_open", json!({"url": base})).await;
+    assert!(!is_error, "{page}");
+    let (page, is_error) = self_tool(&e.app, &token_a, "browser_open", json!({"url": base})).await;
+    assert!(!is_error, "{page}");
+
+    let (page, is_error) = self_tool(&e.app, &token_a, "browser_act", json!({"action": "click_text", "text": "Get the file"})).await;
+    assert!(!is_error, "{page}");
+    let report = wait_for_download(&e.app, &token_a).await;
+    assert_eq!(report["status"], "done", "{report}");
+
+    let (_, workspace_a) = resolve_sandbox_target_info(&e.state, &bot_a.id).await.expect("bot a workspace");
+    assert!(workspace_a.join("downloads/note.txt").exists(), "the download should land in A's own folder");
+
+    let (_, workspace_b) = resolve_sandbox_target_info(&e.state, &bot_b.id).await.expect("bot b workspace");
+    assert!(!workspace_b.join("downloads").exists() || std::fs::read_dir(workspace_b.join("downloads")).unwrap().next().is_none(), "nothing should have landed in B's folder");
+
+    let (page_b, is_error) = self_tool(&e.app, &token_b, "browser_page", json!({})).await;
+    assert!(!is_error, "{page_b}");
+    assert!(page_b["download"].is_null(), "B's own page never started a download, so it should report none: {page_b}");
+
+    mcp_runtime::finish_turn(&e.state, &token_a).await;
+    mcp_runtime::finish_turn(&e.state, &token_b).await;
+}
+
+#[tokio::test]
 async fn browser_upload_answers_the_pages_own_picker_with_a_workspace_file() {
     if computer::local_chrome_path().is_none() {
         eprintln!("skipped: no Chrome or Chromium installed");
@@ -273,10 +333,19 @@ async fn browser_upload_answers_the_pages_own_picker_with_a_chat_attachment() {
     let _chrome = ChromeGuard(e.state.config.data_dir.join("local-chrome"));
     let kwants = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap();
     let bot = &kwants[0];
-    let scope = SelfScope { kwant_id: bot.id.clone(), kwant_name: bot.name.clone(), sandbox_target: Some(bot.id.clone()), ..Default::default() };
+    let scope = SelfScope {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        sandbox_target: Some(bot.id.clone()),
+        origin: Some(TurnOrigin { channel_id: Some("chat-a".into()), ..Default::default() }),
+        ..Default::default()
+    };
     let (_ctx, token) = mcp_runtime::prepare_turn_with_self(&e.state, bot, None, None, Some(scope)).await.unwrap();
 
+    // A real chat attachment only gets its context_id once it's actually sent with a message
+    // (see `attachments::attach_to_message`); link it to this turn's own chat the same way.
     let attachment_id = upload_attachment(&e.state, "post.mov", b"attachment bytes, also not a real video").await;
+    e.state.db.link_attachments(&[attachment_id.clone()], "msg-a", "chat-a", Some("chat-a"), None, None).await.unwrap();
 
     let base = serve().await;
     let (page, is_error) = self_tool(&e.app, &token, "browser_open", json!({"url": format!("{base}/upload")})).await;
@@ -288,6 +357,83 @@ async fn browser_upload_answers_the_pages_own_picker_with_a_chat_attachment() {
     let (page, is_error) = self_tool(&e.app, &token, "browser_upload", json!({"files": [attachment_id]})).await;
     assert!(!is_error, "{page}");
     assert!(page["text"].as_str().unwrap_or("").contains("picked:post.mov"), "{page}");
+
+    mcp_runtime::finish_turn(&e.state, &token).await;
+}
+
+#[tokio::test]
+async fn browser_upload_refuses_an_attachment_from_another_chat() {
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let e = setup().await;
+    let _chrome = ChromeGuard(e.state.config.data_dir.join("local-chrome"));
+    let kwants = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap();
+    let bot = &kwants[0];
+    let scope = SelfScope {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        sandbox_target: Some(bot.id.clone()),
+        origin: Some(TurnOrigin { channel_id: Some("chat-a".into()), ..Default::default() }),
+        ..Default::default()
+    };
+    let (_ctx, token) = mcp_runtime::prepare_turn_with_self(&e.state, bot, None, None, Some(scope)).await.unwrap();
+
+    // Linked to a different chat than the one this turn runs in.
+    let attachment_id = upload_attachment(&e.state, "secret.mov", b"someone else's chat's file").await;
+    e.state.db.link_attachments(&[attachment_id.clone()], "msg-b", "chat-b", Some("chat-b"), None, None).await.unwrap();
+
+    let base = serve().await;
+    let (page, is_error) = self_tool(&e.app, &token, "browser_open", json!({"url": format!("{base}/upload")})).await;
+    assert!(!is_error, "{page}");
+    let (page, is_error) = self_tool(&e.app, &token, "browser_act", json!({"action": "click_text", "text": "Pick a file"})).await;
+    assert!(!is_error, "{page}");
+    wait_for_chooser(&e.app, &token).await;
+
+    let (page, is_error) = self_tool(&e.app, &token, "browser_upload", json!({"files": [attachment_id]})).await;
+    assert!(is_error, "{page}");
+    let error = page["error"].as_str().unwrap_or("");
+    assert!(error.contains("isn't a file in your folder"), "{page}");
+    assert!(!error.contains(&attachment_id), "the refusal must not reveal that the id exists: {page}");
+
+    let (page, is_error) = self_tool(&e.app, &token, "browser_page", json!({})).await;
+    assert!(!is_error, "{page}");
+    assert!(page["file_chooser"].is_object(), "nothing should have reached the page: the picker should still be open");
+
+    mcp_runtime::finish_turn(&e.state, &token).await;
+}
+
+#[tokio::test]
+async fn browser_upload_fills_a_multiple_file_input_in_one_call() {
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let e = setup().await;
+    let _chrome = ChromeGuard(e.state.config.data_dir.join("local-chrome"));
+    let kwants = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap();
+    let bot = &kwants[0];
+    let scope = SelfScope { kwant_id: bot.id.clone(), kwant_name: bot.name.clone(), sandbox_target: Some(bot.id.clone()), ..Default::default() };
+    let (_ctx, token) = mcp_runtime::prepare_turn_with_self(&e.state, bot, None, None, Some(scope)).await.unwrap();
+
+    let (_, workspace) = resolve_sandbox_target_info(&e.state, &bot.id).await.expect("bot workspace");
+    std::fs::create_dir_all(workspace.join("downloads")).unwrap();
+    std::fs::write(workspace.join("downloads/one.txt"), b"first file").unwrap();
+    std::fs::write(workspace.join("downloads/two.txt"), b"second file").unwrap();
+
+    let base = serve().await;
+    let (page, is_error) = self_tool(&e.app, &token, "browser_open", json!({"url": format!("{base}/multi-upload")})).await;
+    assert!(!is_error, "{page}");
+    let (page, is_error) = self_tool(&e.app, &token, "browser_act", json!({"action": "click_text", "text": "Pick files"})).await;
+    assert!(!is_error, "{page}");
+    wait_for_chooser(&e.app, &token).await;
+
+    let (page, is_error) =
+        self_tool(&e.app, &token, "browser_upload", json!({"files": ["downloads/one.txt", "downloads/two.txt"]})).await;
+    assert!(!is_error, "{page}");
+    let text = page["text"].as_str().unwrap_or("");
+    assert!(text.contains("picked:one.txt,two.txt"), "the page's own change handler should have seen both files: {page}");
 
     mcp_runtime::finish_turn(&e.state, &token).await;
 }
