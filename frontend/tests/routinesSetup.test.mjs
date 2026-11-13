@@ -62,7 +62,16 @@ test('a Mon–Fri routine reads "Weekdays at …"', () => {
 test('phone: the four actions sit in a 4-column grid of 44 px buttons; desktop keeps the indented row', () => {
   const h = ui.row(rowProps());
   assert.match(h, /grid grid-cols-4 gap-1\.5 sm:flex sm:flex-wrap sm:items-center sm:pl-9/);
-  assert.equal((h.match(/min-h-11 sm:min-h-0 justify-center/g) || []).length, 4);
+  assert.equal((h.match(/min-h-11 sm:min-h-0 justify-center whitespace-nowrap/g) || []).length, 4, 'each label stays on one line');
+  // Like History's chevron, Run now's Play icon is desktop only, so "Run now" fits a phone column.
+  assert.match(h, /hidden sm:block[^"]*lucide-play|lucide-play[^"]*hidden sm:block/);
+});
+
+test('Settings scrolls the open tab into view (phone tab strip), without motion', async () => {
+  const { readFileSync } = await import('node:fs');
+  const s = readFileSync(new URL('../src/components/SpaceSettings.tsx', import.meta.url), 'utf8');
+  assert.match(s, /ref=\{tab === t\.id \? currentTabRef : undefined\}\s*aria-current=\{tab === t\.id \? 'page'/);
+  assert.match(s, /currentTabRef\.current\?\.scrollIntoView\?\.\(\{ block: 'nearest', inline: 'nearest' \}\);\s*\}, \[tab, scope\]\)/);
 });
 
 const kwants = [{ id: 'k1', name: 'Ben' }];

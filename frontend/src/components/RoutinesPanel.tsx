@@ -426,8 +426,8 @@ export const RoutineForm: React.FC<{
   );
 };
 
-/** Phone: 44 px, centred, so the four buttons share one row at 390 px. */
-const rowBtn = 'min-h-11 sm:min-h-0 justify-center';
+/** Phone: 44 px, centred, one line each, so the four buttons share one row at 390 px. */
+const rowBtn = 'min-h-11 sm:min-h-0 justify-center whitespace-nowrap';
 
 /** "Mon, Nov 9": the card's last run, date only; the time is in History. */
 const lastRanDate = (iso: string | null | undefined): string | null => {
@@ -601,7 +601,7 @@ export const RoutineRow: React.FC<{
       {/* Phone: four 44 px buttons in one row, no indent, so Delete never wraps. Desktop is as before. */}
       <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:pl-9">
         <button type="button" onClick={runNow} disabled={busy} className={`${rowSmallBtn} ${rowBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
-          <Play size={11} aria-hidden="true" /> Run now
+          <Play size={11} aria-hidden="true" className="hidden sm:block" /> Run now
         </button>
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={`${rowQuietBtn} ${rowBtn}`}>
           <span className="hidden sm:inline-flex" aria-hidden="true">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span> <History size={11} aria-hidden="true" /> History
