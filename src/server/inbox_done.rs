@@ -631,14 +631,52 @@ struct CheckItem {
 
 /// A text masked as the answer excerpt is, on one line, at most `max`.
 fn masked_line(text: &str, max: usize) -> String {
-    cut(away::mask_words(&redact(text)).trim(), max)
+    cut(mask_words_keep_urls(&redact(text)).trim(), max)
 }
 
 /// A check's output or evidence: masked line by line, blank lines dropped, at most
 /// [`CHECK_EVIDENCE_CHARS`]; `None` when empty.
 fn masked_text(text: &str) -> Option<String> {
-    let lines: Vec<String> = redact(text).lines().map(|l| away::mask_words(l.trim())).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<String> = redact(text).lines().map(|l| mask_words_keep_urls(l.trim())).filter(|l| !l.is_empty()).collect();
     (!lines.is_empty()).then(|| cut(&lines.join("\n"), CHECK_EVIDENCE_CHARS))
+}
+
+/// [`away::mask_words`], but an address stays readable: `mask_words` splits `https://host/a/42`
+/// at the colon and masks the rest as a key once it is 20 characters with a digit, and an http
+/// check's address is the very thing the card names. An address keeps its scheme; its host and
+/// each piece of its path, query and fragment are masked on their own (sign-in details before an
+/// `@` always), so a key in the path or a `token=` value still goes.
+fn mask_words_keep_urls(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| match w.split_once("://") {
+            Some((scheme, rest)) if scheme == "http" || scheme == "https" => mask_url(scheme, rest),
+            _ => away::mask_words(w),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn mask_url(scheme: &str, rest: &str) -> String {
+    let piece = |s: &str| if s.is_empty() || away::mask_words(s) == s { s.to_string() } else { "[redacted]".to_string() };
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (host, tail) = rest.split_at(host_end);
+    let host = match host.rsplit_once('@') {
+        Some((_, h)) => format!("[redacted]@{}", piece(h)),
+        None => piece(host),
+    };
+    let mut out = format!("{scheme}://{host}");
+    let mut seg = String::new();
+    for c in tail.chars() {
+        if "/?&#".contains(c) {
+            out.push_str(&piece(&seg));
+            out.push(c);
+            seg.clear();
+        } else {
+            seg.push(c);
+        }
+    }
+    out.push_str(&piece(&seg));
+    out
 }
 
 /// A stored check status as a result. Only `passed` passes; a check that couldn't run (`error`)
@@ -1166,6 +1204,26 @@ mod tests {
         unapproved.approved = false;
         let v = checked(&[TaskChecks { checks: vec![unapproved], ..Default::default() }], None);
         assert_eq!(v["items"], json!([]));
+    }
+
+    #[test]
+    fn an_address_stays_readable_but_a_key_in_it_is_masked() {
+        let key = "Zq8VwK3mT9pL2rX7nB4c";
+        assert_eq!(masked_line("https://github.com/alexsergivan/kwant/pull/566", 200), "https://github.com/alexsergivan/kwant/pull/566");
+        assert_eq!(masked_line("opened https://deutero.example/study/42?round=2#top", 200), "opened https://deutero.example/study/42?round=2#top");
+        assert_eq!(masked_line(&format!("https://hooks.example/in/{key}/x"), 200), "https://hooks.example/in/[redacted]/x");
+        let q = masked_line("https://api.example/v1?token=hunter2hunter2&page=3", 200);
+        assert!(q.starts_with("https://api.example/v1?") && q.ends_with("&page=3") && !q.contains("hunter2"), "{q}");
+        let u = masked_line("https://bob:s3cret@db.example/", 200);
+        assert!(u.starts_with("https://") && u.ends_with("@db.example/") && !u.contains("s3cret"), "{u}");
+        assert_eq!(masked_line("key sk-ant-api03-abcdefghijklmnop1234 and http://x.example", 200), "key [redacted] and http://x.example");
+        // Through an http check and a criterion's evidence
+        let mut t = TaskChecks { checks: vec![check("http", json!({"url": "https://kwant.si/r/2026/11/report-42"}), "passed", Some("HTTP 200"))], ..Default::default() };
+        t.evidence = vec![evidence("ev1", "Pull request", Some("https://github.com/alexsergivan/kwant/pull/566"))];
+        t.criteria = vec![criterion("c1", "The pull request is open", "met", &["ev1"])];
+        let v = checked(&[t], None);
+        assert_eq!(v["items"][0]["what"], "https://kwant.si/r/2026/11/report-42");
+        assert_eq!(v["items"][1]["evidence"], "Pull request: https://github.com/alexsergivan/kwant/pull/566");
     }
 
     #[test]
