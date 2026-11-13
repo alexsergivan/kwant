@@ -1310,9 +1310,10 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         {isD ? dBody() : tBody()}
       </div>
       {/* Phone, team from words: Cancel and Try again share a row as equal halves (Cancel's transparent border matches
-          Try again's), and Create gets its own full-width row: basis-full, since flex-1's 0% basis never wraps. */}
+          Try again's), and Create gets its own full-width row: basis-full, since flex-1's 0% basis never wraps.
+          Desktop note: text-balance, not nowrap, so the amber "6 bots at most..." wraps to 2 even lines beside the buttons. */}
       <footer className={`flex ${phone ? 'flex-wrap' : 'items-center'} gap-2 ${phone ? 'px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]' : 'px-5 py-3.5'} border-t border-zinc-800 bg-zinc-900`}>
-        <p className={`${phone ? 'w-full' : 'flex-1 min-w-0 whitespace-nowrap'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
+        <p className={`${phone ? 'w-full' : 'flex-1 min-w-0 text-balance'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
           {!fallbackFooter && !sNote && footNote && <Undo2 size={13} aria-hidden="true" />}
           {fallbackFooter ? null : footNote}
         </p>
