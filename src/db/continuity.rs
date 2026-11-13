@@ -54,6 +54,28 @@ pub struct Memory {
     pub updated_at: DateTime<Utc>,
 }
 
+/// One memory and the embedding stored for it (see [`Database::memory_vector_rows`]).
+#[derive(Debug, Clone, FromRow)]
+pub struct MemoryVectorRow {
+    pub id: String,
+    pub text: String,
+    pub model: Option<String>,
+    pub text_hash: Option<String>,
+    pub vec: Option<Vec<u8>>,
+}
+
+impl MemoryVectorRow {
+    /// The stored vector, when it was made by `model` from the memory's current text (`hash`).
+    pub fn fresh_vector(&self, model: &str, hash: &str) -> Option<Vec<f32>> {
+        if self.model.as_deref() != Some(model) || self.text_hash.as_deref() != Some(hash) {
+            return None;
+        }
+        let bytes = self.vec.as_deref()?;
+        (bytes.chunks_exact(4).remainder().is_empty() && !bytes.is_empty())
+            .then(|| bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    }
+}
+
 /// The external-content full-text indexes over chat messages and bot memories.
 const SEARCH_INDEXES: [&str; 2] = ["messages_fts", "kwant_memories_fts"];
 
@@ -424,6 +446,26 @@ impl Database {
         } else {
             self.repair_search_index_if_out_of_step("kwant_memories", "kwant_memories_fts").await?;
         }
+        self.migrate_memory_vectors().await
+    }
+
+    /// Additive: the side table hybrid recall keeps one embedding per memory in (see
+    /// `server::memory_recall`), and a trigger that drops a memory's vector with the memory, on
+    /// every delete path. Older binaries ignore both; a vector they leave stale is noticed by its
+    /// `text_hash` and filled again.
+    async fn migrate_memory_vectors(&self) -> Result<(), DbError> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS kwant_memory_vectors (\
+             memory_id TEXT PRIMARY KEY, model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, text_hash TEXT NOT NULL)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE TRIGGER IF NOT EXISTS kwant_memories_vectors_ad AFTER DELETE ON kwant_memories BEGIN \
+             DELETE FROM kwant_memory_vectors WHERE memory_id = old.id; END",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -801,6 +843,38 @@ impl Database {
         .bind(limit.clamp(1, MAX_MEMORY_SEARCH_LIMIT))
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    /// Every note of the kwant with the vector stored for it, if any: what hybrid recall reads to
+    /// rank by meaning and to find vectors that are missing or stale.
+    pub async fn memory_vector_rows(&self, kwant_id: &str) -> Result<Vec<MemoryVectorRow>, DbError> {
+        Ok(sqlx::query_as::<_, MemoryVectorRow>(
+            "SELECT m.id, m.text, v.model, v.text_hash, v.vec FROM kwant_memories m \
+             LEFT JOIN kwant_memory_vectors v ON v.memory_id = m.id WHERE m.kwant_id = ? ORDER BY m.created_at, m.rowid",
+        )
+        .bind(kwant_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Stores (or replaces) a memory's vector as little-endian f32s. Nothing is stored for a memory
+    /// deleted meanwhile, so a slow embedding call never leaves an orphan row. True when stored.
+    pub async fn put_memory_vector(&self, memory_id: &str, model: &str, vec: &[f32], text_hash: &str) -> Result<bool, DbError> {
+        let bytes: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let res = sqlx::query(
+            "INSERT INTO kwant_memory_vectors (memory_id, model, dim, vec, text_hash) \
+             SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM kwant_memories WHERE id = ?1) \
+             ON CONFLICT(memory_id) DO UPDATE SET model = excluded.model, dim = excluded.dim, \
+             vec = excluded.vec, text_hash = excluded.text_hash",
+        )
+        .bind(memory_id)
+        .bind(model)
+        .bind(vec.len() as i64)
+        .bind(bytes)
+        .bind(text_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     pub async fn delete_memory(&self, kwant_id: &str, id: &str) -> Result<bool, DbError> {
