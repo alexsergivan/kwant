@@ -69,6 +69,7 @@ async fn fake_connect(State(f): State<Shared>, h: HeaderMap, Json(body): Json<Va
     let method = body["method"].as_str().unwrap_or_default().to_string();
     let args = body["params"]["arguments"].clone();
     let what = match method.as_str() {
+        "tools/call" if body["params"]["name"] == "COMPOSIO_SEARCH_TOOLS" => "/connect/mcp tools/call search".to_string(),
         "tools/call" => format!("/connect/mcp tools/call {}", args["toolkits"][0]["action"].as_str().unwrap_or_default()),
         m => format!("/connect/mcp {m}"),
     };
@@ -107,6 +108,18 @@ async fn fake_connect(State(f): State<Shared>, h: HeaderMap, Json(body): Json<Va
             let text = json!({"successful": true, "data": {"results": results}, "error": null}).to_string();
             json!({"content": [{"type": "text", "text": text}], "isError": false})
         }
+        // Composio's recorded answers (tests/fixtures/composio): ElevenLabs typed any way, and a
+        // made-up name, which still gets unrelated toolkits back.
+        "tools/call" if body["params"]["name"] == "COMPOSIO_SEARCH_TOOLS" => {
+            let asked = args["queries"][0]["use_case"].as_str().unwrap_or_default().to_ascii_lowercase();
+            let file = match asked.as_str() {
+                "elevenlabs" => "search_tools_elevenlabs.json",
+                "eleven labs" => "search_tools_eleven_labs.json",
+                _ => "search_tools_notarealapp123.json",
+            };
+            let text = std::fs::read_to_string(format!("{}/tests/fixtures/composio/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+            json!({"content": [{"type": "text", "text": text}], "isError": false})
+        }
         _ => json!({"content": [{"type": "text", "text": "not in this fake"}], "isError": true}),
     };
     let event = format!("event: message\ndata: {}\n\n", json!({"jsonrpc": "2.0", "id": id, "result": result}));
@@ -117,6 +130,15 @@ async fn fake_composio() -> (String, Shared) {
     let fake: Shared = Arc::default();
     let app = Router::new()
         .route("/connect/mcp", post(fake_connect))
+        // composio.dev's public app pages, as recorded: elevenlabs exists, nothing else here does.
+        .route(
+            "/toolkits/:slug",
+            get(|State(f): State<Shared>, h: HeaderMap, Path(slug): Path<String>| async move {
+                let key = [key_of(&h), h.get("x-consumer-api-key").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string()].concat();
+                f.lock().unwrap().seen.push(("HEAD".into(), format!("/toolkits/{slug}"), key, Value::Null));
+                if slug == "elevenlabs" { StatusCode::OK } else { StatusCode::NOT_FOUND }
+            }),
+        )
         .route(
             "/api/v3.1/tool_router/session",
             post(|State(f): State<Shared>, h: HeaderMap, Json(body): Json<Value>| async move {
@@ -198,6 +220,10 @@ async fn fake_composio() -> (String, Shared) {
                         ], "next_cursor": null}))),
                         _ => (StatusCode::BAD_REQUEST, Json(json!({"error": {"message": "bad cursor"}}))),
                     };
+                }
+                // A made-up name: Composio's search answers with nothing.
+                if q.get("search").is_some_and(|s| s == "notarealapp123") {
+                    return (StatusCode::OK, Json(json!({"items": []})));
                 }
                 (
                     StatusCode::OK,
@@ -706,6 +732,11 @@ async fn without_a_query_the_whole_catalogue_comes_back_for_autocomplete() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=gm", None).await;
     assert_eq!((s, v["apps"].as_array().unwrap().len()), (StatusCode::OK, 3), "{v}");
+    assert!(v.get("hint").is_none(), "{v}");
+    // Nothing in the whole catalogue: Composio answered, so line (a).
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=notarealapp123", None).await;
+    assert_eq!((s, v["apps"].clone(), v["source"].clone()), (StatusCode::OK, json!([]), json!("all")), "{v}");
+    assert_eq!(v["hint"], "kwant couldn't find an app called “notarealapp123” on Composio. Check the spelling or type the app's full name, or ask a bot to connect it.");
 
     // Another key gets its own list; a refused key gets the usual 409.
     let (s, _) = call(&env.app, "PUT", "/api/connections/composio/key", Some(json!({"api_key": "ak_good2"}))).await;
@@ -936,4 +967,128 @@ async fn replacing_the_key_switches_between_project_and_composio_connect() {
     assert_eq!(saved[0].headers, std::collections::BTreeMap::from([("x-api-key".to_string(), "ak_other".to_string())]));
     let c = calls(&fake);
     assert_eq!(c.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(), vec!["/api/v3.1/tool_router/session"], "{c:?}");
+}
+
+/// The search with a Composio Connect key: a name the popular list doesn't have is asked about
+/// with Composio Connect's search, however it is typed, and comes back with Connect.
+#[tokio::test]
+async fn composio_connect_finds_an_app_beyond_the_popular_list_by_its_name() {
+    let (env, fake) = env_with_fake().await;
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio", Some(json!({"api_key": "ck_good"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    calls(&fake);
+
+    for (typed, name) in [("ElevenLabs", "ElevenLabs"), ("elevenlabs", "ElevenLabs"), ("Eleven%20Labs", "ElevenLabs")] {
+        let (s, v) = call(&env.app, "GET", &format!("/api/connections/composio/apps?q={typed}"), None).await;
+        assert_eq!(s, StatusCode::OK, "{typed}: {v}");
+        let found: Vec<&Value> = v["apps"].as_array().unwrap().iter().filter(|a| a["slug"] == "elevenlabs").collect();
+        assert_eq!(found.len(), 1, "{typed}: {v}");
+        let app = found[0];
+        assert_eq!(app["name"], name, "{typed}: the name as first typed: {v}");
+        assert_eq!(app["logo"], "https://logos.composio.dev/api/elevenlabs");
+        assert_eq!(app["connected"], true, "from the search's connection status: {v}");
+        assert_eq!(app["found_by_name"], true);
+        assert!(app["description"].as_str().unwrap().contains("voices"), "{v}");
+        assert_eq!(v["can_connect"], true);
+        assert_eq!(v["count"], json!(v["apps"].as_array().unwrap().len()));
+        assert!(v.get("hint").is_none(), "{v}");
+        let c = calls(&fake);
+        let searches: Vec<&Value> = c.iter().filter(|x| x.1 == "/connect/mcp tools/call search").map(|x| &x.3).collect();
+        assert!(searches.len() <= 1, "{typed}: one search at most: {c:?}");
+        if let Some(asked) = searches.first() {
+            assert_eq!(asked["queries"][0]["use_case"], typed.replace("%20", " "), "only the typed name goes: {asked}");
+            assert!(c.iter().all(|x| x.2 == "ck_good" && x.1.starts_with("/connect/mcp")), "Composio Connect only, with the key: {c:?}");
+        }
+    }
+
+    // The same name again within minutes costs nothing.
+    call(&env.app, "GET", "/api/connections/composio/apps?q=ElevenLabs", None).await;
+    assert!(calls(&fake).iter().all(|c| c.1 != "/connect/mcp tools/call search"), "kept");
+
+    // Connect works for it like for any popular app.
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio/apps/elevenlabs/connect", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["redirect_url"], "https://connect.composio.dev/link/lk_elevenlabs");
+
+    // A name Composio has no app for: no apps, Composio's unrelated toolkits left out, and the
+    // line to show instead.
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=notarealapp123", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["apps"], json!([]), "{v}");
+    assert_eq!(v["count"], 0);
+    assert_eq!(v["hint"], "kwant couldn't find an app called “notarealapp123” on Composio. Check the spelling or type the app's full name, or ask a bot to connect it.");
+    let c = calls(&fake);
+    assert_eq!(c.iter().filter(|x| x.1 == "/connect/mcp tools/call search").count(), 1, "{c:?}");
+    assert_eq!(c.iter().filter(|x| x.0 == "HEAD").count(), 1, "then its one app page: {c:?}");
+    assert!(c.iter().filter(|x| x.0 == "HEAD").all(|x| x.2.is_empty()), "no key to the app pages: {c:?}");
+
+    // A popular app: the popular rows exactly as before, and no search.
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=gmail", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["apps"][0]["slug"], "gmail");
+    assert!(v["apps"].as_array().unwrap().iter().all(|a| a.get("found_by_name").is_none()), "{v}");
+    assert!(calls(&fake).iter().all(|c| c.1 != "/connect/mcp tools/call search" && c.0 != "HEAD"));
+    // A popular app typed another way: its popular row, no call. (Round 1 used "Google Search
+    // Console" here, which isn't one of the 120 popular apps, so Composio was rightly asked.)
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=google-calendar", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["apps"].as_array().unwrap().iter().any(|a| a["slug"] == "googlecalendar"), "{v}");
+    assert!(calls(&fake).iter().all(|c| c.1 != "/connect/mcp tools/call search" && c.0 != "HEAD"));
+    // A popular app's name half typed: its popular rows, no call.
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=gma", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["apps"][0]["slug"], "gmail", "{v}");
+    assert!(v.get("hint").is_none(), "{v}");
+    assert!(calls(&fake).iter().all(|c| c.1 != "/connect/mcp tools/call search" && c.0 != "HEAD"));
+}
+
+/// Composio Connect can't answer: the public app page still finds the app, and a name nobody can
+/// answer about gets the top-apps line.
+#[tokio::test]
+async fn when_composio_connect_cannot_search_the_app_page_still_finds_it() {
+    let (env, fake) = env_with_fake().await;
+    let (s, v) = call(&env.app, "POST", "/api/connections/composio", Some(json!({"api_key": "ck_good"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // The saved key now fails at Composio Connect.
+    let space = kwnt::db::spaces::SpaceId::default_space();
+    let mut server = env.state.db.list_mcp_servers(&space).await.unwrap().remove(0);
+    server.headers.insert("x-consumer-api-key".into(), "ck_down".into());
+    env.state.db.update_mcp_server(&server).await.unwrap();
+    calls(&fake);
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=ElevenLabs", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let app = v["apps"].as_array().unwrap().iter().find(|a| a["slug"] == "elevenlabs").cloned().unwrap_or_else(|| panic!("{v}"));
+    assert_eq!(app["name"], "ElevenLabs");
+    assert_eq!(app["connected"], false, "unknown without Composio Connect: {v}");
+    assert!(calls(&fake).iter().any(|c| c.0 == "HEAD" && c.1 == "/toolkits/elevenlabs"));
+}
+
+/// Before Composio is added: the public app page, with nothing but the app's name.
+#[tokio::test]
+async fn before_setup_an_app_beyond_the_popular_list_is_found_on_its_page() {
+    let (env, fake) = env_with_fake().await;
+    for typed in ["ElevenLabs", "elevenlabs", "Eleven%20Labs"] {
+        let (s, v) = call(&env.app, "GET", &format!("/api/connections/composio/apps?q={typed}"), None).await;
+        assert_eq!(s, StatusCode::OK, "{typed}: {v}");
+        assert_eq!((v["mode"].clone(), v["can_connect"].clone()), (Value::Null, json!(false)), "{v}");
+        let app = v["apps"].as_array().unwrap().iter().find(|a| a["slug"] == "elevenlabs").cloned().unwrap_or_else(|| panic!("{typed}: {v}"));
+        assert_eq!(app["name"], "ElevenLabs", "{typed}: {v}");
+        assert_eq!(app["logo"], "https://logos.composio.dev/api/elevenlabs");
+        assert!(v.get("hint").is_none());
+    }
+    let c = calls(&fake);
+    assert!(!c.is_empty() && c.iter().all(|x| x.0 == "HEAD" && x.1.starts_with("/toolkits/") && x.2.is_empty()), "only app pages, no key: {c:?}");
+    // ElevenLabs: its one page (elevenlabs reuses the answer); Eleven Labs: its 3 candidates.
+    assert_eq!(c.len(), 4, "at most 3 pages a name, each name once: {c:?}");
+
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=notarealapp123", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["apps"], json!([]));
+    assert_eq!(v["hint"], "kwant couldn't find an app called “notarealapp123” on Composio. Check the spelling or type the app's full name, or ask a bot to connect it.");
+    // Pages out of reach: the line says what kwant could check.
+    let env2 = setup_with(|state| state.composio_api = Arc::new(ComposioApi::new("http://127.0.0.1:9"))).await;
+    let (s, v) = call(&env2.app, "GET", "/api/connections/composio/apps?q=Eleven%20Labs", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["apps"], json!([]), "{v}");
+    assert_eq!(v["hint"], "“Eleven Labs” isn't one of Composio's top apps, and kwant couldn't reach Composio to check the rest. Try again in a minute, or ask a bot to connect it.");
 }
