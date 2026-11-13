@@ -21,6 +21,38 @@ pub const MAX_TURNS: usize = 5;
 /// How often one kwant may speak in a discussion (a reply when a teammate @mentions them back).
 pub const MAX_TURNS_PER_KWANT: usize = 2;
 
+/// Puts the teammates the speaker just @mentioned at the front of the discussion `queue`, in
+/// mention order, each marked as asked by the speaker: "@Ben, get the prices" means Ben goes
+/// next, before any planned reactor. A mentioned teammate already in the queue (a planned
+/// reactor or an earlier mention) moves to the front instead of keeping its late place. The
+/// speaker itself, a teammate mentioned twice, and one who already spoke
+/// [`MAX_TURNS_PER_KWANT`] times (`spoke`, by id) are left out. The queue never grows past one
+/// entry per mentioned teammate; [`MAX_TURNS`] still ends the discussion.
+pub fn put_mentions_first<K: Clone>(
+    queue: &mut std::collections::VecDeque<(K, Option<String>)>,
+    mentioned: &[K],
+    id_of: impl Fn(&K) -> &str,
+    speaker_id: &str,
+    speaker_name: &str,
+    spoke: &std::collections::HashMap<String, usize>,
+) {
+    let mut front: Vec<(K, Option<String>)> = Vec::new();
+    for k in mentioned {
+        let id = id_of(k);
+        if id == speaker_id
+            || spoke.get(id).copied().unwrap_or(0) >= MAX_TURNS_PER_KWANT
+            || front.iter().any(|(f, _)| id_of(f) == id)
+        {
+            continue;
+        }
+        queue.retain(|(q, _)| id_of(q) != id);
+        front.push((k.clone(), Some(speaker_name.to_string())));
+    }
+    for entry in front.into_iter().rev() {
+        queue.push_front(entry);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Speak(String),
@@ -57,7 +89,7 @@ pub fn opening_prompt(user_prompt: &str, team: &str, responders: &[String]) -> S
         "You'll then wrap up with a short summary.".to_string()
     } else {
         format!(
-            "{} will react to your points next (they get the turn automatically, so don't @mention them), then you'll wrap up with a short summary.",
+            "{} will react to your points next (they get the turn anyway; @mention one of them only to hand that teammate a specific task, which makes them go first), then you'll wrap up with a short summary.",
             responders.join(" and ")
         )
     };
@@ -145,6 +177,59 @@ mod tests {
         assert!(summary.contains("Never leave open a question that the user's message, a URL in it"), "{summary}");
         assert!(summary.contains("only for real decisions the user must make"), "{summary}");
         assert!(!summary.contains("only if decisions remain for the user"), "{summary}");
+    }
+
+    use std::collections::{HashMap, VecDeque};
+
+    /// The queue after `speaker` (Ann) mentions `mentioned`, as "name<-asked_by" (or just "name").
+    fn reorder(queue: &[(&str, Option<&str>)], mentioned: &[&str], spoke: &[(&str, usize)]) -> Vec<String> {
+        let mut q: VecDeque<(String, Option<String>)> =
+            queue.iter().map(|(n, a)| (n.to_string(), a.map(str::to_string))).collect();
+        let mentioned: Vec<String> = mentioned.iter().map(|s| s.to_string()).collect();
+        let spoke: HashMap<String, usize> = spoke.iter().map(|(n, c)| (n.to_string(), *c)).collect();
+        put_mentions_first(&mut q, &mentioned, |k| k.as_str(), "Ann", "Ann", &spoke);
+        q.into_iter().map(|(n, a)| a.map_or(n.clone(), |a| format!("{n}<-{a}"))).collect()
+    }
+
+    #[test]
+    fn a_mentioned_teammate_who_was_not_planned_goes_next() {
+        // Ann opened; Cody is the planned reactor; Ann asks Ben for the prices.
+        assert_eq!(reorder(&[("Cody", None)], &["Ben"], &[("Ann", 1)]), ["Ben<-Ann", "Cody"]);
+    }
+
+    #[test]
+    fn a_mentioned_planned_reactor_moves_ahead_of_the_others_and_is_asked_by_the_speaker() {
+        assert_eq!(reorder(&[("Ben", None), ("Cody", None)], &["Cody"], &[("Ann", 1)]), ["Cody<-Ann", "Ben"]);
+        // Never queued twice
+        let after = reorder(&[("Ben", None), ("Cody", None), ("Dana", Some("Ben"))], &["Dana"], &[]);
+        assert_eq!(after, ["Dana<-Ann", "Ben", "Cody"]);
+    }
+
+    #[test]
+    fn two_mentions_keep_mention_order_ahead_of_the_queue() {
+        assert_eq!(reorder(&[("Ben", None)], &["Dana", "Cody"], &[]), ["Dana<-Ann", "Cody<-Ann", "Ben"]);
+        assert_eq!(reorder(&[("Cody", None), ("Dana", None)], &["Dana", "Cody", "Dana"], &[]), ["Dana<-Ann", "Cody<-Ann"]);
+    }
+
+    #[test]
+    fn a_teammate_out_of_turns_or_the_speaker_is_not_requeued() {
+        let out = MAX_TURNS_PER_KWANT;
+        // Ben already spoke his share: nothing changes, not even his planned place (he has none).
+        assert_eq!(reorder(&[("Cody", None)], &["Ben"], &[("Ben", out)]), ["Cody"]);
+        // A mention of the speaker hands nothing on.
+        assert_eq!(reorder(&[("Cody", None)], &["Ann"], &[]), ["Cody"]);
+        // One under the cap still goes next.
+        assert_eq!(reorder(&[("Cody", None)], &["Ben"], &[("Ben", out - 1)]), ["Ben<-Ann", "Cody"]);
+        // No mentions: the planned order stands.
+        assert_eq!(reorder(&[("Ben", None), ("Cody", None)], &[], &[]), ["Ben", "Cody"]);
+    }
+
+    #[test]
+    fn the_opening_lets_the_lead_hand_a_planned_reactor_a_task() {
+        let open = opening_prompt("Plan the launch", "core", &["Ben".into(), "Cody".into()]);
+        assert!(!open.contains("don't @mention"), "{open}");
+        assert!(open.contains("Ben and Cody will react to your points next"), "{open}");
+        assert!(open.contains("@mention one of them only to hand that teammate a specific task, which makes them go first"), "{open}");
     }
 
     #[test]

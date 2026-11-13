@@ -1949,16 +1949,12 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
                 if !contributors.contains(&kwant.name) {
                     contributors.push(kwant.name.clone());
                 }
-                for i in crate::router::handoff_targets(&text, &names) {
-                    let k = &scope.teammates[i];
-                    let turns_taken = spoke.get(&k.id).copied().unwrap_or(0);
-                    if k.id != kwant.id
-                        && turns_taken < discussion::MAX_TURNS_PER_KWANT
-                        && !queue.iter().any(|(q, _)| q.id == k.id)
-                    {
-                        queue.push_back((k.clone(), Some(kwant.name.clone())));
-                    }
-                }
+                // Whoever was @mentioned goes next, in mention order, ahead of the planned reactors.
+                let mentioned: Vec<Kwant> = crate::router::handoff_targets(&text, &names)
+                    .into_iter()
+                    .map(|i| scope.teammates[i].clone())
+                    .collect();
+                discussion::put_mentions_first(&mut queue, &mentioned, |k| k.id.as_str(), &kwant.id, &kwant.name, &spoke);
                 previous = Some(kwant.clone());
             }
         }
