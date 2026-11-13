@@ -146,6 +146,7 @@ test('A: Open goes to Space settings › General and rings the Dev mode card onc
   const app = src('App.tsx');
   assert.match(app, /movedPointer=\{movedPointerShows\(\{ established: whatsNewEstablished, seen: movedHidden \}\)\}/);
   assert.match(app, /const openMoved = \(\) => \{\s*openSpaceSettings\('general'\);\s*ringDevSettings\(\);\s*hideMoved\(\);/);
+  assert.match(app, /<GetStarted[\s\S]*?onDismissed=\{hideMoved\}/, 'finishing Get started (someone new) hides the pointer for good');
 });
 
 // ------------------------------------------------------------------ C: #general's three asks

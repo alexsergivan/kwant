@@ -3806,7 +3806,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         bots={kwants}
         engines={engines.engines}
         reloadEngines={engines.reload}
-        onDismissed={() => undefined}
+        // Someone who finishes Get started in 0.9.8 never saw the old sidebar controls: no "moved" pointer.
+        onDismissed={hideMoved}
         spaceName={space.name}
         onImported={reloadAfterImport}
         mainSpace={space.is_default}
