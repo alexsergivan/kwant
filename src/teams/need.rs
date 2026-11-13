@@ -268,8 +268,8 @@ pub fn row_keys(bots: &[DraftBot]) -> Vec<String> {
 /// happens without the person.
 pub fn team_instructions(need: &str) -> String {
     format!(
-        "This team was drafted from the person's own words.\nThe lead turns each request into a small plan, hands each job to the right member and checks it is done.\n\n\
-         What the person asked for, in their words:\n{need}\n\n\
+        "This team was drafted from the words below.\nThe lead turns each request into a small plan, hands each job to the right member and checks it is done.\n\n\
+         The words it was drafted from:\n{need}\n\n\
          Never without the person:\n\
          - Send, post or publish anything.\n\
          - Spend money, buy, book or promise anything to anyone.\n\
@@ -384,6 +384,14 @@ mod tests {
     #[test]
     fn team_instructions_quote_the_words_and_keep_the_person_in_charge() {
         let t = team_instructions("I run a bakery");
-        assert!(t.contains("I run a bakery") && t.contains("Never without the person"));
+        assert!(t.starts_with("This team was drafted from the words below.\n"));
+        assert!(t.contains("The words it was drafted from:\nI run a bakery\n\n"));
+        assert!(!t.contains("the person's own words") && !t.contains("What the person asked for"));
+        assert!(t.ends_with(
+            "Never without the person:\n\
+             - Send, post or publish anything.\n\
+             - Spend money, buy, book or promise anything to anyone.\n\
+             - Delete or change anything you can't undo."
+        ));
     }
 }
