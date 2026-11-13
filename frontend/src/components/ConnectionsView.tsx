@@ -370,7 +370,7 @@ export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen =
     if ('error' in body) return setError(body.error);
     setSaving(true);
     setError(null);
-    const problem = await onAdd(body.url, body.api_key ?? '', body.enabled);
+    const problem = await onAdd(body.url ?? '', body.api_key ?? '', body.enabled);
     setSaving(false);
     if (problem) setError(problem);
     else (setOpen(false), setUrl(''), setKey(''), setEnabled(false));

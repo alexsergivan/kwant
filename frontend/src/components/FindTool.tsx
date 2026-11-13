@@ -110,11 +110,11 @@ const POPULAR = ['gmail', 'googlecalendar', 'slack', 'notion', 'github', 'google
 const PER_GROUP = 5;
 
 /** What an app does, for the Composio rows we know; Composio's lists carry no description. */
-const KNOWN_BLURBS: Record<string, string> = Object.fromEntries([
-  ...COMPOSIO_ONLY_APPS.map((a) => [a.toolkit, a.blurb]),
-  ...APP_TILES.map((t) => [t.slug, `${t.blurb}.`]),
-]);
-const TINT: Record<string, string> = Object.fromEntries(APP_TILES.map((t) => [t.slug, t.tint]));
+const KNOWN_BLURBS: Record<string, string> = {};
+for (const a of COMPOSIO_ONLY_APPS) if (a.blurb) KNOWN_BLURBS[a.toolkit] = a.blurb;
+for (const t of APP_TILES) KNOWN_BLURBS[t.slug] = `${t.blurb}.`;
+const TINT: Record<string, string> = {};
+for (const t of APP_TILES) if (t.tint) TINT[t.slug] = t.tint;
 
 const FALLBACK_APPS: ComposioListedApp[] = COMPOSIO_ONLY_APPS.map((a) => ({ slug: a.toolkit, name: a.label }));
 

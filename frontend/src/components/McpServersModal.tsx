@@ -23,7 +23,6 @@ import {
   LogOut,
   Users,
   ExternalLink,
-  AlertTriangle,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
