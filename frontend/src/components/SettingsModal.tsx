@@ -35,8 +35,8 @@ import { signedInDevicesVisible } from '../deviceSignIn';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { ClaudeIsolationRow } from './ClaudeIsolationRow';
 import { LayaStatusRow } from './LayaStatus';
-import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
-import { WhatsNewAbout } from './WhatsNewSheet';
+import { useAppUpdate } from './AppUpdateBanner';
+import { VersionCard } from './VersionCard';
 import { StarAskSettingsLink } from './StarAsk';
 import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
 import { IDEA_CAP_DEFAULT, IDEA_CAP_MAX, IDEA_CAP_MIN, ideaCapForSwitch, lastIdeaCap, parseIdeaCap, rememberIdeaCap } from '../ideaShell';
@@ -343,7 +343,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [webhookUrl, setWebhookUrl] = useState('');
   const [notifyOn, setNotifyOn] = useState<NotifyKind[]>(NOTIFY_KINDS.map((k) => k.id));
   // The Mac app's update API answered: only then is there an App updates notification to switch
-  const appUpdates = useAppUpdate().model.status !== null;
+  const appUpdates = useAppUpdate().model.status?.canInstall === true;
   const [browserNotify, setBrowserNotify] = useState(browserNotifyEnabled);
   const [permission, setPermission] = useState(notificationPermission);
   const [notifyEnv] = useState(() => readNotifyEnv());
@@ -671,8 +671,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           </div>
         </div>
 
-        <AppUpdateAbout />
-        <WhatsNewAbout />
+        <VersionCard />
         <StarAskSettingsLink />
 
         {computer.state.settings && (
