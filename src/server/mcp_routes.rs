@@ -112,8 +112,11 @@ pub async fn update_server(
         .map_err(db_err)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "MCP server not found"))?;
     let server = mcp::build_server(input, Some(&existing)).map_err(|m| err(StatusCode::BAD_REQUEST, m))?;
-    let space = state.db.space_of_mcp_server(&id).await.map_err(db_err)?.unwrap_or_else(SpaceId::default_space);
-    check_name_free(&state, &space, &server.name, Some(&id)).await?;
+    // Only a new name is checked, so a case-only pair saved before this rule can still be edited and switched
+    if server.name != existing.name {
+        let space = state.db.space_of_mcp_server(&id).await.map_err(db_err)?.unwrap_or_else(SpaceId::default_space);
+        check_name_free(&state, &space, &server.name, Some(&id)).await?;
+    }
     let updated = state.db.update_mcp_server(&server).await.map_err(db_err)?;
     if updated.is_some() && (server.url != existing.url || server.transport != existing.transport) {
         // Tokens and registrations belong to the old address

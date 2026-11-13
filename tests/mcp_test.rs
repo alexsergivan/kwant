@@ -246,3 +246,25 @@ async fn a_server_may_change_only_the_case_of_its_own_name() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["name"], "Stripe");
 }
+
+#[tokio::test]
+async fn a_case_only_pair_saved_before_the_rule_can_still_be_edited_but_not_renamed_onto() {
+    let (app, db, _tmp) = app().await;
+    let (status, _) = call(&app, "POST", "/api/mcp/servers", Some(named("stripe"))).await;
+    assert_eq!(status, StatusCode::OK);
+    // The pair the hand-add form allowed before this rule, written straight to the database
+    let older = McpServer { name: "Stripe".into(), ..echo_server(30) };
+    let older = db.create_mcp_server(&kwnt::db::spaces::SpaceId::default_space(), &older).await.unwrap();
+    let uri = format!("/api/mcp/servers/{}", older.id);
+
+    let mut off = named("Stripe");
+    off["enabled"] = json!(false);
+    let (status, updated) = call(&app, "PUT", &uri, Some(off)).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["enabled"], false);
+    assert_eq!(updated["name"], "Stripe");
+
+    let (status, e) = call(&app, "PUT", &uri, Some(named("STRIPE"))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{e}");
+    assert_eq!(db.get_mcp_server(&older.id).await.unwrap().unwrap().name, "Stripe");
+}
