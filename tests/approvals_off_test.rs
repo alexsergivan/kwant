@@ -371,6 +371,106 @@ async fn smart_lets_a_read_only_command_through_in_a_kwant_started_turn() {
     assert_eq!(ask_with(&e, &e.bot, "Bash", bash("touch x"), Default::default()).await, Ok(true));
 }
 
+// ── Must-hold 2 (#569, 0.9.8): "Don't ask" still asks at the floors in a kwant-started turn ──
+// Each runs through the real permission route in a turn started like Loose ends' (not strict):
+// approvals off lets an ordinary change through, and the floor still raises a card that says
+// who started the turn. Flight School's is in flight_school_test.rs (it needs a claimed task).
+
+#[tokio::test]
+async fn dont_ask_still_asks_for_a_payment_in_a_kwant_started_turn() {
+    let e = setup().await;
+    put(&e, &format!("/api/kwants/{}/approvals", e.bot.id), "off").await;
+    let bash = |c: &str| json!({"command": c});
+    assert_eq!(ask_with(&e, &e.bot, "Bash", bash("touch x"), kwant_started()).await, Ok(true), "off runs an ordinary change");
+    let stripe = "curl -X POST https://api.stripe.com/v1/charges -u sk_test_x: -d amount=100 -d currency=usd";
+    let card = ask_with(&e, &e.bot, "Bash", bash(stripe), kwant_started()).await.expect_err("a payment asks");
+    assert!(card["payment_reason"].as_str().is_some_and(|r| r.contains("stripe.com")), "{card}");
+    assert_eq!(card["started_by"], "Loose ends", "{card}");
+}
+
+#[tokio::test]
+async fn dont_ask_still_asks_at_the_production_floor_in_a_kwant_started_turn() {
+    let e = setup().await;
+    put(&e, &format!("/api/kwants/{}/approvals", e.bot.id), "off").await;
+    let space = e.state.db.get_kwant(&e.bot.id).await.unwrap().unwrap().space_id;
+    e.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    let bash = |c: &str| json!({"command": c});
+    assert_eq!(ask_with(&e, &e.bot, "Bash", bash("touch notes.txt"), kwant_started()).await, Ok(true), "off runs an ordinary change");
+    for command in ["git push origin main", "sqlite3 demo.db 'DROP TABLE demo_auto'"] {
+        let card = ask_with(&e, &e.bot, "Bash", bash(command), kwant_started()).await.expect_err(command);
+        assert!(card["prod_floor"].is_object(), "{command}: {card}");
+        assert_eq!(card["started_by"], "Loose ends", "{command}: {card}");
+    }
+}
+
+// ── Must-hold 4 (#569, 0.9.8): "Ask only when risky" in a kwant-started turn ──
+// Only a shell command that just reads runs without a card; each of these asks, even where an
+// ordinary turn's smart check alone would let it through (it is in the bot's folder).
+
+/// The card `command` raises under "Ask only when risky" in a turn kwant started on its own.
+async fn smart_card(command: &str) -> Value {
+    let e = setup().await;
+    e.state.db.set_kwant_approvals(&e.bot.id, "smart").await.unwrap();
+    let card = match ask_with(&e, &e.bot, "Bash", json!({"command": command}), kwant_started()).await {
+        Err(card) => card,
+        Ok(allowed) => panic!("`{command}` must ask in a kwant-started turn, answered without a card (allowed {allowed})"),
+    };
+    assert_eq!(card["always_ask"], true, "{command}: {card}");
+    assert_eq!(card["started_by"], "Loose ends", "{command}: {card}");
+    card
+}
+
+#[tokio::test]
+async fn risky_only_runs_git_status_and_ls_without_a_card_in_a_kwant_started_turn() {
+    let e = setup().await;
+    e.state.db.set_kwant_approvals(&e.bot.id, "smart").await.unwrap();
+    for command in ["git status", "ls", "ls -la", "git status --short && ls"] {
+        assert_eq!(ask_with(&e, &e.bot, "Bash", json!({"command": command}), kwant_started()).await, Ok(true), "{command}");
+    }
+    let ran = get(&e, "/api/approvals?space=spc_default&status=auto_allowed").await;
+    let row = ran.as_array().unwrap().iter().find(|r| r["details"]["arguments"]["command"] == "git status").expect("on record");
+    assert_eq!(row["details"]["started_by"], "Loose ends", "{row}");
+}
+
+#[tokio::test]
+async fn risky_only_asks_for_rm_rf_in_a_kwant_started_turn() {
+    smart_card("rm -rf build").await;
+}
+
+#[tokio::test]
+async fn risky_only_asks_for_git_add_dot_in_a_kwant_started_turn() {
+    smart_card("git add .").await;
+}
+
+#[tokio::test]
+async fn risky_only_asks_for_echo_into_a_file_in_a_kwant_started_turn() {
+    smart_card("echo x > f").await;
+}
+
+#[tokio::test]
+async fn risky_only_asks_for_git_dash_c_in_a_kwant_started_turn() {
+    // A global option before the subcommand: `-C` points git at another repository
+    smart_card("git -C . status").await;
+}
+
+#[tokio::test]
+async fn risky_only_asks_for_git_diff_output_in_a_kwant_started_turn() {
+    smart_card("git diff --output=f").await;
+}
+
+#[tokio::test]
+async fn risky_only_asks_for_rg_pre_in_a_kwant_started_turn() {
+    // `--pre` runs a program on every file it searches
+    smart_card("rg --pre cat x").await;
+}
+
+#[tokio::test]
+async fn risky_only_asks_for_a_var_prefix_in_a_kwant_started_turn() {
+    // LC_ALL is one smart's own check allows, so this is the read-only rule asking
+    smart_card("LC_ALL=C ls").await;
+    smart_card("GIT_EXTERNAL_DIFF=./x git diff").await;
+}
+
 #[tokio::test]
 async fn a_bot_override_beats_the_space_both_ways() {
     let e = setup().await;

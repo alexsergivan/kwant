@@ -2066,6 +2066,8 @@ mod tests {
             "cat run.sh",
             "rg -n foo src 2>/dev/null",
             "wc -l run.sh; pwd",
+            "ls",
+            "git status --short && ls",
         ] {
             assert!(reads_only(cmd, &ws), "{cmd} only reads");
             assert!(classify(cmd, &ws).is_allowed(), "{cmd} passes classify first");
@@ -2091,6 +2093,17 @@ mod tests {
             "cat /etc/passwd",
             "curl https://example.com",
             "ls && rm x",
+            // Must-hold 4 (#569): each of these asks in a kwant-started turn
+            "rm -rf src",
+            "git add .",
+            "echo x > f",
+            "git -C . status",
+            "git diff --output=f",
+            "git diff --output f",
+            "rg --pre cat x",
+            "rg --pre=cat x",
+            "LC_ALL=C ls",
+            "GIT_EXTERNAL_DIFF=./x git diff",
         ] {
             assert!(!reads_only(cmd, &ws), "{cmd} must not count as read-only");
         }
