@@ -146,6 +146,8 @@ fn is_transient(t: &str) -> bool {
 pub fn classify(source: &str, status: &str, text: &str) -> &'static str {
     let t = text.to_lowercase();
     match (source, status) {
+        // A waiting check past its deadline: only the person can wait longer or verify by hand
+        ("check", "waited_too_long") => "waited_too_long",
         ("check", "failed") if t.contains("exit code 127") || t.contains("command not found") => "bad_spec",
         ("check", "failed") => "check_failed",
         ("check", _) if is_transient(&t) => "transient",
@@ -221,6 +223,7 @@ fn fix_text(class: &str) -> Option<&'static str> {
         "quota" => Some("Usage limit reached: wait for it to reset or switch account, then retry."),
         "budget" => Some("Remove or raise the task's token limit, then retry it."),
         "denied" => Some("An action was denied during the run. Decide whether it may run, then retry."),
+        "waited_too_long" => Some("The check didn't answer in time. Wait longer, or verify by hand."),
         _ => None,
     }
 }

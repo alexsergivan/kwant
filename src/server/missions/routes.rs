@@ -978,6 +978,34 @@ pub async fn approve_check(State(state): State<AppState>, RawQuery(q): RawQuery,
     Json(super::check_json(&t, &check, super::name_of(&state, check.checked_by.as_deref()).await)).into_response()
 }
 
+/// `POST /api/checks/:id/wait-more` (person only): a check waiting on an outside service, or
+/// stopped at its deadline, waits 24 h more and runs again on the next tick. The task must be in
+/// review.
+pub async fn wait_more(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>) -> Response {
+    let check = match state.db.get_check(&id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return not_found("check"),
+        Err(e) => return internal(e),
+    };
+    let t = match load_task(&state, q.as_deref(), &check.task_id).await {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    if t.state != "review" {
+        return conflict(format!("only a task in review waits on its checks; this one is {}", t.state));
+    }
+    let hours = crate::db::missions::WAIT_MORE_HOURS;
+    match state.db.extend_wait(&id, chrono::Utc::now(), hours).await {
+        Ok(true) => {}
+        Ok(false) => return conflict(format!("the check is {}, not waiting", check.status)),
+        Err(e) => return internal(e),
+    }
+    let _ = state.db.log_task_event(&t.id, "check_wait_more", "person", &json!({"check_id": id, "hours": hours})).await;
+    let check = state.db.get_check(&id).await.ok().flatten().unwrap_or(check);
+    emit_task(&state, &t).await;
+    Json(super::check_json(&t, &check, super::name_of(&state, check.checked_by.as_deref()).await)).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

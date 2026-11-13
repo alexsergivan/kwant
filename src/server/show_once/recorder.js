@@ -166,6 +166,17 @@
     return true;
   } });
 
+  // The person picked a file kwnt's own sheet put in (the live view can't show Chrome's native
+  // picker): the page sees an untrusted change, which the listener below ignores. kwnt's server
+  // calls this, in this world only, right after setting the input's files, so the upload is still
+  // logged as an `upload` step like a native pick, label only, never the file's name (S-C13).
+  Object.defineProperty(globalThis, '__kwntRecorderUpload', { value: function (el) {
+    if (!el || el.nodeType !== 1 || el.tagName !== 'INPUT' || String(el.type).toLowerCase() !== 'file') return false;
+    var ff = facts(el);
+    post({ kind: 'upload', field: ff, label: label(ff) });
+    return true;
+  } });
+
   document.addEventListener('change', function (e) {
     var el = e.target;
     if (!e.isTrusted) { if (isTextField(el)) scripted.add(el); return; }

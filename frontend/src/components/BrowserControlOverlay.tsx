@@ -20,7 +20,7 @@ import { resizeFor } from '../browserInput';
 import { domainOf } from '../humanSteps';
 import { haptic } from '../haptics';
 import type { BrowserStream } from '../useBrowserStream';
-import { PageDialogModal, SelectPopover } from './BrowserPopups';
+import { FileChooserModal, FileChooserToast, PageDialogModal, SelectPopover } from './BrowserPopups';
 
 /** Sends one gesture to the page: presses, releases, taps and text wait for an ack, moves don't. */
 export function sendPageInput(send: (payload: Record<string, unknown>, input?: boolean) => void, input: PageInput) {
@@ -281,8 +281,11 @@ export interface BrowserControlOverlayProps {
   onHandBack: () => void;
   /** The page's viewport size in CSS px (1280×800 unless the desktop stage resized it). */
   page?: Size;
-  /** For the page's own <select> lists and alert/confirm/prompt, which the screencast can't show. */
-  stream?: Pick<BrowserStream, 'select' | 'dialog' | 'clearSelect' | 'clearDialog'>;
+  /** For the page's own <select> lists, alert/confirm/prompt and file picker, which the screencast can't show. */
+  stream?: Pick<
+    BrowserStream,
+    'select' | 'dialog' | 'clearSelect' | 'clearDialog' | 'fileChooser' | 'fileChooserError' | 'fileChooserDone' | 'answerFileChooser' | 'cancelFileChooser' | 'clearFileChooserError' | 'clearFileChooserDone'
+  >;
   /** An open sign-in, code or other step for this browser: its Done sits on the status line. */
   step?: { need: string; doneLabel: string; onDone: () => Promise<string | void> | void } | null;
   /** The person controls the page (or a human step lets their input through): size it to the stage. */
@@ -573,6 +576,26 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
             }}
           />
         </div>
+      )}
+      {stream?.fileChooser && (
+        <div className="absolute inset-x-0 bottom-0 z-50" style={{ top: barHeight }} data-dialog-area>
+          <FileChooserModal
+            key={stream.fileChooser.id}
+            request={stream.fileChooser}
+            failure={stream.fileChooserError}
+            onAnswer={(attachmentIds) => stream.answerFileChooser(stream.fileChooser!.id, attachmentIds)}
+            onCancel={() => stream.cancelFileChooser(stream.fileChooser!.id)}
+            onClearFailure={stream.clearFileChooserError}
+            compact
+          />
+        </div>
+      )}
+      {stream && !stream.fileChooser && stream.fileChooserDone && (
+        <FileChooserToast
+          names={stream.fileChooserDone.names}
+          onDone={stream.clearFileChooserDone}
+          style={{ top: barHeight + 12 }}
+        />
       )}
 
       <div className="shrink-0" style={{ height: 'env(safe-area-inset-bottom)' }} />

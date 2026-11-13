@@ -28,9 +28,13 @@ export const PLACEHOLDER_PAD = 24;
  * long one would wrap and be cut mid-glyph. Unknown width (before layout): the short one.
  */
 export function phonePlaceholder(name: string, fieldWidth: number, measure: (text: string) => number): string {
-  const long = `Message ${name}`;
-  if (!(fieldWidth > PLACEHOLDER_PAD)) return 'Message';
-  return measure(long) <= fieldWidth - PLACEHOLDER_PAD ? long : 'Message';
+  return fitPlaceholder(`Message ${name}`, 'Message', fieldWidth, measure);
+}
+
+/** The long placeholder when it fits the field, else the short one. */
+export function fitPlaceholder(long: string, short: string, fieldWidth: number, measure: (text: string) => number): string {
+  if (!(fieldWidth > PLACEHOLDER_PAD)) return short;
+  return measure(long) <= fieldWidth - PLACEHOLDER_PAD ? long : short;
 }
 
 let ctx: CanvasRenderingContext2D | null | undefined;
