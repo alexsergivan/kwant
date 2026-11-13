@@ -464,13 +464,33 @@ export function storeChoice(space: string, c: AiChoice | null) {
  * Whether #general shows the card (C4): not dismissed here, and either nothing can run yet or the
  * card was started here, or #general is still empty in a space with only the starter team (a fresh install that
  * found an account already signed in, D2). An older install with any history never sees it.
+ *
+ * The fresh-install welcome and its starter bots belong to the main space (`mainSpace`, the server's
+ * `is_default`; left out counts as main). Another space shows the card only while nothing can run there:
+ * a new space that got its bots (from words, a template or an import) with an account ready is not a fresh
+ * install, and the main space's starter bots aren't in it.
  */
-export function showCard(opts: { dismissed: boolean; canRun: boolean | null; generalMessages: number; teams: number; started: boolean }): boolean {
+export function showCard(opts: { dismissed: boolean; canRun: boolean | null; generalMessages: number; teams: number; started: boolean; mainSpace?: boolean }): boolean {
   if (opts.dismissed) return false;
-  if (opts.canRun === false || opts.started) return true;
+  if (opts.canRun === false) return true;
+  if (opts.mainSpace === false) return false;
+  if (opts.started) return true;
   if (opts.canRun === null) return false;
   // A fresh install comes with one starter team (core-engineering), so one team still counts as fresh.
   return opts.generalMessages === 0 && opts.teams <= 1;
+}
+
+/**
+ * Step 3's "keep" tile outside the main space: the bots this space already has, never the main space's
+ * starters. Up to three names, then "and N more".
+ */
+export function keepOwnBotsLine(names: string[], spaceName: string): string {
+  const where = `already in ${spaceName}.`;
+  if (!names.length) return `The bots ${where}`;
+  const shown = names.slice(0, names.length > 3 ? 2 : 3);
+  const rest = names.length - shown.length;
+  const list = rest > 0 ? `${shown.join(', ')} and ${rest} more` : shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+  return `${list}, ${where}`;
 }
 
 /**

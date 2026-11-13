@@ -3734,6 +3734,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     generalMessages: messages.length,
     teams: teams.length,
     started: getStartedWasStarted(space.id),
+    mainSpace: space.is_default,
   });
   // New bots, teams and their team chats after an import (Space settings or Get started).
   const reloadAfterImport = () => {
@@ -3753,6 +3754,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         onDismissed={() => undefined}
         spaceName={space.name}
         onImported={reloadAfterImport}
+        mainSpace={space.is_default}
       />
     ) : null;
   const setupChecklist = (
