@@ -7,7 +7,7 @@ import { loadBundled } from './bundle.mjs';
 
 globalThis.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
-const w = await loadBundled(`export * from './src/waitingChecks'; export { checksText, buildReceipt, checkStatusLabel, cardStatus, columnOfTask, stoppedWaiting, missionsApi } from './src/missions';`);
+const w = await loadBundled(`export * from './src/waitingChecks'; export { checksText, buildReceipt, checkStatusLabel, cardStatus, columnOfTask, stoppedWaiting, missionsApi, eventText } from './src/missions';`);
 const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
@@ -173,4 +173,17 @@ test('the detail offers Wait 24 h more for a stopped check, 44 px on phones, lab
   assert.ok(!noAction.includes('data-wait-more'), 'no button when the server does not offer it');
   assert.equal(typeof w.missionsApi.waitMore, 'function');
   assert.equal(asked, null);
+});
+
+// Round 3 (Rigel QA): the Activity trail must not say "A check failed" for each waiting poll, nor
+// "A check couldn't run" when the check stops waiting. passed / failed / plain error read as before.
+test('activity trail: waiting polls and the stop read as waiting, other results unchanged', () => {
+  const ev = (detail) => ({ id: 1, task_id: 't1', mission_id: null, kind: 'check_result', actor: 'kwant', actor_name: null,
+    from_state: null, to_state: null, detail, created_at: iso('2026-11-13T09:12:05') });
+  assert.equal(w.eventText(ev({ status: 'waiting' })), 'A check is still waiting');
+  assert.equal(w.eventText(ev({ status: 'error', timed_out: true })), 'A check stopped waiting');
+  assert.equal(w.eventText(ev({ status: 'passed' })), 'A check passed');
+  assert.equal(w.eventText(ev({ status: 'failed' })), 'A check failed');
+  assert.equal(w.eventText(ev({ status: 'error' })), 'A check couldn’t run');
+  assert.equal(w.eventText(ev({ status: 'error', timed_out: false })), 'A check couldn’t run');
 });

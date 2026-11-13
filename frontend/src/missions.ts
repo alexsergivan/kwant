@@ -1554,6 +1554,8 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     case 'check_started':
       return 'A check started';
     case 'check_result':
+      if (str(d.status) === 'waiting') return 'A check is still waiting';
+      if (str(d.status) === 'error' && d.timed_out) return 'A check stopped waiting';
       return `A check ${str(d.status) === 'passed' ? 'passed' : str(d.status) === 'error' ? 'couldn’t run' : 'failed'}`;
     case 'review':
       return `${Who} reviewed it: ${str(d.verdict) === 'pass' ? 'pass' : 'fail'}${note ? `. ${note}` : ''}`;
