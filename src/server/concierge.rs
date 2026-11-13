@@ -1,6 +1,7 @@
 //! The Concierge: a generalist bot that answers in #general when no specialist fits the message.
 //!
-//! It is made on the first message nothing fits (with a card the person can undo), never counts
+//! It is made on the first message nothing fits once an AI account could answer it (with a card
+//! the person can undo; before any account is connected nothing is made), never counts
 //! against the daily cap on bots made without a card, and is never picked by role scoring. Its id
 //! is kept in the `concierge:<space>` setting: set and present is the Concierge; set but gone means
 //! the person removed it, so #general goes back to the lead and it is never made again unasked.
@@ -61,8 +62,9 @@ pub async fn id(app: &AppState, space: &SpaceId, all_kwants: &[Kwant]) -> Option
 }
 
 /// The Concierge for a #general message nothing fits: the existing one, else a new one made now
-/// with a card in `channel_id` the person can undo. `None` when the person removed it (or it
-/// couldn't be made): the message stays with today's pick.
+/// with a card in `channel_id` the person can undo. `None` when the person removed it, when no
+/// AI account could answer it yet (see [`can_answer`]), or when it couldn't be made: the message
+/// stays with today's pick.
 pub async fn for_no_match(app: &AppState, space: &SpaceId, channel_id: &str, all_kwants: &[Kwant]) -> Option<Kwant> {
     let _making = MAKING.lock().await;
     let fresh = app.db.list_kwants(space).await.unwrap_or_else(|_| all_kwants.to_vec());
@@ -70,6 +72,13 @@ pub async fn for_no_match(app: &AppState, space: &SpaceId, channel_id: &str, all
         State::Present(k) => return Some(*k),
         State::Removed => return None,
         State::None => {}
+    }
+    // Nothing made while no AI account could answer it: on a fresh install the first message
+    // would otherwise show a change to undo and then a reply that no account can run bots.
+    // The setting stays unset, so the first unmatched message after one is connected makes it.
+    if !can_answer(app, space).await {
+        tracing::info!(space = %space.as_str(), "no AI account can answer yet; the Concierge waits until one is connected");
+        return None;
     }
     // A bot the person already named Concierge is adopted rather than doubled
     if let Some(k) = fresh.iter().find(|k| k.name.trim().eq_ignore_ascii_case(NAME)) {
@@ -117,6 +126,28 @@ pub async fn for_no_match(app: &AppState, space: &SpaceId, channel_id: &str, all
     let _ = super::bot_actions::record_with_card(app, &new, NAME).await;
     tracing::info!(kwant_id = %id, space = %space.as_str(), "made the Concierge for a message no specialist fits");
     app.db.get_kwant(&id).await.ok().flatten()
+}
+
+/// Whether a turn in `space` could run now, so a new Concierge could answer: an AI account
+/// that is ready or only out of usage for now (it answers after the reset, as today), or a
+/// model this machine runs without an account (its own CLI login, an API key in Settings,
+/// Ollama). The second half is the same check a turn makes before it says no account can run
+/// bots (`run_kwant_turn_inner`), so the Concierge waits exactly while its reply would be that.
+async fn can_answer(app: &AppState, space: &SpaceId) -> bool {
+    let accounts = super::profile_turn::call_accounts(app, space).await;
+    if connected(&accounts) {
+        return true;
+    }
+    let profile_engines = super::profile_turn::profile_engines(app, space).await;
+    let host_off = super::profile_turn::host_off(app, space).await;
+    !crate::drivers::detect_available_models(&app.db, &app.engines, &profile_engines, &host_off)
+        .await
+        .is_empty()
+}
+
+/// An account is connected when one is ready, or one is signed in but out of usage for now.
+fn connected(accounts: &super::profile_turn::CallAccounts) -> bool {
+    !accounts.ready.is_empty() || accounts.limited.is_some()
 }
 
 /// Similar requests the Concierge must have had (this one included) within [`SIMILAR_WINDOW_DAYS`]
@@ -174,6 +205,21 @@ pub fn hire_note(ids: &[&str]) -> String {
         ids.len(),
         ids.join(", ")
     )
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+    use crate::server::profile_turn::CallAccounts;
+
+    /// No account at all isn't connected; one only out of usage is (the Concierge is made then,
+    /// as before, and answers after the reset).
+    #[test]
+    fn an_account_out_of_usage_counts_as_connected() {
+        assert!(!connected(&CallAccounts::default()));
+        let limited = CallAccounts { ready: Vec::new(), limited: Some(("Work".into(), chrono::Utc::now() + chrono::Duration::hours(2))) };
+        assert!(connected(&limited));
+    }
 }
 
 #[cfg(test)]
