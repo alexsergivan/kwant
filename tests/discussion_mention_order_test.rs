@@ -152,8 +152,12 @@ async fn the_teammate_the_lead_mentions_speaks_before_the_planned_reactors() {
     let order: Vec<(&str, &str)> = messages
         .iter()
         .filter(|m| m.sender_role == "kwant")
+        // A bot's message is saved under its name; map an id too, in case that changes
         .map(|m| {
-            let who = if m.sender_id == ann { "Ann" } else if m.sender_id == bob { "Bob" } else { "Cody" };
+            let who = [(&ann, "Ann"), (&bob, "Bob"), (&cody, "Cody")]
+                .iter()
+                .find(|(id, name)| m.sender_id == **id || m.sender_id == *name)
+                .map_or(m.sender_id.as_str(), |&(_, name)| name);
             (who, m.text.as_str())
         })
         .collect();
