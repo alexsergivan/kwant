@@ -673,7 +673,8 @@ async fn server_messages_say_bot_and_general_describes_the_space() {
     let desc = c["description"].as_str().or(c["channel"]["description"].as_str()).unwrap_or_default().to_string();
     assert_eq!(desc, kwnt::db::GENERAL_DESCRIPTION, "{c}");
 
-    // An unedited old seed text is replaced on the next start; an edited one is kept
+    // An unedited old seed text is replaced on the next start (with the pre-0.9.8 text: that path
+    // is the old-install upgrade); an edited one is kept
     let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", env.data.join("kwnt.db").display())).await.unwrap();
     sqlx::query("UPDATE channels SET description = 'Main collaboration hub for all agents' WHERE id = ?")
         .bind(&general)
@@ -682,7 +683,7 @@ async fn server_messages_say_bot_and_general_describes_the_space() {
         .unwrap();
     Database::init(&env.data).await.unwrap();
     let (d,): (String,) = sqlx::query_as("SELECT description FROM channels WHERE id = ?").bind(&general).fetch_one(&pool).await.unwrap();
-    assert_eq!(d, kwnt::db::GENERAL_DESCRIPTION);
+    assert_eq!(d, kwnt::db::LEGACY_GENERAL_DESCRIPTION);
     sqlx::query("UPDATE channels SET description = 'Ours' WHERE id = ?").bind(&general).execute(&pool).await.unwrap();
     Database::init(&env.data).await.unwrap();
     let (d,): (String,) = sqlx::query_as("SELECT description FROM channels WHERE id = ?").bind(&general).fetch_one(&pool).await.unwrap();

@@ -384,6 +384,45 @@ pub const COPY_JS: &str = r#"(() => {
 /// Longest text `copy` returns.
 pub const COPY_MAX: usize = 65536;
 
+/// Called on a file input (resolved into the recorder's isolated world) to start one file: a
+/// fresh list of Blob parts, with the name, type and `lastModified` to give the finished `File`.
+pub const UPLOAD_BEGIN_FN: &str = r#"function (meta) {
+  if (!this.__kwntUpload) this.__kwntUpload = { files: [] };
+  this.__kwntUpload.files.push({ name: meta.name, mime: meta.mime, lastModified: meta.lastModified, chunks: [] });
+  return true;
+}"#;
+
+/// Appends one base64-decoded chunk (at most 1 MB before encoding) to the file `UPLOAD_BEGIN_FN`
+/// last started. Kept as `Uint8Array`s, not a plain byte array, so a 100 MB file doesn't balloon
+/// into thirty-odd million boxed numbers in a small container.
+pub const UPLOAD_CHUNK_FN: &str = r#"function (b64) {
+  const u = this.__kwntUpload;
+  if (!u || !u.files.length) return false;
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  u.files[u.files.length - 1].chunks.push(bytes);
+  return true;
+}"#;
+
+/// Builds the `File`s from their chunks, sets them on the input through a `DataTransfer` (the
+/// only way to set `.files` from script) and fires bubbling input and change, as a real pick
+/// does. Then tells the recorder, in this same world, so Show it once logs the label, never the
+/// name (capture.rs S-C13); a no-op where nothing is recording.
+pub const UPLOAD_FINISH_FN: &str = r#"function () {
+  const u = this.__kwntUpload;
+  if (!u || !u.files.length) return false;
+  const dt = new DataTransfer();
+  u.files.forEach((f) => dt.items.add(new File(f.chunks, f.name, { type: f.mime, lastModified: f.lastModified })));
+  this.files = dt.files;
+  delete this.__kwntUpload;
+  this.dispatchEvent(new Event('input', { bubbles: true }));
+  this.dispatchEvent(new Event('change', { bubbles: true }));
+  const rec = globalThis.__kwntRecorderUpload;
+  if (typeof rec === 'function') rec(this);
+  return true;
+}"#;
+
 pub fn cursor_js(x: f64, y: f64) -> String {
     format!(
         "(() => {{ const e = document.elementFromPoint({x}, {y}); if (!e) return 'auto'; const c = getComputedStyle(e).cursor; \

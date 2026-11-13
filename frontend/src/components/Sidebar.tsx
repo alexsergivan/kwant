@@ -3,7 +3,7 @@ import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, Chevro
 import { ModernAvatar, useModelBadge } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
-import { canRunNow, engineTip, isUsable, type RunsOn } from '../engines';
+import { canRunNow, engineTip, isUsable, pinnedCantRun, type RunsOn } from '../engines';
 import { statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
@@ -115,6 +115,8 @@ export interface SidebarProps {
   selectedTeamId?: string | null;
   /** What busy bots are doing ("Working on …", "Working here"), shown under their name. */
   busyKwants?: Record<string, string>;
+  /** Teammates who already replied in a team turn now waiting on the person: "Done · replied in @team". */
+  doneKwants?: Record<string, string>;
   /** Busy bots' status for the avatar dot; bots not listed are Available (or Can't run). */
   botStatus?: Record<string, BotStatus>;
   /** Open browser steps per bot ("Needs you" pill). */
@@ -363,6 +365,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isChannel,
   selectedTeamId,
   busyKwants = {},
+  doneKwants = {},
   botStatus = {},
   needsYou = {},
   browsingOwners = {},
@@ -538,7 +541,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const attLine = att && (att.rank === 2 || att.rank === 3 || att.rank === 4 || (att.rank === 1 && att.review)) ? att.line : undefined;
     const attTone = !att ? '' : att.rank === 1 ? 'text-warn' : att.rank === 2 ? 'text-rose-300' : att.rank === 3 ? 'text-[#7dd3fc]' : 'text-zinc-200';
     const attDot = !att ? '' : att.rank === 1 ? 'kw-status-warn' : att.rank === 2 ? 'bg-rose-400' : att.rank === 3 ? 'bg-[#38bdf8]' : 'bg-teal-400';
-    const status = asked ? 'needs_you' : statusOf(k.id, botStatus, canRun);
+    // Pinned to an engine that can't run, with failover off: its turn would fail, so no green dot
+    const pinnedTip = pinnedCantRun(k, engines.engines);
+    const status = asked ? 'needs_you' : statusOf(k.id, botStatus, pinnedTip ? false : canRun);
     const isLead = !!team && k.id === team.lead_kwant_id;
     const canRemove = !!team && !isLead && !!onUpdateTeamMembers;
     const hasRowActions = !!onEditKwant || canRemove;
@@ -561,6 +566,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         : budgetPaused && !busyKwants[k.id]
           ? PAUSED_ROW_LINE
           : busyKwants[k.id];
+    // A teammate who finished its part of a team turn that now waits on the person (UX audit #2)
+    const doneLine = !busyLine && !warn ? doneKwants[k.id] : undefined;
     // A stuck or finished row opens where that happened (its thread or chat), like its Inbox card
     // A review row opens its item in the Inbox
     const open = asked && onOpenNeedsYou
@@ -592,7 +599,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >
-        <span className="shrink-0" title={status === 'cant_run' ? "Can't run yet: no account works here" : statusText(k.name, status)}>
+        <span className="shrink-0" title={status === 'cant_run' ? pinnedTip ?? "Can't run yet: no account works here" : statusText(k.name, status)}>
           <ModernAvatar role={k.avatar_sprite} name={k.name} size={chat ? 32 : 28} status={status} kwantId={k.id} />
         </span>
         <div className="flex-1 min-w-0">
@@ -695,6 +702,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 aria-hidden="true"
               />
               <span className="truncate">{busyLine}</span>
+            </p>
+          ) : doneLine ? (
+            <p className={`flex items-center gap-1.5 text-meta text-zinc-400 truncate${actionRoom}`} title={doneLine} data-bot-done="">
+              <span className="kw-status-dot !h-1.5 !w-1.5 kw-status-ok" aria-hidden="true" />
+              <span className="truncate">{doneLine}</span>
             </p>
           ) : (
             // Keeps its one line even with no title, so Edit and Remove sit under the name, never on it (#290 N1)

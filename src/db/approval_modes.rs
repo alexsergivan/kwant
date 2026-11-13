@@ -383,6 +383,21 @@ impl Database {
 
     /// Records a call that ran without a card because approvals were off (or it was safe under
     /// "Ask only when risky").
+    /// Records a call the person approved before it was asked (0.9.7: a push their Retry or
+    /// Override on a pre-push card covers) as `allowed_once`, with no card. Its id.
+    pub async fn save_granted(&self, input: &super::models::NewApproval) -> Result<String, DbError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status) VALUES (?, ?, ?, ?, ?, 'allowed_once')")
+            .bind(&id)
+            .bind(&input.turn_id)
+            .bind(&input.kwant_id)
+            .bind(&input.tool_name)
+            .bind(serde_json::to_string(&input.parameters)?)
+            .execute(&self.pool)
+            .await?;
+        Ok(id)
+    }
+
     pub async fn save_auto_allowed(&self, input: &super::models::NewApproval) -> Result<String, DbError> {
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query(

@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use sqlx::FromRow;
 
 /// The failure classes that are the bot's own doing. `quota`, `auth`, `budget`, `transient`,
-/// `bad_spec` and `needs_input` are not, so they never become a lesson.
+/// `bad_spec`, `needs_input` and `waited_too_long` are not, so they never become a lesson.
 pub const LESSON_CLASSES: [&str; 4] = ["check_failed", "stalled", "denied", "unknown"];
 
 /// One `task_failures` row of a task the bot owned and held a claim on.
@@ -116,7 +116,7 @@ mod tests {
             assert!(super::super::autofix::CLASSES.contains(&c), "{c}");
             assert!(CLASSES_IN.contains(&format!("'{c}'")), "{c}");
         }
-        for c in ["quota", "auth", "budget", "transient", "bad_spec", "needs_input"] {
+        for c in ["quota", "auth", "budget", "transient", "bad_spec", "needs_input", "waited_too_long"] {
             assert!(!LESSON_CLASSES.contains(&c), "{c}");
         }
     }

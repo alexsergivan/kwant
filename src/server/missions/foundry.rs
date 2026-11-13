@@ -216,7 +216,7 @@ pub async fn drive_draft(state: &AppState, run: &FoundryRun) {
     let started = Utc::now();
     let reply = match scope_for(state, &owner, None, None, &job, 0).await {
         Ok(scope) => {
-            let mut opts = TurnOpts::always_asking("Skill Foundry");
+            let mut opts = TurnOpts::strict_asking("Skill Foundry");
             (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(DRAFT_PURPOSE.into()));
             opts.tier = tier_of(model_mode(state).await);
             match tokio::time::timeout(DRAFT_TIMEOUT, turn_once(&scope, &owner, prompt, opts)).await {
@@ -722,7 +722,7 @@ async fn replay_one(state: &AppState, run: &FoundryRun, skill: &Skill, meta: &Sk
         let reply = match scope_for(state, owner, None, None, &job, 0).await {
             Ok(mut scope) => {
                 scope.workspace_dir = Some(scratch.clone());
-                let mut opts = TurnOpts::always_asking("Skill Foundry replay");
+                let mut opts = TurnOpts::strict_asking("Skill Foundry replay");
                 (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(REPLAY_PURPOSE.into()));
                 opts.tier = tier_of(model_mode(state).await);
                 opts.rehearse = Some(log.clone());

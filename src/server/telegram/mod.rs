@@ -103,7 +103,7 @@ pub fn link_only_reason(details: &Value) -> Option<&'static str> {
     }
     // A turn kwant started on its own (loose ends, a mission): nobody asked for this step
     if details["always_ask"] == true {
-        return Some("kwant started this turn on its own, not from your message.");
+        return Some("Started on its own, not by you, so each change asks first.");
     }
     let kind = ApprovalKind::of(details);
     if !TELEGRAM_APPROVABLE.contains(&kind) {
@@ -622,8 +622,8 @@ mod tests {
             (json!({"source": "mcp", "tool": "no_server"}), "This is one of kwant's own tools."),
             (json!({"source": "mcp", "server": "files", "tool": "x", "tainted": true}), "This bot read text from outside in this turn."),
             (json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "tainted": true}), "This bot read text from outside in this turn."),
-            (json!({"source": "mcp", "server": "files", "tool": "x", "always_ask": true}), "kwant started this turn on its own, not from your message."),
-            (json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "always_ask": true}), "kwant started this turn on its own, not from your message."),
+            (json!({"source": "mcp", "server": "files", "tool": "x", "always_ask": true}), "Started on its own, not by you, so each change asks first."),
+            (json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "always_ask": true}), "Started on its own, not by you, so each change asks first."),
             // Both: the outside text is the sharper reason
             (json!({"source": "mcp", "server": "files", "tool": "x", "always_ask": true, "tainted": true}), "This bot read text from outside in this turn."),
         ];

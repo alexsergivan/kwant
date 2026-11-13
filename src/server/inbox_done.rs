@@ -20,6 +20,9 @@
 //! - `unread`: newer than the last-seen marker. `POST /api/away/seen` only clears this now; done
 //!   items stay listed for [`DONE_DAYS`] days.
 //!
+//! - `checked` (0.9.7 done-check, autonomy/done-check/brief.md): what checked the result and how,
+//!   from what kwant already stores, see [`checked`]. Nothing here runs a check.
+//!
 //! A lead's reply that ended with `Done: …` (keep_going's `chain_done` meta) is a done item of
 //! kind `team_job`, with the lead, the members it handed work to for that request, and the fields
 //! above.
@@ -29,13 +32,16 @@ use super::inbox::{sort_key, Group};
 use super::keep_going::DONE_KEY;
 use super::AppState;
 use crate::db::away::DoneReplyRow;
-use crate::db::missions::Task;
+use crate::db::missions::{Evidence, OutcomeCheck, Task};
 use crate::db::models::Message;
 use crate::db::spaces::SpaceId;
 use crate::db::DbError;
+use crate::server::missions::autofix::{redact, redact_value};
 use crate::server::missions::checkpoints::NO_EFFECT_TOOLS;
+use crate::server::missions::contract::{Contract, Criterion};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 /// Done items stay this many days, seen or not.
 pub const DONE_DAYS: i64 = DEFAULT_LOOKBACK_DAYS;
@@ -271,6 +277,9 @@ pub struct DoneFacts {
     /// `{kind: "task", task_id}`, `{kind: "delegation", delegation_id}` or
     /// `{kind: "team_job", delegation_id}`; `null` when unknown.
     pub source: Value,
+    /// What checked the result: the item's task (a review's own, a routine run's or hand-off's),
+    /// or a team job's hand-off tasks. Empty when no task stands behind it.
+    pub tasks: Vec<TaskChecks>,
 }
 
 /// The ledger's answer, else the trail's.
@@ -322,6 +331,7 @@ pub fn apply(v: &mut Value, f: &DoneFacts, unread: bool) {
     v["why_kind"] = json!(f.why_kind);
     v["changed"] = json!(changed);
     v["changed_nothing"] = json!(changed.map(|c| !c));
+    v["checked"] = checked(&f.tasks, m.map(meta_of).as_ref());
 }
 
 async fn message(state: &AppState, id: Option<&str>) -> Result<Option<Message>, DbError> {
@@ -338,6 +348,7 @@ async fn routine_facts(state: &AppState, run_id: &str) -> Result<DoneFacts, DbEr
     };
     Ok(DoneFacts {
         message: message(state, message_id.as_deref()).await?,
+        tasks: sourced_task(state, "routine", run_id).await?,
         why: why_of(&instructions, true),
         why_kind: Some("routine"),
         source: json!({"kind": "routine", "routine_id": routine_id, "run_id": run_id, "trigger": trigger}),
@@ -352,6 +363,7 @@ async fn delegation_facts(state: &AppState, id: &str) -> Result<DoneFacts, DbErr
     };
     Ok(DoneFacts {
         message: message(state, d.result_message_id.as_deref()).await?,
+        tasks: sourced_task(state, "delegation", &d.id).await?,
         why: why_of(&d.task, false),
         why_kind: Some("ask"),
         source: json!({"kind": "delegation", "delegation_id": d.id}),
@@ -395,6 +407,8 @@ pub async fn task_facts(state: &AppState, task: &Task, owner_name: &str, in_revi
         f.why_kind = f.why.as_ref().map(|_| "task");
     }
     f.ledger_changed = ledger_changed(state, &task.id).await?;
+    // The review's own task (the one its routine run or hand-off made, when there is one)
+    f.tasks = vec![task_checks(state, &task.id).await?];
     // A review links to its own task; the routine run it came from is still exact (`run_id`)
     f.source = match f.source.take() {
         Value::Object(mut o) if o.get("kind") == Some(&json!("routine")) => {
@@ -515,7 +529,9 @@ pub async fn team_jobs(state: &AppState, space: &SpaceId, since: DateTime<Utc>, 
             .collect();
         let mut members: Vec<Value> = Vec::new();
         let mut more = Vec::new();
+        let mut tasks = Vec::new();
         for d in &handoffs {
+            tasks.extend(sourced_task(state, "delegation", &d.id).await?);
             let name = state.db.get_kwant(&d.specialist_kwant_id).await?.map(|k| k.name).unwrap_or_else(|| "A bot".into());
             if !members.iter().any(|m| m["kwant_id"] == json!(d.specialist_kwant_id)) {
                 members.push(json!({"kwant_id": d.specialist_kwant_id, "kwant_name": name}));
@@ -547,11 +563,352 @@ pub async fn team_jobs(state: &AppState, space: &SpaceId, since: DateTime<Utc>, 
             "done_line": away::mask_words(&done_text),
         });
         let source = json!({"kind": "team_job", "delegation_id": handoffs.first().map(|d| d.id.clone())});
-        let facts = DoneFacts { message: Some(msg), why: why.clone(), why_kind: why.as_ref().map(|_| "request"), ledger_changed: None, more, source };
+        let facts = DoneFacts { message: Some(msg), why: why.clone(), why_kind: why.as_ref().map(|_| "request"), ledger_changed: None, more, source, tasks };
         apply(&mut v, &facts, unread);
         items.push(v);
     }
     Ok(items)
+}
+
+// ---- Done, and here's the check (0.9.7 done-check) ----
+
+/// Most `checked.items` shown; the rest are counted in `items_dropped`.
+pub const CHECKED_MAX: usize = 8;
+const CHECK_WHAT_CHARS: usize = 120;
+const CHECK_EVIDENCE_CHARS: usize = 300;
+const CHECK_LINE_CHARS: usize = 240;
+
+/// One task's stored checks: its outcome checks, its contract's criteria and the evidence still
+/// attached to it, and the names of the bots that reviewed it.
+#[derive(Debug, Default, Clone)]
+pub struct TaskChecks {
+    pub checks: Vec<OutcomeCheck>,
+    pub criteria: Vec<Criterion>,
+    pub evidence: Vec<Evidence>,
+    pub names: HashMap<String, String>,
+}
+
+async fn task_checks(state: &AppState, task_id: &str) -> Result<TaskChecks, DbError> {
+    let checks = state.db.list_checks(task_id).await?;
+    let evidence = state.db.list_evidence(task_id).await?;
+    let criteria = state.db.get_contract(task_id).await?.and_then(|r| serde_json::from_str::<Contract>(&r.body).ok()).map(|c| c.criteria).unwrap_or_default();
+    let mut names = HashMap::new();
+    for by in checks.iter().filter(|c| c.kind == "peer_review").filter_map(|c| c.checked_by.as_deref()) {
+        if !names.contains_key(by) {
+            if let Some(k) = state.db.get_kwant(by).await? {
+                names.insert(by.to_string(), k.name);
+            }
+        }
+    }
+    Ok(TaskChecks { checks, criteria, evidence, names })
+}
+
+/// The checks of the task a routine run or hand-off made, if it made one.
+async fn sourced_task(state: &AppState, kind: &str, id: &str) -> Result<Vec<TaskChecks>, DbError> {
+    match state.db.task_by_source(kind, id).await? {
+        Some(t) => Ok(vec![task_checks(state, &t.id).await?]),
+        None => Ok(Vec::new()),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fed {
+    Check,
+    Criterion,
+    Delivery,
+}
+
+/// One `checked.items` row before it is JSON; `claim` marks a criterion met with no evidence.
+#[derive(Debug, Clone)]
+struct CheckItem {
+    from: Fed,
+    what: String,
+    how: &'static str,
+    result: &'static str,
+    evidence: Option<String>,
+    claim: bool,
+}
+
+/// A text masked as the answer excerpt is, on one line, at most `max`.
+fn masked_line(text: &str, max: usize) -> String {
+    cut(mask_words_keep_urls(&redact(text)).trim(), max)
+}
+
+/// A check's output or evidence: masked line by line, blank lines dropped, at most
+/// [`CHECK_EVIDENCE_CHARS`]; `None` when empty.
+fn masked_text(text: &str) -> Option<String> {
+    let lines: Vec<String> = redact(text).lines().map(|l| mask_words_keep_urls(l.trim())).filter(|l| !l.is_empty()).collect();
+    (!lines.is_empty()).then(|| cut(&lines.join("\n"), CHECK_EVIDENCE_CHARS))
+}
+
+/// [`away::mask_words`], but an address stays readable: `mask_words` splits `https://host/a/42`
+/// at the colon and masks the rest as a key once it is 20 characters with a digit, and an http
+/// check's address is the very thing the card names. An address keeps its scheme; its host and
+/// each piece of its path, query and fragment are masked on their own (sign-in details before an
+/// `@` always), so a key in the path or a `token=` value still goes.
+fn mask_words_keep_urls(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| match w.split_once("://") {
+            Some((scheme, rest)) if scheme == "http" || scheme == "https" => mask_url(scheme, rest),
+            _ => away::mask_words(w),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn mask_url(scheme: &str, rest: &str) -> String {
+    let piece = |s: &str| if s.is_empty() || away::mask_words(s) == s { s.to_string() } else { "[redacted]".to_string() };
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (host, tail) = rest.split_at(host_end);
+    let host = match host.rsplit_once('@') {
+        Some((_, h)) => format!("[redacted]@{}", piece(h)),
+        None => piece(host),
+    };
+    let mut out = format!("{scheme}://{host}");
+    let mut seg = String::new();
+    for c in tail.chars() {
+        if "/?&#".contains(c) {
+            out.push_str(&piece(&seg));
+            out.push(c);
+            seg.clear();
+        } else {
+            seg.push(c);
+        }
+    }
+    out.push_str(&piece(&seg));
+    out
+}
+
+/// A stored check status as a result. Only `passed` passes; a check that couldn't run (`error`)
+/// failed; one running or waiting on an outside service (#564's `waiting`) is `waiting`; anything
+/// else (queued, or a status this code doesn't know) is `not_checked`, never `passed`.
+fn check_result(status: &str) -> &'static str {
+    match status {
+        "passed" => "passed",
+        "failed" | "error" => "failed",
+        "running" | "waiting" => "waiting",
+        _ => "not_checked",
+    }
+}
+
+fn check_how(c: &OutcomeCheck) -> &'static str {
+    match c.kind.as_str() {
+        "command" => "ran the command",
+        "http" => "opened the address",
+        "file_exists" => "looked for the file",
+        "file_contains" => "looked for the text in the file",
+        "file_sha256" => "compared the file's fingerprint",
+        "peer_review" if c.spec_value()["fresh_eyes"].as_bool() == Some(true) => "a fresh-eyes review",
+        "peer_review" => "a teammate's review",
+        "person" => "you checked it",
+        _ => "a check",
+    }
+}
+
+/// The check in words: its command, address or file; who reviewed; or the person's own check.
+fn check_what(c: &OutcomeCheck, names: &HashMap<String, String>) -> String {
+    let spec = redact_value(&c.spec_value());
+    let field = |k: &str| spec[k].as_str().map(str::trim).filter(|v| !v.is_empty());
+    let what = match c.kind.as_str() {
+        "command" => field("command").map(str::to_string),
+        "http" => field("url").map(str::to_string),
+        "file_contains" => field("path").map(|p| match field("text") {
+            Some(t) => format!("{p} has “{t}”"),
+            None => p.to_string(),
+        }),
+        "file_exists" | "file_sha256" => field("path").map(str::to_string),
+        "peer_review" => Some(match c.checked_by.as_deref().and_then(|b| names.get(b)) {
+            Some(n) => format!("Review by {n}"),
+            None => "Review by a teammate".to_string(),
+        }),
+        "person" => Some("Your own check".to_string()),
+        _ => None,
+    };
+    masked_line(&what.unwrap_or_else(|| c.kind.replace('_', " ")), CHECK_WHAT_CHARS)
+}
+
+fn check_items(t: &TaskChecks) -> Vec<CheckItem> {
+    t.checks
+        .iter()
+        // A check waiting for approval never ran and doesn't count
+        .filter(|c| c.approved)
+        .map(|c| CheckItem {
+            from: Fed::Check,
+            what: check_what(c, &t.names),
+            how: check_how(c),
+            result: check_result(&c.status),
+            evidence: c.output_excerpt.as_deref().and_then(masked_text),
+            claim: false,
+        })
+        .collect()
+}
+
+/// A criterion's evidence in words: each attached evidence's label and first line, joined.
+fn criterion_evidence(k: &Criterion, evidence: &[Evidence]) -> Option<String> {
+    let parts: Vec<String> = k
+        .evidence
+        .iter()
+        .filter_map(|id| evidence.iter().find(|e| &e.id == id))
+        .map(|e| {
+            let detail = e.uri.as_deref().or(e.path.as_deref()).or_else(|| e.excerpt.as_deref().and_then(|x| x.lines().find(|l| !l.trim().is_empty())));
+            match detail {
+                Some(d) => format!("{}: {}", e.label.trim(), d.trim()),
+                None => e.label.trim().to_string(),
+            }
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("; ")).and_then(|p| masked_text(&p))
+}
+
+/// The contract's criteria: met with evidence still on the task passed; met without it is a
+/// claim, not checked (the contract's own rule); not met failed.
+fn criterion_items(t: &TaskChecks) -> Vec<CheckItem> {
+    let on_task: Vec<String> = t.evidence.iter().map(|e| e.id.clone()).collect();
+    t.criteria
+        .iter()
+        .map(|k| {
+            let claim = crate::server::missions::contract::is_claim(k, &on_task);
+            let (how, result, evidence) = match k.status.as_str() {
+                "met" if claim => ("task criterion, marked met with no evidence (a claim)", "not_checked", None),
+                "met" => ("task criterion, met with evidence", "passed", criterion_evidence(k, &t.evidence)),
+                "not_met" => ("task criterion, marked not met", "failed", criterion_evidence(k, &t.evidence)),
+                _ => ("task criterion, not marked yet", "not_checked", None),
+            };
+            CheckItem { from: Fed::Criterion, what: masked_line(&k.text, CHECK_WHAT_CHARS), how, result, evidence, claim }
+        })
+        .collect()
+}
+
+/// What the person asked to see, in words, from what was missing or from the reply's plan.
+fn delivery_thing(names: &[&str]) -> &'static str {
+    match (names.contains(&"image"), names.contains(&"link")) {
+        (true, true) => "picture and link",
+        (true, false) => "picture",
+        (false, true) => "link",
+        _ => "result",
+    }
+}
+
+/// The delivery check's verdict on the result message (`meta.delivery`, written by
+/// `delivery_check::meta`): a hit passed, a miss failed with what is missing. No verdict (no plan
+/// to check against) is no item.
+fn delivery_item(meta: &Value) -> Option<CheckItem> {
+    let d = &meta["delivery"];
+    let hit = match d["outcome"].as_str()? {
+        "hit" => true,
+        "miss" => false,
+        _ => return None,
+    };
+    let strs = |v: &Value| v.as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+    let missing = strs(&d["missing"]);
+    let shown = strs(&meta[super::delivery_plan::META_KEY]["show"]);
+    let names: Vec<&str> = if hit { shown.iter().map(String::as_str).collect() } else { missing.iter().map(String::as_str).filter(|m| *m != "follow_through").collect() };
+    let thing = delivery_thing(&names);
+    let evidence = match (hit, d["auto_shared"].as_bool() == Some(true)) {
+        (true, true) => "kwant shared the bot's last screenshot under the reply".to_string(),
+        (true, false) => format!("the {thing} is in the reply"),
+        (false, _) => format!("missing from the reply: {thing}"),
+    };
+    Some(CheckItem {
+        from: Fed::Delivery,
+        what: format!("The {thing} you asked for"),
+        how: "kwant compared the reply with what you asked for",
+        result: if hit { "passed" } else { "failed" },
+        evidence: Some(evidence),
+        claim: false,
+    })
+}
+
+fn state_of(items: &[CheckItem]) -> &'static str {
+    let passed = items.iter().filter(|i| i.result == "passed").count();
+    if items.iter().any(|i| i.result == "failed") {
+        "failed"
+    } else if passed > 0 && passed == items.len() {
+        "checked"
+    } else if passed > 0 {
+        "partly"
+    } else {
+        "not_checked"
+    }
+}
+
+/// The card's one line: the state, then a short phrase per source (checks, criteria, delivery).
+fn checked_line(state: &str, items: &[CheckItem]) -> String {
+    if items.is_empty() {
+        return "Not checked: nothing verified this result.".into();
+    }
+    let count = |of: &[&CheckItem], r: &str| of.iter().filter(|i| i.result == r).count();
+    let mut parts: Vec<String> = Vec::new();
+    let checks: Vec<&CheckItem> = items.iter().filter(|i| i.from == Fed::Check).collect();
+    match checks.len() {
+        0 => {}
+        1 => {
+            let c = checks[0];
+            let word = match c.result {
+                "passed" => "passed",
+                "failed" => "failed",
+                "waiting" => "is still waiting",
+                _ => "hasn't run",
+            };
+            parts.push(format!("{} {word}", cut(&c.what, 60)));
+        }
+        n => {
+            let (p, f, w) = (count(&checks, "passed"), count(&checks, "failed"), count(&checks, "waiting"));
+            parts.push(match (f, w) {
+                (0, 0) => format!("{p} of {n} checks passed"),
+                (0, w) => format!("{p} of {n} checks passed, {w} still waiting"),
+                (f, _) => format!("{f} of {n} checks failed"),
+            });
+        }
+    }
+    let criteria: Vec<&CheckItem> = items.iter().filter(|i| i.from == Fed::Criterion).collect();
+    let (met, not_met, claims) = (count(&criteria, "passed"), count(&criteria, "failed"), criteria.iter().filter(|i| i.claim).count());
+    match criteria.len() {
+        0 => {}
+        1 if not_met == 1 => parts.push("the criterion is not met".into()),
+        1 if met == 1 => parts.push("the criterion has evidence".into()),
+        1 if claims == 1 => parts.push("the criterion is a claim with no evidence".into()),
+        1 => parts.push("the criterion isn't checked".into()),
+        n if not_met > 0 => parts.push(format!("{not_met} of {n} criteria not met")),
+        n => parts.push(format!("{met} of {n} criteria have evidence")),
+    }
+    if let Some(d) = items.iter().find(|i| i.from == Fed::Delivery) {
+        let thing = d.what.trim_start_matches("The ").to_string();
+        parts.push(match d.result {
+            "passed" => format!("the {thing} is in the reply"),
+            _ => format!("the {thing} is missing"),
+        });
+    }
+    let prefix = match state {
+        "checked" => "Checked",
+        "partly" => "Partly checked",
+        "failed" => "Failed",
+        _ => "Not checked",
+    };
+    cut(&format!("{prefix}: {}.", parts.join(", ")), CHECK_LINE_CHARS)
+}
+
+/// A done item's `checked`: `{state, items, items_dropped, line}`. `items` come only from what
+/// kwant stored: each task's approved outcome checks and contract criteria, then the delivery
+/// check's verdict on the result message. `state` is `failed` when any item failed, `checked`
+/// when all passed, `partly` when some did, else `not_checked` (also with no items at all). At
+/// most [`CHECKED_MAX`] items, failed first; the state and line count them all.
+pub fn checked(tasks: &[TaskChecks], result_meta: Option<&Value>) -> Value {
+    let mut items: Vec<CheckItem> = Vec::new();
+    for t in tasks {
+        items.extend(check_items(t));
+        items.extend(criterion_items(t));
+    }
+    items.extend(result_meta.and_then(delivery_item));
+    let state = state_of(&items);
+    let line = checked_line(state, &items);
+    // Failed first, the rest in source order (a stable sort)
+    let mut shown = items;
+    shown.sort_by_key(|i| i.result != "failed");
+    let dropped = shown.len().saturating_sub(CHECKED_MAX);
+    shown.truncate(CHECKED_MAX);
+    let rows: Vec<Value> = shown.iter().map(|i| json!({"what": i.what, "how": i.how, "result": i.result, "evidence": i.evidence})).collect();
+    json!({"state": state, "items": rows, "items_dropped": dropped, "line": line})
 }
 
 #[cfg(test)]
@@ -691,5 +1048,203 @@ mod tests {
         let mut v = json!({});
         apply(&mut v, &DoneFacts::default(), true);
         assert_eq!((v["result_message_id"].clone(), v["changed"].clone(), v["trail"].clone()), (Value::Null, Value::Null, json!([])));
+    }
+
+    // ---- done-check ----
+
+    fn check(kind: &str, spec: Value, status: &str, output: Option<&str>) -> OutcomeCheck {
+        let now = Utc::now();
+        OutcomeCheck {
+            id: format!("chk-{kind}-{status}"),
+            task_id: "t1".into(),
+            kind: kind.into(),
+            spec: spec.to_string(),
+            required: true,
+            approved: true,
+            status: status.into(),
+            output_excerpt: output.map(str::to_string),
+            checked_by: Some("kwant".into()),
+            requested_by: "person".into(),
+            approved_by: Some("person".into()),
+            evidence_id: None,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: Some(now),
+        }
+    }
+
+    fn criterion(id: &str, text: &str, status: &str, evidence: &[&str]) -> Criterion {
+        Criterion { id: id.into(), text: text.into(), status: status.into(), evidence: evidence.iter().map(|e| e.to_string()).collect(), by: "owner".into(), round_added: 1 }
+    }
+
+    fn evidence(id: &str, label: &str, uri: Option<&str>) -> Evidence {
+        Evidence {
+            id: id.into(),
+            task_id: "t1".into(),
+            kind: "link".into(),
+            label: label.into(),
+            uri: uri.map(str::to_string),
+            path: None,
+            sha256: None,
+            bytes: None,
+            excerpt: None,
+            captured_by: "k1".into(),
+            run_id: None,
+            captured_at: Utc::now(),
+        }
+    }
+
+    fn results(v: &Value) -> Vec<&str> {
+        v["items"].as_array().unwrap().iter().map(|i| i["result"].as_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn a_passed_command_and_a_criterion_with_evidence_read_checked() {
+        let t = TaskChecks {
+            checks: vec![check("command", json!({"command": "cargo test"}), "passed", Some("running 12 tests\ntest result: ok. 12 passed"))],
+            criteria: vec![criterion("c1", "The site answers 200", "met", &["ev1"])],
+            evidence: vec![evidence("ev1", "Status page", Some("https://booktun.ing/health"))],
+            ..Default::default()
+        };
+        let v = checked(&[t], None);
+        assert_eq!(v["state"], "checked");
+        assert_eq!(v["items"][0], json!({"what": "cargo test", "how": "ran the command", "result": "passed", "evidence": "running 12 tests\ntest result: ok. 12 passed"}));
+        assert_eq!(v["items"][1], json!({"what": "The site answers 200", "how": "task criterion, met with evidence", "result": "passed", "evidence": "Status page: https://booktun.ing/health"}));
+        assert_eq!(v["line"], "Checked: cargo test passed, the criterion has evidence.");
+        assert_eq!(v["items_dropped"], 0);
+    }
+
+    #[test]
+    fn a_criterion_met_without_evidence_is_a_claim_not_a_pass() {
+        let t = TaskChecks {
+            checks: vec![check("command", json!({"command": "cargo test"}), "passed", None)],
+            criteria: vec![
+                criterion("c1", "Tests pass", "met", &["ev1"]),
+                criterion("c2", "Docs updated", "met", &[]),
+                // Evidence that was taken off the task no longer counts
+                criterion("c3", "Changelog entry", "met", &["gone"]),
+            ],
+            evidence: vec![evidence("ev1", "CI run", None)],
+            ..Default::default()
+        };
+        let v = checked(&[t], None);
+        assert_eq!(results(&v), ["passed", "passed", "not_checked", "not_checked"]);
+        assert_eq!(v["items"][2]["how"], "task criterion, marked met with no evidence (a claim)");
+        assert_eq!(v["items"][2]["evidence"], Value::Null);
+        assert_eq!(v["state"], "partly");
+        assert_eq!(v["line"], "Partly checked: cargo test passed, 1 of 3 criteria have evidence.");
+        // Only a claim: nothing checked it
+        let t = TaskChecks { criteria: vec![criterion("c1", "Docs updated", "met", &[])], ..Default::default() };
+        let v = checked(&[t], None);
+        assert_eq!((v["state"].as_str(), v["line"].as_str()), (Some("not_checked"), Some("Not checked: the criterion is a claim with no evidence.")));
+    }
+
+    #[test]
+    fn a_failed_check_fails_the_item_and_comes_first() {
+        let t = TaskChecks {
+            checks: vec![
+                check("http", json!({"url": "https://booktun.ing"}), "passed", Some("GET https://booktun.ing → 200")),
+                check("file_exists", json!({"path": "dist/index.html"}), "failed", Some("dist/index.html is missing")),
+            ],
+            criteria: vec![criterion("c1", "Page is live", "met", &["ev1"])],
+            evidence: vec![evidence("ev1", "Screenshot", None)],
+            ..Default::default()
+        };
+        let v = checked(&[t], None);
+        assert_eq!(v["state"], "failed");
+        assert_eq!(results(&v), ["failed", "passed", "passed"]);
+        assert_eq!(v["items"][0]["what"], "dist/index.html");
+        assert_eq!(v["items"][0]["how"], "looked for the file");
+        assert_eq!(v["line"], "Failed: 1 of 2 checks failed, the criterion has evidence.");
+        // A check that couldn't run (`error`) and a criterion marked not met fail too
+        let t = TaskChecks { checks: vec![check("command", json!({"command": "make"}), "error", Some("the mission's folder doesn't exist"))], ..Default::default() };
+        assert_eq!(checked(&[t], None)["line"], "Failed: make failed.");
+        let t = TaskChecks { criteria: vec![criterion("c1", "Under budget", "not_met", &[])], ..Default::default() };
+        assert_eq!(checked(&[t], None)["line"], "Failed: the criterion is not met.");
+    }
+
+    #[test]
+    fn a_routine_run_nothing_checked_says_so_plainly() {
+        let msg = Message { direct_kwant_id: Some("k1".into()), ..bare_message("m1", "Posted the daily summary.", Some(json!({"activity": {"steps": []}}).to_string())) };
+        let mut v = json!({});
+        apply(&mut v, &DoneFacts { message: Some(msg), why: Some("Post the summary".into()), why_kind: Some("routine"), ..Default::default() }, true);
+        assert_eq!(v["checked"], json!({"state": "not_checked", "items": [], "items_dropped": 0, "line": "Not checked: nothing verified this result."}));
+        // No message and no task: the same
+        let mut v = json!({});
+        apply(&mut v, &DoneFacts::default(), true);
+        assert_eq!(v["checked"]["state"], "not_checked");
+        // A plan that wasn't checked (no outcome) is no item
+        assert!(delivery_item(&json!({"delivery": {"outcome": null, "missing": ["follow_through"]}})).is_none());
+    }
+
+    #[test]
+    fn a_delivery_miss_fails_and_names_what_is_missing() {
+        let meta = json!({"delivery": {"outcome": "miss", "missing": ["image", "follow_through"], "auto_shared": false}, "delivery_plan": {"show": ["image", "text"]}});
+        let v = checked(&[], Some(&meta));
+        assert_eq!(v["state"], "failed");
+        assert_eq!(v["items"][0], json!({"what": "The picture you asked for", "how": "kwant compared the reply with what you asked for", "result": "failed", "evidence": "missing from the reply: picture"}));
+        assert_eq!(v["line"], "Failed: the picture you asked for is missing.");
+        // A hit reads from the plan what was asked for
+        let hit = json!({"delivery": {"outcome": "hit", "missing": []}, "delivery_plan": {"show": ["link"]}});
+        let v = checked(&[], Some(&hit));
+        assert_eq!((v["state"].as_str(), v["line"].as_str()), (Some("checked"), Some("Checked: the link you asked for is in the reply.")));
+        assert_eq!(v["items"][0]["evidence"], "the link is in the reply");
+    }
+
+    #[test]
+    fn an_unknown_or_unfinished_check_status_never_reads_as_passed() {
+        for (status, want) in [("waiting", "waiting"), ("running", "waiting"), ("pending", "not_checked"), ("needs_approval", "not_checked"), ("passed_maybe", "not_checked"), ("", "not_checked")] {
+            assert_eq!(check_result(status), want, "{status}");
+        }
+        let t = TaskChecks { checks: vec![check("http", json!({"url": "https://deutero.example/study/42"}), "waiting", None)], ..Default::default() };
+        let v = checked(&[t], None);
+        assert_eq!((v["state"].as_str(), v["line"].as_str()), (Some("not_checked"), Some("Not checked: https://deutero.example/study/42 is still waiting.")));
+        // A check still waiting for approval never ran: no item
+        let mut unapproved = check("command", json!({"command": "rm -rf build"}), "needs_approval", None);
+        unapproved.approved = false;
+        let v = checked(&[TaskChecks { checks: vec![unapproved], ..Default::default() }], None);
+        assert_eq!(v["items"], json!([]));
+    }
+
+    #[test]
+    fn an_address_stays_readable_but_a_key_in_it_is_masked() {
+        let key = "Zq8VwK3mT9pL2rX7nB4c";
+        assert_eq!(masked_line("https://github.com/alexsergivan/kwant/pull/566", 200), "https://github.com/alexsergivan/kwant/pull/566");
+        assert_eq!(masked_line("opened https://deutero.example/study/42?round=2#top", 200), "opened https://deutero.example/study/42?round=2#top");
+        assert_eq!(masked_line(&format!("https://hooks.example/in/{key}/x"), 200), "https://hooks.example/in/[redacted]/x");
+        let q = masked_line("https://api.example/v1?token=hunter2hunter2&page=3", 200);
+        assert!(q.starts_with("https://api.example/v1?") && q.ends_with("&page=3") && !q.contains("hunter2"), "{q}");
+        let u = masked_line("https://bob:s3cret@db.example/", 200);
+        assert!(u.starts_with("https://") && u.ends_with("@db.example/") && !u.contains("s3cret"), "{u}");
+        assert_eq!(masked_line("key sk-ant-api03-abcdefghijklmnop1234 and http://x.example", 200), "key [redacted] and http://x.example");
+        // Through an http check and a criterion's evidence
+        let mut t = TaskChecks { checks: vec![check("http", json!({"url": "https://kwant.si/r/2026/11/report-42"}), "passed", Some("HTTP 200"))], ..Default::default() };
+        t.evidence = vec![evidence("ev1", "Pull request", Some("https://github.com/alexsergivan/kwant/pull/566"))];
+        t.criteria = vec![criterion("c1", "The pull request is open", "met", &["ev1"])];
+        let v = checked(&[t], None);
+        assert_eq!(v["items"][0]["what"], "https://kwant.si/r/2026/11/report-42");
+        assert_eq!(v["items"][1]["evidence"], "Pull request: https://github.com/alexsergivan/kwant/pull/566");
+    }
+
+    #[test]
+    fn checked_texts_are_masked_and_capped_at_eight_failed_first() {
+        let key = "sk-ant-api03-abcdefghijklmnop1234";
+        let mut checks: Vec<OutcomeCheck> = (0..9).map(|i| check("command", json!({"command": format!("test -f f{i}")}), "passed", None)).collect();
+        checks.push(check("command", json!({"command": format!("curl -H 'x-api-key: {key}' https://api.example")}), "failed", Some(&format!("token {key} refused"))));
+        let v = checked(&[TaskChecks { checks, ..Default::default() }], None);
+        let text = v.to_string();
+        assert!(!text.contains(key), "{text}");
+        assert_eq!(v["items"].as_array().unwrap().len(), CHECKED_MAX);
+        assert_eq!(v["items_dropped"], 2);
+        assert_eq!(v["items"][0]["result"], "failed");
+        assert_eq!(v["line"], "Failed: 1 of 10 checks failed.");
+        // A teammate's review says who; the person's own check says so
+        let mut review = check("peer_review", json!({"note": "Looks right", "fresh_eyes": true}), "passed", Some("Looks right"));
+        review.checked_by = Some("k2".into());
+        let names = HashMap::from([("k2".to_string(), "Rigel".to_string())]);
+        let v = checked(&[TaskChecks { checks: vec![review, check("person", json!({"note": "ok"}), "passed", None)], names, ..Default::default() }], None);
+        assert_eq!((v["items"][0]["what"].as_str(), v["items"][0]["how"].as_str()), (Some("Review by Rigel"), Some("a fresh-eyes review")));
+        assert_eq!((v["items"][1]["what"].as_str(), v["items"][1]["how"].as_str()), (Some("Your own check"), Some("you checked it")));
+        assert_eq!(v["line"], "Checked: 2 of 2 checks passed.");
     }
 }

@@ -240,10 +240,12 @@ async fn start(state: &AppState, space: &SpaceId, events: &[(Event, Vec<CaseRow>
     let id = kwant.id.clone();
     tokio::spawn(async move {
         let _job = job;
-        // Nobody asked for this turn: anything that could change something asks, approvals off or not
-        let opts = TurnOpts::always_asking("Loose ends: prepare drafts and next steps");
+        // Nobody asked for this turn: under Ask or "Ask only when risky" anything that could change
+        // something asks, and the card says why; approvals off still means off (0.9.7)
+        const LABEL: &str = "Loose ends: prepare drafts and next steps";
+        let opts = TurnOpts::always_asking(LABEL);
         let reply = try_kwant_turn(&scope, &kwant, text, opts).await;
-        let _ = continue_once_if_capped(&scope, &kwant, reply, true).await;
+        let _ = continue_once_if_capped(&scope, &kwant, reply, Some(LABEL)).await;
     });
     Some(id)
 }

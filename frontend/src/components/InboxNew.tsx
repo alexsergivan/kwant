@@ -26,8 +26,10 @@ import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard } from './ModernApprovalCard';
 import { ReviewDone, VERDICT_STYLE } from './ReviewItemStub';
 import { ReviewItemView } from './ReviewItemView';
-import { type DoneApi, type DoneDetailData, type MessageTarget, DoneChips, DoneItemView, DoneSections, defaultDoneApi, useDoneDetail } from './DoneDetail';
+import { type DoneApi, type DoneDetailData, type MessageTarget, DoneChipsAndCheck, DoneItemView, DoneSections, defaultDoneApi, useDoneDetail } from './DoneDetail';
 import { DONE_EMPTY, DONE_FOOTER, changedState, doneTitle, isDoneGroup, isRoutineItem, isUnread, metaLine, rowKicker, sectionItems, teamSize, unreadLine } from '../doneAway';
+import { knownChecked, listsCriteria } from '../doneCheck';
+import { CheckMarker, DoneCheck } from './DoneCheck';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
@@ -236,6 +238,8 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
   const who = (item.kind === 'team_job' ? teamSize(item) : null) ?? item.kwant_name;
   const unread = isUnread(item);
   const doneRow = !review && isDoneGroup(item.group) && opensInPane(item);
+  // done-check: one word before the summary on done rows whose item says how it was checked.
+  const check = isDoneGroup(item.group) ? knownChecked(item.checked) : null;
   return (
     <li role="presentation" className={`relative rounded-xl border transition-colors ${tint}`} data-row={item.id} data-group={item.group}>
       <div
@@ -278,15 +282,15 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
           </span>
           <span className="block mt-0.5 text-sm font-semibold text-zinc-100 break-words max-md:line-clamp-3 md:truncate">{title}</span>
           <span className="block mt-1 text-xs">
-            {review && doneSummary ? (
+            {review && (doneSummary || check) ? (
               <span className="block text-zinc-400 max-md:line-clamp-2 md:truncate" data-done-summary>
-                {doneSummary}
+                {check ? <CheckMarker state={check.state} summary={doneSummary || item.summary || null} /> : doneSummary}
               </span>
             ) : review ? (
               <ReviewSubline item={review} />
-            ) : doneRow && item.summary ? (
+            ) : doneRow && (item.summary || check) ? (
               <span className="block text-zinc-400 max-md:line-clamp-2 md:truncate" data-done-summary>
-                {item.summary}
+                {check ? <CheckMarker state={check.state} summary={item.summary || null} /> : item.summary}
               </span>
             ) : (
               <AwaySubline item={item} />
@@ -620,7 +624,11 @@ const ItemPane: React.FC<{
   const phone = usePhoneLayout();
   const d = useDoneDetail(item, runItem, api ?? defaultDoneApi, initial);
   const doneLayout = isDoneGroup(item.group) && (!isReview(item) || isRoutineItem(item));
-  if (isReview(item) && !doneLayout) return <ReviewItemView item={item} entry={entry} onDone={onDone} onHeldResolved={onHeldResolved} />;
+  if (isReview(item) && !doneLayout) {
+    // done-check: a to-review task in Done keeps the full review layout and gets the check box above the verdict.
+    const checked = isDoneGroup(item.group) ? knownChecked(item.checked) : null;
+    return <ReviewItemView item={item} entry={entry} onDone={onDone} onHeldResolved={onHeldResolved} checkBox={checked ? <DoneCheck key={item.id} checked={checked} /> : undefined} />;
+  }
   const target = d.target ?? servedTarget(item);
   const openChat = () => (target && onOpenMessage ? onOpenMessage(target) : onOpenItemChat(runItem ?? item));
   // Part B's result_link names where the answer is when the routine isn't loaded (and for team jobs).
@@ -638,9 +646,10 @@ const ItemPane: React.FC<{
       done={{
         title: doneTitle(item),
         meta: metaLine(item, d.routine, d.run),
-        chips: <DoneChips item={item} d={d} onAddCheck={edit} />,
+        chips: <DoneChipsAndCheck item={item} d={d} onAddCheck={edit} />,
         body: <DoneSections item={item} d={d} place={place} onOpenChat={openChat} onEditRoutine={onEditRoutine} />,
         changed: changedState(item, d.message),
+        hideCriteria: listsCriteria(knownChecked(item.checked)),
       }}
     />
   );

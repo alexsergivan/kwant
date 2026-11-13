@@ -247,6 +247,8 @@ async fn approvals_off_still_cards_a_card_form_click_and_the_shell_api_refuses_i
         conversation: "c-pay".into(),
         chat: None,
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     };
     let approver = SelfToolsApprover {
         inner: Arc::new(inner),

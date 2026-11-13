@@ -9,6 +9,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Fixed
+- In the live browser view, a page's own file picker (TikTok Studio's "Select video", for one) now opens kwant's own **Choose file…** sheet instead of doing nothing, since the screencast can't show Chrome's native dialog. Choose a file, watch it upload, and the page gets it as if you'd picked it yourself.
+- The page's own file picker: dropping a file onto the sheet, a focused OK when the page itself closed the picker, a Cancel while uploading, a byte-count progress bar, and a failed answer (not just a lost picker) can now be retried instead of always going "gone". (#578)
+
+## [Mac 0.9.7] - 2026-11-13
+
+kwant 0.9.7: your bot itself at work while a reply is coming, a mark on each bot's avatar for the AI it runs on and one search box to find a tool and add it.
+
+### Added
+- **Your bot at work while a reply is coming.** Before the first words of a reply arrive, the bubble shows the bot's own avatar at a small pixel laptop, typing, with "Ben is working on it" next to it, instead of three grey lines. In a team chat it's the bot that is speaking. The first words fade in where the picture was, at the same height, so nothing jumps. With reduced motion on, the picture stands still, and screen readers hear "Ben is working on the answer". Phones keep the status strip. (#562)
+- **Each bot's AI on its avatar.** A small mark at the bottom left of a bot's avatar shows the AI it runs on: Anthropic, OpenAI, xAI, Ollama, a chip for a custom engine, or ✦ when Laya picks the model. While a bot works, the mark shows what it runs on right now and changes if the bot moves to another engine. A resting bot that Laya picks for shows its last reply's mark, faded, with a small ✦. A pinned bot whose engine is signed out, off or not set up is greyed, and the tooltip says why, for example "Runs on Claude · Sonnet · signed out"; running out of usage doesn't grey it. The sidebar name tooltip says the same. For apps: a `turn_runs_on` event when a turn starts and on failover, and `last_ran_on` for each bot in `GET /api/kwants`. (#554, #560)
+- **Find a tool.** One search box finds a tool to add, in Add a tool and on Apps & accounts. Suggestions start from the first letter and forgive typos and short names ("gmial", "11labs", "pg"). Results come in three groups: Built in, Through Composio, and From the public directory, a copy of the official MCP Registry that kwant refreshes every 6 hours. Add & test installs a tool from there in one step. Connecting a Composio app before Composio is set up asks for the key right there. The Composio card shows the apps connected and which bots use them, with Replace key, Turn off and Remove. (#552, #555)
+
+### Fixed
+- Apps & accounts › Another app › Through Composio now finds any app Composio has, such as ElevenLabs, not only its popular ones. (#568)
+- Signing in to tool servers that accept a client ID document instead of letting apps register themselves, such as ElevenLabs, works now. kwant uses kwant.si/oauth/client.json when it runs on this computer, or serves its own at /api/mcp/oauth/client.json over https. A server it still can't sign in to says why and what to do instead, with no Retry. (#574)
+
+### Fixed
 - **Find any Composio app by its name.** Apps & accounts › Another app only searched Composio's 120 most popular apps, so "ElevenLabs" said "No Composio apps match". Now a name the popular list doesn't have is checked with Composio itself, through Composio Connect, or on the app's public page on composio.dev when Connect can't answer (only the app's name is sent). "ElevenLabs", "elevenlabs" and "Eleven Labs" all find ElevenLabs, ready to connect. When nothing is found, the line says why and what to try: the app's full name, trying again if Composio couldn't be reached, or asking a bot. Answers are kept for 10 minutes.
 
 ## [Mac 0.9.6] - 2026-11-13

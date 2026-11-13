@@ -296,6 +296,68 @@ pub fn classify(command: &str, folder: &Path) -> SmartVerdict {
     }
 }
 
+/// Programs that only read and print: no option of theirs writes a file or runs another program
+/// (`sort -o`, `uniq IN OUT`, `tree -o`, `find -exec` and `sed -i` are why those aren't here).
+const READS_ONLY: &[&str] = &[
+    "cd", "ls", "cat", "head", "tail", "wc", "echo", "printf", "true", "false", "pwd", "diff", "cmp", "cut", "tr", "file",
+    "stat", "du", "basename", "dirname", "realpath", "readlink", "which", "date", "test", "[", "nl", "rev", "tac", "strings",
+    "md5sum", "sha1sum", "sha256sum", "sha512sum", "jq", "grep", "egrep", "fgrep", "rg", "git",
+];
+/// git subcommands that only read the repository.
+const GIT_READS: &[&str] = &[
+    "status", "diff", "log", "show", "rev-parse", "blame", "ls-files", "grep", "describe", "shortlog", "cat-file", "rev-list",
+    "merge-base", "show-ref", "ls-tree", "diff-tree", "name-rev",
+];
+
+/// Whether `command` only reads, inside `folder`: "Ask only when risky" lets it through even in a
+/// turn kwnt started on its own. Stricter than [`classify`] (which it must pass first): every
+/// program is one in [`READS_ONLY`], git runs only a subcommand in [`GIT_READS`] with no option
+/// that writes a file or runs a program, there are no `VAR=` assignments, and output goes nowhere
+/// but `/dev/null`. Anything else is `false` (and goes on to ask).
+pub fn reads_only(command: &str, folder: &Path) -> bool {
+    if check(command, folder).is_err() {
+        return false;
+    }
+    let Ok(toks) = lex(command) else { return false };
+    let mut simple: Vec<Word> = Vec::new();
+    let mut iter = toks.into_iter();
+    while let Some(tok) = iter.next() {
+        match tok {
+            Tok::Word(w) => simple.push(w),
+            Tok::Dup => {}
+            Tok::Redirect => match iter.next() {
+                Some(Tok::Word(target)) if target.text == "/dev/null" => {}
+                _ => return false,
+            },
+            Tok::Sep => {
+                if !simple_reads_only(&std::mem::take(&mut simple)) {
+                    return false;
+                }
+            }
+        }
+    }
+    simple_reads_only(&simple)
+}
+
+/// One command of [`reads_only`]; an empty one (after a trailing `;`) reads nothing.
+fn simple_reads_only(words: &[Word]) -> bool {
+    let Some(first) = words.first() else { return true };
+    let name = first.text.as_str();
+    if !READS_ONLY.contains(&name) {
+        return false;
+    }
+    if name != "git" {
+        return true;
+    }
+    // `git <subcommand>`, with no global options before it
+    let Some(sub) = words.get(1) else { return false };
+    let writes = |a: &Word| {
+        let t = a.text.as_str();
+        t == "-o" || t.starts_with("--output") || t == "--ext-diff" || t.starts_with("--open-files-in-pager") || t == "-O"
+    };
+    GIT_READS.contains(&sub.text.as_str()) && !words[2..].iter().any(writes)
+}
+
 fn check(command: &str, folder: &Path) -> Verdict {
     if command.trim().is_empty() {
         return Err("the command is empty".into());
@@ -1987,5 +2049,63 @@ mod tests {
             SmartVerdict::Ask("`pip install` reaches outside the folder".into())
         );
         assert_eq!(classify("npm create vite@latest", &ws), SmartVerdict::Ask("`npm create vite@latest` downloads a starter package and runs it".into()));
+    }
+
+    /// 0.9.7: what a turn kwnt started on its own may run under "Ask only when risky" without a
+    /// card. Oleks's command (Nov 13) is the first one.
+    #[test]
+    fn reads_only_lets_through_only_commands_that_read() {
+        let (_tmp, ws) = folder();
+        for cmd in [
+            "cd src && git rev-parse --short HEAD && git show --stat HEAD | head -20 && grep -rn 'placeMaker' --include=*.go . | head -30",
+            "git log --oneline -5",
+            "git status",
+            "git diff HEAD~1 -- src/main.rs",
+            "git blame src/main.rs",
+            "ls -la src",
+            "cat run.sh",
+            "rg -n foo src 2>/dev/null",
+            "wc -l run.sh; pwd",
+            "ls",
+            "git status --short && ls",
+        ] {
+            assert!(reads_only(cmd, &ws), "{cmd} only reads");
+            assert!(classify(cmd, &ws).is_allowed(), "{cmd} passes classify first");
+        }
+        for cmd in [
+            "rm -rf x",
+            "touch x",
+            "mkdir y",
+            "git add -A",
+            "git commit -m x",
+            "git checkout -b x",
+            "git show HEAD --output=out.txt",
+            "git diff --ext-diff",
+            "git -C src log",
+            "git",
+            "cat run.sh > copy.sh",
+            "echo hi >> run.sh",
+            "sort -o out run.sh",
+            "sed -i s/a/b/ run.sh",
+            "find . -delete",
+            "cargo test",
+            "RUST_LOG=1 cat run.sh",
+            "cat /etc/passwd",
+            "curl https://example.com",
+            "ls && rm x",
+            // Must-hold 4 (#569): each of these asks in a kwant-started turn
+            "rm -rf src",
+            "git add .",
+            "echo x > f",
+            "git -C . status",
+            "git diff --output=f",
+            "git diff --output f",
+            "rg --pre cat x",
+            "rg --pre=cat x",
+            "LC_ALL=C ls",
+            "GIT_EXTERNAL_DIFF=./x git diff",
+        ] {
+            assert!(!reads_only(cmd, &ws), "{cmd} must not count as read-only");
+        }
     }
 }
