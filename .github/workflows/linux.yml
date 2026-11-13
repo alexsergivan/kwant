@@ -45,13 +45,13 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: System libraries (WebKitGTK, GTK, tray)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev patchelf xvfb xauth zsync
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -265,7 +265,7 @@ jobs:
           test $status -eq 0 || { echo "::error::kwant --demo-nudge crashed or stopped early"; exit 1; }
           grep -q 'demo-nudge: step 4' "$out/demo-nudge.txt" || { echo "::error::the demo never reached step 4"; exit 1; }
           grep -q 'demo-nudge: notification' "$out/demo-nudge.txt" || echo "::warning::no notification was shown (no notification service on the virtual display?)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ always() && !startsWith(github.ref, 'refs/tags/') }}
         with:
           name: nudge-linux
@@ -280,7 +280,7 @@ jobs:
           set -uo pipefail
           sudo apt-get install -y --no-install-recommends imagemagick x11-utils > /dev/null || true
           xvfb-run -a -s "-screen 0 2400x1000x24" dbus-run-session -- apps/mac/ci/side-by-side.sh "$RUNNER_TEMP/side-by-side-linux" "$PWD/apps/mac/target/release/kwant"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: side-by-side-linux
@@ -311,7 +311,7 @@ jobs:
           cd "$out"
           for f in *.deb *.AppImage; do sha256sum "$f" > "$f.sha256"; done
           ls -l
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: ${{ runner.temp }}/linux
@@ -332,7 +332,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends appstream desktop-file-utils
           appstreamcli --version
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: linux
           path: linux
