@@ -11,9 +11,19 @@
 //! a turn running is never closed. Room is made and a page opened under one lock per team
 //! ([`JobPages::team_lock`]), so jobs opening at once never pass the cap. A bot tool that finds
 //! no room waits up to [`PAGE_WAIT`] for a page to free up, then gets [`pages_full_message`].
+//!
+//! Resting and recovery (0.9.5). In VM mode a page no bot has used and nobody has watched for
+//! [`IDLE_FREEZE`] is put to rest: its media paused and the page frozen, so a feed left
+//! autoplaying doesn't burn the browser's CPU and memory; a team page idle for [`IDLE_BLANK`] is
+//! sent to about:blank (its cookies stay in the jar). A rested page wakes before its next
+//! action, screenshot or live view. When the browser stops answering, a bot's call retries with
+//! backoff for up to [`RETRY_WINDOW`], first freeing memory by closing or blanking other idle
+//! pages ([`relieve`]), never the page the bot is using; if it still can't, the bot is told the
+//! problem is temporary ([`crate::sandbox::service::BROWSER_BUSY`]).
 
 use super::continuity::SelfScope;
 use super::AppState;
+use crate::sandbox::service::Rest;
 use axum::{extract::{Path, State}, Json};
 use serde_json::{json, Value};
 use std::{
@@ -36,6 +46,32 @@ pub const SWEEP_EVERY: Duration = Duration::from_secs(60);
 /// How long a bot's browser call waits for one of its team's pages to free up before it is
 /// told every page is in use.
 pub const PAGE_WAIT: Duration = Duration::from_secs(60);
+/// VM mode: a page no bot used and nobody watched for this long is frozen (media paused).
+pub const IDLE_FREEZE: Duration = Duration::from_secs(10 * 60);
+/// VM mode: a team page idle this long is sent to about:blank.
+pub const IDLE_BLANK: Duration = Duration::from_secs(2 * 60 * 60);
+/// How long a bot's browser call keeps retrying a browser that doesn't answer (VM mode).
+pub const RETRY_WINDOW: Duration = Duration::from_secs(45);
+/// The first wait between retries; each next one doubles, up to [`RETRY_MAX_DELAY`].
+pub const RETRY_FIRST_DELAY: Duration = Duration::from_secs(1);
+pub const RETRY_MAX_DELAY: Duration = Duration::from_secs(8);
+/// Freeing memory for a stalled browser leaves alone a page used this recently.
+const RELIEF_IDLE: Duration = Duration::from_secs(60);
+/// Longest one rest or relief step on one page may take (the browser may be stalled).
+const REST_STEP: Duration = Duration::from_secs(5);
+/// Longest all of one [`relieve`] may take.
+const RELIEF_BUDGET: Duration = Duration::from_secs(15);
+
+/// The wait before retry number `attempt` (0-based): 1, 2, 4, 8, 8, ... seconds.
+pub fn retry_delay(attempt: u32) -> Duration {
+    RETRY_FIRST_DELAY.saturating_mul(1u32 << attempt.min(16)).min(RETRY_MAX_DELAY)
+}
+
+/// Whether to try once more after waiting `delay`, `elapsed` into a retry `window`: only while
+/// the next attempt still starts inside it.
+pub fn keep_retrying(elapsed: Duration, delay: Duration, window: Duration) -> bool {
+    elapsed + delay < window
+}
 
 /// What a job is told when every job page of its team is in use and none freed up in time.
 pub fn pages_full_message() -> String {
@@ -52,6 +88,8 @@ pub struct JobPages {
     opening: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Tests only: the wait for room in ms (0 = [`PAGE_WAIT`]).
     wait_ms: AtomicU64,
+    /// Tests only: the retry window in ms (0 = [`RETRY_WINDOW`]).
+    retry_ms: AtomicU64,
 }
 
 impl JobPages {
@@ -68,6 +106,18 @@ impl JobPages {
     pub fn wait(&self) -> Duration {
         match self.wait_ms.load(Ordering::Relaxed) {
             0 => PAGE_WAIT,
+            ms => Duration::from_millis(ms),
+        }
+    }
+
+    /// Tests: a shorter retry window than [`RETRY_WINDOW`].
+    pub fn set_retry_window(&self, window: Duration) {
+        self.retry_ms.store((window.as_millis() as u64).max(1), Ordering::Relaxed);
+    }
+
+    pub fn retry_window(&self) -> Duration {
+        match self.retry_ms.load(Ordering::Relaxed) {
+            0 => RETRY_WINDOW,
             ms => Duration::from_millis(ms),
         }
     }
@@ -119,6 +169,116 @@ async fn closable(state: &AppState, key: &str) -> bool {
         Some(ctrl) => ctrl.control.try_write().is_ok() && !ctrl.is_held_for_person(),
         None => true,
     }
+}
+
+/// Whether a page may be put to rest now: [`closable`], and no live view shows it.
+async fn restable(state: &AppState, key: &str) -> bool {
+    let watched = state.browser_controllers.lock().await.get(key).is_some_and(|c| c.watchers() > 0);
+    !watched && closable(state, key).await
+}
+
+/// Puts one page to rest (see [`Rest`]) through its controller, or one made for the open page
+/// when no bot has used it this run. Bounded by [`REST_STEP`]. Whether it was.
+async fn rest_page(state: &AppState, key: &str, rest: Rest) -> bool {
+    let ctrl = state.browser_controllers.lock().await.get(key).cloned();
+    let ctrl = match ctrl {
+        Some(ctrl) => ctrl,
+        None => match state.browser_service.existing_page(key).await {
+            Some(ctrl) => ctrl,
+            None => return false,
+        },
+    };
+    let done = match rest {
+        Rest::Frozen => tokio::time::timeout(REST_STEP, ctrl.freeze()).await,
+        Rest::Blank => tokio::time::timeout(REST_STEP, ctrl.blank()).await,
+    };
+    match done {
+        Ok(Ok(())) => {
+            state.browser_service.mark_rested(key, rest);
+            true
+        }
+        Ok(Err(e)) => {
+            tracing::debug!(page = %key, "couldn't put an idle page to rest: {e}");
+            false
+        }
+        Err(_) => {
+            tracing::debug!(page = %key, "putting an idle page to rest timed out");
+            false
+        }
+    }
+}
+
+/// What the idle sweep does with a page idle for `idle` that was last put to rest as `rested`:
+/// nothing before `freeze_after`; a team page past `blank_after` is blanked; any other is
+/// frozen. `None` when it already is.
+pub fn rest_for(job: bool, idle: Duration, rested: Option<Rest>, freeze_after: Duration, blank_after: Duration) -> Option<Rest> {
+    if idle < freeze_after || rested == Some(Rest::Blank) {
+        return None;
+    }
+    let want = if !job && idle >= blank_after { Rest::Blank } else { Rest::Frozen };
+    (rested != Some(want)).then_some(want)
+}
+
+/// VM mode: puts to rest the pages idle past `freeze_after` (see [`rest_for`]) that no step
+/// holds, no turn of their job is running in, and nobody is using or watching. Returns how many
+/// were (frozen, blanked).
+pub async fn rest_idle(state: &AppState, freeze_after: Duration, blank_after: Duration) -> (usize, usize) {
+    if state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local {
+        return (0, 0);
+    }
+    let now = Instant::now();
+    let (mut frozen, mut blanked) = (0, 0);
+    for (key, at) in state.browser_service.open_pages().await {
+        let rested = state.browser_service.rest_of(&key);
+        let Some(rest) = rest_for(is_job_page(&key), now.duration_since(at), rested, freeze_after, blank_after) else { continue };
+        if !restable(state, &key).await || !rest_page(state, &key, rest).await {
+            continue;
+        }
+        tracing::info!(page = %key, ?rest, "browser: put an idle page to rest");
+        match rest {
+            Rest::Frozen => frozen += 1,
+            Rest::Blank => blanked += 1,
+        }
+    }
+    (frozen, blanked)
+}
+
+/// The browser stopped answering a call for `keep`: frees memory by closing other idle job pages
+/// and blanking other idle team pages, least recently used first, never `keep` nor a page used
+/// in the last minute, watched, held or in use. Each step is bounded (the browser may be
+/// stalled), and all of it by [`RELIEF_BUDGET`]. Returns how many pages were closed or blanked.
+pub async fn relieve(state: &AppState, keep: &str) -> usize {
+    if state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local {
+        return 0;
+    }
+    let mut relieved = 0;
+    let work = async {
+        let now = Instant::now();
+        let pages = match tokio::time::timeout(REST_STEP, state.browser_service.open_pages()).await {
+            Ok(pages) => pages,
+            Err(_) => return,
+        };
+        for (key, at) in pages {
+            if key == keep || now.duration_since(at) < RELIEF_IDLE || !restable(state, &key).await {
+                continue;
+            }
+            if is_job_page(&key) {
+                // a page being opened or closed for its team is left to that
+                let lock = state.job_pages.team_lock(page_team(&key));
+                let Ok(_opening) = lock.try_lock() else { continue };
+                if tokio::time::timeout(REST_STEP, close_page(state, &key)).await.is_ok() {
+                    relieved += 1;
+                }
+            } else if state.browser_service.rest_of(&key) != Some(Rest::Blank) && rest_page(state, &key, Rest::Blank).await {
+                relieved += 1;
+            }
+        }
+    };
+    let _ = tokio::time::timeout(RELIEF_BUDGET, work).await;
+    if relieved > 0 {
+        tracing::warn!(page = %keep, "browser: not answering; closed or blanked {relieved} other idle pages to free memory");
+    }
+    relieved
 }
 
 /// Closes a job page: its controller first (cookies kept), then the page.
@@ -179,7 +339,7 @@ pub async fn sweep_idle(state: &AppState, idle: Duration) -> usize {
     closed
 }
 
-/// Runs [`sweep_idle`] every [`SWEEP_EVERY`] until `cancel`.
+/// Runs [`sweep_idle`] and [`rest_idle`] every [`SWEEP_EVERY`] until `cancel`.
 pub fn spawn_sweeper(state: AppState, cancel: tokio_util::sync::CancellationToken) {
     tokio::spawn(async move {
         loop {
@@ -190,6 +350,10 @@ pub fn spawn_sweeper(state: AppState, cancel: tokio_util::sync::CancellationToke
             let closed = sweep_idle(&state, JOB_PAGE_IDLE).await;
             if closed > 0 {
                 tracing::info!("browser: closed {closed} idle job pages");
+            }
+            let (frozen, blanked) = rest_idle(&state, IDLE_FREEZE, IDLE_BLANK).await;
+            if frozen + blanked > 0 {
+                tracing::info!("browser: froze {frozen} and blanked {blanked} idle pages");
             }
         }
     });
@@ -280,6 +444,44 @@ mod tests {
         assert_eq!(pages.wait(), Duration::from_millis(5));
         assert!(Arc::ptr_eq(&pages.team_lock("t"), &pages.team_lock("t")));
         assert!(!Arc::ptr_eq(&pages.team_lock("t"), &pages.team_lock("u")), "one lock per team");
+    }
+
+    #[test]
+    fn retries_back_off_from_one_second_to_eight_inside_the_window() {
+        let delays: Vec<u64> = (0..6).map(|n| retry_delay(n).as_secs()).collect();
+        assert_eq!(delays, [1, 2, 4, 8, 8, 8]);
+        assert_eq!(retry_delay(40), RETRY_MAX_DELAY, "no overflow on a long outage");
+        let s = Duration::from_secs;
+        assert!(keep_retrying(s(0), s(1), RETRY_WINDOW));
+        assert!(keep_retrying(s(36), s(8), RETRY_WINDOW));
+        assert!(!keep_retrying(s(37), s(8), RETRY_WINDOW), "the next try would start after the window");
+        assert!(!keep_retrying(s(45), s(1), RETRY_WINDOW));
+        // the waits alone fill the window in 1+2+4+8+8+8+8 = 39 s: about 7 tries when each fails fast
+        let mut elapsed = Duration::ZERO;
+        let mut tries = 1;
+        while keep_retrying(elapsed, retry_delay(tries - 1), RETRY_WINDOW) {
+            elapsed += retry_delay(tries - 1);
+            tries += 1;
+        }
+        assert_eq!((tries, elapsed.as_secs()), (8, 39));
+        let pages = JobPages::default();
+        assert_eq!(pages.retry_window(), RETRY_WINDOW);
+        pages.set_retry_window(Duration::from_millis(5));
+        assert_eq!(pages.retry_window(), Duration::from_millis(5));
+    }
+
+    #[test]
+    fn idle_pages_are_frozen_after_ten_minutes_and_team_pages_blanked_after_hours() {
+        let m = |n: u64| Duration::from_secs(n * 60);
+        let rest = |job, idle, rested| rest_for(job, idle, rested, IDLE_FREEZE, IDLE_BLANK);
+        assert_eq!(rest(false, m(9), None), None, "used within ten minutes");
+        assert_eq!(rest(false, m(10), None), Some(Rest::Frozen));
+        assert_eq!(rest(true, m(10), None), Some(Rest::Frozen));
+        assert_eq!(rest(false, m(30), Some(Rest::Frozen)), None, "already frozen");
+        assert_eq!(rest(false, m(120), Some(Rest::Frozen)), Some(Rest::Blank));
+        assert_eq!(rest(false, m(120), None), Some(Rest::Blank));
+        assert_eq!(rest(false, m(600), Some(Rest::Blank)), None, "already blank");
+        assert_eq!(rest(true, m(600), None), Some(Rest::Frozen), "a job page is never blanked (it is closed)");
     }
 
     #[test]

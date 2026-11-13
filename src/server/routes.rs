@@ -5582,6 +5582,8 @@ pub enum PageRefusal {
     Unavailable,
     /// Every job page of the team is held or in use, and none freed up in time.
     PagesFull,
+    /// VM mode: the browser is there but didn't answer in time (overloaded). Temporary.
+    Busy,
 }
 
 /// The page's controller for a bot's browser call: like [`get_or_create_browser_controller`],
@@ -5592,13 +5594,50 @@ pub async fn page_controller(
     state: &AppState,
     key: &str,
 ) -> Result<crate::sandbox::BrowserController, (StatusCode, Json<serde_json::Value>)> {
-    open_page(state, key, state.job_pages.wait()).await.map_err(|refusal| page_refused(state, refusal))
+    open_page_steady(state, key, state.job_pages.wait()).await.map_err(|refusal| page_refused(state, refusal))
+}
+
+/// [`open_page`] for a bot's call: in VM mode a browser that doesn't answer in time
+/// ([`PageRefusal::Busy`]) is tried again with backoff ([`super::browser_pages::retry_delay`])
+/// for up to [`super::browser_pages::RETRY_WINDOW`], after freeing memory once by closing or
+/// blanking other idle pages ([`super::browser_pages::relieve`]). A browser that can't be
+/// reached at all fails at once.
+pub async fn open_page_steady(
+    state: &AppState,
+    key: &str,
+    wait: std::time::Duration,
+) -> Result<crate::sandbox::BrowserController, PageRefusal> {
+    let started = std::time::Instant::now();
+    let window = state.job_pages.retry_window();
+    let mut attempt = 0;
+    loop {
+        let refusal = match open_page(state, key, wait).await {
+            Ok(ctrl) => {
+                if attempt > 0 {
+                    tracing::info!(page = %key, attempt, "the browser answered again");
+                }
+                return Ok(ctrl);
+            }
+            Err(refusal) => refusal,
+        };
+        let delay = super::browser_pages::retry_delay(attempt);
+        if refusal != PageRefusal::Busy || !super::browser_pages::keep_retrying(started.elapsed(), delay, window) {
+            return Err(refusal);
+        }
+        if attempt == 0 {
+            super::browser_pages::relieve(state, key).await;
+        }
+        tracing::warn!(page = %key, attempt, "the browser isn't answering; trying again in {}s", delay.as_secs());
+        tokio::time::sleep(delay).await;
+        attempt += 1;
+    }
 }
 
 /// The answer to a call whose page couldn't be had.
 pub(crate) fn page_refused(state: &AppState, refusal: PageRefusal) -> (StatusCode, Json<serde_json::Value>) {
     match refusal {
         PageRefusal::Unavailable => browser_unavailable(state),
+        PageRefusal::Busy => browser_busy(),
         PageRefusal::PagesFull => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
             "error": super::browser_pages::pages_full_message(),
             "code": PAGES_FULL,
@@ -5625,7 +5664,7 @@ pub async fn open_page(
     let team = super::browser_pages::page_team(key).to_string();
     if !super::browser_pages::is_job_page(key) {
         state.browser_service.touch_page(key);
-        return controller_for(state, key, &team).await.ok_or(PageRefusal::Unavailable);
+        return controller_for(state, key, &team).await.map_err(refusal_for);
     }
     // An open job page that answers needs no lock; any page is only ever opened under it
     let existing = state.browser_controllers.lock().await.get(key).cloned();
@@ -5644,7 +5683,7 @@ pub async fn open_page(
             state.browser_service.touch_page(key);
             let ctrl = controller_for(state, key, &team).await;
             drop(opening);
-            return ctrl.ok_or(PageRefusal::Unavailable);
+            return ctrl.map_err(refusal_for);
         }
         drop(opening);
         let now = std::time::Instant::now();
@@ -5656,21 +5695,39 @@ pub async fn open_page(
     }
 }
 
+/// Why a page's controller couldn't be had: [`PageRefusal::Busy`] for a VM browser that is
+/// there but didn't answer in time, else [`PageRefusal::Unavailable`].
+fn refusal_for(error: crate::sandbox::BrowserError) -> PageRefusal {
+    match crate::sandbox::outage(&error) {
+        crate::sandbox::Outage::Busy => PageRefusal::Busy,
+        _ => PageRefusal::Unavailable,
+    }
+}
+
 /// The page's controller, opening the page when it isn't open (or no longer answers).
-async fn controller_for(state: &AppState, team_id: &str, team: &str) -> Option<crate::sandbox::BrowserController> {
+async fn controller_for(
+    state: &AppState,
+    team_id: &str,
+    team: &str,
+) -> Result<crate::sandbox::BrowserController, crate::sandbox::BrowserError> {
     let team = team.to_string();
     let job = super::browser_pages::is_job_page(team_id);
     let mut controllers = state.browser_controllers.lock().await;
     let mut driver = None;
     if let Some(ctrl) = controllers.get(team_id) {
-        if !ctrl.is_managed_session() || ctrl.refresh_location().await.is_ok() { return Some(ctrl.clone()); }
-        if ctrl.control.try_write().is_err() { return None; }
+        let checked = if ctrl.is_managed_session() { ctrl.refresh_location().await } else { Ok(()) };
+        let error = match checked {
+            Ok(()) => return Ok(ctrl.clone()),
+            Err(error) => error,
+        };
+        // a bot is mid-step on it: the page is in use, not gone
+        if ctrl.control.try_write().is_err() { return Err(error); }
         driver = ctrl.site_guard.driver();
         controllers.remove(team_id);
     }
     let Some((_, workspace)) = resolve_sandbox_target_info(state, &team).await else {
         state.browser_service.forget_page(team_id);
-        return None;
+        return Err(crate::sandbox::BrowserError::Protocol(format!("no sandbox target {team}")));
     };
     let opened = if job {
         state.browser_service.page_session(team_id, &workspace).await
@@ -5691,13 +5748,13 @@ async fn controller_for(state: &AppState, team_id: &str, team: &str) -> Option<c
             let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
                 team_id: team, container_name: "browser-service".into(), is_running: true,
             });
-            Some(ctrl)
+            Ok(ctrl)
         }
         Err(error) => {
             tracing::warn!("Browser service unavailable: {}", error);
             // a job page that didn't open isn't one of the team's pages
             if job { state.browser_service.forget_page(team_id); }
-            None
+            Err(error)
         }
     }
 }
@@ -5732,13 +5789,40 @@ pub(crate) async fn guard_bot_action(
     ctrl.apply_site_rules(rules).await
 }
 
+/// `GET /api/sandbox/:team_id/status`: whether the browser answers, read without opening,
+/// using or waking a page (0.9.5: it used to open one for any key it was given, and the
+/// panel's reads kept idle pages in use). `page_open` says whether this key's page is open.
 pub async fn get_sandbox_status(
     State(state): State<AppState>, Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let running = get_or_create_browser_controller(&state, &team_id).await.is_some();
+    let team = super::browser_pages::page_team(&team_id).to_string();
+    // a key that names no sandbox target never reaches the browser
+    let known = resolve_sandbox_target_info(&state, &team).await.is_some();
+    let health = if known { Some(state.browser_service.ping().await) } else { None };
+    let running = matches!(health, Some(Ok(())));
+    let busy = matches!(&health, Some(Err(e)) if crate::sandbox::outage(e) == crate::sandbox::Outage::Busy);
+    let page_open = known && state.browser_service.has_page(&team_id).await;
     let execution = state.sandbox_manager.get_sandbox(&team_id).await;
-    Ok(Json(json!({"team_id":team_id,"is_running":running,"container_name":"browser-service",
-        "execution_running":execution.is_some_and(|s| s.is_running)})))
+    // a busy browser is still there (overloaded, not gone): running, but not answering
+    let mut body = json!({"team_id":team_id,"is_running":running || busy,"responding":running,
+        "container_name":"browser-service","page_open":page_open,
+        "execution_running":execution.is_some_and(|s| s.is_running)});
+    if busy {
+        body["error"] = json!(crate::sandbox::service::BROWSER_BUSY);
+        body["code"] = json!(crate::sandbox::service::BROWSER_BUSY_CODE);
+        body["retryable"] = json!(true);
+    }
+    Ok(Json(body))
+}
+
+/// A call refused because the VM browser didn't answer in time: temporary, retry the step.
+fn browser_busy() -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
+        "error": crate::sandbox::service::BROWSER_BUSY,
+        "code": crate::sandbox::service::BROWSER_BUSY_CODE,
+        "retryable": true,
+        "is_running": true,
+    })))
 }
 
 fn browser_unavailable(state: &AppState) -> (StatusCode, Json<serde_json::Value>) {
@@ -5760,6 +5844,9 @@ fn browser_request_failed(error: crate::sandbox::BrowserError) -> (StatusCode, J
         })));
     }
     tracing::warn!("Sandbox browser request failed: {}", error);
+    if crate::sandbox::outage(&error) == crate::sandbox::Outage::Busy {
+        return browser_busy();
+    }
     (StatusCode::BAD_GATEWAY, Json(json!({
         "error": "The sandbox browser did not respond. Restart the browser and try again."
     })))
