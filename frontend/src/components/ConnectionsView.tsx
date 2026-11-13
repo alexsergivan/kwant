@@ -31,6 +31,7 @@ import { TelegramConnection } from './TelegramCard';
 import { ToolNotesSection, ToolNotesSectionProps } from './ToolNotesSection';
 import { notesChipText } from '../toolNotes';
 import { usePhoneLayout } from '../usePhoneLayout';
+import { ComposioTile, ComposioTileApi } from './ComposioTile';
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
@@ -608,6 +609,8 @@ export interface ConnectionsViewProps extends ManageLinks {
   hideAccounts?: boolean;
   /** Apps & accounts' Advanced: Composio's "Choose bots" (instead of "Turn on in Tools"). */
   onChooseComposioBots?: () => void;
+  /** Tests and screenshots: the Composio tile's api. */
+  composioTileApi?: ComposioTileApi;
 }
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
@@ -636,6 +639,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   phone,
   hideAccounts = false,
   onChooseComposioBots,
+  composioTileApi,
   ...links
 }) => {
   const phoneLayout = usePhoneLayout();
@@ -802,6 +806,21 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               <ul className="space-y-2">
                 <TelegramConnection />
                 {data.catalog.map((entry) => (
+                  entry.id === 'composio' ? (
+                    <ComposioTile
+                      key={entry.id}
+                      entry={entry}
+                      usedBy={data.connections.find((c) => c.id === entry.connection_id)?.used_by.map((b) => b.name) ?? []}
+                      onAddLink={onAddComposio}
+                      onOpenTools={onChooseComposioBots ? undefined : links.onOpenTools}
+                      onChooseBots={onChooseComposioBots}
+                      onChanged={onRefresh}
+                      phone={phone ?? phoneLayout}
+                      openRequest={composioRequest}
+                      api={composioTileApi}
+                      initialOpen={composioOpen && !entry.added ? 'add' : undefined}
+                    />
+                  ) : (
                   <ComposioCard
                     key={entry.id}
                     entry={entry}
@@ -811,6 +830,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                     onChooseBots={entry.id === 'composio' ? onChooseComposioBots : undefined}
                     openRequest={entry.id === 'composio' ? composioRequest : 0}
                   />
+                  ),
                 ))}
               </ul>
             </section>

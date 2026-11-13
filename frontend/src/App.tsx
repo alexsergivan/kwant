@@ -148,6 +148,7 @@ import { useEngines } from './useEngines';
 import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
+import { OPEN_ADD_TOOL_EVENT, type OpenAddTool } from './mcp';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
@@ -443,6 +444,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   // Connections' "+ Add connection" opens Tools straight on adding a server.
   const [mcpStartAdding, setMcpStartAdding] = useState(false);
+  // Add a tool opened from Apps & accounts' Find a tool, straight on that tool's form.
+  const [mcpStartWith, setMcpStartWith] = useState<OpenAddTool | null>(null);
+  useEffect(() => {
+    const open = (e: Event) => {
+      setMcpStartWith((e as CustomEvent<OpenAddTool>).detail ?? null);
+      setMcpStartAdding(true);
+      setIsMcpOpen(true);
+    };
+    window.addEventListener(OPEN_ADD_TOOL_EVENT, open);
+    return () => window.removeEventListener(OPEN_ADD_TOOL_EVENT, open);
+  }, []);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
@@ -4541,11 +4553,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         <McpServersModal
           isOpen={isMcpOpen}
           startAdding={mcpStartAdding}
-          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); }}
+          startWith={mcpStartWith}
+          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); setMcpStartWith(null); }}
           kwants={kwants}
           onOpenConnections={() => {
             setIsMcpOpen(false);
             setMcpStartAdding(false);
+            setMcpStartWith(null);
             openConnections();
           }}
         />

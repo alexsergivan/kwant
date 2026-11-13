@@ -98,12 +98,13 @@ test('a Composio connection is marked as storing its login on Composio’s serve
   assert.ok(html.includes('text-amber-200'));
 });
 
-test('the page groups rows, counts them, and offers Composio as optional with its warning', () => {
+test('the page groups rows, counts them, and offers Composio with where it keeps sign-ins', () => {
   const html = ui.view(viewProps({ onOpenTools: noop, onOpenAccounts: noop, onOpenLooseEnds: noop }));
-  for (const t of ['Connections', '2 connected · 2 need you', 'Tool servers (MCP)', 'Engine accounts', 'Saved website logins', 'Mail and GitHub (Loose ends)', 'Out of quota until 14:00', 'Open Loose ends', 'Optional connectors', 'Composio', 'Optional', 'Add Composio']) {
+  for (const t of ['Connections', '2 connected · 2 need you', 'Tool servers (MCP)', 'Engine accounts', 'Saved website logins', 'Mail and GitHub (Loose ends)', 'Out of quota until 14:00', 'Open Loose ends', 'Optional connectors', 'Composio', 'Add Composio']) {
     assert.ok(html.includes(t), `page shows "${t}"`);
   }
-  assert.ok(html.includes('Composio keeps your app sign-ins on Composio&#x27;s servers'), 'the warning is next to the add button');
+  assert.ok(html.includes('data-composio-tile="new"'), 'Composio is the one-key tile (design.md §3)');
+  assert.ok(html.includes('Your app sign-ins stay on Composio’s servers, not in kwant’s vault.'), 'the footer says where sign-ins live');
 });
 
 test('the add form is off by default and repeats nothing secret', () => {
@@ -194,22 +195,19 @@ test('the search and connect calls go to kwnt, never straight to Composio', asyn
   ]);
 });
 
-test('the server catalog lists Gmail as "via Composio" and explains why, with the warning', async () => {
+test('Add a tool is Find a tool over the built-in grid, with Add by address, and never says MCP', async () => {
   const cat = await loadBundled(`
     import React from 'react';
     import { renderToStaticMarkup } from 'react-dom/server.browser';
-    import { PresetCatalog } from './src/components/McpServersModal';
-    export const render = (props) => renderToStaticMarkup(React.createElement(PresetCatalog, props));
+    import { AddToolPicker } from './src/components/McpServersModal';
+    export const render = (props) => renderToStaticMarkup(React.createElement(AddToolPicker, props));
   `);
-  const base = { query: 'gmail', onQuery: noop, onPick: noop, onCustom: noop, onOpenConnections: noop };
-  const list = cat.render(base);
-  assert.ok(list.includes('Gmail') && list.includes('via Composio'));
-  const open = cat.render({ ...base, initialComposioApp: 'gmail' });
-  assert.ok(open.includes('data-composio-note="gmail"') && open.includes('Open Connections'));
-  assert.ok(open.includes('not in this app’s vault'));
-  // The open card must not stretch to the item's full height, or the note spills over the next section.
-  const card = open.slice(open.lastIndexOf('<button', open.indexOf('aria-expanded="true"')), open.indexOf('data-composio-note="gmail"'));
-  assert.ok(!/class="[^"]*\bh-full\b/.test(card.slice(0, card.indexOf('>'))), 'open Composio card is not h-full');
+  const api = { list: async () => ({ connections: [], catalog: [] }), apps: async () => ({ apps: [] }), addKey: noop, replaceKey: noop, connect: noop, directory: async () => null };
+  const html = cat.render({ onPick: noop, onCustom: noop, onDirectory: noop, onChooseBots: noop, findApi: api });
+  assert.ok(html.includes('placeholder="Find a tool, like gmail, stripe or a database"'));
+  assert.ok(html.includes('All built-in tools') && html.includes('data-builtin-grid'));
+  assert.ok(html.includes('Add by address') && html.includes('Paste a command or web address from any tool’s instructions.'));
+  assert.ok(!/MCP|Custom server|server URL|connector/.test(html.replace(/<[^>]+>/g, ' ')), 'no MCP words on the main path');
 });
 
 // Oleks (2026-10-28): "why is there no way to connect new tools here?" The header gets "+ Add
