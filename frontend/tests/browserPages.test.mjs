@@ -174,7 +174,19 @@ test('page titles: the step\'s page_title, then one seen live, then the path; "/
     step('browser_open', 'https://roastco.example.com/cart', 't3'),
     step('browser_open', 'https://roastco.example.com/about', 't4', { page_title: 'About RoastCo' }),
   ]);
-  assert.deepEqual(pages.map((p) => p.title), ['About RoastCo', 'Your cart · RoastCo', '/shop/coffee/1kg', 'roastco.example.com']);
+  assert.deepEqual(pages.map((p) => bp.pageTitleOf(p.url, p.stepTitle)), ['About RoastCo', 'Your cart · RoastCo', '/shop/coffee/1kg', 'roastco.example.com']);
+});
+
+test('a title noted after pagesOfReply ran still shows through pageTitleOf (memoized trails)', () => {
+  bp.clearTitles();
+  const pages = bp.pagesOfReply([step('browser_open', 'https://roastco.example.com/cart', 't1')]);
+  assert.equal(pages[0].stepTitle, null);
+  assert.equal(bp.pageTitleOf(pages[0].url, pages[0].stepTitle), '/cart');
+  bp.noteTitle('https://roastco.example.com/cart', 'Your cart · RoastCo');
+  assert.equal(bp.pageTitleOf(pages[0].url, pages[0].stepTitle), 'Your cart · RoastCo');
+  // A step's own page_title still wins over a live one
+  const own = bp.pagesOfReply([step('browser_open', 'https://roastco.example.com/cart', 't2', { page_title: 'Cart' })]);
+  assert.equal(bp.pageTitleOf(own[0].url, own[0].stepTitle), 'Cart');
 });
 
 test('noteTitle keeps the newest 200 addresses and ignores blank titles', () => {

@@ -184,7 +184,9 @@ export interface ReplyPage {
   at: string;
   url: string;
   host: string;
-  title: string;
+  /** The title the step reported (page_title), if any. Resolve the shown title at render with pageTitleOf,
+   *  so a title the app sees later (live stream, browser_navigated) still shows on a memoized trail. */
+  stepTitle: string | null;
 }
 
 /** An http(s) address without its #hash, or null when it isn't one. */
@@ -255,7 +257,7 @@ export function pagesOfReply(steps: readonly PageStep[] | null | undefined): Rep
     out.delete(key);
     out.set(key, { at: s.started_at, url: key, host: pageHost(key) ?? u.host, stepTitle: s.page_title?.trim() || prev?.stepTitle || null });
   }
-  return [...out.values()].reverse().map(p => ({ at: p.at, url: p.url, host: p.host, title: pageTitleOf(p.url, p.stepTitle) }));
+  return [...out.values()].reverse();
 }
 
 /** The chip's words: "Ben opened 2 pages", or while browsing the host and the count from 2 up. */

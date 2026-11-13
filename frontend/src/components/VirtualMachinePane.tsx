@@ -34,7 +34,7 @@ import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 import { PointLayer, PointSink } from './PointLayer';
 import { POINT_COPY, footerText } from '../point';
-import { choosePage, pageTeam, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
+import { choosePage, noteTitle, pageTeam, pageTitleOf, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
 
@@ -278,6 +278,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   useEffect(() => {
     if (stream.location?.url) setInputUrl(stream.location.url);
   }, [stream.location]);
+  // The pane's own stream knows each page's title too, so the trail can name pages the bot opened
+  useEffect(() => {
+    noteTitle(stream.location?.url, stream.location?.title);
+  }, [stream.location?.url, stream.location?.title]);
 
   useEffect(() => {
     setInputUrl(activeUrl);
@@ -1010,7 +1014,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                         >
                           <span className="text-xs text-zinc-400 tabular-nums">{trailTime(p.at)}</span>
                           <span className="min-w-0">
-                            <span className="block text-[13px] text-zinc-100 truncate">{p.title}</span>
+                            <span className="block text-[13px] text-zinc-100 truncate">{pageTitleOf(p.url, p.stepTitle)}</span>
                             <span className="block text-xs text-zinc-400 truncate">{p.host}</span>
                           </span>
                           {now ? (

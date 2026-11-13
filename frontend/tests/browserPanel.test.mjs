@@ -78,8 +78,8 @@ test('a remounted pane comes back on the tab chosen for that bot', () => {
 
 // ---------- 0.9.8 browser panel (design browser-panel/design.md C) ----------
 const trail = [
-  { at: '2026-11-13T10:46:00Z', url: 'https://roastco.example.com/cart', host: 'roastco.example.com', title: 'Your cart · RoastCo' },
-  { at: '2026-11-13T10:45:00Z', url: 'https://roastco.example.com/shop/coffee/1kg', host: 'roastco.example.com', title: '/shop/coffee/1kg' },
+  { at: '2026-11-13T10:46:00Z', url: 'https://roastco.example.com/cart', host: 'roastco.example.com', stepTitle: 'Your cart · RoastCo' },
+  { at: '2026-11-13T10:45:00Z', url: 'https://roastco.example.com/shop/coffee/1kg', host: 'roastco.example.com', stepTitle: null },
 ];
 
 test('the header says whose browser it is and whether it browses now; no Take over, Point, Key or Refresh up there', () => {
