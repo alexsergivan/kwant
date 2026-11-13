@@ -72,6 +72,8 @@ import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
 import { routeChipLabel, routeReasonText } from '../routeReason';
+import { RoutineRow } from './RoutineRow';
+import { routineOf } from '../routineRow';
 import { BudgetPausedNotice, ExpiredApprovalNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { parseSpendStopped } from '../spendStop';
@@ -1432,6 +1434,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
       );
     if (isSystemNotice(msg) && !parseAttachments(msg.meta).length)
       return <SystemNotice key={msg.id} messageId={msg.id} text={msg.text} flash={flashId === msg.id} />;
+    // UX audit #5: a routine's run is not the person speaking; it gets its own row, not a "You" bubble
+    const routine = routineOf(msg);
+    if (routine !== null)
+      return (
+        <RoutineRow
+          key={msg.id}
+          messageId={msg.id}
+          name={routine}
+          text={msg.text}
+          body={renderFormattedText(msg.text)}
+          at={msg.created_at}
+          flash={flashId === msg.id}
+        />
+      );
     const isUser = msg.sender_role === 'user';
     const files = msg.meta ? parseAttachments(msg.meta) : [];
     // A bot's share_file note: the file tiles say it all.
