@@ -160,23 +160,30 @@ const StoryLine: React.FC<{ story: Story; card: Card; bot: string; onOpenCard?: 
   onOpenApproval,
 }) => (
   <div data-story={story.step} className="mt-1.5 flex min-w-0 flex-col gap-1">
-    <p role="status" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta">
-      <Led s={STORY_LED[story.step]} className={`shrink-0 ${story.step === 'pushed' || story.step === 'blocked' ? '' : 'dv-led-still'}`} />
-      <span data-story-now className={`min-w-0 [overflow-wrap:anywhere] ${story.step === 'pushed' ? 'font-medium text-emerald-300' : story.step === 'blocked' ? 'text-rose-300' : 'text-zinc-200'}`}>
-        {story.step === 'asks' ? `${bot}'s push needs your OK.` : story.now}
-      </span>
-      {story.next && onOpenCard && story.step !== 'asks' && (
-        <button type="button" data-story-next={story.next.id} className={LINK} onClick={() => onOpenCard(story.next!.id)}>
-          {story.step === 'blocked' ? 'See what it found' : story.step === 'pushed' ? 'See the push' : 'See the new check'} <ArrowDown size={12} aria-hidden="true" />
-        </button>
-      )}
-    </p>
-    {story.step === 'asks' && story.approval && (
-      <p data-story-approval={story.approval.id} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-amber-400/40 bg-amber-400/[.06] px-2.5 py-1.5 text-meta text-zinc-200">
-        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{withBranch(story.now, card.branch)}</span>
+    {story.step === 'asks' && story.approval ? (
+      // One amber line that says it and links to the approval (no second status line repeating it).
+      <p
+        role="status"
+        data-story-approval={story.approval.id}
+        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-amber-400/40 bg-amber-400/[.06] px-2.5 py-1.5 text-meta text-zinc-200"
+      >
+        <Led s={STORY_LED.asks} className="shrink-0 dv-led-still" />
+        <span data-story-now className="min-w-0 flex-1 [overflow-wrap:anywhere]">{withBranch(story.now, card.branch)}</span>
         {onOpenApproval && (
           <button type="button" className={LINK} onClick={() => onOpenApproval(story.approval!.id)}>
             Open it <ArrowDown size={12} aria-hidden="true" />
+          </button>
+        )}
+      </p>
+    ) : (
+      <p role="status" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta">
+        <Led s={STORY_LED[story.step]} className={`shrink-0 ${story.step === 'pushed' || story.step === 'blocked' ? '' : 'dv-led-still'}`} />
+        <span data-story-now className={`min-w-0 [overflow-wrap:anywhere] ${story.step === 'pushed' ? 'font-medium text-emerald-300' : story.step === 'blocked' ? 'text-rose-300' : 'text-zinc-200'}`}>
+          {story.step === 'asks' ? `${bot}'s push needs your OK.` : story.now}
+        </span>
+        {story.next && onOpenCard && story.step !== 'asks' && (
+          <button type="button" data-story-next={story.next.id} className={LINK} onClick={() => onOpenCard(story.next!.id)}>
+            {story.step === 'blocked' ? 'See what it found' : story.step === 'pushed' ? 'See the push' : 'See the new check'} <ArrowDown size={12} aria-hidden="true" />
           </button>
         )}
       </p>

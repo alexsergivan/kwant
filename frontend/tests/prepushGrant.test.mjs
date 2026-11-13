@@ -258,6 +258,10 @@ test('the story line follows the new push live, and a floor approval line opens 
   const line = host.querySelector('[data-story-approval="ap1"]');
   assert.ok(line);
   assert.match(text(line), /Quant's push needs your OK: it pushes to main/);
+  // Said once: the amber line is the only status line, not a second "needs your OK." above it.
+  assert.equal((text(host).match(/needs your OK/g) ?? []).length, 1);
+  assert.equal(host.querySelectorAll('[role="status"]').length, 1);
+  assert.equal(line.getAttribute('role'), 'status');
   await click(button(line, 'Open it'));
   assert.deepEqual(openedA, ['ap1']);
   await rerender(props(all('PP_RETRIED_GRANT', 'PP_NEXT_PUSHED')));
