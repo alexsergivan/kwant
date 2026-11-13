@@ -90,6 +90,18 @@ card_art: avatar:tech_lead
   <figcaption>The same limits on a phone.</figcaption>
 </figure>
 
+<h3 id="bot-budget">Monthly budget per bot</h3>
+<p>Since 0.9.5, each bot can also have its own limit for the month: open the bot's settings, then <strong>Usage › Monthly budget</strong>. <strong>Tokens per month</strong> counts fresh tokens, not cache reads. <strong>Dollars per month</strong> counts only engines that report a cost. Leave both empty for no budget.</p>
+<figure>
+  <div class="frame">{{shot:v095-bot-budget-card|Ben's Monthly budget in his settings: an amber bar at 1.7M of 2M fresh tokens in November, '83% used. At 100% it finishes what it's doing and starts nothing new until December 1.', Tokens per month 2000000 and Dollars per month No limit, with Save budget and Clear limits.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>One bot's budget, at 83% of its token limit.</figcaption>
+</figure>
+<p>At 80% the bot's sidebar row gets a small amber meter, its chat gets a note, and the Inbox gets a Needs you item. At 100% the bot finishes what it's doing and starts nothing new until you raise the limit, continue, or the month ends. Its chat says "Paused: monthly budget reached" with <strong>Raise the limit</strong> and <strong>Continue this month</strong>, and a message you send meanwhile waits until it can start again. <strong>Settings → All spaces → Usage</strong> lists every bot's budget in this space.</p>
+<figure>
+  <div class="phone">{{shot:phone-v095-budget-paused|Ann's chat on a phone: a note that Ann stopped at its monthly budget, Ann's product copy for the Ridgeline 2P tent, a waiting request for a shorter newsletter version, and above the message box 'Paused: monthly budget reached', 2M of 2M fresh tokens in November, with Raise the limit and Continue this month.|300px}}</div>
+  <figcaption>A paused bot on a phone. Your message goes through once it can start again.</figcaption>
+</figure>
+
 <p>What stops runaway loops are guards that never wait for you: the same task sent to the same teammate word for word is skipped, and so is a teammate whose last 3 tasks for this message failed, with the reason in the chat. The one hand-off limit that waits for you is 64 hand-offs for one message. Past that, the chat shows "Paused after 64 hand-offs for one message: … not sent yet." with a <strong>Continue</strong> button, or you can type "continue".</p>
 
 <h2 id="flags">"May be invalid"</h2>

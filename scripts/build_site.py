@@ -198,7 +198,8 @@ CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-hum
             "v077-dev-fresh-card", "v077-import-several-card", "v077-whats-new-card",
             "v080-queued-under-running-card", "v080-import-card", "v080-prepush-card-card",
             "v080-fresh-eyes-chip-card", "v080-before-after-card", "v080-drop-files-card", "v080-import-preview-card",
-            "v090-attention-card", "v090-ci-fixit-card", "v090-ci-verdict-card", "v090-line-notes-card", "v090-point-at-it-card", "v090-review-inbox-card", "v090-roll-back-card", "v090-roll-back-restore-card", "v090-scope-warning-card", "v090-tool-notes-card", "v090-tool-notes-chat-card", "v090-verdict-card", "v090-watch-chat-card", "v090-watch-mission-card", "v090-worktrees-card"}
+            "v090-attention-card", "v090-ci-fixit-card", "v090-ci-verdict-card", "v090-line-notes-card", "v090-point-at-it-card", "v090-review-inbox-card", "v090-roll-back-card", "v090-roll-back-restore-card", "v090-scope-warning-card", "v090-tool-notes-card", "v090-tool-notes-chat-card", "v090-verdict-card", "v090-watch-chat-card", "v090-watch-mission-card", "v090-worktrees-card",
+            "v095-apps-accounts-tiles", "v095-budget-overview-card", "v095-bot-budget-card", "v095-tool-failure-line-card"}
 
 
 def shot(root, name, alt, sizes):

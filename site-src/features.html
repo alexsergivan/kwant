@@ -62,10 +62,39 @@ card_art: team
       <h2>Apps in one place, a budget for each bot</h2>
       <p>Apps, AI accounts and tool servers now share one settings page, and connecting an app takes 3 steps. Each bot can have a monthly budget. When a bot's connection stops working, its chat says which one and why, and the team browser copes when it's busy.</p>
     </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="apps-accounts">Apps and AI accounts on one page</h3>
+        <p>Connections, Tools and Accounts are one page now: <strong>Settings › This space › Apps &amp; accounts</strong>. Apps are tiles (Gmail, Google Calendar, Slack, Notion, Shopify, GitHub, and any other app you find through Composio), and each AI account says which bots use it.</p>
+        <p>MCP servers, Telegram and notes from bots are under <strong>Advanced</strong>, and old links to Connections open the new page.</p>
+      </div>
+      <div class="frame">{{shot:v095-apps-accounts-tiles|Close-up of Apps and accounts for Trailhead Outfitters: Gmail, Google Calendar and Slack read Connected with Choose bots, Notion, Shopify and GitHub read Connect, and below them a search to find another app.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="connect-app">Connect an app in 3 steps</h3>
+        <p>Press a tile and the Connect sheet has 3 steps: make a free Composio account, paste your Composio link (an API key is optional), and pick the bots that may use the app.</p>
+        <p>No bot is picked for you, and Composio is on only for the bots you pick. <a href="docs/mcp.html#composio">Composio</a></p>
+      </div>
+      <div class="frame">{{video:clip-v095-connect-app|Clip: the person opens Slack's Connect sheet, opens Composio, pastes the Composio link and an API key, ticks Ann and Ben, and presses Connect Slack. The Slack tile turns Connected and a banner says 'Slack is on for Ann and Ben.'}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="bot-budgets">A monthly budget for each bot</h3>
+        <p>In a bot's settings, <strong>Usage › Monthly budget</strong> sets a limit in tokens, in dollars, or both. It's off until you set it. At 80% the bot's sidebar row gets a small amber meter, its chat gets a note, and the Inbox gets a Needs you item.</p>
+        <p>At 100% the bot finishes its turn and starts nothing new: its row and chat say "Paused: monthly budget reached", with <strong>Raise the limit</strong> and <strong>Continue this month</strong>. Settings › All spaces › Usage lists every bot's budget in this space. <a href="docs/mission-board.html#bot-budget">Budgets</a></p>
+      </div>
+      <div class="frame">{{shot:v095-budget-overview-card|Monthly budget per bot: Ann is Paused at 2M of 2M fresh tokens in November, Ben is at 83% used in amber with 1.7M of 2M, and Cody is on track with 420k of 1.5M, each with Change.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="tool-failure-line">One line when a connection stops working</h3>
+        <p>When a bot's tool fails because of its connection, the chat gets one line that names it and says why, for example "GitHub stopped working for Ben: it needs you to sign in again. Reconnect". That covers an expired sign-in, a Composio app that needs connecting again, a tool server that didn't start, and one that stopped responding.</p>
+        <p>There's at most one line per connection per turn, and none when a retry fixed it within 20 seconds. Lines only you can fix also go to the Inbox, and a line adds "It works again." once the connection works.</p>
+      </div>
+      <div class="frame">{{shot:v095-tool-failure-line-card|Ben's chat: a line 'GitHub stopped working for Ben: it needs you to sign in again. It works again.' in green, Ben's reply opening issue 41 on demo-org/demo-app, and later a second GitHub line ending in Reconnect in amber.}}</div>
+    </div>
     <ul class="flist">
-      <li id="apps-accounts" class="span3"><h3>Apps &amp; accounts</h3><p>Connections, Tools and Accounts are one page now: <strong>Settings › This space › Apps &amp; accounts</strong>. Apps are tiles (Gmail, Google Calendar, Slack, Notion, Shopify, GitHub, and any other app you find through Composio), and each AI account says which bots use it. Press a tile and the Connect sheet has 3 steps: open Composio, paste your Composio link, and pick the bots that may use the app. No bot is picked for you, and Composio is on only for the bots you pick. MCP servers, Telegram and notes from bots are under <strong>Advanced</strong>, and old links to Connections open the new page. <a href="docs/mcp.html#composio">Composio</a></p></li>
-      <li id="bot-budgets" class="span3"><h3>A monthly budget for each bot</h3><p>In a bot's settings, <strong>Usage › Monthly budget</strong> sets a limit in tokens, in dollars, or both. It's off until you set it. At 80% the bot's sidebar row gets a small amber meter, its chat gets a note, and the Inbox gets a Needs you item. At 100% the bot finishes its turn and starts nothing new: its row and chat say "Paused: monthly budget reached", with <strong>Raise the limit</strong> and <strong>Continue this month</strong>. Settings › All spaces › Usage lists every bot's budget in this space.</p></li>
-      <li id="tool-failure-line" class="span3"><h3>One line when a connection stops working</h3><p>When a bot's tool fails because of its connection, the chat gets one line that names it and says why, for example "GitHub stopped working for Ben: it needs you to sign in again. Reconnect". That covers an expired sign-in, a Composio app that needs connecting again, a tool server that didn't start, and one that stopped responding. There's at most one line per connection per turn, and none when a retry fixed it within 20 seconds. Lines only you can fix also go to the Inbox, and a line adds "It works again." once the connection works.</p></li>
       <li id="browser-recovery" class="span3"><h3>The team browser recovers when it's busy</h3><p>A page nobody has used for 10 minutes stops its videos and sounds and is frozen, and an idle team page is cleared after 2 hours, with its sign-ins kept in the team's cookie jar. When the browser is busy, kwant tries again for up to 45 seconds and closes other idle pages to make room. If that isn't enough, the bot is told the browser isn't responding right now and to retry the step in a minute, and the live view says "The browser isn't responding. Reconnecting…". The Docker message appears only when the browser really can't be reached. <a href="docs/browser.html">Browser</a></p></li>
       <li id="fixes-095" class="span3"><h3>Smaller changes in 0.9.5</h3><p>Dev mode no longer stops at 30 model calls a day: its calls count toward the space's daily spending stop and each bot's monthly budget, and cards the old cap stopped are written again. <strong>Fix it</strong> and line notes on a PR a person wrote go to the lead of the team that owns the repo, who pushes new commits and never rewrites the person's. A bot that needs you to connect an app posts a card for it instead of a sign-in link.</p></li>
     </ul>
@@ -971,7 +1000,7 @@ card_art: team
         <div class="card-body"><h3>Rules per space</h3><p>Each space has its own approval rule and hiring rule.</p></div>
       </article>
       <article class="card">
-        <span class="shot">{{shot:v2-accounts|Settings, This space, Accounts: the Order to use list. Work login (Claude) and ChatGPT Plus (Codex) are ready, Personal Max is out until 15:03, a spare Claude API key is off, Ollama on the Mac can't connect and a Team gateway is ready. Below, under Not in the order, This machine's Claude and Codex are signed out and Grok is not installed.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v2-accounts|Settings, This space, Apps and accounts, AI accounts: Claude is used first, ready and used by Ann and Ben. If it runs out: Codex, ready, which Cody uses first, a Personal Max Claude login out until 06:34, and Ollama on the Mac, which can't connect, each with Use first. Grok isn't used and isn't installed. Below: Sign-ins and settings, and Advanced.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Accounts per space</h3><p>Every account in one order: which is ready, which ran out and until when, and which still needs a sign-in.</p></div>
       </article>
     </div>
