@@ -265,6 +265,8 @@ impl Database {
         db.migrate_flight_school().await?;
         // Last: it rebuilds `tasks` and `missions` from their stored SQL, columns and triggers included
         db.migrate_opt_in_budgets().await?;
+        // 0.9.7: waiting checks; rebuilds `outcome_checks` and `task_failures` once, triggers included
+        db.migrate_waiting_checks().await?;
         db.migrate_chain_budget_default().await?;
         // After it: observes finished tasks once (their class comes from Flight School)
         db.migrate_performance().await?;

@@ -115,6 +115,8 @@ export interface SidebarProps {
   selectedTeamId?: string | null;
   /** What busy bots are doing ("Working on …", "Working here"), shown under their name. */
   busyKwants?: Record<string, string>;
+  /** Teammates who already replied in a team turn now waiting on the person: "Done · replied in @team". */
+  doneKwants?: Record<string, string>;
   /** Busy bots' status for the avatar dot; bots not listed are Available (or Can't run). */
   botStatus?: Record<string, BotStatus>;
   /** Open browser steps per bot ("Needs you" pill). */
@@ -361,6 +363,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isChannel,
   selectedTeamId,
   busyKwants = {},
+  doneKwants = {},
   botStatus = {},
   needsYou = {},
   browsingOwners = {},
@@ -560,6 +563,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         : budgetPaused && !busyKwants[k.id]
           ? PAUSED_ROW_LINE
           : busyKwants[k.id];
+    // A teammate who finished its part of a team turn that now waits on the person (UX audit #2)
+    const doneLine = !busyLine && !warn ? doneKwants[k.id] : undefined;
     // A stuck or finished row opens where that happened (its thread or chat), like its Inbox card
     // A review row opens its item in the Inbox
     const open = asked && onOpenNeedsYou
@@ -694,6 +699,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 aria-hidden="true"
               />
               <span className="truncate">{busyLine}</span>
+            </p>
+          ) : doneLine ? (
+            <p className={`flex items-center gap-1.5 text-meta text-zinc-400 truncate${actionRoom}`} title={doneLine} data-bot-done="">
+              <span className="kw-status-dot !h-1.5 !w-1.5 kw-status-ok" aria-hidden="true" />
+              <span className="truncate">{doneLine}</span>
             </p>
           ) : (
             // Keeps its one line even with no title, so Edit and Remove sit under the name, never on it (#290 N1)

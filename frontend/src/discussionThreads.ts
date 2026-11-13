@@ -17,8 +17,12 @@ export type ChatItem<M> =
 const isTurn = (m: LabeledMessage) => !!m.reasoning_content?.startsWith(TURN_LABEL);
 const isSummary = (m: LabeledMessage) => !!m.reasoning_content?.startsWith(SUMMARY_LABEL);
 
-/** Groups runs of discussion turns that end in a team summary; turns still in progress stay inline. */
-export function groupDiscussionThreads<M extends LabeledMessage>(messages: M[]): ChatItem<M>[] {
+/**
+ * Groups runs of discussion turns that end in a team summary; turns still in progress stay inline.
+ * `foldOpen` (0.9.7 waiting state): the team turn waits on the person's answer, so its last run of turns
+ * folds too, and the question card sits right under the banner.
+ */
+export function groupDiscussionThreads<M extends LabeledMessage>(messages: M[], opts: { foldOpen?: boolean } = {}): ChatItem<M>[] {
   const items: ChatItem<M>[] = [];
   let i = 0;
   while (i < messages.length) {
@@ -30,7 +34,8 @@ export function groupDiscussionThreads<M extends LabeledMessage>(messages: M[]):
     let j = i;
     while (j < messages.length && isTurn(messages[j])) j += 1;
     const turns = messages.slice(i, j);
-    if (j < messages.length && isSummary(messages[j])) {
+    const lastRun = !messages.slice(j).some(isTurn);
+    if ((j < messages.length && isSummary(messages[j])) || (opts.foldOpen && lastRun)) {
       const speakers = Array.from(new Set(turns.map((t) => t.sender_id)));
       items.push({ kind: 'thread', id: turns[0].id, turns, speakers });
     } else {

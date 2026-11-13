@@ -27,6 +27,8 @@ import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
 import { liveNamingOrder, namesToFill } from './workingStrip';
+import { doneLines } from './waitingState';
+import { botOf } from './sharedFiles';
 import {
   HumanStep,
   HumanStepMeta,
@@ -3480,6 +3482,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const awaitingTurns = new Set([...turnsAwaitingAnswer(questions), ...browserTurns]);
   const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
   const awaitingBrowserHere = awaitingHere && openTurns.some((t) => t.state === 'running' && browserTurns.has(t.turn_id));
+  // The bot whose question the chat waits on, for the waiting banner (UX audit #2).
+  const awaitingTurnHere = awaitingHere ? openTurns.find((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) : undefined;
+  const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
   // The open chat's running turn's live steps (the newest, when several reply at once).
   const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
   const needsYouByKwant = openStepsByKwant(humanSteps);
@@ -3616,6 +3621,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
+  // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
+  const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
 
   // Avatar moods and the background-tab signal come from the same state as the sidebar's dots.
@@ -3903,6 +3910,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      doneKwants={doneKwants}
       browsingOwners={globes.owners}
       browsingBots={globes.bots}
       browserNeedsYou={browserNeedsYou}
@@ -4243,6 +4251,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onSendToOtherBot={openThreadId ? undefined : handleSendToOtherBot}
           awaitingAnswer={awaitingHere}
           awaitingBrowser={awaitingBrowserHere}
+          awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
           renderHumanStep={renderHumanStep}
           contextKey={openCtx}
