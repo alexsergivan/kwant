@@ -6,6 +6,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::*;
+use kwnt::db::questions::QuestionPlace;
 use kwnt::server::continuity::SelfScope;
 use kwnt::RuntimeEvent;
 use serde_json::{json, Value};
@@ -320,4 +321,74 @@ async fn a_late_answer_in_a_delegation_reaches_the_lead() {
     let meta: Value = serde_json::from_str(late.meta.as_deref().unwrap()).unwrap();
     assert_eq!((meta["kind"].as_str(), meta["late"].as_bool()), (Some("delegation_result"), Some(true)));
     assert_eq!(invocations_with("got the person's answer").len(), 1, "the lead is resumed once");
+}
+
+/// Typed instead of tapped (#567): in a direct chat, a message sent while the bot's question card
+/// is open answers it. The waiting turn goes on with the text, and no second turn starts.
+#[tokio::test]
+async fn a_typed_reply_answers_the_open_question_in_a_direct_chat() {
+    let env = setup().await;
+    send_direct(&env, &env.a, &format!("{} REPLYTAG:ta1", ask_marker("Which offer should the shop run?", &["15% off", "Free shipping"])), json!({})).await;
+    let q = open_question(&env, &env.a).await;
+    let id = q["id"].as_str().unwrap();
+
+    let v = send_direct(&env, &env.a, "Free shipping over $35, please", json!({})).await;
+    assert_eq!((v["status"].as_str(), v["question_id"].as_str()), (Some("answered"), Some(id)), "{v}");
+    let reply = wait_reply(&env, &env.a, "answer ta1").await;
+    assert!(reply.text.contains("The user answered: Free shipping over $35, please]"), "{}", reply.text);
+    let q = &question(&env, id).await["question"];
+    assert_eq!((q["status"].as_str(), q["answer"].as_str()), (Some("answered"), Some("Free shipping over $35, please")));
+    assert!(invocations_with("Free shipping over $35").is_empty(), "no second turn");
+}
+
+/// The same in a team chat (`team_id` and the team's channel): the member's open question takes
+/// the typed message instead of the team router starting a new turn.
+#[tokio::test]
+async fn a_typed_reply_answers_the_open_question_in_a_team_chat() {
+    let env = setup().await;
+    let (s, v) = call(&env.app, "POST", "/api/teams", Some(json!({"name": "shop", "lead_kwant_id": env.a, "member_kwants": [env.a, env.b]}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let team = v["id"].as_str().or(v["team"]["id"].as_str()).unwrap().to_string();
+    let (_, channels) = call(&env.app, "GET", "/api/channels", None).await;
+    let channel = channels.as_array().unwrap().iter().find(|c| c["name"] == "team-shop").unwrap()["id"].as_str().unwrap().to_string();
+    let app = &env.app;
+    let say = |prompt: String| {
+        let body = json!({"channel_id": channel, "team_id": team, "prompt": prompt, "sender_id": "user"});
+        async move { call(app, "POST", "/api/chat/send", Some(body)).await }
+    };
+
+    let (s, v) = say(format!("{} REPLYTAG:tt1", ask_marker("Which offer should the shop run?", &["15% off", "Free shipping"]))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let q = open_question(&env, &channel).await;
+    let id = q["id"].as_str().unwrap();
+    assert!([env.a.as_str(), env.b.as_str()].contains(&q["kwant_id"].as_str().unwrap()), "{q}");
+
+    let (s, v) = say("Free shipping over $35, please".into()).await;
+    assert_eq!((s, v["status"].as_str(), v["question_id"].as_str()), (StatusCode::OK, Some("answered"), Some(id)), "{v}");
+    let reply = wait_reply(&env, &channel, "answer tt1").await;
+    assert!(reply.text.contains("The user answered: Free shipping over $35, please]"), "{}", reply.text);
+    assert_eq!(question(&env, id).await["question"]["status"], "answered");
+    assert!(invocations_with("Free shipping over $35").is_empty(), "the team router started no turn");
+}
+
+/// A direct chat only answers its own bot's question: another bot's open question (in its own
+/// chat, or one it left in this chat) stays open, and the message is an ordinary new turn.
+#[tokio::test]
+async fn a_typed_reply_never_answers_another_bots_question() {
+    let env = setup().await;
+    send_direct(&env, &env.b, &format!("{} REPLYTAG:tn0", ask_marker("Which courier?", &["DHL", "UPS"])), json!({})).await;
+    let theirs = open_question(&env, &env.b).await;
+    let place = QuestionPlace { kwant_id: env.b.clone(), direct_kwant_id: Some(env.a.clone()), ..Default::default() };
+    let left_here = env.state.db.create_question(&place, "Which warehouse?", &["north".into(), "south".into()]).await.unwrap();
+
+    let v = send_direct(&env, &env.a, "Free shipping over $35, please REPLYTAG:tn1", json!({})).await;
+    assert_ne!(v["status"], "answered", "{v}");
+    wait_reply(&env, &env.a, "answer tn1").await;
+    for id in [theirs["id"].as_str().unwrap(), left_here.id.as_str()] {
+        assert_eq!(question(&env, id).await["question"]["status"], "open", "{id}");
+    }
+
+    let (s, _) = call(&env.app, "POST", &format!("/api/questions/{}/answer", theirs["id"].as_str().unwrap()), Some(json!({"choice": 0}))).await;
+    assert_eq!(s, StatusCode::OK);
+    wait_reply(&env, &env.b, "answer tn0").await;
 }
