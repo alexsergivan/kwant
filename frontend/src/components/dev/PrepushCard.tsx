@@ -167,7 +167,7 @@ const StoryLine: React.FC<{ story: Story; card: Card; bot: string; onOpenCard?: 
       </span>
       {story.next && onOpenCard && story.step !== 'asks' && (
         <button type="button" data-story-next={story.next.id} className={LINK} onClick={() => onOpenCard(story.next!.id)}>
-          {story.step === 'blocked' ? 'See what it found' : 'See the new check'} <ArrowDown size={12} aria-hidden="true" />
+          {story.step === 'blocked' ? 'See what it found' : story.step === 'pushed' ? 'See the push' : 'See the new check'} <ArrowDown size={12} aria-hidden="true" />
         </button>
       )}
     </p>
