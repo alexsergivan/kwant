@@ -55,6 +55,7 @@ import {
   tileStatus,
   whereLabel,
 } from '../gettingStarted';
+import { type StepTeam, type TeamStepView, teamDoneValue, teamStepView } from '../firstScreen';
 import { type InstallTrack, forgetInstall, installDetails, startInstall, useInstallTrack, useStartVersion } from '../gettingStartedInstall';
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
@@ -459,7 +460,7 @@ const ClaudePaste: React.FC<{ api: LoginApi; phone: boolean; onDone: () => void;
       <li className="flex items-start gap-2.5">
         {dot(1, opened)}
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] text-zinc-200">Open claude.ai and allow kwant bots.</p>
+          <p className="text-[13px] text-zinc-200">Open claude.ai and allow kwant.</p>
           <div className="mt-2">
             <Btn phone={phone} kind={opened ? 'secondary' : 'primary'} onClick={open} data-open-claude>
               {opened ? 'Open again' : 'Open claude.ai'}
@@ -767,7 +768,9 @@ const TeamStep: React.FC<{
   onImported: () => void;
   /** Each Import or Undo inside the dialog, so the sidebar loads the new bots. */
   onImportChanged?: () => void;
-}> = ({ phone, spaceName, mainSpace, botNames, onKeep, onPicked, onImported, onImportChanged }) => {
+  /** First-screen D: what step 3 shows; a team here gives "Your team" and the Start tile. */
+  view: TeamStepView;
+}> = ({ phone, spaceName, mainSpace, botNames, onKeep, onPicked, onImported, onImportChanged, view }) => {
   const rt = useReadyTeams();
   const [importing, setImporting] = useState(false);
   const imported = useRef(false);
@@ -782,11 +785,39 @@ const TeamStep: React.FC<{
     if (imported.current) onImported();
     else window.setTimeout(() => importTile.current?.focus(), 0);
   };
-  const templates = rt?.available ? (rt.templates ?? []) : [];
+  const offered = new Set(view.templateIds);
+  const templates = rt?.available ? (rt.templates ?? []).filter((t) => offered.has(t.id)) : [];
+  const start = view.start;
   const tile = `w-full rounded-xl border text-left ${phone ? 'min-h-16 p-3' : 'p-3'} ${FOCUS}`;
   return (
     <div data-team-step>
-      <p className="text-xs text-zinc-400 mb-2.5">Each team has a lead, helpers and skills for one job. You can add more teams later.</p>
+      <p className="text-xs text-zinc-400 mb-2.5">{view.intro}</p>
+      {start && (
+        <div
+          data-start-team={start.handle}
+          className={`mb-3 rounded-xl border border-sky-400/60 bg-sky-400/[0.08] p-3 flex gap-3 ${phone ? 'flex-col' : 'items-center'}`}
+        >
+          <span className="flex -space-x-2 shrink-0" aria-hidden="true">
+            {start.members.slice(0, 3).map((b) => (
+              <span key={b.id} className="flex rounded-[7px] ring-2 ring-[#16122b]">
+                <ModernAvatar role={b.avatar_sprite} name={b.name} size={26} />
+              </span>
+            ))}
+          </span>
+          <span className="flex-1 min-w-0">
+            <span className="block text-sm font-semibold text-zinc-50">Start with @{start.handle}</span>
+            {start.line && <span className="block text-[12.5px] leading-[18px] text-zinc-300">{start.line}</span>}
+          </span>
+          <Btn kind="primary" phone={phone} data-start-button onClick={onKeep} className={`shrink-0 text-sm px-4${phone ? ' w-full' : ''}`}>
+            Start
+          </Btn>
+        </div>
+      )}
+      {start && (
+        <p className="text-2xs font-semibold uppercase tracking-wider text-zinc-400 mb-2" data-add-team-label>
+          Or add a team for one job
+        </p>
+      )}
       <ul className={phone ? 'flex flex-col gap-2' : 'grid grid-cols-2 gap-2'}>
         {templates.map((t) => (
           <li key={t.id}>
@@ -816,7 +847,7 @@ const TeamStep: React.FC<{
             </button>
           </li>
         ))}
-        <li>
+        {!start && <li>
           <button type="button" data-keep-starter onClick={onKeep} className={`${tile} h-full flex flex-col gap-1 border-dashed border-zinc-600 bg-transparent hover:border-zinc-500`}>
             <span className="text-sm font-semibold text-zinc-100">{mainSpace ? 'Keep the starter bots' : 'Keep the bots you have'}</span>
             <span className="text-[12.5px] leading-[18px] text-zinc-300">{mainSpace ? 'Architect, TechLead and DevOps, in #general.' : keepOwnBotsLine(botNames, spaceName)}</span>
@@ -824,7 +855,7 @@ const TeamStep: React.FC<{
               Use ›
             </span>
           </button>
-        </li>
+        </li>}
         <li>
           <button
             ref={importTile}
@@ -886,9 +917,13 @@ export interface GetStartedProps {
   onImported?: () => void;
   /** The space's `is_default`. Only the main space has the starter bots; left out counts as main. */
   mainSpace?: boolean;
+  /** The space's teams: with one, step 3 is "Your team" with a Start tile (first-screen D). */
+  teams?: StepTeam[];
 }
 
-export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, reloadEngines, onDismissed, loginApiOverride, hostOverride, spaceName, onImported, mainSpace = true }) => {
+const NO_TEAMS: StepTeam[] = [];
+
+export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, reloadEngines, onDismissed, loginApiOverride, hostOverride, spaceName, onImported, mainSpace = true, teams = NO_TEAMS }) => {
   const api = loginApiOverride ?? defaultLoginApi;
   const phone = useMedia(PHONE_QUERY);
   useStartVersion();
@@ -904,6 +939,8 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
   const [resumed] = useState(() => !!chosen && !(engines && tileStatus(engines, chosen) === 'signed_in'));
   const v: StepsView = stepsView({ engines, chosen, teamEarly, changing });
   const kept = isKept(space);
+  const rt = useReadyTeams();
+  const teamView = teamStepView({ teams, bots, templates: rt?.templates ?? [], madeFrom: (id) => rt?.made(id)?.templateId });
   const importedHere = isImported(space);
   const titleId = useId();
   const stepIds = [useId(), useId(), useId()];
@@ -965,6 +1002,11 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
       dismiss(space);
       onDismissed();
     } else markStarted(space, 'kept');
+  };
+  // Start with @team: today's Keep, then the composer, so the next thing is the first ask.
+  const startTeam = () => {
+    keep();
+    window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('[data-composer-form] textarea')?.focus(), 0);
   };
   // "Bring your bots": like Keep, the card goes once step 2 is done; before that step 3 reads done.
   const importedBots = () => {
@@ -1114,9 +1156,9 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
         <div className={`${row} border-t border-white/[.07]`} data-step="3">
           {head(
             3,
-            'Pick a team',
+            teamView.title,
             v.open === 3 && !done3 ? 'open' : done3 ? 'done' : 'todo',
-            done3 ? (importedHere ? 'Your imported bots' : mainSpace ? 'Starter bots' : 'Your bots') : undefined,
+            done3 ? teamDoneValue({ imported: importedHere, mainSpace, startHandle: teamView.start?.handle ?? null }) : undefined,
             v.open === 2 && slow && !done3 ? (
               <Btn phone={phone} kind="link" className="ml-auto shrink-0" onClick={() => setTeamEarly(true)}>
                 Open
@@ -1130,7 +1172,8 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
                 spaceName={spaceName ?? 'this space'}
                 mainSpace={mainSpace}
                 botNames={bots.map((b) => b.name)}
-                onKeep={keep}
+                onKeep={teamView.start ? startTeam : keep}
+                view={teamView}
                 onPicked={() => undefined}
                 onImported={importedBots}
                 onImportChanged={onImported}

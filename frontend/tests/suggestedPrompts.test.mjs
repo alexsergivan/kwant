@@ -81,9 +81,42 @@ test("a one-to-one chat uses that bot's role, or its persona when the title says
 
 test("#general draws on the space's bots without naming them, and is empty with no bots", () => {
   const out = suggestedPrompts({ kind: 'general', bots: [{ name: 'DevOps', title: 'Systems & Security Engineer' }, ...kitchen] });
-  assert.deepEqual(out, ["Check my server's security", "Plan this week's dinners", 'Who here can help me with what?']);
+  assert.deepEqual(out, ["Check my server's security", "Plan this week's dinners", "Check this week's meals are balanced"]);
   assert.ok(out.every((p) => !p.includes('@')));
   assert.deepEqual(suggestedPrompts({ kind: 'general', bots: [] }), []);
+});
+
+test('#general with the Helpers team gives its three role asks and no filler (first-screen C)', () => {
+  const helpers = [
+    { name: 'Assistant', title: 'Personal Assistant' },
+    { name: 'Researcher', title: 'Research Analyst' },
+    { name: 'Writer', title: 'Writer & Editor' },
+  ];
+  const out = suggestedPrompts({ kind: 'general', bots: helpers });
+  assert.deepEqual(out, ['Plan my week', 'Research my top 3 competitors', 'Outline a blog post']);
+  assert.equal(out.length, MAX_PROMPTS);
+  assert.ok(!out.includes('Who here can help me with what?'));
+});
+
+test('#general only adds "Who here can help me with what?" when fewer than three roles answer', () => {
+  assert.deepEqual(suggestedPrompts({ kind: 'general', bots: [{ name: 'A', title: 'Personal Assistant' }, { name: 'W', title: 'Writer' }] }), [
+    'Plan my week',
+    'Outline a blog post',
+    'Who here can help me with what?',
+  ]);
+  assert.deepEqual(suggestedPrompts({ kind: 'general', bots: [{ name: 'X', title: 'Wizard' }] }), ['Who here can help me with what?']);
+  // The upgraded space's core-engineering starters: three distinct roles, so three asks.
+  assert.deepEqual(
+    suggestedPrompts({
+      kind: 'general',
+      bots: [
+        { name: 'Architect', title: 'Systems Architect' },
+        { name: 'TechLead', title: 'Staff Engineer & Prototyper' },
+        { name: 'DevOps', title: 'Systems & Security Engineer' },
+      ],
+    }),
+    ['Sketch the architecture for a new feature', 'Build a quick prototype', "Check my server's security"],
+  );
 });
 
 test('never more than three (four in a team), each short enough for a phone chip', () => {
