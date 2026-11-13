@@ -1166,7 +1166,7 @@ async fn composio_with_key(state: &AppState, space: &SpaceId) -> Result<(Composi
     let Some(setup) = composio_setup(state, space).await else {
         return Err(error_with(
             StatusCode::CONFLICT,
-            "Add Composio first: paste your free Composio API key in Apps & accounts. kwant never contacts Composio before that.",
+            "Add Composio first: paste your free Composio API key in Apps & accounts. Until then, kwant only looks up app names you search for on composio.dev, with no key or account details.",
             "add_composio",
         ));
     };
@@ -1370,13 +1370,16 @@ async fn find_by_name(state: &AppState, q: &str, candidates: &[String], key: Opt
     (answered || !found.is_empty()).then_some(found)
 }
 
-/// The line a search with no apps shows. Words: Mira (provisional, Nov 13).
+/// The line a search with no apps shows: (a) Composio answered with nothing, (b) Composio
+/// couldn't be reached, (c) no name to check (non-Latin letters, one character). Words: Mira (Nov 13).
 fn no_apps_hint(q: &str, asked: bool) -> String {
     let q: String = q.split_whitespace().collect::<Vec<_>>().join(" ");
     if asked {
-        format!("Composio has no app called “{q}”. Check the spelling or try the app's full name, or ask a bot to connect it.")
+        format!("kwant couldn't find an app called “{q}” on Composio. Check the spelling or type the app's full name, or ask a bot to connect it.")
+    } else if composio::slug_candidates(&q).is_empty() {
+        format!("No app called “{q}” in Composio's top apps. Type the app's full name in English letters, or ask a bot to connect it.")
     } else {
-        format!("No app called “{q}” in Composio's top apps. Type its exact name, or ask a bot to connect it.")
+        format!("“{q}” isn't one of Composio's top apps, and kwant couldn't reach Composio to check the rest. Try again in a minute, or ask a bot to connect it.")
     }
 }
 
@@ -1691,15 +1694,17 @@ pub async fn search_composio_apps(
             row
         })
         .collect();
-    Json(json!({
+    let mut body = json!({
         "apps": rows,
         "connected_checked": connected.is_some(),
         "mode": setup.mode(),
         "can_connect": user.is_some(),
         "source": "all",
         "warning": COMPOSIO_WARNING,
-    }))
-    .into_response()
+    });
+    // Composio answered from its whole catalogue: line (a).
+    add_hint(&mut body, Some(q), true);
+    Json(body).into_response()
 }
 
 /// `POST /api/connections/composio/apps/:slug/connect?space=`: starts signing in to one app on
@@ -1783,6 +1788,24 @@ pub async fn composio_app_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_apps_hint_says_why_nothing_was_found() {
+        assert_eq!(
+            no_apps_hint(" Search   Console ", true),
+            "kwant couldn't find an app called “Search Console” on Composio. Check the spelling or type the app's full name, or ask a bot to connect it."
+        );
+        assert_eq!(
+            no_apps_hint("Eleven Labs", false),
+            "“Eleven Labs” isn't one of Composio's top apps, and kwant couldn't reach Composio to check the rest. Try again in a minute, or ask a bot to connect it."
+        );
+        for q in ["Почта", "x", "!!"] {
+            assert_eq!(
+                no_apps_hint(q, false),
+                format!("No app called “{q}” in Composio's top apps. Type the app's full name in English letters, or ask a bot to connect it.")
+            );
+        }
+    }
 
     fn server(enabled: bool, url: Option<&str>) -> McpServer {
         McpServer {

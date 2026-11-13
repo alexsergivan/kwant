@@ -221,6 +221,10 @@ async fn fake_composio() -> (String, Shared) {
                         _ => (StatusCode::BAD_REQUEST, Json(json!({"error": {"message": "bad cursor"}}))),
                     };
                 }
+                // A made-up name: Composio's search answers with nothing.
+                if q.get("search").is_some_and(|s| s == "notarealapp123") {
+                    return (StatusCode::OK, Json(json!({"items": []})));
+                }
                 (
                     StatusCode::OK,
                     Json(json!({"items": [
@@ -728,6 +732,11 @@ async fn without_a_query_the_whole_catalogue_comes_back_for_autocomplete() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=gm", None).await;
     assert_eq!((s, v["apps"].as_array().unwrap().len()), (StatusCode::OK, 3), "{v}");
+    assert!(v.get("hint").is_none(), "{v}");
+    // Nothing in the whole catalogue: Composio answered, so line (a).
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=notarealapp123", None).await;
+    assert_eq!((s, v["apps"].clone(), v["source"].clone()), (StatusCode::OK, json!([]), json!("all")), "{v}");
+    assert_eq!(v["hint"], "kwant couldn't find an app called “notarealapp123” on Composio. Check the spelling or type the app's full name, or ask a bot to connect it.");
 
     // Another key gets its own list; a refused key gets the usual 409.
     let (s, _) = call(&env.app, "PUT", "/api/connections/composio/key", Some(json!({"api_key": "ak_good2"}))).await;
@@ -1007,7 +1016,7 @@ async fn composio_connect_finds_an_app_beyond_the_popular_list_by_its_name() {
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["apps"], json!([]), "{v}");
     assert_eq!(v["count"], 0);
-    assert_eq!(v["hint"], "Composio has no app called “notarealapp123”. Check the spelling or try the app's full name, or ask a bot to connect it.");
+    assert_eq!(v["hint"], "kwant couldn't find an app called “notarealapp123” on Composio. Check the spelling or type the app's full name, or ask a bot to connect it.");
     let c = calls(&fake);
     assert_eq!(c.iter().filter(|x| x.1 == "/connect/mcp tools/call search").count(), 1, "{c:?}");
     assert_eq!(c.iter().filter(|x| x.0 == "HEAD").count(), 1, "then its one app page: {c:?}");
@@ -1068,11 +1077,11 @@ async fn before_setup_an_app_beyond_the_popular_list_is_found_on_its_page() {
     let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps?q=notarealapp123", None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["apps"], json!([]));
-    assert_eq!(v["hint"], "Composio has no app called “notarealapp123”. Check the spelling or try the app's full name, or ask a bot to connect it.");
+    assert_eq!(v["hint"], "kwant couldn't find an app called “notarealapp123” on Composio. Check the spelling or type the app's full name, or ask a bot to connect it.");
     // Pages out of reach: the line says what kwant could check.
     let env2 = setup_with(|state| state.composio_api = Arc::new(ComposioApi::new("http://127.0.0.1:9"))).await;
     let (s, v) = call(&env2.app, "GET", "/api/connections/composio/apps?q=Eleven%20Labs", None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["apps"], json!([]), "{v}");
-    assert_eq!(v["hint"], "No app called “Eleven Labs” in Composio's top apps. Type its exact name, or ask a bot to connect it.");
+    assert_eq!(v["hint"], "“Eleven Labs” isn't one of Composio's top apps, and kwant couldn't reach Composio to check the rest. Try again in a minute, or ask a bot to connect it.");
 }

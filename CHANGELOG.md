@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Fixed
-- **Find any Composio app by its name.** Apps & accounts › Another app only searched Composio's 120 most popular apps, so "ElevenLabs" said "No Composio apps match". Now a name the popular list doesn't have is checked with Composio itself: with a Composio Connect key through Composio Connect, and before Composio is added on the app's public page on composio.dev (only the app's name is sent). "ElevenLabs", "elevenlabs" and "Eleven Labs" all find ElevenLabs, ready to connect. A name Composio has no app for says so and suggests the exact name or asking a bot. Answers are kept for 10 minutes.
+- **Find any Composio app by its name.** Apps & accounts › Another app only searched Composio's 120 most popular apps, so "ElevenLabs" said "No Composio apps match". Now a name the popular list doesn't have is checked with Composio itself, through Composio Connect, or on the app's public page on composio.dev when Connect can't answer (only the app's name is sent). "ElevenLabs", "elevenlabs" and "Eleven Labs" all find ElevenLabs, ready to connect. When nothing is found, the line says why and what to try: the app's full name, trying again if Composio couldn't be reached, or asking a bot. Answers are kept for 10 minutes.
 
 ## [Mac 0.9.6] - 2026-11-13
 
