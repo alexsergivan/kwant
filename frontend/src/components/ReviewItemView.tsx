@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { type InboxItem, type ReviewItem, type HeldAction, type HeldStatus, type InboxCriterion, BEING_CHECKED_LINE, InboxError, approveState, inboxApi, isBeingChecked, reviewWord } from '../api/inbox';
 import { AwayError } from '../away';
-import { LOOKS_GOOD, redoLabel, redoTitle, rollbackShown as rollbackFor } from '../doneAway';
+import { LOOKS_GOOD, noChecksSet, redoLabel, redoTitle, rollbackShown as rollbackFor } from '../doneAway';
 import { type Checkpoint, type RestorePreview, MissionError, RESTORE_ACTION_LABELS, conflictText, missionsApi, newIdempotencyKey, restoreErrorText } from '../missions';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { ImageViewer } from './Attachments';
@@ -193,6 +193,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   const titleId = `${uid}-title`;
   const [held, setHeld] = useState<Record<string, HeldState>>(() => Object.fromEntries(item.held_actions.map((h) => [h.approval_id, heldFrom(h)])));
   const openHeld = item.held_actions.filter((h) => held[h.approval_id]?.state === 'open');
+  const noChecks = !!doneView && noChecksSet(item);
   const blocked = openHeld.length > 0 ? approveState({ held_actions: openHeld }).blocked : null;
   const [busy, setBusy] = useState<null | 'approve' | 'send' | 'check'>(null);
   const [notice, setNotice] = useState<{ text: string; tone: 'ok' | 'bad' | 'info'; undo?: string | null; copy?: string | null } | null>(null);
@@ -588,6 +589,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
               err={sendErr}
               busy={busy === 'send'}
               openHeld={openHeld.length}
+              noChecks={noChecks}
               onSend={() => void sendBack()}
               onCancel={closeSend}
               phone
@@ -598,7 +600,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
             <h3 className="flex items-center gap-2 text-body font-semibold text-zinc-100">
               <CornerUpLeft size={15} aria-hidden="true" /> {redoTitle(item.kwant_name)}
             </h3>
-            <SendBackForm item={item} note={note} setNote={setNote} err={sendErr} busy={busy === 'send'} openHeld={openHeld.length} onSend={() => void sendBack()} onCancel={closeSend} />
+            <SendBackForm item={item} note={note} setNote={setNote} err={sendErr} busy={busy === 'send'} openHeld={openHeld.length} noChecks={noChecks} onSend={() => void sendBack()} onCancel={closeSend} />
           </div>
         ))}
 
@@ -787,10 +789,12 @@ const SendBackForm: React.FC<{
   err: string | null;
   busy: boolean;
   openHeld: number;
+  /** Mira re-check 4: a finished run with no checks has no checker to promise. */
+  noChecks: boolean;
   onSend: () => void;
   onCancel: () => void;
   phone?: boolean;
-}> = ({ item, note, setNote, err, busy, openHeld, onSend, onCancel, phone = false }) => {
+}> = ({ item, note, setNote, err, busy, openHeld, noChecks, onSend, onCancel, phone = false }) => {
   const ta = useRef<HTMLTextAreaElement>(null);
   const id = useId();
   useEffect(() => {
@@ -834,7 +838,7 @@ const SendBackForm: React.FC<{
         </div>
       )}
       <ul className="list-disc pl-5 space-y-0.5 text-meta text-zinc-400">
-        {sendBackSteps(item, openHeld).map((s) => (
+        {sendBackSteps(item, openHeld, noChecks).map((s) => (
           <li key={s}>{s}</li>
         ))}
       </ul>

@@ -178,6 +178,8 @@ export interface DoneFields {
   trail_dropped?: number;
   why?: string | null;
   why_kind?: 'routine' | 'task' | 'ask' | 'request' | null;
+  /** When the person asked (optional; 0.9.6). Without it, Why carries no date. */
+  why_at?: string | null;
   source?: DoneSource | null;
   /** Team jobs only: who led it and whom it handed work to. */
   lead?: TeamMember;

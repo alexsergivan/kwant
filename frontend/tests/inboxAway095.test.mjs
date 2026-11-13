@@ -194,6 +194,11 @@ test('pane order: meta, chips, answer with Open in chat, What Ben did, Why, then
   await click(q('[data-edit-routine]'));
   await click(q('[data-add-check]'));
   assert.deepEqual(edits, ['rt-prices', 'rt-prices']);
+  // Re-check 4: with no checks set, Ask Ben to redo promises no checker.
+  await click(q('[data-send-back]'));
+  const steps = q('[data-send-panel] ul').textContent;
+  assert.match(steps, /Ben starts round \d+ with your note and the work so far\./);
+  assert.equal(/checker/.test(steps), false);
   root.unmount();
 });
 
@@ -222,12 +227,16 @@ test('a team job opens in the pane: led-by meta, the lead鈥檚 answer, the team鈥
   assert.match(rows[0].textContent, /Ben 路 Opened beanline\.example\.com 路 House Blend/);
   assert.equal(rows[1].getAttribute('data-status'), 'error');
   assert.ok(rows[1].querySelector('[aria-label="Failed"]'));
+  // Re-check 1: the bot's name leads, then the icon, then what happened and the word "failed".
+  assert.equal(rows[1].querySelector('span').firstElementChild.hasAttribute('data-trail-by'), true, 'the name comes first');
+  assert.match(rows[1].textContent, / 路 failed( 路 |$)/);
+  assert.ok(rows[1].querySelector('[data-trail-by]').compareDocumentPosition(rows[1].querySelector('[aria-label="Failed"]')) & Node.DOCUMENT_POSITION_FOLLOWING);
   assert.equal(rows[3].getAttribute('data-status'), 'skipped');
   assert.match(rows[3].textContent, /Cody 路 Sent the draft to the list 路 skipped/);
   assert.equal(rows[3].querySelector('[aria-label="Failed"]'), null, 'skipped: no icon');
   assert.match(rows[3].lastElementChild.className, /text-zinc-400/);
   assert.match(rows[4].textContent, /Wrote the answer in @Spring launch/);
-  assert.match(q('[data-done-why]').textContent.replace(/\s+/g, ' '), /You asked on Nov 11: Plan a spring sale for the house blend and draft the email\.$/);
+  assert.match(q('[data-done-why]').textContent.replace(/\s+/g, ' '), /You asked: Plan a spring sale for the house blend and draft the email\.$/);
   assert.equal(q('[data-done-why]').getAttribute('data-done-why'), 'request');
   assert.equal(q('[data-why-quote]').textContent, 'Plan a spring sale for the house blend and draft the email.');
   assert.equal(q('[data-redo]').textContent.trim(), 'Ask Ann to redo in chat');
@@ -255,7 +264,9 @@ test('Why for a task and a hand-off (Needs B 3)', () => {
   const base = { ...fx.AWAY_HANDOFF, why: 'Check the RoastCo price' };
   assert.equal(a.whyLead({ ...base, why_kind: 'task' }), 'The task said:');
   assert.equal(a.whyLead({ ...base, why_kind: 'ask' }), 'You asked Cody:');
-  assert.equal(a.whyLead({ ...base, why_kind: 'request' }), 'You asked on Nov 11:');
+  // Re-check 7: no date from the finish time; a date only from the ask's own time.
+  assert.equal(a.whyLead({ ...base, why_kind: 'request' }), 'You asked:');
+  assert.equal(a.whyLead({ ...base, why_kind: 'request', why_at: '2026-11-10T21:00:00Z' }), 'You asked on Nov 10:');
   assert.equal(a.whyLead({ ...base, why_kind: 'routine' }), null, 'routines keep their own copy');
   assert.equal(a.whyLead({ ...base, why: '  ', why_kind: 'task' }), null);
   assert.equal(a.ledLine({ ...fx.AWAY_TEAM_JOB, members: [1, 2, 3, 4].map((n) => ({ kwant_id: `k${n}`, kwant_name: `B${n}` })) }), 'Ann led B1, B2 and 2 more');
@@ -290,6 +301,8 @@ test('header: n new, nothing new, and today鈥檚 window line on a server older th
   doneless.items = doneless.items.filter((i) => i.group === 'waiting_on_you');
   const { q, root } = await mountInbox({}, doneless);
   assert.equal(q('[data-section="done"] p').textContent, 'Nothing finished in the last 7 days.');
+  assert.equal(q('[data-done-footer]'), null, 'Re-check 5: no footer under an empty Done');
+  assert.match(q('[data-section="done"] h3').textContent, /路 0/);
   root.unmount();
 });
 

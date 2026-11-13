@@ -293,7 +293,8 @@ export function whyLead(item: InboxItem): string | null {
     case 'ask':
       return `You asked ${item.kwant_name}:`;
     case 'request': {
-      const day = monthDay(item.timestamp);
+      // The finish time can be a day after the ask, so the date comes only from the ask's own time.
+      const day = monthDay(item.why_at);
       return day ? `You asked on ${day}:` : 'You asked:';
     }
     default:

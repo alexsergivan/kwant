@@ -400,21 +400,25 @@ const RunHistory: React.FC<{ routine: Routine; tick: number; onOpenRunResult?: (
         <li key={r.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400">
           <StatusBadge status={r.status} />
           <span>{formatWhen(r.started_at)}</span>
-          <span className="text-zinc-600">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
+          <span className="text-zinc-400">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
           {(() => {
             const t = onOpenRunResult ? runResultTarget(routine, r) : null;
             if (!t) return null;
             return (
-              <button
-                type="button"
-                onClick={() => onOpenRunResult!(t)}
-                className="kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-violet-300 hover:text-violet-200"
-                aria-label={`Open the result of the run on ${formatWhen(r.started_at)}`}
-                data-compact
-                data-run-result={r.id}
-              >
-                Open result <ChevronRight size={11} aria-hidden="true" />
-              </button>
+              <>
+                {/* Mira re-check 6: on a phone Open result always sits on its own line under the badge. */}
+                <span className="basis-full h-0 sm:hidden" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={() => onOpenRunResult!(t)}
+                  className="kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-violet-300 hover:text-violet-200"
+                  aria-label={`Open the result of the run on ${formatWhen(r.started_at)}`}
+                  data-compact
+                  data-run-result={r.id}
+                >
+                  Open result <ChevronRight size={11} aria-hidden="true" />
+                </button>
+              </>
             );
           })()}
           {(() => {

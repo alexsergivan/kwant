@@ -937,7 +937,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   ) : (
                     <p className="px-1 text-xs text-zinc-400">{sec.empty}</p>
                   )}
-                  {key === 'done' && (
+                  {key === 'done' && count > 0 && (
                     <p className="mt-3 px-1 text-xs text-zinc-400" data-done-footer>
                       {DONE_FOOTER}
                     </p>

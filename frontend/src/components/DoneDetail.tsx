@@ -201,7 +201,7 @@ export const DoneSections: React.FC<{
           {answerHeading(item)}
         </h3>
         {d.loading && !text ? (
-          <p className="inline-flex items-center gap-1.5 text-meta text-zinc-400" role="status">
+          <p className="flex items-center gap-1.5 text-meta text-zinc-400" role="status">
             <Loader2 size={13} className="motion-safe:animate-spin" aria-hidden="true" /> Loading the answer…
           </p>
         ) : text ? (
@@ -251,7 +251,6 @@ export const DoneSections: React.FC<{
                 <li key={i} className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 text-body" data-trail-row data-status={r.failed ? 'error' : r.skipped ? 'skipped' : 'ok'}>
                   <time className="tabular-nums text-meta text-zinc-400 pt-px">{r.at}</time>
                   <span className={`min-w-0 break-words ${r.failed ? 'text-rose-200' : r.skipped ? 'text-zinc-400' : 'text-zinc-100'}`}>
-                    {r.failed && <AlertTriangle size={13} className="inline -mt-0.5 mr-1" aria-label="Failed" />}
                     {r.by && (
                       <>
                         <span className="font-semibold text-zinc-100" data-trail-by>
@@ -260,7 +259,9 @@ export const DoneSections: React.FC<{
                         {' · '}
                       </>
                     )}
+                    {r.failed && <AlertTriangle size={13} className="inline -mt-0.5 mr-1" aria-label="Failed" />}
                     {r.what}
+                    {r.failed && ' · failed'}
                     {r.skipped && ' · skipped'}
                     {r.detail && <span className="text-zinc-400"> · {r.detail}</span>}
                   </span>
@@ -310,8 +311,8 @@ export const DoneSections: React.FC<{
         )
       )}
       {d.error && (
-        <p className="text-meta text-zinc-400" role="status" data-done-error>
-          Couldn’t load the run’s details. {d.error}
+        <p className="text-meta text-zinc-400" role="status" title={d.error} data-done-error>
+          Couldn’t load the routine just now, so some details are missing.
         </p>
       )}
     </>
