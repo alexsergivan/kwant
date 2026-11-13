@@ -1,0 +1,23 @@
+{
+  "client_id": "https://kwant.si/oauth/client.json",
+  "client_name": "kwant",
+  "client_uri": "https://kwant.si",
+  "logo_uri": "https://kwant.si/apple-touch-icon.png",
+  "application_type": "native",
+  "redirect_uris": [
+    "http://127.0.0.1/api/mcp/oauth/callback",
+    "http://127.0.0.1:8799/api/mcp/oauth/callback",
+    "http://localhost/api/mcp/oauth/callback",
+    "http://localhost:8799/api/mcp/oauth/callback",
+    "http://[::1]/api/mcp/oauth/callback",
+    "http://[::1]:8799/api/mcp/oauth/callback"
+  ],
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "token_endpoint_auth_method": "none"
+}
