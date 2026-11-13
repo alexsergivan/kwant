@@ -379,8 +379,14 @@ pub fn counts(task: &Task, c: &OutcomeCheck) -> bool {
 pub fn verdict(task: &Task, checks: &[OutcomeCheck], since: Option<chrono::DateTime<chrono::Utc>>) -> Verdict {
     let owner = task.owner_kwant_id.as_deref().unwrap_or("");
     let required: Vec<&OutcomeCheck> = checks.iter().filter(|c| c.required).collect();
-    let live: Vec<&OutcomeCheck> = required.iter().copied().filter(|c| counts(task, c) && fresh(c, since)).collect();
-    if let Some(bad) = live.iter().find(|c| matches!(c.status.as_str(), "failed" | "error")) {
+    let mut live: Vec<&OutcomeCheck> = required.iter().copied().filter(|c| counts(task, c) && fresh(c, since)).collect();
+    // A check that is waiting on an outside service, or stopped waiting at its deadline, holds
+    // the task in review (never a fail) until it answers, or the person verifies by hand
+    let by_hand = live.iter().any(|c| c.kind == "person" && c.status == "passed");
+    if by_hand {
+        live.retain(|c| !waits(c));
+    }
+    if let Some(bad) = live.iter().find(|c| matches!(c.status.as_str(), "failed" | "error") && !timed_out(c)) {
         return Verdict::Fail(format!("{} check {}", bad.kind, bad.status));
     }
     if live.iter().any(|c| c.status != "passed") {
@@ -396,6 +402,16 @@ pub fn verdict(task: &Task, checks: &[OutcomeCheck], since: Option<chrono::DateT
     } else {
         Verdict::Waiting
     }
+}
+
+/// Whether `c` stopped waiting at its deadline (`error`, failure class `waited_too_long`).
+pub fn timed_out(c: &OutcomeCheck) -> bool {
+    c.status == "error" && c.timed_out_at.is_some()
+}
+
+/// Whether `c` is waiting on an outside service or stopped waiting at its deadline.
+pub fn waits(c: &OutcomeCheck) -> bool {
+    c.status == "waiting" || timed_out(c)
 }
 
 /// When the task last went to review.
@@ -423,7 +439,8 @@ pub async fn evaluate(state: &AppState, task_id: &str) -> Option<Task> {
             let change = TaskChange { reason: Some(why.clone()), attempt: true, ..Default::default() };
             let moved = transition(state, task_id, "review", to, Actor::Kwant, "kwant", change).await.ok();
             if moved.is_some() {
-                let bad = checks.iter().filter(|c| matches!(c.status.as_str(), "failed" | "error")).find(|c| c.required).or_else(|| checks.iter().find(|c| matches!(c.status.as_str(), "failed" | "error")));
+                let failed = |c: &&OutcomeCheck| matches!(c.status.as_str(), "failed" | "error") && !timed_out(c);
+                let bad = checks.iter().filter(failed).find(|c| c.required).or_else(|| checks.iter().find(failed));
                 if let Some(c) = bad {
                     let text = format!("{} {}\n{}", c.kind, autofix::redact_value(&c.spec_value()), c.output_excerpt.as_deref().unwrap_or(""));
                     autofix::record(state, task_id, "check", &c.status, &text, &why).await;
@@ -440,14 +457,20 @@ pub async fn evaluate(state: &AppState, task_id: &str) -> Option<Task> {
 /// checks that count (see [`counts`]); `needs_approval` is how many wait for the person, and
 /// `required_needs_approval` how many of those are required, so hold the task.
 pub fn checks_summary(task: &Task, checks: &[OutcomeCheck]) -> Value {
-    let live: Vec<&OutcomeCheck> = checks.iter().filter(|c| counts(task, c)).collect();
+    let mut live: Vec<&OutcomeCheck> = checks.iter().filter(|c| counts(task, c)).collect();
+    // As in [`verdict`]: the person's Verify settles a check that waits on an outside service
+    if live.iter().any(|c| c.required && c.kind == "person" && c.status == "passed") {
+        live.retain(|c| !waits(c));
+    }
     let waiting = checks.iter().filter(|c| !c.approved).count();
     // An optional check waiting for approval is listed but doesn't hold the task (see [`verdict`])
     let required_waiting = checks.iter().filter(|c| c.required && !c.approved).count();
     let holding = required_waiting > 0;
     let gating = |c: &&&OutcomeCheck| c.required;
     let passed = live.iter().filter(|c| c.status == "passed").count();
-    let failed = live.iter().filter(gating).filter(|c| matches!(c.status.as_str(), "failed" | "error")).count();
+    let failed = live.iter().filter(gating).filter(|c| matches!(c.status.as_str(), "failed" | "error") && !timed_out(c)).count();
+    // Waiting on an outside service (or stopped at its deadline): the summary stays pending
+    let waiting_n = live.iter().filter(|c| waits(c)).count();
     let status = if live.is_empty() && waiting == 0 {
         "not_checked"
     } else if failed > 0 {
@@ -463,6 +486,7 @@ pub fn checks_summary(task: &Task, checks: &[OutcomeCheck]) -> Value {
         "failed": failed,
         "needs_approval": waiting,
         "required_needs_approval": required_waiting,
+        "waiting": waiting_n,
         "total": checks.len(),
     })
 }
@@ -575,7 +599,9 @@ pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
 
 async fn owner_needs_you(state: &AppState, task: &Task) -> Vec<Value> {
     if task.state == "review" {
-        return check_approvals(state, task).await;
+        let mut items = check_approvals(state, task).await;
+        items.extend(timed_out_checks(state, task).await);
+        return items;
     }
     let Some(owner) = &task.owner_kwant_id else { return Vec::new() };
     if !matches!(task.state.as_str(), "working" | "needs_you") {
@@ -619,6 +645,35 @@ pub async fn check_approvals(state: &AppState, task: &Task) -> Vec<Value> {
         .map(|c| {
             let text = format!("Allow this check: {} {}", c.kind, autofix::redact_value(&c.spec_value()));
             json!({"kind": "check_approval", "id": c.id, "text": text.chars().take(200).collect::<String>()})
+        })
+        .collect()
+}
+
+/// A task in review waits on the person for each required check that stopped waiting at its
+/// deadline (`{"kind": "check_timed_out", "id": <check id>, "text", "actions": ["wait_more",
+/// "verify"]}`): "Wait 24 h more" (`POST /api/checks/:id/wait-more`) or Verify. A check still
+/// waiting is never an item.
+pub async fn timed_out_checks(state: &AppState, task: &Task) -> Vec<Value> {
+    let checks = state.db.list_checks(&task.id).await.unwrap_or_default();
+    if checks.iter().any(|c| c.kind == "person" && c.status == "passed" && c.required) {
+        return Vec::new();
+    }
+    checks
+        .iter()
+        .filter(|c| c.required && counts(task, c) && timed_out(c))
+        .map(|c| {
+            let hours = match (c.waiting_since, c.wait_until) {
+                (Some(s), Some(u)) => (((u - s).num_minutes() as f64) / 60.0).round().max(1.0) as i64,
+                _ => crate::db::missions::DEFAULT_WAIT_HOURS,
+            };
+            let text = format!("{} didn't answer in {hours} h. Wait longer, or verify by hand.", checks::check_label(c));
+            json!({
+                "kind": "check_timed_out",
+                "id": c.id,
+                "text": text.chars().take(200).collect::<String>(),
+                "actions": ["wait_more", "verify"],
+                "wait_more_hours": crate::db::missions::WAIT_MORE_HOURS,
+            })
         })
         .collect()
 }
@@ -859,12 +914,20 @@ pub fn validate_check(kind: &str, spec: &Value, person_ok: bool) -> Result<bool,
             if spec["timeout_secs"].as_u64().is_some_and(|t| !(1..=checks::MAX_COMMAND_SECS).contains(&t)) {
                 return Err(format!("spec.timeout_secs must be 1–{}", checks::MAX_COMMAND_SECS));
             }
+            validate_waiting(spec)?;
             Ok(person_ok)
         }
         "http" => {
             let url = s("url").ok_or("an http check needs spec.url")?;
             if !(url.starts_with("http://") || url.starts_with("https://")) {
                 return Err("spec.url must start with http:// or https://".into());
+            }
+            validate_waiting(spec)?;
+            if !spec["waiting_status"].is_null() && !spec["waiting_status"].as_u64().is_some_and(|s| (100..=599).contains(&s)) {
+                return Err("spec.waiting_status must be an HTTP status, 100–599".into());
+            }
+            if !spec["waiting_contains"].is_null() && !spec["waiting_contains"].as_str().is_some_and(|t| !t.is_empty() && t.len() <= 500) {
+                return Err("spec.waiting_contains must be text of 1–500 characters".into());
             }
             // Stricter than WebFetch: kwnt fetches it itself, so no local dev-server exemption
             Ok(person_ok || crate::mcp::fetch_risk::public_only(url).is_ok())
@@ -889,6 +952,19 @@ pub fn validate_check(kind: &str, spec: &Value, person_ok: bool) -> Result<bool,
         "peer_review" | "person" => Err(format!("{kind} checks are recorded by task_review or the person's Verify, not added")),
         other => Err(format!("unknown check kind {other}")),
     }
+}
+
+/// A waiting check's `recheck_mins` (5–1440) and `wait_hours` (1–336), when given: whole numbers
+/// in range. Left out, a "not yet" uses 15 minutes and 72 hours.
+fn validate_waiting(spec: &Value) -> Result<(), String> {
+    use crate::db::missions::{RECHECK_MINS, WAIT_HOURS};
+    for (key, range) in [("recheck_mins", RECHECK_MINS), ("wait_hours", WAIT_HOURS)] {
+        let v = &spec[key];
+        if !v.is_null() && !v.as_i64().is_some_and(|n| range.contains(&n)) {
+            return Err(format!("spec.{key} must be a whole number, {}–{}", range.start(), range.end()));
+        }
+    }
+    Ok(())
 }
 
 /// Resolves a bot by id or name in `space`.
@@ -1121,6 +1197,35 @@ mod tests {
     use chrono::Utc;
 
     #[test]
+    fn wait_fields_have_bounds_and_defaults() {
+        let cmd = |extra: Value| {
+            let mut spec = json!({"command": "true"});
+            for (k, v) in extra.as_object().unwrap() {
+                spec[k] = v.clone();
+            }
+            validate_check("command", &spec, true)
+        };
+        assert!(cmd(json!({})).is_ok(), "both left out: the defaults");
+        for ok in [json!({"recheck_mins": 5}), json!({"recheck_mins": 1440}), json!({"wait_hours": 1}), json!({"wait_hours": 336}), json!({"recheck_mins": null})] {
+            assert!(cmd(ok.clone()).is_ok(), "{ok}");
+        }
+        for bad in [json!({"recheck_mins": 4}), json!({"recheck_mins": 1441}), json!({"wait_hours": 0}), json!({"wait_hours": 337}), json!({"wait_hours": 1.5}), json!({"recheck_mins": "15"})] {
+            assert!(cmd(bad.clone()).is_err(), "{bad}");
+        }
+        let http = |extra: Value| {
+            let mut spec = json!({"url": "https://example.com"});
+            for (k, v) in extra.as_object().unwrap() {
+                spec[k] = v.clone();
+            }
+            validate_check("http", &spec, true)
+        };
+        assert!(http(json!({"waiting_status": 202, "waiting_contains": "pending", "wait_hours": 24})).is_ok());
+        assert!(http(json!({"waiting_status": 42})).is_err());
+        assert!(http(json!({"waiting_contains": ""})).is_err());
+        assert!(http(json!({"recheck_mins": 0})).is_err());
+    }
+
+    #[test]
     fn transitions_follow_the_contract() {
         use Actor::*;
         assert!(allowed("backlog", "ready", Kwant));
@@ -1194,6 +1299,12 @@ mod tests {
             created_at: Utc::now(),
             started_at: None,
             finished_at: Some(Utc::now()),
+            waiting_since: None,
+            next_run_at: None,
+            wait_until: None,
+            runs: 0,
+            wait_round: 0,
+            timed_out_at: None,
         }
     }
 

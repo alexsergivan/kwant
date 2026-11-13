@@ -3,7 +3,8 @@
 //! Each result is stored on the check and as `check_output` evidence; then the task is evaluated.
 
 use super::{evaluate, task_folder, MAX_EXCERPT};
-use crate::db::missions::{NewEvidence, OutcomeCheck, Task, KWANT_CHECK_KINDS};
+use crate::db::missions::{NewEvidence, OutcomeCheck, Task, DEFAULT_RECHECK_MINS, DEFAULT_WAIT_HOURS, KWANT_CHECK_KINDS, WAITING_EXIT};
+use chrono::{DateTime, Duration, Utc};
 use crate::server::AppState;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -111,9 +112,30 @@ pub struct Seen {
     pub sha256: Option<(String, String)>,
 }
 
+/// What one run of a check said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Said {
+    Pass,
+    Fail,
+    /// "Not yet": a command's exit 75, or an http check's `waiting_status` / `waiting_contains`.
+    Wait,
+}
+
+impl From<bool> for Said {
+    fn from(ok: bool) -> Self {
+        if ok {
+            Said::Pass
+        } else {
+            Said::Fail
+        }
+    }
+}
+
 /// Runs one check; returns `(status, output)` with status "passed", "failed" or "error".
 /// `person_ok`: the person added or approved it, so an `http` check may reach this computer or a
 /// private network; otherwise the URL must resolve to public addresses only, and is fetched from them.
+/// A "not yet" (exit 75, `waiting_status`, `waiting_contains`) counts as "failed" here: only
+/// Mission Control's own runs ([`run_check`]) wait.
 pub async fn run_spec(kind: &str, spec: &Value, folder: Option<&Path>, person_ok: bool) -> (String, String) {
     let (status, output, _) = run_spec_seen(kind, spec, folder, person_ok).await;
     (status, output)
@@ -121,20 +143,32 @@ pub async fn run_spec(kind: &str, spec: &Value, folder: Option<&Path>, person_ok
 
 /// [`run_spec`], also returning what the run saw.
 pub async fn run_spec_seen(kind: &str, spec: &Value, folder: Option<&Path>, person_ok: bool) -> (String, String, Seen) {
+    let (status, output, seen) = run_spec_env(kind, spec, folder, person_ok, &[]).await;
+    (if status == "waiting" { "failed".into() } else { status }, output, seen)
+}
+
+/// [`run_spec_seen`] with extra environment for a command check, and status "waiting" for a
+/// "not yet".
+async fn run_spec_env(kind: &str, spec: &Value, folder: Option<&Path>, person_ok: bool, env: &[(String, String)]) -> (String, String, Seen) {
     let mut seen = Seen::default();
     let s = |k: &str| spec[k].as_str().map(str::trim).filter(|v| !v.is_empty());
     let need_folder = || folder.ok_or_else(|| "this task has no folder to check in".to_string());
-    let r: Result<(bool, String), String> = match kind {
+    let r: Result<(Said, String), String> = match kind {
         "command" => match (s("command"), need_folder()) {
             (Some(cmd), Ok(dir)) => {
                 let secs = spec["timeout_secs"].as_u64().unwrap_or(DEFAULT_COMMAND_SECS).clamp(1, MAX_COMMAND_SECS);
-                match crate::tools::shell::execute_shell(dir, &json!({"command": cmd, "timeout_secs": secs})).await {
+                match crate::tools::shell::execute_shell_env(dir, &json!({"command": cmd, "timeout_secs": secs}), env).await {
                     Ok(v) => {
                         let code = v["exit_code"].as_i64().unwrap_or(-1);
                         let out = format!("exit code {code}\n{}{}", v["stdout"].as_str().unwrap_or(""), v["stderr"].as_str().unwrap_or(""));
                         seen.exit_code = Some(code);
                         seen.stdout = Some(v["stdout"].as_str().unwrap_or("").to_string());
-                        Ok((code == 0, out))
+                        let said = match code {
+                            0 => Said::Pass,
+                            WAITING_EXIT => Said::Wait,
+                            _ => Said::Fail,
+                        };
+                        Ok((said, out))
                     }
                     Err(e) => Err(e.to_string()),
                 }
@@ -147,20 +181,21 @@ pub async fn run_spec_seen(kind: &str, spec: &Value, folder: Option<&Path>, pers
             None => Err("spec.url is missing".into()),
         },
         "file_exists" | "file_contains" | "file_sha256" => match (s("path"), need_folder()) {
-            (Some(rel), Ok(dir)) => file(kind, rel, spec, dir, &mut seen).await,
+            (Some(rel), Ok(dir)) => file(kind, rel, spec, dir, &mut seen).await.map(|(ok, out)| (Said::from(ok), out)),
             (None, _) => Err("spec.path is missing".into()),
             (_, Err(e)) => Err(e),
         },
         other => Err(format!("kwant doesn't run {other} checks")),
     };
     match r {
-        Ok((true, out)) => ("passed".into(), excerpt(&out), seen),
-        Ok((false, out)) => ("failed".into(), excerpt(&out), seen),
+        Ok((Said::Pass, out)) => ("passed".into(), excerpt(&out), seen),
+        Ok((Said::Fail, out)) => ("failed".into(), excerpt(&out), seen),
+        Ok((Said::Wait, out)) => ("waiting".into(), excerpt(&out), seen),
         Err(e) => ("error".into(), excerpt(&e), seen),
     }
 }
 
-async fn http(url: &str, spec: &Value, person_ok: bool, seen: &mut Seen) -> Result<(bool, String), String> {
+async fn http(url: &str, spec: &Value, person_ok: bool, seen: &mut Seen) -> Result<(Said, String), String> {
     let mut builder = reqwest::Client::builder();
     if !person_ok {
         let (host, addrs) = crate::mcp::fetch_risk::public_only(url).map_err(|why| format!("not fetched: {why}; the person can approve it"))?;
@@ -198,9 +233,18 @@ async fn http(url: &str, spec: &Value, person_ok: bool, seen: &mut Seen) -> Resu
     let text = String::from_utf8_lossy(&body);
     let contains = spec["contains"].as_str().filter(|t| !t.is_empty());
     let has = contains.is_none_or(|t| text.contains(t));
+    // "Not yet" wins over pass and fail: a 202 is a 2xx, and a "pending" page can still match `contains`
+    let wait_status = spec["waiting_status"].as_u64().is_some_and(|w| u64::from(status) == w);
+    let wait_text = spec["waiting_contains"].as_str().filter(|t| !t.is_empty()).filter(|t| text.contains(t));
     let mut out = format!("GET {url} → {status}");
     if let Some(t) = contains {
         out.push_str(&format!("; {} \"{t}\"", if has { "contains" } else { "does not contain" }));
+    }
+    if wait_status {
+        out.push_str("; not ready yet (waiting status)");
+    }
+    if let Some(t) = wait_text {
+        out.push_str(&format!("; not ready yet (contains \"{t}\")"));
     }
     if let Some(to) = &seen.redirect {
         out.push_str(&format!(
@@ -213,7 +257,8 @@ async fn http(url: &str, spec: &Value, person_ok: bool, seen: &mut Seen) -> Resu
     }
     seen.http_status = Some(status);
     seen.body = Some(text.into_owned());
-    Ok((ok_status && has, out))
+    let said = if wait_status || wait_text.is_some() { Said::Wait } else { Said::from(ok_status && has) };
+    Ok((said, out))
 }
 
 /// Why a GET didn't get a response. A refused or dropped connection and a timeout say so in
@@ -289,14 +334,63 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The key an outside service dedupes on: sha256 of the check's id and the round, so every run
+/// of a round sends the same key, and the round after a fail sends a new one.
+pub fn idempotency_key(check_id: &str, round: i64) -> String {
+    hex(&Sha256::digest(format!("{check_id}:{round}").as_bytes()))
+}
+
+/// The environment a command check runs with (`KWANT_TASK_ID` and friends).
+fn check_env(task: &Task, check: &OutcomeCheck, run: i64, round: i64) -> Vec<(String, String)> {
+    vec![
+        ("KWANT_TASK_ID".into(), task.id.clone()),
+        ("KWANT_TASK_TITLE".into(), task.title.clone()),
+        ("KWANT_TASK_ACCEPTANCE".into(), task.acceptance.clone()),
+        ("KWANT_CHECK_ID".into(), check.id.clone()),
+        ("KWANT_CHECK_RUN".into(), run.to_string()),
+        ("KWANT_CHECK_ROUND".into(), round.to_string()),
+        ("KWANT_IDEMPOTENCY_KEY".into(), idempotency_key(&check.id, round)),
+    ]
+}
+
+/// A spec's whole-number field, or its default (validation keeps it in range; clamped anyway).
+fn spec_num(spec: &Value, key: &str, default: i64, range: std::ops::RangeInclusive<i64>) -> i64 {
+    spec[key].as_i64().unwrap_or(default).clamp(*range.start(), *range.end())
+}
+
+/// What a check is called to the person: its command or URL, cut short.
+pub fn check_label(c: &OutcomeCheck) -> String {
+    let spec = c.spec_value();
+    let what = match c.kind.as_str() {
+        "command" => spec["command"].as_str(),
+        "http" => spec["url"].as_str(),
+        _ => spec["path"].as_str(),
+    };
+    let what = super::autofix::redact(what.unwrap_or(&c.kind));
+    let what = what.trim();
+    if what.chars().count() > 80 {
+        format!("{}…", what.chars().take(79).collect::<String>())
+    } else {
+        what.to_string()
+    }
+}
+
 /// Runs `check` if kwant runs its kind and it is approved; stores the result and its evidence.
 pub async fn run_check(state: &AppState, task: &Task, check: &OutcomeCheck) -> OutcomeCheck {
+    run_check_at(state, task, check, Utc::now()).await
+}
+
+/// [`run_check`] at `now`, which schedules a waiting check's next run and judges its deadline.
+pub async fn run_check_at(state: &AppState, task: &Task, check: &OutcomeCheck, now: DateTime<Utc>) -> OutcomeCheck {
     if !KWANT_CHECK_KINDS.contains(&check.kind.as_str()) || !check.approved {
         return check.clone();
     }
     if !state.db.start_check(&check.id).await.unwrap_or(false) {
         return state.db.get_check(&check.id).await.ok().flatten().unwrap_or_else(|| check.clone());
     }
+    // The round: how many times the task went to review (at least 1, for a run before the first)
+    let round = state.db.review_rounds(&task.id).await.unwrap_or(0).max(1);
+    let run = state.db.count_check_run(&check.id, round).await.unwrap_or(1);
     super::emit_task(state, task).await;
     let folder = task_folder(state, task).await;
     let spec = check.spec_value();
@@ -310,12 +404,17 @@ pub async fn run_check(state: &AppState, task: &Task, check: &OutcomeCheck) -> O
         ("command", Some(dir)) => state.db.host_command_refusal(dir).await,
         _ => None,
     };
+    let env = check_env(task, check, run, round);
     let (status, output) = match refused {
         Some(why) => ("error".to_string(), why),
-        None => run_spec(&check.kind, &spec, folder.as_deref(), person_ok).await,
+        None => {
+            let (status, output, _) = run_spec_env(&check.kind, &spec, folder.as_deref(), person_ok, &env).await;
+            (status, output)
+        }
     };
     // The excerpt reaches bots and the API: credentials in the output never get stored
     let output = super::autofix::redact(&output);
+    let output = if status == "waiting" { format!("run {run}: not ready yet\n{output}") } else { output };
     let ev = state
         .db
         .add_evidence(&NewEvidence {
@@ -329,8 +428,75 @@ pub async fn run_check(state: &AppState, task: &Task, check: &OutcomeCheck) -> O
         })
         .await
         .ok();
-    let _ = state.db.finish_check(&check.id, &status, Some(&output), "kwant", ev.as_ref().map(|e| e.id.as_str())).await;
+    let ev_id = ev.as_ref().map(|e| e.id.as_str());
+    if status != "waiting" {
+        let _ = state.db.finish_check(&check.id, &status, Some(&output), "kwant", ev_id).await;
+        return state.db.get_check(&check.id).await.ok().flatten().unwrap_or_else(|| check.clone());
+    }
+    // "Not yet": no failure, no AutoFix, no bot turn; the missions tick runs it again when due
+    let wait_hours = spec_num(&spec, "wait_hours", DEFAULT_WAIT_HOURS, crate::db::missions::WAIT_HOURS);
+    let recheck = spec_num(&spec, "recheck_mins", DEFAULT_RECHECK_MINS, crate::db::missions::RECHECK_MINS);
+    // A later run keeps the round's deadline (the person may have moved it)
+    let first = run <= 1 || check.wait_until.is_none() || check.wait_round != round;
+    let deadline = if first { now + Duration::hours(wait_hours) } else { check.wait_until.unwrap_or(now) };
+    if now >= deadline {
+        let since = check.waiting_since.unwrap_or(now);
+        let hours = ((deadline - since).num_minutes() as f64 / 60.0).round() as i64;
+        let why = format!("{} didn't answer in {} h", check_label(check), hours.max(1));
+        let out = format!("{why}. Wait longer, or verify by hand.\n{output}");
+        let _ = state.db.time_out_check(&check.id, Some(&out), ev_id, now).await;
+        // One failure row, class waited_too_long: AutoFix never retries it
+        let text = format!("{} {}\n{}", check.kind, super::autofix::redact_value(&spec), out);
+        super::autofix::record(state, &task.id, "check", "waited_too_long", &text, &why).await;
+    } else {
+        let next = (now + Duration::minutes(recheck)).min(deadline);
+        let _ = state.db.wait_check(&check.id, Some(&output), ev_id, now, next, deadline).await;
+    }
     state.db.get_check(&check.id).await.ok().flatten().unwrap_or_else(|| check.clone())
+}
+
+/// Set while [`spawn_due`]'s run is going, so ticks don't stack runs of slow checks.
+static DUE_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// [`run_due`] at now, in the background, unless the last one is still going.
+pub fn spawn_due(state: &AppState) {
+    use std::sync::atomic::Ordering;
+    if DUE_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let state = state.clone();
+    tokio::spawn(async move {
+        struct Done;
+        impl Drop for Done {
+            fn drop(&mut self) {
+                DUE_RUNNING.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let _done = Done;
+        run_due(&state, Utc::now()).await;
+    });
+}
+
+/// Most waiting checks one tick runs; the rest are due on the next.
+const DUE_PER_TICK: i64 = 8;
+
+/// Runs the waiting checks due by `now` (tasks in review only), one after another, and evaluates
+/// each task after. Returns how many ran. The missions tick calls it; tests pass their own `now`.
+pub async fn run_due(state: &AppState, now: DateTime<Utc>) -> usize {
+    let due = state.db.due_waiting_checks(now, DUE_PER_TICK).await.unwrap_or_default();
+    let mut ran = 0;
+    for c in due {
+        let Ok(Some(task)) = state.db.get_task(&c.task_id).await else { continue };
+        if task.state != "review" {
+            continue;
+        }
+        run_check_at(state, &task, &c, now).await;
+        ran += 1;
+        if let Some(t) = evaluate(state, &task.id).await {
+            super::emit_task(state, &t).await;
+        }
+    }
+    ran
 }
 
 /// Whether the person approved `check` (`POST /api/checks/:id/approve`, or the mission it came in).
@@ -408,5 +574,33 @@ mod tests {
         assert!(out.contains("exit code 3") && out.contains("boom"), "{out}");
         assert_eq!(run_spec("command", &json!({"command": "true"}), None, true).await.0, "error", "no folder");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn exit_75_waits_only_for_mission_control() {
+        let dir = std::env::temp_dir().join(format!("kwnt-mc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = Some(dir.as_path());
+        let spec = json!({"command": "echo queued; exit 75"});
+        // The verifier, goals, Foundry and AutoFix read "not ready yet" as not passed
+        assert_eq!(run_spec("command", &spec, d, true).await.0, "failed");
+        let (status, out, _) = run_spec_env("command", &spec, d, true, &[]).await;
+        assert_eq!(status, "waiting");
+        assert!(out.contains("queued"), "{out}");
+        let env = vec![("KWANT_CHECK_RUN".to_string(), "3".to_string())];
+        let (status, out, _) = run_spec_env("command", &json!({"command": "echo run $KWANT_CHECK_RUN"}), d, true, &env).await;
+        assert_eq!(status, "passed");
+        assert!(out.contains("run 3"), "{out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_idempotency_key_is_per_check_and_round() {
+        let k = idempotency_key("c1", 1);
+        assert_eq!(k.len(), 64);
+        assert_eq!(k, idempotency_key("c1", 1), "stable across runs of a round");
+        assert_ne!(k, idempotency_key("c1", 2), "a new round, a new key");
+        assert_ne!(k, idempotency_key("c2", 1));
+        assert_eq!(k, hex(&Sha256::digest(b"c1:1")));
     }
 }
