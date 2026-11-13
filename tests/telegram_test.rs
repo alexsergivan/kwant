@@ -782,7 +782,7 @@ async fn a_turn_that_read_outside_text_or_that_kwant_started_has_no_allow_once()
     let started = ask_through_the_approver(&env, "turn-tg-started", "started_lookup", true);
     let k = tg.wait_send(&bot, |c| c.text().contains("<code>started_lookup</code>")).await;
     assert!(k.callbacks().is_empty(), "{:?}", k.buttons());
-    assert!(k.text().contains("kwant started this turn on its own, not from your message. Approve it in kwant."), "{}", k.text());
+    assert!(k.text().contains("Started on its own, not by you, so each change asks first. Approve it in kwant."), "{}", k.text());
     assert!(!k.text().contains("read text from outside"), "{}", k.text());
 
     kwnt::server::missions::truth_ledger::end_turn("turn-tg-taint");

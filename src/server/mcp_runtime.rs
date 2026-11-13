@@ -290,6 +290,10 @@ impl BrokerApprover {
         }
         if self.always_ask {
             details["always_ask"] = json!(true);
+            // The card picks its sentence from this, not from the label (Ada, #569 round 2)
+            if self.strict_ask {
+                details["strict_ask"] = json!(true);
+            }
             if let Some(label) = self.started_by.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
                 details["started_by"] = json!(label);
             }

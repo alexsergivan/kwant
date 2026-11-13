@@ -136,13 +136,40 @@ export const paymentReason = (approval: PendingApproval) => {
 };
 
 /**
+ * Who started a turn, as the card names it after "Started by": the server's raw label
+ * (`details.started_by`) mapped to a name people know (Mira's table, #569). Internal names
+ * nobody sees on screen become plain nouns; a label not listed shows its part before the first ":".
+ */
+const STARTED_BY_NAMES: Record<string, string> = {
+  'Loose ends: prepare drafts and next steps': 'Loose ends',
+  Watch: 'Watch',
+  Verify: 'a task check',
+  Audit: 'an audit',
+  'Goal draft': 'a goal draft',
+  'Skill Foundry': 'a skill draft',
+  'Skill Foundry replay': 'a skill draft’s test run',
+  'Idea jar': 'Idea jar',
+  'Show it once': 'Show it once',
+  'Dev mode card': 'Dev mode',
+};
+
+export const startedByName = (label: string) => {
+  const raw = label.trim();
+  return STARTED_BY_NAMES[raw] ?? (raw.split(':')[0].trim() || raw);
+};
+
+/**
  * Why a card asks although nobody typed a request: kwant started the turn on its own (the
- * server's `details.started_by`, e.g. "Loose ends"). Null on an ordinary turn's card.
+ * server's `details.started_by`). A strict turn (`details.strict_ask`, a Skill Foundry draft)
+ * asks even on Don’t ask, so it says so instead. Null on an ordinary turn's card.
  */
 export const startedByNote = (approval: PendingApproval) => {
   const label = approval.details?.started_by;
   if (typeof label !== 'string' || !label.trim()) return null;
-  return `This turn started on its own (${label.trim()}), so changes ask you.`;
+  const who = startedByName(label);
+  return approval.details?.strict_ask === true
+    ? `Started by ${who}, not by you. Skill drafts always ask, even on Don’t ask.`
+    : `Started by ${who}, not by you, so each change asks first. Bots on Don’t ask (Settings › This space) run these without a card.`;
 };
 
 /** The line under a still-open card's heading. */
@@ -240,7 +267,10 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const tier = payment ? null : tierReason(approval.details);
   const startedBy = payment || tier ? null : startedByNote(approval);
   const time = localClock(approval.asked_at);
-  const offerAlways = !shell && !waiting && !payment;
+  // A session allow doesn't count in a turn kwant started on its own (the server asks again),
+  // so those cards don't offer one.
+  const alwaysAsk = approval.details?.always_ask === true;
+  const offerAlways = !shell && !waiting && !payment && !alwaysAsk;
 
   const bot = botName ? <strong className="font-semibold text-zinc-50">{botName}</strong> : 'A bot';
   // "<Bot> wants to open a pull request on <Server>", the server in bold.
@@ -326,6 +356,11 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
       <p className="mt-2.5 text-base leading-6 text-zinc-200 break-words" data-approval-summary="">
         {bot} wants to {what}
       </p>
+      {startedBy && (
+        <p role="note" data-started-by className="mt-1 text-xs leading-[18px] text-zinc-400 break-words">
+          {startedBy}
+        </p>
+      )}
 
       {(shell || builtin?.kind === 'shell') && (
         <>
@@ -376,18 +411,12 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         </div>
       )}
 
-      {startedBy && (
-        <p role="note" data-started-by className="mt-2 text-xs leading-[18px] text-zinc-400 break-words">
-          {startedBy}
-        </p>
-      )}
-
       {details && <ApprovalDetails phone={phone}>{details}</ApprovalDetails>}
 
       {/* Allow on a row of its own, first; Deny and Always allow share the row under it. On a wider
           screen they sit in one row, right-aligned, with Allow last. Local shell approvals are never
-          remembered, a late answer only lets that one call run, and a payment always asks again,
-          so none of them gets an "always". */}
+          remembered, a late answer only lets that one call run, and a payment or a turn kwant
+          started on its own always asks again, so none of them gets an "always". */}
       <div data-approval-actions className="mt-3 flex flex-col gap-2 sm:flex-row-reverse sm:items-center sm:justify-start">
         <button
           type="button"

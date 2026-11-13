@@ -299,6 +299,8 @@ async fn a_strict_turn_still_asks_with_approvals_off() {
     let card = ask_with(&e, &e.bot, "Bash", json!({"command": "touch x"}), strict_started()).await.expect_err("strict asks");
     assert_eq!(card["always_ask"], true, "{card}");
     assert_eq!(card["started_by"], "Skill Foundry", "{card}");
+    // The card says "Skill drafts always ask" from this flag, not from the label
+    assert_eq!(card["strict_ask"], true, "{card}");
     // Reads still run (claude's own Read never reaches the approver), and so do kwnt's read tools
     let tool = format!("mcp__{}__search_history", kwnt::mcp::SELF_SERVER_NAME);
     assert_eq!(ask_with(&e, &e.bot, &tool, json!({}), strict_started()).await, Ok(true));
@@ -312,9 +314,11 @@ async fn with_approvals_on_a_kwant_started_turn_asks_and_says_who_started_it() {
     let card = ask_with(&e, &e.bot, "Bash", json!({"command": "touch x"}), kwant_started()).await.expect_err("asks");
     assert_eq!(card["always_ask"], true, "{card}");
     assert_eq!(card["started_by"], "Loose ends", "{card}");
-    // An ordinary turn's card has neither
+    // Not strict: the card points to Don’t ask instead
+    assert!(card.get("strict_ask").is_none(), "{card}");
+    // An ordinary turn's card has none of them
     let card = ask_with(&e, &e.bot, "Bash", json!({"command": "touch x"}), Default::default()).await.expect_err("asks");
-    assert!(card.get("always_ask").is_none() && card.get("started_by").is_none(), "{card}");
+    assert!(card.get("always_ask").is_none() && card.get("started_by").is_none() && card.get("strict_ask").is_none(), "{card}");
     // A blank label adds no line
     let blank = mcp_runtime::TurnApprovalOpts { started_by: Some("  ".into()), ..kwant_started() };
     let card = ask_with(&e, &e.bot, "Bash", json!({"command": "touch x"}), blank).await.expect_err("asks");
