@@ -708,6 +708,6 @@ mod tests {
         // No room for a suffix: the entry's name instead of a name build_server would refuse
         let long = "a".repeat(48);
         assert_eq!(install_name(Some(&long), "com.stripe/mcp", &none), long);
-        assert_eq!(install_name(Some(&long), "com.stripe/mcp", &[long.clone()]), "stripe");
+        assert_eq!(install_name(Some(&long), "com.stripe/mcp", std::slice::from_ref(&long)), "stripe");
     }
 }
