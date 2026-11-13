@@ -4,9 +4,11 @@
 
 use super::{lease_ms, transition, Actor};
 use crate::db::missions::{ClaimRefused, Mission, Task, TaskChange};
+use crate::server::busy_retry::{self, Slot as BusySlot};
 use crate::server::routes::{scope_for, turn_once, TurnOpts};
 use crate::server::AppState;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 pub const MAX_RUNNING: usize = 2;
@@ -230,23 +232,39 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
     let (channel, thread) = mission_place(m, bot);
     let reply = match scope_for(state, bot, channel, thread, &job, 0).await {
         Ok(scope) => {
-            let mut opts = TurnOpts::default();
-            (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(PURPOSE.into()));
-            // One notification per task outcome, sent below, not one per attempt
-            opts.quiet_finish = true;
+            let mut hint = None;
             let mut p = prompt(state, m, task).await;
             if let Some(note) = super::autofix::retry_note(state, task).await {
                 p.push_str(&note);
             }
             // C1: lessons from the bot's earlier tasks; held out for 1 in 5 tasks (still logged)
-            if let Some((block, hint)) = super::lessons::for_brief(state, &bot.id, &task.id).await {
+            if let Some((block, h)) = super::lessons::for_brief(state, &bot.id, &task.id).await {
                 if !block.is_empty() {
                     p.truncate(p.trim_end().len());
                     p.push_str(&block);
                 }
-                opts.task = Some(hint);
+                hint = Some(h);
             }
-            turn_once(&scope, bot, p, opts).await
+            // 0.9.6: nobody watches a runner turn, so a busy browser step it ends on is retried
+            // here with the hand-offs' bounds (see [`busy_retry::unwatched`]), while the task is
+            // still this bot's to work on; one that still ends busy fails the task as any failed
+            // turn does (below). Every retry is `quiet_finish` too: one notification per outcome
+            let mut first = true;
+            busy_retry::unwatched(&scope, &bot.name, &p, |p, slot| {
+                let mut opts = TurnOpts::default();
+                (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(PURPOSE.into()));
+                // One notification per task outcome, sent below, not one per attempt
+                opts.quiet_finish = true;
+                opts.task = hint.clone();
+                opts.busy_slot = Some(slot.clone());
+                let retry = !std::mem::replace(&mut first, false);
+                let (scope, task_id, bot_id) = (&scope, task.id.as_str(), bot.id.as_str());
+                attempt(retry, slot, move || still_held(state, task_id, bot_id), async move {
+                    // boxed, so the retry loop around the turn adds no stack to it
+                    Box::pin(turn_once(scope, bot, p, opts)).await
+                })
+            })
+            .await
         }
         Err(e) => Err(e),
     };
@@ -256,6 +274,43 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
     let err = reply.as_ref().err().map(ToString::to_string);
     after_turn(state, &task.id, err.as_deref(), started).await;
     notify_outcome(state, &task.id, &bot.id, &context, reply.is_ok()).await;
+}
+
+/// Why a busy browser step's retry didn't run: the task stopped being the runner's while it
+/// waited (the person took it, moved it on, or the mission let it go).
+pub const MOVED_ON: &str = "the task moved on while its busy browser step waited for a retry";
+
+/// One turn of a runner's [`busy_retry::retry_loop`]: a retry (`retry`) runs only while the task
+/// is still held ([`still_held`]), and a busy end is left in `slot` for a retry only if the task
+/// is still held after the turn: a bot that handed the task in, blocked it or asked the person
+/// meanwhile is not run again.
+async fn attempt<H, HF, T>(retry: bool, slot: BusySlot, held: H, turn: T) -> Result<String, String>
+where
+    H: Fn() -> HF,
+    HF: Future<Output = bool>,
+    T: Future<Output = Result<String, String>>,
+{
+    if retry && !held().await {
+        return Err(MOVED_ON.into());
+    }
+    let outcome = turn.await;
+    if let Some(step) = slot.take() {
+        if held().await {
+            slot.put(step);
+        }
+    }
+    outcome
+}
+
+/// Whether `task_id` is still `working` for `bot_id`. Renews its lease when it is, so a busy
+/// browser retry's cooldown (1 min, then 2) never runs a short lease out.
+async fn still_held(state: &AppState, task_id: &str, bot_id: &str) -> bool {
+    let Ok(Some(t)) = state.db.get_task(task_id).await else { return false };
+    let held = t.state == "working" && t.owner_kwant_id.as_deref() == Some(bot_id);
+    if held {
+        let _ = state.db.renew_claim(task_id, lease_ms(state).await).await;
+    }
+    held
 }
 
 /// The runner turn's one `turn_finished` notification: none while AutoFix has a retry of the task
@@ -340,6 +395,110 @@ pub async fn after_turn(state: &AppState, task_id: &str, err: Option<&str>, star
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::busy_retry::{retry_loop, Step};
+    use serde_json::json;
+    use std::collections::VecDeque;
+    use std::time::Duration;
+
+    fn act(args: serde_json::Value) -> Step {
+        Step { tool: "browser_act".into(), args: args.to_string() }
+    }
+
+    /// What a fake runner task did: the outcome, the prompts its turns got and the waits
+    /// (attempt, cooldown) between them.
+    struct Ran {
+        outcome: Result<String, String>,
+        prompts: Vec<String>,
+        waits: Vec<(u8, Duration)>,
+    }
+
+    /// A runner task through [`attempt`] and the same loop [`busy_retry::unwatched`] runs: turn n
+    /// replies "reply n" and ends on `step` where `busy[n]`; each "is the task still held?"
+    /// answers the next of `held` (then yes), as the database would.
+    async fn run_task(step: &Step, busy: &[bool], held: &[bool]) -> Ran {
+        let prompts = Mutex::new(Vec::new());
+        let waits = Mutex::new(Vec::new());
+        let held = Mutex::new(held.iter().copied().collect::<VecDeque<bool>>());
+        let mut first = true;
+        let outcome = retry_loop(
+            "[Mission Control] You hold task t1",
+            |p, slot| {
+                let retry = !std::mem::replace(&mut first, false);
+                let (prompts, held) = (&prompts, &held);
+                attempt(retry, slot.clone(), move || async move { held.lock().unwrap().pop_front().unwrap_or(true) }, async move {
+                    let n = {
+                        let mut ps = prompts.lock().unwrap();
+                        ps.push(p);
+                        ps.len() - 1
+                    };
+                    if busy.get(n).copied().unwrap_or(false) {
+                        slot.put(step.clone());
+                    }
+                    Ok(format!("reply {n}"))
+                })
+            },
+            |s, attempt, after| {
+                assert_eq!(&s, step, "the retry is for the same step");
+                waits.lock().unwrap().push((attempt, after));
+                async { true }
+            },
+        )
+        .await;
+        Ran { outcome, prompts: prompts.into_inner().unwrap(), waits: waits.into_inner().unwrap() }
+    }
+
+    #[tokio::test]
+    async fn a_task_turn_that_ends_busy_is_retried_twice_then_fails_as_today() {
+        let step = act(json!({"action": "scroll", "delta_y": 400}));
+        let ran = run_task(&step, &[true, true, true], &[]).await;
+        assert_eq!(ran.prompts.len(), 3, "the turn, then 2 retries, never a third");
+        assert_eq!(ran.prompts[0], "[Mission Control] You hold task t1");
+        for p in &ran.prompts[1..] {
+            assert!(p.contains("the browser was busy") && p.contains("`browser_act`"), "{p}");
+            assert_eq!(p.matches("You hold task t1").count(), 1, "the brief once");
+        }
+        assert_eq!(ran.waits, vec![(1, Duration::from_secs(60)), (2, Duration::from_secs(120))]);
+        // The turn's error, which `after_turn` records like any failed runner turn: AutoFix's
+        // `unknown` (one retry_same per task), never a class of its own
+        let err = ran.outcome.expect_err("the task fails once the retries are used up");
+        assert_eq!(err, "the browser stayed busy after 2 automatic retries of `browser_act`");
+        assert_eq!(super::super::autofix::classify("turn", "error", &err), "unknown");
+    }
+
+    #[tokio::test]
+    async fn a_task_turn_that_gets_through_on_retry_1_ends_with_that_reply() {
+        let ran = run_task(&act(json!({"action": "click", "ref": "e9"})), &[true, false], &[]).await;
+        assert_eq!(ran.outcome, Ok("reply 1".into()));
+        assert_eq!((ran.prompts.len(), ran.waits.len()), (2, 1));
+        // and one that never ends busy runs once, as before
+        let ran = run_task(&act(json!({})), &[false], &[]).await;
+        assert_eq!((ran.outcome, ran.prompts.len(), ran.waits.len()), (Ok("reply 0".into()), 1, 0));
+    }
+
+    #[tokio::test]
+    async fn a_busy_task_step_that_may_reach_outside_is_never_run_again() {
+        let send = act(json!({"action": "click", "ref": "e4", "name": "Send"}));
+        let ran = run_task(&send, &[true, true, true], &[]).await;
+        assert_eq!((ran.prompts.len(), ran.waits.len()), (1, 0), "straight to the one failure");
+        let err = ran.outcome.unwrap_err();
+        assert!(err.contains("may reach outside") && err.contains("wasn't run again by itself"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_task_the_bot_let_go_of_in_its_busy_turn_is_not_run_again() {
+        // It ended busy, but it handed the task in (or blocked it, or asked the person) first
+        let ran = run_task(&act(json!({"action": "scroll"})), &[true, true], &[false]).await;
+        assert_eq!(ran.outcome, Ok("reply 0".into()), "the turn's own reply, as before");
+        assert_eq!((ran.prompts.len(), ran.waits.len()), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn a_task_that_moved_on_during_the_cooldown_is_not_run_again() {
+        // Held when the busy turn ended, gone by the time the retry is due
+        let ran = run_task(&act(json!({"action": "scroll"})), &[true, true], &[true, false]).await;
+        assert_eq!(ran.outcome, Err(MOVED_ON.into()));
+        assert_eq!((ran.prompts.len(), ran.waits.len()), (1, 1), "no retry turn ran");
+    }
 
     #[test]
     fn slots_are_per_server_and_freed_when_dropped() {

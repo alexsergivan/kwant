@@ -40,8 +40,9 @@ use tower::ServiceExt;
 /// On a Mission Control prompt: logs the prompt (with the task it holds) to prompts.log next to
 /// itself, streams its usage so far (10 input, 10 output), moves the task to review through its
 /// kwant tools, then reports the same final usage: 20 fresh tokens a turn, all known at hand-in.
+/// A task titled SLOWBUSY: works 3 s, then ends without handing it in.
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
-import json, os, re, sys, urllib.request
+import json, os, re, sys, time, urllib.request
 args = sys.argv[1:]
 if args[:1] == ["auth"]:
     print('{"loggedIn":true}')
@@ -51,6 +52,12 @@ held = re.search(r"You hold task (\S+) of", prompt)
 if held and "--mcp-config" in args:
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts.log"), "a") as f:
         f.write(json.dumps({"task": held.group(1), "prompt": prompt}) + "\n")
+    if "SLOWBUSY" in prompt:
+        # A turn that works a while (for a test to see it running), then ends without hand-in
+        time.sleep(3)
+        print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": "still on it",
+                          "usage": {"input_tokens": 10, "output_tokens": 10}}))
+        sys.exit(0)
     start = {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 10, "output_tokens": 1}}}
     print(json.dumps({"type": "stream_event", "event": start}), flush=True)
     print(json.dumps({"type": "stream_event", "event": {"type": "message_delta", "usage": {"output_tokens": 10}}}), flush=True)
@@ -453,6 +460,61 @@ async fn a_failing_task_notifies_once_for_its_outcome_and_a_passing_one_still_no
     assert_eq!(got.len(), 2, "the passing task's turn notified once: {got:?}");
     assert!(attempts(&e, &t2).await.is_empty(), "no AutoFix attempt for a passing task");
     watch.abort();
+}
+
+// 0.9.6: nobody watches a runner turn, so one that ends on a busy browser step (by code) is
+// retried by kwnt with the hand-offs' bounds: the retry is said in the mission's chat, and the
+// task stays the bot's, `working`, with no failure recorded while the retry waits
+#[tokio::test]
+async fn a_mission_task_turn_that_ends_on_a_busy_browser_step_is_retried_and_the_task_stays_working() {
+    let e = setup().await;
+    autofix(&e, "on", 25).await;
+    let ann = cli_bot(&e).await;
+    let body = json!({"title": "Ship it", "goal": "a release", "lead_kwant_id": ann, "budget_tokens": 900_000,
+                      "channel_id": e.general, "tasks": [{"title": "SLOWBUSY", "owner": ann, "budget_tokens": 50_000,
+                      "checks": failing_check()}]});
+    let mid = id(&person(&e, "POST", "/api/missions", Some(body)).await);
+    let tid = id(&person(&e, "GET", &format!("/api/missions/{mid}"), None).await["tasks"][0]);
+    let row = e.state.db.get_mission(&mid).await.unwrap().unwrap();
+    std::fs::create_dir_all(&row.workspace_path).unwrap();
+    person(&e, "POST", &format!("/api/missions/{mid}/run"), Some(json!({"max_tasks": 1}))).await;
+
+    // Ann's runner turn is working: its last browser step is refused, the browser busy
+    let mut turn = None;
+    for _ in 0..200 {
+        turn = e.state.turns.active_turns().into_iter().find(|t| t.kwant_id == ann && t.state == "running");
+        if turn.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let turn = turn.expect("Ann's runner turn started");
+    kwnt::server::busy_retry::note(&turn.turn_id, "browser_act", &json!({"action": "scroll"}), true);
+
+    // When the turn ends, kwnt says the retry in the mission's chat, then waits its cooldown
+    let mut said = None;
+    for _ in 0..300 {
+        let msgs = e.state.db.list_messages(&e.general, 50).await.unwrap();
+        said = msgs.into_iter().find(|m| m.meta.as_deref().is_some_and(|x| x.contains("browser_busy_retry")));
+        if said.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let said = said.expect("the retry is said in the mission's chat");
+    let meta: Value = serde_json::from_str(said.meta.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["attempt"], 1, "{meta}");
+    assert!(said.text.contains("`browser_act`") && said.text.contains("retry 1 of 2"), "{}", said.text);
+    assert_eq!(said.sender_role, "system");
+
+    // ...while the task is still Ann's to work on: not failed, no failure recorded, no AutoFix run
+    let t = task(&e, &tid).await;
+    assert_eq!(t["state"], "working", "{t}");
+    assert_eq!(t["owner_kwant_id"], ann.as_str(), "{t}");
+    assert!(failures(&e, &tid).await.is_empty(), "no failure while the retry waits");
+    assert!(attempts(&e, &tid).await.is_empty(), "no AutoFix attempt while the retry waits");
+    assert_eq!(prompts(&tid).len(), 1, "the retry waits its cooldown first");
+    assert!(runner::is_running(&e.state, &mid), "the runner holds the task through the cooldown");
 }
 
 // 3
