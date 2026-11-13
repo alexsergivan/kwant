@@ -42,6 +42,7 @@ pub mod away;
 pub mod computer;
 pub mod mcp_suggest;
 pub mod page_source;
+pub mod tool_failures;
 pub mod tool_notes;
 pub mod connection_suggest;
 pub mod bot_actions;
@@ -406,6 +407,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/connections/telegram/unpair/undo", post(telegram::routes::undo_unpair))
         .route("/api/connections/telegram/test", post(telegram::routes::test))
         .route("/api/connections/composio", post(connections::add_composio))
+        .route("/api/connections/composio/switch", post(connections::switch_composio))
+        .route("/api/connections/composio/key", put(connections::replace_composio_key))
         .route("/api/connections/composio/apps", get(connections::search_composio_apps))
         .route("/api/connections/composio/apps/:slug/connect", post(connections::connect_composio_app))
         .route("/api/connections/composio/apps/:slug/status", get(connections::composio_app_status))

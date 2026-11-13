@@ -6,7 +6,7 @@
 //! person. The reply must be one JSON object; a reply that doesn't validate is asked for once more,
 //! then the card is `failed` with the reason and keeps its rule-based parts. Each try takes a call
 //! from the space's daily cap, which is a parameter of [`generate_with_cap`]; [`generate`] reads it
-//! from `KWANT_DEV_CALL_CAP` ([`super::call_cap`], 30 by default).
+//! from `KWANT_DEV_CALL_CAP` ([`super::call_cap`]; no cap when unset, since 0.9.5).
 //!
 //! Every card turn is asked with [`NO_TOOLS`]: the [`Model`] seam gets the tool list with each
 //! call, [`TurnModel`] refuses any other list, and the tests check the list stays empty.
@@ -30,8 +30,8 @@ pub fn cap_reason(cap: i64) -> String {
     format!("Today's {cap} Dev mode model calls for this space are used up; the card has only its rule-based parts.")
 }
 
-/// Generates the card `card_id` under the space's daily cap ([`super::call_cap`]:
-/// `KWANT_DEV_CALL_CAP`, else 30); see [`generate_with_cap`].
+/// Generates the card `card_id` under the space's daily cap ([`super::call_cap`]: none unless
+/// `KWANT_DEV_CALL_CAP` sets one); see [`generate_with_cap`].
 pub async fn generate(state: AppState, card_id: String) {
     generate_with_cap(state, card_id, super::call_cap()).await
 }
@@ -481,9 +481,8 @@ mod tests {
         (m.cap, m.calls_left) = (5, 0);
         let e = ask_json(&mut m, "P", parse).await.unwrap_err();
         assert!(e.starts_with("Today's 5 Dev mode model calls"), "{e}");
-        assert_eq!(cap_reason(crate::db::dev_mode::CALLS_CAP), cap_reason(30));
-        // generate() reads the space's cap from Lin's KWANT_DEV_CALL_CAP seam (30 when unset)
-        assert_eq!(super::super::call_cap(), crate::db::dev_mode::CALLS_CAP);
+        // generate() reads the space's cap from Lin's KWANT_DEV_CALL_CAP seam (no cap when unset)
+        assert_eq!(super::super::call_cap(), crate::db::dev_mode::NO_CALL_CAP);
     }
 
     #[test]
@@ -537,6 +536,35 @@ mod tests {
         assert!(db.take_dev_call_at("sp_b", now, 1).await.unwrap());
         assert!(db.take_dev_call_at("sp_a", now, 3).await.unwrap());
         assert_eq!(db.dev_calls_on("sp_a", &super::super::utc_day(now)).await.unwrap(), 3);
+    }
+
+    /// 0.9.5: cards the old 30-call cap failed go back to pending (recent ones only); a card that
+    /// failed for another reason, a ready one and a stale one stay as they are.
+    #[tokio::test]
+    async fn cards_the_old_cap_failed_go_back_to_pending() {
+        use crate::db::dev_mode::{PENDING, STALE};
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
+        let mut ids = Vec::new();
+        for (i, (status, error)) in [(FAILED, cap_reason(30)), (FAILED, "`intent` is missing".to_string()), (READY, String::new()), (STALE, cap_reason(30))].into_iter().enumerate() {
+            let row = db.insert_dev_card("sp_a", REVIEW, &format!("pr-{i}"), &format!("sha{i}"), "{}").await.unwrap().unwrap();
+            let card = serde_json::json!({"kind": REVIEW, "error": error, "risk": {"level": "low"}}).to_string();
+            db.set_dev_card(&row.id, status, Some(&card)).await.unwrap();
+            ids.push(row.id);
+        }
+        // A cap failure from before the window stays failed
+        assert_eq!(db.requeue_capped_dev_cards(chrono::Utc::now() + chrono::Duration::minutes(1)).await.unwrap(), 0);
+        assert_eq!(db.requeue_capped_dev_cards(chrono::Utc::now() - chrono::Duration::days(3)).await.unwrap(), 1);
+        let status = |i: usize| {
+            let (db, id) = (&db, ids[i].clone());
+            async move { db.dev_card(&id).await.unwrap().unwrap().status }
+        };
+        assert_eq!(status(0).await, PENDING);
+        assert_eq!(status(1).await, FAILED);
+        assert_eq!(status(2).await, READY);
+        assert_eq!(status(3).await, STALE);
+        let pending: Vec<String> = db.pending_dev_cards().await.unwrap().into_iter().map(|r| r.id).collect();
+        assert_eq!(pending, vec![ids[0].clone()]);
     }
 
     #[test]

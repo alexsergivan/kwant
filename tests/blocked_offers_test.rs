@@ -90,7 +90,8 @@ async fn a_connection_suggestion_posts_one_card_per_app_with_the_steps() {
     let cards: Vec<_> = messages(&env, &env.a).await.into_iter().filter(|m| m.text.starts_with("Suggested connection:")).collect();
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].sender_role, "kwant");
-    assert!(cards[0].text.contains("find Google Search Console and press Connect"), "{}", cards[0].text);
+    assert!(cards[0].text.contains("then find Google Search Console under Composio in Apps & accounts and press Connect"), "{}", cards[0].text);
+    assert!(cards[0].text.contains("add Composio with your free key in Apps & accounts"), "{}", cards[0].text);
     let meta: Value = serde_json::from_str(cards[0].meta.as_deref().unwrap()).unwrap();
     assert_eq!(meta["kind"], "connection_suggestion");
     assert_eq!(meta["app"], "google_search_console");
@@ -138,7 +139,7 @@ async fn with_composio_ready_the_card_goes_straight_to_connect() {
     let card = messages(&env, &env.a).await.into_iter().find(|m| m.text.starts_with("Suggested connection: Google Analytics")).unwrap();
     let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap()).unwrap();
     assert_eq!(meta["composio"], "ready");
-    assert!(card.text.contains("To connect it, open Connections"), "{}", card.text);
+    assert!(card.text.contains("To connect it, find Google Analytics under Composio in Apps & accounts"), "{}", card.text);
 }
 
 #[tokio::test]

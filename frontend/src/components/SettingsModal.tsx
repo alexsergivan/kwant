@@ -4,6 +4,7 @@ import { AuditorModelSetting } from './AuditorModelSetting';
 import { Key, X, Settings, Check, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare, BellRing } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { DailyUsagePanel } from './DailyUsage';
+import { BudgetOverview } from './BotBudget';
 import { SpendStopFields, StopFields, forgetToday } from './SpendStop';
 import { stopBody, stopFieldsFromSettings } from '../spendStop';
 import { CodingAgents } from './CodingAgents';
@@ -255,10 +256,12 @@ interface SettingsModalProps {
   tokensUsed?: number;
   /** Inside Settings › All spaces: no dialog frame, no close button, Escape is the parent's. */
   embedded?: boolean;
-  /** Opens Settings › This space › Accounts, where the API keys and Ollama address live. */
+  /** Opens Settings › This space › Apps & accounts, where the API keys and Ollama address live. */
   onOpenApiKeys?: () => void;
   /** A switch to scroll to and focus once loaded, by its row id ("idea-jar" from the jar's Settings button). */
   focusRow?: string | null;
+  /** 0.9.5: opens a bot's settings at its monthly budget (the overview's Set / Change). */
+  onOpenBotBudget?: (kwantId: string) => void;
 }
 
 /** App settings: shared by every space (keys, Laya, limits, notifications, sounds). Accounts,
@@ -305,7 +308,7 @@ const DiscoverySetting: React.FC<{ value: DiscoverySettings; onChange: (v: Disco
   );
 };
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys, focusRow = null }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys, focusRow = null, onOpenBotBudget }) => {
   const { authRequired, deviceLogin, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
   const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
@@ -689,7 +692,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         {/* Saves at once, so it sits outside the Settings form (its own Create form can't nest). */}
         <CodingAgents currentSpace={getCurrentSpace()} />
 
-        {/* App settings form; API keys moved to Settings › This space › Accounts */}
+        {/* App settings form; API keys moved to Settings › This space › Apps & accounts */}
         <form onSubmit={handleSave} onChange={(e) => isTextField(e.target) && setTyped(true)} {...editorProps(typed)} className="space-y-4">
           {onOpenApiKeys && (
             <button
@@ -704,7 +707,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               <Key size={14} className="text-violet-400" aria-hidden="true" />
               <span className="flex-1">
                 <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
-                <span className="block text-[11px] text-zinc-500">Now in Settings › This space › Accounts, next to the accounts that use them.</span>
+                <span className="block text-[11px] text-zinc-500">Now in Settings › This space › Apps & accounts, next to the accounts that use them.</span>
               </span>
               <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />
             </button>
@@ -808,7 +811,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </fieldset>
           )}
 
-          <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
+          <fieldset className="min-w-0 space-y-3 pt-2 border-t border-zinc-800">
             <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
               <Gauge size={14} className="text-sky-300" aria-hidden="true" />
               <span>Usage</span>
@@ -851,6 +854,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             )}
             {spendStop !== null && <SpendStopFields value={spendStop} onChange={setSpendStop} open={isOpen} savedKey={spendSaved} />}
             <DailyUsagePanel open={isOpen} />
+            <BudgetOverview open={isOpen} onOpenBot={onOpenBotBudget} />
           </fieldset>
 
           {agentTools !== null && (

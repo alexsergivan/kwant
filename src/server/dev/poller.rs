@@ -118,7 +118,8 @@ pub fn is_fresh(at: Option<DateTime<Utc>>, now: DateTime<Utc>, days: u32) -> boo
 }
 
 /// Starts the poller, after picking up what a restart left: pending cards go to `generate`
-/// again, and a Fix it whose task never went out is sent.
+/// again (with the last [`CAPPED_REDO_DAYS`] days' cards that failed only on the old daily call
+/// cap, while there is no cap), and a Fix it whose task never went out is sent.
 pub fn spawn(state: AppState, shutdown: CancellationToken) {
     tokio::spawn(async move {
         recover(&state).await;
@@ -151,7 +152,17 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) {
     });
 }
 
+/// How far back a restart writes again the cards the old 30-call cap failed (0.9.5).
+pub const CAPPED_REDO_DAYS: i64 = 3;
+
 async fn recover(state: &AppState) {
+    if super::shown_cap().is_none() {
+        match state.db.requeue_capped_dev_cards(Utc::now() - Duration::days(CAPPED_REDO_DAYS)).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("dev: writing {n} card(s) again that the old daily call cap failed"),
+            Err(e) => tracing::warn!("dev: could not put capped cards back: {e}"),
+        }
+    }
     match state.db.pending_dev_cards().await {
         Ok(rows) => {
             for r in rows {

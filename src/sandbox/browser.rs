@@ -2,7 +2,7 @@ use futures::{SinkExt, StreamExt};
 use super::credentials::CredentialStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -50,8 +50,76 @@ async fn guard_app_links(ws: &mut WsStream, msg_id: &AtomicU64) {
 }
 
 pub(crate) async fn connect_cdp(url: &str) -> Result<WsStream, BrowserError> {
-    let (ws, _) = connect_async(cdp_ws_request(url)?).await.map_err(|e| BrowserError::Ws(e.to_string()))?;
+    // A browser starved of memory can accept the TCP connection and never finish the upgrade:
+    // that is a timeout (busy, try again), not a dead browser.
+    let (ws, _) = timeout(CDP_CONNECT_TIMEOUT, connect_async(cdp_ws_request(url)?)).await
+        .map_err(|_| BrowserError::Timeout)?
+        .map_err(|e| BrowserError::Ws(e.to_string()))?;
     Ok(ws)
+}
+
+/// One command on `ws` before it is handed out (waking a page), with a short deadline.
+async fn raw_call(ws: &mut WsStream, msg_id: &AtomicU64, method: &str, params: Value) -> Result<Value, BrowserError> {
+    let id = msg_id.fetch_add(1, Ordering::SeqCst);
+    let request = json!({"id": id, "method": method, "params": params});
+    ws.send(Message::Text(request.to_string())).await.map_err(|e| BrowserError::Ws(e.to_string()))?;
+    timeout(Duration::from_secs(5), await_reply(ws, id)).await.map_err(|_| BrowserError::Timeout)?.and_then(|r| r)
+}
+
+/// How long opening a DevTools WebSocket may take.
+const CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A DevTools `/json` request that failed: [`BrowserError::Timeout`] when it timed out, so a busy
+/// browser is told apart from one that isn't there; otherwise the error with its causes ("error
+/// sending request" alone doesn't say the connection was refused).
+fn http_error(error: reqwest::Error) -> BrowserError {
+    if error.is_timeout() {
+        return BrowserError::Timeout;
+    }
+    let mut text = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    BrowserError::Http(text)
+}
+
+/// Why the browser couldn't be used, as far as what to do next goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outage {
+    /// It is there but didn't answer in time (overloaded, out of memory, mid-restart): retry soon.
+    Busy,
+    /// Nothing listens at its address, the name doesn't resolve, or Docker isn't running.
+    Unreachable,
+    /// Anything else (Chrome refused a command, a person holds the page, ...).
+    Other,
+}
+
+/// Classifies a failed browser call (see [`Outage`]). Only a refused connection, a failed name
+/// lookup or a Docker failure is [`Outage::Unreachable`]; a timeout or a dropped connection is
+/// [`Outage::Busy`].
+pub fn outage(error: &BrowserError) -> Outage {
+    const UNREACHABLE: [&str; 9] = [
+        "connection refused", "dns error", "failed to lookup address", "name or service not known",
+        "no such host", "network is unreachable", "no route to host", "cannot connect to the docker daemon",
+        "docker:",
+    ];
+    match error {
+        BrowserError::Timeout => Outage::Busy,
+        BrowserError::Http(text) | BrowserError::Ws(text) | BrowserError::Protocol(text) => {
+            let text = text.to_ascii_lowercase();
+            if UNREACHABLE.iter().any(|u| text.contains(u)) {
+                Outage::Unreachable
+            } else if matches!(error, BrowserError::Protocol(_)) && !text.contains("connection closed before response") {
+                Outage::Other
+            } else {
+                Outage::Busy
+            }
+        }
+        _ => Outage::Other,
+    }
 }
 
 /// Reads `ws` until the reply to command `id`. The outer `Err` means the connection broke (closed
@@ -1153,6 +1221,29 @@ pub struct BrowserController {
     /// [`super::popups::Popups::generation`] when `ws_conn` was opened: a newer one means the
     /// page in front changed and the next command reconnects to it.
     ws_generation: Arc<AtomicU64>,
+    /// The page may be frozen (see [`Self::freeze`]): the next command wakes it first.
+    needs_wake: Arc<AtomicBool>,
+    /// How many live views show this page now: a watched page is never frozen.
+    watchers: Arc<AtomicUsize>,
+}
+
+/// Stops media in a page that is put to rest, so a feed or video doesn't keep decoding. Media it
+/// muted is unmuted when the page wakes ([`UNMUTE_SCRIPT`]); nothing resumes playing by itself.
+const REST_MEDIA_SCRIPT: &str = r#"(() => { let n = 0;
+  for (const m of document.querySelectorAll('video, audio')) {
+    if (!m.paused) { m.pause(); n++; }
+    if (!m.muted) { m.muted = true; m.dataset.kwntMuted = '1'; }
+  }
+  return n; })()"#;
+const UNMUTE_SCRIPT: &str = r#"(() => { for (const m of document.querySelectorAll('[data-kwnt-muted]')) { m.muted = false; delete m.dataset.kwntMuted; } })()"#;
+
+/// Counts one live view of a page while it lives (see [`BrowserController::watch`]).
+pub struct WatchGuard(Arc<AtomicUsize>);
+
+impl Drop for WatchGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Widest screenshot a bot gets, in pixels, and the narrowest width it may ask for.
@@ -1220,7 +1311,85 @@ impl BrowserController {
             site_guard: Arc::default(),
             popups: Arc::default(),
             ws_generation: Arc::default(),
+            needs_wake: Arc::default(),
+            watchers: Arc::default(),
         }
+    }
+
+    /// Puts an idle page to rest: pauses its media, then freezes it (Chrome stops its timers,
+    /// animation frames and network tasks; the page keeps its state and still answers DevTools).
+    /// The next command through this controller, or any controller of the page made later,
+    /// wakes it first (see [`Self::wake_before_use`]).
+    pub async fn freeze(&self) -> Result<(), BrowserError> {
+        self.send_cdp_command("Runtime.evaluate", json!({"expression": REST_MEDIA_SCRIPT, "returnByValue": true})).await?;
+        // marked and frozen under the connection's lock, so no command slips in between and
+        // finds the page frozen but unmarked
+        let mut guard = self.ws_conn.lock().await;
+        self.ensure_connected(&mut guard).await?;
+        self.needs_wake.store(true, Ordering::SeqCst);
+        let frozen = raw_call(guard.as_mut().unwrap(), &self.msg_id, "Page.setWebLifecycleState", json!({"state": "frozen"})).await;
+        if frozen.is_err() { *guard = None; }
+        frozen.map(|_| ())
+    }
+
+    /// Sends the page to about:blank (a team page idle for hours: its site's memory is freed; the
+    /// team's cookies are kept in its jar first).
+    pub async fn blank(&self) -> Result<(), BrowserError> {
+        self.persist_cookies().await;
+        self.send_cdp_command("Page.navigate", json!({"url": "about:blank"})).await?;
+        *self.current_url.lock().await = Some("about:blank".into());
+        *self.current_title.lock().await = Some(String::new());
+        Ok(())
+    }
+
+    /// Whether the page may be frozen, so its next command wakes it.
+    pub fn needs_wake(&self) -> bool { self.needs_wake.load(Ordering::SeqCst) }
+
+    /// Marks the page as possibly frozen, by an earlier controller or an earlier run of kwant:
+    /// its next command wakes it.
+    pub fn wake_before_use(&self) { self.needs_wake.store(true, Ordering::SeqCst); }
+
+    /// Wakes the page now if it may be frozen (the live view, which talks to the page on its own
+    /// connection, calls this first).
+    pub async fn wake(&self) -> Result<(), BrowserError> {
+        if self.needs_wake() {
+            self.send_cdp_command("Runtime.evaluate", json!({"expression": "1", "returnByValue": true})).await?;
+        }
+        Ok(())
+    }
+
+    /// Counts a live view of this page until the guard drops: a watched page is never frozen.
+    pub fn watch(&self) -> WatchGuard {
+        self.watchers.fetch_add(1, Ordering::SeqCst);
+        WatchGuard(self.watchers.clone())
+    }
+
+    /// How many live views show this page now.
+    pub fn watchers(&self) -> usize { self.watchers.load(Ordering::SeqCst) }
+
+    /// On `ws`, the page's own connection: makes the page active again and shows its window
+    /// once more. Chrome keeps a page that was frozen "hidden" after it is made active (its
+    /// screencast sends no frames and `requestAnimationFrame` never runs); minimizing its window
+    /// and restoring it makes it visible again (checked on kwnt-browser's Chrome 156).
+    async fn wake_page(&self, ws: &mut WsStream) -> Result<(), BrowserError> {
+        let id = &self.msg_id;
+        // Chrome refusing the method (an error reply, which await_reply gives as the error's
+        // JSON) leaves nothing frozen to wake; a page that doesn't answer, or a dead socket, fails
+        match raw_call(ws, id, "Page.setWebLifecycleState", json!({"state": "active"})).await {
+            Err(BrowserError::Protocol(reply)) if reply.starts_with('{') => {}
+            Err(error) => return Err(error),
+            Ok(_) => {}
+        }
+        if let Ok(window) = raw_call(ws, id, "Browser.getWindowForTarget", json!({})).await {
+            if let Some(window) = window["windowId"].as_i64() {
+                for state in ["minimized", "normal"] {
+                    let bounds = json!({"windowId": window, "bounds": {"windowState": state}});
+                    let _ = raw_call(ws, id, "Browser.setWindowBounds", bounds).await;
+                }
+            }
+        }
+        let _ = raw_call(ws, id, "Runtime.evaluate", json!({"expression": UNMUTE_SCRIPT})).await;
+        Ok(())
     }
 
     /// Sets the fixed viewport of a windowless browser, and remembers it so a sized screenshot
@@ -1333,7 +1502,15 @@ impl BrowserController {
         // 1. Try /json/list to get active Page target
         let list_url = format!("{}/json/list", self.endpoint);
         if !self.browser_level {
-        if let Ok(resp) = client.get(&list_url).header(reqwest::header::HOST, "localhost").send().await {
+        let listed = client.get(&list_url).header(reqwest::header::HOST, "localhost").send().await;
+        // a page's own list request that timed out or was refused is the browser's state, not a
+        // sign its page is gone
+        if let Err(e) = &listed {
+            if self.target_id.is_some() || e.is_timeout() {
+                return Err(http_error(listed.err().unwrap()));
+            }
+        }
+        if let Ok(resp) = listed {
             if let Ok(targets) = resp.json::<Vec<Value>>().await {
                 let pages: Vec<&Value> = targets.iter().filter(|t| t["type"] == "page").collect();
                 let chain = self.popups.chain();
@@ -1374,9 +1551,9 @@ impl BrowserController {
             .header(reqwest::header::HOST, "localhost")
             .send()
             .await
-            .map_err(|e| BrowserError::Http(e.to_string()))?;
+            .map_err(http_error)?;
 
-        let json: Value = resp.json().await.map_err(|e| BrowserError::Http(e.to_string()))?;
+        let json: Value = resp.json().await.map_err(http_error)?;
         let advertised = json["webSocketDebuggerUrl"]
             .as_str()
             .ok_or_else(|| BrowserError::Protocol("Missing webSocketDebuggerUrl".into()))?;
@@ -1394,8 +1571,8 @@ impl BrowserController {
             .header(reqwest::header::HOST, "localhost")
             .send()
             .await
-            .map_err(|e| BrowserError::Http(e.to_string()))?;
-        resp.json().await.map_err(|e| BrowserError::Http(e.to_string()))
+            .map_err(http_error)?;
+        resp.json().await.map_err(http_error)
     }
 
     /// Starts following the popups the bot's page opens, unless that is already running.
@@ -1506,6 +1683,16 @@ impl BrowserController {
     ) -> Result<Value, BrowserError> {
         let mut guard = self.ws_conn.lock().await;
         self.ensure_connected(&mut guard).await?;
+        if !self.browser_level && self.needs_wake.load(Ordering::SeqCst) {
+            match self.wake_page(guard.as_mut().unwrap()).await {
+                Ok(()) => self.needs_wake.store(false, Ordering::SeqCst),
+                Err(e) => {
+                    // stays marked, so the next command tries again on a new connection
+                    *guard = None;
+                    return Err(e);
+                }
+            }
+        }
 
         let id = self.msg_id.fetch_add(1, Ordering::SeqCst);
         let request = json!({
@@ -2454,5 +2641,40 @@ mod view_claim_tests {
         claims.claim(size(1, 1000));
         assert_eq!(claims.release(1), ViewRelease::Reapply(size(2, 390)));
         assert_eq!(claims.release(2), ViewRelease::Restore);
+    }
+}
+
+#[cfg(test)]
+mod outage_tests {
+    use super::{outage, BrowserError, Outage};
+
+    #[test]
+    fn a_browser_that_does_not_answer_in_time_is_busy() {
+        assert_eq!(outage(&BrowserError::Timeout), Outage::Busy);
+        // a socket that broke mid-answer, or a /json request that failed some other way
+        assert_eq!(outage(&BrowserError::Ws("Connection reset without closing handshake".into())), Outage::Busy);
+        assert_eq!(outage(&BrowserError::Http("error sending request: connection closed before message completed".into())), Outage::Busy);
+        // Chrome dropped the page's socket before it answered
+        assert_eq!(outage(&BrowserError::Protocol("Connection closed before response".into())), Outage::Busy);
+    }
+
+    #[test]
+    fn nothing_at_the_address_is_unreachable() {
+        for text in [
+            "error sending request for url (http://127.0.0.1:9/json/version): client error (Connect): tcp connect error: Connection refused (os error 111)",
+            "error sending request: dns error: failed to lookup address information: Name or service not known",
+            "IO error: Connection refused (os error 111)",
+        ] {
+            assert_eq!(outage(&BrowserError::Http(text.into())), Outage::Unreachable, "{text}");
+            assert_eq!(outage(&BrowserError::Ws(text.into())), Outage::Unreachable, "{text}");
+        }
+        assert_eq!(outage(&BrowserError::Protocol("docker: Cannot connect to the Docker daemon".into())), Outage::Unreachable);
+    }
+
+    #[test]
+    fn everything_else_is_neither() {
+        assert_eq!(outage(&BrowserError::Protocol("{\"code\":-32000,\"message\":\"No target with given id\"}".into())), Outage::Other);
+        assert_eq!(outage(&BrowserError::HumanControl), Outage::Other);
+        assert_eq!(outage(&BrowserError::Navigation("net::ERR_NAME_NOT_RESOLVED".into())), Outage::Other);
     }
 }

@@ -189,7 +189,7 @@ export const SpendStopNeedsYou: React.FC<{ send?: typeof fetch; onOpenSettings?:
   }, [focusSeq]);
   if (!item) return null;
   return (
-    <section ref={box} aria-labelledby="needs-spend-h" data-needs-spend-stop>
+    <section ref={box} aria-labelledby="needs-spend-h" data-needs-spend-stop data-needs-you>
       <h3 id="needs-spend-h" className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
         <Gauge size={12} aria-hidden="true" />
         Needs you

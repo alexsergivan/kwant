@@ -186,7 +186,8 @@ export const needsAttention = (status: string) => status === 'needs_sign_in' || 
 export function countsLine(list: Connection[]): string {
   if (list.length === 0) return 'Nothing connected yet';
   const connected = list.filter((c) => c.status === 'connected').length;
-  const attention = list.filter((c) => needsAttention(c.status)).length;
+  // An AI account no bot uses isn't something the person has to fix (Apps & accounts, 0.9.5).
+  const attention = list.filter((c) => needsAttention(c.status) && !(c.kind === 'account' && c.used_by.length === 0)).length;
   const off = list.filter((c) => c.status === 'off').length;
   const parts = [`${connected} connected`];
   if (attention) parts.push(`${attention} ${attention === 1 ? 'needs' : 'need'} you`);
@@ -242,15 +243,15 @@ export interface ComposioBody {
 /** The add form as the API wants it, or why it can't be sent yet. */
 export function composioBody(url: string, apiKey: string, enabled: boolean): ComposioBody | { error: string } {
   const u = url.trim();
-  if (!u) return { error: 'Paste the MCP URL from your Composio dashboard.' };
-  if (!isComposioUrl(u)) return { error: 'That isn’t a Composio address. It should start with https:// and end in composio.dev.' };
+  if (!u) return { error: 'Paste your Composio link first. It’s under MCP in Composio.' };
+  if (!isComposioUrl(u)) return { error: 'That isn’t a Composio link. Copy the one under MCP in Composio; it starts with https:// and is on composio.dev.' };
   const key = apiKey.trim();
   return key ? { url: u, api_key: key, enabled } : { url: u, enabled };
 }
 
 /** What the add form says when the server refuses. */
 export function composioErrorText(e: unknown): string {
-  if (e instanceof ConnectionsError && e.status === 409) return 'Composio is already added. Change it under Tools instead.';
+  if (e instanceof ConnectionsError && e.status === 409) return 'Composio is already added. Change it under Advanced instead.';
   if (e instanceof ConnectionsError && e.status === 400) return e.message;
   return e instanceof Error ? e.message : 'Something went wrong.';
 }
