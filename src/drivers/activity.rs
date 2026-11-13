@@ -53,6 +53,11 @@ pub struct Step {
     pub ended_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// The title of the page a bot browser open/navigate step landed on (see [`opens_page`]),
+    /// redacted and cut to [`MAX_TITLE`], once the step ends. Missing for every other step, and
+    /// on replies saved before 0.9.8.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_title: Option<String>,
     #[serde(skip)]
     clock: Option<Instant>,
 }
@@ -128,6 +133,7 @@ impl ActivityLog {
             started_at: now(),
             ended_at: None,
             duration_ms: None,
+            page_title: None,
             clock: Some(Instant::now()),
         });
         Some(self.steps.len() - 1)
@@ -197,6 +203,13 @@ impl ActivityLog {
                     let failed = failed_reason(result);
                     if let Some(Some(why)) = failed {
                         self.steps[i].detail = Some(cut(&self.redact(why), MAX_DETAIL));
+                    }
+                    if failed.is_none() && self.steps[i].tool.as_deref().is_some_and(opens_page) {
+                        self.steps[i].page_title = result["title"]
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|t| !t.is_empty())
+                            .map(|t| cut(&self.redact(t), MAX_TITLE));
                     }
                     changed.push(self.end(i, if failed.is_some() { "failed" } else { "ok" }));
                 }
@@ -497,6 +510,40 @@ const TOKEN_PREFIXES: [&str; 12] = [
 
 /// Masks secrets in text shown to people: the exact `secrets`, then credentials written as
 /// `key=value`, `Bearer …`, URL passwords and provider-looking tokens.
+/// Own names (after any `mcp__<server>__` prefix) of the bot browser tools that open or move to a
+/// page: kwnt's `browser_open` and `browser_navigate`, and the `navigate` / `open_url` of browser
+/// tool servers. The same list the chat's page trail counts (`frontend/src/browserPages.ts`).
+/// WebFetch isn't one: it never touches the bot's browser.
+pub const PAGE_OPEN_TOOLS: [&str; 4] = ["browser_open", "browser_navigate", "navigate", "open_url"];
+
+/// Whether a tool (`browser_open`, `mcp__kwnt__browser_open`, …) opens a page in the bot's browser.
+pub fn opens_page(tool: &str) -> bool {
+    PAGE_OPEN_TOOLS.contains(&tool.rsplit("__").next().unwrap_or(tool))
+}
+
+/// The page title in the text a page-opening browser tool answered with: the `title` of the page
+/// JSON it returns (kwnt's `browser_open`), or of the page after a note ("…\n\nThe page now:\n{…}").
+/// Drivers put it on the finished tool call's result as `title`, for [`Step::page_title`].
+pub fn page_title_in(text: &str) -> Option<String> {
+    let text = text.trim();
+    let page = serde_json::from_str::<Value>(text).ok().or_else(|| {
+        let at = text.rfind("\n{")?;
+        serde_json::from_str::<Value>(&text[at + 1..]).ok()
+    })?;
+    page["title"].as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string)
+}
+
+/// The finished tool call's result with the page title on it (`title`), when the tool opens a
+/// page and its answer (`text`) names one. Other results pass as they are.
+pub fn with_page_title(mut result: Value, tool: &str, text: &str) -> Value {
+    if opens_page(tool) && failed_reason(&result).is_none() {
+        if let (Some(title), Some(obj)) = (page_title_in(text), result.as_object_mut()) {
+            obj.insert("title".into(), Value::String(title));
+        }
+    }
+    result
+}
+
 /// A finished tool call's result: `None` when it went fine, `Some(why)` when its step is
 /// `failed` (error, failed, denied or cancelled), with the reason it gave, trimmed, if any. The
 /// one rule for "a tool failed", shared with the chat's failure line (`server::tool_failures`).
@@ -956,5 +1003,83 @@ mod tests {
         ] {
             assert_eq!(redact(text, &[]), want);
         }
+    }
+
+    fn opened(id: &str, result: Value) -> RuntimeEvent {
+        RuntimeEvent::ToolCallCompleted { id: id.into(), result }
+    }
+
+    /// 0.9.8 browser panel: a bot browser open/navigate step keeps the title of the page it
+    /// landed on, under any MCP prefix, so a saved reply's page trail shows titles after a reload.
+    #[test]
+    fn a_browser_open_step_keeps_the_page_title() {
+        for tool in ["browser_open", "mcp__kwnt__browser_open", "mcp__kwnt_tools__browser_open", "browser_navigate", "mcp__playwright__navigate", "open_url"] {
+            let mut log = ActivityLog::default();
+            log.observe(&pending("b", tool, json!({"url": "http://roastco.example.com/"})));
+            assert!(log.steps()[0].page_title.is_none(), "no title while it runs");
+            let ended = log.observe(&opened("b", json!({"status": "ok", "title": "  RoastCo · Shop "})));
+            assert_eq!(ended[0].page_title.as_deref(), Some("RoastCo · Shop"), "{tool}");
+            assert_eq!(log.to_json()["steps"][0]["page_title"], "RoastCo · Shop", "{tool}: saved on the reply");
+        }
+    }
+
+    #[test]
+    fn other_steps_get_no_page_title() {
+        let mut log = ActivityLog::default();
+        // WebFetch never touches the bot's browser; a GitHub issue's title isn't a page
+        for (id, tool) in [("1", "WebFetch"), ("2", "mcp__github__create_issue"), ("3", "mcp__kwnt__browser_page"), ("4", "Bash")] {
+            log.observe(&pending(id, tool, json!({"url": "https://example.com"})));
+            let ended = log.observe(&opened(id, json!({"status": "ok", "title": "Some title"})));
+            assert_eq!(ended[0].page_title, None, "{tool}");
+        }
+        // An open that failed, or a page with no title (or a blank one), has none either
+        for (id, result) in [
+            ("5", json!({"status": "error", "error": "net::ERR_NAME_NOT_RESOLVED", "title": "x"})),
+            ("6", json!({"status": "ok"})),
+            ("7", json!({"status": "ok", "title": "   "})),
+            ("8", json!({"status": "ok", "title": 42})),
+        ] {
+            log.observe(&pending(id, "mcp__kwnt__browser_open", json!({"url": "https://example.com"})));
+            assert_eq!(log.observe(&opened(id, result))[0].page_title, None, "step {id}");
+        }
+        // Old rows and other steps carry no `page_title` key at all
+        let saved = log.to_json();
+        assert!(saved["steps"].as_array().unwrap().iter().all(|s| s.get("page_title").is_none()), "{saved}");
+    }
+
+    #[test]
+    fn a_page_title_is_redacted_and_cut() {
+        let mut log = ActivityLog::with_secrets(vec!["hunter2-mcp-value".into()]);
+        log.observe(&pending("b", "mcp__kwnt__browser_open", json!({"url": "https://example.com"})));
+        let title = "Reset for hunter2-mcp-value with ghp_abcdefghijklmnopqrstuvwxyz0123";
+        let ended = log.observe(&opened("b", json!({"status": "ok", "title": title})));
+        let shown = ended[0].page_title.clone().unwrap();
+        assert!(!shown.contains("hunter2-mcp-value") && !shown.contains("ghp_abc"), "{shown}");
+        assert!(shown.starts_with("Reset for "), "{shown}");
+
+        log.observe(&pending("c", "browser_navigate", json!({"url": "https://example.com"})));
+        let ended = log.observe(&opened("c", json!({"status": "ok", "title": "é".repeat(MAX_TITLE + 40)})));
+        let cut = ended[0].page_title.clone().unwrap();
+        assert_eq!(cut.chars().count(), MAX_TITLE);
+        assert!(cut.ends_with('…'));
+    }
+
+    /// The drivers find the title in the page JSON `browser_open` answers with.
+    #[test]
+    fn drivers_read_the_title_from_the_page_the_tool_answered_with() {
+        let page = json!({"url": "http://roastco.example.com/", "title": "RoastCo · Shop", "text": "Prices"}).to_string();
+        assert_eq!(page_title_in(&page).as_deref(), Some("RoastCo · Shop"));
+        // A CAPTCHA note, then the page the person left
+        let noted = format!("Solved by the person.\n\nThe page now:\n{page}");
+        assert_eq!(page_title_in(&noted).as_deref(), Some("RoastCo · Shop"));
+        for text in ["", "Browser error (HTTP 502).", r#"{"title": ""}"#, r#"{"url": "x"}"#, "[1,2]", "{\"title\": \"cut off"] {
+            assert_eq!(page_title_in(text), None, "{text:?}");
+        }
+        let ok = with_page_title(json!({"status": "ok"}), "mcp__kwnt__browser_open", &page);
+        assert_eq!(ok, json!({"status": "ok", "title": "RoastCo · Shop"}));
+        // Not a page-opening tool, or the call failed: the result passes as it is
+        assert_eq!(with_page_title(json!({"status": "ok"}), "WebFetch", &page), json!({"status": "ok"}));
+        let failed = json!({"status": "error", "error": "x"});
+        assert_eq!(with_page_title(failed.clone(), "browser_open", &page), failed);
     }
 }
