@@ -237,10 +237,13 @@ Up to 12 entries for `q` (cut to 60 characters; fewer than 2 letters answer no e
 | `unavailable` | `true` (with no entries) only when there's no copy yet and the registry can't be reached. |
 | `source` | `"copy"` or `"live"` (before the first sync). |
 
-Ranking, best first: entries whose publisher is what was typed (`stripe` → `com.stripe/*`, also
-with one typo); then how the name or title matches (starts with it, a word starts with it, a known
-alias such as `pg` → postgres, a name part, contains it, one or two typos); an exact name or title;
-remotes before packages; then registry order. `ai.smithery/*` mirrors and entries whose address is a
+Ranking, best first: entries whose publisher is what was typed (`stripe` → `com.stripe/*`,
+`github` → `io.github.github/*`; a publisher's name is a two-label domain's first label or the GitHub
+user, so `io.ddx.pg` isn't `pg`); then how the name or title matches (starts with it, a word starts
+with it, a known alias such as `pg` → postgres, a name part, contains it, one or two typos); within
+each of those, a publisher one or two typos from what was typed (`strpie` → stripe.com); an exact
+name or title; remotes before packages; then registry order. Typos are only looked for when closer
+matches leave fewer than 12 rows. `ai.smithery/*` mirrors and entries whose address is a
 `{placeholder}` always come last. Case and accents don't matter. The answer carries
 `Server-Timing: directory;dur=<ms>`.
 
