@@ -393,6 +393,20 @@ export interface PageDialog {
   default_prompt: string;
 }
 
+/** The page's own file picker, intercepted instead of Chrome drawing it natively. */
+export interface FileChooserRequest {
+  /** The server's own per-connection counter, not the client's action-correlation id. */
+  id: number;
+  accept: string;
+  multiple: boolean;
+}
+
+/** A `file_chooser_error`: `too_big`, `gone` or `failed` (the brief's codes); `error` is ready to show. */
+export interface FileChooserFailure {
+  code: string;
+  error: string;
+}
+
 export function parseSelect(m: unknown): SelectRequest | null {
   const v = m as Record<string, unknown> | null;
   if (!v || !Array.isArray(v.options)) return null;
@@ -414,6 +428,26 @@ export function parseDialog(m: unknown): PageDialog | null {
   const kinds = ['alert', 'confirm', 'prompt', 'beforeunload'];
   const kind = (kinds.includes(String(v.kind)) ? v.kind : 'alert') as PageDialog['kind'];
   return { kind, message: String(v.message ?? ''), default_prompt: String(v.default_prompt ?? '') };
+}
+
+export function parseFileChooser(m: unknown): FileChooserRequest | null {
+  const v = m as Record<string, unknown> | null;
+  const id = typeof v?.id === 'number' && Number.isFinite(v.id) ? v.id : NaN;
+  if (!Number.isFinite(id)) return null;
+  return { id, accept: typeof v?.accept === 'string' ? v.accept : '', multiple: v?.multiple === true };
+}
+
+export function parseFileChooserFailure(m: unknown): FileChooserFailure | null {
+  const v = m as Record<string, unknown> | null;
+  if (typeof v?.id !== 'number') return null;
+  return { code: typeof v.code === 'string' ? v.code : 'failed', error: typeof v.error === 'string' ? v.error : 'Couldn’t send that file.' };
+}
+
+/** The sheet's title, from the input's own `accept` (draft wording — Pixel/Mira have the final call). */
+export function fileChooserTitle(accept: string): string {
+  if (/^video\//i.test(accept)) return 'Choose a video';
+  if (/^image\//i.test(accept)) return 'Choose a photo';
+  return 'Choose a file';
 }
 
 /** Type-ahead: the first enabled option after `from` (wrapping) whose label starts with `typed`. */

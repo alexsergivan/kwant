@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Globe } from 'lucide-react';
-import { PageDialog, Rect, SelectRequest, Size, matchOption, nextEnabled, popoverPlacement } from '../browserInput';
+import { FileChooserFailure, FileChooserRequest, PageDialog, Rect, SelectRequest, Size, fileChooserTitle, matchOption, nextEnabled, popoverPlacement } from '../browserInput';
+import { preflightFile, uploadWithRetry } from '../attachments';
 
 const PAGE_STEP = 8;
 const TYPEAHEAD_MS = 500;
@@ -313,6 +314,181 @@ export function PageDialogModal({ dialog, host, onAnswer, compact = false }: { d
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+type ChooserPhase = 'picking' | 'uploading' | 'sending';
+
+/**
+ * The page's own file picker, intercepted instead of Chrome drawing it natively (the screencast
+ * can't show it either). Modeled on `PageDialogModal` — not anchored to any on-page rect, so it's
+ * a centered card the same way. `failure` is the server's `file_chooser_error` for this chooser
+ * (already filtered by id in `useBrowserStream`); a client-side preflight/upload failure is kept
+ * local instead, since the server never sees it.
+ */
+export function FileChooserModal({
+  request,
+  failure,
+  onAnswer,
+  onCancel,
+  onClearFailure,
+  compact = false,
+}: {
+  request: FileChooserRequest;
+  failure: FileChooserFailure | null;
+  onAnswer: (attachmentIds: string[]) => void;
+  onCancel: () => void;
+  onClearFailure: () => void;
+  /** Phone: the page area is short, so the card sits 16 px down, not 96 */
+  compact?: boolean;
+}) {
+  const [phase, setPhase] = useState<ChooserPhase>('picking');
+  const [name, setName] = useState('');
+  const [progress, setProgress] = useState(0);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const chooseRef = useRef<HTMLButtonElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const titleId = useId();
+
+  useLayoutEffect(() => {
+    chooseRef.current?.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const error = failure?.error ?? localError;
+  const button = 'h-8 [@media(pointer:coarse)]:h-11 px-3 rounded-[10px] text-[13px] max-sm:flex-1';
+
+  const pick = async (files: FileList | null) => {
+    const list = Array.from(files ?? []).slice(0, request.multiple ? undefined : 1);
+    if (list.length === 0) return;
+    for (const f of list) {
+      const problem = preflightFile(f);
+      if (problem) {
+        setLocalError(problem);
+        return;
+      }
+    }
+    setLocalError(null);
+    setPhase('uploading');
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const ids: string[] = [];
+    try {
+      for (let i = 0; i < list.length; i++) {
+        setName(list.length > 1 ? `${list[i].name} (${i + 1} of ${list.length})` : list[i].name);
+        setProgress(0);
+        const attachment = await uploadWithRetry(list[i], setProgress, controller.signal);
+        ids.push(attachment.id);
+      }
+      setPhase('sending');
+      onAnswer(ids);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      setLocalError(err instanceof Error ? err.message : "Couldn’t send that file.");
+      setPhase('picking');
+    }
+  };
+
+  const retry = () => {
+    abortRef.current?.abort();
+    setLocalError(null);
+    setPhase('picking');
+    if (failure) onClearFailure();
+  };
+
+  return (
+    <div
+      className={`absolute inset-0 z-50 flex justify-center items-start px-4 sm:px-0 ${compact ? 'pt-4' : 'pt-24'} bg-[rgb(10_7_25/0.6)]`}
+      data-browser-popup
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        data-escape-layer
+        data-file-chooser
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Escape' && phase !== 'sending') {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        className="w-full sm:w-[420px] rounded-[14px] border border-white/[0.14] bg-[#1a1538] p-4 shadow-[0_24px_64px_rgb(0_0_0/0.55)] text-zinc-100 kw-pop-in"
+      >
+        <p id={titleId} className="text-[15px] font-semibold text-zinc-100">
+          {fileChooserTitle(request.accept)}
+        </p>
+
+        {error ? (
+          <>
+            <p role="alert" className="mt-3 text-sm text-rose-300">
+              {error}
+            </p>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button type="button" onClick={onCancel} className={`${button} ${GHOST_BUTTON}`}>
+                Cancel
+              </button>
+              <button type="button" onClick={retry} className={`${button} ${PRIMARY_BUTTON}`}>
+                Try again
+              </button>
+            </div>
+          </>
+        ) : phase === 'picking' ? (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <input
+              ref={inputRef}
+              type="file"
+              accept={request.accept || undefined}
+              multiple={request.multiple}
+              className="sr-only"
+              tabIndex={-1}
+              onChange={(e) => {
+                void pick(e.target.files);
+                e.target.value = '';
+              }}
+            />
+            <button type="button" onClick={onCancel} className={`${button} ${GHOST_BUTTON}`}>
+              Cancel
+            </button>
+            <button ref={chooseRef} type="button" onClick={() => inputRef.current?.click()} className={`${button} ${PRIMARY_BUTTON}`}>
+              Choose file…
+            </button>
+          </div>
+        ) : (
+          <div className="mt-4" aria-live="polite">
+            <p className="text-sm text-zinc-300 truncate">{phase === 'sending' ? 'Sending to the page…' : name}</p>
+            <div className="mt-2 h-1.5 rounded-full bg-[#2c2552] overflow-hidden">
+              <div className="h-full bg-[#6c58e0] transition-[width]" style={{ width: `${Math.round((phase === 'sending' ? 1 : progress) * 100)}%` }} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** "Added {name}", shown once the page has the file; same spot the select/dialog sheets land. */
+export function FileChooserToast({ names, onDone }: { names: string[]; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 4000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const text = names.length === 0 ? 'Added' : names.length === 1 ? `Added ${names[0]}` : `Added ${names.length} files`;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-browser-popup
+      className="absolute left-1/2 top-3 z-50 -translate-x-1/2 rounded-[10px] border border-[rgb(94_234_212/0.2)] bg-[#1a1538] px-3 py-1.5 text-xs text-[#5eead4] shadow-[0_12px_32px_rgb(0_0_0/0.45)] kw-pop-in"
+    >
+      {text}
     </div>
   );
 }

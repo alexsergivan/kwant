@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- In the live browser view, a page's own file picker (TikTok Studio's "Select video", for one) now opens kwant's own **Choose file…** sheet instead of doing nothing, since the screencast can't show Chrome's native dialog. Choose a file, watch it upload, and the page gets it as if you'd picked it yourself.
+
 ## [Mac 0.9.7] - 2026-11-13
 
 kwant 0.9.7: your bot itself at work while a reply is coming, a mark on each bot's avatar for the AI it runs on and one search box to find a tool and add it.

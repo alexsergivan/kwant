@@ -9,6 +9,7 @@ use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit
 use super::point;
 use super::{routes::PageRefusal, AppState};
 use super::show_once::{capture as recorder, stage::{Act, StageRecorder}};
+use crate::db::attachments::Attachment;
 use crate::sandbox::app_links::{self, AppLinkWatch, Verdict};
 use crate::sandbox::browser::{web_address, BrowserController, BrowserError, HeldPointer, PersonLease, ViewClaim, ViewRelease, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
 use crate::sandbox::browser_history::HistoryDirection;
@@ -32,6 +33,17 @@ const SELECT_GROUP: &str = "kwnt-select";
 /// A frame the client has not acked for this long is let go, so a lost ack costs one stale
 /// picture instead of the stream (and the person's control).
 const FRAME_STALL: Duration = Duration::from_secs(4);
+/// Chrome somewhere else has no shared filesystem with kwnt, so a file chooser answer there goes
+/// in as base64 chunks instead of a real path; the compose browser's own container caps at
+/// mem_limit 1536m, so the files sent that way are capped well under it.
+const REMOTE_UPLOAD_CAP_BYTES: u64 = 100 * 1024 * 1024;
+/// Per `Runtime.callFunctionOn` call, before base64 encoding.
+const UPLOAD_CHUNK_BYTES: usize = 1_000_000;
+/// How long a local-delivery temp copy (named after the attachment, not its content hash) stays
+/// after `DOM.setFileInputFiles`, since the page may only read it later (e.g. only once the person
+/// clicks "Post"). An opportunistic sweep of older orphans runs on every new chooser as a backstop.
+const CHOOSER_TMP_TTL: Duration = Duration::from_secs(600);
+const CHOOSER_TMP_ORPHAN_AGE: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -793,6 +805,18 @@ struct Worker {
     open_select: Option<String>,
 }
 
+/// A page's file picker, intercepted instead of letting Chrome draw its own natively. Lives in
+/// `stream()`'s locals next to `dialog_open` — per-connection, latest wins, cleared on navigation
+/// and Hand back, never a bot's concern (nothing is sent to the client during a bot's turn).
+struct OpenChooser {
+    /// This connection's own counter, not a CDP id: lets the client tell which sheet a
+    /// `file_chooser_done`/error belongs to even if it raced a newer chooser.
+    id: u64,
+    backend_node_id: i64,
+    frame_id: String,
+    multiple: bool,
+}
+
 fn ack(id: &Value, extra: Value) -> Value {
     let mut ack = json!({"type":"ack","id":id});
     if let (Some(ack), Value::Object(extra)) = (ack.as_object_mut(), extra) {
@@ -803,6 +827,15 @@ fn ack(id: &Value, extra: Value) -> Value {
 
 fn error(id: &Value, error: impl std::fmt::Display) -> Value {
     json!({"type":"error","id":id,"error":error.to_string()})
+}
+
+/// A file chooser failure, with a machine-readable `code` (`too_big`, `gone`, `failed`) so the
+/// sheet can show the right inline message. Its own type, never `error`: the chooser's `id`
+/// comes from the server's own per-connection counter, not the client's action-correlation
+/// counter `error`/`ack` are matched against, so reusing `error`'s envelope could misroute this
+/// into an unrelated pending action or G3 Point wait by sheer numeric coincidence.
+fn chooser_error(id: &Value, code: &str, message: impl std::fmt::Display) -> Value {
+    json!({"type":"file_chooser_error","id":id,"code":code,"error":message.to_string()})
 }
 
 fn protocol(message: &str) -> BrowserError {
@@ -1234,6 +1267,10 @@ struct Page {
 /// guard and the screencast.
 async fn watch_page(cdp: &Cdp, shared: &Shared) -> Result<(), BrowserError> {
     cdp.call("Page.enable", json!({}), Duration::from_secs(10)).await?;
+    // Chrome would otherwise draw its own native file picker, which nobody watching the live
+    // view can see (headless: closed at once; headful on a virtual display: off-screen).
+    // Intercepting it turns it into a `Page.fileChooserOpened` event instead.
+    cdp.call("Page.setInterceptFileChooserDialog", json!({"enabled": true}), Duration::from_secs(10)).await?;
     // A Chrome window behind other apps on a Mac doesn't have the OS's focus, so its page
     // can act unfocused and drop typed keys. While anyone watches or controls it, the page
     // behaves as focused (as Playwright does for every page). It ends with this connection.
@@ -1329,7 +1366,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
     let local = service.mode() == crate::sandbox::computer::ComputerMode::Local;
     let window = if local && service.local_window() { None } else { Some(local && crate::sandbox::computer::window_reason().is_none()) };
     let mut signin = crate::sandbox::signin_gate::LiveNotice::new(window);
-    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &mut page, &shared, &client_tx, &mut client_rx, &jobs, &mut rec, &pointer, &mut signin).await;
+    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &mut page, &shared, &client_tx, &mut client_rx, &jobs, &mut rec, &pointer, &mut signin, &state, local).await;
     // a recording live on this socket stops here (Show it once: `closed`), its steps kept, after
     // the edit still pending in the page, if the page can still be reached
     if rec.is_live() {
@@ -1362,6 +1399,8 @@ async fn stream(
     rec: &mut StageRecorder,
     pointer: &Arc<Pointer>,
     signin: &mut crate::sandbox::signin_gate::LiveNotice,
+    state: &AppState,
+    local: bool,
 ) -> (Result<(), BrowserError>, Option<PersonLease>) {
     let mut lease: Option<PersonLease> = None;
     // the Show it once recorder's script on new documents, while a recording is live
@@ -1382,6 +1421,9 @@ async fn stream(
         let mut location_tick = tokio::time::interval(Duration::from_secs(2));
         let mut moves = RateLimit::new(bi::MOVES_PER_SECOND, 10.0, std::time::Instant::now());
         let mut dialog_open = false;
+        // the page's file picker, intercepted instead of Chrome drawing its own; latest wins
+        let mut chooser: Option<OpenChooser> = None;
+        let mut chooser_seq: u64 = 0;
         let mut app_links = AppLinkWatch::default();
         // the events of the page the view moved to: a popup the page opened, or back from it
         let mut moved: Option<mpsc::Receiver<Value>> = None;
@@ -1391,6 +1433,7 @@ async fn stream(
                 frames = FrameGate::default();
                 app_links = AppLinkWatch::default();
                 dialog_open = false;
+                chooser = None;
                 pointer.forget_world();
                 // Show it once records on the page in front too
                 if rec.is_live() {
@@ -1469,6 +1512,10 @@ async fn stream(
                     // a new document: the old title goes now, the new one follows on DOMContentLoaded
                     if let Some(url) = navigated_to(method, params) {
                         pointer.forget_world();
+                        // its backendNodeId won't resolve to the new document's input
+                        if let Some(open) = chooser.take() {
+                            let _ = client_tx.send(chooser_error(&json!(open.id), "gone", "The page moved on."));
+                        }
                         let _ = client_tx.send(json!({"type":"location","url":url,"title":""}));
                         if let Some(notice) = signin.update(&url, lease.is_some() || ctrl.is_held_for_person()) {
                             let _ = client_tx.send(notice);
@@ -1516,6 +1563,19 @@ async fn stream(
                             dialog_open = false;
                             send(socket, json!({"type":"dialog_closed","accepted":params["result"]})).await?;
                         }
+                        // during a bot's turn, nothing goes to the client: Part B covers bots
+                        "Page.fileChooserOpened" if lease.is_some() || ctrl.is_held_for_person() => {
+                            if let (Some(backend_node_id), Some(frame_id)) =
+                                (params["backendNodeId"].as_i64(), params["frameId"].as_str())
+                            {
+                                let multiple = params["mode"].as_str() == Some("selectMultiple");
+                                let accept = describe_accept(cdp, backend_node_id).await;
+                                chooser_seq += 1;
+                                let id = chooser_seq;
+                                chooser = Some(OpenChooser { id, backend_node_id, frame_id: frame_id.to_string(), multiple });
+                                send(socket, json!({"type":"file_chooser","id":id,"accept":accept,"multiple":multiple})).await?;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1562,6 +1622,7 @@ async fn stream(
                             if rec.is_live() {
                                 recorder_acts(socket, ctrl, cdp, shared, rec, vec![Act::Flush], &mut recorder_script).await?;
                             }
+                            chooser = None;
                             let (done, wait) = oneshot::channel();
                             if jobs.send(Job::HandBack(Some(done))).is_ok() {
                                 let _ = timeout(Duration::from_secs(8), wait).await;
@@ -1578,6 +1639,32 @@ async fn stream(
                         "restore_viewport" => { let _ = jobs.send(Job::Restore(id)); }
                         // G3 Point at it: read-only, so watching is enough
                         "point_at" | "point_neighbour" | "point_pick" => pointer.handle(&value, id, shared),
+                        "file_chooser" => {
+                            if lease.is_none() && !ctrl.is_held_for_person() {
+                                send(socket, chooser_error(&id, "failed", not_in_control(ctrl.control.try_read().is_err()))).await?;
+                                continue;
+                            }
+                            let Some(seq) = value["id"].as_u64() else { send(socket, chooser_error(&id, "failed", protocol("Missing id"))).await?; continue; };
+                            if chooser.as_ref().map(|c| c.id) != Some(seq) {
+                                send(socket, chooser_error(&id, "gone", "The page moved on.")).await?;
+                                continue;
+                            }
+                            let open = chooser.take().expect("checked above");
+                            if value["cancel"] == true {
+                                // the sheet already knows it cancelled; no reply needed
+                                continue;
+                            }
+                            let ids: Vec<String> = value["attachment_ids"].as_array().cloned().unwrap_or_default()
+                                .into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                            let (state, cdp, client) = (state.clone(), cdp.clone(), client_tx.clone());
+                            tokio::spawn(async move {
+                                let reply = match answer_file_chooser(&state, &cdp, local, &open, ids).await {
+                                    Ok(names) => json!({"type":"file_chooser_done","id":open.id,"names":names}),
+                                    Err((code, message)) => chooser_error(&json!(open.id), code, message),
+                                };
+                                let _ = client.send(reply);
+                            });
+                        }
                         _ => {
                             if lease.is_none() && !ctrl.is_held_for_person() {
                                 send(socket, error(&id, not_in_control(ctrl.control.try_read().is_err()))).await?;
@@ -1616,6 +1703,181 @@ async fn stream(
         Ok(())
     }.await;
     (result, lease)
+}
+
+/// Reads the `accept` attribute straight off the DOM node CDP already named in
+/// `Page.fileChooserOpened`'s `backendNodeId`, with no `DOM.resolveNode`/`Runtime.callFunctionOn`
+/// round trip just for this. `multiple` comes from the event's own `mode` instead (never raced).
+async fn describe_accept(cdp: &Cdp, backend_node_id: i64) -> String {
+    let Ok(described) = cdp.call("DOM.describeNode", json!({"backendNodeId": backend_node_id}), PROBE_WAIT).await else {
+        return String::new();
+    };
+    accept_attr(described["node"]["attributes"].as_array().map(Vec::as_slice).unwrap_or_default())
+}
+
+/// `DOM.describeNode`'s `attributes` is a flat `[name, value, name, value, ...]` array; this picks
+/// out `accept`'s value, or `""` when the input has none (any file type).
+fn accept_attr(attributes: &[Value]) -> String {
+    attributes
+        .chunks(2)
+        .find(|pair| pair.first().and_then(Value::as_str) == Some("accept"))
+        .and_then(|pair| pair.get(1))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Validates the client's answer (known ids, belongs to this person's own unsent uploads, not
+/// over the remote cap), then puts the files into the page. Names on success, or a coded error
+/// for the sheet (`too_big`, `gone`, `failed` — matching the brief exactly).
+async fn answer_file_chooser(
+    state: &AppState,
+    cdp: &Cdp,
+    local: bool,
+    open: &OpenChooser,
+    ids: Vec<String>,
+) -> Result<Vec<String>, (&'static str, String)> {
+    if ids.is_empty() {
+        return Err(("failed", "No file was chosen.".to_string()));
+    }
+    let ids: Vec<String> = if open.multiple { ids } else { ids.into_iter().take(1).collect() };
+    let attachments = super::attachments::check_uploads(state, &ids)
+        .await
+        .map_err(|_| ("failed", "That file couldn't be sent.".to_string()))?;
+    if !local {
+        let total: i64 = attachments.iter().map(|a| a.size).sum();
+        if total < 0 || total as u64 > REMOTE_UPLOAD_CAP_BYTES {
+            return Err(("too_big", "That's bigger than kwnt can send here (100 MB).".to_string()));
+        }
+    }
+    let names = attachments.iter().map(|a| a.name.clone()).collect();
+    if local {
+        set_file_input_files_local(state, cdp, open, &attachments).await?;
+    } else {
+        inject_files_remote(state, cdp, open, &attachments).await?;
+    }
+    Ok(names)
+}
+
+/// Local Chrome shares kwnt's filesystem, but `DOM.setFileInputFiles` names the file from the
+/// path's own basename, not from any metadata, and the blob is named by its sha256 with no
+/// extension. A copy named after the attachment's real name fixes that — the same workaround
+/// Playwright's own buffer-based `setInputFiles` uses internally. The page may only read the
+/// bytes later (e.g. only once the person clicks "Post"), so the copy can't be removed right
+/// after this call returns: it's scheduled for removal after `CHOOSER_TMP_TTL`, with an
+/// opportunistic sweep of older orphans on every new chooser as a backstop if kwnt restarts.
+async fn set_file_input_files_local(
+    state: &AppState,
+    cdp: &Cdp,
+    open: &OpenChooser,
+    attachments: &[Attachment],
+) -> Result<(), (&'static str, String)> {
+    let root = super::attachments::root(state);
+    let tmp_root = root.join("chooser-tmp");
+    sweep_chooser_tmp(&tmp_root).await;
+    let dir = tmp_root.join(uuid::Uuid::new_v4().to_string());
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| ("failed", e.to_string()))?;
+    let mut paths = Vec::with_capacity(attachments.len());
+    for a in attachments {
+        let Some(blob) = super::attachments::blob_path(&root, &a.sha256) else {
+            return Err(("failed", "That file couldn't be sent.".to_string()));
+        };
+        let dest = dir.join(super::attachments::clean_name(&a.name));
+        tokio::fs::copy(&blob, &dest).await.map_err(|e| ("failed", e.to_string()))?;
+        paths.push(dest);
+    }
+    let result = cdp
+        .call(
+            "DOM.setFileInputFiles",
+            json!({"files": paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(), "backendNodeId": open.backend_node_id}),
+            ACTION_WAIT,
+        )
+        .await;
+    let cleanup_dir = dir.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(CHOOSER_TMP_TTL).await;
+        let _ = tokio::fs::remove_dir_all(&cleanup_dir).await;
+    });
+    result.map(|_| ()).map_err(|_| ("gone", "The page moved on.".to_string()))
+}
+
+/// Deletes any `chooser-tmp` directory older than `CHOOSER_TMP_ORPHAN_AGE`, a backstop for the
+/// scheduled cleanup in [`set_file_input_files_local`] if the process restarted before it ran.
+async fn sweep_chooser_tmp(tmp_root: &std::path::Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(tmp_root).await else { return };
+    let cutoff = std::time::SystemTime::now() - CHOOSER_TMP_ORPHAN_AGE;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.metadata().await.ok().and_then(|m| m.modified().ok()).is_some_and(|m| m < cutoff) {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
+}
+
+/// Chrome somewhere else (`KWNT_BROWSER_CDP_URL`) has no filesystem shared with kwnt, so the
+/// bytes go in as base64 chunks instead, evaluated in the recorder's own isolated world (reusing
+/// `Page.fileChooserOpened`'s own `frameId` — no extra `Page.getFrameTree` round trip, unlike
+/// `record_pick`) so the upload's own finish call can tell the recorder directly (S-C13: the
+/// label only, never the file's name). Kept as `Uint8Array`s in the page, not concatenated into a
+/// JS number array, so a 100 MB file doesn't balloon past the compose browser's 1536m container.
+async fn inject_files_remote(
+    state: &AppState,
+    cdp: &Cdp,
+    open: &OpenChooser,
+    attachments: &[Attachment],
+) -> Result<(), (&'static str, String)> {
+    use base64::Engine;
+    let gone = || ("gone", "The page moved on.".to_string());
+    let failed = || ("failed", "That file couldn't be sent.".to_string());
+    let world = cdp
+        .call("Page.createIsolatedWorld", json!({"frameId": open.frame_id, "worldName": recorder::WORLD}), PROBE_WAIT)
+        .await
+        .map_err(|_| gone())?;
+    let context = world["executionContextId"].as_i64().ok_or_else(gone)?;
+    let resolved = cdp
+        .call("DOM.resolveNode", json!({"backendNodeId": open.backend_node_id, "executionContextId": context}), PROBE_WAIT)
+        .await
+        .map_err(|_| gone())?;
+    let object = resolved["object"]["objectId"].as_str().map(str::to_string).ok_or_else(gone)?;
+    let root = super::attachments::root(state);
+    let outcome = async {
+        for a in attachments {
+            let blob = super::attachments::blob_path(&root, &a.sha256).ok_or_else(failed)?;
+            let bytes = tokio::fs::read(&blob).await.map_err(|_| failed())?;
+            let began = cdp
+                .call(
+                    "Runtime.callFunctionOn",
+                    json!({
+                        "objectId": object, "functionDeclaration": bi::UPLOAD_BEGIN_FN,
+                        "arguments": [{"value": {"name": a.name.clone(), "mime": a.mime.clone(), "lastModified": a.created_at.timestamp_millis()}}],
+                        "returnByValue": true,
+                    }),
+                    ACTION_WAIT,
+                )
+                .await;
+            if !began.is_ok_and(|r| r["result"]["value"] == true) { return Err(failed()); }
+            for chunk in bytes.chunks(UPLOAD_CHUNK_BYTES) {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(chunk);
+                let chunked = cdp
+                    .call(
+                        "Runtime.callFunctionOn",
+                        json!({"objectId": object, "functionDeclaration": bi::UPLOAD_CHUNK_FN, "arguments": [{"value": b64}], "returnByValue": true}),
+                        ACTION_WAIT,
+                    )
+                    .await;
+                if !chunked.is_ok_and(|r| r["result"]["value"] == true) { return Err(failed()); }
+            }
+        }
+        let finished = cdp
+            .call(
+                "Runtime.callFunctionOn",
+                json!({"objectId": object, "functionDeclaration": bi::UPLOAD_FINISH_FN, "returnByValue": true}),
+                ACTION_WAIT,
+            )
+            .await;
+        if finished.is_ok_and(|r| r["result"]["value"] == true) { Ok(()) } else { Err(failed()) }
+    }.await;
+    let _ = cdp.call("Runtime.releaseObject", json!({"objectId": object}), PROBE_WAIT).await;
+    outcome
 }
 
 /// Keeps links to another app from freezing the tab while the live view is open (see
@@ -2023,5 +2285,28 @@ mod tests {
         assert_eq!(shape, vec![("left".into(), 6), ("right".into(), 4), ("middle".into(), 0)]);
         assert!(events.iter().all(|e| e["type"] == "mouseReleased" && e["x"] == 3.0 && e["y"] == 4.0));
         assert!(release_events(HeldPointer { x: 0.0, y: 0.0, buttons: 0 }).is_empty());
+    }
+
+    /// Its own `type`, never `error`/`ack`: those are matched against the client's own
+    /// `sequence.current` id-space, which the chooser's server-assigned id can collide with.
+    #[test]
+    fn a_file_chooser_failure_never_looks_like_a_generic_error() {
+        let wire = chooser_error(&json!(7), "too_big", "That's bigger than kwnt can send here (100 MB).");
+        assert_eq!(wire["type"], "file_chooser_error");
+        assert_eq!(wire["id"], 7);
+        assert_eq!(wire["code"], "too_big");
+        assert_eq!(wire["error"], "That's bigger than kwnt can send here (100 MB).");
+        assert_ne!(wire["type"], "error");
+        assert_ne!(wire["type"], "ack");
+    }
+
+    #[test]
+    fn accept_reads_the_flat_attribute_pairs_or_falls_back_to_any_file() {
+        assert_eq!(accept_attr(&[json!("id"), json!("f1"), json!("accept"), json!("video/*")]), "video/*");
+        assert_eq!(accept_attr(&[json!("accept"), json!("image/*"), json!("multiple"), json!("")]), "image/*");
+        assert_eq!(accept_attr(&[json!("id"), json!("f1")]), "", "no accept attribute: any file type");
+        assert_eq!(accept_attr(&[]), "");
+        // a dangling name with no paired value doesn't panic
+        assert_eq!(accept_attr(&[json!("accept")]), "");
     }
 }
