@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Hourglass } from 'lucide-react';
 import { missionsApi, type Check, type Task } from '../missions';
-import { cardWaits, isWaiting, nextRefresh, shortLabel, waitLine, waitLineText, waitingFallback, type WaitLine } from '../waitingChecks';
+import { cardWaits, detailLineText, isWaiting, nextRefresh, shortLabel, waitLine, waitLineText, waitingFallback, type WaitLine } from '../waitingChecks';
 
 /**
  * One waiting check as a line: "Waiting on <label> since 09:12 · next look 09:27", and under it
@@ -11,24 +11,35 @@ import { cardWaits, isWaiting, nextRefresh, shortLabel, waitLine, waitLineText, 
 export const WaitingCheckLine: React.FC<{ line: WaitLine; compact?: boolean }> = ({ line, compact = false }) => {
   const label = compact ? shortLabel(line.label) : line.label;
   const tone = line.timedOut ? 'text-amber-200' : 'text-sky-200';
-  const Icon = line.timedOut ? AlertTriangle : Hourglass;
+  // The detail's stopped row already has the amber hand: no second warning icon there.
+  const Icon = line.timedOut ? (compact ? AlertTriangle : null) : Hourglass;
+  const indent = Icon ? 'pl-4' : '';
+  // The detail row prints the label just above, so the detail line leaves it out.
+  const detailText = compact ? null : detailLineText(line);
   return (
     <span className={`block text-[11px] ${tone}`} data-waiting-line={line.timedOut ? 'timed-out' : 'waiting'}>
       <span className="flex items-start gap-1 min-w-0">
-        <Icon size={11} className="mt-0.5 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 break-words">
-          <span className="sr-only">{waitLineText(line)}</span>
-          <span aria-hidden="true">
-            {!line.timedOut && 'Waiting on '}
-            <span className="font-mono break-all text-zinc-200" title={line.label}>
-              {label}
-            </span>
-            {line.rest ? ` ${line.rest}` : ''}
+        {Icon && <Icon size={11} className="mt-0.5 shrink-0" aria-hidden="true" />}
+        {detailText !== null ? (
+          <span className="min-w-0 break-words" data-waiting-detail>
+            <span className="sr-only">{detailText.replace(' · ', ', ')}</span>
+            <span aria-hidden="true">{detailText}</span>
           </span>
-        </span>
+        ) : (
+          <span className="min-w-0 break-words">
+            <span className="sr-only">{waitLineText(line)}</span>
+            <span aria-hidden="true">
+              {!line.timedOut && 'Waiting on '}
+              <span className="font-mono break-all text-zinc-200" title={line.label}>
+                {label}
+              </span>
+              {line.rest ? ` ${line.rest}` : ''}
+            </span>
+          </span>
+        )}
       </span>
       {line.last && (
-        <span className="mt-0.5 flex min-w-0 pl-4 text-zinc-400" data-waiting-last>
+        <span className={`mt-0.5 flex min-w-0 ${indent} text-zinc-400`} data-waiting-last>
           <span className="sr-only">It last printed: </span>
           <span className={`min-w-0 font-mono ${compact ? 'truncate' : 'break-all whitespace-pre-wrap'}`} title={line.last}>
             {line.last}
@@ -36,7 +47,7 @@ export const WaitingCheckLine: React.FC<{ line: WaitLine; compact?: boolean }> =
         </span>
       )}
       {!compact && line.deadline && (
-        <span className="mt-0.5 block pl-4 text-zinc-500" data-waiting-deadline>
+        <span className={`mt-0.5 block ${indent} text-zinc-400`} data-waiting-deadline>
           {line.deadline}
         </span>
       )}
@@ -99,7 +110,7 @@ export const CardWaitingChecks: React.FC<{ task: Task; now?: number }> = ({ task
       {lines.slice(0, 2).map(({ id, l }) => (
         <WaitingCheckLine key={id} line={l} compact />
       ))}
-      {lines.length > 2 && <span className="block pl-4 text-[11px] text-zinc-500">+{lines.length - 2} more waiting</span>}
+      {lines.length > 2 && <span className="block pl-4 text-[11px] text-zinc-400">+{lines.length - 2} more waiting</span>}
     </span>
   );
 };

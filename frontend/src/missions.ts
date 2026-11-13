@@ -542,8 +542,11 @@ export function columnOfTask(t: Pick<Task, 'state' | 'flags' | 'needs_you'>): Co
   return c && (openFlags(t).length || (t.needs_you ?? []).some((n) => PERSON_ITEMS.has(n.kind))) ? 'needs_you' : c;
 }
 
+/** How many of the task's checks stopped waiting on an outside service (Needs-you `check_timed_out`). */
+export const stoppedWaiting = (t: Pick<Task, 'needs_you'>): number => (t.needs_you ?? []).filter((n) => n.kind === 'check_timed_out').length;
+
 /** Items that wait for the person whatever the task's state, so its card sits in Needs you. */
-const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change', 'check_approval', ENGINE_CANT_SANDBOX]);
+const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change', 'check_approval', 'check_timed_out', ENGINE_CANT_SANDBOX]);
 
 /**
  * The lane a phone opens on: Needs you when something waits on the person, else Working, else Ready.
@@ -841,12 +844,15 @@ function optionalWaitingCount(s: ChecksSummary): number {
  * `total`: an optional check waiting for you isn't a check that didn't pass. A task that has never
  * been checked says so, plainly.
  */
-export function checksText(s: ChecksSummary): { text: string; tone: Tone } {
+export function checksText(s: ChecksSummary, stopped = 0): { text: string; tone: Tone } {
   const n = (k: number, one: string, many: string) => (k === 1 ? one : many.replace('#', String(k)));
   if (approvalHolds(s)) return { text: n(s.required_needs_approval ?? 0, '1 check needs your OK', '# checks need your OK'), tone: 'amber' };
   if (s.status === 'not_checked') return { text: 'Not checked', tone: 'zinc' };
   if (s.status === 'failed') return { text: n(s.failed, '1 check failed', '# checks failed'), tone: 'rose' };
-  if (s.status === 'pending' && (s.waiting ?? 0) > 0) return { text: n(s.waiting ?? 0, '1 check waiting', '# checks waiting'), tone: 'zinc' };
+  // #564 counts a check that stopped waiting in `waiting` too; the person has to act on those.
+  if (s.status === 'pending' && stopped > 0) return { text: n(stopped, '1 check stopped waiting', '# checks stopped waiting'), tone: 'amber' };
+  const waiting = (s.waiting ?? 0) - stopped;
+  if (s.status === 'pending' && waiting > 0) return { text: n(waiting, '1 check waiting', '# checks waiting'), tone: 'zinc' };
   if (s.status === 'pending') return { text: s.passed > 0 ? n(s.passed, '1 check passed, still checking', '# checks passed, still checking') : 'Checking', tone: 'zinc' };
   return { text: s.passed > 1 ? `${s.passed} checks passed` : 'Check passed', tone: 'emerald' };
 }
@@ -907,6 +913,9 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
       if (t.checks_summary.status === 'not_checked') {
         return t.reviewer?.name ? `Waiting for ${t.reviewer.name} to review` : 'Bot says done. Not checked yet';
       }
+      if (stoppedWaiting(t) > 0) return 'Waiting for you: wait longer, or verify by hand';
+      // Between looks nothing is checking: the waiting line says what it waits on.
+      if (t.checks_summary.status === 'pending' && (t.checks_summary.waiting ?? 0) > 0) return 'Bot says done';
       // While a required check runs the card reads as checking; the grey note covers optional ones.
       if (t.checks_summary.status === 'pending') return 'Bot says done. Checking';
       return optionalWaitingText(optionalWaitingCount(t.checks_summary)) ?? 'Bot says done. Checking';
@@ -1840,6 +1849,8 @@ export const missionsApi = {
   tasks: () => call<{ tasks: Task[] }>('/api/tasks?limit=500').then((r) => r.tasks),
   task: (id: string) => call<TaskDetail>(`/api/tasks/${enc(id)}`),
   approveCheck: (id: string) => call<Check>(`/api/checks/${enc(id)}/approve`, 'POST', {}),
+  /** A check that stopped waiting on an outside service: wait `wait_more_hours` longer (person only). */
+  waitMore: (id: string) => call<Check>(`/api/checks/${enc(id)}/wait-more`, 'POST', {}),
   graph: (missionId: string) => call<WorkGraph>(`/api/missions/${enc(missionId)}/graph`),
   scan: (missionId: string) => call<GraphScanResult>(`/api/missions/${enc(missionId)}/graph/scan`, 'POST', {}),
   /** Settle a flag. The key rides along on `redo` too, since a verified task's redo makes a copy. */

@@ -127,6 +127,7 @@ import {
   cardStatus,
   checkKindLabel,
   checksText,
+  stoppedWaiting,
   optionalChecksNote,
   approvalHolds,
   columnOfTask,
@@ -675,7 +676,7 @@ export const TaskCard: React.FC<{
   onDismissMany?: (ts: Task[]) => void;
 }> = ({ task: t, names, now = Date.now(), showMission = true, onOpen, onRemoveLimit, busy = false, openRisks = 0, older = [], onQuick, onDismissMany }) => {
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
-  const checks = checksText(t.checks_summary);
+  const checks = checksText(t.checks_summary, stoppedWaiting(t));
   const optionalNote = optionalChecksNote(t.checks_summary);
   const status = cardStatus(t, names, now);
   const flags = openFlags(t);
@@ -757,7 +758,7 @@ export const TaskCard: React.FC<{
           </span>
         )}
         {status && (
-          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && approvalHolds(t.checks_summary)) ? 'text-amber-200' : autofixLive ? 'text-violet-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
+          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && (approvalHolds(t.checks_summary) || stoppedWaiting(t) > 0)) ? 'text-amber-200' : autofixLive ? 'text-violet-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
           </span>
         )}
@@ -2057,6 +2058,8 @@ export const TaskDetailBody: React.FC<{
   notice?: TaskNotice | null;
   onAction: (a: TaskAction, reason?: string) => void;
   onApproveCheck: (c: Check) => void;
+  /** A check that stopped waiting: wait longer (POST /api/checks/:id/wait-more). */
+  onWaitMore?: (checkId: string) => void;
   onOpenChat?: (t: Task, place?: ChatPlace | null) => void;
   onOpenTask?: (id: string) => void;
   onResolveFlag?: (f: OpenFlag, choice: ResolveChoice) => void;
@@ -2100,6 +2103,7 @@ export const TaskDetailBody: React.FC<{
   notice,
   onAction,
   onApproveCheck,
+  onWaitMore,
   onOpenChat,
   onOpenTask,
   onResolveFlag,
@@ -2450,7 +2454,9 @@ export const TaskDetailBody: React.FC<{
                               ? 'Check to allow'
                               : n.kind === ENGINE_CANT_SANDBOX
                                 ? 'Engine can’t be sandboxed'
-                                : 'Question'}
+                                : n.kind === 'check_timed_out'
+                                  ? 'Stopped waiting'
+                                  : 'Question'}
                     :{' '}
                   </span>
                   {n.kind === ENGINE_CANT_SANDBOX ? <span data-engine-cant-sandbox>{engineCantSandboxText(owner ?? null)}</span> : n.text}
@@ -2466,6 +2472,19 @@ export const TaskDetailBody: React.FC<{
                       </button>
                     ) : null;
                   })()
+                ) : n.kind === 'check_timed_out' ? (
+                  onWaitMore &&
+                  n.actions?.includes('wait_more') && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onWaitMore(n.id)}
+                      className="px-2 py-1 rounded border border-amber-500/40 hover:bg-amber-500/10 min-h-[44px] sm:min-h-[32px] disabled:opacity-50"
+                      data-wait-more
+                    >
+                      Wait {n.wait_more_hours ?? 24} h more
+                    </button>
+                  )
                 ) : onOpenChat && answerChat(t, n) && (
                   <button type="button" onClick={() => onOpenChat(t, answerChat(t, n))} className="px-2 py-1 rounded border border-amber-500/40 hover:bg-amber-500/10 min-h-[32px]" data-answer-in-chat>
                     Answer in chat
@@ -3477,6 +3496,21 @@ export const MissionBoardPage: React.FC<{
     }
   };
 
+  const waitMore = async (checkId: string) => {
+    setBusy(true);
+    setDetailNotice(null);
+    try {
+      await missionsApi.waitMore(checkId);
+      if (!alive.current) return;
+      setDetailNotice({ text: 'It waits longer now. It looks again soon.', error: false });
+      if (openId) await loadDetail(openId);
+    } catch (e) {
+      if (alive.current) setDetailNotice({ text: failMsg(e), error: true });
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+
   const afterChange = async (changed: Task[], openNext: string | null) => {
     setTasks((list) => (list ? changed.reduce((l, x) => upsertTask(l, x), list) : list));
     if (graphMission.current) loadGraph(graphMission.current);
@@ -3882,6 +3916,7 @@ export const MissionBoardPage: React.FC<{
               notice={detailNotice}
               onAction={act}
               onApproveCheck={approveCheck}
+              onWaitMore={waitMore}
               onResolveFlag={resolveFlag}
               onFork={forkTask}
               inGoalMission={!!missionGoalLink(missions.find((m) => m.id === detail.task.mission_id) ?? {})}

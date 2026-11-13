@@ -53,8 +53,10 @@ const at = (iso: string | null | undefined): Date | null => {
 export interface WaitLine {
   /** Full label, for the title and screen readers. */
   label: string;
-  /** "since 09:12 · next look 09:27" (waiting), or "didn't answer in 72 h. Verify the task by hand." (stopped). */
+  /** "since 09:12 · next look 09:27" (waiting), or "didn't answer in 72 h." (stopped). */
   rest: string;
+  /** Stopped: the hours between the server's `waiting_since` and `wait_until`, or null. */
+  hours: number | null;
   /** Waiting: "If it isn't ready by Sun 09:12, it stops and tells you." Stopped: null. */
   deadline: string | null;
   /** The last line the script printed, or null. */
@@ -71,13 +73,14 @@ export function waitLine(c: WaitFields, now: number = Date.now()): WaitLine | nu
   const until = at(c.wait_until);
   if (c.status === 'error') {
     const hours = since && until ? Math.max(1, Math.round((until.getTime() - since.getTime()) / 3_600_000)) : null;
-    return { label, rest: `${hours ? `didn’t answer in ${hours} h` : 'didn’t answer in time'}. Verify the task by hand.`, deadline: null, last, timedOut: true };
+    return { label, rest: `${hours ? `didn’t answer in ${hours} h` : 'didn’t answer in time'}.`, hours, deadline: null, last, timedOut: true };
   }
   const next = at(c.next_run_at);
   const parts = [since ? `since ${clockTime(since, now)}` : null, next ? `next look ${next.getTime() <= now ? 'soon' : clockTime(next, now)}` : null].filter(Boolean);
   return {
     label,
     rest: parts.join(' · '),
+    hours: null,
     deadline: until ? `If it isn’t ready by ${clockTime(until, now)}, it stops and tells you.` : null,
     last,
     timedOut: false,
@@ -88,6 +91,15 @@ export function waitLine(c: WaitFields, now: number = Date.now()): WaitLine | nu
 export function waitLineText(w: WaitLine): string {
   if (w.timedOut) return `${w.label} ${w.rest}`;
   return `Waiting on ${w.label}${w.rest ? ` ${w.rest}` : ''}`;
+}
+
+/**
+ * The detail's line, where the receipt row already shows the label above it:
+ * "Waiting since 10:08 · next look 10:38", or "No answer in 72 h.".
+ */
+export function detailLineText(w: WaitLine): string {
+  if (w.timedOut) return w.hours ? `No answer in ${w.hours} h.` : 'No answer in time.';
+  return w.rest ? `Waiting ${w.rest}` : 'Waiting';
 }
 
 /** Whether the card should look up its waiting checks: it is in review and the summary counts some. */

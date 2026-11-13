@@ -1,21 +1,22 @@
 // Waiting checks (0.9.7, #564): a check that waits on an outside service shows as one line on the
 // task card and in the task detail, "Waiting on <label> since 09:12 · next look 09:27", plus the
-// last line the script printed. Past its deadline it says so and points at Verify by hand.
+// last line the script printed. Past its deadline the card moves to Needs you with a Wait N h more button.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadBundled } from './bundle.mjs';
 
 globalThis.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
-const w = await loadBundled(`export * from './src/waitingChecks'; export { checksText, buildReceipt, checkStatusLabel } from './src/missions';`);
+const w = await loadBundled(`export * from './src/waitingChecks'; export { checksText, buildReceipt, checkStatusLabel, cardStatus, columnOfTask, stoppedWaiting, missionsApi } from './src/missions';`);
 const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
-  import { TaskCard, EvidenceReceipt } from './src/components/MissionBoardView';
+  import { TaskCard, EvidenceReceipt, TaskDetailBody } from './src/components/MissionBoardView';
   import { WaitingCheckLine } from './src/components/WaitingCheckLine';
   import { buildReceipt } from './src/missions';
   export const card = (p) => renderToStaticMarkup(React.createElement('ul', null, React.createElement(TaskCard, p)));
   export const line = (p) => renderToStaticMarkup(React.createElement(WaitingCheckLine, p));
+  export const detail = (p) => renderToStaticMarkup(React.createElement(TaskDetailBody, p));
   export const receipt = (d) => renderToStaticMarkup(React.createElement(EvidenceReceipt, { receipt: buildReceipt(d, {}), names: {} }));
 `);
 
@@ -61,9 +62,20 @@ test('the last printed line skips the run header and is null when the script pri
   assert.equal(w.waitLine(check({ output_excerpt: 'run 1: not ready yet' }), NOW).last, null);
 });
 
-test('past its deadline it says it did not answer and points at verifying by hand (no Wait button in 0.9.7)', () => {
+test('past its deadline the card line says it did not answer, and the detail says No answer', () => {
   const l = w.waitLine(check({ status: 'error', next_run_at: null, timed_out_at: iso('2026-11-16T09:12:00') }), NOW);
-  assert.equal(w.waitLineText(l), './gate.sh didn’t answer in 72 h. Verify the task by hand.');
+  assert.equal(w.waitLineText(l), './gate.sh didn’t answer in 72 h.');
+  assert.equal(l.hours, 72);
+  assert.equal(w.detailLineText(l), 'No answer in 72 h.');
+  assert.equal(w.detailLineText({ ...l, hours: null }), 'No answer in time.');
+  assert.equal(w.detailLineText(w.waitLine(check(), NOW)), 'Waiting since 09:12 · next look 09:27');
+  const det = ui.line({ line: l });
+  assert.ok(!det.includes('./gate.sh'), 'the detail row already shows the label');
+  assert.ok(!det.includes('<svg'), 'no second warning icon in the detail');
+  assert.ok(!det.includes('pl-4'), 'the last printed line lines up under the text');
+  const card = ui.line({ line: l, compact: true });
+  assert.ok(card.includes('<svg'), 'the card keeps its triangle');
+  assert.ok(!card.includes('Verify the task by hand'));
   assert.equal(l.deadline, null);
   assert.equal(l.timedOut, true);
   assert.equal(w.waitLine(check({ status: 'error', timed_out_at: null }), NOW), null, 'an ordinary error is not a wait');
@@ -83,7 +95,10 @@ test('the line is labelled for screen readers and never renders HTML from the sc
   const html = ui.line({ line: w.waitLine(check({ output_excerpt: 'run 1: not ready yet\n<img src=x onerror=alert(1)>' }), NOW) });
   assert.ok(!html.includes('<img'), 'output is text');
   assert.ok(html.includes('&lt;img'));
-  assert.ok(html.includes('class="sr-only">Waiting on ./gate.sh since 09:12 · next look 09:27<'));
+  assert.ok(html.includes('class="sr-only">Waiting since 09:12, next look 09:27<'));
+  assert.ok(html.includes('>Waiting since 09:12 · next look 09:27<'));
+  assert.ok(!html.includes('text-zinc-500'), 'small grey text meets AA');
+  assert.ok(ui.line({ line: w.waitLine(check(), NOW), compact: true }).includes('class="sr-only">Waiting on ./gate.sh since 09:12 · next look 09:27<'));
   assert.ok(html.includes('It last printed: '));
   assert.ok(html.includes('data-waiting-deadline'));
   assert.ok(html.includes('aria-hidden="true"'));
@@ -118,4 +133,44 @@ test('the card looks again a minute after the earliest next look, never sooner t
   assert.equal(w.nextRefresh([check()], NOW), 8 * 60_000);
   assert.equal(w.nextRefresh([check({ next_run_at: iso('2026-11-13T09:00:00') })], NOW), 30_000);
   assert.equal(w.nextRefresh([check({ status: 'error' })], NOW), null);
+});
+
+const stopped = (over = {}) => task({
+  needs_you: [{ id: 'ch1', kind: 'check_timed_out', text: './gate.sh didn’t answer in 72 h. Wait longer, or verify by hand.', check_label: './gate.sh', actions: ['wait_more', 'verify'], wait_more_hours: 24 }],
+  ...over,
+});
+
+test('a waiting card says Bot says done; a stopped one moves to Needs you, amber, with its own chip', () => {
+  assert.equal(w.cardStatus(task(), {}, NOW), 'Bot says done');
+  assert.equal(w.columnOfTask(task()), 'review');
+  const t = stopped();
+  assert.equal(w.stoppedWaiting(t), 1);
+  assert.equal(w.columnOfTask(t), 'needs_you');
+  assert.equal(w.cardStatus(t, {}, NOW), 'Waiting for you: wait longer, or verify by hand');
+  assert.deepEqual(w.checksText(t.checks_summary, 1), { text: '1 check stopped waiting', tone: 'amber' });
+  assert.deepEqual(w.checksText({ ...t.checks_summary, waiting: 3 }, 2), { text: '2 checks stopped waiting', tone: 'amber' });
+  const html = ui.card({ task: t, names: {}, now: NOW, onOpen: () => {} });
+  assert.ok(/text-amber-200[^>]*>Waiting for you: wait longer/.test(html));
+  assert.ok(html.includes('1 check stopped waiting'));
+  assert.ok(!html.includes('1 check waiting'), 'the waiting count leaves the stopped one out');
+});
+
+test('the detail offers Wait 24 h more for a stopped check, 44 px on phones, labelled Stopped waiting', () => {
+  let asked = null;
+  const t = stopped();
+  const p = { detail: { task: t, checks: [check({ status: 'error', timed_out_at: iso('2026-11-16T09:12:00') })], evidence: [], events: [] }, names: {}, now: NOW, onAction() {}, onApproveCheck() {}, onWaitMore: (id) => (asked = id) };
+  const html = ui.detail(p);
+  const btn = html.match(/<button[^>]*data-wait-more[^>]*>([\s\S]*?)<\/button>/);
+  assert.ok(btn, 'the button');
+  assert.ok(btn[0].includes('min-h-[44px] sm:min-h-[32px]'), '44 px on phones');
+  assert.equal(btn[1].replace(/<!-- -->/g, ''), 'Wait 24 h more');
+  const flat = html.replace(/<!-- -->/g, '');
+  assert.ok(flat.includes('>Stopped waiting: <'), 'the row label');
+  assert.ok(!flat.includes('Question: '));
+  const six = ui.detail({ ...p, detail: { ...p.detail, task: stopped({ needs_you: [{ ...t.needs_you[0], wait_more_hours: 6 }] }) } });
+  assert.ok(six.replace(/<!-- -->/g, '').includes('>Wait 6 h more<'));
+  const noAction = ui.detail({ ...p, detail: { ...p.detail, task: stopped({ needs_you: [{ ...t.needs_you[0], actions: ['verify'] }] }) } });
+  assert.ok(!noAction.includes('data-wait-more'), 'no button when the server does not offer it');
+  assert.equal(typeof w.missionsApi.waitMore, 'function');
+  assert.equal(asked, null);
 });
