@@ -6,7 +6,7 @@ import { loadBundled } from './bundle.mjs';
 globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 
 const m = await loadBundled(`
-  export { ModernApprovalCard, localShellView } from './src/components/ModernApprovalCard';
+  export { ModernApprovalCard, localShellView, startedByNote } from './src/components/ModernApprovalCard';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createElement } from 'react';
 `);
@@ -132,4 +132,20 @@ test('a payment card in its summary form (after a reload) shows the reason and n
   // The same summary card without a reason still offers Always this session.
   const plain = render({ id: 'n4', tool_name: 'Bash', details: { source: 'summary', tool: 'Bash', summary: 'command: ls' } });
   assert.match(plain, /Always this session/);
+});
+
+// Shaped like BrokerApprover::classified for a turn kwant started on its own (loose ends, Watch).
+test('a card from a turn kwant started says why it asks, in one line', () => {
+  const ticket = (extra = {}) => ({
+    id: 's1',
+    tool_name: 'Bash',
+    details: { source: 'claude_builtin', tool: 'Bash', arguments: { command: 'touch x' }, kwant_name: 'Lin', always_ask: true, ...extra },
+  });
+  const html = render(ticket({ started_by: 'Loose ends' }));
+  assert.match(html, /data-started-by[^>]*>kwant started this turn on its own \(Loose ends\), so changes ask you\.<\/p>/);
+  assert.doesNotMatch(render(ticket()), /data-started-by/, 'no label, no line');
+  assert.equal(m.startedByNote(ticket({ started_by: '  ' })), null);
+  assert.equal(m.startedByNote({ id: 'x', tool_name: 'Bash', details: { started_by: 3 } }), null);
+  // A payment card keeps its own reason and doesn't add this line
+  assert.doesNotMatch(render(stripeTicket({ always_ask: true, started_by: 'Loose ends' })), /data-started-by/);
 });

@@ -367,6 +367,8 @@ async fn an_approval_card_or_a_question_returns_waiting_on_person() {
         conversation: thread_id.clone(),
         chat: Some(json!({"thread_id": thread_id})),
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     });
     let req = ToolApprovalRequest {
         kwant_id: env.a.clone(),

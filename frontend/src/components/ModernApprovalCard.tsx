@@ -135,6 +135,16 @@ export const paymentReason = (approval: PendingApproval) => {
   return why.trim().replace(/[.\s]+$/, '') || 'it looks like paying';
 };
 
+/**
+ * Why a card asks although nobody typed a request: kwant started the turn on its own (the
+ * server's `details.started_by`, e.g. "Loose ends"). Null on an ordinary turn's card.
+ */
+export const startedByNote = (approval: PendingApproval) => {
+  const label = approval.details?.started_by;
+  if (typeof label !== 'string' || !label.trim()) return null;
+  return `kwant started this turn on its own (${label.trim()}), so changes ask you.`;
+};
+
 /** The line under a still-open card's heading. */
 export const waitingNote = (bot: string | null) =>
   `${bot ?? 'The bot'} stopped waiting for an answer and nothing ran. Allow starts it again to make this call; Deny closes the card.`;
@@ -228,6 +238,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const botName = name ?? mcp?.kwant ?? null;
   const payment = paymentReason(approval);
   const tier = payment ? null : tierReason(approval.details);
+  const startedBy = payment || tier ? null : startedByNote(approval);
   const time = localClock(approval.asked_at);
   const offerAlways = !shell && !waiting && !payment;
 
@@ -363,6 +374,12 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
             <p className="text-xs leading-[18px] text-zinc-400">This bot’s tier asks you here, even with approvals off.</p>
           </div>
         </div>
+      )}
+
+      {startedBy && (
+        <p role="note" data-started-by className="mt-2 text-xs leading-[18px] text-zinc-400 break-words">
+          {startedBy}
+        </p>
       )}
 
       {details && <ApprovalDetails phone={phone}>{details}</ApprovalDetails>}

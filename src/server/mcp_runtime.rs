@@ -130,10 +130,18 @@ pub struct BrokerApprover {
     /// The chat a card left unanswered resumes in after a late Allow (see [`turn_chat`]);
     /// `None` resumes in the bot's direct chat.
     pub chat: Option<Value>,
-    /// Ask even when the bot's approvals are off, and don't use "always allow" answers: for
-    /// turns kwnt starts on its own that nobody asked for (the loose-ends owner). A call the
-    /// person allowed on a card (late Allow) still runs once.
+    /// kwnt started this turn on its own, nobody asked for it (the loose-ends owner, Watch,
+    /// Verify, an audit…): "always allow" answers don't count and, under Ask or "Ask only when
+    /// risky", every call that could change something asks, with the card saying why
+    /// (`details.started_by`). Approvals off still runs everything (0.9.7): only
+    /// [`BrokerApprover::strict_ask`] turns ask then. A call the person allowed on a card (late
+    /// Allow) still runs once.
     pub always_ask: bool,
+    /// Asks even when the bot's approvals are off: a turn that runs something the person hasn't
+    /// reviewed (a Skill Foundry draft). Only with `always_ask`.
+    pub strict_ask: bool,
+    /// What kwnt started the turn for (its label, "Watch"), shown on an `always_ask` turn's card.
+    pub started_by: Option<String>,
     /// Where task folders resolve, for the side-effect ledger (`turn_tool_calls`).
     pub data_dir: PathBuf,
 }
@@ -188,6 +196,23 @@ impl ToolApprover for BrokerApprover {
     }
 }
 
+/// One of claude's plain read tools (Read, Glob, Grep).
+fn plain_read(req: &ToolApprovalRequest) -> bool {
+    req.builtin.is_some() && matches!(req.tool.as_str(), "Read" | "Glob" | "Grep")
+}
+
+/// A claude Bash call whose command only reads, in the bot's folder (see
+/// [`mcp::shell_risk::reads_only`]).
+fn shell_reads_only(req: &ToolApprovalRequest) -> bool {
+    let Some(cwd) = req.builtin.as_ref().and_then(|b| b.cwd.as_deref()) else { return false };
+    let Some(command) = req.arguments.get("command").and_then(Value::as_str) else { return false };
+    if req.tool != "Bash" {
+        return false;
+    }
+    let folder = std::path::Path::new(cwd).canonicalize().unwrap_or_else(|_| PathBuf::from(cwd));
+    mcp::shell_risk::reads_only(command, &folder)
+}
+
 impl BrokerApprover {
     /// [`ToolApprover::decide`], with the ledger's decision class and the card's id.
     async fn classified(&self, req: ToolApprovalRequest) -> (ApprovalOutcome, &'static str, Option<String>) {
@@ -212,15 +237,19 @@ impl BrokerApprover {
         // follow approvals off even in an always-asking audit turn; its other tools still ask
         let audit_call = req.server == mcp::SELF_SERVER_NAME
             && (super::missions::auditor::TOOL_NAMES.contains(&req.tool.as_str()) || req.tool == super::missions::verifier::TOOL);
-        let off = !forced && (!self.always_ask || audit_call) && mode.as_ref().is_some_and(|m| m.is_off());
+        // Approvals off means off in a turn kwant started on its own too (0.9.7): only a strict one
+        // (it runs something the person hasn't reviewed) still asks.
+        let strict = self.always_ask && self.strict_ask;
+        let off = !forced && (!strict || audit_call) && mode.as_ref().is_some_and(|m| m.is_off());
         // "Ask only when risky": what the caller made of this call; nothing known asks. A turn that
-        // always asks (kwant started it on its own) still lets claude's plain read tools through.
+        // always asks (kwant started it on its own) still lets claude's plain read tools through,
+        // and a shell command that only reads (`git show`, `grep`) unless the turn is strict.
         let smart = mode
             .as_ref()
             .is_some_and(|m| m.is_smart())
             .then(|| req.smart.clone())
             .flatten()
-            .filter(|_| !self.always_ask || (req.builtin.is_some() && matches!(req.tool.as_str(), "Read" | "Glob" | "Grep")))
+            .filter(|_| !self.always_ask || plain_read(&req) || (!strict && shell_reads_only(&req)))
             .filter(|_| !forced);
         let mut details = match &req.builtin {
             Some(b) => json!({
@@ -261,6 +290,9 @@ impl BrokerApprover {
         }
         if self.always_ask {
             details["always_ask"] = json!(true);
+            if let Some(label) = self.started_by.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+                details["started_by"] = json!(label);
+            }
         }
         let record = NewApproval {
             turn_id: req.turn_id.clone(),
@@ -666,9 +698,12 @@ pub struct TurnApprovalOpts {
     /// The turn's (agent, effort): a card it leaves unanswered resumes on the same ones after a
     /// late Allow.
     pub routed: Option<(String, String)>,
-    /// Every call that could change something asks, approvals off or not (see
-    /// [`BrokerApprover::always_ask`]).
+    /// kwnt started the turn on its own (see [`BrokerApprover::always_ask`]).
     pub always_ask: bool,
+    /// Asks even with approvals off (see [`BrokerApprover::strict_ask`]).
+    pub strict_ask: bool,
+    /// The turn's label, for its cards (see [`BrokerApprover::started_by`]).
+    pub started_by: Option<String>,
     /// A Skill Foundry replay: nothing that could change anything outside the scratch folder
     /// runs, and every such call is logged here as what the bot would have done (see
     /// [`RehearseApprover`]).
@@ -810,6 +845,8 @@ pub async fn prepare_turn_with_opts(
         conversation: turn_conversation(state, &turn_id),
         chat,
         always_ask: opts.always_ask,
+        strict_ask: opts.strict_ask,
+        started_by: opts.started_by.clone(),
         data_dir: state.config.data_dir.clone(),
     });
     let approver: Arc<dyn ToolApprover> = if let Some(log) = opts.rehearse.clone() {
@@ -832,11 +869,17 @@ pub async fn prepare_turn_with_opts(
         permission_url: Some(format!("{}/api/mcp/permission/{token}", local_base_url(state))),
         gateway: Some(GatewayAccess { url: format!("{}/api/mcp/gateway", local_base_url(state)), token: token.clone() }),
         max_tool_iterations: max_tool_iterations(setting),
-        approvals: if opts.always_ask || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
-            // An audit turn asks whatever the setting says, and a Dev mode brief only reads: never tell either to just go ahead
-            Approvals::Ask
-        } else {
-            state.db.kwant_approvals(&kwant.id).await.map(|m| Approvals::from_mode(&m.effective)).unwrap_or_default()
+        approvals: {
+            let mode = state.db.kwant_approvals(&kwant.id).await.map(|m| Approvals::from_mode(&m.effective)).unwrap_or_default();
+            if (opts.always_ask && opts.strict_ask) || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
+                // A strict turn asks whatever the setting says, and a Dev mode brief only reads: never tell either to just go ahead
+                Approvals::Ask
+            } else if opts.always_ask && mode != Approvals::Off {
+                // A turn kwant started on its own asks under "Ask only when risky" too
+                Approvals::Ask
+            } else {
+                mode
+            }
         },
         records: Default::default(),
     };

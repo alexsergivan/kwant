@@ -738,6 +738,8 @@ fn ask_through_the_approver(env: &Env, turn: &str, tool: &str, always_ask: bool)
         conversation: env.a.clone(),
         chat: Some(json!({"direct_kwant_id": env.a})),
         always_ask,
+        strict_ask: false,
+        started_by: None,
     };
     let req = kwnt::mcp::ToolApprovalRequest {
         kwant_id: env.a.clone(),

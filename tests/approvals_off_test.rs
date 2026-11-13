@@ -86,11 +86,22 @@ async fn put(e: &Env, uri: &str, approvals: &str) -> Value {
 
 /// A live turn of `bot` in the general channel with its own tools; returns its token.
 async fn turn(e: &Env, bot: &Kwant) -> (String, String, TempDir) {
-    turn_with(e, bot, false).await
+    turn_with(e, bot, Default::default()).await
 }
 
-/// [`turn`]; `always_ask` makes it a turn like the loose-ends owner's.
-async fn turn_with(e: &Env, bot: &Kwant, always_ask: bool) -> (String, String, TempDir) {
+/// A turn kwant started on its own (`always_ask`), labelled like loose-ends' owner's.
+fn kwant_started() -> mcp_runtime::TurnApprovalOpts {
+    mcp_runtime::TurnApprovalOpts { always_ask: true, started_by: Some("Loose ends".into()), ..Default::default() }
+}
+
+/// [`kwant_started`], strict like Skill Foundry's: it still asks with approvals off.
+fn strict_started() -> mcp_runtime::TurnApprovalOpts {
+    mcp_runtime::TurnApprovalOpts { always_ask: true, strict_ask: true, started_by: Some("Skill Foundry".into()), ..Default::default() }
+}
+
+/// [`turn`] with the routed turn's approval options (`always_ask`: a turn like the loose-ends
+/// owner's; `strict_ask`: Skill Foundry's).
+async fn turn_with(e: &Env, bot: &Kwant, opts: mcp_runtime::TurnApprovalOpts) -> (String, String, TempDir) {
     let turn_id = uuid::Uuid::new_v4().to_string();
     let folder = tempdir().unwrap();
     let scope = SelfScope {
@@ -100,7 +111,6 @@ async fn turn_with(e: &Env, bot: &Kwant, always_ask: bool) -> (String, String, T
         turn_id: Some(turn_id.clone()),
         ..Default::default()
     };
-    let opts = mcp_runtime::TurnApprovalOpts { always_ask, ..Default::default() };
     let (_, token) =
         mcp_runtime::prepare_turn_with_opts(&e.state, bot, Some(turn_id.clone()), Some(folder.path().to_path_buf()), Some(scope), opts)
             .await
@@ -120,12 +130,13 @@ async fn turn_with(e: &Env, bot: &Kwant, always_ask: bool) -> (String, String, T
 /// What claude's permission prompt gets back for `Bash {command}`: `Some(allowed)` when kwnt
 /// answers without a card, `None` when it shows one (the card is then denied, to end the wait).
 async fn ask_bash(e: &Env, bot: &Kwant, command: &str) -> Option<bool> {
-    ask_tool(e, bot, "Bash", json!({"command": command}), false).await
+    ask_with(e, bot, "Bash", json!({"command": command}), Default::default()).await.ok()
 }
 
-/// [`ask_bash`] for any tool, in a turn that may be `always_ask`.
-async fn ask_tool(e: &Env, bot: &Kwant, tool: &str, input: Value, always_ask: bool) -> Option<bool> {
-    let (turn_id, token, _folder) = turn_with(e, bot, always_ask).await;
+/// [`ask_bash`] for any tool, in a turn with `opts`: `Ok(allowed)` when kwnt answers without a card,
+/// `Err(details)` with the card's details when it shows one (then denied, to end the wait).
+async fn ask_with(e: &Env, bot: &Kwant, tool: &str, input: Value, opts: mcp_runtime::TurnApprovalOpts) -> Result<bool, Value> {
+    let (turn_id, token, _folder) = turn_with(e, bot, opts).await;
     let mut events = e.state.event_sender.subscribe();
     let ask = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
         "arguments": {"tool_name": tool, "input": input, "tool_use_id": "tu_1"}}});
@@ -147,12 +158,12 @@ async fn ask_tool(e: &Env, bot: &Kwant, tool: &str, input: Value, always_ask: bo
         (true, None) => {
             let (status, v) = (&mut prompt).await.unwrap();
             assert_eq!(status, StatusCode::OK, "{v}");
-            Some(v["result"]["content"][0]["text"].as_str().unwrap().contains(r#""behavior":"allow""#))
+            Ok(v["result"]["content"][0]["text"].as_str().unwrap().contains(r#""behavior":"allow""#))
         }
-        (false, Some(id)) => {
+        (false, Some((id, details))) => {
             assert!(e.state.broker.resolve(&id, ApprovalDecision::Deny).await);
             prompt.await.unwrap();
-            None
+            Err(details)
         }
         (answered, carded) => panic!("answered {answered} with card {carded:?} (15 s)"),
     };
@@ -161,12 +172,12 @@ async fn ask_tool(e: &Env, bot: &Kwant, tool: &str, input: Value, always_ask: bo
     outcome
 }
 
-/// The id of an approval card among the events received so far, if one was shown.
-fn card_in(events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) -> Option<String> {
+/// The id and details of an approval card among the events received so far, if one was shown.
+fn card_in(events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) -> Option<(String, Value)> {
     use tokio::sync::broadcast::error::TryRecvError;
     loop {
         match events.try_recv() {
-            Ok(RuntimeEvent::ApprovalRequired { id, .. }) => return Some(id),
+            Ok(RuntimeEvent::ApprovalRequired { id, details, .. }) => return Some((id, details)),
             Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
             Err(_) => return None,
         }
@@ -249,29 +260,66 @@ async fn space_off_runs_bash_without_a_card_and_records_it() {
     assert_eq!(ask_bash(&e, &e.bot, "touch y").await, None);
 }
 
-/// The loose-ends owner's turn (nobody asked for it) asks before anything that could change
-/// something, even with approvals off; tools that only read still run.
+/// Oleks's report (0.9.5): with approvals off, a bot's loose-ends turn (kwant started it, nobody
+/// asked) still asked to run `git show`. Off now wins there too: a read-only command, a change in
+/// the folder, a write outside it and kwnt's own changing tools run without a card, on record.
 #[tokio::test]
-async fn an_always_ask_turn_asks_even_with_approvals_off() {
+async fn approvals_off_wins_in_a_turn_kwant_started_on_its_own() {
     let e = setup().await;
     put(&e, "/api/spaces/spc_default/approvals", "off").await;
     put(&e, &format!("/api/kwants/{}/approvals", e.bot.id), "off").await;
-    assert_eq!(ask_tool(&e, &e.bot, "Bash", json!({"command": "touch x"}), false).await, Some(true), "an ordinary turn runs it");
 
     let self_tool = |name: &str| format!("mcp__{}__{name}", kwnt::mcp::SELF_SERVER_NAME);
+    let oleks = "git show --stat HEAD 2>/dev/null | head -40; grep -rn \"TODO\" . | head -20";
     for (tool, input) in [
+        ("Bash".to_string(), json!({"command": oleks})),
         ("Bash".to_string(), json!({"command": "touch x"})),
         ("Write".to_string(), json!({"file_path": "/tmp/kwnt-owner-test", "content": "x"})),
         (self_tool("routine_create"), json!({"name": "r", "instructions": "x", "schedule": {"type": "daily", "time": "09:00"}})),
         (self_tool("delegate"), json!({"to": "Other", "task": "send it"})),
         (self_tool("memory_add"), json!({"text": "x"})),
+        (self_tool("search_history"), json!({})),
     ] {
-        assert_eq!(ask_tool(&e, &e.bot, &tool, input, true).await, None, "{tool} must ask in an owner turn");
+        assert_eq!(ask_with(&e, &e.bot, &tool, input, kwant_started()).await, Ok(true), "{tool} runs with approvals off");
     }
-    for tool in ["search_history", "routine_list", "delegation_status"] {
-        assert_eq!(ask_tool(&e, &e.bot, &self_tool(tool), json!({}), true).await, Some(true), "{tool} only reads");
-    }
-    // "Always allow" for the conversation doesn't carry into an owner turn either
+    let ran = get(&e, "/api/approvals?space=spc_default&status=auto_allowed").await;
+    let bash = ran.as_array().unwrap().iter().find(|r| r["details"]["arguments"]["command"] == oleks).expect("on record");
+    assert_eq!(bash["details"]["always_ask"], true, "{bash}");
+    assert_eq!(bash["details"]["started_by"], "Loose ends", "{bash}");
+    let away = get(&e, "/api/away").await;
+    assert!(away["waiting"].as_array().unwrap().iter().all(|i| i["kind"] != "approval"), "{away}");
+}
+
+/// A strict turn (Skill Foundry's draft: it runs steps the person hasn't reviewed) still asks
+/// with approvals off, and says who started it.
+#[tokio::test]
+async fn a_strict_turn_still_asks_with_approvals_off() {
+    let e = setup().await;
+    put(&e, &format!("/api/kwants/{}/approvals", e.bot.id), "off").await;
+    let card = ask_with(&e, &e.bot, "Bash", json!({"command": "touch x"}), strict_started()).await.expect_err("strict asks");
+    assert_eq!(card["always_ask"], true, "{card}");
+    assert_eq!(card["started_by"], "Skill Foundry", "{card}");
+    // Reads still run (claude's own Read never reaches the approver), and so do kwnt's read tools
+    let tool = format!("mcp__{}__search_history", kwnt::mcp::SELF_SERVER_NAME);
+    assert_eq!(ask_with(&e, &e.bot, &tool, json!({}), strict_started()).await, Ok(true));
+}
+
+/// With approvals on, a kwant-started turn still asks, and its card says why: `started_by`.
+/// "Always allow" for the conversation doesn't carry into it either.
+#[tokio::test]
+async fn with_approvals_on_a_kwant_started_turn_asks_and_says_who_started_it() {
+    let e = setup().await;
+    let card = ask_with(&e, &e.bot, "Bash", json!({"command": "touch x"}), kwant_started()).await.expect_err("asks");
+    assert_eq!(card["always_ask"], true, "{card}");
+    assert_eq!(card["started_by"], "Loose ends", "{card}");
+    // An ordinary turn's card has neither
+    let card = ask_with(&e, &e.bot, "Bash", json!({"command": "touch x"}), Default::default()).await.expect_err("asks");
+    assert!(card.get("always_ask").is_none() && card.get("started_by").is_none(), "{card}");
+    // A blank label adds no line
+    let blank = mcp_runtime::TurnApprovalOpts { started_by: Some("  ".into()), ..kwant_started() };
+    let card = ask_with(&e, &e.bot, "Bash", json!({"command": "touch x"}), blank).await.expect_err("asks");
+    assert!(card.get("started_by").is_none(), "{card}");
+
     e.state.broker.allow_for_session(&e.bot.id, &e.general, "Bash").await;
     for (always_ask, want) in [(false, ApprovalOutcome::Allowed), (true, ApprovalOutcome::Unanswered)] {
         let approver = mcp_runtime::BrokerApprover {
@@ -283,6 +331,8 @@ async fn an_always_ask_turn_asks_even_with_approvals_off() {
             conversation: e.general.clone(),
             chat: None,
             always_ask,
+            strict_ask: false,
+            started_by: None,
         };
         let req = ToolApprovalRequest {
             kwant_id: e.bot.id.clone(),
@@ -296,9 +346,25 @@ async fn an_always_ask_turn_asks_even_with_approvals_off() {
             smart: None,
             payment: None,
         };
-        put(&e, &format!("/api/kwants/{}/approvals", e.bot.id), "ask").await;
         assert_eq!(approver.decide(req).await, want, "always_ask {always_ask}");
     }
+}
+
+/// "Ask only when risky" in a kwant-started turn: a command that only reads runs; anything that
+/// changes something asks. A strict turn asks for both.
+#[tokio::test]
+async fn smart_lets_a_read_only_command_through_in_a_kwant_started_turn() {
+    let e = setup().await;
+    e.state.db.set_kwant_approvals(&e.bot.id, "smart").await.unwrap();
+    let bash = |c: &str| json!({"command": c});
+    assert_eq!(ask_with(&e, &e.bot, "Bash", bash("git show --stat HEAD"), kwant_started()).await, Ok(true));
+    assert_eq!(ask_with(&e, &e.bot, "Bash", bash("grep -rn TODO . | head -20"), kwant_started()).await, Ok(true));
+    for command in ["rm -rf x", "touch x", "git add -A", "git show HEAD > out.txt"] {
+        assert!(ask_with(&e, &e.bot, "Bash", bash(command), kwant_started()).await.is_err(), "{command} asks");
+    }
+    assert!(ask_with(&e, &e.bot, "Bash", bash("git show --stat HEAD"), strict_started()).await.is_err(), "strict asks");
+    // An ordinary turn: smart's own rules, unchanged (an in-folder `touch` is not risky)
+    assert_eq!(ask_with(&e, &e.bot, "Bash", bash("touch x"), Default::default()).await, Ok(true));
 }
 
 #[tokio::test]

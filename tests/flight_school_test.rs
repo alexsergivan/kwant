@@ -209,6 +209,8 @@ fn approver(e: &Env) -> mcp_runtime::BrokerApprover {
         conversation: e.general.clone(),
         chat: None,
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     }
 }
 
