@@ -267,9 +267,12 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
         <HowToUpdatePanel id={howId} how={model.status?.how ?? null} version={line.version} url={line.url} />
       )}
       {entry && <WhatsNewButton entry={entry} onPick={onWhatsNew} />}
-      <a href={RELEASES_URL} target="_blank" rel="noreferrer" className={`mt-2 inline-flex items-center gap-1.5 py-1 text-xs text-sky-300 hover:underline max-md:min-h-[44px] ${focus}`}>
-        All releases on GitHub <ExternalLink size={13} aria-hidden="true" />
-      </a>
+      {/* Off already links the latest release; one GitHub link is enough */}
+      {line.kind !== 'off' && (
+        <a href={RELEASES_URL} target="_blank" rel="noreferrer" className={`mt-2 inline-flex items-center gap-1.5 py-1 text-xs text-sky-300 hover:underline max-md:min-h-[44px] ${focus}`}>
+          All releases on GitHub <ExternalLink size={13} aria-hidden="true" />
+        </a>
+      )}
     </section>
   );
 };

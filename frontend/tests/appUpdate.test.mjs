@@ -156,6 +156,7 @@ test('off (404 or supported=false) shows the version, Check again and the latest
     assert.match(html, /data-version-recheck[^>]*>Check again<\/button>/);
     assert.match(html, /href="https:\/\/github\.com\/alexsergivan\/kwant\/releases\/latest"[^>]*>Get the latest version/);
     assert.doesNotMatch(html, /latest version<\/span>|Update<\/button>/);
+    assert.doesNotMatch(html, /All releases on GitHub/, 'off has one GitHub link, not two');
     if (answer.status === 200) assert.match(html, /kwant bots <span[^>]*>0\.1\.2<\/span>/, 'the version from the answer');
     // Asked again after 10 s, 60 s, then every 30 minutes
     assert.deepEqual(h.live().map((t) => t.ms), [10_000]);
