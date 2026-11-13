@@ -33,6 +33,8 @@ export interface AwayItem {
   task_id?: string | null;
   /** 0.9.5, connection items only (Inbox): a sign-in only the person can redo, and its fix button. */
   connection?: string;
+  /** "sign_in" or "reconnect" (an app to connect again); older servers may leave it out. */
+  cause?: string;
   fix?: { label: string; opens?: string } | null;
 }
 
@@ -106,7 +108,7 @@ export function windowLabel(since: string, now: number = Date.now()): string {
 export type Tone = 'amber' | 'emerald' | 'rose' | 'sky' | 'zinc';
 
 /** Short label and colour for an item's kind and status. */
-export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: string; tone: Tone } {
+export function itemLabel(item: Pick<AwayItem, 'kind' | 'status' | 'cause'>): { label: string; tone: Tone } {
   switch (item.kind) {
     case 'question':
       return { label: 'Question', tone: 'amber' };
@@ -116,7 +118,8 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: str
     case 'watch':
       return { label: 'Watch', tone: 'amber' };
     case 'connection':
-      return { label: 'Sign in again', tone: 'amber' };
+      // The chat line's cause: an app to connect again (Composio, no active account), else a sign-in.
+      return item.cause === 'reconnect' ? { label: 'Connect again', tone: 'amber' } : { label: 'Sign in again', tone: 'amber' };
     case 'routine_run':
       return item.status === 'ok' ? { label: 'Routine ran', tone: 'emerald' } : { label: 'Routine failed', tone: 'rose' };
     case 'delegation':

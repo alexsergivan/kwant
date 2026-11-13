@@ -216,6 +216,18 @@ fn needs_you_lists_open_sign_in_lines() {
     assert_eq!(item["text"], "GitHub stopped working for Ben: it needs you to sign in again.");
 }
 
+/// The Inbox row is worded like the chat line: a sign-in, or an app to connect again.
+#[test]
+fn inbox_title_follows_the_cause() {
+    assert_eq!(inbox_title("Gmail", Cause::SignIn.as_str(), "Ben"), "Gmail needs you to sign in again for Ben");
+    assert_eq!(
+        inbox_title("Google Calendar", Cause::Reconnect.as_str(), "TechLead"),
+        "Google Calendar needs to be connected again for TechLead"
+    );
+    // A line saved without a cause reads as a sign-in, as before
+    assert_eq!(inbox_title("GitHub", "", "Ann"), "GitHub needs you to sign in again for Ann");
+}
+
 /// A long reason is cut before it is kept.
 #[test]
 fn reasons_are_cut() {

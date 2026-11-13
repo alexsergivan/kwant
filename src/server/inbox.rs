@@ -540,13 +540,14 @@ fn watch_item(mut v: Value, last_seen: Option<DateTime<Utc>>) -> Value {
 }
 
 /// 0.9.5: a connection only the person can fix (`tool_failures::needs_you`) as a Waiting-on-you
-/// row, "Gmail needs you to sign in again for Ben"; the row's Reconnect opens Settings › Connections
+/// row, "Gmail needs you to sign in again for Ben" or, for `cause` "reconnect", "Google Calendar
+/// needs to be connected again for TechLead"; the row's Reconnect opens Settings › Connections
 /// and the row itself opens the chat with the line. Its id is the line's message id.
 pub fn connection_item(at: DateTime<Utc>, v: &Value, last_seen: Option<DateTime<Utc>>) -> Value {
     let unread = last_seen.is_none_or(|s| at > s);
     let name = v["kwant_name"].as_str().unwrap_or("").to_string();
     let id = v["message_id"].as_str().unwrap_or("").to_string();
-    let title = super::tool_failures::inbox_title(v["connection"].as_str().unwrap_or("A connection"), &name);
+    let title = super::tool_failures::inbox_title(v["connection"].as_str().unwrap_or("A connection"), v["cause"].as_str().unwrap_or(""), &name);
     json!({
         "kind": "connection",
         "id": id,

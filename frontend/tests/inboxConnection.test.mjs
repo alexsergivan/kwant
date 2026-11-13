@@ -24,7 +24,7 @@ const { React, store: s } = m;
 const row = {
   kind: 'connection', id: 'msg1', kwant_id: 'k1', kwant_name: 'Ben', title: 'Gmail needs you to sign in again for Ben', summary: '',
   status: 'open', timestamp: '2026-11-12T18:00:00Z', link: { thread_id: null, channel_id: null, direct_kwant_id: 'k1' },
-  connection: 'Gmail', cause: 'reconnect', fix: { label: 'Reconnect', opens: 'connections', connection_id: 'mcp:s1' },
+  connection: 'Gmail', cause: 'sign_in', fix: { label: 'Reconnect', opens: 'connections', connection_id: 'mcp:s1' },
   group: 'waiting_on_you', sort_key: [0, 0, 0, 'Ben', 'msg1'],
 };
 
@@ -50,6 +50,27 @@ test('a connection row says who needs what, with Reconnect, in Waiting on you', 
   assert.equal(btn.textContent, 'Reconnect');
   assert.match(btn.className, /h-11/, '44 px on a phone');
   assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open' }), { label: 'Sign in again', tone: 'amber' });
+  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'sign_in' }), { label: 'Sign in again', tone: 'amber' });
+});
+
+test('a Composio app with no active account says Connect again, still with Reconnect', () => {
+  const composio = {
+    ...row, id: 'msg2', kwant_name: 'TechLead', title: 'Google Calendar needs to be connected again for TechLead',
+    connection: 'Google Calendar', cause: 'reconnect', sort_key: [0, 0, 0, 'TechLead', 'msg2'],
+  };
+  const data = JSON.parse(JSON.stringify(m.INBOX_FIXTURE_EMPTY));
+  data.items = [composio];
+  data.counts.waiting_on_you = 1;
+  s.inboxStore.reset();
+  s.inboxStore.patch({ data });
+  const html = m.renderToStaticMarkup(React.createElement(m.InboxNew, { noLoad: true, wide: false, onOpen: () => {}, onOpenConnections: () => {} }));
+  const li = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html').querySelector('[data-row="msg2"]');
+  assert.ok(li, 'the row is listed');
+  assert.match(li.textContent, /Google Calendar needs to be connected again for TechLead/);
+  assert.match(li.textContent, /Connect again/);
+  assert.doesNotMatch(li.textContent, /Sign in again/);
+  assert.equal(li.querySelector('[data-reconnect="msg2"]').textContent, 'Reconnect');
+  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'reconnect' }), { label: 'Connect again', tone: 'amber' });
 });
 
 test('without a way to open Connections there is no button', () => {

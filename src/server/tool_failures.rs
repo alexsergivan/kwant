@@ -313,10 +313,15 @@ pub fn line(f: &Failure, bot: &str) -> String {
     }
 }
 
-/// The Inbox row's title for a connection only the person can fix: "Gmail needs you to sign in
-/// again for Ben".
-pub fn inbox_title(connection: &str, bot: &str) -> String {
-    format!("{connection} needs you to sign in again for {bot}")
+/// The Inbox row's title for a connection only the person can fix, worded like the chat line:
+/// "Gmail needs you to sign in again for Ben" for a sign-in, "Google Calendar needs to be connected
+/// again for TechLead" for an app to connect again (`cause` is the line's `Cause::as_str`).
+pub fn inbox_title(connection: &str, cause: &str, bot: &str) -> String {
+    if cause == Cause::Reconnect.as_str() {
+        format!("{connection} needs to be connected again for {bot}")
+    } else {
+        format!("{connection} needs you to sign in again for {bot}")
+    }
 }
 
 /// The saved message's text: the line plus where to fix it, for clients that show text only.
