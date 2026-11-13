@@ -159,7 +159,7 @@ import { isNotificationOpen, placeOfNotification, showDeviceNotification } from 
 import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { BudgetNeedsYou } from './components/BotBudget';
-import { budgetStore, isBudgetMessage, requestBudgetFocus } from './botBudget';
+import { budgetStore, isBudgetMessage, requestBudgetFocus, sendWaitsForBudget } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
@@ -1855,13 +1855,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setDiscussionState({ inProgress: false });
       setRoutingState(null);
     }
-    streamingContextIdRef.current = targetId;
-    if (!(targetId in liveRef.current)) {
-      streamsRef.current[targetId] = { text: '', thinking: '' };
-      setStreamingText('');
-      setStreamingThinking('');
+    // A bot paused at its monthly budget: the message is saved and waits, and nothing starts (QA F1), so
+    // no "getting started", timer or Stop. Continue starts the turn, and its events show it working.
+    const budgetWait = (): boolean => !threadId && !isTargetChannel && sendWaitsForBudget(budgetStore.get().byBot, targetId);
+    if (!budgetWait()) {
+      streamingContextIdRef.current = targetId;
+      if (!(targetId in liveRef.current)) {
+        streamsRef.current[targetId] = { text: '', thinking: '' };
+        setStreamingText('');
+        setStreamingThinking('');
+      }
+      markLive(targetId, speakerName);
     }
-    markLive(targetId, speakerName);
 
     // Optimistically add user message
     const tempId = `temp-${Date.now()}`;
@@ -1911,6 +1916,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         throw new Error(message);
       }
       const reply = await res.json().catch(() => null);
+      // Paused while this was on its way (the list caught up since): drop the working state it started
+      if (budgetWait() && turnsIn(turnsRef.current, targetId).length === 0) {
+        clearLive(targetId);
+        if (streamingContextIdRef.current === targetId) streamingContextIdRef.current = null;
+      }
       const held = heldFromReply(reply, tempId);
       if (held) {
         // H3: saved, but no turn starts yet, so no "thinking" for it; the line under the message says why.
