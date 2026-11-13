@@ -111,7 +111,7 @@ fn assert_plain(message: &str) {
 
 /// A ready-made "inbox" team: (bot action id, a bot it made).
 async fn ready_made_team(app: &Router, state: &AppState) -> (String, String) {
-    let (s, v) = post(app, state, "/api/teams/from-template", json!({"template_id": "inbox"})).await;
+    let (s, v) = post(app, state, "/api/teams/from-template", json!({"template_id": "inbox", "names": {"Researcher": "Finder"}})).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let bot = v["bots"].as_array().unwrap().iter().find(|b| b["lead"] != true).unwrap()["id"].as_str().unwrap().to_string();
     (v["action_id"].as_str().unwrap().to_string(), bot)
@@ -125,8 +125,8 @@ async fn h3_undoing_a_ready_made_team_rebuilds_the_index_and_succeeds() {
         state.db.insert_message(&dm(&bot, if i % 2 == 0 { "user" } else { "kwant" }, &format!("message {i} about the inbox"))).await.unwrap();
     }
     state.db.add_memory(&bot, "Oleks files receipts on Fridays.", "user").await.unwrap();
-    let architect = state.db.list_kwants(&SpaceId::default_space()).await.unwrap().into_iter().find(|k| k.name == "Architect").unwrap().id;
-    state.db.insert_message(&dm(&architect, "user", "a message that stays")).await.unwrap();
+    let assistant = state.db.list_kwants(&SpaceId::default_space()).await.unwrap().into_iter().find(|k| k.name == "Assistant").unwrap().id;
+    state.db.insert_message(&dm(&assistant, "user", "a message that stays")).await.unwrap();
     let pool = raw(&tmp).await;
     put_indexes_out_of_step(&pool, &bot).await;
 
