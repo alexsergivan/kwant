@@ -324,3 +324,11 @@ test('App refetches open hand-offs on a reconnect, and live updates and stops gu
   assert.match(live, /noteLiveDelegation\(dl\.id\);/);
   assert.equal(app.match(/noteLiveDelegation\(next\.id\);/g)?.length, 2, 'both Stop paths');
 });
+
+test('turn_started keeps an audit turn’s who-and-why (14a)', () => {
+  const audit = { audit_id: 'a1', task_id: 't1', task_title: 'Routine: Daily digest', source_kind: 'routine', trigger: 'low_confidence', stage: 'challenge', challenger_kwant_id: 'ben', owner_kwant_id: 'ann' };
+  let m = t.applyTurnEvent({}, ev('turn_started', { turn_id: 'x', kwant_id: 'ben', context_id: 'ben', audit }));
+  assert.deepEqual(m.x.audit, audit);
+  m = t.applyTurnEvent({}, ev('turn_started', { turn_id: 'y', kwant_id: 'ben', context_id: 'ben' }));
+  assert.equal('audit' in m.y, false);
+});

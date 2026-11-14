@@ -340,6 +340,7 @@ async fn note_tool_is_only_in_chat_routine_and_hand_off_turns() {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: purpose.map(String::from),
+            audit: None,
         });
         let list = rpc(&env, token, "tools/list", json!({})).await;
         let r = rpc(&env, token, "tools/call", json!({"name": "note_tool", "arguments": {"tool": "bash", "kind": "tip", "text": format!("from {token}")}})).await;

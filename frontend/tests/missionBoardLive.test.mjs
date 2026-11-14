@@ -421,3 +421,14 @@ test('card actions can ask for keepalive, so they finish after the page closes',
     { url: '/api/tasks/t1/reject', keepalive: false },
   ]);
 });
+
+test('an audit turn on the Live strip says who is double-checking whose work and why, and opens the task (14a)', () => {
+  const audit = { audit_id: 'a1', task_id: 'tk_dig', task_title: 'Routine: Daily digest', source_kind: 'routine', trigger: 'high_impact', stage: 'challenge', challenger_kwant_id: 'k_tw', owner_kwant_id: 'k_gone' };
+  const d = m.describeTurn(turn({ purpose: 'audit', audit }), { names, teams, tasks: [] });
+  assert.equal(d.kind, 'audit');
+  assert.equal(d.taskId, 'tk_dig');
+  assert.equal(d.what, 'Double-checking a teammate’s routine run “Daily digest”: it’s marked high priority.');
+  // Even when the bot also has a working task in that chat, the audit turn says it is the audit.
+  const own = task({ state: 'working', owner_kwant_id: 'k_tw', title: 'Something else', channel_id: null, direct_kwant_id: 'k_tw' });
+  assert.equal(m.describeTurn(turn({ audit }), { names, teams, tasks: [own] }).kind, 'audit');
+});

@@ -9,6 +9,7 @@ import { PersonCancelledError, personFetch } from './auth';
 import { relativeTime } from './away';
 import { Capabilities, CapabilityChange, CapabilityChangedEvent, ENGINE_CANT_SANDBOX, ProposalDecision, ProposalStatus, Scorecard, TaskTier, Tier, TierProposal } from './flightSchool';
 import type { Risk, RiskResolution, TaskRisks } from './auditor';
+import { AuditTurn, auditTurnLine, auditWhyLine, routineSkipText } from './auditor';
 import { Dispute, DisputeStatus, Fact, FactChangedEvent, FactDetail, FactDisputeEvent, FactStatus, ledgerSetting } from './truthLedger';
 
 export type TaskState = 'backlog' | 'ready' | 'working' | 'needs_you' | 'review' | 'verified' | 'blocked' | 'failed' | 'cancelled';
@@ -1598,8 +1599,15 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       return str(d.status) === 'stale' ? 'A proposed change went out of date, so nothing changed' : `${Who} ${str(d.status) === 'rejected' ? 'rejected' : 'approved'} a proposed change`;
     case 'workflow_change_applied':
       return 'The approved change was applied';
-    case 'audit_started':
-      return `An audit started: ${actorName(str(d.challenger) ?? '', null, names)} challenges the work`;
+    case 'audit_started': {
+      // 14a: who is double-checking whose work, and why. Older events have no owner: "a teammate's".
+      const challenger = str(d.challenger);
+      const owner = str(d.owner);
+      return auditWhyLine(
+        { challenger: challenger ? names[challenger] : null, owner: owner ? names[owner] : null, sourceKind: str(d.source_kind), trigger: str(d.trigger) },
+        { tense: 'started' },
+      ).replace(/\.$/, '');
+    }
     case 'audit_challenge':
       return `${Who} raised ${typeof d.risks === 'number' ? (d.risks === 1 ? '1 risk' : `${d.risks} risks`) : 'risks'} in the audit`;
     case 'audit_rebuttal':
@@ -1607,7 +1615,7 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     case 'audit_done':
       return str(d.status) === 'done' ? 'The audit finished. It doesn’t change whether the task passed' : `The audit ended: ${str(d.status) ?? 'stopped'}`;
     case 'audit_skipped':
-      return `No audit: ${str(d.reason) === 'daily_cap' ? 'today’s limit was reached' : str(d.reason) === 'no_challenger' ? 'no other bot could challenge it' : str(d.reason) === 'task_moved' ? 'the task moved on' : 'skipped'}`;
+      return `No audit: ${str(d.reason) === 'daily_cap' ? 'today’s limit was reached' : str(d.reason) === 'no_challenger' ? 'no other bot could challenge it' : str(d.reason) === 'task_moved' ? 'the task moved on' : str(d.reason) === 'routine_recently_checked' ? routineSkipText(str(d.last_audit_at), str(d.next_audit_from)) : 'skipped'}`;
     case 'risk_resolved':
       return `${Who} ${str(d.resolution) === 'dismissed' ? 'dismissed' : 'resolved'} a risk`;
     case 'self_checked':
@@ -1990,6 +1998,8 @@ export interface BoardTurn {
   state: 'queued' | 'running';
   since?: string;
   purpose?: string;
+  /** 14a: set on an audit's hidden turn. */
+  audit?: AuditTurn;
 }
 
 export interface BoardTeam {
@@ -2174,7 +2184,7 @@ export interface LiveBot {
   teamName: string;
   /** One line: what it is doing. */
   what: string;
-  kind: 'task' | 'room' | 'thread' | 'chat' | 'deciding';
+  kind: 'task' | 'audit' | 'room' | 'thread' | 'chat' | 'deciding';
   since?: string;
   /** Where clicking it goes. */
   place: ChatPlace;
@@ -2204,6 +2214,8 @@ export function describeTurn(turn: BoardTurn, ctx: LiveContext): Pick<LiveBot, '
   const task = (ctx.tasks ?? []).find(
     (t) => t.state === 'working' && taskBot(t) === turn.kwant_id && (turn.thread_id ? t.thread_id === turn.thread_id : !t.thread_id && (t.channel_id ?? t.direct_kwant_id) === turn.context_id),
   );
+  // 14a: an audit's turn says who is double-checking whose work and why, and opens that task.
+  if (turn.audit) return { what: auditTurnLine(turn.audit, ctx.names, { subject: false }), kind: 'audit', place, taskId: turn.audit.task_id || null };
   if (task) return { what: task.title, kind: 'task', place, taskId: task.id };
   if (turn.purpose === 'decide') return { what: 'Deciding how to answer', kind: 'deciding', place, taskId: null };
   if (room !== undefined) return { what: `In ${room || 'a room'}`, kind: 'room', place, taskId: null };

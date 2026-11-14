@@ -239,7 +239,7 @@ mod tests {
             E::ApprovalRequired { id: s("a"), tool_name: s("x"), details: json!({}) },
             E::ApprovalWithdrawn { id: s("a"), answered_via: None, outcome: None },
             E::TurnComplete { tokens: 1, duration_ms: 1, kwant_id: Some(s("k")), profile_id: None },
-            E::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: None, thread_id: None },
+            E::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: None, thread_id: None, audit: None },
             E::TurnEnded { kwant_id: s("k"), context_id: None, outcome: s("completed"), turn_id: None, thread_id: None, quiet: false },
             E::TurnQueued { turn_id: s("x"), kwant_id: s("k"), context_id: None, thread_id: None, position: 1, reason: s("x"), slots: None },
             E::TurnRunsOn {
@@ -446,7 +446,7 @@ mod tests {
     fn turn_runs_on_is_placed_like_turn_started() {
         let s = |x: &str| x.to_string();
         for thread_id in [None, Some(s("th"))] {
-            let started = RuntimeEvent::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: Some(s("t")), thread_id: thread_id.clone() };
+            let started = RuntimeEvent::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: Some(s("t")), thread_id: thread_id.clone(), audit: None };
             let runs_on = RuntimeEvent::TurnRunsOn {
                 kwant_id: s("k"),
                 turn_id: s("t"),

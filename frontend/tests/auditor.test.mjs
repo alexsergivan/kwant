@@ -59,8 +59,8 @@ test('open: risk, evidence, count, tokens and person-only buttons', () => {
   assert.match(html, /data-open-risks="1"/);
   assert.match(html, /The yearly discount is not in the copy\./);
   assert.match(html, /Evidence: <\/span>docs\/pricing\.md/);
-  assert.match(html, /Audit by Architect/);
-  assert.match(html, /high or urgent task/);
+  assert.match(html, /Architect double-checked Ann’s task: it’s marked high priority</);
+  assert.doesNotMatch(html, /Swarm Auditor|Audit by/);
   assert.match(html, /15\.4k tokens/);
   assert.match(html, /data-risk-status="open"/);
   assert.match(html, />Resolve</);
@@ -160,10 +160,18 @@ test('board badge counts only unresolved risks per task', () => {
 
 test('activity lines for audit events', () => {
   const ev = (kind, detail = {}, actor = 'kwant') => m.eventText({ id: 1, task_id: 't1', mission_id: null, kind, actor, actor_name: null, from_state: null, to_state: null, detail, created_at: '' }, names);
-  assert.equal(ev('audit_started', { challenger: 'k_arch' }), 'An audit started: Architect challenges the work');
+  // 14a: who double-checks whose work, and why; an event from before 14a has no owner.
+  assert.equal(ev('audit_started', { challenger: 'k_arch' }), 'Architect started double-checking a teammate’s task');
+  assert.equal(
+    ev('audit_started', { challenger: 'k_arch', owner: 'k_ann', source_kind: 'routine', trigger: 'low_confidence' }),
+    'Architect started double-checking Ann’s routine run: nothing else checks it',
+  );
   assert.equal(ev('audit_challenge', { risks: 2 }, 'k_arch'), 'Architect raised 2 risks in the audit');
   assert.equal(ev('audit_done', { status: 'done' }), 'The audit finished. It doesn’t change whether the task passed');
   assert.equal(ev('audit_skipped', { reason: 'daily_cap' }), 'No audit: today’s limit was reached');
+  const skipped = ev('audit_skipped', { reason: 'routine_recently_checked', last_audit_at: '2026-10-29T10:00:00Z', next_audit_from: '2026-11-05T10:00:00Z' });
+  assert.match(skipped, /^No audit: this routine was double-checked on Oct 29, .+; the next check is due from Nov 5, .+$/);
+  assert.equal(ev('audit_skipped', { reason: 'routine_recently_checked' }), 'No audit: this routine was double-checked in the last week');
   assert.equal(ev('risk_resolved', { resolution: 'dismissed' }, 'person'), 'You dismissed a risk');
 });
 
@@ -173,6 +181,7 @@ test('settings: off by default, cap clamped, hidden on servers without it', () =
   assert.deepEqual(a.parseAuditorSettings({ auditor: 'on' }), { auditor: 'on', auditor_daily_cap: 5 });
   assert.equal(a.parseAuditorSettings({}), null);
   assert.match(a.SETTING_HINT, /never marks work passed or failed, and each audit uses tokens/);
+  assert.match(a.SETTING_HINT, /Routine runs without a check are double-checked on their first run and then at most once a week\./);
   const src = readFileSync(new URL('../src/components/SettingsModal.tsx', import.meta.url), 'utf8');
   assert.match(src, /id="auditor"/);
   assert.match(src, /\.\.\.\(auditor \?\? \{\}\)/, 'saved only when the server has it');
@@ -183,4 +192,50 @@ test('a 403 on resolve hides the buttons; resolving re-reads the risks', () => {
   const fn = src.slice(src.indexOf('const resolveRisk = async'), src.indexOf('const decideChange ='));
   assert.match(fn, /status === 403\) setCanResolveRisks\(false\)/);
   assert.match(fn, /await loadRisks\(taskId\)/);
+});
+
+// ---------- 14a: who is double-checking whose work, and why ----------
+
+test('the who-and-why line: routine run, high priority, hand-off, manual', () => {
+  const routine = { challenger: 'Ben', owner: 'Ann', title: 'Routine: Daily digest', sourceKind: 'routine', trigger: 'low_confidence' };
+  assert.equal(a.auditWhyLine(routine), 'Ben is double-checking Ann’s routine run “Daily digest”: nothing else checks it.');
+  assert.equal(a.auditWhyLine({ ...routine, trigger: 'high_impact' }), 'Ben is double-checking Ann’s routine run “Daily digest”: it’s marked high priority.');
+  assert.equal(a.auditWhyLine({ ...routine, sourceKind: 'delegation', title: 'Fix the footer' }), 'Ben is double-checking Ann’s hand-off “Fix the footer”: nothing else checks it.');
+  assert.equal(a.auditWhyLine({ ...routine, sourceKind: 'person', title: 'Fix the footer', trigger: 'manual' }), 'Ben is double-checking Ann’s task “Fix the footer”: you asked for it.');
+  assert.equal(a.auditWhyLine({ ...routine, trigger: 'something_new' }), 'Ben is double-checking Ann’s routine run “Daily digest”.');
+  // Under the bot's own name the subject goes; in the log it is past.
+  assert.equal(a.auditWhyLine(routine, { subject: false }), 'Double-checking Ann’s routine run “Daily digest”: nothing else checks it.');
+  assert.equal(a.auditWhyLine(routine, { tense: 'started' }), 'Ben started double-checking Ann’s routine run “Daily digest”: nothing else checks it.');
+  assert.equal(a.auditWhyLine(routine, { tense: 'done' }), 'Ben double-checked Ann’s routine run “Daily digest”: nothing else checks it.');
+  // The owner's answer turn.
+  assert.equal(a.auditWhyLine({ ...routine, stage: 'rebuttal' }), 'Ann is answering Ben’s double-check of the routine run “Daily digest”: nothing else checks it.');
+  assert.equal(a.auditWhyLine({ ...routine, stage: 'rebuttal' }, { subject: false }), 'Answering Ben’s double-check of the routine run “Daily digest”: nothing else checks it.');
+  // A name ending in s.
+  assert.equal(a.auditWhyLine({ ...routine, owner: 'Atlas' }), 'Ben is double-checking Atlas’ routine run “Daily digest”: nothing else checks it.');
+});
+
+test('the who-and-why line with a missing name or title', () => {
+  assert.equal(a.auditWhyLine({ challenger: 'Ben', owner: null, title: 'Routine: Daily digest', sourceKind: 'routine', trigger: 'low_confidence' }), 'Ben is double-checking a teammate’s routine run “Daily digest”: nothing else checks it.');
+  assert.equal(a.auditWhyLine({ challenger: '  ', owner: 'Ann', sourceKind: 'routine', trigger: 'high_impact' }), 'A teammate is double-checking Ann’s routine run: it’s marked high priority.');
+  assert.equal(a.auditWhyLine({ challenger: 'Ben', owner: undefined, stage: 'rebuttal', trigger: 'low_confidence' }), 'A teammate is answering Ben’s double-check of the task: nothing else checks it.');
+  assert.equal(a.auditWork('routine', 'Routine:   '), 'routine run');
+});
+
+test('a running audit turn: names looked up, internals never shown', () => {
+  const turn = { audit_id: 'a1', task_id: 't1', task_title: 'Routine: Daily digest', source_kind: 'routine', trigger: 'low_confidence', stage: 'challenge', challenger_kwant_id: 'k_arch', owner_kwant_id: 'k_ann' };
+  const line = a.auditTurnLine(turn, names);
+  assert.equal(line, 'Architect is double-checking Ann’s routine run “Daily digest”: nothing else checks it.');
+  assert.doesNotMatch(line, /Swarm|Auditor|audit_|prompt/i);
+  assert.equal(a.auditTurnLine({ ...turn, owner_kwant_id: 'k_gone' }, names), 'Architect is double-checking a teammate’s routine run “Daily digest”: nothing else checks it.');
+});
+
+test('the audit heading on its task follows the audit status', () => {
+  const h = (status, sk) => a.auditHeaderLine(audit({ status, trigger: 'low_confidence' }), names, sk);
+  assert.equal(h('queued', 'routine'), 'Architect will double-check Ann’s routine run: nothing else checks it.');
+  assert.equal(h('challenge', 'routine'), 'Architect is double-checking Ann’s routine run: nothing else checks it.');
+  assert.equal(h('rebuttal', 'routine'), 'Architect is double-checking Ann’s routine run: nothing else checks it.');
+  assert.equal(h('done', 'routine'), 'Architect double-checked Ann’s routine run: nothing else checks it.');
+  assert.equal(h('failed', null), 'Architect started double-checking Ann’s task: nothing else checks it.');
+  const html = ui.risks({ data: data([audit({ status: 'challenge', trigger: 'low_confidence' })]), names, sourceKind: 'routine' });
+  assert.match(html, /data-audit-who="true">Architect is double-checking Ann’s routine run: nothing else checks it</);
 });

@@ -49,6 +49,26 @@ pub struct ActiveTurn {
     /// "decide" for the hidden decide-first round's turns (see [`super::decide`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
+    /// An audit turn's who and why, so the UI can say whose work is being double-checked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit: Option<AuditTurn>,
+}
+
+/// What an audit turn is about (14a): the task, whose it is, who checks it and why. Ids and the
+/// trigger only; the person-facing line is built by the app with the bots' names.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AuditTurn {
+    pub audit_id: String,
+    pub task_id: String,
+    pub task_title: String,
+    /// The task's `source_kind`: `routine`, `delegation`, `person`, ...
+    pub source_kind: String,
+    /// `high_impact`, `low_confidence` or `manual`.
+    pub trigger: String,
+    /// `challenge` (the challenger checks) or `rebuttal` (the owner answers).
+    pub stage: String,
+    pub challenger_kwant_id: String,
+    pub owner_kwant_id: String,
 }
 
 #[derive(Default)]
@@ -225,6 +245,11 @@ impl TurnRegistry {
 
     /// Marks a known turn "queued" or "running" again (an isolated reply waiting for the VM), keeping
     /// when it started.
+    /// A running audit turn's [`AuditTurn`], as the JSON its `turn_started` event carries.
+    pub fn audit_of(&self, turn_id: &str) -> Option<serde_json::Value> {
+        self.lock().turns.get(turn_id)?.audit.as_ref().and_then(|a| serde_json::to_value(a).ok())
+    }
+
     pub fn set_turn_state(&self, turn_id: &str, state: &str) {
         if let Some(t) = self.lock().turns.get_mut(turn_id) {
             t.state = state.into();
@@ -470,6 +495,7 @@ impl TurnRegistry {
             state: "queued".into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         });
         self.note_queue_reason(&tag.turn_id, rx.reason);
         let _ = events.send(RuntimeEvent::TurnQueued {
@@ -791,6 +817,7 @@ mod tests {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         });
         reg.note_screenshot("t", shot("https://a.test/1"));
         reg.note_screenshot("t", shot("https://a.test/2"));
@@ -808,6 +835,7 @@ mod tests {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         });
         assert!(!reg.take_pictures("t").shared_image, "ending the turn forgot them");
     }
@@ -823,6 +851,7 @@ mod tests {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: purpose.map(String::from),
+            audit: None,
         };
         reg.set_turn(turn("a", "k", Some("foundry")));
         reg.set_turn(turn("b", "k", None));
@@ -847,6 +876,7 @@ mod tests {
             state: state.into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         };
         reg.note_source("t", TurnSource::bot("Ada"));
         reg.set_turn(turn("queued"));
@@ -887,6 +917,7 @@ mod tests {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         });
         assert!(!reg.defer("t", "d1"), "nothing waits before the turn's first hand-off");
         assert_eq!(reg.hold("t"), Some(true));

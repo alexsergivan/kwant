@@ -974,6 +974,22 @@ urgent (`high_impact`) or no check that counts and isn't the owner's will judge 
 (`manual`). One audit per task attempt; one audit runs at a time server-wide. A skipped audit (cap,
 no challenger) logs `audit_skipped`.
 
+**Routine runs (14a).** A routine run's task (`source_kind = routine`) that would be audited only as
+`low_confidence` is audited on its routine's first run that reaches review, on the first run after
+the routine's instructions or acceptance changed, and otherwise at most once per routine per 7 days.
+Any other run logs `audit_skipped` with reason `routine_recently_checked`, `routine_id`,
+`last_audit_at`, `last_audit_task_id` and `next_audit_from`. "Last audited" is the newest audit of
+any run of the routine that is `queued`, in a stage or `done` (not skipped, failed or interrupted);
+"changed" compares a hash of the routine's instructions and acceptance, which `audit_started`
+records as `routine_fp` (an audit from before 14a has none, so the next run is audited). No column
+or migration: the audits, the runs and the task events answer it. High-impact routine runs, manual
+audits, hand-offs, goals and every other task are audited as before, and the daily cap still holds.
+
+**Who and why.** `audit_started` also records `owner` and `source_kind`. An audit turn's entry in
+`GET /api/turns` and its `turn_started` event carry `audit: {audit_id, task_id, task_title,
+source_kind, trigger, stage, challenger_kwant_id, owner_kwant_id}`, so the app can say in one line
+who is double-checking whose work and why, instead of a plain "working".
+
 **Challenger.** A bot of the task's space other than the owner, the mission's lead and the lead that
 handed the task off, that knows the kind of work. Pools, best first:
 
