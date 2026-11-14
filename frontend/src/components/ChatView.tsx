@@ -27,6 +27,7 @@ import { markNewSeen } from '../whatsNew';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { StreamMarkdown } from './StreamMarkdown';
 import { ToolCallsList } from './ToolCallsList';
 import { VirtualMachinePane, TerminalLogEntry } from './VirtualMachinePane';
 import { playSfx } from '../audio/chiptune';
@@ -497,7 +498,8 @@ const useNarrow = () => {
 
 /**
  * The live reply's words or thinking line (14b): the one place that re-renders with the stream, at most
- * once a frame. The finished messages around it never do. `onGrow` keeps the bottom pinned.
+ * once a frame. The finished messages around it never do. `onGrow` keeps the bottom pinned. Its markdown
+ * renders a block at a time (15a, StreamMarkdown): only the open block at the end is parsed each frame.
  */
 const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { stream: StreamText; part: keyof StreamView; onGrow: () => void }) {
   const streamingText = useStreamPart(stream, part);
@@ -505,7 +507,7 @@ const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { st
   if (part === 'thinking') return <>{streamingText}</>;
   return (
     <div className="kw-wa-in kw-wa-hold">
-      <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} isStreaming={true} />
+      <StreamMarkdown content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} />
     </div>
   );
 });
