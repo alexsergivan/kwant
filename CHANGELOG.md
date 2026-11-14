@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **One call for the desktop island.** `GET /api/glance` sums up every active space in one response: what needs you (exactly what `/api/away` lists as waiting, with an inline Allow only for plain approvals, never risky, money or push steps), which bots are working and on what step, and the last 5 finishes in 24 h. It answers `304` while nothing changed. `POST /api/glance/ask {space_id, kwant_id, text}` sends a quick message into your chat with a bot (up to 8,000 characters). Both are for you only, not for bots.
+
 ## [Mac 0.9.11] - 2026-11-14
 
 kwant 0.9.11: Fix it and line notes that go to the bot you pick, a Documents tab for the files bots quote and done cards that check each part of what you asked.
