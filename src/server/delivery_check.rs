@@ -296,9 +296,10 @@ pub fn promise_line(reply: &str) -> Option<String> {
     })
 }
 
-/// Plain asks of the person (13a): "Send me the URL", "paste the output", "approve the command".
-/// Matched as whole words, and not in a sentence that opens with the bot's own plan ("I'll share…").
-const ASKS_PERSON: &[&str] = &["send me", "paste", "share", "upload", "allow", "approve", "sign in", "log in", "connect"];
+/// Plain asks of the person (13a): "Send me the URL", "paste the output", "approve the command",
+/// "tell me to run it". Matched as whole words, and not in a sentence that opens with the bot's own
+/// plan ("I'll share…").
+const ASKS_PERSON: &[&str] = &["send me", "paste", "share", "upload", "allow", "approve", "sign in", "log in", "connect", "tell me"];
 /// Offers, not waits: a reply that only offers ("Let me know if…", "If you'd like, I can…") goes on
 /// without the person, so these words are taken out before looking for a wait.
 const OFFERS: &[&str] = &[
@@ -334,14 +335,35 @@ pub fn waits_on_person(reply: &str) -> Option<String> {
     waits.then(|| cut_at_word(&bare, WAIT_CHARS))
 }
 
+/// What went wrong before a turn's own tool steps (13a), for [`failed_step_blocked`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FailedBefore {
+    /// A step failed before the turn's own tools: kwnt couldn't open the request's link before the
+    /// turn, or the held turn this decided reply replaces ended on a failed step. Counts when the
+    /// turn ran no tool after it.
+    pub failed: bool,
+    /// The person declined an approval card in the held turn this decided reply replaces. Counts
+    /// like a card declined in the turn itself.
+    pub declined: bool,
+}
+
+impl FailedBefore {
+    /// What a turn that ends held (see [`super::decide::Held`]) leaves for its decided reply: its
+    /// last tool step failed (or its link didn't open and no tool ran after), or it had a declined
+    /// card. The decided reply runs as a new turn, so these aren't in its own activity.
+    pub fn of_turn(activity: Option<&Value>, before: FailedBefore) -> Self {
+        let (ran_tools, failed, declined) = tool_steps_in(activity);
+        Self { failed: failed.is_some() || (before.failed && !ran_tools), declined: declined || before.declined }
+    }
+}
+
 /// What a finished turn is blocked on (13a), for `meta.blocked`: its last tool step failed, the
-/// person declined an approval card in it, or kwnt couldn't open the request's link before the turn
-/// (`page_failed`) and the turn ran no tool after that; and its reply ends waiting on the person in
-/// prose with no `Done:` or `Blocked:` line ([`waits_on_person`]). `activity` is the turn's saved
-/// activity.
-pub fn failed_step_blocked(reply: &str, activity: Option<&Value>, page_failed: bool) -> Option<String> {
-    let (ran_tools, failed, declined) = tool_steps_in(activity);
-    if failed.is_none() && !declined && !(page_failed && !ran_tools) {
+/// person declined an approval card in it, or a step failed `before` its tools and it ran no tool
+/// after that; and its reply ends waiting on the person in prose with no `Done:` or `Blocked:` line
+/// ([`waits_on_person`]). `activity` is the turn's saved activity.
+pub fn failed_step_blocked(reply: &str, activity: Option<&Value>, before: FailedBefore) -> Option<String> {
+    let after = FailedBefore::of_turn(activity, before);
+    if !after.failed && !after.declined {
         return None;
     }
     waits_on_person(reply)
@@ -1127,6 +1149,8 @@ mod tests {
     const T9_535: &str = "I couldn't run the tests. You denied the approval for the shell command, so `python3 -m unittest` never ran and I have no result to report.\n\nThe command I tried was `python3 -m unittest` from `/tmp/lts/full/535/run1/t9/work`. If you approve it, I'll run it and report the result. You can also run it yourself and paste the output here, and I'll go through any failures with you.";
     const T10_093: &str = "I couldn't download the invoice. `https://billing.example.invalid/invoices` didn't resolve (`net::ERR_NAME_NOT_RESOLVED`), so the page never loaded and nothing was saved to `/tmp/lts/full/093/run1/t10/work/invoice.pdf`.\n\nThe `.invalid` ending is reserved and can never resolve, so this looks like a placeholder address and not your real billing site. I can't guess the real one. Send me the correct URL, for example `https://billing.<yourprovider>.com/invoices`, and I'll open it. If the page needs a login, I'll ask you to sign in in the browser panel, then I'll download the latest invoice and save it as `invoice.pdf`.";
     const T10_535: &str = "I couldn't download the invoice. `https://billing.example.invalid/invoices` didn't resolve (`net::ERR_NAME_NOT_RESOLVED`), so no page loaded and nothing was saved to `invoice.pdf`.\n\nThe `.invalid` ending is a reserved placeholder domain that can never resolve, so it is probably a stand-in and not your real billing address. I can't guess the right one. Look for it in your invoice emails or in your account's billing section. It will usually be something like `billing.<provider>.com/invoices`.\n\nSend me the correct URL and I'll open it. If the site needs a login, I'll ask you to sign in in the browser panel. Then I'll download the latest invoice and save it as `invoice.pdf` in `/tmp/lts/full/535/run1/t10/work`.";
+    // Task 9, PR build run 2: the decided reply after the held one (decide first)
+    const T9_PR_HELD: &str = "I haven't run the tests, because you declined the approval for `python3 -m unittest` and I didn't ask again. So there is no actual test result.\n\nI haven't edited anything. Running `python3 -m unittest` in that folder would confirm the prediction. Tell me if you want me to run it, or paste the output and I'll check it against the table.";
 
     #[test]
     fn a_prose_ask_waits_on_the_person() {
@@ -1152,6 +1176,9 @@ mod tests {
             "Connect your Google account in Settings, then I can read the sheet.",
             "Allow Terminal for this team.",
             "I'll run it as soon as you turn Terminal on.",
+            // Task 9 endings of the PR build after a declined card (decided replies, diag runs 2 and 3)
+            "The real result is still unconfirmed. If you want it, run `cd work && python3 -m unittest`, or tell me to run it and I'll do so.",
+            "If you approve the command, I'll run it and confirm. You can also run `python3 -m unittest` in that folder and paste me the output.",
         ] {
             assert!(waits_on_person(ask).is_some(), "{ask}");
         }
@@ -1175,24 +1202,44 @@ mod tests {
     #[test]
     fn a_failed_or_declined_step_and_a_prose_ask_are_blocked() {
         let steps = |s: Value| Some(json!({ "steps": s }));
+        let none = FailedBefore::default();
+        let page = FailedBefore { failed: true, declined: false };
         let failed = steps(json!([{ "kind": "tool", "tool": "Bash", "status": "failed", "title": "python3 -m unittest" }]));
         let declined = steps(json!([{ "kind": "approval", "status": "declined" }, { "kind": "tool", "tool": "Read", "status": "ok" }]));
         let fine = steps(json!([{ "kind": "tool", "tool": "Bash", "status": "failed" }, { "kind": "tool", "tool": "Bash", "status": "ok" }]));
         // The last tool step failed, or the person declined a card: the ending is blocked
-        assert_eq!(failed_step_blocked(T9_093, failed.as_ref(), false).as_deref(), waits_on_person(T9_093).as_deref());
-        assert!(failed_step_blocked(T9_535, declined.as_ref(), false).is_some());
+        assert_eq!(failed_step_blocked(T9_093, failed.as_ref(), none).as_deref(), waits_on_person(T9_093).as_deref());
+        assert!(failed_step_blocked(T9_535, declined.as_ref(), none).is_some());
         // The request's link didn't open before the turn (task 10) and no tool ran after it
-        assert_eq!(failed_step_blocked(T10_535, None, true).as_deref(), waits_on_person(T10_535).as_deref());
-        assert!(failed_step_blocked(T10_093, steps(json!([])).as_ref(), true).is_some());
+        assert_eq!(failed_step_blocked(T10_535, None, page).as_deref(), waits_on_person(T10_535).as_deref());
+        assert!(failed_step_blocked(T10_093, steps(json!([])).as_ref(), page).is_some());
         // ...but a tool that ran fine after it (the bot found the page another way) clears it
         let ok = steps(json!([{ "kind": "tool", "tool": "WebSearch", "status": "ok" }]));
-        assert_eq!(failed_step_blocked(T10_535, ok.as_ref(), true), None);
+        assert_eq!(failed_step_blocked(T10_535, ok.as_ref(), page), None);
         // No failed step (an earlier one recovered), or no tools and the link opened: nothing to store
-        assert_eq!(failed_step_blocked(T9_093, fine.as_ref(), false), None);
-        assert_eq!(failed_step_blocked(T10_535, None, false), None);
+        assert_eq!(failed_step_blocked(T9_093, fine.as_ref(), none), None);
+        assert_eq!(failed_step_blocked(T10_535, None, none), None);
         // A failed step and an ending that doesn't wait (a promise, an explicit Blocked: line,
         // which the save step keeps in its own words): none from here
-        assert_eq!(failed_step_blocked("It failed.\n\nI'll retry it next.", failed.as_ref(), false), None);
-        assert_eq!(failed_step_blocked("It failed.\nBlocked: Terminal is off. Allow it, then say continue.", failed.as_ref(), false), None);
+        assert_eq!(failed_step_blocked("It failed.\n\nI'll retry it next.", failed.as_ref(), none), None);
+        assert_eq!(failed_step_blocked("It failed.\nBlocked: Terminal is off. Allow it, then say continue.", failed.as_ref(), none), None);
+        // A held reply's decided turn (decide first) runs as a new turn: what the held turn's steps
+        // left counts as if it were the decided turn's own. Task 9, 2nd run of the PR build: the
+        // card was declined in the held turn, the decided turn only read the files
+        let held = steps(json!([{ "kind": "approval", "status": "declined" }, { "kind": "tool", "tool": "Bash", "status": "failed" }]));
+        let left = FailedBefore::of_turn(held.as_ref(), none);
+        assert_eq!(left, FailedBefore { failed: true, declined: true });
+        let reads = steps(json!([{ "kind": "tool", "tool": "Bash", "status": "ok" }, { "kind": "tool", "tool": "Read", "status": "ok" }]));
+        assert_eq!(failed_step_blocked(T9_PR_HELD, reads.as_ref(), left).as_deref(), waits_on_person(T9_PR_HELD).as_deref());
+        assert!(waits_on_person(T9_PR_HELD).is_some_and(|t| t.contains("paste the output")));
+        assert_eq!(failed_step_blocked(T9_PR_HELD, reads.as_ref(), none), None, "nothing failed in its own turn");
+        // A held turn's failed step (no card) counts only while the decided turn runs no tool
+        let failed_only = FailedBefore::of_turn(failed.as_ref(), none);
+        assert_eq!(failed_only, FailedBefore { failed: true, declined: false });
+        assert!(failed_step_blocked(T9_093, None, failed_only).is_some());
+        assert_eq!(failed_step_blocked(T9_093, reads.as_ref(), failed_only), None);
+        // ...and a link that didn't open carries over the same way, unless a tool ran after it
+        assert_eq!(FailedBefore::of_turn(None, page), page);
+        assert_eq!(FailedBefore::of_turn(reads.as_ref(), page), none);
     }
 }
