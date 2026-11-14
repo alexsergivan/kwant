@@ -555,7 +555,7 @@ async fn run_stage(state: &AppState, audit: &Audit, task: &Task, bot: &Kwant, st
             let mut opts = TurnOpts::always_asking("Audit");
             (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(PURPOSE.into()));
             // So the person sees who is double-checking whose work and why (14a)
-            opts.audit = Some(crate::server::turns::AuditTurn {
+            opts.audit = Some(Box::new(crate::server::turns::AuditTurn {
                 audit_id: audit.id.clone(),
                 task_id: task.id.clone(),
                 task_title: task.title.clone(),
@@ -564,7 +564,7 @@ async fn run_stage(state: &AppState, audit: &Audit, task: &Task, bot: &Kwant, st
                 stage: stage.into(),
                 challenger_kwant_id: audit.challenger_kwant_id.clone(),
                 owner_kwant_id: audit.owner_kwant_id.clone(),
-            });
+            }));
             // B1: the challenger reviews with fresh eyes (the spec and the result in its prompt,
             // no chat, notes or history tools); the rebuttal is the owner answering for its work
             opts.fresh_eyes = stage_is_fresh(stage);

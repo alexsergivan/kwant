@@ -77,9 +77,9 @@ pub enum RuntimeEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
         /// An audit turn's who and why (`server::turns::AuditTurn`), so the app can say whose work
-        /// is being double-checked.
+        /// is being double-checked. Boxed so the event (held across awaits in turn futures) stays small.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        audit: Option<serde_json::Value>,
+        audit: Option<Box<serde_json::Value>>,
     },
     /// A kwant's turn is over, however it ended: "completed", "failed" or "cancelled".
     #[serde(rename = "turn_ended", alias = "TurnEnded")]

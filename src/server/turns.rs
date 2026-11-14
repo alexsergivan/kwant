@@ -51,7 +51,7 @@ pub struct ActiveTurn {
     pub purpose: Option<String>,
     /// An audit turn's who and why, so the UI can say whose work is being double-checked.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub audit: Option<AuditTurn>,
+    pub audit: Option<Box<AuditTurn>>,
 }
 
 /// What an audit turn is about (14a): the task, whose it is, who checks it and why. Ids and the
@@ -243,13 +243,13 @@ impl TurnRegistry {
         inner.turns.insert(turn.turn_id.clone(), turn);
     }
 
-    /// Marks a known turn "queued" or "running" again (an isolated reply waiting for the VM), keeping
-    /// when it started.
     /// A running audit turn's [`AuditTurn`], as the JSON its `turn_started` event carries.
     pub fn audit_of(&self, turn_id: &str) -> Option<serde_json::Value> {
         self.lock().turns.get(turn_id)?.audit.as_ref().and_then(|a| serde_json::to_value(a).ok())
     }
 
+    /// Marks a known turn "queued" or "running" again (an isolated reply waiting for the VM), keeping
+    /// when it started.
     pub fn set_turn_state(&self, turn_id: &str, state: &str) {
         if let Some(t) = self.lock().turns.get_mut(turn_id) {
             t.state = state.into();
