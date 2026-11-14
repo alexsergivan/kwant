@@ -222,6 +222,30 @@ mod tests {
         assert_eq!(with_activity(None, Some(json!({"steps": []}))).unwrap()["activity"]["steps"], json!([]));
     }
 
+    /// 0.9.8 browser panel: the page title of a bot browser open goes out live, is listed on
+    /// `GET /api/turns` and is kept on the saved reply; a reply saved before it reads as it did.
+    #[test]
+    fn a_browser_steps_page_title_streams_and_is_saved() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let tag = TurnTag { turn_id: "turn-page-title".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "mcp__kwnt_tools__browser_open".into(), args: json!({"url": "http://roastco.example.com/"}) });
+        turn.observe(&RuntimeEvent::ToolCallCompleted { id: "1".into(), result: json!({"status": "ok", "title": "RoastCo · Shop"}) });
+        let wire: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).map(|e| e.to_wire()).collect();
+        assert_eq!(wire.last().unwrap()["data"]["step"]["page_title"], "RoastCo · Shop");
+        let saved = turn.finish().unwrap();
+        let meta = with_activity(Some(json!({"model": "m"})), Some(saved)).unwrap();
+        // what the reply's meta holds in the DB and what /api sends back after a reload
+        let reloaded: Value = serde_json::from_str(&meta.to_string()).unwrap();
+        assert_eq!(reloaded["activity"]["steps"][0]["page_title"], "RoastCo · Shop");
+        assert_eq!(reloaded["activity"]["steps"][0]["detail"], "http://roastco.example.com/");
+        drop(turn);
+        // An old row, saved before the field existed, still reads the same
+        let old = json!({"activity": {"steps": [{"id": "s1", "kind": "tool", "status": "ok", "title": "Opening example.com", "tool": "browser_open", "started_at": "2026-11-01T10:00:00.000Z"}]}});
+        assert_eq!(with_activity(Some(old.clone()), None), Some(old.clone()));
+        assert!(old["activity"]["steps"][0].get("page_title").is_none());
+    }
+
     /// Ticket 4: a page that loads mid-turn gets the open step from `GET /api/turns`.
     #[test]
     fn listed_turn_carries_its_steps_so_far() {
