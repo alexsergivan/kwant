@@ -1,8 +1,8 @@
 /* kwant.si redesign mockup, "Nebula". Dark-first, one system for every page.
    Mira, Nov 13 2026. Tokens come only from the violet ramp, --ok/--wait and the avatar screen colours. */
-@font-face { font-family: "Pixelify Sans"; src: url("../fonts/pixelify-sans.woff2?v=66e897e155") format("woff2"); font-weight: 400 700; font-display: swap; }
-@font-face { font-family: "Inter"; src: url("../fonts/inter-var.woff2?v=3100e775e8") format("woff2"); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: "JetBrains Mono"; src: url("../fonts/jetbrains-mono.woff2?v=fa21ea9c83") format("woff2"); font-weight: 100 800; font-display: swap; }
+@font-face { font-family: "Pixelify Sans"; src: url("../fonts/pixelify-sans.woff2?v=4840ba0cdf") format("woff2"); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("../fonts/inter-var.woff2?v=977e43492e") format("woff2"); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("../fonts/jetbrains-mono.woff2?v=8247becaf0") format("woff2"); font-weight: 400 600; font-display: swap; }
 
 :root {
   color-scheme: dark;
@@ -81,7 +81,7 @@ code, pre, kbd { font-family: var(--mono); }
 .reel { position: absolute; right: 24px; top: 6px; pointer-events: auto; }
 .reel .btn { min-height: 44px; font-size: 14px; gap: 8px; }
 .reel .btn span { color: var(--dim); font: 500 13px var(--mono); }
-@media (max-width: 860px) { .reel { display: none; } }
+@media (max-width: 859px) { .reel { display: none; } }
 html.reel-open { overflow: hidden; }
 dialog.reel-dialog { width: min(1280px, 94vw); max-height: 94vh; padding: 0; border: 2px solid var(--line-2); border-radius: 0; background: var(--panel); color: var(--v9); overflow: hidden; }
 dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
@@ -97,7 +97,7 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
 .reel-play .pi { width: 36px; height: 36px; }
 
 /* ---------- Hero ---------- */
-.hero { position: relative; margin-top: -68px; padding: 148px 0 0; overflow: hidden; background: var(--bg) url("../media/nebula-still.png?v=101cf0ddc1") center top / cover no-repeat; image-rendering: pixelated; }
+.hero { position: relative; margin-top: -68px; padding: 148px 0 0; overflow: hidden; background: var(--bg) url("../media/nebula-still.png?v=1e9018746d") center top / cover no-repeat; image-rendering: pixelated; }
 .hero > canvas { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; image-rendering: crisp-edges; opacity: 0; transition: opacity .2s linear; }
 .hero > canvas.live { opacity: 1; }
 .hero-copy { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; }
@@ -109,6 +109,8 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
 .dl-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .dl-sub { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 20px; margin-top: 14px; font-size: 14px; color: var(--dim); }
 .dl-sub a { color: var(--v8); font-weight: 500; }
+/* A 44 px tall tap area that takes no more room than the line (QA B2): the negative margins cancel the extra height. */
+.hero .dl-sub > a { display: inline-block; padding-block: 11px; margin-block: -11px; }
 .mac-first summary { list-style: none; cursor: pointer; color: var(--dim); }
 .mac-first summary::-webkit-details-marker { display: none; }
 .mac-first summary b { color: var(--v8); font-weight: 500; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
@@ -839,7 +841,7 @@ html:has(.jump-bar) { scroll-padding-top: 156px; }
 .jump-bar.more .wrap::after { opacity: 1; }
 
 /* release proof line under the downloads */
-.proof { margin: 14px 0 0; font: 400 12.5px var(--mono); color: var(--dim); }
+.proof { margin: 14px 0 0; font: 400 12.5px/17px var(--mono); /* fixed line height: a late font swap must not move the hero */ color: var(--dim); }
 .proof a { color: inherit; }
 
 /* install box (dark), tabs and copy buttons come from the kept rules */
@@ -960,3 +962,7 @@ body:has(.jump-bar) .topbar::before { content: ""; position: absolute; z-index: 
 main:has(.jump-bar) .page-head h1 { max-width: 13.5em; text-wrap: wrap; }
 @media (max-width: 640px) { main:has(.jump-bar) .page-head h1 { max-width: 7em; } }
 /* 3b. Docs menu: .docs-group a:hover now sits inside @media (hover: hover), so a tapped item on a phone keeps no bar */
+
+/* The home page's below-the-fold images wait in data-src for site.js; without JS, hide the empty placeholder and let
+   the <noscript> copy show instead. */
+@media (scripting: none) { img[data-src] { display: none; } noscript { display: contents; } }

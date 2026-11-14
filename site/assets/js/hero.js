@@ -1,11 +1,15 @@
 // kwant.si hero: the dithered pixel nebula and the "kwant moments" toolbar.
 // Mira's design (Nov 13 2026), built by Pixel. Runs after first paint, needs no library. Home page only.
-// Nebula: 8 fps, 2 fps below 640 px, paused off screen or in a hidden tab, one still frame under reduced motion.
+// Nebula: after load; 8 fps only on a desktop with a mouse, one still frame on phones and touch screens and under reduced motion;
+// paused off screen or in a hidden tab; each frame drawn in slices of at most 8 ms.
 // Moments: an ARIA tablist; it never switches by itself.
 (function () {
   "use strict";
+  function afterPaint(fn) {
+    function go() { requestAnimationFrame(function () { setTimeout(fn, 0); }); }
+    if (document.readyState === "complete") go(); else window.addEventListener("load", go, { once: true });
+  }
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
-  var narrow = window.matchMedia("(max-width: 639px)");
 
   /* ---------- Nebula ----------
      One canvas cell = 4 CSS px (PX). A warped value-noise field picks a level 0..4 on one of three ladders
@@ -32,12 +36,14 @@
   function clamp(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
   function sstep(a, b, v) { return smooth(clamp((v - a) / (b - a))); }
 
-  function draw(cv, t) {
-    var w = cv.width, h = cv.height, ctx = cv.getContext("2d"), img = ctx.createImageData(w, h), p = img.data;
+  // One frame, drawn a few rows at a time: each call works for at most `budget` ms and returns true once the frame
+  // is on the canvas. So a frame never blocks the page for long, even on a slow phone.
+  function frame(cv, t) {
+    var w = cv.width, h = cv.height, ctx = cv.getContext("2d"), img = ctx.createImageData(w, h), p = img.data, y = 0;
     var cx = parseFloat(cv.dataset.cx || 0.5), cy = parseFloat(cv.dataset.cy || 0.3);
     var rx = parseFloat(cv.dataset.rx || 0.34), ry = parseFloat(cv.dataset.ry || 0.30);
     var aspect = (w / h);
-    for (var y = 0; y < h; y++) {
+    function row(y) {
       for (var x = 0; x < w; x++) {
         var u = x / w, v = y / h;
         var sx = u * 3.2 * aspect, sy = v * 3.2;
@@ -60,33 +66,40 @@
         p[i] = c[0]; p[i + 1] = c[1]; p[i + 2] = c[2]; p[i + 3] = 255;
       }
     }
-    ctx.putImageData(img, 0, 0);
+    return function (budget) {
+      var stop = performance.now() + budget;
+      while (y < h) { row(y++); if (performance.now() > stop) return false; }
+      ctx.putImageData(img, 0, 0);
+      return true;
+    };
   }
 
+  // Phones and touch screens get one still frame (drawn after the page has loaded, in small slices); only a desktop with
+  // a mouse animates it, at 8 fps, paused off screen and in a hidden tab. Reduced motion: one still frame everywhere.
   function startNebula(cv) {
-    var box = cv.parentNode;
+    var box = cv.parentNode, animate = window.matchMedia("(hover: hover) and (min-width: 860px)");
+    var t = parseFloat(cv.dataset.t || 7), gen = 0, timer = 0, onScreen = true;
     function size() { cv.width = Math.ceil(box.clientWidth / PX); cv.height = Math.ceil(box.clientHeight / PX); }
+    function moving() { return animate.matches && !reduce.matches && cv.dataset.still === undefined && onScreen && !document.hidden; }
+    // Draws one frame in slices of at most 8 ms, then calls done (unless a newer paint has started).
+    function paint(done) {
+      var my = ++gen, f = frame(cv, t);
+      (function slice() { if (my !== gen) return; if (f(8)) { timer = 0; cv.classList.add("live"); if (done) done(); } else timer = setTimeout(slice, 0); })();
+    }
+    function tick() {
+      timer = 0;
+      if (!moving()) return;
+      t += 0.125 * 0.35;
+      paint(function () { timer = setTimeout(tick, 125); });
+    }
+    function run() { if (moving() && !timer) timer = setTimeout(tick, 125); }
     size();
-    var t = parseFloat(cv.dataset.t || 7), visible = true, last = 0, raf = 0;
-    draw(cv, t); cv.classList.add("live");
-    if (reduce.matches || cv.dataset.still !== undefined) return;
-    function tick(now) {
-      raf = requestAnimationFrame(tick);
-      var step = narrow.matches ? 500 : 125; // 8 fps is enough for smoke; 2 fps on phones
-      if (!visible || now - last < step) return;
-      last = now; t += (step / 1000) * 0.35; draw(cv, t);
-    }
-    var onScreen = true;
-    function run() {
-      visible = onScreen && !document.hidden;
-      if (visible && !raf) raf = requestAnimationFrame(tick);
-      if (!visible && raf) { cancelAnimationFrame(raf); raf = 0; }
-    }
+    paint(run);
     if ("IntersectionObserver" in window) new IntersectionObserver(function (e) { onScreen = e[0].isIntersecting; run(); }).observe(box);
     document.addEventListener("visibilitychange", run);
+    if (animate.addEventListener) animate.addEventListener("change", run);
     var rz = 0;
-    window.addEventListener("resize", function () { clearTimeout(rz); rz = setTimeout(function () { size(); draw(cv, t); }, 150); });
-    run();
+    window.addEventListener("resize", function () { clearTimeout(rz); rz = setTimeout(function () { clearTimeout(timer); timer = 0; size(); paint(run); }, 150); });
   }
 
   /* ---------- Moments toolbar (ARIA tablist) ---------- */
@@ -141,12 +154,12 @@
       video.src = cur.dataset.clip;
       if (!paused()) video.play().catch(function () {});
     }
-    // Wait for the page's load event so the clip never competes with the poster (the LCP image) for bandwidth.
+    // Wait until the page has loaded and painted so the clip never competes with the poster (the LCP image).
     function watch() {
       if ("IntersectionObserver" in window) new IntersectionObserver(function (e) { if (e[0].isIntersecting) arm(); }, { rootMargin: "200px" }).observe(video);
       else arm();
     }
-    if (document.readyState === "complete") watch(); else window.addEventListener("load", watch, { once: true });
+    afterPaint(watch);
     var start = new URLSearchParams(location.search).get("tab");
     if (start && tabs[+start]) select(tabs[+start]);
   }
@@ -196,10 +209,10 @@
   }
   var reelPill = document.querySelector("[data-reel]"); if (reelPill) startReel(reelPill);
 
-  function go() {
-    var cv = document.querySelector("canvas[data-nebula]"); if (cv) startNebula(cv);
-    var m = document.querySelector("[data-moments]"); if (m) startMoments(m);
-  }
-  // after first paint, so the headline paints first
-  if ("requestIdleCallback" in window) requestIdleCallback(go, { timeout: 600 }); else setTimeout(go, 50);
+  // Extra work waits for the load event and then for the frame after it: on a fast load the load event comes before
+  // the first paint, and anything started then would hold that paint up.
+  function idle(fn, ms) { if ("requestIdleCallback" in window) requestIdleCallback(fn, { timeout: ms }); else setTimeout(fn, 50); }
+  afterPaint(function () { idle(function () { var m = document.querySelector("[data-moments]"); if (m) startMoments(m); }, 600); });
+  // Until the nebula starts, the still image (nebula-still.png) is the hero's background.
+  afterPaint(function () { idle(function () { var cv = document.querySelector("canvas[data-nebula]"); if (cv) startNebula(cv); }, 1000); });
 })();

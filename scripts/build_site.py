@@ -13,7 +13,7 @@ Shortcodes in the HTML:
   {{root}}                                relative path back to site/
   {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*); desktop ones not in
                                           CLOSEUPS get class="app", the window bar in site.css
-  {{video:NAME|LABEL}}                    a muted looping demo clip with its poster (class="app", window bar too)
+  {{video:NAME|LABEL}}                    a muted looping demo clip; site.js sets its poster near the screen (class="app", window bar too)
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
   {{CONTACT_EMAIL}}                       the contact address, from OPERATOR below (marked placeholder while empty)
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
@@ -59,6 +59,7 @@ import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "site-src"
+MEDIA = ROOT / "site" / "assets" / "media"
 OUT = ROOT / "site"
 SITE_URL = "https://kwant.si"
 GITHUB = "https://github.com/alexsergivan/kwant"
@@ -70,10 +71,29 @@ OPERATOR = {
 
 # Cloudflare Web Analytics: counts page views without cookies, local storage or fingerprinting. The token is the kwant.si
 # site in Cloudflare (automatic install is off there). site/_headers allows its two hosts in script-src and connect-src.
-CF_ANALYTICS = (
-    "<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' "
-    "data-cf-beacon='{\"token\": \"7f6ed395033a43eea3885ad0943890c2\"}'></script><!-- End Cloudflare Web Analytics -->"
-)
+# The page only carries the token; site.js adds the beacon script after the first paint, so it never competes with the
+# page's own files.
+CF_ANALYTICS = '<script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>'
+
+
+# On the home page every lazy image waits for site.js, which loads it when it comes within 600 px of the screen. Native
+# lazy loading starts them at the first layout, before the first paint, where on a phone they compete with the hero
+# poster (the LCP image). Until then the image shows an empty picture of the same size; <noscript> keeps the real one.
+LAZY_IMG = re.compile(r'<img\b[^>]*\bloading="lazy"[^>]*>')
+
+
+def defer_images(page_html):
+    def one(m):
+        tag = m[0]
+        before = m.string[:m.start()]
+        if before.rfind("<picture") > before.rfind("</picture>"):
+            return tag  # a <picture> picks its own source; leave it to the browser's lazy loading
+        w, h = re.search(r'\bwidth="(\d+)"', tag)[1], re.search(r'\bheight="(\d+)"', tag)[1]
+        empty = f"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}'/%3E"
+        lazy = re.sub(r'\ssrc="', f' src="{empty}" data-src="', tag, count=1).replace(' srcset="', ' data-srcset="', 1)
+        return f"{lazy}<noscript>{tag}</noscript>"
+    return LAZY_IMG.sub(one, page_html)
+
 
 DOC_GROUPS = [
     ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run")]),
@@ -275,9 +295,11 @@ def shot(root, name, alt, sizes):
     sizes = sizes or "(max-width: 1024px) 100vw, 680px"
     a = html.escape(alt, quote=True)
     app = "" if phone or name in CLOSEUPS else ' class="app"'
+    # A 720w copy, where one exists, keeps phones from fetching the 1440w file.
+    mid = f"{base}-720.webp 720w, " if not phone and (MEDIA / f"{name}-720.webp").exists() else ""
     return (
         f'<a class="zoom" href="{base}-{big}.webp" data-caption="{a}">'
-        f'<img{app} src="{base}-{small}.webp" srcset="{base}-{small}.webp {small}w, {base}-{big}.webp {big}w" '
+        f'<img{app} src="{base}-{small}.webp" srcset="{mid}{base}-{small}.webp {small}w, {base}-{big}.webp {big}w" '
         f'sizes="{sizes}" width="{w}" height="{h}" loading="lazy" decoding="async" alt="{a}"></a>'
     )
 
@@ -287,7 +309,7 @@ def video(root, name, label, eager=False):
     lbl = html.escape(label, quote=True)
     return (
         f'<video class="app" data-autoplay controls muted playsinline loop preload="{"metadata" if eager else "none"}" '
-        f'poster="{base}-poster.webp" width="1280" height="800" aria-label="{lbl}">'
+        f'data-poster="{base}-poster.webp" width="1280" height="800" aria-label="{lbl}">'
         f'<source src="{base}.mp4" type="video/mp4"></video>'
     )
 
@@ -735,6 +757,8 @@ def page(meta, body, root, dates):
 <link rel="icon" href="{root}favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="{root}apple-touch-icon.png">
 <link rel="preload" href="{root}assets/fonts/pixelify-sans.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
 <body class="page-{meta.get("active", "docs" if meta.get("nav") else "home") if not is404 else "404"}">
@@ -1249,7 +1273,10 @@ def main(argv=None):
         if meta.get("nav"):
             body = docs_shell(root, meta["nav"], body)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(clean_links(version_urls(page(meta, body, root, dates)), meta["path"]))
+        built = version_urls(page(meta, body, root, dates))
+        if meta["path"] == "index.html":
+            built = defer_images(built)
+        out.write_text(clean_links(built, meta["path"]))
         written.append(meta["path"])
     if posts:
         root = "../"

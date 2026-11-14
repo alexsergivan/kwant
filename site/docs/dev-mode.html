@@ -30,8 +30,10 @@
 <link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
 <link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
-<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=2718fa0777">
+<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=4840ba0cdf" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/inter-var.woff2?v=977e43492e" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/jetbrains-mono.woff2?v=8247becaf0" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css?v=6aad372047">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -89,7 +91,7 @@
 <p>Since 0.7.3, Dev mode reads every repo's history with git: GitHub, GitLab, Gitea, any git server, or a team folder with no remote. Each merge gets its plain-words card. Pull requests, CI checks and reviews need the repo's forge: GitHub, or since 0.7.4 <a href="#forges">GitLab, Gitea and Forgejo</a>. <strong>Post to GitHub</strong> works on GitHub repos only. kwant keeps a copy of each watched repo in its data folder, up to 1 GB; a bigger repo reads "Too big to read". The server needs git 2.31 or newer; without it, the desk says "Needs git on the server", with the install tip. kwant fetches over https, http, ssh or git, and never from the server itself, a link-local or a cloud metadata address. git runs as the server user kwant runs as, so that user's SSH keys and credential helpers work.</p>
 <p>Under a team's repo link, Team settings say in one line what Dev mode does with it: watched, watched but needs Connect GitHub for reviews, can be watched once Dev mode is on, or read with git.</p>
 <figure>
-  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v071-dev-on-poster.webp?v=7c37f29be2" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="../assets/media/clip-v071-dev-on.mp4?v=8ef32af3fe" type="video/mp4"></video></div>
+  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="../assets/media/clip-v071-dev-on-poster.webp?v=7c37f29be2" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="../assets/media/clip-v071-dev-on.mp4?v=8ef32af3fe" type="video/mp4"></video></div>
   <figcaption>On, the repo found, and the last five merges written up.</figcaption>
 </figure>
 
@@ -295,9 +297,9 @@
     </div>
   </div>
 </footer>
-<script src="../assets/js/site.js?v=6d3de1ef56" defer></script>
-<script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
+<script src="../assets/js/site.js?v=0f53ed50bc" defer></script>
+<script src="../assets/js/pixel.js?v=0a1a3bf1e2" defer></script>
 <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/dev-mode#article","headline":"Dev mode: AI code review and a production safety floor","description":"Point a kwant space at its git repos, on GitHub, GitLab, Gitea, Forgejo or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.","url":"https://kwant.si/docs/dev-mode","mainEntityOfPage":"https://kwant.si/docs/dev-mode","image":"https://kwant.si/assets/og/docs-dev-mode.png?v=4b20e5912f","inLanguage":"en","datePublished":"2026-11-06","dateModified":"2026-11-14","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Dev mode","item":"https://kwant.si/docs/dev-mode"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
-<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
+<script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>
 </body>
 </html>
