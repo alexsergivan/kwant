@@ -13,17 +13,18 @@ import type {
   ReviewCard,
   RiskLevel,
 } from './types';
+import { timeText } from '../clock';
 
 // ---------------------------------------------------------------------------------------------------
 // Time and numbers (display only: nothing here computes a new figure from the data)
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-/** "19:26" in the viewer's own time zone, or null. */
+/** "7:26 PM" / "19:26" on the viewer's own clock, or null. */
 export function clock(iso: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return timeText(iso);
 }
 
 const dayKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;

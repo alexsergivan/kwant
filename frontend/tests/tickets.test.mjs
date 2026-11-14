@@ -391,7 +391,7 @@ test('picking a choice answers that question', async () => {
 
 test('once asked, the card says it waits for the answer on Jira and offers See the comment', () => {
   const out = html(m.TicketCard, { ...N, ticket: T('needs_answer'), brief: B(fx.BRIEF_ASKED), onAskPreview: async () => fx.ASK_PREVIEW });
-  assert.match(out, /Asked Dana Park on Jira at 10:04\. You can still answer here\./);
+  assert.match(out, /Asked Dana Park on Jira at 10:04 AM\. You can still answer here\./);
   assert.match(out, /Ann checks the Jira comment every 5 minutes\. The first answer wins, here or there\./);
   assert.doesNotMatch(out, /data-ask=/);
 });

@@ -3,7 +3,7 @@
 // Contract: dev-mode/plan/plan.md §3.2 and §3.6, the route JSON in dev-mode/impl/lin.md.
 
 import { personFetch } from './auth';
-import { dateText } from './clock';
+import { dateText, timeText } from './clock';
 
 // ---------------------------------------------------------------------------
 // Server shapes
@@ -353,10 +353,9 @@ export interface RepoRow {
   fix: ForgeFix | null;
 }
 
-/** "14:32", 24-hour local time: the desk header's "Checked" format, shared by the repo rows. */
+/** "2:32 PM" / "14:32" on the device's clock: the desk header's "Checked" format, shared by the repo rows. */
 export function checkedLabel(ms: number): string {
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return timeText(ms) ?? '';
 }
 
 /** A repo row's poll time in the header's format ("15:30"), or null. */

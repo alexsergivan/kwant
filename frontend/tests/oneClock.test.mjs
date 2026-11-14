@@ -16,6 +16,10 @@ const m = await loadBundled(`
   export { dayLabel as usageDay } from './src/components/DailyUsage';
   export { dayLabel as devDay } from './src/devMode';
   export { onceWords } from './src/botActions';
+  export { clock as inboxClock } from './src/components/InboxNew';
+  export { hm as awayHm, scheduleShort } from './src/doneAway';
+  export { checkedLabel } from './src/devMode';
+  export { dayLabel as worktreeDay } from './src/dev/worktrees';
 `);
 
 // Some ICU builds put a narrow no-break space before AM/PM; compare on plain spaces.
@@ -33,6 +37,7 @@ const TABLE = [
   ['dateClock', () => [m.dateClock(AT, { locale: 'en-US' }), m.dateClock(AT, { locale: 'en-GB' })], ['Nov 16, 8:15 PM', '16 Nov, 20:15']],
   ['wallClock 08:30', () => [m.wallClock('08:30', 'en-US'), m.wallClock('08:30', 'en-GB')], ['8:30 AM', '08:30']],
   ['wallClock 20:05', () => [m.wallClock('20:05', 'en-US'), m.wallClock('20:05', 'en-GB')], ['8:05 PM', '20:05']],
+  ['secondsText (step logs)', () => [m.secondsText(AT, { locale: 'en-US' }), m.secondsText(AT, { locale: 'en-GB' })], ['8:15:00 PM', '20:15:00']],
   ['wallClock midnight', () => [m.wallClock('00:00', 'en-US'), m.wallClock('00:00', 'en-GB')], ['12:00 AM', '00:00']],
 ];
 
@@ -82,4 +87,15 @@ test('call sites that forced 24 h or en-GB now follow the locale', () => {
   assert.equal(m.usageDay('2026-10-20', new Date(AT), 'en-GB'), 'Tue 20 Oct');
   assert.equal(m.devDay('2026-11-03T10:00:00Z', new Date(AT), 'en-GB'), 'Tue 3 Nov');
   assert.equal(n(m.onceWords('2026-11-06T15:00:00Z', 'en-US')), 'once on Fri, Nov 6 at 3:00 PM');
+});
+
+test('one clock: hand-built HH:MM spots now read the device clock (Inbox queue, Done-away, Dev desk, worktrees)', () => {
+  const want = n(m.timeText(AT));
+  assert.equal(n(m.inboxClock(AT)), want);
+  assert.equal(n(m.awayHm(AT)), want);
+  assert.equal(n(m.checkedLabel(Date.parse(AT))), want);
+  assert.equal(n(m.worktreeDay(AT, Date.parse(AT)).time), want);
+  assert.equal(n(m.worktreeDay(AT, Date.parse('2026-12-01T10:00:00Z')).day), n(m.dateText(AT)));
+  assert.equal(n(m.scheduleShort({ type: 'weekly', time: '20:15', weekdays: ['mon'], tz: 'UTC' })), `every Mon ${n(m.wallClock('20:15'))}`);
+  assert.equal(m.inboxClock('nope'), '');
 });

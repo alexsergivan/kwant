@@ -34,6 +34,15 @@ export function timeText(at: When, opts: ClockOpts = {}): string | null {
     .replace(/\u202f/g, ' ');
 }
 
+/** "8:15:02 PM" / "20:15:02": the device's clock with seconds, for step-by-step logs. */
+export function secondsText(at: When, opts: ClockOpts = {}): string | null {
+  const d = toDate(at);
+  if (!d) return null;
+  return d
+    .toLocaleTimeString(opts.locale, { timeStyle: 'medium', ...(opts.timeZone ? { timeZone: opts.timeZone } : {}) })
+    .replace(/\u202f/g, ' ');
+}
+
 /** "Nov 3" / "3 Nov", with the weekday ("Tue, Nov 3") or year ("Nov 3, 2026") when asked. */
 export function dateText(at: When, opts: ClockOpts & { weekday?: boolean; year?: boolean } = {}): string | null {
   const d = toDate(at);

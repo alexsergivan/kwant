@@ -84,7 +84,7 @@ test('provider beats the host guess: a GitHub Enterprise host the server calls g
   assert.equal(m.gitOnlyRepo(s, 'ghe.example.test/demo/core'), false);
   assert.equal(m.statusLine(s).note, null, 'no plain-git line');
   assert.deepEqual(texts(m.statusLine(s).parts), ['Watching ', 'demo/core', ' · ', 'main']);
-  assert.equal(m.repoRows(state({ repos: [APP, GHE] }))[1].state, 'Watching · checked 09:00');
+  assert.equal(m.repoRows(state({ repos: [APP, GHE] }))[1].state, 'Watching · checked 9:00 AM');
   // The same row from an older server is guessed as plain git.
   assert.ok(m.gitOnlyRepo(state({ repos: [noProvider(GHE)] }), 'ghe.example.test/demo/core'));
   // Rendered: what the desk passes to the card for this repo keeps the CI tile and Post.
@@ -133,11 +133,11 @@ test('watching (GitHub): no quiet line, cards keep CI and Post', () => {
 test('watching (a folder with no remote): read with git, "Landed changes only", counted as watched', () => {
   const s = state({ repos: [APP, NOTES] });
   const rows = m.repoRows(s);
-  assert.equal(rows[1].state, 'Landed changes only · checked 09:00');
+  assert.equal(rows[1].state, 'Landed changes only · checked 9:00 AM');
   assert.equal(rows[1].led, 'ok');
   assert.equal(rows[1].note, LOCAL_TIP);
   assert.equal(rows[1].origin, 'From Notes’s folder');
-  assert.equal(rows[0].state, 'Watching · checked 09:00');
+  assert.equal(rows[0].state, 'Watching · checked 9:00 AM');
   assert.equal(rows[0].note, null);
   assert.equal(m.repoRows(state({ repos: [APP, { ...NOTES, polled_at: null }] }))[1].state, 'Landed changes only');
   assert.equal(m.reposSummary(s), 'Watching 2 repos');
@@ -145,7 +145,7 @@ test('watching (a folder with no remote): read with git, "Landed changes only", 
   assert.deepEqual(m.repoFilters(s).map((f) => f.label), ['app', 'notes']);
   const out = html(m.DevStatusLine, { spaceId: 'spc_demo', state: s });
   assert.match(out, /data-dv-repo-note="true">Read from Notes’s folder on the server/);
-  assert.match(out, /data-dv-repo-state="true" aria-describedby="([^"]+-note-1)">Landed changes only · checked 09:00<\/span>/);
+  assert.match(out, /data-dv-repo-state="true" aria-describedby="([^"]+-note-1)">Landed changes only · checked 9:00 AM<\/span>/);
   assert.doesNotMatch(out, /Local folder, no remote/);
   // The 0.7.1 shape (no repos[]): a local source is no longer turned into other_host.
   const legacy = m.parseDevMode({ on: true, status: 'watching', repo: 'notes', sources: [{ team: 'Notes', repo: 'notes', host: null, from: 'local' }] });
@@ -238,7 +238,7 @@ test('too big (error): the row always reads "Too big to read"; the quiet line is
     assert.match(out, /Too big to read/);
   }
   // A code on a non-error row changes nothing.
-  assert.equal(m.repoRows(state({ repos: [APP, { ...LAB, poll_code: 'too_big' }] }))[1].state, 'Landed changes only · checked 09:00');
+  assert.equal(m.repoRows(state({ repos: [APP, { ...LAB, poll_code: 'too_big' }] }))[1].state, 'Landed changes only · checked 9:00 AM');
   // Any other error keeps "Can't read it right now".
   assert.equal(m.repoRows(state({ repos: [APP, { ...LAB, status: 'error', poll_error: 'Couldn’t reach the repo’s host.' }] }))[1].state, 'Can’t read it right now. Trying again.');
   assert.equal(m.devSubLine(state({ repos: [cap] })).parts[0].text, 'Can’t read a repo');

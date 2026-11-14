@@ -10,14 +10,10 @@ import { READ_LABEL, READ_STEPS, closedWhy, earnsMatches, onSite, openQuestions,
 import { clock } from '../../dev/logic';
 import { SiteOrigins, TicketBrief } from './TicketBrief';
 import { TicketQuestions } from './TicketQuestions';
+import { dateText } from '../../clock';
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-/** "Nov 5" in the viewer's zone, or null. */
-export const shortDay = (iso: string | null): string | null => {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : `${MONTHS[d.getMonth()]} ${d.getDate()}`;
-};
+/** "Nov 5" / "5 Nov" in the viewer's zone and date order, or null. */
+export const shortDay = (iso: string | null): string | null => dateText(iso);
 
 const initials = (name: string) =>
   name

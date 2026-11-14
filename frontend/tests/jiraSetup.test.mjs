@@ -409,7 +409,7 @@ test('errors: a rejected token, an address with no Jira, no projects visible (it
   await step1(s);
   await click(s.$('[data-jira-check]'));
   await settle(20);
-  assert.match(s.$('[data-jira-slow]').textContent, /Jira asked us to slow down\. Trying again at 10:09\./);
+  assert.match(s.$('[data-jira-slow]').textContent, /Jira asked us to slow down\. Trying again at 10:09 AM\./);
   s.unmount();
 });
 
