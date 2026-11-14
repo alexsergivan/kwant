@@ -168,7 +168,8 @@ async fn model_lists_and_calls_mcp_tools() {
     let requests = mock.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 2);
     let names: Vec<_> = requests[0]["tools"].as_array().unwrap().iter().map(|t| t["function"]["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["mcp__echo__echo", "mcp__echo__add", "mcp__echo__sleep", "mcp__echo__env", "mcp__echo__crash"]);
+    // The read-back tool for trimmed results comes last, on OpenAI-style endpoints
+    assert_eq!(names, ["mcp__echo__echo", "mcp__echo__add", "mcp__echo__sleep", "mcp__echo__env", "mcp__echo__crash", "kwnt_read_tool_result"]);
     assert_eq!(requests[0]["tools"][0]["function"]["parameters"]["required"], json!(["text"]));
     // Second request carries the assistant tool call and its result
     let msgs = requests[1]["messages"].as_array().unwrap();
@@ -296,6 +297,8 @@ async fn anthropic_bots_call_mcp_tools_in_the_messages_format() {
     assert_eq!(tools[0]["name"], "mcp__echo__echo");
     assert_eq!(tools[0]["input_schema"]["required"], json!(["text"]));
     assert!(tools.iter().all(|t| t.get("function").is_none() && t["input_schema"]["type"] == "object"));
+    // The Anthropic API never trims tool results, so it isn't offered the read-back tool
+    assert!(tools.iter().all(|t| t["name"] != "kwnt_read_tool_result"));
     // The second request replays the model's tool_use and answers it with a tool_result
     let msgs = requests[1]["messages"].as_array().unwrap();
     let (asked, answered) = (&msgs[msgs.len() - 2], &msgs[msgs.len() - 1]);
