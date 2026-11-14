@@ -227,7 +227,7 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
 .docs-group h3 { margin-bottom: 6px; font: 500 11.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
 .docs-group ul { margin: 0; padding: 0; list-style: none; }
 .docs-group a { display: block; padding: 6px 10px 6px 12px; margin-left: -12px; border-left: 2px solid transparent; color: var(--v8); text-decoration: none; font-size: 15px; }
-.docs-group a:hover { color: var(--v9); border-left-color: var(--line-2); }
+@media (hover: hover) { .docs-group a:hover { color: var(--v9); border-left-color: var(--line-2); } }
 .docs-group a[aria-current="page"] { color: var(--v9); font-weight: 600; border-left-color: var(--wait); background: linear-gradient(90deg, rgba(92, 63, 208, .18), transparent); }
 .prose { max-width: 728px; color: var(--v8); font-size: 17px; line-height: 1.72; }
 .prose h1 { margin-top: 14px; font-size: clamp(36px, 4.6vw, 54px); text-wrap: balance; }
@@ -942,3 +942,21 @@ pre { position: relative; margin: 20px 0 0; padding: 18px 20px; overflow-x: auto
 .docs-group a { border-left: 2px solid transparent; padding-left: 10px; }
 .docs-group a[aria-current="page"] { border-left-color: var(--wait); background: var(--surface); }
 .docs-nav { margin-left: -12px; padding-left: 12px; }
+
+/* ---------- Round 3 (Mira's non-blocking items at 19bbf988) ---------- */
+/* 1. Features jump bar: opaque. The 80 px strip above the stuck bar (76 px on phones) is filled by a band behind the
+   floating nav, on the features page only. (A .jump-bar::before would also cover the lede while the bar isn't stuck yet.) */
+.jump-bar { background: var(--bg); }
+body:has(.jump-bar) .topbar::before { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: -12px; height: 80px; background: var(--bg); pointer-events: none; }
+@media (max-width: 640px) { body:has(.jump-bar) .topbar::before { height: 76px; } }
+/* 2. Outro: 16 px from the quickstart / server row to the OS download; on phones the download is hidden, so 16 px to the note */
+.outro .dl { margin-top: 16px; }
+.outro .dl .cta { margin-top: 0; }
+@media (max-width: 640px) {
+  .outro .dl .cta { display: none; }
+  .outro .dl .mac-dl { margin-top: 0; }
+}
+/* 3. Features h1: balance alone broke "self- / hosted"; a narrower measure puts the breaks between words */
+main:has(.jump-bar) .page-head h1 { max-width: 13.5em; text-wrap: wrap; }
+@media (max-width: 640px) { main:has(.jump-bar) .page-head h1 { max-width: 7em; } }
+/* 3b. Docs menu: .docs-group a:hover now sits inside @media (hover: hover), so a tapped item on a phone keeps no bar */
