@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- Bots can open menus that show only on hover, like a video tile's ⋮ menu: the tile and its hidden buttons now appear in the bot's list of controls, clicking one moves the mouse over the tile first, and a new hover action shows what appears. The payment check is unchanged.
+
 ## [Mac 0.9.10] - 2026-11-14
 
 kwant 0.9.10: usage bars for each AI account, a Done mark and an Approve button on replies and one search for every app.

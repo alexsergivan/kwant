@@ -6885,9 +6885,12 @@ pub async fn act_sandbox_allowed(
             .await
             .map(|_| "scrolled".to_string())
             .map_err(|e| e.to_string()),
+        // Shows what a page shows on hover (a tile's ⋮ menu) and says what appeared; clicks nothing
+        ("hover", Some(target)) => ctrl.hover_target(&target).await.map_err(|e| e.to_string()),
         ("click_text" | "click", None) => Err("click needs ref (a number from the clickable list) or text (a label).".to_string()),
+        ("hover", None) => Err("hover needs ref (a number from the clickable list) or text (a label).".to_string()),
         (other, _) => Err(format!(
-            "Unknown action \"{}\". Use click (with ref or text), type (with text), key (with key) or scroll (with delta_y).",
+            "Unknown action \"{}\". Use click (with ref or text), hover (with ref or text), type (with text), key (with key) or scroll (with delta_y).",
             other
         )),
     };
@@ -6908,6 +6911,11 @@ pub async fn act_sandbox_allowed(
     };
     let mut after = ctrl.snapshot().await;
     let mut changed = diff(&after);
+    // A hover mostly shows what was already in the page's text (an opacity-0 button): what it
+    // brought up is the change
+    if payload.action == "hover" && changed.is_none() {
+        changed = result.as_ref().ok().and_then(|r| r.split_once("Appeared: ")).map(|(_, a)| format!("Appeared: {a}"));
+    }
     if changed.is_none() {
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         after = ctrl.snapshot().await;
