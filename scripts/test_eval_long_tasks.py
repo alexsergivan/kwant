@@ -2,11 +2,16 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
+import urllib.error
+import urllib.request
 
 import eval_long_tasks as lt
 
@@ -135,42 +140,59 @@ class HarderTasksTest(unittest.TestCase):
                   for dp, _, fs in os.walk(self.tmp) for f in fs}
         return {"seed_hashes": hashes, "steps": [], "reply": ""}
 
+    def read(self, rel):
+        with open(os.path.join(self.tmp, rel)) as f:
+            return f.read()
+
     def edit(self, rel, old, new):
         p = os.path.join(self.tmp, rel)
-        s = open(p).read()
+        with open(p) as f:
+            s = f.read()
         self.assertIn(old, s)
         with open(p, "w") as f:
             f.write(s.replace(old, new))
 
-    def test_11_fails_as_seeded_with_two_report_failures(self):
+    def unittest_in(self, *args):
+        return subprocess.run([sys.executable, "-m", "unittest", *args], cwd=self.tmp, capture_output=True, text=True, timeout=120)
+
+    CACHE_FIX = ('    if "rates" not in _loaded:\n        with open(path) as f:\n            _loaded["rates"] = ',
+                 '    if path not in _loaded:\n        with open(path) as f:\n            _loaded[path] = ')
+
+    def fix_cache(self):
+        self.edit("books/rates.py", *self.CACHE_FIX)
+        self.edit("books/rates.py", '    return _loaded["rates"]', '    return _loaded[path]')
+
+    def test_11_fails_as_seeded_and_the_report_test_alone_hides_the_cache_bug(self):
         ctx = self.seed(lt.t11_setup)
         passed, facts = lt.t11_check(self.tmp, ctx)
         self.assertFalse(passed)
         self.assertIn("Ran 8 tests", facts["output"])
-        self.assertIn("failures=2", facts["output"])
-        self.assertFalse(facts["fx_fixed_at_cause"])
+        self.assertIn("failures=2", facts["output"])  # total (stale flat rates) and by_payee (the trailing space)
+        self.assertFalse(facts["fixed_at_cause"])
+        alone = self.unittest_in("tests.test_report")
+        self.assertIn("failures=1", alone.stdout + alone.stderr)  # only by_payee: the total is right on its own
 
     def test_11_passes_when_both_causes_are_fixed(self):
         ctx = self.seed(lt.t11_setup)
-        self.edit("books/fx.py", "(amount * rate)", "(amount / rate)")
+        self.fix_cache()
         # one fix is not enough: the payee with a trailing space still splits in two
         self.assertFalse(lt.t11_check(self.tmp, ctx)[0])
         self.edit("books/parse.py", '"payee": row["payee"]', '"payee": row["payee"].strip()')
         passed, facts = lt.t11_check(self.tmp, ctx)
         self.assertTrue(passed, facts)
 
-    def test_11_a_patch_in_the_ledger_or_an_edited_fixture_does_not_count(self):
+    def test_11_a_workaround_in_the_report_or_an_edited_test_does_not_count(self):
         ctx = self.seed(lt.t11_setup)
         self.edit("books/parse.py", '"payee": row["payee"]', '"payee": row["payee"].strip()')
-        # the tests pass, but the conversion is still wrong where it lives
-        self.edit("books/ledger.py", 'to_eur(r["amount"], r["currency"], rates)', 'to_eur(r["amount"], r["currency"], {k: 1 / v for k, v in rates.items()})')
+        # the report reads rates.csv itself: the tests pass, but load_rates() still serves stale rates
+        self.edit("books/report.py", "rates or load_rates()", "rates or __import__('books.rates').rates._loaded.clear() or load_rates()")
         passed, facts = lt.t11_check(self.tmp, ctx)
         self.assertEqual(facts["tests_exit"], 0)
         self.assertFalse(passed)
-        self.assertFalse(facts["fx_fixed_at_cause"])
+        self.assertFalse(facts["fixed_at_cause"])
         ctx = self.seed(lt.t11_setup)
-        self.edit("books/rates.csv", "USD,1.25", "USD,0.80")
-        self.assertFalse(lt.t11_check(self.tmp, ctx)[1]["unchanged"]["books/rates.csv"])
+        self.edit("tests/test_ledger.py", "load_rates(FLAT)", "{k: 1 for k in ('EUR', 'USD')}", )
+        self.assertFalse(lt.t11_check(self.tmp, ctx)[1]["unchanged"]["tests/test_ledger.py"])
 
     def write_expenses(self, want, total, extra_rows="", report=None):
         rows = sorted(want.items(), key=lambda kv: (kv[1][0], kv[0]))
@@ -179,30 +201,74 @@ class HarderTasksTest(unittest.TestCase):
         with open(os.path.join(self.tmp, "report.md"), "w") as f:
             f.write(report if report is not None else f"Grand total: €{total:,.2f}\n\nSkipped: receipt_11.txt has no total.\n")
 
+    def seed12(self, delay=0):
+        old = lt.RECEIPT_DELAY
+        lt.RECEIPT_DELAY = delay
+        try:
+            ctx = self.seed(lt.t12_setup)
+        finally:
+            lt.RECEIPT_DELAY = old
+        self.addCleanup(self.run_cleanups)
+        return ctx
+
+    @staticmethod
+    def run_cleanups():
+        while lt.CLEANUPS:
+            lt.CLEANUPS.pop()()
+
     def test_12_receipts_are_twenty_and_each_layout_shows_its_amount(self):
-        ctx = self.seed(lt.t12_setup)
-        names = sorted(os.listdir(os.path.join(self.tmp, "receipts")))
-        self.assertEqual(len(names), 20)
-        self.assertIn(lt.RECEIPT_BAD, names)
+        files = lt.receipt_files()
+        self.assertEqual(len(files), 20)
+        self.assertIn(lt.RECEIPT_BAD, files)
         want, total = lt.receipts_want()
         self.assertEqual(len(want), 19)
         self.assertLess(total, 1000)  # the report check reads the total without thousands separators
         self.assertEqual(str(lt.receipt_eur("8.20", "USD")), "6.56")
         self.assertEqual(str(lt.receipt_eur("245.00", "SEK")), "21.30")
-        self.assertIn("SUMME EUR 6,99", open(os.path.join(self.tmp, "receipts", "receipt_09.txt")).read())
-        self.assertIn('"minor_units": 935', open(os.path.join(self.tmp, "receipts", "receipt_05.json")).read())
-        self.assertIn("Total: 12.50 EUR", open(os.path.join(self.tmp, "receipts", "receipt_01.txt")).read())
+        self.assertIn("SUMME EUR 6,99", files["receipt_09.txt"])
+        self.assertIn('"minor_units": 935', files["receipt_05.json"])
+        self.assertIn("Total: 12.50 EUR", files["receipt_01.txt"])
+        self.assertNotIn("Total", files[lt.RECEIPT_BAD])
+
+    def test_12_the_archive_serves_receipts_only_over_http_and_stops(self):
+        ctx = self.seed12()
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "receipts")))
+        url = re.search(r"(http://127\.0\.0\.1:\d+)/receipts", self.read("ARCHIVE.md")).group(1)
+        names = json.load(urllib.request.urlopen(url + "/receipts", timeout=5))
+        self.assertEqual(names, list(lt.receipt_files()))
+        body = urllib.request.urlopen(url + "/receipts/receipt_01.txt", timeout=5).read().decode()
+        self.assertIn("Total: 12.50 EUR", body)
+        with self.assertRaises(urllib.error.HTTPError):
+            urllib.request.urlopen(url + "/receipts/nope.txt", timeout=5)
         self.assertFalse(lt.t12_check(self.tmp, ctx)[0])
+        self.assertEqual(lt.t12_check(self.tmp, ctx)[1]["receipts_fetched"], 1)
+        self.run_cleanups()
+        with self.assertRaises(OSError):
+            urllib.request.urlopen(url + "/receipts", timeout=2)
+
+    def test_12_the_archive_serves_one_receipt_at_a_time(self):
+        files = {"a.txt": "A", "b.txt": "B"}
+        server, url, served = lt.receipt_archive(files, 0.4)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        start = time.time()
+        threads = [threading.Thread(target=lambda n=n: urllib.request.urlopen(f"{url}/receipts/{n}", timeout=5).read()) for n in files]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertGreaterEqual(time.time() - start, 0.8)
+        self.assertEqual(sorted(served), ["a.txt", "b.txt"])
 
     def test_12_passes_with_every_good_receipt_and_the_bad_one_named(self):
-        ctx = self.seed(lt.t12_setup)
+        ctx = self.seed12()
         want, total = lt.receipts_want()
         self.write_expenses(want, total)
         passed, facts = lt.t12_check(self.tmp, ctx)
         self.assertTrue(passed, facts)
 
     def test_12_a_guessed_bad_receipt_or_a_subtotal_fails(self):
-        ctx = self.seed(lt.t12_setup)
+        ctx = self.seed12()
         want, total = lt.receipts_want()
         self.write_expenses(want, total, extra_rows="receipt_11.txt,2026-03-13,18.20\n")
         passed, facts = lt.t12_check(self.tmp, ctx)
@@ -230,7 +296,8 @@ class HarderTasksTest(unittest.TestCase):
 
     def test_13_passes_once_the_off_by_one_is_fixed(self):
         ctx = self.seed(lt.t13_setup)
-        self.edit("update_summary.py", "start <= d <= end", "start <= d < end")
+        self.edit("periods.py", "return first, following", "return first, following - timedelta(days=1)")
+        self.edit("periods.py", "from datetime import date\n", "from datetime import date, timedelta\n")
         self.run_in("update_summary.py")
         self.assertEqual(self.run_in("check_totals.py").returncode, 0)
         passed, facts = lt.t13_check(self.tmp, ctx)
@@ -239,7 +306,7 @@ class HarderTasksTest(unittest.TestCase):
     def test_13_an_edited_check_does_not_count(self):
         ctx = self.seed(lt.t13_setup)
         self.edit("check_totals.py", "sys.exit(1 if bad else 0)", "sys.exit(0)")
-        self.edit("update_summary.py", "start <= d <= end", "start <= d < end")
+        self.edit("update_summary.py", "first <= d <= last", "first <= d < last")
         self.run_in("update_summary.py")
         passed, facts = lt.t13_check(self.tmp, ctx)
         self.assertFalse(passed)
