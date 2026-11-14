@@ -626,8 +626,12 @@ test('Settings › Dev mode: shown before the first switch-on with Turn on (0.9.
   assert.ok(first, 'the header switch is gone, so the card must be there to turn it on the first time');
   assert.doesNotMatch(first.textContent, /switch next to/);
   assert.equal(first.querySelector('[data-dev-turn-off]'), null);
+  const setV = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setV.call(first.querySelector('#dv-set-repo'), 'demo-org/demo-app');
+  first.querySelector('#dv-set-repo').dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle();
   await click(first.querySelector('[data-dev-turn-on]'));
-  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').at(-1)[2], { on: true });
+  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').at(-1)[2], { on: true, repo: 'demo-org/demo-app' });
   assert.equal(m.devStore.isOn('spc_demo'), true);
   v.root.unmount();
 
@@ -651,7 +655,8 @@ test('Settings › Dev mode: shown before the first switch-on with Turn on (0.9.
   await click(form.querySelector('[data-dev-turn-off]'));
   assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').at(-1)[2], { on: false });
   assert.equal(m.devStore.isOn('spc_demo'), false);
-  assert.match(form.textContent, /Off\. Reviews, the ship gate and the production floor are stopped\. Approvals stay as you set them above\./);
+  assert.match(form.textContent, /Found demo-org\/demo-app\. Turn it on and your bots review pull requests/, 'back to the Off card, the repo kept');
+  assert.match(form.textContent, /You can turn it off any time\./);
   assert.doesNotMatch(form.textContent, /approvals stay on/);
   v.root.unmount();
 });
