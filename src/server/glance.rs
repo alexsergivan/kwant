@@ -97,12 +97,69 @@ pub fn app_path(space: &str, link: &Value, kwant_id: &str, card: Option<&str>) -
 /// [`mcp_writes`]: super::dev::prepush::mcp_writes
 const PUSH_WORDS: &[&str] = &["MERGE", "PUSH", "UPDATE_BRANCH", "UPDATE_A_REFERENCE", "UPDATE_REF", "CREATE_A_REFERENCE", "DELETE_A_REFERENCE", "RELEASE"];
 
+/// Parts of a tool or server name (any case) that mark a tool taking free text to run: a command,
+/// a script, code or a query. A one-line peek can't show what that text does, and a list of bad
+/// commands is never complete, so all of them need the full card.
+const RUNS_TEXT_NAMES: &[&str] = &["RUN", "EXEC", "COMMAND", "CMD", "SHELL", "BASH", "TERMINAL", "SSH", "SCRIPT", "EVAL", "CODE", "SQL"];
+
+/// Argument keys (any depth, any case) that carry free text to run.
+const RUNS_TEXT_KEYS: &[&str] = &["command", "cmd", "argv", "args", "script", "code", "shell", "query", "sql"];
+
+/// Whole words (in the tool name, any argument key or any string value) that push, merge, publish
+/// or release, or move refs and tags.
+const PUSH_FAMILY: &[&[&str]] = &[&["push"], &["merge"], &["publish"], &["release"], &["send", "pack"], &["receive", "pack"], &["refs"], &["deploy"], &["tag"]];
+
+/// Parts of a tool name (any case) that act outside kwant or destroy something: publishing,
+/// sending, deleting, posting or paying.
+const OUTWARD_NAMES: &[&str] = &["PUBLISH", "DEPLOY", "SEND", "EMAIL", "MAIL", "DELETE", "REMOVE", "DESTROY", "DROP", "POST", "PAY"];
+
+const PUSHES: &str = "This pushes code, so it needs the full card.";
+const RUNS: &str = "This runs a command, so it needs the full card.";
+const OUTWARD: &str = "This acts outside kwant, so it needs the full card.";
+
+/// Every argument key and string value, at any depth, in document order (array items in turn).
+fn texts<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
+    match v {
+        Value::String(s) => out.push(s),
+        Value::Array(items) => items.iter().for_each(|i| texts(i, out)),
+        Value::Object(map) => map.iter().for_each(|(k, v)| {
+            out.push(k);
+            texts(v, out);
+        }),
+        _ => {}
+    }
+}
+
+/// Whether any key at any depth is one of [`RUNS_TEXT_KEYS`].
+fn has_run_key(v: &Value) -> bool {
+    match v {
+        Value::Array(items) => items.iter().any(has_run_key),
+        Value::Object(map) => map.iter().any(|(k, v)| RUNS_TEXT_KEYS.iter().any(|r| k.eq_ignore_ascii_case(r)) || has_run_key(v)),
+        _ => false,
+    }
+}
+
+/// Whether `text` holds a [`PUSH_FAMILY`] word as a whole word: lowercased, with anything but
+/// letters and digits (spaces, tabs, `_`, `-`, `/`, quotes, dots) as a break.
+fn has_push_word(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    PUSH_FAMILY.iter().any(|phrase| words.windows(phrase.len()).any(|w| w == *phrase))
+}
+
 /// Why an approval may only be answered on its full card, from its stored details alone; `None`
 /// when the island may offer Allow once. Starts from Telegram's rule (money, the production floor,
 /// a tier-forced ask, a turn that read outside text or that kwant started on its own, a shell
 /// command, kwant's own tools, wrappers that run other actions, file tools outside the bot's
 /// folder), then adds what a one-line peek can't show safely: a risky step (`smart_reason`), the
-/// push floor (a prepush grant, a GitHub write, a `git push`, a merge) and details it can't read.
+/// push floor (a prepush grant, a GitHub write, a merge) and details it can't read.
+///
+/// It fails closed in three layers, each of which refuses on its own (Ada, #646 round 2):
+/// 1. a push-family word ([`PUSH_FAMILY`]) anywhere in the tool name, an argument key or a string
+///    value, as a whole word;
+/// 2. a tool that runs free text: its tool or server name says so ([`RUNS_TEXT_NAMES`]) or an
+///    argument key at any depth does ([`RUNS_TEXT_KEYS`]);
+/// 3. a tool whose name acts outside kwant or destroys something ([`OUTWARD_NAMES`]).
 pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     if !details.is_object() {
         return Some("Open it to see what it does.");
@@ -118,21 +175,32 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
         return Some("kwant flagged this step as risky.");
     }
     if set("prepush_grant") || set("strict_ask") {
-        return Some("This pushes code, so it needs the full card.");
+        return Some(PUSHES);
     }
     let tool = details["tool"].as_str().unwrap_or_default();
+    let server = details["server"].as_str().unwrap_or_default();
     let args = &details["arguments"];
     if !super::dev::prepush::mcp_writes(tool, args).is_empty() {
-        return Some("This pushes code, so it needs the full card.");
+        return Some(PUSHES);
     }
     let upper = tool.to_ascii_uppercase();
     if PUSH_WORDS.iter().any(|w| upper.contains(w)) {
-        return Some("This pushes code, so it needs the full card.");
+        return Some(PUSHES);
     }
-    // A command or argument that pushes, wherever it hides
-    let text = args.to_string().to_ascii_lowercase();
-    if text.contains("git push") {
-        return Some("This pushes code, so it needs the full card.");
+    // 1. A push-family word wherever it hides: the name, a key, a value, an argv item
+    let mut all = vec![tool];
+    texts(args, &mut all);
+    if has_push_word(&all.join(" ")) {
+        return Some(PUSHES);
+    }
+    // 2. Free text to run, whatever it says
+    let names = format!("{} {}", server.to_ascii_uppercase(), upper);
+    if RUNS_TEXT_NAMES.iter().any(|w| names.contains(w)) || has_run_key(args) {
+        return Some(RUNS);
+    }
+    // 3. Acts outside kwant or destroys something
+    if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) {
+        return Some(OUTWARD);
     }
     None
 }
@@ -497,6 +565,82 @@ mod tests {
         assert!(inline_refusal(&mcp("composio", "GITHUB_MERGE_A_PULL_REQUEST", json!({}))).is_some());
         assert!(inline_refusal(&mcp("runner", "run", json!({"cmd": "cd x && git push origin main"}))).is_some());
         assert!(inline_refusal(&mcp("github", "create_issue", json!({"owner": "o", "repo": "r", "title": "Bug"}))).is_none());
+    }
+
+    /// Rigel's round-2 risk-4 rows (#646): fifteen commands and four outward tools that came back
+    /// Allow once at 184d8fd0. tests/glance_test.rs reads the same rows back through the API.
+    fn risky_rows() -> Vec<(&'static str, Value)> {
+        let run = |c: &str| mcp("runner", "run", json!({ "command": c }));
+        vec![
+            ("git  push (two spaces)", run("git  push origin main")),
+            ("git<TAB>push", run("git\tpush origin main")),
+            ("git -C dir push", run("git -C /repo push origin main")),
+            ("git -c k=v push", run("git -c core.x=1 push")),
+            ("argv [git, push]", mcp("runner", "run", json!({"argv": ["git", "push", "origin", "main"]}))),
+            ("gh pr merge", run("gh pr merge 5 --squash")),
+            ("gh release create", run("gh release create v1")),
+            ("gh api -X PUT merge", run("gh api -X PUT repos/o/r/pulls/5/merge")),
+            ("git send-pack", run("git send-pack origin main")),
+            ("npm publish", run("npm publish")),
+            ("cargo publish", run("cargo publish")),
+            ("docker push", run("docker push img")),
+            ("curl POST git/refs", run("curl -X POST https://api.github.com/repos/o/r/git/refs")),
+            ("rm -rf /", run("rm -rf /")),
+            ("bitbucket pr_action merge", mcp("bitbucket", "pr_action", json!({"action": "merge"}))),
+            ("publish_site", mcp("netlify", "publish_site", json!({}))),
+            ("deploy", mcp("vercel", "deploy", json!({}))),
+            ("send_email", mcp("gmail", "send_email", json!({}))),
+            ("delete_page", mcp("notion", "delete_page", json!({}))),
+        ]
+    }
+
+    #[test]
+    fn every_round_two_row_needs_the_full_card() {
+        let rows = risky_rows();
+        assert_eq!(rows.len(), 19);
+        for (name, d) in rows {
+            assert!(inline_refusal(&d).is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn each_layer_refuses_on_its_own() {
+        // 1. Push-family words, whole words only, in any key or value, at any depth
+        let words = |args: Value| inline_refusal(&mcp("notes", "save_note", args));
+        assert_eq!(words(json!({"a": {"b": ["x", "Push it"]}})), Some(PUSHES));
+        assert_eq!(words(json!({"what_to_merge": "a"})), Some(PUSHES), "a key");
+        assert_eq!(words(json!({"t": "receive-pack"})), Some(PUSHES));
+        assert_eq!(words(json!({"t": "v1 TAG"})), Some(PUSHES));
+        assert_eq!(words(json!({"t": "pushkin, merger, tags, published"})), None, "whole words only");
+        assert_eq!(inline_refusal(&mcp("github", "create_tag", json!({}))), Some(PUSHES), "a name word");
+        // 2. Free text to run: by tool name, server name or a key at any depth
+        assert_eq!(inline_refusal(&mcp("notes", "Execute", json!({}))), Some(RUNS));
+        assert_eq!(inline_refusal(&mcp("my-ssh", "connect", json!({}))), Some(RUNS));
+        assert_eq!(inline_refusal(&mcp("db", "read_rows", json!({"filter": {"SQL": "select 1"}}))), Some(RUNS));
+        assert_eq!(inline_refusal(&mcp("notes", "save_note", json!({"items": [{"code": "x"}]}))), Some(RUNS));
+        // 3. Outward or destructive names
+        assert_eq!(inline_refusal(&mcp("x", "Remove_Item", json!({}))), Some(OUTWARD));
+        assert_eq!(inline_refusal(&mcp("x", "create_post", json!({}))), Some(OUTWARD));
+        assert_eq!(inline_refusal(&mcp("x", "pay_invoice", json!({}))), Some(OUTWARD));
+    }
+
+    /// Realistic steps that still get Allow once, so the rule isn't "always no".
+    fn realistic_rows() -> Vec<(&'static str, Value)> {
+        vec![
+            (
+                "a file write inside the bot's folder",
+                json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "arguments": {"file_path": "notes/todo.md", "content": "Buy milk\nCall Ana"}}),
+            ),
+            ("a read-only fetch", mcp("fetch", "fetch", json!({"url": "https://example.com/docs", "max_length": 5000}))),
+            ("a page that mentions Pushkin", mcp("notion", "create_page", json!({"title": "Pushkin reading list", "parent": {"page_id": "abc"}}))),
+        ]
+    }
+
+    #[test]
+    fn realistic_steps_may_still_be_allowed_inline() {
+        for (name, d) in realistic_rows() {
+            assert_eq!(inline_refusal(&d), None, "{name}");
+        }
     }
 
     #[test]
