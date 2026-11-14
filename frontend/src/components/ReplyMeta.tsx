@@ -4,12 +4,17 @@ import { localClock } from '../clock';
 import { RouteInfo, useRouteChip } from './RouteChip';
 import { EngineChip } from './Signature';
 import { SentToTelegram } from './TelegramMarks';
+import { DoneMarker } from './DoneMarker';
+import { ranOnWords } from '../modelUsage';
+import type { ReplyDone } from '../replyDone';
 
 export interface ReplyFacts {
   /** "Claude · Opus 5.5": the engine and model the reply ran on. */
   ranOn?: string | null;
   account?: string | null;
   tokens?: { label: string; detail: string } | null;
+  /** Details' Cost row in words (replyCostWords); `tokens.detail` is its tooltip. */
+  cost?: { text: string; note: string | null } | null;
 }
 
 export interface ReplyMetaProps extends ReplyFacts {
@@ -22,9 +27,12 @@ export interface ReplyMetaProps extends ReplyFacts {
   failed?: boolean;
   /** One muted line under the name, e.g. "Claude is out until 03:00 · answered on Codex (GPT-6.1)". */
   note?: string | null;
-  /** Why this bot answered: a chip beside the name that opens the full reason (and "Wrong bot?"). */
+  /** Why this bot answered: Details' first row, in words, with "Wrong bot?" after it. */
   route?: RouteInfo | null;
-  /** Set after a failover: the engines the reply moved between, with the reason on hover. */
+  /** A job's final reply (replyDone.doneOf): the quiet marker after the name. */
+  done?: ReplyDone | null;
+  /** Set after a failover: the engines the reply moved between, with the reason on hover. Only then is
+   *  the engine on the name line; otherwise it waits in Details. */
   handoff?: { from: string; to: string; why: string } | null;
   now?: number;
   /** The reply also went out to Telegram (G4): "· sent to Telegram too" after the time. */
@@ -42,26 +50,40 @@ export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
 
 const hasContent = (n: React.ReactNode) => React.Children.toArray(n).length > 0;
 
-/** A bot reply's header: one line, "Name · 3:42 PM", and a Details toggle holding the rest. */
-export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, failed = false, note, route, handoff, now, sentToTelegram = false, children }) => {
+/** A bot reply's header: one line, "Name · [Done] · 3:42 PM · Details", and a Details toggle holding the rest in words. */
+export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, cost, failed = false, note, route, done, handoff, now, sentToTelegram = false, children }) => {
   const [open, setOpen] = useState(false);
   const why = useRouteChip(route);
   const panelId = useId();
   const time = localClock(at, now);
   const facts: Array<[string, React.ReactNode]> = [];
-  if (ranOn) facts.push(['Model', ranOn]);
-  if (account) facts.push(['Account', account]);
-  if (tokens) facts.push(['Tokens', <span title={tokens.detail}>{tokens.label}<span className="text-zinc-400"> · {tokens.detail}</span></span>]);
-  const hasDetails = facts.length > 0 || hasContent(children);
+  if (why.reason)
+    facts.push([
+      `Why ${name}`,
+      <>
+        {why.reason}
+        {why.wrongBot}
+      </>,
+    ]);
+  const ran = ranOnWords(ranOn, account);
+  if (ran) facts.push(['Ran on', ran]);
+  if (cost)
+    facts.push([
+      'Cost',
+      <span title={tokens?.detail}>
+        {cost.text}
+        {cost.note && <span className="text-zinc-400"> {cost.note}</span>}
+      </span>,
+    ]);
+  else if (tokens) facts.push(['Cost', <span title={tokens.detail}>{tokens.label}</span>]);
+  const hasDetails = facts.length > 0 || hasContent(children) || !!why.panel;
   return (
     <div className="w-full max-w-full min-w-0">
       <div className="mb-1.5 flex min-w-0 max-w-full flex-nowrap sm:flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400 font-medium">
         {avatar && <span className="sm:hidden shrink-0 inline-flex">{avatar}</span>}
-        <span className="shrink-0 text-[13px] font-semibold text-zinc-50">{name}</span>
-        {why.chip}
-        {(ranOn || handoff) && (
-          <EngineChip label={[ranOn, account].filter(Boolean).join(' · ')} short={ranOn ? ranOn.split(' · ').pop() : null} handoff={handoff} />
-        )}
+        <span className="min-w-0 truncate text-[13px] font-semibold text-zinc-50">{name}</span>
+        {done && <DoneMarker done={done} />}
+        {handoff && <EngineChip label={[ranOn, account].filter(Boolean).join(' · ')} short={ranOn ? ranOn.split(' · ').pop() : null} handoff={handoff} />}
         {time && (
           <span className="shrink-0 whitespace-nowrap text-zinc-400" data-reply-time="">
             <span aria-hidden="true" className="sm:hidden">· </span>
@@ -84,20 +106,20 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
           </button>
         )}
       </div>
-      {why.panel}
       {note && <FailoverNote text={note} />}
       {open && hasDetails && (
-        <div id={panelId} className="mb-2 w-full max-w-2xl">
+        <div id={panelId} className="mb-2 w-full max-w-2xl" data-reply-details="">
           {facts.length > 0 && (
-            <dl className="mb-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+            <dl className="mb-2 grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-x-3 gap-y-0 sm:gap-y-1 text-xs">
               {facts.map(([k, v]) => (
                 <React.Fragment key={k}>
                   <dt className="text-zinc-400">{k}</dt>
-                  <dd className="text-zinc-300 min-w-0 break-words">{v}</dd>
+                  <dd className="mb-1.5 sm:mb-0 text-zinc-200 min-w-0 break-words leading-snug">{v}</dd>
                 </React.Fragment>
               ))}
             </dl>
           )}
+          {why.panel}
           {children}
         </div>
       )}
