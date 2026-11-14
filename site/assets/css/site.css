@@ -963,6 +963,6 @@ main:has(.jump-bar) .page-head h1 { max-width: 13.5em; text-wrap: wrap; }
 @media (max-width: 640px) { main:has(.jump-bar) .page-head h1 { max-width: 7em; } }
 /* 3b. Docs menu: .docs-group a:hover now sits inside @media (hover: hover), so a tapped item on a phone keeps no bar */
 
-/* The home page's below-the-fold images wait in data-src for site.js; without JS, hide the empty placeholder and let
-   the <noscript> copy show instead. */
-@media (scripting: none) { img[data-src] { display: none; } noscript { display: contents; } }
+/* The home page's below-the-fold images wait in data-src, and demo video posters in data-poster, for site.js; without
+   JS, hide the empty placeholder or poster-less video and let the <noscript> copy show instead. */
+@media (scripting: none) { img[data-src], video[data-poster] { display: none; } noscript { display: contents; } }
