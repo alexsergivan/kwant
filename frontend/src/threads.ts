@@ -48,6 +48,11 @@ export interface Thread {
   updated_at: string;
   delegation?: Delegation | null;
   active?: ActiveTurn[];
+  /** Continue in a new chat (continueChat.ts): the chat and message it was continued from; null otherwise. */
+  forked_from_context?: string | null;
+  forked_from_message_id?: string | null;
+  forked_copied?: number | null;
+  forked_truncated?: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
