@@ -144,6 +144,11 @@ export function answerTarget(opts: {
   return { kind: 'team', label: 'This channel', detail: 'The bots in this channel answer. Type @ and a name to ask one.' };
 }
 
+/** The team home's footer: one @ (the line's own icon), and the team named like the composer pill. */
+export function teamAnswerLine(teamName?: string): string {
+  return `${teamName ? `The ${teamName} team` : 'The team'} answers. Type @ and a name to ask one member.`;
+}
+
 /** "5m ago", "2h ago", "3d ago", else the date: short, for the recent-work cards. */
 export function ago(iso: string, now: number = Date.now()): string {
   const t = Date.parse(iso.includes('T') || iso.endsWith('Z') ? iso : `${iso.replace(' ', 'T')}Z`);

@@ -68,7 +68,7 @@ test('members: lead first, each once', () => {
 
 test('who answers: the team home reuses the composer pill words', () => {
   const t = m.answerTarget({ kind: 'team', text: '', teamName: 'engineering', names: [] });
-  assert.equal(t.detail, '@engineering team answers. Type @ and a name to ask one member.');
+  assert.equal(t.detail, 'The engineering team answers. Type @ and a name to ask one member.');
 });
 
 const teamHome = (purpose) => ({ kind: 'team', team: { name: 'engineering', purpose, lead: 'Ada', members: [ada, lin, pix] } });
@@ -89,6 +89,14 @@ test('BotHome for a team: name, purpose, answer line, member chips with titles a
   assert.match(t, /What changed this week\?/);
   assert.doesNotMatch(t, /A fourth one/, 'three asks, not four');
   assert.doesNotMatch(t, /What do you want done\?/);
+  assert.match(t, /For example/, 'the same section label as #general');
+  assert.doesNotMatch(t, /Try asking/);
+});
+
+test('team home footer: one @ (its icon), the team named like the pill; the pill itself is unchanged', () => {
+  assert.equal(m.teamAnswerLine('helpers'), 'The helpers team answers. Type @ and a name to ask one member.');
+  assert.equal(m.teamAnswerLine(undefined), 'The team answers. Type @ and a name to ask one member.');
+  assert.equal(m.answerTarget({ kind: 'team', text: '', teamName: 'helpers', names: [] }).label, '@helpers team');
 });
 
 test('BotHome for a team without a description, and while nothing can run', () => {
@@ -122,7 +130,7 @@ test('ChatView: an empty team chat shows the team home; with one message it does
     const home = v.host.querySelector('[data-bot-home="team"]');
     assert.ok(home, 'team home shows');
     assert.equal(home.querySelector('[data-team-home-line]').textContent, 'Ships software safely.');
-    assert.equal(home.querySelector('[data-answer-line]').textContent, '@engineering team answers. Type @ and a name to ask one member.');
+    assert.equal(home.querySelector('[data-answer-line]').textContent, 'The engineering team answers. Type @ and a name to ask one member.');
     assert.equal(v.host.querySelector('[aria-label="Suggested prompts"] > span'), null, 'no "Suggested:" chip row under the composer');
   } finally {
     v.unmount();

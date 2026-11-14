@@ -149,7 +149,7 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
       ) : cards.length > 0 && (
         <div className="mt-8 w-full text-left">
           <p className="mb-2 flex items-center gap-1.5 text-meta font-semibold uppercase tracking-wider text-zinc-400">
-            <MessageSquareText size={13} aria-hidden="true" /> {general ? 'For example' : 'Try asking'} <NewTag id="starters" className="ml-1.5 normal-case tracking-normal" />
+            <MessageSquareText size={13} aria-hidden="true" /> {general || crew ? 'For example' : 'Try asking'} <NewTag id="starters" className="ml-1.5 normal-case tracking-normal" />
           </p>
           <div className={`kw-stagger grid grid-cols-1 gap-2.5 ${cards.length === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`} role="group" aria-label="Suggested prompts">
             {cards.map((prompt, i) => {

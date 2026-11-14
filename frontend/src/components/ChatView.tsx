@@ -16,7 +16,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
-import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
+import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
@@ -827,8 +827,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.
   const stickRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  // The empty chat's home opens at its top: on a phone a team home is taller than the screen, and its faces come first (13d).
+  const homeShowingRef = useRef(false);
   const pinToBottom = (el: HTMLDivElement) => {
-    el.scrollTop = el.scrollHeight;
+    el.scrollTop = homeShowingRef.current ? 0 : el.scrollHeight;
     lastScrollTopRef.current = el.scrollTop;
   };
   // A waiting card whose buttons are off screen while the person reads further up.
@@ -1844,6 +1846,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     !!home &&
     (home.kind === 'bot' || home.kind === 'general' || (home.kind === 'team' && !!home.team)) &&
     !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
+  homeShowingRef.current = showHome;
   // first-screen E: nothing can run and Get started (the welcome) isn't on screen. The home shows it in place of its asks.
   const accountCard = accountCardShows({ canRun, getStartedShowing: !!welcome });
   // Who answers what's typed: the chat decides, an @mention overrides
@@ -2249,7 +2252,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               spaceName={spaceName}
               team={home.kind === 'team' ? home.team?.members : activeKwants}
               prompts={suggestions}
-              answerLine={home.kind === 'team' ? target.detail : undefined}
+              answerLine={home.kind === 'team' ? teamAnswerLine(teamName) : undefined}
               canRun={canRun}
               onPick={handlePromptSuggestion}
               accountCard={accountCard}
