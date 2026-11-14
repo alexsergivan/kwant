@@ -66,10 +66,28 @@ card_art: team
       <h2>A browser panel that follows your bot, and AI use over 7 or 30 days, by model</h2>
       <p>The browser panel opens when your bot browses and lists the pages it opened. See your AI use for 7 or 30 days, day by day and by model. Routines open from the sidebar, with a Weekdays chip and schedules in words.</p>
     </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="browser-panel">A browser panel that follows your bot</h3>
+        <p>When a bot opens a page in its browser, the panel opens by itself, with the bot's name, a <strong>Browsing now</strong> or <strong>Finished</strong> line and a Live pill, and closes again shortly after the bot is done, unless you used it. <strong>Pages this reply</strong> lists each page the reply opened, by title, with <strong>Now</strong> on the current one. A chip on the reply, like <strong>Ben opened 2 pages</strong>, reopens it; on a phone it opens as a sheet. <strong>Point</strong> and <strong>Take over</strong> sit under the preview, and <strong>Enlarge</strong> shows the page bigger, view only.</p>
+      </div>
+      <div class="frame">{{shot:v099-browser-panel|Ben is working on "Can you compare our two tents on the shop and check both pages are right?". The chip "Ben is on shop.example.com · 2 pages" sits in the reply's steps. Ben's browser panel opened by itself on the right: "Browsing now", a Live pill on the Summit 3P Tent page, and "Pages this reply · 2" with Summit 3P Tent marked Now.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="usage-history">AI use over 7 or 30 days, by model</h3>
+        <p><strong>AI use</strong> in Settings › All spaces › Usage switches between <strong>7 days</strong> and <strong>30 days</strong>: the total, a bar for each day (a quiet day shows as a gap), and <strong>By model</strong>, each model's share. When no model reported a cost, it counts fresh tokens instead.</p>
+      </div>
+      <div class="frame">{{shot:v099-usage-history|Settings › AI use at 7 days: "$8.36 in the last 7 days", a bar per day from Sun 8 Nov to today with one quiet day, and a hovered bar reading "Yesterday: $1.31". Below are By model (claude-sonnet-5-5 $4.91 59%, claude-opus-5-5 $3.44 41%, Codex · GPT-5.5 "No cost reported") and By day, which shows fresh tokens, cache reads and cost per bot.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="routines-setup">Routines are easier to set up</h3>
+        <p>The sidebar has a <strong>Routines</strong> row. With none yet, one card explains what a routine is. The form gives examples, shows your time zone in one line (<strong>Kyiv time GMT+2</strong>), and a weekly routine has a <strong>Weekdays</strong> chip. Each card shows the first line of its instructions, when it runs next, and its schedule in words, like <strong>Weekdays at 08:30, Kyiv time</strong>.</p>
+      </div>
+      <div class="frame">{{shot:v099-routines-setup|Settings › Routines for Trailhead Outfitters with three cards. Competitor prices is OK, next run Mon, Nov 16, 08:30 AM, "Weekdays at 08:30, Kyiv time · Ben · direct chat". Size chart sync is Failed, running every day at 07:00 with Ann. Shipping recap is switched off and Paused, every Monday at 09:00 with Cody. Each card has Run now, History, Edit and Delete, and Suggested routines sits below.}}</div>
+    </div>
     <ul class="flist">
-      <li id="browser-panel" class="span3"><h3>A browser panel that follows your bot</h3><p>When a bot opens a page in its browser, the panel opens by itself, with the bot's name, a <strong>Browsing now</strong> or <strong>Finished</strong> line and a Live pill, and closes again shortly after the bot is done, unless you used it. <strong>Pages this reply</strong> lists each page the reply opened, by title, with <strong>Now</strong> on the current one. A chip on the reply, like <strong>Ben opened 2 pages</strong>, reopens it; on a phone it opens as a sheet. <strong>Point</strong> and <strong>Take over</strong> sit under the preview, and <strong>Enlarge</strong> shows the page bigger, view only.</p></li>
-      <li id="usage-history" class="span3"><h3>AI use over 7 or 30 days, by model</h3><p><strong>AI use</strong> in Settings › All spaces › Usage switches between <strong>7 days</strong> and <strong>30 days</strong>: the total, a bar for each day (a quiet day shows as a gap), and <strong>By model</strong>, each model's share. When no model reported a cost, it counts fresh tokens instead.</p></li>
-      <li id="routines-setup" class="span3"><h3>Routines are easier to set up</h3><p>The sidebar has a <strong>Routines</strong> row. With none yet, one card explains what a routine is. The form gives examples, shows your time zone in one line (<strong>Kyiv time GMT+2</strong>), and a weekly routine has a <strong>Weekdays</strong> chip. Each card shows the first line of its instructions, when it runs next, and its schedule in words, like <strong>Weekdays at 08:30, Kyiv time</strong>.</p></li>
       <li id="fixes-099" class="span3"><h3>Smaller changes in 0.9.9</h3><p>Update checks are ready at launch; Settings asks again and links to the latest release. Tool server names are unique regardless of case. Chrome start-up errors lead with the real cause.</p></li>
     </ul>
   </div>
