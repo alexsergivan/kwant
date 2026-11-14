@@ -9,6 +9,7 @@ pub mod mcp_routes;
 pub mod mcp_runtime;
 pub mod profile_routes;
 pub mod profile_turn;
+pub mod account_usage;
 pub mod engine_routes;
 pub mod engine_login;
 pub mod auth;
@@ -259,6 +260,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
         .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))
         .route("/api/profiles/:id/check", post(profile_routes::check))
+        .route("/api/profiles/:id/usage", post(profile_routes::usage))
         .route("/api/profiles/:id/login", post(profile_routes::start_login))
         .route(
             "/api/profiles/:id/login/:flow_id",
