@@ -55,7 +55,7 @@ import {
   useInbox,
   inboxStore,
 } from '../inboxStore';
-import { timeText } from '../clock';
+import { localClock } from '../clock';
 
 export const WIDE_QUERY = '(min-width: 1024px)';
 
@@ -113,9 +113,10 @@ const okBtn =
 const plainBtn =
   'kw-focus inline-flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed';
 
-/** "2:08 PM" / "14:08": the queue shows the clock, in the device's own format. */
-export function clock(ts: string): string {
-  return timeText(ts) ?? '';
+/** "2:08 PM" today, "Nov 11, 2:08 PM" another day: the app's one rule, in the device's own format, so the row
+ *  reads the same moment the way the card inside it and chat do. */
+export function clock(ts: string, now: number = Date.now()): string {
+  return localClock(ts, now) ?? '';
 }
 
 /**
@@ -260,7 +261,7 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
         <ModernAvatar role={item.kwant_name} name={item.kwant_name} size={30} kwantId={item.kwant_id} />
         <span className="flex-1 min-w-0">
           <span className="flex items-center gap-2 text-[11px]">
-            <span className="font-semibold text-zinc-300 truncate">
+            <span className="min-w-0 font-semibold text-zinc-300 truncate">
               {kicker && (
                 <span className="font-normal text-zinc-400" data-kicker>
                   {kicker} ·{' '}
@@ -274,7 +275,7 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
                 <span className="sr-only">New</span>
               </span>
             )}
-            <time dateTime={item.timestamp} className={`${unread ? '' : 'ml-auto '}shrink-0 tabular-nums text-zinc-400`}>
+            <time dateTime={item.timestamp} className={`${unread ? '' : 'ml-auto '}shrink-0 whitespace-nowrap tabular-nums text-zinc-400`}>
               {clock(item.timestamp)}
             </time>
           </span>

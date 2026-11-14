@@ -74,8 +74,8 @@ test('routines: the schedule and its Next line use the same clock', () => {
 });
 
 test('call sites that forced 24 h or en-GB now follow the locale', () => {
-  assert.equal(n(m.reviewClock(AT, 'en-US')), '8:15 PM', 'the Inbox');
-  assert.equal(m.reviewClock(AT, 'en-GB'), '20:15');
+  assert.equal(n(m.reviewClock(AT, 'en-US', Date.parse(AT))), '8:15 PM', 'the Inbox');
+  assert.equal(m.reviewClock(AT, 'en-GB', Date.parse(AT)), '20:15');
   assert.equal(n(m.callTime(AT, new Date(AT), 'en-US')), '8:15 PM');
   assert.equal(n(m.callTime(AT, new Date('2026-11-17T09:00:00Z'), 'en-US')), 'Nov 16, 8:15 PM');
   assert.equal(m.callTime(AT, new Date('2026-11-17T09:00:00Z'), 'en-GB'), '16 Nov, 20:15');
@@ -91,7 +91,7 @@ test('call sites that forced 24 h or en-GB now follow the locale', () => {
 
 test('one clock: hand-built HH:MM spots now read the device clock (Inbox queue, Done-away, Dev desk, worktrees)', () => {
   const want = n(m.timeText(AT));
-  assert.equal(n(m.inboxClock(AT)), want);
+  assert.equal(n(m.inboxClock(AT, Date.parse(AT))), want);
   assert.equal(n(m.awayHm(AT)), want);
   assert.equal(n(m.checkedLabel(Date.parse(AT))), want);
   assert.equal(n(m.worktreeDay(AT, Date.parse(AT)).time), want);
@@ -99,3 +99,14 @@ test('one clock: hand-built HH:MM spots now read the device clock (Inbox queue, 
   assert.equal(n(m.scheduleShort({ type: 'weekly', time: '20:15', weekdays: ['mon'], tz: 'UTC' })), `every Mon ${n(m.wallClock('20:15'))}`);
   assert.equal(m.inboxClock('nope'), '');
 });
+
+test('one clock: the Inbox row and review item carry the date on another day, like the card and chat (Round 2)', () => {
+  const LATER = Date.parse('2026-11-19T09:00:00Z');
+  assert.equal(n(m.inboxClock(AT, LATER)), n(m.localClock(AT, LATER)), 'the row follows localClock');
+  assert.equal(n(m.inboxClock(AT, LATER)), `${n(m.dateText(AT))}, ${want0()}`);
+  assert.equal(n(m.reviewClock(AT, 'en-US', LATER)), 'Nov 16, 8:15 PM', 'in Review since … yesterday or earlier');
+  assert.equal(m.reviewClock(AT, 'en-GB', LATER), '16 Nov, 20:15');
+  assert.equal(m.reviewClock(null), null);
+  assert.equal(m.reviewClock('nope'), null);
+});
+const want0 = () => n(m.timeText(AT));
