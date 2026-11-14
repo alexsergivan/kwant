@@ -33,7 +33,7 @@
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=4840ba0cdf" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=977e43492e" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/jetbrains-mono.woff2?v=8247becaf0" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=6aad372047">
+<link rel="stylesheet" href="../assets/css/site.css?v=64e56152f8">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -133,7 +133,7 @@
 <h2 id="sandbox">What Sandbox asks about</h2>
 <p>At Sandbox, a bot works on files in its task folder without asking, because kwant took a checkpoint first and you can <a href="/docs/mission-board#checkpoints">restore</a> it. Anything that can change something outside that folder asks first, and the card says why:</p>
 <figure>
-  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="../assets/media/clip-sandbox-poster.webp?v=28a4a80e5f" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified."><source src="../assets/media/clip-sandbox.mp4?v=9195606fc7" type="video/mp4"></video></div>
+  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified." data-poster="../assets/media/clip-sandbox-poster.webp?v=28a4a80e5f"><source src="../assets/media/clip-sandbox.mp4?v=9195606fc7" type="video/mp4"></video><noscript><video class="app" data-autoplay controls muted playsinline loop preload="none" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified." poster="../assets/media/clip-sandbox-poster.webp?v=28a4a80e5f"><source src="../assets/media/clip-sandbox.mp4?v=9195606fc7" type="video/mp4"></video></noscript></div>
   <figcaption>A Sandbox bot asks before running a build. You allow it, and the task ends Verified.</figcaption>
 </figure>
 <p>Reading and searching files never asks. On Claude, read-only commands in the bot's own folder, such as <code>ls</code> or <code>cat</code>, run without asking; any other command asks below Act. A bot that works through an API key runs commands through kwant's own shell tool, and below Act every command it runs asks, even read-only ones. At Observe, file changes ask too, even inside the task folder.</p>
@@ -205,7 +205,7 @@
     </div>
   </div>
 </footer>
-<script src="../assets/js/site.js?v=0f53ed50bc" defer></script>
+<script src="../assets/js/site.js?v=02a491b838" defer></script>
 <script src="../assets/js/pixel.js?v=0a1a3bf1e2" defer></script>
 <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/flight-school#article","headline":"Flight School: earned freedom for AI agents","description":"Set each bot's tier per kind of work: Observe, Sandbox or Act. Bots earn a step up with a scorecard, only you grant it, payments always ask, and you can revoke a tier in a click.","url":"https://kwant.si/docs/flight-school","mainEntityOfPage":"https://kwant.si/docs/flight-school","image":"https://kwant.si/assets/og/docs-flight-school.png?v=3182073a3c","inLanguage":"en","datePublished":"2026-10-28","dateModified":"2026-11-06","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Flight School","item":"https://kwant.si/docs/flight-school"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>
