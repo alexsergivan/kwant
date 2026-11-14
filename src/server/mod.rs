@@ -542,6 +542,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/watch-checks/:id", get(missions::watch::get_check))
         .route("/api/graph", get(missions::graph::loose_graph))
         .route("/api/tasks", get(missions::routes::list_tasks).post(missions::routes::create_task))
+        .route("/api/tasks/receipts.csv", get(missions::receipts::receipts_csv))
         .route("/api/tasks/:id", get(missions::routes::get_task).patch(missions::routes::patch_task))
         .route("/api/tasks/:id/verify", post(missions::routes::verify_task))
         .route("/api/tasks/:id/reject", post(missions::routes::reject_task))

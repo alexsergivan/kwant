@@ -60,6 +60,7 @@ pub mod telegram_customers;
 pub mod show_once;
 pub mod isolated_folders;
 pub mod tool_notes;
+pub mod receipts;
 pub mod mission_watch;
 pub mod verifier;
 pub mod last_ran_on;
