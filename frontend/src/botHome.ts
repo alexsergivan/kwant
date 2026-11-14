@@ -138,7 +138,7 @@ export function answerTarget(opts: {
     return { kind: 'laya', label: 'Best fit', detail: 'The best bot for each message answers. Type @ and a name to choose one yourself.' };
   }
   if (opts.kind === 'team') {
-    const t = opts.teamName ? `@${opts.teamName} team` : 'The team';
+    const t = opts.teamName ? `@${teamNamed(opts.teamName)}` : 'The team';
     return { kind: 'team', label: t, detail: `${t} answers. Type @ and a name to ask one member.` };
   }
   return { kind: 'team', label: 'This channel', detail: 'The bots in this channel answer. Type @ and a name to ask one.' };
@@ -146,7 +146,13 @@ export function answerTarget(opts: {
 
 /** The team home's footer: one @ (the line's own icon), and the team named like the composer pill. */
 export function teamAnswerLine(teamName?: string): string {
-  return `${teamName ? `The ${teamName} team` : 'The team'} answers. Type @ and a name to ask one member.`;
+  // A no-break space keeps "Type @" together, so a wrapped line never starts with a loose "@" (13d round 2).
+  return `${teamName ? `The ${teamNamed(teamName)}` : 'The team'} answers. Type\u00a0@ and a name to ask one member.`;
+}
+
+/** "helpers" → "helpers team"; "Booktun.ing Team" stays as it is (no "team team"). */
+export function teamNamed(name: string): string {
+  return /\bteam$/i.test(name.trim()) ? name.trim() : `${name.trim()} team`;
 }
 
 /** "5m ago", "2h ago", "3d ago", else the date: short, for the recent-work cards. */

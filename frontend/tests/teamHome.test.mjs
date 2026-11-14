@@ -94,8 +94,8 @@ test('BotHome for a team: name, purpose, answer line, member chips with titles a
 });
 
 test('team home footer: one @ (its icon), the team named like the pill; the pill itself is unchanged', () => {
-  assert.equal(m.teamAnswerLine('helpers'), 'The helpers team answers. Type @ and a name to ask one member.');
-  assert.equal(m.teamAnswerLine(undefined), 'The team answers. Type @ and a name to ask one member.');
+  assert.equal(m.teamAnswerLine('helpers'), 'The helpers team answers. Type\u00a0@ and a name to ask one member.');
+  assert.equal(m.teamAnswerLine(undefined), 'The team answers. Type\u00a0@ and a name to ask one member.');
   assert.equal(m.answerTarget({ kind: 'team', text: '', teamName: 'helpers', names: [] }).label, '@helpers team');
 });
 
@@ -130,7 +130,7 @@ test('ChatView: an empty team chat shows the team home; with one message it does
     const home = v.host.querySelector('[data-bot-home="team"]');
     assert.ok(home, 'team home shows');
     assert.equal(home.querySelector('[data-team-home-line]').textContent, 'Ships software safely.');
-    assert.equal(home.querySelector('[data-answer-line]').textContent, 'The engineering team answers. Type @ and a name to ask one member.');
+    assert.equal(home.querySelector('[data-answer-line]').textContent, 'The engineering team answers. Type\u00a0@ and a name to ask one member.');
     assert.equal(v.host.querySelector('[aria-label="Suggested prompts"] > span'), null, 'no "Suggested:" chip row under the composer');
   } finally {
     v.unmount();
@@ -152,4 +152,12 @@ test('ChatView: an empty team chat while nothing can run shows the account card 
   } finally {
     v.unmount();
   }
+});
+
+test('a team whose name already ends in "Team": no "team team" in the home footer or the pill', () => {
+  assert.equal(m.teamAnswerLine('Booktun.ing Team'), 'The Booktun.ing Team answers. Type\u00a0@ and a name to ask one member.');
+  const t = m.answerTarget({ kind: 'team', text: '', teamName: 'Booktun.ing Team', names: [] });
+  assert.equal(t.label, '@Booktun.ing Team');
+  assert.equal(t.detail, '@Booktun.ing Team answers. Type @ and a name to ask one member.');
+  assert.equal(m.teamAnswerLine('steam'), 'The steam team answers. Type\u00a0@ and a name to ask one member.');
 });
