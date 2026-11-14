@@ -28,6 +28,51 @@ pub struct Thread {
     pub archived: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The chat this one was continued from ("Continue in a new chat from here"): a thread id
+    /// or a bot's id (its main chat). `None` for every other thread.
+    #[sqlx(default)]
+    pub forked_from_context: Option<String>,
+    /// The message there it was continued from: the newest one copied.
+    #[sqlx(default)]
+    pub forked_from_message_id: Option<String>,
+    /// How many messages were copied into it (Iris's ask: the "Continued from … · n messages"
+    /// line needs n after a reload, not only in the 201). `None` for every other thread.
+    #[sqlx(default)]
+    pub forked_copied: Option<i64>,
+    /// Whether only the newest [`CONTINUE_MAX_MESSAGES`] were copied. `None` for every other thread.
+    #[sqlx(default)]
+    pub forked_truncated: Option<bool>,
+}
+
+/// Most messages "Continue in a new chat from here" copies: the newest ones, up to the pressed one.
+pub const CONTINUE_MAX_MESSAGES: usize = 1000;
+
+/// What [`Database::continue_chat`] made.
+#[derive(Debug, Clone)]
+pub struct Continued {
+    pub thread: Thread,
+    /// Messages copied into the new thread.
+    pub copied: usize,
+    /// The chat had more than [`CONTINUE_MAX_MESSAGES`] up to the pressed message, so only the
+    /// newest ones were copied.
+    pub truncated: bool,
+}
+
+/// `<title> (continued)`, at most [`MAX_TITLE_CHARS`]: the source title is cut (not the suffix),
+/// and continuing a continued chat doesn't stack a second suffix.
+pub fn continued_title(source: &str) -> String {
+    const SUFFIX: &str = " (continued)";
+    let base = clean_title(source);
+    let base = base.strip_suffix(SUFFIX).unwrap_or(&base);
+    let room = MAX_TITLE_CHARS - SUFFIX.chars().count();
+    let base: String = if base.chars().count() > room {
+        let mut b: String = base.chars().take(room - 1).collect();
+        b.push('…');
+        b
+    } else {
+        base.to_string()
+    };
+    format!("{base}{SUFFIX}")
 }
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
@@ -170,6 +215,19 @@ impl Database {
         let _ = sqlx::query("ALTER TABLE delegations ADD COLUMN lead_turn_id TEXT;")
             .execute(&self.pool)
             .await;
+        // Continue in a new chat from here (0.9.10): where a chat was continued from
+        let _ = sqlx::query("ALTER TABLE threads ADD COLUMN forked_from_context TEXT;")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE threads ADD COLUMN forked_from_message_id TEXT;")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE threads ADD COLUMN forked_copied INTEGER;")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE threads ADD COLUMN forked_truncated INTEGER;")
+            .execute(&self.pool)
+            .await;
         Ok(())
     }
 
@@ -194,6 +252,10 @@ impl Database {
             archived: false,
             created_at: now,
             updated_at: now,
+            forked_from_context: None,
+            forked_from_message_id: None,
+            forked_copied: None,
+            forked_truncated: None,
         };
         sqlx::query(
             "INSERT INTO threads (id, kwant_id, title, kind, team_id, created_by, archived, created_at, updated_at) \
@@ -210,6 +272,117 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(thread)
+    }
+
+    /// "Continue in a new chat from here": a new `chat` thread for `kwant_id`, made by the person,
+    /// holding a copy of every message of chat `context_id` up to and including `message_id`, in
+    /// one transaction. Copies get new ids and keep their sender, text, reasoning, tool calls,
+    /// tokens, meta (file cards by reference) and `created_at`, oldest first, so the order holds;
+    /// a reply that quotes a copied message quotes its copy. Stored Smart Results come along.
+    /// Reactions, approvals and running turns don't. Past [`CONTINUE_MAX_MESSAGES`] only the
+    /// newest are copied (`truncated`). The source chat is only read.
+    pub async fn continue_chat(
+        &self,
+        kwant_id: &str,
+        title: &str,
+        team_id: Option<&str>,
+        context_id: &str,
+        message_id: &str,
+    ) -> Result<Continued, DbError> {
+        let mut tx = self.pool.begin().await?;
+        // Newest first, up to and including the pressed message, in the order the chat shows
+        // (`list_messages`: created_at, then rowid)
+        let mut rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT m.id, m.reply_to_message_id FROM messages m, \
+             (SELECT created_at AS at, rowid AS seq FROM messages WHERE id = ?2) cut \
+             WHERE (m.channel_id = ?1 OR m.direct_kwant_id = ?1 OR m.thread_id = ?1) \
+             AND (m.created_at < cut.at OR (m.created_at = cut.at AND m.rowid <= cut.seq)) \
+             ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?3",
+        )
+        .bind(context_id)
+        .bind(message_id)
+        .bind(CONTINUE_MAX_MESSAGES as i64 + 1)
+        .fetch_all(&mut *tx)
+        .await?;
+        let truncated = rows.len() > CONTINUE_MAX_MESSAGES;
+        rows.truncate(CONTINUE_MAX_MESSAGES);
+        rows.reverse();
+
+        let now = Utc::now();
+        let thread = Thread {
+            id: Uuid::new_v4().to_string(),
+            kwant_id: kwant_id.into(),
+            title: clean_title(title),
+            kind: "chat".into(),
+            team_id: team_id.map(Into::into),
+            created_by: "user".into(),
+            archived: false,
+            created_at: now,
+            updated_at: now,
+            forked_from_context: Some(context_id.into()),
+            forked_from_message_id: Some(message_id.into()),
+            forked_copied: Some(rows.len() as i64),
+            forked_truncated: Some(truncated),
+        };
+        sqlx::query(
+            "INSERT INTO threads (id, kwant_id, title, kind, team_id, created_by, archived, created_at, updated_at, \
+             forked_from_context, forked_from_message_id, forked_copied, forked_truncated) \
+             VALUES (?, ?, ?, 'chat', ?, 'user', 0, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&thread.id)
+        .bind(&thread.kwant_id)
+        .bind(&thread.title)
+        .bind(&thread.team_id)
+        .bind(now)
+        .bind(now)
+        .bind(&thread.forked_from_context)
+        .bind(&thread.forked_from_message_id)
+        .bind(thread.forked_copied)
+        .bind(thread.forked_truncated)
+        .execute(&mut *tx)
+        .await?;
+
+        let new_ids: std::collections::HashMap<&str, String> =
+            rows.iter().map(|(id, _)| (id.as_str(), Uuid::new_v4().to_string())).collect();
+        for (old, reply_to) in &rows {
+            let new = &new_ids[old.as_str()];
+            // A quote of a message that wasn't copied keeps pointing at the original
+            let reply_to = reply_to.as_deref().map(|r| new_ids.get(r).cloned().unwrap_or_else(|| r.to_string()));
+            sqlx::query(
+                "INSERT INTO messages (id, channel_id, direct_kwant_id, sender_role, sender_id, text, reasoning_content, \
+                 tool_calls, tokens_used, created_at, thread_id, meta, reply_to_message_id) \
+                 SELECT ?, NULL, NULL, sender_role, sender_id, text, reasoning_content, tool_calls, tokens_used, created_at, ?, meta, ? \
+                 FROM messages WHERE id = ?",
+            )
+            .bind(new)
+            .bind(&thread.id)
+            .bind(reply_to)
+            .bind(old)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO message_results (message_id, version, payload) SELECT ?, version, payload FROM message_results WHERE message_id = ?",
+            )
+            .bind(new)
+            .bind(old)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(Continued { thread, copied: rows.len(), truncated })
+    }
+
+    /// Whether message `a` comes at or before message `b` in a chat's order (created_at, then
+    /// rowid). `false` when either is gone.
+    pub async fn message_at_or_before(&self, a: &str, b: &str) -> Result<bool, DbError> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM messages x, messages y WHERE x.id = ? AND y.id = ? \
+             AND (x.created_at < y.created_at OR (x.created_at = y.created_at AND x.rowid <= y.rowid)))",
+        )
+        .bind(a)
+        .bind(b)
+        .fetch_one(&self.pool)
+        .await?)
     }
 
     pub async fn get_thread(&self, id: &str) -> Result<Option<Thread>, DbError> {
@@ -271,6 +444,10 @@ impl Database {
             archived: false,
             created_at: now,
             updated_at: now,
+            forked_from_context: None,
+            forked_from_message_id: None,
+            forked_copied: None,
+            forked_truncated: None,
         };
         sqlx::query(
             "INSERT INTO threads (id, kwant_id, title, kind, team_id, created_by, archived, created_at, updated_at) \
@@ -599,5 +776,90 @@ mod tests {
         let t = clean_title(&long);
         assert_eq!(t.chars().count(), MAX_TITLE_CHARS);
         assert!(t.ends_with('…'));
+    }
+
+    #[test]
+    fn continued_titles_keep_the_suffix_and_never_stack_it() {
+        assert_eq!(continued_title("Wifi  help"), "Wifi help (continued)");
+        assert_eq!(continued_title("Wifi help (continued)"), "Wifi help (continued)");
+        let t = continued_title(&"x".repeat(300));
+        assert_eq!(t.chars().count(), MAX_TITLE_CHARS);
+        assert!(t.ends_with("… (continued)"), "{t}");
+    }
+
+    async fn say(db: &Database, chat: &str, role: &str, text: &str, reply_to: Option<&str>) -> String {
+        let msg = crate::db::models::NewMessage {
+            channel_id: None,
+            direct_kwant_id: Some(chat.into()),
+            sender_role: role.into(),
+            sender_id: if role == "user" { "user".into() } else { "Ada".into() },
+            text: text.into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 3,
+        };
+        let id = db.insert_message(&msg).await.unwrap().id;
+        if let Some(r) = reply_to {
+            sqlx::query("UPDATE messages SET reply_to_message_id = ? WHERE id = ?").bind(r).bind(&id).execute(&db.pool).await.unwrap();
+        }
+        id
+    }
+
+    #[tokio::test]
+    async fn a_continued_chat_copies_up_to_the_cut_with_replies_and_results_but_not_reactions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let first = say(&db, "k1", "user", "one", None).await;
+        let second = say(&db, "k1", "kwant", "two", None).await;
+        let cut = say(&db, "k1", "user", "three", Some(&second)).await;
+        let quoted_before = say(&db, "k2", "user", "elsewhere", None).await;
+        sqlx::query("UPDATE messages SET reply_to_message_id = ? WHERE id = ?").bind(&quoted_before).bind(&first).execute(&db.pool).await.unwrap();
+        say(&db, "k1", "kwant", "four, after the cut", None).await;
+        sqlx::query("INSERT INTO message_results (message_id, version, payload) VALUES (?, 1, '{\"blocks\":[]}')")
+            .bind(&second)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        db.set_reaction(&second, Some("up")).await.unwrap();
+
+        let c = db.continue_chat("k1", "Ada (continued)", None, "k1", &cut).await.unwrap();
+        assert_eq!((c.copied, c.truncated), (3, false));
+        assert_eq!(c.thread.kind, "chat");
+        assert_eq!(c.thread.created_by, "user");
+        assert_eq!(c.thread.forked_from_context.as_deref(), Some("k1"));
+        assert_eq!(c.thread.forked_from_message_id.as_deref(), Some(cut.as_str()));
+        // Stored, so a reload still shows "· n messages" (Iris)
+        let stored = db.get_thread(&c.thread.id).await.unwrap().unwrap();
+        assert_eq!((stored.forked_copied, stored.forked_truncated), (Some(c.copied as i64), Some(c.truncated)));
+        assert_eq!(db.get_thread(&c.thread.id).await.unwrap().unwrap(), c.thread, "the columns read back");
+
+        let copies = db.list_messages(&c.thread.id, 100).await.unwrap();
+        assert_eq!(copies.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["one", "two", "three"]);
+        let originals = db.list_messages("k1", 100).await.unwrap();
+        for (copy, orig) in copies.iter().zip(&originals) {
+            assert_ne!(copy.id, orig.id);
+            assert_eq!(copy.thread_id.as_deref(), Some(c.thread.id.as_str()));
+            assert!(copy.direct_kwant_id.is_none() && copy.channel_id.is_none());
+            assert_eq!((&copy.sender_role, &copy.sender_id, copy.tokens_used, copy.created_at), (&orig.sender_role, &orig.sender_id, orig.tokens_used, orig.created_at));
+        }
+        // A quote of a copied message quotes its copy; one of a message that wasn't copied stays
+        assert_eq!(copies[2].reply_to_message_id.as_deref(), Some(copies[1].id.as_str()));
+        assert_eq!(copies[0].reply_to_message_id.as_deref(), Some(quoted_before.as_str()));
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM message_results WHERE message_id = ? AND payload = '{\"blocks\":[]}'")
+            .bind(&copies[1].id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "stored results come along");
+        assert_eq!(db.get_reaction(&copies[1].id).await.unwrap(), None, "reactions don't");
+        assert_eq!(db.get_reaction(&second).await.unwrap().as_deref(), Some("up"));
+        // The source is untouched
+        assert_eq!(originals.len(), 4);
+        assert_eq!(originals.iter().filter(|m| m.thread_id.is_some()).count(), 0);
+
+        assert!(db.message_at_or_before(&first, &cut).await.unwrap());
+        assert!(db.message_at_or_before(&cut, &cut).await.unwrap());
+        assert!(!db.message_at_or_before(&originals[3].id, &cut).await.unwrap());
+        assert!(!db.message_at_or_before("gone", &cut).await.unwrap());
     }
 }
