@@ -1,6 +1,7 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
 import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
+import { createStreamText, useStreamPart, useStreamThinking, useStreamWriting, type StreamText, type StreamView } from '../streamText';
 import { queuedText } from '../claudeVm';
 import { QueuedBeside } from './QueuedBeside';
 import { WaitingBanner } from './WaitingBanner';
@@ -215,8 +216,14 @@ export interface ChatViewProps {
   /** Phones: back to the list. */
   onBack?: () => void;
   messages: ChatMessage[];
-  streamingText: string;
-  streamingThinking: string;
+  /**
+   * The open chat's streaming reply (14b): only the live reply's body subscribes to it, so a token never
+   * re-renders this view or its finished messages. App passes this.
+   */
+  stream?: StreamText;
+  /** Without `stream`: the streaming reply as plain props (tests, previews). */
+  streamingText?: string;
+  streamingThinking?: string;
   /** Tool approvals waiting in this chat, oldest first. */
   pendingApprovals: PendingApproval[];
   /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
@@ -488,6 +495,16 @@ const useNarrow = () => {
   return narrow;
 };
 
+/**
+ * The live reply's words or thinking line (14b): the one place that re-renders with the stream, at most
+ * once a frame. The finished messages around it never do. `onGrow` keeps the bottom pinned.
+ */
+const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { stream: StreamText; part: keyof StreamView; onGrow: () => void }) {
+  const value = useStreamPart(stream, part);
+  useEffect(onGrow, [value, onGrow]);
+  return part === 'text' ? <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(value))} isStreaming={true} /> : <>{value}</>;
+});
+
 export const ChatView: React.FC<ChatViewProps> = ({
   heldNotes,
   dropOff = false,
@@ -496,8 +513,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   spaceName,
   onBack,
   messages,
-  streamingText,
-  streamingThinking,
+  stream: streamProp,
+  streamingText = '',
+  streamingThinking = '',
   pendingApprovals,
   prepush,
   settledApprovals = [],
@@ -826,6 +844,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.
   const stickRef = useRef(true);
+  // The streaming reply (14b). Given as props instead of a store, those props feed a store of this view's own.
+  const [propStream] = useState(() => createStreamText({ text: streamingText, thinking: streamingThinking }));
+  const stream = streamProp ?? propStream;
+  useLayoutEffect(() => {
+    if (!streamProp) propStream.show({ text: streamingText, thinking: streamingThinking });
+  }, [streamProp, propStream, streamingText, streamingThinking]);
+  const writing = useStreamWriting(stream) || (!streamProp && !!streamingText);
+  const thinkingShown = useStreamThinking(stream) || (!streamProp && !!streamingThinking);
   const lastScrollTopRef = useRef(0);
   const pinToBottom = (el: HTMLDivElement) => {
     el.scrollTop = el.scrollHeight;
@@ -858,7 +884,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // (`phone` is the A1 PHONE_QUERY flag above).
   const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
   // What the live bubble holds before its first words: a pending approval reads as "waiting for your OK", not loading.
-  const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing: !!streamingText });
+  const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing });
   // The strip's "Answer ↑": the open question card, else the approval card, fully in view.
   const showWaitingCard = (on: 'question' | 'approval') => {
     if (on === 'approval') return showApproval();
@@ -878,7 +904,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     awaitingBrowser: !!awaitingBrowser,
     approvalOpen: pendingApprovals.length > 0,
     queued: !!queued,
-    writing: !!streamingText,
+    writing,
   });
   // Team words ("Stop team", the rail) only for a team turn; a single bot asking in a channel gets "Stop".
   const teamChat = isTeamTurn(home?.kind, !!discussionState?.inProgress);
@@ -905,7 +931,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       queued={!!queued}
       awaitingAnswer={!!awaitingAnswer}
       awaitingBrowser={!!awaitingBrowser}
-      writing={!!streamingText}
+      writing={writing}
       onAnswer={showWaitingCard}
       onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       phone={phone}
@@ -955,7 +981,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
     checkApprovalVisible();
-  }, [messages, streamingText, streamingThinking, approvalKey, routingState, queued, contextKey]);
+  }, [messages, writing, thinkingShown, approvalKey, routingState, queued, contextKey]);
+  // Each streamed update (at most one a frame) keeps the bottom pinned while the person follows the chat.
+  const onStreamGrowRef = useRef(() => {});
+  onStreamGrowRef.current = () => {
+    if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
+    checkApprovalVisible();
+  };
+  const [onStreamGrow] = useState(() => () => onStreamGrowRef.current());
 
   // Jump to a search hit: open its folded discussion if needed, then centre and flash it.
   // Runs after the auto-scroll above, so it wins.
@@ -2377,25 +2410,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 />
               )}
 
-              {streamingThinking && (
+              {thinkingShown && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
                   <Sparkles size={13} className="text-violet-400 flex-shrink-0" />
-                  <span className="truncate">{streamingThinking}</span>
+                  <span className="truncate"><StreamPart stream={stream} part="thinking" onGrow={onStreamGrow} /></span>
                 </div>
               )}
 
               {/* On a phone the strip says "working" and "waiting": no skeleton, no "Paused on…" bubble. */}
-              {(!phone || queued || streamingText) && (
+              {(!phone || queued || writing) && (
               <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full" data-live-bubble-body="">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
                     {queuedText(queued.reason, queued.slots)}
                   </p>
-                ) : streamingText ? (
+                ) : writing ? (
                   /* The scene's 62 px holds under the first words (kw-wa-hold), so the bubble does not jump; they fade in once. */
                   <div className="kw-wa-in kw-wa-hold">
-                    <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} isStreaming={true} />
+                    <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
                   </div>
                 ) : awaitingAnswer ? (
                   <p className="text-zinc-400" role="status">
