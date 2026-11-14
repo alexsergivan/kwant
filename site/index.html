@@ -42,7 +42,18 @@
     <a class="nl stars" href="https://github.com/alexsergivan/kwant" rel="noopener" aria-label="kwant on GitHub, 527 stars"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><b>★ 527</b></a>
     <a class="btn btn-solid btn-get px" href="/docs/quickstart">Get started</a>
   </nav>
+  <div class="reel"><a class="btn btn-line px" href="assets/media/reel.mp4?v=60d961a730" data-reel aria-haspopup="dialog" aria-controls="reel-dialog"><svg class="pi" viewBox="0 0 6 6" shape-rendering="crispEdges" fill="currentColor" aria-hidden="true"><rect x="0" y="0" width="1" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="0" y="2" width="5" height="1"/><rect x="0" y="3" width="5" height="1"/><rect x="0" y="4" width="3" height="1"/><rect x="0" y="5" width="1" height="1"/></svg>Watch it work <span>0:52</span></a></div>
 </header>
+<dialog class="reel-dialog" id="reel-dialog" aria-labelledby="reel-title" aria-describedby="reel-desc">
+  <div class="reel-bar"><h2 id="reel-title">Watch kwant work</h2><button type="button" class="reel-close" data-reel-close aria-label="Close video">Close</button></div>
+  <div class="reel-frame">
+    <video controls playsinline preload="none" data-src="assets/media/reel.mp4?v=60d961a730" data-poster-sm="assets/media/reel-poster-960.webp?v=817501e7d8" data-poster-lg="assets/media/reel-poster-1920.webp?v=904e39462a" aria-describedby="reel-desc">
+      <track kind="captions" srclang="en" label="English" data-src="assets/media/reel.vtt">
+    </video>
+    <button type="button" class="reel-play" data-reel-play hidden aria-label="Play video"><svg class="pi" viewBox="0 0 6 6" shape-rendering="crispEdges" fill="currentColor" aria-hidden="true"><rect x="0" y="0" width="1" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="0" y="2" width="5" height="1"/><rect x="0" y="3" width="5" height="1"/><rect x="0" y="4" width="3" height="1"/><rect x="0" y="5" width="1" height="1"/></svg></button>
+  </div>
+  <p class="sr-only" id="reel-desc">kwant demo, 52 seconds. A team of bots picks up a task and hands it on, you point at the exact spot on a page that's wrong, a bot asks before running a risky command, each task shows the checks it passed, and a routine keeps watching overnight. Recorded on a sample demo workspace, with no real account or repo.</p>
+</dialog>
 <main id="main">
 <section class="hero" aria-labelledby="hero-title">
   <canvas data-nebula aria-hidden="true"></canvas>

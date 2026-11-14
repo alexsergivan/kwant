@@ -382,16 +382,16 @@ def expand(body, root):
     return body
 
 
-# The "Watch it work · 1:00" reel (home page, desktop). The pill and its lightbox are only emitted once the video is in
+# The "Watch it work · 0:52" reel (home page, desktop). The pill and its lightbox are only emitted once the video is in
 # site/assets/media, so the site never links to a missing file. The description is the reel's text alternative.
 REEL = "assets/media/reel.mp4"
 REEL_VTT = "assets/media/reel.vtt"
 REEL_POSTERS = ("assets/media/reel-poster-960.webp", "assets/media/reel-poster-1920.webp")
-REEL_DESC = ("A one-minute recording of the kwant app in use, in one demo space with no sound. A fresh install opens on a "
-             "team of helper bots. You ask for something in plain words, and one bot hands the work on to a teammate. "
-             "You point at the exact part of a page that is wrong and a bot fixes it. A risky step waits on an approval "
-             "card until you press Approve. A finished task shows the checks it passed. A routine is set up to run every "
-             "morning while you are away. It ends on the kwant avatars and kwant.si.")
+REEL_DESC = ("kwant demo, 52 seconds. A team of bots picks up a task and hands it on, you point at the exact spot on a "
+             "page that's wrong, a bot asks before running a risky command, each task shows the checks it passed, and a "
+             "routine keeps watching overnight. Recorded on a sample demo workspace, with no real account or repo.")
+# The real length (Kit's reel.json: 51.8 s). The label never claims a full minute.
+REEL_LENGTH = "0:52"
 
 
 def reel_markup(root):
@@ -403,10 +403,10 @@ def reel_markup(root):
     track = (f'\n      <track kind="captions" srclang="en" label="English" data-src="{root}{REEL_VTT}">'
              if (OUT / REEL_VTT).exists() else "")
     pill = (f'\n  <div class="reel"><a class="btn btn-line px" href="{root}{REEL}" data-reel aria-haspopup="dialog" '
-            f'aria-controls="reel-dialog">{px_icon(IC["play"])}Watch it work <span>1:00</span></a></div>')
+            f'aria-controls="reel-dialog">{px_icon(IC["play"])}Watch it work <span>{REEL_LENGTH}</span></a></div>')
     dialog = f"""
 <dialog class="reel-dialog" id="reel-dialog" aria-labelledby="reel-title" aria-describedby="reel-desc">
-  <div class="reel-bar"><h2 id="reel-title">kwant in one minute</h2><button type="button" class="reel-close" data-reel-close aria-label="Close video">Close</button></div>
+  <div class="reel-bar"><h2 id="reel-title">Watch kwant work</h2><button type="button" class="reel-close" data-reel-close aria-label="Close video">Close</button></div>
   <div class="reel-frame">
     <video controls playsinline preload="none" data-src="{root}{REEL}" {posters} aria-describedby="reel-desc">{track}
     </video>
