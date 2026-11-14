@@ -402,3 +402,28 @@ Every window a test has to cross reads "now" from **`kwnt::clock::now()`**. Nobo
 | Clash code (test plan T-A5, T-W9, Q-API1) | 409 `clash` with `clashes[]` | 409 `name_taken` / `handle_taken` (`name_taken` is what imports already answer) **plus** `clashes[]` with every clash | one code family across kwant; the list is what the sheet needs |
 | Idempotency (test plan §0.5, T-W9) | `idempotency_key` in the body, required | optional `Idempotency-Key` header; 400 `bad_request` when sent empty or over 200 characters | a header keeps the body strict (`unknown_field`), and an older client without a key still works; the sheet always sends one |
 | Templates source | templates-copy.md | `templates.json` embedded byte for byte from `design/templates.js` | no hand copying |
+
+## 9. Errors, everywhere in the HTTP API (14d)
+
+Every refusal under `/api/` (any 4xx or 5xx) answers in one JSON shape:
+
+```json
+{ "error": "<a plain sentence>", "code": "<snake_case>", "detail": "<optional>" }
+```
+
+- A route's own `code` always wins (`bad_name`, `exists`, `too_large`, `archived`, ...), and so do its other fields
+  (`field`, `suggestion`, `max_bytes`, `person_only`, ...).
+- A route that sends no `code` gets one from the status: `bad_request` (400 and any other 4xx), `unauthorized`
+  (401), `forbidden` (403), `not_found` (404), `method_not_allowed` (405), `conflict` (409), `too_large` (413),
+  `unsupported_media` (415), `unprocessable` (422), `rate_limited` (429), `server_error` (5xx).
+- A request kwant can't parse (a query, path or JSON body in the wrong form) gets a plain sentence, one of the codes
+  `bad_request`, `bad_json` (the body isn't valid JSON), `unsupported_media` (not sent as `application/json`),
+  `too_large` or `unprocessable` (valid JSON with the wrong fields or types), and the parser's own words in `detail`
+  (at most 300 characters). For example `GET /api/spaces/spc_default/docs/page?file=faq.md&page=abc`:
+  `400 {"error": "That request wasn't in the form kwant expected.", "code": "bad_request", "detail": "Failed to deserialize query string: invalid digit found in string"}`.
+- A 409 that found a thing in another state names that state in both `status` and `code` (a fact `accepted`, a
+  proposal `stale`, a suggestion `dismissed`).
+- Successful answers, downloads, streams (SSE, WebSocket), and error bodies over 64 KB or of unknown length are sent
+  as the route wrote them. JSON-RPC answers (`/api/mcp/...`) keep their own `error` object.
+
+The layer is `src/server/error_shape.rs`, the outermost layer of the router.
