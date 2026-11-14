@@ -198,10 +198,18 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
       )}
 
       {!accountCard && (
-        <p className="mt-8 flex items-center gap-1.5 text-meta text-zinc-400" data-answer-line={crew ? '' : undefined}>
+        crew ? (
+          // Can wrap on a phone, so the @ sits inline with the words instead of beside the block.
+          <p className="mt-8 max-w-md text-balance text-meta text-zinc-400" data-answer-line="">
+            <AtSign size={13} aria-hidden="true" className="mr-1.5 inline-block align-[-2px]" />
+            {answerLine ?? `${crew.name} answers. Type @ and a name to ask one member.`}
+          </p>
+        ) : (
+        <p className="mt-8 flex items-center gap-1.5 text-meta text-zinc-400">
           <AtSign size={13} aria-hidden="true" />
-          {crew ? (answerLine ?? `${crew.name} answers. Type @ and a name to ask one member.`) : general ? 'Type @ to ask one bot yourself.' : 'Type @ to bring another bot into the conversation.'}
+          {general ? 'Type @ to ask one bot yourself.' : 'Type @ to bring another bot into the conversation.'}
         </p>
+        )
       )}
     </section>
   );
