@@ -594,3 +594,62 @@ async fn thirty_busy_spaces_glance_quickly() {
     println!("GLANCE 31 spaces, 60 waiting, 30 finished: 200 median {f50:.1} ms p90 {f90:.1} ms; 304 median {n50:.1} ms p90 {n90:.1} ms; body {} bytes; baseline /api/spaces median {s50:.1} ms, one space's /api/away median {a50:.1} ms", v.to_string().len());
     assert!(f50 < 1000.0, "{f50} ms");
 }
+
+/// Rigel's round-2 risk-4 rows (#646), read back through `GET /api/glance`: nineteen steps that
+/// must never get Allow once inline, and three ordinary ones that still do.
+#[tokio::test]
+async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
+    let (app, state, _tmp) = setup().await;
+    let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].clone();
+    let mcp = |server: &str, tool: &str, args: Value| json!({"source": "mcp", "server": server, "tool": tool, "arguments": args});
+    let run = |c: &str| mcp("runner", "run", json!({ "command": c }));
+    let rows: Vec<(&str, Value, bool)> = vec![
+        ("git  push (two spaces)", run("git  push origin main"), false),
+        ("git<TAB>push", run("git\tpush origin main"), false),
+        ("git -C dir push", run("git -C /repo push origin main"), false),
+        ("git -c k=v push", run("git -c core.x=1 push"), false),
+        ("argv [git, push]", mcp("runner", "run", json!({"argv": ["git", "push", "origin", "main"]})), false),
+        ("gh pr merge", run("gh pr merge 5 --squash"), false),
+        ("gh release create", run("gh release create v1"), false),
+        ("gh api -X PUT merge", run("gh api -X PUT repos/o/r/pulls/5/merge"), false),
+        ("git send-pack", run("git send-pack origin main"), false),
+        ("npm publish", run("npm publish"), false),
+        ("cargo publish", run("cargo publish"), false),
+        ("docker push", run("docker push img"), false),
+        ("curl POST git/refs", run("curl -X POST https://api.github.com/repos/o/r/git/refs"), false),
+        ("rm -rf /", run("rm -rf /"), false),
+        ("bitbucket pr_action merge", mcp("bitbucket", "pr_action", json!({"action": "merge"})), false),
+        ("publish_site", mcp("netlify", "publish_site", json!({})), false),
+        ("deploy", mcp("vercel", "deploy", json!({})), false),
+        ("send_email", mcp("gmail", "send_email", json!({})), false),
+        ("delete_page", mcp("notion", "delete_page", json!({})), false),
+        (
+            "a file write inside the bot's folder",
+            json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "arguments": {"file_path": "notes/todo.md", "content": "Buy milk\nCall Ana"}}),
+            true,
+        ),
+        ("a read-only fetch", mcp("fetch", "fetch", json!({"url": "https://example.com/docs", "max_length": 5000})), true),
+        ("a page that mentions Pushkin", mcp("notion", "create_page", json!({"title": "Pushkin reading list", "parent": {"page_id": "abc"}})), true),
+    ];
+    assert_eq!(rows.iter().filter(|r| !r.2).count(), 19);
+    let person = |body: Value| Req { body: Some(body), remote: true, cookie: Some(TOKEN), ..Default::default() };
+    // Ten at a time keeps them under the Needs-you cap; each batch is denied before the next
+    for batch in rows.chunks(10) {
+        let mut made = Vec::new();
+        for (name, details, _) in batch {
+            let tool = details["tool"].as_str().unwrap().to_string();
+            made.push((name, approval(&state, &bot.id, &tool, details.clone()).await));
+        }
+        let (v, _) = glance(&app).await;
+        for ((name, (id, _rx)), (_, _, inline)) in made.iter().zip(batch) {
+            let a = &find(&v["needs_you"], id)["approval"];
+            assert_eq!(a["can_allow_inline"], *inline, "{name}: {a}");
+            assert_eq!(a["risk"], if *inline { "normal" } else { "high" }, "{name}");
+            assert_eq!(a["why_open"].is_null(), *inline, "{name}: {a}");
+        }
+        for (_, (id, _rx)) in &made {
+            let (s, _, body) = send(&app, "POST", &format!("/api/approvals/{id}/resolve"), person(json!({"decision": "deny"}))).await;
+            assert_eq!(s, StatusCode::OK, "{body}");
+        }
+    }
+}
