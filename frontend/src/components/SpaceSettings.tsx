@@ -420,6 +420,9 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
 
   return (
     <>
+      {/* First: the one setting here that changes what the bots do (name and icon are set once). */}
+      <DevModeSettings key={`dev-${space.id}`} spaceId={space.id} spaceName={space.name} approvals={space.approvals} teams={devTeamRefs(teams, kwants)} />
+
       <form onSubmit={save} {...editorProps(dirty)} className={`${card} p-4 space-y-4`}>
         <div className="flex items-center gap-3">
           <SpaceTile space={{ id: space.id, icon, color: color || null }} size={44} />
@@ -500,8 +503,6 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
         }}
         onChanged={() => onApprovalsChanged?.()}
       />
-
-      <DevModeSettings key={`dev-${space.id}`} spaceId={space.id} spaceName={space.name} approvals={space.approvals} teams={devTeamRefs(teams, kwants)} />
 
       <div className={`${card} p-4 space-y-3`}>
         <p className="flex items-center gap-2 text-xs font-medium text-zinc-200">
