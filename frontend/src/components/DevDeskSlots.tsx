@@ -59,6 +59,9 @@ export interface ReviewCardProps {
   lineNotes?: import('../dev/lineNotesApi').LineNotesApi;
   /** 0.9.0 G1: "Open {bot}'s chat" after a send. */
   onOpenChat?: (botId: string) => void;
+  /** Fix it "Send to…" (#609): the card's recipients, and "Open task ›" after a send. */
+  recipients?: (cardId: string) => Promise<import('../dev/types').DevRecipients>;
+  onOpenTask?: (taskId: string) => void;
 }
 
 export interface ReleaseNotesSheetProps {
@@ -92,7 +95,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onO
   );
 };
 
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, forge, forgeLogin, sample, now, repoLabel, gitOnly = false, jiraOrigins, lineNotes, onOpenChat }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, forge, forgeLogin, sample, now, repoLabel, gitOnly = false, jiraOrigins, lineNotes, onOpenChat, recipients, onOpenTask }) => {
   const parsed = useMemo(() => parseReview(card), [card]);
   if (!parsed) return <CardFallback raw={card} />;
   const send = async (cardId: string, findingId: string, action: FindingAction): Promise<Review> => {
@@ -107,7 +110,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost,
         return next;
       }
     : undefined;
-  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} forge={gitOnly ? null : forge} forgeLogin={forgeLogin} sample={sample} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} lineNotes={lineNotes} onOpenChat={onOpenChat} />;
+  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} forge={gitOnly ? null : forge} forgeLogin={forgeLogin} sample={sample} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} lineNotes={lineNotes} onOpenChat={onOpenChat} recipients={recipients} onOpenTask={onOpenTask} />;
 };
 
 export const ReleaseNotesSheet: React.FC<ReleaseNotesSheetProps> = ({ card, onSaveToNotion, onDiscard, onClose }) => {

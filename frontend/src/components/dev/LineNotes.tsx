@@ -49,6 +49,9 @@ import {
   summaryLine,
 } from '../../dev/lineNotes';
 import { LineNotesError, newSendId, type LineNotesApi } from '../../dev/lineNotesApi';
+import { BarTrigger, type RecipientsLoad, type SendTo } from './RecipientPicker';
+import { badRecipientNotes, noDefaultNotes, target, toFor } from '../../dev/recipients';
+import type { RecipientBot } from '../../dev/types';
 
 /** The app re-sends the `dev_card` SSE as this window event (DevDesk.tsx DEV_CARD_EVENT). */
 const DEV_CARD_EVENT = 'kwant:dev-card';
@@ -75,6 +78,8 @@ export interface ChangesSectionProps {
   defaultOpen?: boolean;
   /** Tests: force the phone layout (default: the 640 px breakpoint). */
   phone?: boolean;
+  /** Fix it "Send to…" (#609): the card's list and pick; notes go to the same bot as Fix it. */
+  sendTo?: SendTo | null;
 }
 
 type Load = { s: 'idle' } | { s: 'loading' } | { s: 'error' } | { s: 'ready'; changes: Changes };
@@ -96,13 +101,15 @@ type Bar =
   | { s: 'confirm' }
   | { s: 'sending' }
   | { s: 'sent'; n: number; bot: string; botId: string | null; at: string | null }
-  | { s: 'failed' };
+  | { s: 'failed' }
+  /** §5: the picked bot left the space; the notes stay as drafts. */
+  | { s: 'bad'; name: string | null };
 
 const marker = (k: FlatLine['line']['kind']) => (k === 'add' ? '+' : k === 'del' ? '-' : ' ');
 const quote = (lines: FlatLine[], a: number, b: number): DiffLine[] => lines.slice(a, b + 1).map((x) => x.line);
 const base = (p: string) => p.split('/').pop() || p;
 
-export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, stat, notesCount = null, headSha = null, prUrl = null, onOpenChat, defaultOpen = false, phone: forcePhone }) => {
+export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, stat, notesCount = null, headSha = null, prUrl = null, onOpenChat, defaultOpen = false, phone: forcePhone, sendTo = null }) => {
   const media = useMedia('(max-width: 639px)');
   const phone = forcePhone ?? media;
   const ids = useId();
@@ -124,8 +131,11 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
   const loadedHead = useRef<string | null>(null);
 
   const changes = load.s === 'ready' ? load.changes : null;
-  const bot = changes?.author_bot?.name ?? null;
-  const canNote = !!changes && !!changes.author_bot && changes.pr_state === 'open';
+  // Notes go where Fix it goes: the card's pick, else the server's default, else the PR's author bot.
+  const list = sendTo?.load.s === 'ready' ? sendTo.load.r : null;
+  const to: RecipientBot | null = target(list, sendTo?.pick ?? null) ?? changes?.author_bot ?? null;
+  const bot = to?.name ?? null;
+  const canNote = !!changes && changes.pr_state === 'open' && (!!changes.author_bot || (list?.bots.length ?? 0) > 0);
   const drafts = useMemo(() => (notes ?? []).filter((n) => n.state === 'draft'), [notes]);
 
   // -------------------------------------------------------------------------------------------------
@@ -298,21 +308,39 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
   // -------------------------------------------------------------------------------------------------
   // Sending
 
-  const send = async (only?: string[]) => {
-    if (!changes?.author_bot || bar.s === 'sending') return;
+  const send = async (only?: string[], el?: HTMLElement | null, chosen?: RecipientBot) => {
+    if (!changes || bar.s === 'sending') return;
     const n = only ? only.length : drafts.length;
     if (n === 0 || n > MAX_SEND) return;
+    // §7: no default and no pick: "Send N notes…" opens the picker and sends after the pick.
+    const goTo = chosen ?? to;
+    if (!goTo) {
+      if (sendTo && el) sendTo.open(el, (b) => void send(only, null, b));
+      return;
+    }
+    // `to` with a pick (or the pick just made); once the picker has been shown on this card, always (N1).
+    const picked = chosen ?? sendTo?.pick ?? null;
+    const toId = toFor(list, picked, !!chosen || !!sendTo?.pinned);
     sendId.current ??= newSendId();
     setBar({ s: 'sending' });
     try {
-      const r = await api.send(cardId, sendId.current, only);
+      const r = await api.send(cardId, sendId.current, only, toId);
       sendId.current = null;
       const back = new Map(r.notes.map((x) => [x.id, x]));
       setNotes((all) => (all ?? []).map((x) => back.get(x.id) ?? x));
-      const name = r.kwant_name ?? changes.author_bot.name;
-      setBar({ s: 'sent', n: r.sent, bot: name, botId: r.kwant_id ?? changes.author_bot.id, at: clock(r.sent_at) });
+      const name = r.kwant_name ?? goTo.name;
+      setBar({ s: 'sent', n: r.sent, bot: name, botId: r.kwant_id ?? goTo.id, at: clock(r.sent_at) });
       setSaid(`Sent ${notesWord(r.sent)} to ${name}.`);
-    } catch {
+    } catch (e) {
+      if (e instanceof LineNotesError && e.code === 'bad_recipient') {
+        // Nothing went out: a fresh send id for the next try, the list refetched, the pick dropped.
+        sendId.current = null;
+        const name = picked?.name ?? null;
+        setBar({ s: 'bad', name });
+        setSaid(badRecipientNotes(name));
+        sendTo?.reset();
+        return;
+      }
       // The send id is kept, so Try again can't post the batch twice (ask 6).
       setBar({ s: 'failed' });
       setSaid(SEND_FAILED);
@@ -335,7 +363,7 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
   // -------------------------------------------------------------------------------------------------
 
   const draftCount = notes ? drafts.length : notesCount?.drafts ?? 0;
-  const showBar = canNote && (drafts.length > 0 || bar.s === 'sent' || bar.s === 'failed');
+  const showBar = canNote && (drafts.length > 0 || bar.s === 'sent' || bar.s === 'failed' || bar.s === 'bad');
 
   return (
     <section data-line-notes={cardId} aria-label="Changes" className="relative mt-4">
@@ -397,7 +425,12 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
         )}
         {open && changes && (
           <div className="mt-2">
-            {!changes.author_bot && (
+            {!changes.author_bot && list && list.bots.length > 0 && !list.default && changes.pr_state === 'open' && (
+              <Banner>
+                <span data-ln-no-default>{noDefaultNotes(changes.author_login)}</span>
+              </Banner>
+            )}
+            {!changes.author_bot && !(list && list.bots.length > 0) && (
               <Banner>
                 {notBotLine(changes.author_login).split(changes.author_login ?? '\u0000').map((part, i, all) => (
                   <React.Fragment key={i}>
@@ -434,7 +467,7 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
                     submit={() => void submit()}
                     onEdit={startEditing}
                     onDelete={(n) => void remove(n)}
-                    onSendOne={(n) => void send([n.id])}
+                    onSendOne={(n, el) => void send([n.id], el)}
                     folded={folded}
                     toggleFold={(id) =>
                       setFolded((s) => {
@@ -505,9 +538,11 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
             bar={bar}
             setBar={setBar}
             drafts={drafts.length}
-            bot={bot ?? ''}
+            bot={bot}
             phone={phone}
-            onSend={() => void send()}
+            sendTo={sendTo}
+            fallback={changes?.author_bot?.name ?? null}
+            onSend={(el) => void send(undefined, el)}
             onDiscard={() => void discardAll()}
             onOpenChat={onOpenChat}
           />
@@ -553,7 +588,7 @@ interface FileBlockProps {
   submit: () => void;
   onEdit: (n: Note) => void;
   onDelete: (n: Note) => void;
-  onSendOne: (n: Note) => void;
+  onSendOne: (n: Note, el: HTMLElement) => void;
   folded: Set<string>;
   toggleFold: (id: string) => void;
 }
@@ -691,7 +726,7 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
         onFold={() => p.toggleFold(note.id)}
         onEdit={() => p.onEdit(note)}
         onDelete={() => p.onDelete(note)}
-        onSendOne={() => p.onSendOne(note)}
+        onSendOne={(el) => p.onSendOne(note, el)}
         movedTo={note.moved && note.at_head ? note.at_head.end.line : null}
       />
     );
@@ -962,7 +997,7 @@ interface NoteBoxProps {
   onFold: () => void;
   onEdit: () => void;
   onDelete: () => void;
-  onSendOne: () => void;
+  onSendOne: (el: HTMLElement) => void;
   movedTo: number | null;
 }
 
@@ -1044,7 +1079,7 @@ const NoteBox: React.FC<NoteBoxProps> = ({ note, bot, editable, folded, onFold, 
           {goneLine(note.seen_sha)}
           {editable && (
             <>
-              <button type="button" onClick={onSendOne} className={`rounded font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}>
+              <button type="button" onClick={(e) => onSendOne(e.currentTarget)} className={`rounded font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}>
                 Send it anyway
               </button>
               <span aria-hidden="true">·</span>
@@ -1114,7 +1149,7 @@ const Composer: React.FC<ComposerProps> = ({ writing: w, setWriting, bot, onCanc
   return (
     <div data-ln-writing className="my-1.5 ml-2.5 mr-2.5 rounded-[10px] border border-violet-500 bg-surface-raised px-3 py-2.5 font-sans ring-[3px] ring-violet-500/15 sm:ml-16">
       <p id={label} className="text-[11.5px] text-zinc-400">
-        <span className="font-semibold text-zinc-100">{w.editing ? 'Edit note' : `Note for ${bot}`}</span> {lineWords(w.start, w.end)}
+        <span className="font-semibold text-zinc-100">{w.editing ? 'Edit note' : bot ? `Note for ${bot}` : 'Note'}</span> {lineWords(w.start, w.end)}
       </p>
       <textarea
         data-ln-text
@@ -1172,7 +1207,7 @@ const NoteSheet: React.FC<{ writing: Writing; setWriting: ComposerProps['setWrit
       >
         <div aria-hidden="true" className="mx-auto mb-3 h-1 w-9 rounded-full bg-white/20" />
         <h2 id={title} className="flex flex-wrap items-baseline gap-x-2 text-[15px] font-semibold text-zinc-50">
-          {w.editing ? 'Edit note' : `Note for ${bot}`}
+          {w.editing ? 'Edit note' : bot ? `Note for ${bot}` : 'Note'}
           <span className="text-[13px] font-normal text-zinc-400 [overflow-wrap:anywhere]">
             {base(w.path)} · {lineWords(w.start, w.end)}
           </span>
@@ -1235,17 +1270,36 @@ interface SendBarProps {
   bar: Bar;
   setBar: (b: Bar) => void;
   drafts: number;
-  bot: string;
+  /** Who the notes go to now; null with no default and no pick. */
+  bot: string | null;
   phone: boolean;
-  onSend: () => void;
+  /** The card's list and pick: the bar's trigger opens the same picker as Fix it. */
+  sendTo?: SendTo | null;
+  /** The author bot, while the list loads. */
+  fallback?: string | null;
+  onSend: (el: HTMLElement) => void;
   onDiscard: () => void;
   onOpenChat?: (botId: string) => void;
 }
 
-const SendBar: React.FC<SendBarProps> = ({ bar, setBar, drafts, bot, phone, onSend, onDiscard, onOpenChat }) => {
+const SendBar: React.FC<SendBarProps> = ({ bar, setBar, drafts, bot, phone, sendTo = null, fallback = null, onSend, onDiscard, onOpenChat }) => {
   const [menu, setMenu] = useState(false);
   const tooMany = drafts > MAX_SEND;
-  const failed = bar.s === 'failed';
+  const failed = bar.s === 'failed' || bar.s === 'bad';
+  const load: RecipientsLoad = sendTo?.load ?? { s: 'failed' };
+  const trigger = (
+    <BarTrigger
+      load={load}
+      pick={sendTo?.pick ?? null}
+      fallback={bot ?? fallback}
+      phone={phone}
+      expanded={!!sendTo?.anchor && sendTo.anchor.dataset.goesFor === 'notes'}
+      onOpen={(el) => {
+        el.dataset.goesFor = 'notes';
+        sendTo?.open(el);
+      }}
+    />
+  );
   const where = phone
     ? 'fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(.625rem,env(safe-area-inset-bottom))]'
     : 'sticky bottom-0 z-10 -mx-4 mt-3 rounded-b-[inherit] px-4';
@@ -1273,13 +1327,25 @@ const SendBar: React.FC<SendBarProps> = ({ bar, setBar, drafts, bot, phone, onSe
             </button>
           )}
         </>
+      ) : bar.s === 'bad' ? (
+        <>
+          <span data-ln-bad className="inline-flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-meta text-zinc-200">
+            <AlertTriangle size={14} aria-hidden="true" className="shrink-0 text-rose-300" />
+            <span className="min-w-0 [overflow-wrap:anywhere]">{badRecipientNotes(bar.name)}</span>
+            {trigger}
+          </span>
+          <button type="button" data-ln-send disabled={tooMany} onClick={(e) => onSend(e.currentTarget)} aria-label={sendLabel(drafts, bot)} className={`kw-btn-primary ${phone ? 'min-h-11 !text-[15px]' : ''}`}>
+            <ArrowUp size={14} aria-hidden="true" />
+            {phone ? sendShort(drafts) : sendLabel(drafts, bot)}
+          </button>
+        </>
       ) : failed ? (
         <>
           <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-meta text-zinc-200">
             <AlertTriangle size={14} aria-hidden="true" className="shrink-0 text-rose-300" />
             {SEND_FAILED}
           </span>
-          <button type="button" onClick={onSend} className="kw-btn-primary max-sm:min-h-11">
+          <button type="button" onClick={(e) => onSend(e.currentTarget)} className="kw-btn-primary max-sm:min-h-11">
             Try again
           </button>
         </>
@@ -1296,11 +1362,13 @@ const SendBar: React.FC<SendBarProps> = ({ bar, setBar, drafts, bot, phone, onSe
       ) : (
         <>
           <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-meta text-zinc-300">
-            <span aria-hidden="true" className="inline-flex shrink-0">
-              <ModernAvatar name={bot} size={22} />
-            </span>
+            {!sendTo && bot && (
+              <span aria-hidden="true" className="inline-flex shrink-0">
+                <ModernAvatar name={bot} size={22} />
+              </span>
+            )}
             <span className="min-w-0 [overflow-wrap:anywhere]">
-              <strong className="font-semibold text-zinc-100">{notesWord(drafts)}</strong> for {bot}
+              <strong className="font-semibold text-zinc-100">{notesWord(drafts)}</strong> for {sendTo ? trigger : bot}
               {!phone && <span className="text-zinc-400"> · drafts, only you see them</span>}
               {tooMany && <span className="block text-zinc-400">{TOO_MANY}</span>}
             </span>
@@ -1343,7 +1411,7 @@ const SendBar: React.FC<SendBarProps> = ({ bar, setBar, drafts, bot, phone, onSe
             type="button"
             data-ln-send
             disabled={bar.s === 'sending' || tooMany}
-            onClick={onSend}
+            onClick={(e) => onSend(e.currentTarget)}
             aria-label={bar.s === 'sending' ? 'Sending…' : sendLabel(drafts, bot)}
             className={`kw-btn-primary ${phone ? 'min-h-11 !text-[15px]' : ''}`}
           >

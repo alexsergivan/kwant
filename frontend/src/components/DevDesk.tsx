@@ -19,7 +19,15 @@ import { personFetch } from '../auth';
 import { WorktreesPanel, useWorktrees } from './dev/WorktreesTab';
 import { worktreeCount, worktreeStore } from '../dev/worktrees';
 import { usePhoneLayout } from '../usePhoneLayout';
+import { parseRecipients, type DevRecipients } from '../dev/types';
 
+/** Fix it "Send to…" (#609): the card's recipients. Module-level, so each card fetches once. */
+const RECIPIENTS = (cardId: string): Promise<DevRecipients> =>
+  devApi.recipients(cardId).then((v) => {
+    const r = parseRecipients(v);
+    if (!r) throw new Error('bad recipients answer');
+    return r;
+  });
 /** 0.9.0 G1: the review cards' line notes, over the person's session. */
 const LINE_NOTES = lineNotesApi(fetchCaller((input, init) => personFetch(input as string, init)));
 
@@ -223,9 +231,11 @@ export interface DevDeskViewProps {
   onOpenChat?: (botId: string, threadId?: string | null) => void;
   /** 0.9.0 H1: the create dialog's default bot. */
   defaultBotId?: string | null;
+  /** Fix it "Send to…": "Open task ›" on a sent finding opens it on the board. */
+  onOpenTask?: (taskId: string) => void;
 }
 
-export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots, onOpenChat, defaultBotId }) => {
+export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots, onOpenChat, defaultBotId, onOpenTask }) => {
   const dev = useDevMode(spaceId);
   const connect = (anchor?: HTMLElement) => (onOpenLooseEnds ? onOpenLooseEnds(anchor) : openGitHubConnect({ space: spaceId, anchor }));
   // 0.7.2: with several repos, both lists filter by one (All · app · site) through `?repo=`.
@@ -595,7 +605,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
             ) : reviews.length ? (
               <>
                 {freshLine && <FreshLine text={freshLine} />}
-                {reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} lineNotes={LINE_NOTES} onOpenChat={onOpenChat} />)}
+                {reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} lineNotes={LINE_NOTES} onOpenChat={onOpenChat} recipients={RECIPIENTS} onOpenTask={onOpenTask} />)}
               </>
             ) : (
               desk.reviews && (
