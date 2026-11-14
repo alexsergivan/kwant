@@ -544,7 +544,7 @@ export function useDictation(o: DictationOptions): Dictation {
 export function MicButton({ d, phone }: { d: Dictation; phone: boolean }) {
   if (d.view === 'hidden') return null;
   const state = d.view === 'muted' ? 'muted' : d.phase === 'recording' ? 'rec' : d.phase === 'transcribing' ? 'busy' : 'ready';
-  const size = phone ? 'w-11 h-11 focus-visible:outline-[#b8adff]' : 'w-11 h-11 sm:w-9 sm:h-9 focus-visible:outline-sky-400';
+  const size = phone ? 'w-11 h-11 ml-1.5 focus-visible:outline-[#b8adff]' : 'w-11 h-11 sm:w-9 sm:h-9 focus-visible:outline-sky-400';
   const look =
     state === 'rec'
       ? 'bg-violet-500/[0.22] shadow-[inset_0_0_0_1px_rgb(167_139_250/0.55)] text-violet-200'
@@ -720,8 +720,8 @@ export function DictationLine({ d, phone, botName, reduced }: { d: Dictation; ph
       <div data-dictation-line="transcribing" className={box}>
         <span className={lead}>
           <Loader2 size={14} className="kw-dict-spin text-[#c4b5fd] flex-none" aria-hidden="true" />
-          <b className="font-semibold text-zinc-100 truncate">Turning speech into text…</b>
-          <span className="tabular-nums text-zinc-400 flex-none">{clock(l.seconds)} recorded</span>
+          <b className="font-semibold text-zinc-100 min-w-0">Turning speech into text…</b>
+          <span className="tabular-nums text-zinc-400 flex-none whitespace-nowrap">{clock(l.seconds)} recorded</span>
         </span>
         <LineButton phone={phone} onClick={d.cancel}>
           Cancel
@@ -747,8 +747,8 @@ export function DictationLine({ d, phone, botName, reduced }: { d: Dictation; ph
     return (
       <div data-dictation-line="bad" role="alert" className={box}>
         <span className={lead}>
-          <AlertCircle size={14} className="text-bad flex-none mt-0.5" aria-hidden="true" />
-          <span className="text-bad min-w-0 break-words">{l.text}</span>
+          <AlertCircle size={14} className={`text-bad flex-none ${phone ? 'mt-0.5' : 'mt-[7px]'}`} aria-hidden="true" />
+          <span className={`text-bad min-w-0 break-words ${phone ? '' : 'pt-[5px]'}`}>{l.text}</span>
         </span>
         {l.retry && (
           <LineButton phone={phone} onClick={d.retry}>
@@ -762,8 +762,8 @@ export function DictationLine({ d, phone, botName, reduced }: { d: Dictation; ph
   return (
     <div data-dictation-line="warn" role="alert" className={box}>
       <span className={lead}>
-        <MicOff size={14} className="text-[#fcd34d] flex-none mt-0.5" aria-hidden="true" />
-        <span className="text-[#fde68a] min-w-0 break-words">{l.text}</span>
+        <MicOff size={14} className={`text-[#fcd34d] flex-none ${phone ? 'mt-0.5' : 'mt-[7px]'}`} aria-hidden="true" />
+        <span className={`text-[#fde68a] min-w-0 break-words ${phone ? '' : 'pt-[5px]'}`}>{l.text}</span>
       </span>
       <CloseButton phone={phone} onClick={d.dismiss} />
     </div>

@@ -594,3 +594,19 @@ test('Wiring: App passes the real space id and a toast, and asks again when Spac
   const close = app.slice(app.indexOf('const closeSpaceSettings'), app.indexOf('const closeSpaceSettings') + 500);
   assert.match(close, /refreshDictation\(\)/);
 });
+
+test('Mira round 1 fixes: transcribing wraps, phone 6 px gaps, desktop one-line error centred, New tag hides under the popover', () => {
+  const mic = readFileSync(new URL('../src/components/DictationMic.tsx', import.meta.url), 'utf8');
+  const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  // 1. the label wraps (no truncate) and the time never breaks
+  assert.match(mic, /<b className="font-semibold text-zinc-100 min-w-0">Turning speech into text…<\/b>/);
+  assert.match(mic, /tabular-nums text-zinc-400 flex-none whitespace-nowrap">\{clock\(l\.seconds\)\} recorded/);
+  // 2. ml-1.5 on phone mic and phone Send only; desktop sizes unchanged
+  assert.match(mic, /const size = phone \? 'w-11 h-11 ml-1\.5 [^']*' : 'w-11 h-11 sm:w-9 sm:h-9 focus-visible:outline-sky-400'/);
+  assert.match(chat, /\$\{phone \? 'w-11 h-11 ml-1\.5 focus-visible:outline-\[#b8adff\]' : 'w-11 h-11 sm:w-9 sm:h-9 focus-visible:outline-sky-300'\}/);
+  // 3. bad and warn: desktop text pt-[5px], icon mt-[7px]; phone keeps mt-0.5
+  assert.equal((mic.match(/\$\{phone \? 'mt-0\.5' : 'mt-\[7px\]'\}/g) || []).length, 2);
+  assert.equal((mic.match(/\$\{phone \? '' : 'pt-\[5px\]'\}/g) || []).length, 2);
+  // 4. both mention New tags hide while the setup popover is open
+  assert.equal((chat.match(/\$\{dict\.popOpen \? 'hidden' : ''\}/g) || []).length, 2);
+});
