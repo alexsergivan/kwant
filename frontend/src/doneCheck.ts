@@ -17,6 +17,27 @@ export interface Checked {
   items: CheckedItem[];
   items_dropped: number;
   line: string;
+  /** request-parts (#619, 0.9.11): present only when the task has criteria. Every field is optional, so an older
+   * server draws today's card. `parts_written: false` means each criterion stands in as a part. */
+  parts_checked?: number;
+  parts_total?: number;
+  parts_written?: boolean;
+  parts?: CheckedPart[];
+}
+
+export type PartResult = 'passed' | 'failed' | 'not_checked';
+
+export interface CheckedCriterion {
+  id: string;
+  text: string;
+  result: PartResult | string;
+}
+
+export interface CheckedPart {
+  /** The person's own words for this part of the request. */
+  text: string;
+  result: PartResult | string;
+  criteria: CheckedCriterion[];
 }
 
 const STATES: readonly CheckState[] = ['checked', 'partly', 'not_checked', 'failed'];
@@ -30,8 +51,49 @@ export function knownChecked(v: unknown): (Checked & { state: CheckState }) | nu
     ? c.items.filter((i): i is CheckedItem => !!i && typeof i === 'object' && typeof (i as CheckedItem).what === 'string')
     : [];
   const dropped = typeof c.items_dropped === 'number' && Number.isFinite(c.items_dropped) && c.items_dropped > 0 ? Math.floor(c.items_dropped) : 0;
-  return { state: c.state as CheckState, items, items_dropped: dropped, line: typeof c.line === 'string' ? c.line : '' };
+  const out: Checked & { state: CheckState } = { state: c.state as CheckState, items, items_dropped: dropped, line: typeof c.line === 'string' ? c.line : '' };
+  if (typeof c.parts_written === 'boolean') out.parts_written = c.parts_written;
+  if (typeof c.parts_total === 'number' && Number.isFinite(c.parts_total)) out.parts_total = c.parts_total;
+  if (typeof c.parts_checked === 'number' && Number.isFinite(c.parts_checked)) out.parts_checked = c.parts_checked;
+  if (Array.isArray(c.parts)) out.parts = c.parts.flatMap((p) => knownPart(p));
+  return out;
 }
+
+function knownPart(v: unknown): CheckedPart[] {
+  if (!v || typeof v !== 'object') return [];
+  const p = v as Partial<CheckedPart>;
+  if (typeof p.text !== 'string' || !p.text.trim()) return [];
+  const criteria = Array.isArray(p.criteria)
+    ? p.criteria.filter((x): x is CheckedCriterion => !!x && typeof x === 'object' && typeof (x as CheckedCriterion).text === 'string' && (x as CheckedCriterion).text.trim() !== '')
+    : [];
+  return [{ text: p.text, result: typeof p.result === 'string' ? p.result : 'not_checked', criteria }];
+}
+
+/**
+ * Which layout the parts call for (request-parts ui-brief.md):
+ * - `many`: written parts, two or more: one row per part, then the checks under "How it was checked".
+ * - `one`: a single written part: named, with no counter.
+ * - `null`: no parts, or `parts_written` false/missing: today's card, with no "parts" words.
+ */
+export function partsLayout(c: Pick<Checked, 'parts' | 'parts_total' | 'parts_written'>): 'many' | 'one' | null {
+  if (c.parts_written !== true || !c.parts || c.parts.length === 0) return null;
+  if (typeof c.parts_total === 'number' && c.parts_total >= 2 && c.parts.length >= 2) return 'many';
+  if (c.parts.length === 1) return 'one';
+  return null;
+}
+
+/** A part's or criterion's result; anything unknown reads as "no check", never passed. */
+export function partKind(result: unknown): PartResult {
+  return result === 'passed' || result === 'failed' ? result : 'not_checked';
+}
+
+/** impl.md "Notes for Mira's card": copy to reuse. */
+export const PART_WORD: Record<PartResult, string> = { passed: 'Passed', failed: 'Not met', not_checked: 'No check' };
+export const PART_COLOUR: Record<PartResult, string> = { passed: 'text-ok', failed: 'text-bad', not_checked: 'text-warn' };
+export const PARTS_HEADING = 'Parts of your request';
+export const ONE_PART_HEADING = 'Your request';
+export const NO_CRITERIA_HELP = 'Nothing checked this part.';
+export const criteriaToggle = (open: boolean, n: number): string => (open ? 'Hide what proves it' : `Show what proves it (${n})`);
 
 /** design.md section 4: the line when the server's is blank. */
 export const FALLBACK_LINE: Record<CheckState, string> = {
