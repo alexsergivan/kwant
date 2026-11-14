@@ -35,7 +35,7 @@ async function measure(page, width) {
   await new Promise(r => { f.onload = r; f.src = page; });
   const d = f.contentDocument;
   const imgs = [...d.querySelectorAll('img')];
-  imgs.forEach(i => { i.loading = 'eager'; });
+  imgs.forEach(i => { i.loading = 'eager'; if (i.dataset.src) { if (i.dataset.srcset) i.srcset = i.dataset.srcset; i.src = i.dataset.src; } });
   await Promise.all(imgs.map(i => i.decode().catch(() => {})));
   for (const i of imgs) {
     // Measure the content box: padding and borders (like the window bar on img.app) aren't the picture.
