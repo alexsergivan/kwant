@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Code, Loader2 } from 'lucide-react';
 import { DevModeState, DevTeamRef, devApi, devStore, normaliseRepo } from '../devMode';
-import { foundRepo, hasFoundCode } from '../devSuggest';
+import { foundRepo, hasFoundCode, readableRepos } from '../devSuggest';
 import { JiraSettings } from './JiraSettings';
 import { useDevMode } from './DevModeSwitch';
 
@@ -27,7 +27,7 @@ export const DEV_GAIN = 'your bots review pull requests, show what landed and gu
 const FoundLine: React.FC<{ state: DevModeState }> = ({ state }) => {
   const r = foundRepo(state);
   if (!r) return null;
-  const more = state.repos.length - 1;
+  const more = readableRepos(state).length - 1;
   return (
     <>
       Found <span className="font-mono text-zinc-100">{r.repo}</span>

@@ -6,7 +6,7 @@
 import React from 'react';
 import { Code } from 'lucide-react';
 import type { DevModeState } from '../devMode';
-import { foundRepo } from '../devSuggest';
+import { foundRepo, readableRepos } from '../devSuggest';
 import { useMedia } from '../useMedia';
 import { PHONE_QUERY } from '../layout';
 import { Btn } from './GetStarted';
@@ -20,7 +20,7 @@ export const DevModeSuggestion: React.FC<{ spaceName: string; state: DevModeStat
   const phone = useMedia(PHONE_QUERY);
   const r = foundRepo(state);
   if (!r) return null;
-  const more = state.repos.length - 1;
+  const more = readableRepos(state).length - 1;
   const title = `${spaceName} has code: ${r.repo}${more > 0 ? ` and ${more} more` : ''}`;
   return (
     <aside

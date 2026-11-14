@@ -3932,7 +3932,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         teams={teams}
       />
     ) : null;
-  const devSuggest = suggestShows({ inGeneral: isGeneral, state: devState, dismissed: suggestDismissed(space.id), gettingStarted: !!setupBanner || !!getStartedCard }) && devState ? (
+  const devSuggest = suggestShows({ inGeneral: isGeneral, state: devState, dismissed: suggestDismissed(space.id), gettingStarted: !!setupBanner || !!getStartedCard, canRun }) && devState ? (
     <DevModeSuggestion
       spaceName={space.name}
       state={devState}

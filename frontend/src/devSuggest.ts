@@ -31,14 +31,23 @@ export function dismissSuggest(space: string): void {
   }
 }
 
-/** The repo to name: the first one a team brought (team order), else the first one found. */
+/**
+ * Repos Dev mode can read after Turn on. `no_git` (the server has no git) and `no_repo` (a source with no
+ * fetch URL) leave nothing to watch, so "has code, turn it on" would be a dead end: they never count here,
+ * and a space with only those gets the quiet card, whose status lines explain the problem.
+ */
+export const readableRepos = (state: DevModeState | null | undefined): DevRepo[] =>
+  state ? state.repos.filter((r) => r.status !== 'no_git' && r.status !== 'no_repo') : [];
+
+/** The repo to name: the first readable one a team brought (team order), else the first readable one found. */
 export function foundRepo(state: DevModeState | null | undefined): DevRepo | null {
-  if (!state || !state.repos.length) return null;
-  return state.repos.find((r) => r.team) ?? state.repos[0];
+  const repos = readableRepos(state);
+  if (!repos.length) return null;
+  return repos.find((r) => r.team) ?? repos[0];
 }
 
-/** Off and the server found a repo in one of the space's teams (or a hand-added one): the space has code. */
-export const hasFoundCode = (state: DevModeState | null | undefined): boolean => !!state && !state.on && state.repos.length > 0;
+/** Off and the server found a readable repo in one of the space's teams (or a hand-added one): the space has code. */
+export const hasFoundCode = (state: DevModeState | null | undefined): boolean => !!state && !state.on && readableRepos(state).length > 0;
 
 export interface SuggestGate {
   /** The person is looking at the space's #general. */
@@ -48,9 +57,15 @@ export interface SuggestGate {
   dismissed: boolean;
   /** The getting-started card or the setup banner is up: getting started wins. */
   gettingStarted: boolean;
+  /**
+   * An AI account can run (canRunNow). false = nothing can run, so "Connect an AI account" is the one step
+   * that matters; null = still checking. Only true shows the suggestion.
+   */
+  canRun: boolean | null;
 }
 
-export const suggestShows = (g: SuggestGate): boolean => g.inGeneral && !g.dismissed && !g.gettingStarted && hasFoundCode(g.state);
+export const suggestShows = (g: SuggestGate): boolean =>
+  g.canRun === true && g.inGeneral && !g.dismissed && !g.gettingStarted && hasFoundCode(g.state);
 
 const asked = new Set<string>();
 /**

@@ -177,7 +177,7 @@ test('On: unchanged form (repo, branch, backup, Turn off, primary Save), no acce
 
 test('Suggestion: shows only in #general, Off, a repo found, not dismissed, no getting started, and a loaded state', () => {
   const s = state(offFound);
-  const base = { inGeneral: true, state: s, dismissed: false, gettingStarted: false };
+  const base = { inGeneral: true, state: s, dismissed: false, gettingStarted: false, canRun: true };
   assert.equal(m.suggestShows(base), true);
   assert.equal(m.suggestShows({ ...base, inGeneral: false }), false, 'other chats');
   assert.equal(m.suggestShows({ ...base, dismissed: true }), false, 'Not now');
@@ -186,9 +186,57 @@ test('Suggestion: shows only in #general, Off, a repo found, not dismissed, no g
   assert.equal(m.suggestShows({ ...base, state: state({ ...offFound, on: true }) }), false, 'Dev mode on');
   assert.equal(m.suggestShows({ ...base, state: state({ ...off, repos: [] }) }), false, 'no repo found');
   const app = src('App.tsx');
-  assert.match(app, /suggestShows\(\{ inGeneral: isGeneral, state: devState, dismissed: suggestDismissed\(space\.id\), gettingStarted: !!setupBanner \|\| !!getStartedCard \}\)/);
+  assert.match(app, /suggestShows\(\{ inGeneral: isGeneral, state: devState, dismissed: suggestDismissed\(space\.id\), gettingStarted: !!setupBanner \|\| !!getStartedCard, canRun \}\)/);
   assert.match(app, /setupBanner \?\? \(\s*<>\s*\{devSuggest\}\s*\{devSuggestStatus\}/);
   assert.match(app, /data-dev-suggestion-status>\s*\{suggestHiddenIn === space\.id \? SUGGEST_HIDDEN : ''\}/, 'the live region is there before Not now fills it');
+});
+
+test('Round 2: no AI account (canRun false) or still checking (null) hides the suggestion', () => {
+  const base = { inGeneral: true, state: state(offFound), dismissed: false, gettingStarted: false, canRun: true };
+  assert.equal(m.suggestShows(base), true);
+  assert.equal(m.suggestShows({ ...base, canRun: false }), false, 'no account: "Connect an AI account" is the one step');
+  assert.equal(m.suggestShows({ ...base, canRun: null }), false, 'still checking');
+});
+
+test('Round 2: only no_git / no_repo repos: no suggestion, and the Off card is the quiet grey one', async () => {
+  const dead = { ...off, repos: [repo({ status: 'no_git' }), repo({ key: 'x/y', repo: 'demo-org/no-url', status: 'no_repo', team: 'Ops', team_id: 't2' })] };
+  const s = state(dead);
+  assert.equal(s.repos.length, 2);
+  assert.deepEqual(m.readableRepos(s), []);
+  assert.equal(m.hasFoundCode(s), false);
+  assert.equal(m.foundRepo(s), null);
+  assert.equal(m.suggestShows({ inGeneral: true, state: s, dismissed: false, gettingStarted: false, canRun: true }), false);
+  reset(dead);
+  const v = await mount(h(m.DevModeSettings, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+  const card = v.host.querySelector('[data-dev-settings]');
+  assert.equal(card.getAttribute('data-dev-off'), 'none', 'quiet card');
+  assert.doesNotMatch(card.className, /border-sky-500\/40/, 'no accent');
+  assert.doesNotMatch(card.textContent, /Found /);
+  v.root.unmount();
+});
+
+test('Round 2: one readable repo among no_git / no_repo ones: shown and named, "and N more" counts readable only', async () => {
+  const mixed = {
+    ...off,
+    repos: [
+      repo({ key: 'a', repo: 'demo-org/no-git', status: 'no_git' }),
+      repo({ key: 'b', repo: 'demo-org/no-url', status: 'no_repo' }),
+      repo({ key: 'c', repo: 'demo-org/web', status: 'watching', team: 'Web team', team_id: 't3' }),
+    ],
+  };
+  const s = state(mixed);
+  assert.equal(m.foundRepo(s).repo, 'demo-org/web');
+  assert.equal(m.suggestShows({ inGeneral: true, state: s, dismissed: false, gettingStarted: false, canRun: true }), true);
+  reset(mixed);
+  const sug = await mount(h(m.DevModeSuggestion, { spaceName: 'Demo', state: s, onOpen() {}, onDismiss() {} }));
+  const title = sug.host.querySelector('#dv-sug-title').textContent;
+  assert.equal(title, 'Demo has code: demo-org/web', 'named, and no "and 2 more"');
+  sug.root.unmount();
+  const v = await mount(h(m.DevModeSettings, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+  const card = v.host.querySelector('[data-dev-settings]');
+  assert.equal(card.getAttribute('data-dev-off'), 'found');
+  assert.match(card.querySelector('[data-dev-gain]').textContent, /^Found demo-org\/web in Web team\. Turn it on/);
+  v.root.unmount();
 });
 
 test('Suggestion: a failed or 403 GET leaves nothing to show, and the state is asked for once per space', async () => {
@@ -198,11 +246,11 @@ test('Suggestion: a failed or 403 GET leaves nothing to show, and the state is a
   await settle();
   assert.equal(server.calls.length, 1, 'once, not per render');
   assert.equal(m.devStore.get('spc_demo'), null);
-  assert.equal(m.suggestShows({ inGeneral: true, state: m.devStore.get('spc_demo'), dismissed: false, gettingStarted: false }), false);
+  assert.equal(m.suggestShows({ inGeneral: true, state: m.devStore.get('spc_demo'), dismissed: false, gettingStarted: false, canRun: true }), false);
   reset(offFound);
   m.ensureDevState('spc_demo');
   await settle();
-  assert.equal(m.suggestShows({ inGeneral: true, state: m.devStore.get('spc_demo'), dismissed: false, gettingStarted: false }), true);
+  assert.equal(m.suggestShows({ inGeneral: true, state: m.devStore.get('spc_demo'), dismissed: false, gettingStarted: false, canRun: true }), true);
   m.ensureDevState('spc_demo');
   await settle();
   assert.equal(server.calls.length, 1, 'cached: no second GET');
@@ -232,7 +280,7 @@ test('Suggestion: names the space and repo; Not now persists for that space acro
   const fresh = await loadBundled(`export * from './src/devSuggest';`);
   assert.equal(fresh.suggestDismissed('spc_demo'), true);
   assert.equal(fresh.suggestDismissed('spc_other'), false, 'per space');
-  assert.equal(fresh.suggestShows({ inGeneral: true, state: state(offFound), dismissed: fresh.suggestDismissed('spc_demo'), gettingStarted: false }), false);
+  assert.equal(fresh.suggestShows({ inGeneral: true, state: state(offFound), dismissed: fresh.suggestDismissed('spc_demo'), gettingStarted: false, canRun: true }), false);
   v.root.unmount();
 });
 
