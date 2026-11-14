@@ -69,6 +69,11 @@ const file = (name, body) => (fs.writeFileSync(path.join(files, name), body), pa
 // ---------- the browser ----------
 const browser = BROWSER === 'webkit' ? await pw.webkit.launch() : await pw.chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--no-sandbox'] });
 console.log(`${MODE} drops in ${BROWSER}`);
+// The chips show before the POST /api/attachments responses come back, so a check that counts
+// `uploads` first waits for `n` of them, at most 5 s (CI flake on #614, Nov 14).
+const uploadsArrive = async (uploads, n, ms = 5000) => {
+  for (const end = Date.now() + ms; uploads.length < n && Date.now() < end; ) await sleep(50);
+};
 const results = [];
 const check = (id, name, pass, detail = '') => {
   results.push({ id, name, pass: !!pass, detail });
@@ -192,6 +197,7 @@ async function landsIn(id, name, label, { mention = false } = {}) {
     const field = await page.locator('textarea').first().inputValue();
     const seq = await phases(page);
     await page.screenshot({ path: path.join(OUT, `${id}.png`) });
+    await uploadsArrive(uploads, 2);
     const ok = before === 'over' && got.includes(name1) && got.includes(name2) && uploads.length === 2 && uploads.every((s) => s < 300) && after === null && !errors.length;
     check(id, name, ok, JSON.stringify({ layerBeforeDrop: before, chips: got, uploads, layerAfter: after, field, errors }));
     // "-" before "landing" is the 0.8.0 exit effect's first commit; React flushes that effect in the same
