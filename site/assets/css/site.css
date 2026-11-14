@@ -877,11 +877,6 @@ html:has(.jump-bar) { scroll-padding-top: 156px; }
   .setup { padding: 64px 0; }
   .install { white-space: normal; }
 }
-@media (max-width: 639px) {
-  /* phones: crop the clip to the conversation pane */
-  .win-screen { aspect-ratio: 4 / 5; }
-  .win-poster, .win-screen video { object-position: 52% 50%; }
-}
 
 /* grid children may shrink below their content (long commands, tables, code) instead of widening the page */
 .docs > *, .outro-grid > *, .day-grid > *, .feat > *, .rel-grid > * { min-width: 0; }
@@ -907,4 +902,43 @@ pre { position: relative; margin: 20px 0 0; padding: 18px 20px; overflow-x: auto
 .btn-violet:not(.px) { background: var(--v5); }
 .btn-violet:not(.px):hover { background: var(--v6); }
 @media (max-width: 640px) { .outro .dl-row .btn-line { display: flex; } }
-.dl-sub { flex-direction: column; align-items: center; }
+
+/* ---------- Round 2 (Mira's design check at b3216819) ---------- */
+/* 1. Home "Added in": three plain rows of thumb, title and line, not boxed cards */
+.added .new-list a { height: auto; padding: 0; background: none; border: 0; border-radius: 0; }
+.added .new-list a:hover { background: none; }
+.added li img { height: auto; grid-row: span 2; }
+.added li :is(b, span) { grid-column: 2; }
+.added .new-list a { row-gap: 4px; align-content: start; }
+.added li span { margin-top: 0; }
+.added .new-note { margin-top: 28px; }
+.new-list a:focus-visible { outline: 2px solid var(--wait); outline-offset: 3px; }
+/* 2. Hero: "First time on a Mac? How to open it" is one quiet line next to the VPS link */
+.hero .dl-sub { flex-direction: row; align-items: center; }
+.hero .mac-first { margin-top: 0; max-width: none; background: none; border: 0; border-radius: 0; box-shadow: none; }
+.hero .mac-first > summary { display: inline-flex; min-height: 44px; padding: 0; gap: 0; border-radius: 0; font: 400 14px var(--sans); color: var(--dim); }
+.hero .mac-first > summary:hover { background: none; }
+.hero .mac-first > summary:hover b { color: var(--v9); }
+.hero .mac-first .mf-sum { display: inline; }
+.hero .mac-first .mf-sum b { display: inline; font: 500 14px var(--sans); color: var(--v8); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.hero .mac-first :is(.mf-ico, .mf-chev) { display: none; }
+.hero .mac-first[open] { flex: 1 1 100%; display: flex; flex-direction: column; align-items: center; }
+.hero .mac-first .mf-body { width: 100%; max-width: 560px; margin-top: 8px; text-align: left; background: var(--surface); border: 0; box-shadow: 0 0 0 1px var(--line-2); clip-path: polygon(0 3px, 3px 3px, 3px 0, calc(100% - 3px) 0, calc(100% - 3px) 3px, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 3px calc(100% - 3px), 0 calc(100% - 3px)); }
+.hero .mf-why { margin: 0 0 12px; font-size: 14px; line-height: 21px; color: var(--muted); }
+@media (max-width: 639px) {
+  .hero .dl-sub { flex-direction: column; gap: 0; }
+}
+/* 4. Outro: no star card; the OS download is an outlined stepped button */
+.outro .dl .cta { display: flex; margin-top: 16px; }
+/* 5. Features: amber version chip + date above each release h2, balanced h2, centred rows */
+.rel-kick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; font: 400 13px var(--mono); color: var(--dim); }
+.rel-kick .ver { display: inline-block; padding: 4px 10px; background: var(--wait); color: var(--v1); font: 600 13px/1.2 var(--mono); }
+.section-head h2 { text-wrap: balance; }
+.rel-kick + h2 { margin-top: 14px; }
+.fgroup .row { align-items: center; }
+.jump .sep { flex: none; }
+.jump a.ver { color: var(--v7); }
+/* 6. Docs: the current page has the amber bar on a flat surface */
+.docs-group a { border-left: 2px solid transparent; padding-left: 10px; }
+.docs-group a[aria-current="page"] { border-left-color: var(--wait); background: var(--surface); }
+.docs-nav { margin-left: -12px; padding-left: 12px; }

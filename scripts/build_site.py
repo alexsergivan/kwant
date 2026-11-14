@@ -366,12 +366,45 @@ def operator(key):
     return html.escape(value)
 
 
+RELEASE_KICKER = re.compile(r'<p class="kicker">New in (\d+(?:\.\d+)+)(?: to (\d+(?:\.\d+)+))?(?: · ([^<]*))?</p>')
+JUMP_VERSIONS = 6
+
+
+def release_kickers(body):
+    """features.html: the "New in 0.9.7" kicker above each release h2 becomes an amber `v0.9.7` chip and the release
+    date (design.md: "amber v0.9.7 chip + date"). The page source keeps "New in X" so release edits stay the same."""
+    dates = {v: d for v, d in releases()}
+
+    def chip(m):
+        first, last, extra = m[1], m[2], m[3]
+        newest = last or first
+        day = dates.get(newest if newest.count(".") == 2 else newest + ".0")
+        ver = f"v{first}" + (f"–{last}" if last else "")
+        when = f'<time datetime="{day.isoformat()}">{day:%b} {day.day}, {day.year}</time>' if day else ""
+        more = f"<span>{extra}</span>" if extra else ""
+        return f'<p class="rel-kick"><span class="sr-only">New in </span><span class="ver">{ver}</span>{when}{more}</p>'
+
+    return RELEASE_KICKER.sub(chip, body)
+
+
+def jump_versions(body):
+    """The newest releases as mono links at the start of the features jump bar, then a divider before the topics."""
+    found = re.findall(r'<section id="(new-\d+)"[^>]*>\s*<div class="wrap">\s*<div class="section-head">\s*'
+                       r'<p class="kicker">New in (\d+(?:\.\d+)+)(?: to (\d+(?:\.\d+)+))?', body)
+    links = "".join(f'<li><a class="ver" href="#{sid}">{last or first}</a></li>' for sid, first, last in found[:JUMP_VERSIONS])
+    return f'<ul class="jump">{links}</ul><span class="sep" aria-hidden="true"></span>' if links else ""
+
+
 def expand(body, root):
     body = body.replace("{{root}}", root)
     body = re.sub(r"\{\{(" + "|".join(OPERATOR) + r")\}\}", lambda m: operator(m[1]), body)
     body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
     if "{{releases}}" in body:
         body = body.replace("{{releases}}", release_line())
+    if "{{jump:versions}}" in body:
+        body = body.replace("{{jump:versions}}", jump_versions(body))
+    if '<p class="kicker">New in ' in body:
+        body = release_kickers(body)
     if "{{windows_exe}}" in body:
         body = body.replace("{{windows_exe}}", windows_installer())
     body = re.sub(r"\{\{avatar:([a-z_]+)\}\}", lambda m: avatar(m[1]), body)
