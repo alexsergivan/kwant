@@ -43,10 +43,10 @@ export class ReceiptsError extends Error {
   }
 }
 
-/** What a refusal reads as: a 400 is the server's own sentence, anything else is the plain retry line. */
+/** What a refusal reads as: a 400 carries the server's own words inside the retry line (Mira, round 1). */
 export function receiptsErrorText(status: number, serverText?: string | null): string {
   if (status === 0) return RECEIPTS_NETWORK_ERROR;
-  if (status === 400 && serverText && serverText.trim()) return serverText.trim();
+  if (status === 400 && serverText && serverText.trim()) return `The download didn’t work (${serverText.trim()}). Try again in a moment.`;
   return RECEIPTS_OTHER_ERROR;
 }
 

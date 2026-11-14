@@ -86,7 +86,7 @@ export const ReceiptsDownload: React.FC<{ download?: (days: number) => Promise<S
             ))}
           </select>
         </div>
-        <p id={captionId} className="min-w-0 text-[11px] leading-4 text-zinc-500 sm:ml-auto sm:text-right">
+        <p id={captionId} className="min-w-0 text-[11px] leading-4 text-zinc-500">
           CSV of finished tasks: who checked, how, the verdict and the evidence.
         </p>
       </div>

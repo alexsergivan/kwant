@@ -91,7 +91,7 @@ test('X-Kwant-Truncated: true is reported, anything else is not', async () => {
   assert.equal((await r.downloadReceipts(365)).truncated, false);
 });
 
-test('errors read as plain words: network, the server’s own 400 text, and a retry line for the rest', async () => {
+test('errors read as plain words: network, the server’s own 400 text inside the retry line, and the retry line for the rest', async () => {
   const err = async () => {
     try {
       await r.downloadReceipts(30);
@@ -103,7 +103,7 @@ test('errors read as plain words: network, the server’s own 400 text, and a re
   reply = new TypeError('Failed to fetch');
   assert.deepEqual(await err(), ['ReceiptsError', 0, 'Couldn’t reach the server. Check your connection and try again.']);
   reply = fail(400, { error: 'from is after to' });
-  assert.deepEqual(await err(), ['ReceiptsError', 400, 'from is after to']);
+  assert.deepEqual(await err(), ['ReceiptsError', 400, 'The download didn’t work (from is after to). Try again in a moment.']);
   reply = fail(400);
   assert.deepEqual(await err(), ['ReceiptsError', 400, 'The download didn’t work. Try again in a moment.']);
   for (const st of [401, 404, 500, 503]) {
@@ -111,7 +111,7 @@ test('errors read as plain words: network, the server’s own 400 text, and a re
     assert.deepEqual(await err(), ['ReceiptsError', st, 'The download didn’t work. Try again in a moment.'], `HTTP ${st}`);
   }
   assert.deepEqual(clicked, [], 'nothing is saved on an error');
-  assert.equal(r.receiptsErrorText(400, '  unknown state: use verified, failed, cancelled or closed '), 'unknown state: use verified, failed, cancelled or closed');
+  assert.equal(r.receiptsErrorText(400, '  unknown state: use verified, failed, cancelled or closed '), 'The download didn’t work (unknown state: use verified, failed, cancelled or closed). Try again in a moment.');
 });
 
 // ---------- the button ----------
