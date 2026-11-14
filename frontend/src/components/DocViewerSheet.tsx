@@ -205,7 +205,7 @@ export const DocViewerSheet: React.FC<{ open: DocViewerOpen; onClose: () => void
               <p>{file} isn’t in this space’s documents any more.</p>
             ) : (
               <p>
-                These words aren’t in {file} now: “{quote}”. The file may have changed since this reply, so check it before you rely on it.
+                These words aren’t in {file} now: “{quote}”{/[.!?…]$/.test(quote.trim()) ? '' : '.'} The file may have changed since this reply, so check it before you rely on it.
               </p>
             )}
           </div>

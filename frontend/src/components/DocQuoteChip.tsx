@@ -41,6 +41,7 @@ export const DocQuoteChip: React.FC<{ href: string; fallback?: React.ReactNode }
         aria-label={label}
         data-tip={tip}
         data-doc-chip={state ?? 'checking'}
+        data-compact
         className={`kws-tip relative inline-flex items-center gap-1 h-7 sm:h-6 max-w-[260px] px-1.5 mx-0.5 align-[2px] rounded-md border text-xs font-medium not-italic whitespace-nowrap transition-colors motion-reduce:transition-none before:absolute before:-inset-y-2 before:inset-x-0 before:content-[''] sm:before:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 ${
           bad ? 'border-amber-300/40 bg-zinc-900/70 text-amber-200 hover:bg-zinc-800' : 'border-zinc-700 bg-zinc-900/70 text-zinc-200 hover:bg-zinc-800 hover:border-zinc-600'
         }`}

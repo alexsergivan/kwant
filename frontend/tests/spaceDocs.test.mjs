@@ -118,7 +118,8 @@ test('words: sizes, meta line, marks, folder and problem rows', () => {
   assert.equal(m.updatedWhen('2026-10-28T08:00:00Z', now), 'Oct 28');
   assert.deepEqual(['a.pdf', 'b.MD', 'c.markdown', 'd.txt', 'e.docx', 'f'].map(m.markOf), ['PDF', 'MD', 'MD', 'TXT', 'DOCX', 'FILE']);
   assert.equal(m.shortFolder('/home/me/.kwnt/docs'), '~/.kwnt/docs');
-  assert.equal(m.shortFolder('/Users/ana/Library/kwnt/spaces/7f3a9c2e1b4d/docs'), '~/Library/kwnt/spaces/7f3a…/docs');
+  assert.equal(m.shortFolder('/Users/ana/Library/kwnt/spaces/7f3a9c2e1b4d/docs'), '~/Library/kwnt/spaces/7f3a9c2e…/docs');
+  assert.equal(m.shortFolder('/home/me/.kwnt/spaces/spc_7f3a9c2e1b4d/docs'), '~/.kwnt/spaces/spc_7f3a…/docs', 'a real space id keeps 8 characters');
   assert.equal(m.shortFolder('/srv/kwnt/spaces/shop/docs'), '/srv/kwnt/spaces/shop/docs', 'a short id stays');
   assert.deepEqual(
     m.sortDocs([

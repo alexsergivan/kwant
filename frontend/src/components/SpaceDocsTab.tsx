@@ -423,14 +423,26 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
       {list && (
         <p className="mt-4 text-xs text-zinc-400 leading-relaxed [overflow-wrap:anywhere]" data-docs-folder>
           Files you put in{' '}
-          <code className="text-zinc-300" title={list.folder}>
+          <code className="rounded-md border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-[11.5px] text-zinc-300" title={list.folder}>
             {shortFolder(list.folder)}
           </code>{' '}
-          show here too.{' '}
-          <button type="button" onClick={copyFolder} className={`inline-flex items-center gap-1 align-middle rounded text-violet-300 hover:text-violet-200 hover:underline ${isPhone ? 'min-h-[44px]' : ''} ${focusRing}`}>
+          show here too.
+          {!isPhone && (
+            <>
+              {' '}
+              <button type="button" onClick={copyFolder} className={`inline-flex items-center gap-1 align-middle rounded text-violet-300 hover:text-violet-200 hover:underline ${focusRing}`}>
+                <Copy size={12} aria-hidden="true" /> {copied ? 'Copied' : 'Copy folder'}
+              </button>
+            </>
+          )}
+        </p>
+      )}
+      {list && isPhone && (
+        <div className="mt-1">
+          <button type="button" onClick={copyFolder} className={`inline-flex items-center gap-1 h-11 -my-1.5 rounded text-xs text-violet-300 hover:text-violet-200 hover:underline ${focusRing}`}>
             <Copy size={12} aria-hidden="true" /> {copied ? 'Copied' : 'Copy folder'}
           </button>
-        </p>
+        </div>
       )}
 
       <p className="sr-only" role="status" aria-live="polite">

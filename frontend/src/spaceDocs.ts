@@ -114,11 +114,11 @@ export function sortDocs(docs: SpaceDoc[]): SpaceDoc[] {
   return [...docs].sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0) || a.name.localeCompare(b.name));
 }
 
-/** The folder for the footer: the home folder as "~" and a long space id cut in the middle ("7f3a…"). */
+/** The folder for the footer: the home folder as "~" and a long space id cut after 8 characters ("spc_7f3a…"). */
 export function shortFolder(folder: string): string {
   return folder
     .replace(/^(\/home\/[^/]+|\/Users\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)(?=[/\\]|$)/, '~')
-    .replace(/([/\\]spaces[/\\])([^/\\]{9,})(?=[/\\]|$)/, (_m, pre: string, id: string) => `${pre}${id.slice(0, 4)}…`);
+    .replace(/([/\\]spaces[/\\])([^/\\]{10,})(?=[/\\]|$)/, (_m, pre: string, id: string) => `${pre}${id.slice(0, 8)}…`);
 }
 
 // ── kwant-doc:// addresses ──
