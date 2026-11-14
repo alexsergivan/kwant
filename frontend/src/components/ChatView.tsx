@@ -987,7 +987,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
   const newestId = messages.length ? messages[messages.length - 1].id : null;
-  const continueMenu = (msg: ChatMessage, about: string, align: 'start' | 'end') =>
+  const continueMenu = (msg: ChatMessage, about: string, align: 'start' | 'end', reveal?: 'hover') =>
     onContinueFrom &&
     canContinueFrom({
       chatKind: home?.kind,
@@ -1001,7 +1001,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         messageId={msg.id}
         about={about}
         align={align}
-        items={[{ label: CONTINUE_LABEL, busyLabel: 'Starting a new chat…', busy: continuing === msg.id, run: () => void continueFrom(msg) }]}
+        reveal={reveal}
+        busy={continuing === msg.id}
+        busyLabel="Starting a new chat…"
+        items={[{ label: CONTINUE_LABEL, run: () => void continueFrom(msg) }]}
       />
     ) : null;
   const startReply = (msg: ChatMessage) => {
@@ -1614,7 +1617,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         data-shared-under={underReply ? '' : undefined}
         // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
         style={underReply ? { marginTop: '0.5rem' } : undefined}
-        className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+        className={`group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
@@ -1722,6 +1725,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Message Body Bubble */}
           {!filesOnly && (text.trim() || !files.length) && (
+          <div className={isUser ? 'relative w-full max-w-2xl' : 'contents'}>
+          {isUser && (() => {
+            // The person's message: the overflow sits in the empty gutter left of the bubble, bottom-aligned, no row
+            const more = continueMenu(msg, 'your message', 'end', 'hover');
+            return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
+          })()}
           <div
             className={`px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
               isUser
@@ -1749,6 +1758,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             ) : (
               <MarkdownRenderer content={text} results={msg.results} messageId={msg.id} />
             )}
+          </div>
           </div>
           )}
           {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
@@ -1822,11 +1832,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
           )}
-          {isUser && !filesOnly && (() => {
-            // The person's message: only the overflow, on the right, under the bubble
-            const more = continueMenu(msg, 'your message', 'end');
-            return more ? <div className="mt-1 flex justify-end">{more}</div> : null;
-          })()}
           {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={isUser ? 'end' : 'start'} />}
         </div>
       </div>

@@ -3534,6 +3534,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             fork.context === currentKwant.id ? currentKwant.name : agentThreads?.find((t) => t.id === fork.context)?.title ?? 'an earlier chat',
             fork.copied,
             fork.truncated,
+            fork.context === currentKwant.id,
           ),
           onOpen: () => {
             if (fork.context === currentKwant.id) setOpenThreadId(null);

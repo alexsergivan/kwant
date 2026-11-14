@@ -51,12 +51,20 @@ export function canContinueFrom(o: {
   return true;
 }
 
-/** The quiet first line of a continued chat. `count` unknown (an older server, a reload before Lin's fields): no count. */
-export function continuedLine(title: string, count: number | null | undefined, truncated?: boolean | null): string {
-  const t = title.trim() || 'the earlier chat';
+/**
+ * The quiet first line of a continued chat. `count` unknown (an older server, a reload before Lin's fields): no count.
+ * `fromMain`: it came from the bot's main chat, so `title` is the bot's name ("your main chat with Ben", no quotes).
+ */
+export function continuedLine(title: string, count: number | null | undefined, truncated?: boolean | null, fromMain?: boolean): string {
+  const t = title.trim();
+  const from = fromMain ? (t ? `your main chat with ${t}` : 'your main chat') : `"${t || 'the earlier chat'}"`;
   const n = typeof count === 'number' && Number.isFinite(count) && count >= 0 ? Math.floor(count) : null;
-  const words = n === null ? '' : ` · ${n.toLocaleString('en-US')} ${n === 1 ? 'message' : 'messages'}`;
-  return `Continued from "${t}"${words}${truncated ? ` (the newest ${CONTINUE_CAP.toLocaleString('en-US')})` : ''}`;
+  const words = truncated
+    ? ` · the newest ${CONTINUE_CAP.toLocaleString('en-US')} messages`
+    : n === null
+      ? ''
+      : ` · ${n.toLocaleString('en-US')} ${n === 1 ? 'message' : 'messages'}`;
+  return `Continued from ${from}${words}`;
 }
 
 /** The fork a thread records, or null when it wasn't continued from another chat. */
@@ -70,11 +78,11 @@ export function forkOf(t: ForkFields | null | undefined): { context: string; mes
   };
 }
 
-/** The one plain line by the message when the request fails. */
+/** The one plain line by the message when the request fails; the reason after the colon starts lower-case. */
 export const continueErrorLine = (err: unknown): string => {
   const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
   const why = raw.trim().replace(/[.\s]+$/, '') || 'something went wrong';
-  return `Couldn't start a new chat: ${why}.`;
+  return `Couldn't start a new chat: ${why.charAt(0).toLowerCase()}${why.slice(1)}.`;
 };
 
 /** Thrown with the server's words and status; a 403 means this session belongs to a bot. */
@@ -84,17 +92,24 @@ export class ContinueError extends Error {
   }
 }
 
-/** The failure's words: the JSON `{error}` when there is one, else the status in plain words. */
+/**
+ * The failure in our own words. Only the 400 keeps the server's text ("Only a chat with one bot can be continued.");
+ * Lin's 404 and 403 bodies ("message not found", "only the person continues a chat in a new one") read like logs.
+ */
 export async function continueFailure(res: Response): Promise<ContinueError> {
-  let message =
-    res.status === 404 ? 'That message is no longer there' : res.status === 403 ? 'Only you can do this, not a bot' : `the server answered ${res.status}`;
-  try {
-    const data = await res.json();
-    if (data && typeof data.error === 'string' && data.error.trim()) message = data.error.trim();
-  } catch {
-    // no JSON body
+  if (res.status === 404) return new ContinueError('that message is no longer in this chat', 404);
+  if (res.status === 403) return new ContinueError('only you can do this, not a bot', 403);
+  if (res.status === 400) {
+    let message = 'only a chat with one bot can be continued';
+    try {
+      const data = await res.json();
+      if (data && typeof data.error === 'string' && data.error.trim()) message = data.error.trim();
+    } catch {
+      // no JSON body
+    }
+    return new ContinueError(message, 400);
   }
-  return new ContinueError(message, res.status);
+  return new ContinueError(`something went wrong (error ${res.status}). Try again`, res.status);
 }
 
 /** POST /api/messages/:id/continue. `send` is `personFetch` in the app (it asks "Confirm it's you" on a 401). */

@@ -3,14 +3,11 @@
 // keys, Home and End move, Esc or Tab closes it, and Esc gives focus back to ⋯. 44 px targets on phones.
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { MessageSquarePlus, MoreHorizontal } from 'lucide-react';
+import { Loader2, MessageSquarePlus, MoreHorizontal } from 'lucide-react';
 import { useEscapeLayer } from '../escape';
 
 export interface MoreItem {
   label: string;
-  /** Shown in place of the label while it runs; the item is disabled then. */
-  busyLabel?: string;
-  busy?: boolean;
   run: () => void;
 }
 
@@ -21,7 +18,15 @@ export const MessageMore: React.FC<{
   items: MoreItem[];
   /** 'end' for the person's messages (right side), 'start' for replies. */
   align?: 'start' | 'end';
-}> = ({ messageId, about, items, align = 'start' }) => {
+  /**
+   * 'hover': on hover devices ⋯ stays hidden until the message is hovered or focused, or the menu is open
+   * (the person's gutter ⋯). Phones always show it.
+   */
+  reveal?: 'hover';
+  /** An item is running (a new chat being made): ⋯ spins, can't be pressed, and keeps focus. */
+  busy?: boolean;
+  busyLabel?: string;
+}> = ({ messageId, about, items, align = 'start', reveal, busy = false, busyLabel = 'Working…' }) => {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -81,24 +86,48 @@ export const MessageMore: React.FC<{
     }
   };
 
+  // aria-disabled, not disabled: a disabled button drops focus to the page, and focus stays on ⋯ while it runs.
+  const shown = open || busy;
+  const revealCls =
+    reveal === 'hover'
+      ? `transition-opacity duration-[120ms] motion-reduce:transition-none ${
+          shown ? 'opacity-100' : '[@media(hover:hover)]:opacity-0 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 focus-within:opacity-100'
+        }`
+      : '';
+
   return (
-    <span ref={wrapRef} className="relative inline-flex shrink-0" data-message-more="">
+    <span ref={wrapRef} className={`relative inline-flex shrink-0 ${revealCls}`} data-message-more="" data-reveal={reveal}>
       <button
         ref={btnRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        aria-label={`More for ${about}`}
-        title="More"
+        aria-label={busy ? busyLabel : `More for ${about}`}
+        aria-busy={busy || undefined}
+        aria-disabled={busy || undefined}
+        title={busy ? busyLabel : 'More'}
         data-message-more-button=""
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={onButtonKey}
-        className={`inline-flex h-11 w-11 sm:h-8 sm:w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors duration-[120ms] motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 cursor-pointer ${
-          open ? 'bg-zinc-800 text-zinc-100' : ''
-        }`}
+        data-busy={busy ? '' : undefined}
+        onClick={() => {
+          if (!busy) setOpen((o) => !o);
+        }}
+        onKeyDown={(e) => {
+          if (busy) {
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown' || e.key === 'ArrowUp') e.preventDefault();
+            return;
+          }
+          onButtonKey(e);
+        }}
+        className={`inline-flex h-11 w-11 sm:h-8 sm:w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors duration-[120ms] motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+          busy ? 'cursor-progress' : 'hover:bg-zinc-800 hover:text-zinc-100 cursor-pointer'
+        } ${open ? 'bg-zinc-800 text-zinc-100' : ''}`}
       >
-        <MoreHorizontal size={15} aria-hidden="true" />
+        {busy ? (
+          <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+        ) : (
+          <MoreHorizontal size={15} aria-hidden="true" />
+        )}
       </button>
       {open && (
         <div
@@ -118,8 +147,6 @@ export const MessageMore: React.FC<{
               key={it.label}
               type="button"
               role="menuitem"
-              disabled={it.busy}
-              aria-disabled={it.busy || undefined}
               onClick={() => {
                 // Focus goes back to ⋯, so an error line lands next to it; a new chat moves it to the composer after.
                 close(true);
@@ -128,7 +155,7 @@ export const MessageMore: React.FC<{
               className="flex w-full items-center gap-2 rounded-md px-2.5 min-h-[44px] sm:min-h-8 text-left text-[13px] sm:text-xs text-zinc-200 hover:bg-zinc-800 focus:bg-zinc-800 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400 disabled:opacity-50 disabled:hover:bg-transparent cursor-pointer disabled:cursor-default"
             >
               <MessageSquarePlus size={14} aria-hidden="true" className="shrink-0 text-zinc-400" />
-              <span className="whitespace-normal">{it.busy && it.busyLabel ? it.busyLabel : it.label}</span>
+              <span className="whitespace-normal">{it.label}</span>
             </button>
           ))}
         </div>

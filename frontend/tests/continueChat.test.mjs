@@ -46,24 +46,28 @@ test("fromMessage prefers the thread view's own counts (Lin's forked_copied / fo
   assert.equal(t.forked_truncated, true);
 });
 
-test('fromMessage errors carry the server words and status', async () => {
+test("fromMessage errors: our own words for Lin's 404/403/5xx, the server's only for the 400", async () => {
+  // Lin's exact bodies, from src/server/continue_chat.rs on lin-continue-chat (#618)
   const cases = [
-    [400, { error: 'Only a chat with one bot can be continued.' }, 'Only a chat with one bot can be continued.'],
-    [404, { error: 'Message not found' }, 'Message not found'],
-    [404, null, 'That message is no longer there'],
-    [403, { error: 'Only the person can do this.' }, 'Only the person can do this.'],
-    [500, null, 'the server answered 500'],
+    [400, { error: 'Only a chat with one bot can be continued.' }, "Couldn't start a new chat: only a chat with one bot can be continued."],
+    [400, null, "Couldn't start a new chat: only a chat with one bot can be continued."],
+    [404, { error: 'message not found' }, "Couldn't start a new chat: that message is no longer in this chat."],
+    [404, { error: "that isn't in this space" }, "Couldn't start a new chat: that message is no longer in this chat."],
+    [403, { error: 'only the person continues a chat in a new one' }, "Couldn't start a new chat: only you can do this, not a bot."],
+    [500, { error: 'database is locked' }, "Couldn't start a new chat: something went wrong (error 500). Try again."],
+    [502, null, "Couldn't start a new chat: something went wrong (error 502). Try again."],
   ];
-  for (const [status, body, words] of cases) {
+  for (const [status, body, line] of cases) {
     const send = async () => (body ? json(status, body) : new Response('nope', { status }));
-    await assert.rejects(m.continueChatApi.fromMessage('m1', send), (e) => e instanceof m.ContinueError && e.status === status && e.message === words);
+    await assert.rejects(m.continueChatApi.fromMessage('m1', send), (e) => e instanceof m.ContinueError && e.status === status && m.continueErrorLine(e) === line);
   }
   await assert.rejects(m.continueChatApi.fromMessage('m1', async () => { throw new TypeError('Failed to fetch'); }), (e) => e.status === 0 && /didn't answer/.test(e.message));
   await assert.rejects(m.continueChatApi.fromMessage('m1', async () => json(201, { nope: 1 })), /no chat/);
 });
 
 test('the error line is one plain sentence', () => {
-  assert.equal(m.continueErrorLine(new Error('Only a chat with one bot can be continued.')), "Couldn't start a new chat: Only a chat with one bot can be continued.");
+  assert.equal(m.continueErrorLine(new Error('Only a chat with one bot can be continued.')), "Couldn't start a new chat: only a chat with one bot can be continued.");
+  assert.equal(m.continueErrorLine(new m.ContinueError("the server didn't answer", 0)), "Couldn't start a new chat: the server didn't answer.");
   assert.equal(m.continueErrorLine(new Error('')), "Couldn't start a new chat: something went wrong.");
   assert.equal(m.continueErrorLine(null), "Couldn't start a new chat: something went wrong.");
 });
@@ -95,7 +99,9 @@ test('it hides in team chats, channels, delegations, bot sessions and on a messa
 test('continuedLine reads like the brief', () => {
   assert.equal(m.continuedLine('Price check', 12, false), 'Continued from "Price check" · 12 messages');
   assert.equal(m.continuedLine('Cody', 1), 'Continued from "Cody" · 1 message');
-  assert.equal(m.continuedLine('Long', 1000, true), 'Continued from "Long" · 1,000 messages (the newest 1,000)');
+  assert.equal(m.continuedLine('Price check', 1000, true), 'Continued from "Price check" · the newest 1,000 messages');
+  assert.equal(m.continuedLine('Ben', 4, false, true), 'Continued from your main chat with Ben · 4 messages', 'the main chat: no quotes');
+  assert.equal(m.continuedLine('Ben', 1000, true, true), 'Continued from your main chat with Ben · the newest 1,000 messages');
   assert.equal(m.continuedLine('Old', null), 'Continued from "Old"', 'no count after a reload on an older server');
   assert.equal(m.continuedLine('  ', 3), 'Continued from "the earlier chat" · 3 messages');
 });
@@ -151,14 +157,29 @@ test('the overflow: one button with a name, the menu opens with the item focused
   v.unmount();
 });
 
-test('the item is disabled while the request runs', async () => {
-  const v = mount(ui.MessageMore, { messageId: 'm1', about: 'your message', align: 'end', items: [{ label: m.CONTINUE_LABEL, busyLabel: 'Starting a new chat…', busy: true, run: () => {} }] });
-  v.host.querySelector('[data-message-more-button]').click();
+test('while the new chat is made, ⋯ spins, cannot be pressed and keeps focus', async () => {
+  const props = { messageId: 'm1', about: 'your message', align: 'end', reveal: 'hover', busyLabel: 'Starting a new chat…', items: [{ label: m.CONTINUE_LABEL, run: () => {} }] };
+  const v = mount(ui.MessageMore, props);
+  const btn = v.host.querySelector('[data-message-more-button]');
+  btn.click();
   await tick();
-  const item = v.host.querySelector('[role="menuitem"]');
-  assert.equal(item.disabled, true);
-  assert.equal(item.textContent, 'Starting a new chat…');
   assert.match(v.host.querySelector('[role="menu"]').className, /right-0/, 'the person’s message opens to the left');
+  v.host.querySelector('[role="menuitem"]').click();
+  await tick();
+  v.render({ ...props, busy: true });
+  assert.equal(document.activeElement, btn, 'focus stays on ⋯ (aria-disabled, not disabled)');
+  assert.equal(btn.getAttribute('aria-busy'), 'true');
+  assert.equal(btn.getAttribute('aria-disabled'), 'true');
+  assert.equal(btn.getAttribute('aria-label'), 'Starting a new chat…');
+  assert.ok(btn.querySelector('svg.animate-spin.motion-reduce\\:animate-none'), 'the spinner, still under reduced motion');
+  btn.click();
+  key(btn, 'ArrowDown');
+  await tick();
+  assert.equal(v.host.querySelector('[role="menu"]'), null, 'a second press does nothing');
+  assert.match(v.host.querySelector('[data-message-more]').className, /opacity-100/, 'visible while busy, even off hover');
+  v.render({ ...props, busy: false });
+  assert.equal(btn.hasAttribute('aria-busy'), false);
+  assert.match(v.host.querySelector('[data-message-more]').className, /\[@media\(hover:hover\)\]:opacity-0/, 'hidden until hover on desktop');
   v.unmount();
 });
 
@@ -182,10 +203,13 @@ test('ChatView puts ⋯ right after Copy, the line before the messages, and keep
   const copy = src.indexOf('<CopyGhost copied=');
   const more = src.indexOf("continueMenu(msg, `${displayName}'s reply`, 'start')");
   assert.ok(copy > 0 && more > copy && more - copy < 200, '⋯ sits next to Copy');
-  assert.match(src, /continueMenu\(msg, 'your message', 'end'\)/);
+  assert.match(src, /continueMenu\(msg, 'your message', 'end', 'hover'\)/);
+  assert.match(src, /absolute right-full bottom-0 mr-1" data-message-more-gutter/, 'the person’s ⋯ sits in the gutter, no row of its own');
+  assert.equal(/mt-1 flex justify-end">\{more\}/.test(src), false, 'no ⋯ row under the person’s bubble');
   assert.ok(src.indexOf('<ContinuedLine') > 0);
   assert.equal(/handleCopy\([^)]*continued/i.test(src), false);
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /continueChatApi\.fromMessage<Thread>\(msg\.id, personFetch\)/, 'person-only, so "Confirm it’s you" can answer a 401');
+  assert.match(app, /fork\.truncated,\s*fork\.context === currentKwant\.id,/, 'the main chat reads "your main chat with <bot>"');
   assert.match(app, /canContinueHere = !!currentKwant && !currentTeam && !botSession && \(!openThreadId \|\| shownThread\?\.kind === 'chat'\)/);
 });
