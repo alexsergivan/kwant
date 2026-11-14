@@ -1108,6 +1108,8 @@ struct ClaudeStream {
     /// Tools, MCP servers, skills and slash commands claude's `init` line said it has; `None`
     /// until that line arrives.
     offered: Option<Vec<String>>,
+    /// The account's windows from the last `rate_limit_event` line.
+    rate_limits: Option<crate::profiles::usage::UsageReading>,
 }
 
 /// Longest reason kept from a failed tool result.
@@ -1143,6 +1145,11 @@ impl ClaudeStream {
         let blocks = v["message"]["content"].as_array().map(Vec::as_slice).unwrap_or_default();
         match v["type"].as_str() {
             Some("result") => self.result_line = Some(line.to_string()),
+            Some("rate_limit_event") => {
+                if let Some(reading) = crate::profiles::usage::from_claude_event(&v) {
+                    self.rate_limits = Some(reading);
+                }
+            }
             Some("system") if v["subtype"] == "init" => {
                 let offered = self.offered.get_or_insert_with(Vec::new);
                 for key in ["tools", "mcp_servers", "skills", "slash_commands"] {
@@ -1888,13 +1895,15 @@ impl Driver for CliDriver {
                         return Err(no_tools_broken(&self.tool_kind, &what));
                     }
                 }
+                // The account's windows, from a container run too (its stdout is the same stream)
+                let rate_limits = claude_stream.rate_limits.take();
                 let stdout = claude_stream.into_stdout();
                 if let Some(t) = isolated.take() {
                     if let Some(notice) = isolated_end(&t, &input, &stdout, exit) {
                         if let Some(u) = ClaudeResult::parse(&stdout).and_then(|r| r.split().map(|u| (r.main_model(), u))) {
                             record_cli_usage(&input, u.0, &u.1).await;
                         }
-                        return Ok(notice);
+                        return Ok(notice.with_usage(rate_limits));
                     }
                 }
 
@@ -1924,7 +1933,7 @@ impl Driver for CliDriver {
                             let bare_limit = crate::profiles::classify::is_limit_line(&result.result);
                             if (result.is_error && result.num_turns <= 1) || bare_limit {
                                 if let Some(failure) = refusal(&result.result) {
-                                    return Ok(TurnOutput::refused(failure));
+                                    return Ok(TurnOutput::refused(failure).with_usage(rate_limits));
                                 }
                             }
                             tokens = result.tokens();
@@ -1967,6 +1976,7 @@ impl Driver for CliDriver {
                     tokens_used: tokens,
                     usage,
                     is_error,
+                    usage_windows: rate_limits,
                     ..Default::default()
                 })
             }
@@ -2230,6 +2240,25 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
         let parsed = ClaudeResult::parse(&s.into_stdout()).unwrap();
         assert_eq!(parsed.result, "all done");
         assert_eq!(parsed.tokens(), Some(7));
+    }
+
+    /// account-usage: the stream keeps the last `rate_limit_event` (a recorded turn) and the
+    /// result line still parses.
+    #[test]
+    fn claude_stream_keeps_the_accounts_windows_from_a_recorded_turn() {
+        let t0 = Instant::now();
+        let mut s = ClaudeStream::default();
+        for line in include_str!("../../tests/fixtures/claude_rate_limit_event.jsonl").lines() {
+            s.line(line, t0);
+        }
+        let r = s.rate_limits.clone().expect("the rate_limit_event was kept");
+        assert_eq!(r.status.as_deref(), Some("ok"));
+        assert_eq!(r.windows.iter().map(|w| (w.kind.as_str(), w.used_pct)).collect::<Vec<_>>(), vec![("five_hour", 14), ("weekly", 56)]);
+        // A later event wins; an empty one doesn't wipe what was read
+        s.line(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","unifiedWindows":{"five_hour":{"utilization":0.9,"resetsAt":1794605400}}}}"#, t0);
+        s.line(r#"{"type":"rate_limit_event","rate_limit_info":{}}"#, t0);
+        assert_eq!(s.rate_limits.as_ref().unwrap().status.as_deref(), Some("warning"));
+        assert_eq!(ClaudeResult::parse(&s.into_stdout()).unwrap().result, "OK");
     }
 
     /// 0.9.5: claude's init line names servers that failed or want a sign-in (said like the API
