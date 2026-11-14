@@ -29,8 +29,8 @@ export interface LineNotesApi {
   remove(noteId: string): Promise<void>;
   restore(noteId: string): Promise<Note>;
   discardAll(cardId: string): Promise<number>;
-  /** `sendId` makes a Try again after a timeout safe (ask 6). */
-  send(cardId: string, sendId: string, ids?: string[]): Promise<SendResult>;
+  /** `sendId` makes a Try again after a timeout safe (ask 6). `to` (#609): a bot the person picked. */
+  send(cardId: string, sendId: string, ids?: string[], to?: string): Promise<SendResult>;
 }
 
 /** (url, method, body) → parsed JSON, or throws LineNotesError. */
@@ -122,8 +122,8 @@ export function lineNotesApi(call: Caller): LineNotesApi {
       const n = r && typeof r === 'object' ? (r as Record<string, unknown>).discarded : null;
       return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : 0;
     },
-    send: async (id, sendId, ids) =>
-      need(parseSendResult(await call(`${card(id)}/notes/send`, 'POST', ids ? { ids, send_id: sendId } : { send_id: sendId }))),
+    send: async (id, sendId, ids, to) =>
+      need(parseSendResult(await call(`${card(id)}/notes/send`, 'POST', { ...(ids ? { ids } : {}), send_id: sendId, ...(to ? { to } : {}) }))),
   };
 }
 
