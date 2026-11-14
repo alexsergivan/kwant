@@ -84,6 +84,8 @@ import { APPROVE_TEXT, asksApproval, changePlaceholder } from '../approvalAsk';
 import { DoneCheckLine } from './DoneMarker';
 import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
+import { ContinuedLine, MessageMore, MessageMoreError } from './MessageMore';
+import { CONTINUE_LABEL, canContinueFrom } from '../continueChat';
 import { RoutineRow } from './RoutineRow';
 import { routineOf } from '../routineRow';
 import { BudgetPausedNotice, ExpiredApprovalNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
@@ -295,6 +297,17 @@ export interface ChatViewProps {
   pinned?: PinnedItem[];
   /** Opens the channel's instructions editor; only for channels. */
   onEditInstructions?: () => void;
+  /**
+   * Continue in a new chat from here (continueChat.ts): set only in a chat with one bot on a person's session.
+   * Resolves to an error line when it failed; on success the app opens the new chat.
+   */
+  onContinueFrom?: (msg: ChatMessage) => Promise<string | void>;
+  /** The open thread's kind ('chat' or 'delegation'); absent in the bot's main chat. */
+  threadKind?: string | null;
+  /** A continued chat's quiet first line, linking back to the message it came from. */
+  continuedFrom?: { text: string; onOpen: () => void } | null;
+  /** Goes up when the composer should take focus (a new continued chat just opened). */
+  focusComposerKey?: number;
   /** A message to scroll to and flash (from search). */
   highlightMessageId?: string | null;
   onHighlightDone?: () => void;
@@ -550,6 +563,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   pinned = [],
   onEditInstructions,
   highlightMessageId,
+  onContinueFrom,
+  threadKind,
+  continuedFrom,
+  focusComposerKey,
   onHighlightDone,
   viewingHistory,
   onJumpToLatest,
@@ -1008,6 +1025,52 @@ export const ChatView: React.FC<ChatViewProps> = ({
     ta.focus();
     ta.setSelectionRange(ta.value.length, ta.value.length);
   };
+  // Continue in a new chat: the message whose request runs, and the one plain line when it failed.
+  const [continuing, setContinuing] = useState<string | null>(null);
+  const [continueError, setContinueError] = useState<{ id: string; text: string } | null>(null);
+  useEffect(() => {
+    setContinuing(null);
+    setContinueError(null);
+  }, [contextKey]);
+  useEffect(() => {
+    if (!focusComposerKey) return;
+    // After the new chat's first paint, so its composer is the one that takes focus
+    const raf = requestAnimationFrame(() => focusComposer());
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusComposerKey]);
+  const continueFrom = async (msg: ChatMessage) => {
+    if (!onContinueFrom || continuing) return;
+    setContinuing(msg.id);
+    setContinueError(null);
+    try {
+      const err = await onContinueFrom(msg);
+      if (err) setContinueError({ id: msg.id, text: err });
+    } finally {
+      setContinuing((cur) => (cur === msg.id ? null : cur));
+    }
+  };
+  const newestId = messages.length ? messages[messages.length - 1].id : null;
+  const continueMenu = (msg: ChatMessage, about: string, align: 'start' | 'end', reveal?: 'hover') =>
+    onContinueFrom &&
+    canContinueFrom({
+      chatKind: home?.kind,
+      threadKind,
+      message: msg,
+      newest: msg.id === newestId,
+      streaming: isStreaming,
+      botSession: false,
+    }) ? (
+      <MessageMore
+        messageId={msg.id}
+        about={about}
+        align={align}
+        reveal={reveal}
+        busy={continuing === msg.id}
+        busyLabel="Starting a new chat…"
+        items={[{ label: CONTINUE_LABEL, run: () => void continueFrom(msg) }]}
+      />
+    ) : null;
   const startReply = (msg: ChatMessage) => {
     setReplyTo(msg);
     setChangeFor(null);
@@ -1618,7 +1681,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         data-shared-under={underReply ? '' : undefined}
         // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
         style={underReply ? { marginTop: '0.5rem' } : undefined}
-        className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+        className={`group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
@@ -1726,6 +1789,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Message Body Bubble */}
           {!filesOnly && (text.trim() || !files.length) && (
+          <div className={isUser ? 'relative w-full max-w-2xl' : 'contents'}>
+          {isUser && (() => {
+            // The person's message: the overflow sits in the empty gutter left of the bubble, bottom-aligned, no row
+            const more = continueMenu(msg, 'your message', 'end', 'hover');
+            return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
+          })()}
           <div
             className={`px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
               isUser
@@ -1753,6 +1822,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             ) : (
               <MarkdownRenderer content={text} results={msg.results} messageId={msg.id} />
             )}
+          </div>
           </div>
           )}
           {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
@@ -1831,9 +1901,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </>
               )}
               <CopyGhost copied={copiedId === msg.id} tipId={`copy-tip-${msg.id}`} onCopy={() => handleCopy(text, msg.id)} />
+              {continueMenu(msg, `${displayName}'s reply`, 'start')}
               {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
           )}
+          {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={isUser ? 'end' : 'start'} />}
         </div>
       </div>
     );
@@ -2242,6 +2314,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-busy={isStreaming}
           >
         {topCard}
+        {continuedFrom && <ContinuedLine text={continuedFrom.text} onOpen={continuedFrom.onOpen} />}
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (
           <div className="flex min-h-full items-center justify-center">

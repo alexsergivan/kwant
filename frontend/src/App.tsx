@@ -155,7 +155,8 @@ import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
-import { personFetch } from './auth';
+import { PersonCancelledError, personFetch } from './auth';
+import { ContinueError, continueChatApi, continueErrorLine, continuedLine, forkOf } from './continueChat';
 import { OPEN_ADD_TOOL_EVENT, type OpenAddTool } from './mcp';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
@@ -2419,6 +2420,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  // Continue in a new chat from here (continueChat.ts). A 403 means this session is a bot's: the item hides.
+  const [botSession, setBotSession] = useState(false);
+  const [focusComposerKey, setFocusComposerKey] = useState(0);
+  const handleContinueFrom = async (msg: ChatMessage): Promise<string | void> => {
+    const kwantId = selectedIdRef.current;
+    try {
+      const t = await continueChatApi.fromMessage<Thread>(msg.id, personFetch);
+      knownThreadsRef.current.add(t.id);
+      setThreadsByKwant((prev) => ({ ...prev, [t.kwant_id]: upsertThread(prev[t.kwant_id], t) }));
+      if (selectedIdRef.current !== kwantId || isChannelRef.current) return;
+      setOpenThreadId(t.id);
+      setFocusComposerKey((n) => n + 1);
+      playSfx('click');
+    } catch (err) {
+      if (err instanceof PersonCancelledError) return err.message;
+      if (err instanceof ContinueError && err.status === 403) setBotSession(true);
+      return continueErrorLine(err);
+    }
+  };
+
   /** Stops a thread's work: its delegation when one is open (so the lead hears), else its turns. */
   const handleStopThread = async (t: Thread): Promise<string | void> => {
     const d = t.delegation ? delegationsRef.current[t.delegation.id] ?? t.delegation : null;
@@ -3540,6 +3561,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The bot's conversations, the open thread's controls, and "working on…" elsewhere.
   const agentThreads = currentKwant ? threadsByKwant[currentKwant.id] : undefined;
   const shownThread = openThreadId ? agentThreads?.find((t) => t.id === openThreadId) ?? null : null;
+  // Continue in a new chat: only in a chat with one bot (its main chat or a `chat` thread we know), never a team's.
+  const canContinueHere = !!currentKwant && !currentTeam && !botSession && (!openThreadId || shownThread?.kind === 'chat');
+  const fork = forkOf(shownThread);
+  const continuedFrom =
+    fork && currentKwant
+      ? {
+          text: continuedLine(
+            fork.context === currentKwant.id ? currentKwant.name : agentThreads?.find((t) => t.id === fork.context)?.title ?? 'an earlier chat',
+            fork.copied,
+            fork.truncated,
+            fork.context === currentKwant.id,
+          ),
+          onOpen: () => {
+            if (fork.context === currentKwant.id) setOpenThreadId(null);
+            else openThreadChecked(currentKwant.id, fork.context);
+            setHighlightMessageId(fork.messageId);
+            playSfx('click');
+          },
+        }
+      : null;
   const elsewhere = currentKwant ? backgroundTurns(turns, currentKwant.id).filter((t) => t.context_id !== openCtx) : [];
   const describeContext = (ctx: string, kwantId: string): string =>
     threadsByKwant[kwantId]?.find((t) => t.id === ctx)?.title ??
@@ -4283,6 +4324,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 }
               : undefined
           }
+          onContinueFrom={canContinueHere ? handleContinueFrom : undefined}
+          threadKind={shownThread?.kind ?? null}
+          continuedFrom={continuedFrom}
+          focusComposerKey={focusComposerKey}
           highlightMessageId={highlightMessageId}
           onHighlightDone={() => setHighlightMessageId(null)}
           subHeader={subHeader}
