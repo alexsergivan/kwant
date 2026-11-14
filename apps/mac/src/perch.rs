@@ -1084,9 +1084,35 @@ pub struct GlanceCache {
     /// It didn't answer (or is signed out, or answered with something unreadable). The last
     /// glance stays, so the perch doesn't flicker over one missed poll.
     pub off: bool,
+    /// Polls in a row that came back 304, and rounds skipped since the last poll (the backoff).
+    pub unchanged: u32,
+    pub skipped: u32,
 }
 
+/// The longest backoff: a place that keeps answering 304 is asked every 3rd round (15 s).
+pub const BACKOFF_MAX: u32 = 3;
+/// 304s in a row before each step of the backoff.
+pub const BACKOFF_AFTER: u32 = 3;
+
 impl GlanceCache {
+    /// Whether to ask this round. Every round while anything changes; after 3 unchanged answers
+    /// every 2nd round, after 6 every 3rd. `eager` (the perch is open, or the person just acted
+    /// on it) and a place with no ETag or no good answer are always asked.
+    pub fn due(&mut self, eager: bool) -> bool {
+        let every = if eager || self.etag.is_none() || self.off {
+            1
+        } else {
+            (1 + self.unchanged / BACKOFF_AFTER).min(BACKOFF_MAX)
+        };
+        if self.skipped + 1 >= every {
+            self.skipped = 0;
+            true
+        } else {
+            self.skipped += 1;
+            false
+        }
+    }
+
     /// Takes in one answer. `away`: what `/api/away` said this round, used when the place is a
     /// kwant from before the glance (404).
     pub fn take(&mut self, answer: crate::remote::Glance, away: Option<&nudge::Waiting>) {
@@ -1097,13 +1123,17 @@ impl GlanceCache {
                     self.glance = g;
                     self.etag = etag;
                     self.off = false;
+                    self.unchanged = 0;
                 }
                 None => {
                     self.etag = None;
                     self.off = true;
                 }
             },
-            A::NotModified if self.etag.is_some() => self.off = false,
+            A::NotModified if self.etag.is_some() => {
+                self.off = false;
+                self.unchanged = self.unchanged.saturating_add(1);
+            }
             // a 304 to no ETag of ours: odd, so nothing is trusted
             A::NotModified => self.off = true,
             A::Missing => {
@@ -1157,6 +1187,39 @@ mod tests {
         // a 304 to no ETag of ours isn't trusted
         c.take(A::NotModified, None);
         assert!(c.off);
+    }
+
+    #[test]
+    fn an_unchanged_place_is_asked_less_often_until_it_changes() {
+        use crate::remote::Glance as A;
+        let mut c = GlanceCache::default();
+        let fresh = || A::Fresh { etag: Some("\"g1\"".into()), body: glance_body() };
+        // no ETag yet: every round
+        assert!(c.due(false));
+        c.take(fresh(), None);
+        let mut asked = Vec::new();
+        for _ in 0..14 {
+            let due = c.due(false);
+            asked.push(due);
+            if due {
+                c.take(A::NotModified, None);
+            }
+        }
+        // 3 polls every round, then 3 every 2nd round, then every 3rd (never slower)
+        let pattern: String = asked.iter().map(|d| if *d { 'x' } else { '.' }).collect();
+        assert_eq!(pattern, "xxx.x.x.x..x..", "{pattern}");
+        // open perch (or just acted): every round again
+        assert!(c.due(true));
+        assert!(c.due(true));
+        // a change resets it
+        c.take(fresh(), None);
+        assert_eq!(c.unchanged, 0);
+        assert!(c.due(false));
+        assert!(c.due(false));
+        // a failed place is asked every round
+        c.unchanged = 50;
+        c.take(A::Failed, None);
+        assert!(c.due(false) && c.due(false));
     }
 
     #[test]

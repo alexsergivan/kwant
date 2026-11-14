@@ -1405,7 +1405,8 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
             let counts: Vec<(bool, usize)> = all.iter().map(|p| (*p == Place::ThisMac, status_of(p).count())).collect();
             picker::set_elsewhere(&app, switcher::waiting_elsewhere(&counts));
             if perch_window::polling(&app) {
-                let snap = perch_window::snapshot(&all, &mut glances, &last, |place, etag| match place {
+                let eager = perch_window::eager(&app);
+                let snap = perch_window::snapshot(&all, &mut glances, &last, eager, |place, etag| match place {
                     Place::ThisMac => match port {
                         Some(port) if !failed => perch_window::local_glance(&local_client, port, etag),
                         _ => remote::Glance::Failed,
@@ -1997,6 +1998,120 @@ mod tests {
                 assert!(matches!(&refused, Err(serde_json::Value::String(_))), "{cmd} from {from}: {refused:?}");
             }
         }
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// What the last poll saw on This Mac: an approval the server lets the perch allow, one it
+    /// doesn't, and a question with two choices.
+    fn perch_snapshot() -> perch::Snapshot {
+        let need = |kind, id: &str, inline| perch::Need {
+            kind,
+            id: id.into(),
+            space_id: "spc_default".into(),
+            space_name: "Default".into(),
+            kwant_name: "Juno".into(),
+            avatar: None,
+            title: "push the branch".into(),
+            since: "2026-11-14T22:00:00Z".into(),
+            path: format!("/s/spc_default/b/k1#{id}"),
+            inline,
+            why_open: String::new(),
+            question: None,
+        };
+        let mut question = need(perch::NeedKind::Question, "q1", false);
+        question.question = Some(perch::Question { choices: vec!["Yes".into(), "No".into()], total: 2, allow_text: false });
+        perch::Snapshot {
+            places: vec![perch::PlaceView {
+                key: places::THIS_MAC.into(),
+                label: "This Mac".into(),
+                this_mac: true,
+                off: false,
+                current: true,
+                glance: perch::Glance {
+                    needs_count: 3,
+                    working_count: 0,
+                    needs: vec![
+                        need(perch::NeedKind::Approval, "apr-inline", true),
+                        need(perch::NeedKind::Approval, "apr-full", false),
+                        question,
+                    ],
+                    working: vec![],
+                    finished: vec![],
+                    ask: vec![],
+                },
+            }],
+        }
+    }
+
+    /// The perch acts only on what its last snapshot shows: Allow once only where the server
+    /// said it may, a chip only among the first choices, an unknown or odd address does
+    /// nothing, and the same item goes at most once a second.
+    #[test]
+    fn the_perch_acts_only_on_what_its_snapshot_shows() {
+        let (app, _window, data_dir) = app("perch-acts");
+        let handle = app.handle();
+        perch_window::set_snapshot(handle, perch_snapshot());
+        let ask = |u: &str| perch_window::handle(handle, &u.parse::<Url>().unwrap());
+        let refused = |op: &'static str, id: &str, code: &'static str| Some((op, id.to_string(), false, code));
+        // never sent: not inline, not there, not ours
+        assert_eq!(ask("kwant-island://allow?p=0&id=apr-full"), refused("allow", "apr-full", "not_inline"));
+        assert_eq!(ask("kwant-island://deny?p=0&id=apr-full"), refused("deny", "apr-full", "not_inline"));
+        assert_eq!(ask("kwant-island://allow?p=0&id=q1"), refused("allow", "q1", "not_inline"));
+        assert_eq!(ask("kwant-island://allow?p=0&id=apr-gone"), refused("allow", "apr-gone", "gone"));
+        assert_eq!(ask("kwant-island://allow?p=1&id=apr-inline"), refused("allow", "apr-inline", "gone"));
+        assert_eq!(ask("kwant-island://answer?p=0&id=q1&c=2"), refused("answer", "q1", "not_inline"));
+        assert_eq!(ask("kwant-island://answer?p=0&id=apr-inline&c=0"), refused("answer", "apr-inline", "not_inline"));
+        assert_eq!(ask("kwant-island://ask?t=0&text=hi&cid=island-abcdef12"), refused("ask", "island-abcdef12", "gone"));
+        for odd in [
+            "kwant-island://allow?p=0",
+            "kwant-island://allow?p=100&id=apr-inline",
+            "kwant-island://allow?p=0&id=../../api",
+            "kwant-island://resolve?p=0&id=apr-inline",
+            "kwant-island://allow?p=x&id=apr-inline",
+            "kwant-app://allow?p=0&id=apr-inline",
+            "https://kwant.example.com/api/approvals/apr-inline/resolve",
+        ] {
+            assert_eq!(ask(odd), None, "{odd}");
+        }
+        assert_eq!(perch_window::probe(handle).1, 0, "nothing in flight");
+        assert!(!perch_window::probe(handle).2, "nothing was sent");
+        // an inline approval is sent (nothing listens on port 1, so it fails and says so)
+        assert_eq!(ask("kwant-island://allow?p=0&id=apr-inline"), Some(("allow", "apr-inline".into(), false, "failed")));
+        let (_, in_flight, acted, _) = perch_window::probe(handle);
+        assert_eq!((in_flight, acted), (0, true));
+        // the same item again within a second: busy, not sent
+        for _ in 0..20 {
+            assert_eq!(ask("kwant-island://deny?p=0&id=apr-inline"), refused("deny", "apr-inline", "busy"));
+        }
+        // a chip among the first choices is its own item
+        assert_eq!(ask("kwant-island://answer?p=0&id=q1&c=1"), Some(("answer", "q1".into(), false, "failed")));
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// A `kwant-island://` address is the perch page's alone: from `main` or a server's window it
+    /// is never loaded and does nothing.
+    #[test]
+    fn a_perch_address_from_any_other_window_does_nothing() {
+        let (places, server) = server_place();
+        let (app, _window, data_dir) = app_with("perch-elsewhere", MAIN, places);
+        let handle = app.handle();
+        perch_window::set_snapshot(handle, perch_snapshot());
+        for u in [
+            "kwant-island://allow?p=0&id=apr-inline",
+            "kwant-island://ready",
+            "kwant-island://focus",
+            "kwant-island://open?what=inbox",
+        ] {
+            let url: Url = u.parse().unwrap();
+            for me in [&Place::ThisMac, &server] {
+                assert!(!route(handle, me, &url, false), "{u} never loaded");
+                assert!(!route(handle, me, &url, true), "{u} nor as a popup");
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(perch_window::probe(handle), (false, 0, false, false), "nothing happened");
         nothing_saved(&data_dir);
         let _ = std::fs::remove_dir_all(data_dir);
     }

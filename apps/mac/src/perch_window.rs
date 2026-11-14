@@ -56,6 +56,8 @@ pub struct PerchState {
     /// Calls in flight, and when each item was last sent.
     in_flight: usize,
     sent: switcher::RateLimit,
+    /// When the person last acted on it (no polling backoff for a while after).
+    last_call: Option<Instant>,
 }
 
 impl PerchState {
@@ -82,6 +84,7 @@ impl PerchState {
             asked: VecDeque::new(),
             in_flight: 0,
             sent: switcher::RateLimit::default(),
+            last_call: None,
         }
     }
 }
@@ -237,6 +240,16 @@ pub fn polling<R: Runtime>(app: &AppHandle<R>) -> bool {
     on(app)
 }
 
+/// How long after an Allow once, Deny, chip or Quick ask every place is asked each round.
+const EAGER_AFTER_CALL: Duration = Duration::from_secs(15);
+
+/// No backoff while the perch is open or the person just acted on it.
+pub fn eager<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let shared = app.state::<Shared>();
+    let st = shared.perch.lock().unwrap();
+    st.page.0.open() || st.last_call.is_some_and(|t| t.elapsed() < EAGER_AFTER_CALL)
+}
+
 /// This Mac's kwant's glance (loopback: no token).
 pub fn local_glance(client: &reqwest::Client, port: u16, etag: Option<&str>) -> remote::Glance {
     let Ok(address) = crate::target::parse_address(&format!("http://127.0.0.1:{port}")) else {
@@ -378,10 +391,16 @@ fn on_perch_url<R: Runtime>(app: &AppHandle<R>, url: &Url) {
     };
     let app = app.clone();
     // never touch a window inside the webview's own callback
-    std::thread::spawn(move || act(&app, ask));
+    std::thread::spawn(move || {
+        act(&app, ask);
+    });
 }
 
-fn act<R: Runtime>(app: &AppHandle<R>, ask: PerchAsk) {
+/// How a call went, as the page hears it: (op, id, ok, code).
+pub type Outcome = (&'static str, String, bool, &'static str);
+
+/// Does what the page asked. A call (Allow once, Deny, a chip, a Quick ask) returns how it went.
+fn act<R: Runtime>(app: &AppHandle<R>, ask: PerchAsk) -> Option<Outcome> {
     match ask {
         PerchAsk::Ready => {
             {
@@ -426,8 +445,32 @@ fn act<R: Runtime>(app: &AppHandle<R>, ask: PerchAsk) {
             let from = crate::picker::last_place_window(app);
             crate::picker::open(app, from, None);
         }
-        PerchAsk::Allow { .. } | PerchAsk::Deny { .. } | PerchAsk::Answer { .. } | PerchAsk::Ask { .. } => call(app, &ask),
+        PerchAsk::Allow { .. } | PerchAsk::Deny { .. } | PerchAsk::Answer { .. } | PerchAsk::Ask { .. } => {
+            return Some(call(app, &ask));
+        }
     }
+    None
+}
+
+/// The perch page's `kwant-island://` address, handled here and now (tests; the window's own
+/// handler does the same on a thread).
+#[cfg(test)]
+pub fn handle<R: Runtime>(app: &AppHandle<R>, url: &Url) -> Option<Outcome> {
+    act(app, perch::parse_perch(url.as_str())?)
+}
+
+/// Sets what the last poll saw (tests).
+#[cfg(test)]
+pub fn set_snapshot<R: Runtime>(app: &AppHandle<R>, snap: Snapshot) {
+    app.state::<Shared>().perch.lock().unwrap().snap = snap;
+}
+
+/// (ready, calls in flight, acted lately, opened by the shortcut) (tests).
+#[cfg(test)]
+pub fn probe<R: Runtime>(app: &AppHandle<R>) -> (bool, usize, bool, bool) {
+    let shared = app.state::<Shared>();
+    let st = shared.perch.lock().unwrap();
+    (st.ready, st.in_flight, st.last_call.is_some(), st.open_by_key)
 }
 
 /// Closes the page (after it sent the person somewhere else).
@@ -477,7 +520,7 @@ fn open<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) {
 }
 
 /// Allow once / Deny / a chip / a Quick ask, for a thing in the latest snapshot only.
-fn call<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) {
+fn call<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) -> Outcome {
     let checked = {
         let shared = app.state::<Shared>();
         let mut st = shared.perch.lock().unwrap();
@@ -488,6 +531,7 @@ fn call<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) {
                     Err((call.op, call.id, "busy"))
                 } else {
                     st.in_flight += 1;
+                    st.last_call = Some(Instant::now());
                     let key = st.snap.places.get(call.p).map(|v| v.key.clone());
                     Ok((call, key))
                 }
@@ -503,7 +547,7 @@ fn call<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) {
         Err((op, id, code)) => {
             tracing::info!(op, code, "the perch's ask was refused");
             done(app, op, &id, false, code);
-            return;
+            return (op, id, false, code);
         }
     };
     let posted = key.and_then(|k| crate::place_by_key(app, &k)).map(|place| post(app, &place, &call.path, &call.body));
@@ -534,6 +578,7 @@ fn call<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) {
     done(app, call.op, &call.id, ok, code);
     // the next poll shows it answered (or gone)
     crate::wake(app);
+    (call.op, call.id, ok, code)
 }
 
 fn op_of(ask: &PerchAsk) -> (&'static str, String) {
@@ -735,6 +780,7 @@ pub fn snapshot(
     all: &[Place],
     caches: &mut Caches,
     away: &HashMap<String, nudge::Waiting>,
+    eager: bool,
     mut fetch: impl FnMut(&Place, Option<&str>) -> remote::Glance,
 ) -> Snapshot {
     caches.retain(|k, _| all.iter().any(|p| &p.key() == k));
@@ -743,8 +789,11 @@ pub fn snapshot(
         .map(|place| {
             let key = place.key();
             let cache = caches.entry(key.clone()).or_default();
-            let answer = fetch(place, cache.etag.as_deref());
-            cache.take(answer, away.get(&key));
+            // a place that keeps answering 304 is asked less often (GlanceCache::due)
+            if cache.due(eager) {
+                let answer = fetch(place, cache.etag.as_deref());
+                cache.take(answer, away.get(&key));
+            }
             view(place, cache)
         })
         .collect();
