@@ -15,8 +15,12 @@ use axum::{
 use kwnt::{
     broker::PermissionBroker,
     config::Config,
-    db::{models::Kwant, spaces::SpaceId, Database},
-    drivers::engines::{EngineId, ProbeEnv},
+    db::{
+        models::{Kwant, LlmProfilePatch},
+        spaces::SpaceId,
+        Database,
+    },
+    drivers::engines::{EngineId, EngineStatus, ProbeEnv},
     router::LayaRouter,
     server::{
         continuity::SelfScope,
@@ -27,7 +31,7 @@ use kwnt::{
     tools::ToolRunner,
 };
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::{tempdir, TempDir};
@@ -54,6 +58,19 @@ fn fake_embedding(text: &str) -> Vec<f32> {
     v
 }
 
+/// A concept-axis embedding with one axis every text shares, as real local models have: any two
+/// unrelated texts score [`UNRELATED_COSINE`] (nomic-embed-text gives unrelated text 0.3–0.4).
+fn shared_axis_embedding(text: &str) -> Vec<f32> {
+    let v = fake_embedding(text);
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let mut v: Vec<f32> = v.iter().map(|x| if norm > 0.0 { x / norm } else { 0.0 }).collect();
+    // cos(a, b) = (a·b + s²) / (1 + s²) for unit a, b; a·b = 0 gives s² / (1 + s²)
+    v.push((UNRELATED_COSINE / (1.0 - UNRELATED_COSINE)).sqrt());
+    v
+}
+
+const UNRELATED_COSINE: f32 = 0.35;
+
 #[derive(Clone, Default)]
 struct Fake {
     /// Every request the server got, of any kind.
@@ -63,6 +80,10 @@ struct Fake {
     embedded_texts: Arc<AtomicUsize>,
     /// Milliseconds to wait before answering a one-text (query) embedding.
     query_delay_ms: Arc<AtomicU64>,
+    /// Milliseconds to wait before answering a batch of several texts (a fill).
+    batch_delay_ms: Arc<AtomicU64>,
+    /// Embed with [`shared_axis_embedding`] instead of [`fake_embedding`].
+    shared_axis: Arc<AtomicBool>,
     /// Ollama's pulled models.
     models: Arc<std::sync::Mutex<Vec<String>>>,
 }
@@ -83,11 +104,12 @@ async fn inputs(f: &Fake, body: &Value) -> Vec<Vec<f32>> {
     f.embed_calls.fetch_add(1, Ordering::SeqCst);
     let texts: Vec<String> = body["input"].as_array().unwrap().iter().map(|t| t.as_str().unwrap().to_string()).collect();
     f.embedded_texts.fetch_add(texts.len(), Ordering::SeqCst);
-    let delay = f.query_delay_ms.load(Ordering::SeqCst);
-    if texts.len() == 1 && delay > 0 {
+    let delay = if texts.len() == 1 { &f.query_delay_ms } else { &f.batch_delay_ms }.load(Ordering::SeqCst);
+    if delay > 0 {
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
-    texts.iter().map(|t| fake_embedding(t)).collect()
+    let shared = f.shared_axis.load(Ordering::SeqCst);
+    texts.iter().map(|t| if shared { shared_axis_embedding(t) } else { fake_embedding(t) }).collect()
 }
 
 async fn ollama_embed(State(f): State<Fake>, Json(body): Json<Value>) -> Json<Value> {
@@ -107,6 +129,24 @@ async fn openai_embed(State(f): State<Fake>, headers: HeaderMap, Json(body): Jso
     Json(json!({"data": data})).into_response()
 }
 
+/// The OpenAI API engine check: listing models needs a valid key.
+async fn openai_models(State(f): State<Fake>, headers: HeaderMap) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    f.calls.fetch_add(1, Ordering::SeqCst);
+    if headers.get("authorization").and_then(|h| h.to_str().ok()) != Some("Bearer sk-test") {
+        let body = json!({"error": {"message": "Incorrect API key provided", "type": "invalid_request_error", "code": "invalid_api_key"}});
+        return (axum::http::StatusCode::UNAUTHORIZED, Json(body)).into_response();
+    }
+    Json(json!({"data": [{"id": "gpt-5.5"}]})).into_response()
+}
+
+/// Runs the OpenAI API engine check with `key` against the fake, as the app does with its key.
+async fn check_openai(state: &AppState, url: &str, key: &str) -> EngineStatus {
+    let env = ProbeEnv { openai_key: Some(key.into()), openai_base: url.to_string(), ..ProbeEnv::default() };
+    state.engines.recheck_one(EngineId::OpenaiApi, &env).await;
+    state.engines.report(EngineId::OpenaiApi).status
+}
+
 async fn fake_server(models: &[&str]) -> (String, Fake) {
     let fake = Fake::default();
     *fake.models.lock().unwrap() = models.iter().map(|m| m.to_string()).collect();
@@ -115,6 +155,7 @@ async fn fake_server(models: &[&str]) -> (String, Fake) {
         .route("/api/version", get(version))
         .route("/api/embed", post(ollama_embed))
         .route("/v1/embeddings", post(openai_embed))
+        .route("/v1/models", get(openai_models))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -344,20 +385,25 @@ async fn an_openai_account_embeds_with_its_key() {
     let texts = vec!["car".to_string(), MONEY_BACK.to_string()];
     let vectors = memory_recall::embed(&source, &texts, Duration::from_secs(2)).await.unwrap();
     assert_eq!(vectors, vec![fake_embedding("car"), fake_embedding(MONEY_BACK)], "sorted back by index");
-    let wrong = EmbedSource::OpenAi { base: url, key: "sk-wrong".into() };
+    let wrong = EmbedSource::OpenAi { base: url.clone(), key: "sk-wrong".into() };
     let err = memory_recall::embed(&wrong, &texts, Duration::from_secs(2)).await.unwrap_err();
     assert_eq!(err, "HTTP 401");
     assert_eq!(fake.embed_calls.load(Ordering::SeqCst), 1);
 
-    // The space's own OpenAI key (Settings) is chosen before a local Ollama
+    // The host's OpenAI key (Settings) is chosen before a local Ollama, once its check passed
     let (_app, state, _tmp) = setup().await;
     let k = first_kwant(&state).await;
     let (ollama, _) = fake_server(&["nomic-embed-text"]).await;
     use_ollama(&state, &ollama).await;
-    state.db.set_setting("openai_api_key", "sk-space").await.unwrap();
+    state.db.set_setting("openai_api_key", "sk-test").await.unwrap();
+    assert!(
+        matches!(memory_recall::source_for_kwant(&state, &k.id).await, Some(EmbedSource::Ollama { .. })),
+        "not before the OpenAI API check has passed"
+    );
+    assert_eq!(check_openai(&state, &url, "sk-test").await, EngineStatus::Ready);
     assert_eq!(
         memory_recall::source_for_kwant(&state, &k.id).await,
-        Some(EmbedSource::OpenAi { base: "https://api.openai.com".into(), key: "sk-space".into() })
+        Some(EmbedSource::OpenAi { base: "https://api.openai.com".into(), key: "sk-test".into() })
     );
     // …unless the OpenAI API engine is turned off
     state.engines.set_enabled(EngineId::OpenaiApi, false);
@@ -418,4 +464,128 @@ async fn search_latency_with_500_memories() {
     let hybrid = time("hybrid (local fake embedding server)", true).await;
     assert!(keywords < Duration::from_millis(200) && none < Duration::from_millis(200), "{keywords:?} {none:?}");
     assert!(hybrid < Duration::from_millis(500), "{hybrid:?}");
+}
+
+/// N1: with a local model, unrelated notes score about 0.35. A search with no real match says
+/// "No matching notes." instead of returning `limit` unrelated notes, and a paraphrase is still found.
+#[tokio::test]
+async fn unrelated_notes_stay_out_when_the_model_scores_them_at_0_35() {
+    let (app, state, _tmp) = setup().await;
+    let k = first_kwant(&state).await;
+    let money_back = state.db.add_memory(&k.id, MONEY_BACK, "agent").await.unwrap().id;
+    for text in ["Daughter's birthday is 3 March", "Prefers short answers in the morning", "The office wifi password lives in the vault"] {
+        state.db.add_memory(&k.id, text, "agent").await.unwrap();
+    }
+    for i in 0..10 {
+        state.db.add_memory(&k.id, &format!("Weekly team lunch {i} is on Thursday at noon"), "agent").await.unwrap();
+    }
+    let (url, fake) = fake_server(&["nomic-embed-text:latest"]).await;
+    fake.shared_axis.store(true, Ordering::SeqCst);
+    use_ollama(&state, &url).await;
+    assert_eq!(memory_recall::fill_now(&state, &k.id, memory_recall::FILL_ROUNDS).await, 14);
+
+    // The fake is as loose as nomic-embed-text: every note is 0.35 from "car"
+    let q = shared_axis_embedding("car");
+    for row in state.db.memory_vector_rows(&k.id).await.unwrap() {
+        let c = memory_recall::cosine(&q, &shared_axis_embedding(&row.text));
+        assert!((c - UNRELATED_COSINE).abs() < 1e-3, "{c} for {:?}", row.text);
+    }
+    assert_eq!(memory_recall::search(&state, &k.id, "car", 10).await.unwrap(), vec![], "no note is about cars");
+    assert_eq!(memory_search(&app, &state, &k, "car").await, "No matching notes.");
+
+    // A paraphrase is still found, alone
+    let hits = memory_recall::search(&state, &k.id, "customer refund rules", 10).await.unwrap();
+    assert_eq!(hits.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), [money_back.as_str()]);
+    // Keywords still find what they find
+    let hits = memory_recall::search(&state, &k.id, "lunch", 10).await.unwrap();
+    assert_eq!(hits.len(), 10, "keyword hits are not cut by the floor");
+}
+
+/// N2: a note written while a fill runs gets its vector when that fill ends, with no search.
+#[tokio::test]
+async fn a_note_written_during_a_fill_gets_its_vector_without_a_search() {
+    let (_app, state, _tmp) = setup().await;
+    let k = first_kwant(&state).await;
+    seed(&state, &k).await;
+    let (url, fake) = fake_server(&["nomic-embed-text"]).await;
+    use_ollama(&state, &url).await;
+    fake.batch_delay_ms.store(400, Ordering::SeqCst);
+
+    let running = {
+        let (state, k) = (state.clone(), k.id.clone());
+        tokio::spawn(async move { memory_recall::fill_now(&state, &k, memory_recall::FILL_ROUNDS).await })
+    };
+    let mut waited = 0;
+    while fake.embed_calls.load(Ordering::SeqCst) == 0 && waited < 100 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        waited += 1;
+    }
+    assert_eq!(fake.embed_calls.load(Ordering::SeqCst), 1, "the fill's first batch is in flight");
+    // The bot writes a note; the listener's fill finds the running one and leaves it to that
+    let late = state.db.add_memory(&k.id, "The car is a blue estate", "agent").await.unwrap().id;
+    assert_eq!(memory_recall::fill_now(&state, &k.id, memory_recall::FILL_ROUNDS).await, 0);
+
+    assert_eq!(running.await.unwrap(), 6, "5 notes, then one more pass for the late one");
+    let row = state.db.memory_vector_rows(&k.id).await.unwrap().into_iter().find(|r| r.id == late).unwrap();
+    assert!(row.fresh_vector("ollama/nomic-embed-text", &memory_recall::text_hash(&row.text)).is_some());
+    assert_eq!(fake.embed_calls.load(Ordering::SeqCst), 2, "no query embedding: no search ran");
+    assert_eq!(memory_recall::fill_now(&state, &k.id, memory_recall::FILL_ROUNDS).await, 0, "nothing left");
+}
+
+/// N4: a fill that is cancelled (or panics) frees the kwant, so the next fill runs.
+#[tokio::test]
+async fn a_cancelled_fill_does_not_block_the_next_one() {
+    let (_app, state, _tmp) = setup().await;
+    let k = first_kwant(&state).await;
+    seed(&state, &k).await;
+    let (url, fake) = fake_server(&["nomic-embed-text"]).await;
+    use_ollama(&state, &url).await;
+    fake.batch_delay_ms.store(2000, Ordering::SeqCst);
+    let cut = tokio::time::timeout(Duration::from_millis(200), memory_recall::fill_now(&state, &k.id, 4)).await;
+    assert!(cut.is_err(), "the fill was dropped mid-batch");
+    fake.batch_delay_ms.store(0, Ordering::SeqCst);
+    assert_eq!(memory_recall::fill_now(&state, &k.id, 4).await, 5, "the kwant isn't stuck as filling");
+}
+
+/// N3 and N5: the host's OpenAI key is used only while its engine check passes, and never in a
+/// space whose This machine is off for Codex.
+#[tokio::test]
+async fn a_rejected_host_key_is_not_tried_and_this_machine_off_is_one_rule() {
+    let (_app, state, _tmp) = setup().await;
+    let k = first_kwant(&state).await;
+    seed(&state, &k).await;
+    let (url, fake) = fake_server(&[]).await;
+    state.db.set_setting("openai_api_key", "sk-revoked").await.unwrap();
+    assert_eq!(memory_recall::source_for_kwant(&state, &k.id).await, None, "not before a check");
+    assert_eq!(check_openai(&state, &url, "sk-revoked").await, EngineStatus::SignedOut);
+    assert_eq!(memory_recall::source_for_kwant(&state, &k.id).await, None, "a rejected key is not a provider");
+    for _ in 0..3 {
+        assert_eq!(memory_recall::search(&state, &k.id, "car", 10).await.unwrap(), state.db.search_memories(&k.id, "car", 10).await.unwrap());
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 1, "only the engine check itself, no embedding call");
+
+    // The key is fixed and checked again: it is the provider again
+    state.db.set_setting("openai_api_key", "sk-test").await.unwrap();
+    assert_eq!(check_openai(&state, &url, "sk-test").await, EngineStatus::Ready);
+    let host = Some(EmbedSource::OpenAi { base: "https://api.openai.com".into(), key: "sk-test".into() });
+    assert_eq!(memory_recall::source_for_kwant(&state, &k.id).await, host);
+
+    // This machine off for Codex in the space: the same rule turns use (profile_turn::host_off)
+    let space = SpaceId::default_space();
+    let this_machine = state
+        .db
+        .list_profiles(&space)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.kind == "system" && p.engine == "codex")
+        .expect("the space's This machine profile for Codex");
+    let off = LlmProfilePatch { enabled: Some(false), ..Default::default() };
+    state.db.update_profile(&this_machine.id, &off).await.unwrap();
+    assert!(kwnt::server::profile_turn::host_off(&state, &space).await.contains(&kwnt::profiles::Engine::Codex));
+    assert_eq!(memory_recall::source_for_kwant(&state, &k.id).await, None);
+    let on = LlmProfilePatch { enabled: Some(true), ..Default::default() };
+    state.db.update_profile(&this_machine.id, &on).await.unwrap();
+    assert_eq!(memory_recall::source_for_kwant(&state, &k.id).await, host);
 }
