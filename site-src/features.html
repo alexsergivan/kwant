@@ -13,32 +13,12 @@ card_art: team
   </div>
 </section>
 
-<nav class="jump-bar" aria-labelledby="jump-label">
+<nav class="jump-bar" aria-label="On this page">
   <div class="wrap">
     <div class="jump-scroll">
-      <p class="jump-label" id="jump-label">On this page</p>
+      <p class="jump-label" aria-hidden="true">Jump</p>
+      {{jump:versions}}
       <ul class="jump">
-        <li><a href="#new-099">New in 0.9.9</a></li>
-        <li><a href="#new-098">New in 0.9.8</a></li>
-        <li><a href="#new-097">New in 0.9.7</a></li>
-        <li><a href="#new-096">New in 0.9.6</a></li>
-        <li><a href="#new-095">New in 0.9.5</a></li>
-        <li><a href="#new-09">New in 0.9.4</a></li>
-        <li><a href="#new-08">New in 0.8.2</a></li>
-        <li><a href="#new-077">New in 0.7.7</a></li>
-        <li><a href="#new-076">New in 0.7.6</a></li>
-        <li><a href="#new-075">New in 0.7.5</a></li>
-        <li><a href="#new-074">New in 0.7.4</a></li>
-        <li><a href="#new-073">New in 0.7.3</a></li>
-        <li><a href="#new-072">New in 0.7.2</a></li>
-        <li><a href="#new-071">New in 0.7.1</a></li>
-        <li><a href="#new-07">New in 0.7</a></li>
-        <li><a href="#new-0611">New in 0.6.11</a></li>
-        <li><a href="#new-069">New in 0.6.9</a></li>
-        <li><a href="#new-065">New in 0.6.5</a></li>
-        <li><a href="#new-064">New in 0.6.4</a></li>
-        <li><a href="#new-06">New in 0.6</a></li>
-        <li><a href="#new-05">New in 0.5</a></li>
         <li><a href="#discovery">Suggested routines</a></li>
         <li><a href="#new-teams">Hand-offs &amp; review</a></li>
         <li><a href="#performance">Performance &amp; audits</a></li>
@@ -58,6 +38,40 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-0910" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.10</p>
+      <h2>How much of each AI account is left, and a Done mark on finished replies</h2>
+      <p>Each Claude or Codex sign-in shows how much of its 5-hour and weekly limit is left. A job's last reply shows a Done mark, and a reply that needs your OK has Approve under it. The Another app search lists every app once, with how it signs in.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="account-usage">How much of each AI account is left</h3>
+        <p>Each Claude or Codex sign-in on <strong>Apps &amp; accounts</strong> shows two thin bars, like <strong>5-hour · 93% left · resets 22:29</strong> and <strong>Weekly · 44% left</strong>. A bar turns amber below 20% left. Claude's numbers come in with every turn; <strong>Check now</strong> reads them when you ask, at most once a minute and never by itself. A failed check says why, like <strong>Codex is signed out</strong>. The model badge on a bot's avatar shows the same line. API-key accounts show no bars.</p>
+      </div>
+      <div class="frame">{{shot:v0910-account-usage|Settings › Apps & accounts with "Sign-ins and settings" open. The Claude Code CLI sign-in card shows "Usage · checked 14 min ago" with a Check now button, a 5-hour bar at 93% left (resets 10:34 AM) and an amber Weekly bar at 17% left (resets Mon 12:13 PM). The OpenAI Codex CLI card below reads "Usage · press Check now".}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="reply-chrome">Replies say when a job is done</h3>
+        <p>A job's final reply gets a <strong>Done</strong> mark after the bot's name, or what checked it: <strong>Checked</strong>, <strong>Partly checked</strong>, <strong>Check failed</strong> or <strong>Not checked</strong>. When a reply asks for your OK, <strong>Approve</strong> and <strong>Change…</strong> sit under it. The name line is just name, mark, time and <strong>Details</strong>, which says in words why that bot answered.</p>
+      </div>
+      <div class="frame">{{shot:v0910-reply-done|Ann's direct chat. Her reply on the Ridgeline 2P size chart (12 sizes match the supplier sheet, floor 218 × 132 cm, peak height 104 cm, packed weight 1.9 kg) ends "Done: the Ridgeline 2P size chart matches the supplier sheet." A holographic Checked mark sits by her name, and the line under the reply reads "Checked: 2 of 2 checks passed, the criterion has evidence."}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="one-app-search">Every app in one search</h3>
+        <p>The <strong>Another app</strong> search on <strong>Apps &amp; accounts</strong> shows Composio apps, built-in tools and tool servers from the public directory in one list, one row per app. Each row says where it comes from and how it signs in, like <strong>Sign in with your Notion account</strong>; other ways to add the same app fold under it.</p>
+      </div>
+      <div class="frame">{{shot:v0910-one-app-search|Settings › Apps & accounts, Another app, searching "stripe". Stripe is one row with "Official · stripe.com", "Sign in with your Stripe account" and Connect. Its "2 other ways to add it" is open: Through Composio (sign in with your account, Connect) and Community · github.com/paylabs (your own Stripe API key, Add). Stripe Helper is its own row (Community · stripe-helper.com, your own Stripe API key).}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0910" class="span3"><h3>Smaller changes in 0.9.10</h3><p>Memory search finds notes by meaning when the space has an OpenAI key or a local Ollama embedding model. Bots can quote a space's own documents from its docs folder, checked word for word. Dev mode offers a modern-web skill once for web projects, so bots look up Google Chrome's Modern Web Guidance before writing browser code.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-099" class="fgroup">
   <div class="wrap">
@@ -173,9 +187,9 @@ card_art: team
     <div class="row">
       <div class="row-copy">
         <h3 id="find-a-tool">Find a tool in one search box</h3>
-        <p>One search box finds a tool to add, in <strong>Add a tool</strong> and on <strong>Apps &amp; accounts</strong>. Suggestions start from the first letter and forgive typos and short names ("gmial", "11labs", "pg"). Results come in three groups: <strong>Built in</strong>, <strong>Through Composio</strong>, and <strong>From the public directory</strong>, a copy of the official MCP Registry that kwant refreshes every 6 hours. <strong>Add &amp; test</strong> installs a tool from there in one step. Connecting a Composio app before Composio is set up asks for the key right there.</p>
+        <p>One search box finds a tool to add, in <strong>Add a tool</strong> and on <strong>Apps &amp; accounts</strong>. Suggestions start from the first letter and forgive typos and short names ("gmial", "11labs", "pg"). Results come from three places: <strong>Built in</strong>, <strong>Through Composio</strong>, and <strong>the public directory</strong>, a copy of the official MCP Registry that kwant refreshes every 6 hours. Since 0.9.10, Apps &amp; accounts shows each app once, with where it comes from and how it signs in. <strong>Add &amp; test</strong> installs a tool from there in one step. Connecting a Composio app before Composio is set up asks for the key right there.</p>
       </div>
-      <div class="frame">{{video:clip-v097-find-a-tool|Find a tool. Typing "gmai" shows Gmail and Mailchimp through Composio, and Gmail Tools and MailSweep from the public directory. Typing "11labs" shows ElevenLabs through Composio and Voicebox from the public directory. Add opens the form with Voicebox and https://voices.example.com/mcp, then Add & test. It ends on the tools list with Voicebox "Working · 2 tools" (text to speech, list voices).}}</div>
+      <div class="frame">{{shot:v097-find-a-tool|Apps & accounts, Another app, searching "stripe": one Stripe row (Official · stripe.com, Sign in with your Stripe account, 2 other ways to add it) and a Stripe Helper row, with the keyboard hints below.}}</div>
     </div>
     <ul class="flist">
       <li id="fixes-097" class="span3"><h3>Smaller changes in 0.9.7</h3><p>Through Composio finds any Composio app. Signing in to tool servers like ElevenLabs works.</p></li>
