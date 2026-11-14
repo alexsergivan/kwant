@@ -196,8 +196,8 @@ test('monthly and cron schedules in plain words', () => {
   assert.equal(c.monthDaysText([15, 'last', 1]), 'the 1st, 15th and last day');
   assert.equal(c.monthDaysText([2, 3, 11, 12, 13, 21, 22, 23]), 'the 2nd, 3rd, 11th, 12th, 13th, 21st, 22nd and 23rd');
   assert.equal(c.monthDaysText(['last']), 'the last day');
-  assert.equal(c.describeSchedule({ type: 'monthly', time: '09:00', days: [1], tz: 'UTC' }), 'Every month on the 1st at 09:00 (UTC)');
-  assert.equal(c.describeSchedule({ type: 'cron', expression: '0 9 * * MON#2', tz: 'UTC' }), 'Custom rule 0 9 * * MON#2 (UTC)');
+  assert.equal(c.describeSchedule({ type: 'monthly', time: '09:00', days: [1], tz: 'UTC' }), 'Every month on the 1st at 09:00, UTC');
+  assert.equal(c.describeSchedule({ type: 'cron', expression: '0 9 * * MON#2', tz: 'UTC' }), 'Custom rule 0 9 * * MON#2, UTC');
   assert.equal(c.describeSchedule({ type: 'lunar' }), 'Unknown schedule');
 });
 
@@ -207,4 +207,59 @@ test('memory tab lists pinned notes first, then newest first', () => {
   assert.deepEqual(order, ['d', 'b', 'c', 'a']);
   assert.deepEqual(c.memoriesForDisplay([m('x', undefined)]).map((x) => x.id), ['x'], 'older servers send no pinned field');
   assert.equal(c.MAX_PINNED, 10);
+});
+
+// Routines setup D, E, F (0.9.9)
+
+test('zoneLabel: a saved time zone as a city', () => {
+  assert.equal(c.zoneLabel('Europe/Kyiv'), 'Kyiv time');
+  assert.equal(c.zoneLabel('America/New_York'), 'New York time');
+  assert.equal(c.zoneLabel('America/Argentina/Buenos_Aires'), 'Buenos Aires time');
+  for (const z of ['UTC', 'Etc/UTC', 'Etc/GMT']) assert.equal(c.zoneLabel(z), 'UTC', z);
+  assert.equal(c.zoneLabel('Etc/GMT-3'), 'UTC+3', 'Etc signs are inverted');
+  assert.equal(c.zoneLabel('Etc/GMT+5'), 'UTC\u22125');
+  for (const odd of ['', 'Kyiv', 'EST5EDT', 'not a zone/ x', '<b>/x']) assert.equal(c.zoneLabel(odd), odd, odd);
+});
+
+test('zoneOffset: Intl shortOffset, or null for a zone Intl does not know', () => {
+  assert.equal(c.zoneOffset('UTC'), 'GMT');
+  assert.equal(c.zoneOffset('Europe/Kyiv', new Date('2026-11-13T12:00:00Z')), 'GMT+2');
+  assert.equal(c.zoneOffset('Europe/Kyiv', new Date('2026-07-01T12:00:00Z')), 'GMT+3');
+  assert.equal(c.zoneOffset('Mars/Olympus'), null);
+});
+
+test('Weekly starts on today only (a pinned Friday gives Fri)', () => {
+  assert.deepEqual(c.emptyScheduleForm(new Date(2026, 10, 13, 12), 'UTC').weekdays, ['fri']);
+  assert.deepEqual(c.emptyScheduleForm(new Date(2026, 10, 15, 12), 'UTC').weekdays, ['sun']);
+  // A saved Mon–Fri routine keeps its days.
+  const saved = { type: 'weekly', time: '08:30', weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'], tz: 'Europe/Kyiv' };
+  assert.deepEqual(c.formFromSchedule(saved, new Date(2026, 10, 13, 12)).weekdays, saved.weekdays);
+  assert.deepEqual(c.scheduleFromForm(c.formFromSchedule(saved), NOW).schedule, saved);
+});
+
+test('sameDays: the Weekdays chip is on only for exactly Mon–Fri', () => {
+  assert.equal(c.sameDays(['fri', 'mon', 'tue', 'wed', 'thu'], c.WORK_WEEK), true);
+  assert.equal(c.sameDays(['mon', 'tue', 'wed', 'thu'], c.WORK_WEEK), false);
+  assert.equal(c.sameDays(['mon', 'tue', 'wed', 'thu', 'fri', 'sat'], c.WORK_WEEK), false);
+});
+
+test('describeSchedule writes the zone as a city and names common day sets', () => {
+  const w = (weekdays) => c.describeSchedule({ type: 'weekly', time: '09:00', weekdays, tz: 'Europe/Kyiv' });
+  assert.equal(c.describeSchedule({ type: 'daily', time: '09:00', tz: 'Europe/Kyiv' }), 'Every day at 09:00, Kyiv time');
+  assert.equal(w(['mon']), 'Every Monday at 09:00, Kyiv time');
+  assert.equal(w(['fri', 'mon', 'wed']), 'Mon, Wed and Fri at 09:00, Kyiv time');
+  assert.equal(w(['mon', 'tue', 'wed', 'thu', 'fri']), 'Weekdays at 09:00, Kyiv time');
+  assert.equal(w(['sat', 'sun']), 'Weekends at 09:00, Kyiv time');
+  assert.equal(w(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']), 'Every day at 09:00, Kyiv time');
+  assert.equal(w(['tue', 'thu']), 'Tue and Thu at 09:00, Kyiv time');
+  assert.equal(c.describeSchedule({ type: 'monthly', time: '07:00', days: [1], tz: 'Europe/Kyiv' }), 'Every month on the 1st at 07:00, Kyiv time');
+  assert.equal(c.describeSchedule({ type: 'cron', expression: '0 9 * * MON#2', tz: 'Europe/Kyiv' }), 'Custom rule 0 9 * * MON#2, Kyiv time');
+  assert.equal(c.describeSchedule({ type: 'interval', every_minutes: 120 }), 'Every 2 h');
+});
+
+test('firstLine: the first non-empty line, and whether more follows', () => {
+  assert.deepEqual(c.firstLine('Check prices.'), { line: 'Check prices.', more: false });
+  assert.deepEqual(c.firstLine('\n  \n  Check prices.  \r\nThen post.\n'), { line: 'Check prices.', more: true });
+  assert.deepEqual(c.firstLine('Only one\n\n   \n'), { line: 'Only one', more: false });
+  assert.deepEqual(c.firstLine(''), { line: '', more: false });
 });
