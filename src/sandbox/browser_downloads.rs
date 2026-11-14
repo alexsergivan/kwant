@@ -145,7 +145,8 @@ impl DownloadCenter {
         let (tx, rx) = mpsc::channel(8);
         let (ready_tx, ready_rx) = oneshot::channel();
         let center = Self { shared: shared.clone(), jobs: tx };
-        tokio::spawn(run(ctrl, workspace, local, browser_context_id, staging_root, shared, rx, ready_tx));
+        let session = Session { workspace, local, browser_context_id, staging_root };
+        tokio::spawn(run(ctrl, session, shared, rx, ready_tx));
         let _ = tokio::time::timeout(Duration::from_secs(2), ready_rx).await;
         center
     }
@@ -356,16 +357,23 @@ impl DownloadCenter {
     }
 }
 
-async fn run(
-    ctrl: BrowserController,
+/// A session's own, unchanging settings for [`run`], grouped so the function stays under
+/// clippy's argument-count lint.
+struct Session {
     workspace: PathBuf,
     local: bool,
     browser_context_id: Option<String>,
     staging_root: PathBuf,
+}
+
+async fn run(
+    ctrl: BrowserController,
+    session: Session,
     shared: Arc<StdMutex<Shared>>,
     mut jobs: mpsc::Receiver<Job>,
     ready: oneshot::Sender<()>,
 ) {
+    let Session { workspace, local, browser_context_id, staging_root } = session;
     let mut ready = Some(ready);
     let _ = tokio::fs::create_dir_all(&staging_root).await;
     loop {
