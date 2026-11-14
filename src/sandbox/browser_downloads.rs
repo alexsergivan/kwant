@@ -134,27 +134,29 @@ impl DownloadCenter {
     /// `browser_context_id`: the session's own context, for a non-default context (VM / job
     /// pages); `None` for a local page, which shares the kwant profile's default context.
     /// `staging_root`: one folder shared by every session, outside any bot's workspace.
-    pub fn start(ctrl: BrowserController, workspace: PathBuf, local: bool, browser_context_id: Option<String>, staging_root: PathBuf) -> Self {
+    ///
+    /// Waits briefly for the first connect-and-setup round trip (`Page.enable`,
+    /// `Browser.setDownloadBehavior`, ...) to land before returning, so that round trip is always
+    /// part of whatever request just opened this session, never something a later, unrelated
+    /// request races against and appears to have caused. A browser slow or unreachable past that
+    /// wait just keeps retrying in the background, same as before this wait existed.
+    pub async fn start(ctrl: BrowserController, workspace: PathBuf, local: bool, browser_context_id: Option<String>, staging_root: PathBuf) -> Self {
         let shared = Arc::new(StdMutex::new(Shared::default()));
         let (tx, rx) = mpsc::channel(8);
+        let (ready_tx, ready_rx) = oneshot::channel();
         let center = Self { shared: shared.clone(), jobs: tx };
-        tokio::spawn(run(ctrl, workspace, local, browser_context_id, staging_root, shared, rx));
+        tokio::spawn(run(ctrl, workspace, local, browser_context_id, staging_root, shared, rx, ready_tx));
+        let _ = tokio::time::timeout(Duration::from_secs(2), ready_rx).await;
         center
     }
 
-    /// One line worth telling the bot about its most recent download, if anything changed: once
-    /// it's reported as finished, cancelled or failed, it won't be reported again.
-    pub fn report(&self) -> Option<Value> {
-        let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = shared.download.as_mut()?;
-        if entry.reported_terminal {
-            return None;
-        }
+    /// `entry`'s current status as the JSON a bot sees, without touching `reported_terminal`.
+    fn entry_value(entry: &DownloadEntry) -> Value {
         let pct = entry
             .total
             .filter(|t| *t > 0)
             .map(|t| (entry.received.saturating_mul(100) / t).min(100));
-        let value = match &entry.status {
+        match &entry.status {
             DlStatus::InProgress => json!({
                 "status": "in_progress",
                 "name": entry.name,
@@ -170,20 +172,41 @@ impl DownloadCenter {
                     human_size(entry.received),
                     rel
                 );
-                entry.reported_terminal = true;
                 json!({"status": "done", "name": entry.name, "path": rel, "note": note})
             }
             DlStatus::Cancelled => {
                 let note = format!("The download of {} was stopped: it passed 1 GB.", entry.name);
-                entry.reported_terminal = true;
                 json!({"status": "cancelled", "name": entry.name, "note": note})
             }
             DlStatus::Failed(why) => {
                 let note = format!("The download of {} failed: {why}", entry.name);
-                entry.reported_terminal = true;
                 json!({"status": "failed", "name": entry.name, "note": note})
             }
-        };
+        }
+    }
+
+    /// Current download info, if any, without marking a terminal state consumed: safe to call
+    /// any number of times, unlike `report` below. For a page read that's a side effect of
+    /// something else (an action's own before/after snapshot, a navigation's result) rather than
+    /// the bot's dedicated "did it finish" check, which must still see the terminal state once
+    /// itself.
+    pub fn peek(&self) -> Option<Value> {
+        let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        Some(Self::entry_value(shared.download.as_ref()?))
+    }
+
+    /// One line worth telling the bot about its most recent download, if anything changed: once
+    /// it's reported as finished, cancelled or failed, it won't be reported again.
+    pub fn report(&self) -> Option<Value> {
+        let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = shared.download.as_mut()?;
+        if entry.reported_terminal {
+            return None;
+        }
+        let value = Self::entry_value(entry);
+        if !matches!(entry.status, DlStatus::InProgress) {
+            entry.reported_terminal = true;
+        }
         Some(value)
     }
 
@@ -341,7 +364,9 @@ async fn run(
     staging_root: PathBuf,
     shared: Arc<StdMutex<Shared>>,
     mut jobs: mpsc::Receiver<Job>,
+    ready: oneshot::Sender<()>,
 ) {
+    let mut ready = Some(ready);
     let _ = tokio::fs::create_dir_all(&staging_root).await;
     loop {
         sweep_incoming(&staging_root).await;
@@ -363,6 +388,9 @@ async fn run(
         if setup(&mut ws, &msg_id, &shared, &staging_root, local, browser_context_id.as_deref()).await.is_err() {
             tokio::time::sleep(RETRY_WAIT).await;
             continue;
+        }
+        if let Some(tx) = ready.take() {
+            let _ = tx.send(());
         }
         let mut follow = tokio::time::interval(FOLLOW_EVERY);
         follow.tick().await;
@@ -654,6 +682,7 @@ async fn describe_accept(ws: &mut WsStream, msg_id: &AtomicU64, backend_node_id:
 async fn land_download(workspace: PathBuf, shared: Arc<StdMutex<Shared>>, guid: String, name: String, staged_path: String) {
     let landing_guid = guid.clone();
     let result = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
+        std::fs::create_dir_all(&workspace)?;
         let root = safe_fs::Dir::open_strict(&workspace)?;
         let dir = root.make_dirs(Path::new("downloads"))?;
         let mut src = std::fs::File::open(&staged_path)?;

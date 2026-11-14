@@ -318,7 +318,7 @@ async fn browser_upload_answers_the_pages_own_picker_with_a_workspace_file() {
     let (page, is_error) = self_tool(&e.app, &token, "browser_upload", json!({"files": ["downloads/clip.mp4"]})).await;
     assert!(!is_error, "{page}");
     assert!(page["result"].as_str().unwrap_or("").contains("clip.mp4"), "{page}");
-    assert!(page["text"].as_str().unwrap_or("").contains("picked:clip.mp4"), "the page's own change handler should have seen the file: {page}");
+    assert!(page["title"].as_str().unwrap_or("").contains("picked:clip.mp4"), "the page's own change handler should have seen the file: {page}");
 
     mcp_runtime::finish_turn(&e.state, &token).await;
 }
@@ -344,7 +344,7 @@ async fn browser_upload_answers_the_pages_own_picker_with_a_chat_attachment() {
 
     // A real chat attachment only gets its context_id once it's actually sent with a message
     // (see `attachments::attach_to_message`); link it to this turn's own chat the same way.
-    let attachment_id = upload_attachment(&e.state, "post.mov", b"attachment bytes, also not a real video").await;
+    let attachment_id = upload_attachment(&e.state, "post.mov", b"\x00\x00\x00\x14ftypqt  attachment bytes, also not a real video").await;
     e.state.db.link_attachments(std::slice::from_ref(&attachment_id), "msg-a", "chat-a", Some("chat-a"), None, None).await.unwrap();
 
     let base = serve().await;
@@ -356,7 +356,7 @@ async fn browser_upload_answers_the_pages_own_picker_with_a_chat_attachment() {
 
     let (page, is_error) = self_tool(&e.app, &token, "browser_upload", json!({"files": [attachment_id]})).await;
     assert!(!is_error, "{page}");
-    assert!(page["text"].as_str().unwrap_or("").contains("picked:post.mov"), "{page}");
+    assert!(page["title"].as_str().unwrap_or("").contains("picked:post.mov"), "{page}");
 
     mcp_runtime::finish_turn(&e.state, &token).await;
 }
@@ -380,8 +380,11 @@ async fn browser_upload_refuses_an_attachment_from_another_chat() {
     };
     let (_ctx, token) = mcp_runtime::prepare_turn_with_self(&e.state, bot, None, None, Some(scope)).await.unwrap();
 
+    let (_, workspace) = resolve_sandbox_target_info(&e.state, &bot.id).await.expect("bot workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
     // Linked to a different chat than the one this turn runs in.
-    let attachment_id = upload_attachment(&e.state, "secret.mov", b"someone else's chat's file").await;
+    let attachment_id = upload_attachment(&e.state, "secret.mov", b"\x00\x00\x00\x14ftypqt  someone else's chat's file").await;
     e.state.db.link_attachments(std::slice::from_ref(&attachment_id), "msg-b", "chat-b", Some("chat-b"), None, None).await.unwrap();
 
     let base = serve().await;
@@ -432,8 +435,8 @@ async fn browser_upload_fills_a_multiple_file_input_in_one_call() {
     let (page, is_error) =
         self_tool(&e.app, &token, "browser_upload", json!({"files": ["downloads/one.txt", "downloads/two.txt"]})).await;
     assert!(!is_error, "{page}");
-    let text = page["text"].as_str().unwrap_or("");
-    assert!(text.contains("picked:one.txt,two.txt"), "the page's own change handler should have seen both files: {page}");
+    let title = page["title"].as_str().unwrap_or("");
+    assert!(title.contains("picked:one.txt,two.txt"), "the page's own change handler should have seen both files: {page}");
 
     mcp_runtime::finish_turn(&e.state, &token).await;
 }
@@ -456,6 +459,7 @@ async fn browser_upload_is_refused_with_no_picker_open() {
     assert!(!is_error, "{page}");
 
     let (_, workspace) = resolve_sandbox_target_info(&e.state, &bot.id).await.expect("bot workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(workspace.join("stray.txt"), b"nothing should want this").unwrap();
     let (page, is_error) = self_tool(&e.app, &token, "browser_upload", json!({"files": ["stray.txt"]})).await;
     assert!(is_error, "{page}");

@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
-- A bot's own browser now saves what it downloads straight into its folder (`downloads/`, never overwriting an existing file) and reports progress as it reads the page; a new `browser_upload` tool answers a file picker the page itself opens, with a file from the bot's folder or a chat attachment.
+- Bots can download and upload files in their browser: a download is saved in the bot's own folder under downloads/ and never replaces a file already there, and a new browser_upload tool gives a page's file picker a file from the bot's folder or a chat attachment. Under Ask, each upload asks you first.
 
 ## [Mac 0.9.10] - 2026-11-14
 

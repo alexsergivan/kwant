@@ -6375,17 +6375,23 @@ pub async fn interact_sandbox(
 /// Compact, text-only page state for agents (no base64 image to wade through).
 async fn sandbox_page_state(ctrl: &crate::sandbox::BrowserController) -> serde_json::Value {
     let snap = ctrl.snapshot().await;
-    page_state_from(ctrl, snap, "").await
+    page_state_from(ctrl, snap, "", false).await
 }
 
 /// [`sandbox_page_state`] from a snapshot already read (`None`: the page couldn't be read).
 /// `find`: the bot's words for what it looks for, to list the matching controls first on a page
 /// with more than [`reads::SHOWN_CONTROLS`](crate::sandbox::reads::SHOWN_CONTROLS). `hash` says
-/// what the read shows, for [`get_sandbox_page`]'s `since`.
+/// what the read shows, for [`get_sandbox_page`]'s `since`. `consume`: whether a download's
+/// terminal status, once reported here, should stop being reported again. Only the one dedicated
+/// `browser_page` read a bot polls to learn a download finished should pass `true`; every other
+/// read that happens to build a page state as a side effect of something else (an action's own
+/// before/after snapshot, a navigation's result) must pass `false`, or it can win the race and
+/// swallow the terminal report before the bot's own poll ever sees it.
 async fn page_state_from(
     ctrl: &crate::sandbox::BrowserController,
     snap: Option<crate::sandbox::progress::Snapshot>,
     find: &str,
+    consume: bool,
 ) -> serde_json::Value {
     use crate::sandbox::reads;
     let (url, title, text) = match snap {
@@ -6422,7 +6428,8 @@ async fn page_state_from(
     if let Some(captcha) = captcha {
         page["captcha"] = json!(captcha);
     }
-    if let Some(download) = ctrl.latest_download_report() {
+    let download = if consume { ctrl.latest_download_report() } else { ctrl.peek_download_report() };
+    if let Some(download) = download {
         page["download"] = download;
     }
     if let Some(chooser) = ctrl.open_chooser_report() {
@@ -6769,7 +6776,7 @@ pub async fn get_sandbox_page(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let snap = ctrl.snapshot().await;
-    let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default()).await;
+    let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default(), true).await;
     if query.wants_blocks() {
         add_blocks(&ctrl, &mut page).await;
     }
@@ -6918,7 +6925,14 @@ async fn resolve_upload_files(
         }
         let rel = std::path::Path::new(raw.trim_start_matches('/'));
         let dir = safe_fs::Dir::open_strict(workspace).map_err(|_| "Your folder couldn't be opened.".to_string())?;
-        let mut file = dir.open_file(rel).map_err(|_| format!("{raw} isn't a file in your folder."))?;
+        // An id-shaped `raw` that fell through here might be an attachment id in a chat `caller`
+        // can't see: echoing it back would tell the call it exists, so this refusal drops it
+        // (same wording as a path that isn't found); a path keeps its name, since that's never
+        // someone else's id.
+        let mut file = dir.open_file(rel).map_err(|_| match uuid::Uuid::parse_str(raw) {
+            Ok(_) => "isn't a file in your folder.".to_string(),
+            Err(_) => format!("{raw} isn't a file in your folder."),
+        })?;
         let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
         let last_modified_ms = chrono::Utc::now().timestamp_millis();
         if local {
@@ -7005,7 +7019,7 @@ pub async fn act_sandbox_allowed(
     let here = before.as_ref().map(|b| b.url.clone()).unwrap_or_default();
     let repeat = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).before(&here, key.as_deref());
     if let Some(stop) = repeat {
-        let mut page = page_state_from(&ctrl, before, "").await;
+        let mut page = page_state_from(&ctrl, before, "", false).await;
         page["stalled"] = json!(true);
         page["error"] = json!(stop);
         return Ok(Json(page));
@@ -7059,10 +7073,23 @@ pub async fn act_sandbox_allowed(
                     Some((_, workspace)) => {
                         let local = state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local;
                         match resolve_upload_files(&state, &workspace, local, &files, caller).await {
-                            Ok(resolved) => ctrl
-                                .answer_upload(local, resolved)
-                                .await
-                                .map(|names| format!("uploaded {}", names.join(", "))),
+                            Ok(resolved) => {
+                                let requested = resolved.len();
+                                ctrl.answer_upload(local, resolved).await.map(|names| {
+                                    let mut message = format!(
+                                        "Gave the page {}. Check the page shows it before you go on.",
+                                        names.join(", ")
+                                    );
+                                    if names.len() < requested {
+                                        if let Some(first) = names.first() {
+                                            message.push_str(&format!(
+                                                " This picker takes one file, so only {first} was used."
+                                            ));
+                                        }
+                                    }
+                                    message
+                                })
+                            }
                             Err(e) => Err(e),
                         }
                     }
@@ -7107,7 +7134,7 @@ pub async fn act_sandbox_allowed(
         }
     }
     let stall = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).after(changed.is_some());
-    let mut page = page_state_from(&ctrl, after, "").await;
+    let mut page = page_state_from(&ctrl, after, "", false).await;
     page["changed"] = json!(changed.as_deref().unwrap_or("Nothing on the page changed."));
     match result {
         Ok(done) => page["result"] = json!(done),
