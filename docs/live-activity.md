@@ -50,6 +50,7 @@ turn's list (keyed by `turn_id`); append it if it's new.
 | `ref_id` | optional. For `approval` it is the approval ticket, and for `human_step` it is the human-step id. Use it to link to the card |
 | `started_at`, `ended_at` | RFC 3339 with milliseconds. `ended_at` is missing while the step is open |
 | `duration_ms` | set once the step ends |
+| `page_title` | optional (0.9.8). On a `tool` step whose tool opens a page in the bot's browser (`browser_open`, `browser_navigate`, `navigate`, `open_url`, under any `mcp__<server>__` prefix), once it ends `ok`: the title of the page it landed on, redacted, ≤160 chars. Missing when the page had no title, and on replies saved before 0.9.8 |
 
 **Thinking text streams live** as the existing `ThinkingDelta` event (`data` is a string chunk,
 scoped to the turn). The `activity` step of kind `thinking` only marks start (`running`) and end

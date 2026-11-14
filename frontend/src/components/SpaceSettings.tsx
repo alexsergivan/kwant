@@ -135,6 +135,12 @@ export const SpaceSettings: React.FC<Props> = (p) => {
     if (rootRef.current?.contains(a) || a?.closest('[data-rail-space]')) return;
     rootRef.current?.querySelector<HTMLElement>('#space-settings-title')?.focus();
   }, []);
+  // Phone: the tab strip scrolls sideways, so bring the open tab into view (from the sidebar's
+  // Routines row it would sit off the right edge; scroll-mx-6 keeps it clear of the edge fade). Instant: no motion.
+  const currentTabRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    currentTabRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [tab, scope]);
 
   return (
     // A full-screen dialog on phones. On desktop it fills the space's area beside the space rail,
@@ -189,12 +195,13 @@ export const SpaceSettings: React.FC<Props> = (p) => {
               <button
                 key={t.id}
                 type="button"
+                ref={tab === t.id ? currentTabRef : undefined}
                 aria-current={tab === t.id ? 'page' : undefined}
                 onClick={() => {
                   playSfx('click');
                   onTab(t.id);
                 }}
-                className={`shrink-0 flex items-center gap-2 px-3 py-1.5 md:py-2 rounded-full md:rounded-lg text-xs font-medium transition-colors ${
+                className={`shrink-0 scroll-mx-6 flex items-center gap-2 px-3 py-1.5 md:py-2 rounded-full md:rounded-lg text-xs font-medium transition-colors ${
                   tab === t.id ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 border border-transparent'
                 }`}
               >
