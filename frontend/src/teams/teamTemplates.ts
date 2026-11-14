@@ -3,6 +3,7 @@
 // next-077/api.md (Lin, branch lin-077-teams). The client turns api.md's shapes into the ones below;
 // tests and shots run against the wire-format fixtures in templateFixtures.ts and suggestFixtures.ts.
 import { personFetch } from '../auth';
+import { timeText } from '../clock';
 
 // ---------------------------------------------------------------------------------------------------
 // Types. The internal shapes the sheet uses; `Wire*` are api.md's, turned into these by the client.
@@ -213,11 +214,7 @@ export function needProblem(raw: string): string | null {
 export const NEED_FAILED = 'Couldn’t suggest a team this time. Try again, or start from a ready-made team.';
 
 /** A time from the server (`until`, RFC 3339) as the person's clock time, or null. */
-const clock = (v: unknown): string | null => {
-  if (typeof v !== 'string') return null;
-  const d = new Date(v);
-  return Number.isFinite(d.getTime()) ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
-};
+const clock = (v: unknown): string | null => (typeof v === 'string' ? timeText(v) : null);
 
 /**
  * What a failed need suggestion says: { head, reason }. `head` is the brief's line; `reason` is the

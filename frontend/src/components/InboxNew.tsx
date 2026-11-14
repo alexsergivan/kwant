@@ -55,6 +55,7 @@ import {
   useInbox,
   inboxStore,
 } from '../inboxStore';
+import { timeText } from '../clock';
 
 export const WIDE_QUERY = '(min-width: 1024px)';
 
@@ -112,12 +113,9 @@ const okBtn =
 const plainBtn =
   'kw-focus inline-flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed';
 
-/** "14:08": the queue shows the clock, like the mockups. */
+/** "2:08 PM" / "14:08": the queue shows the clock, in the device's own format. */
 export function clock(ts: string): string {
-  const t = Date.parse(ts);
-  if (Number.isNaN(t)) return '';
-  const d = new Date(t);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return timeText(ts) ?? '';
 }
 
 /**

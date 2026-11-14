@@ -20,7 +20,7 @@ test('reload with 1 held message: its line comes back from the status, with Try 
   assert.deepEqual([rows[0].messageId, rows[0].kwantId, rows[0].name, rows[0].reason], ['m-1', 'jun', 'Juno', 'stuck']);
   const line = m.heldLine(rows[0], status.jun);
   assert.equal(line.tryAgain, true);
-  assert.match(line.text, /^Waiting for Juno: Juno stopped after 2 tries at 04:05\. Your message is kept/);
+  assert.match(line.text, /^Waiting for Juno: Juno stopped after 2 tries at 4:05 AM\. Your message is kept/);
 });
 
 test('reload with 3 held messages to one bot: every one gets its own line; hand-offs get none', () => {
@@ -44,7 +44,7 @@ test('a waits_on_you hold rebuilt from the status keeps the question time; unkno
   const s = m.parseH4Status({ kwant_id: 'lin', status: 'needs_you', reason_code: 'asked_question', question: { id: 'q', asked_at: '2026-11-11T03:58:00Z' }, held: [msg('m-7', { reason_code: 'waits_on_you' })] });
   const [row] = m.heldMessages([], { lin: s }, nameOf);
   assert.equal(row.reason, 'waits_on_you');
-  assert.match(m.heldLine(row, s).text, /^Queued for Lin: Lin is waiting for your answer to its question \(03:58\)\./);
+  assert.match(m.heldLine(row, s).text, /^Queued for Lin: Lin is waiting for your answer to its question \(3:58 AM\)\./);
   const [anon] = m.heldMessages([], { zed: { ...s, kwant_id: 'zed' } }, nameOf);
   assert.equal(anon.name, 'The bot');
 });

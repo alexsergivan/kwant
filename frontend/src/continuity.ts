@@ -2,6 +2,7 @@
 
 import type { DeletedSkill, Skill } from './skills';
 import type { Recording } from './showOnce';
+import { wallClock, weekdayClock } from './clock';
 
 export const MAX_INSTRUCTIONS = 4000;
 export const MAX_MEMORY = 500;
@@ -532,15 +533,15 @@ export function describeSchedule(s: Schedule): string {
     case 'once':
       return `Once, ${formatWhen(s.at)}`;
     case 'daily':
-      return `Every day at ${s.time}, ${zoneLabel(s.tz)}`;
+      return `Every day at ${wallClock(s.time)}, ${zoneLabel(s.tz)}`;
     case 'weekly':
-      return `${weekdaysText(s.weekdays)} at ${s.time}, ${zoneLabel(s.tz)}`;
+      return `${weekdaysText(s.weekdays)} at ${wallClock(s.time)}, ${zoneLabel(s.tz)}`;
     case 'interval':
       return s.every_minutes % 60 === 0
         ? `Every ${s.every_minutes / 60} h`
         : `Every ${s.every_minutes} min`;
     case 'monthly':
-      return `Every month on ${monthDaysText(s.days)} at ${s.time}, ${zoneLabel(s.tz)}`;
+      return `Every month on ${monthDaysText(s.days)} at ${wallClock(s.time)}, ${zoneLabel(s.tz)}`;
     case 'cron':
       return `Custom rule ${s.expression}, ${zoneLabel(s.tz)}`;
     default:
@@ -548,11 +549,9 @@ export function describeSchedule(s: Schedule): string {
   }
 }
 
-export function formatWhen(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+/** "Mon, Nov 16, 8:30 AM" on the device's own clock, or "—". */
+export function formatWhen(iso: string | null, locale?: string): string {
+  return weekdayClock(iso, { locale }) ?? '—';
 }
 
 /** Time zones for the picker: the browser's list when it has one, with the current value kept. */

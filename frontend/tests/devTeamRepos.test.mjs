@@ -153,7 +153,7 @@ test('two repos: "Watching 2 repos" over two rows, open', () => {
   const l = m.statusLine(state({ repos: [APP, SITE] }), TEAMS);
   assert.equal(text(l), 'Watching 2 repos');
   assert.equal(l.collapsed, false);
-  assert.deepEqual(l.rows.map((r) => [r.team, r.repo.repo, r.repo.branch, r.state.replace(/\d\d:\d\d( [AP]M)?/, 'HH:MM'), r.origin, r.action]), [
+  assert.deepEqual(l.rows.map((r) => [r.team, r.repo.repo, r.repo.branch, r.state.replace(/\d{1,2}:\d\d( [AP]M)?/, 'HH:MM'), r.origin, r.action]), [
     ['App', 'demo-org/app', 'main', 'Watching · checked HH:MM', 'From App’s folder', null],
     ['Site', 'demo-org/site', 'trunk', 'Watching · checked HH:MM', 'From Site’s repo link', null],
   ]);
@@ -169,7 +169,7 @@ test('four rows fold behind the summary; each status has its words, LED and at m
   assert.equal(l.collapsed, true);
   assert.equal(text(l), 'Watching 1 of 5 repos · 2 need you', 'needs you = not_connected + error');
   assert.equal(l.led, 'bad', 'a failing repo lights the line red');
-  assert.deepEqual(l.rows.map((r) => [r.state.replace(/\d\d:\d\d( [AP]M)?/, 'HH:MM'), r.led, r.action]), [
+  assert.deepEqual(l.rows.map((r) => [r.state.replace(/\d{1,2}:\d\d( [AP]M)?/, 'HH:MM'), r.led, r.action]), [
     ['Watching · checked HH:MM', 'ok', null],
     ['Needs your GitHub connection', 'warn', 'connect'],
     ['Can’t read it right now. Trying again.', 'bad', 'remove'],
@@ -336,12 +336,12 @@ test('Ada (0.7.2): linking a repo while Dev mode is off sends on: false, and the
   assert.equal(server.state.on, false);
 });
 
-test('Ada (0.7.2): repo rows say "checked 15:30" in the desk header’s 24-hour format', () => {
+test('Ada (0.7.2): repo rows say "checked 3:30 PM" in the desk header’s format (the device clock)', () => {
   const at = new Date(2026, 10, 6, 15, 30).toISOString();
   const l = m.statusLine(state({ repos: [{ ...APP, polled_at: at }, SITE] }), TEAMS);
-  assert.equal(l.rows[0].state, 'Watching · checked 15:30');
+  assert.equal(l.rows[0].state, 'Watching · checked 3:30 PM');
   assert.equal(m.checkedTime(at), m.checkedLabel(Date.parse(at)));
-  assert.equal(m.checkedTime(new Date(2026, 10, 6, 9, 5).toISOString()), '09:05');
+  assert.equal(m.checkedTime(new Date(2026, 10, 6, 9, 5).toISOString()), '9:05 AM');
 });
 
 test('DOM: Esc closes the Link field and puts focus back on its button', async () => {

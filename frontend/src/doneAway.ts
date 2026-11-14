@@ -10,6 +10,7 @@ import { isReview } from './api/inbox';
 import { type Routine, type RoutineRun, type Schedule, WEEKDAYS, monthDaysText } from './continuity';
 import { parseMetaObject } from './questions';
 import { relativeTime } from './away';
+import { dateText, secondsText, timeText, wallClock } from './clock';
 
 export const NEEDS_GROUPS: InboxGroup[] = ['waiting_on_you', 'failed_or_stuck'];
 export const DONE_GROUPS: InboxGroup[] = ['to_review', 'finished'];
@@ -138,32 +139,21 @@ export const doneTitle = (i: InboxItem): string => (isRoutineItem(i) ? routineNa
 
 // ---------- Times ----------
 
-const pad = (n: number) => String(n).padStart(2, '0');
 
-/** "22:51", local time; '' for a bad stamp. */
+/** "10:51 PM" / "22:51", the device's own clock; '' for a bad stamp. */
 export function hm(ts: string | null | undefined): string {
-  const t = Date.parse(ts ?? '');
-  if (Number.isNaN(t)) return '';
-  const d = new Date(t);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return timeText(ts) ?? '';
 }
 
-/** "22:51:02", local time; '' for a bad stamp. */
+/** "10:51:02 PM" / "22:51:02", the device's own clock; '' for a bad stamp. */
 export function hms(ts: string | null | undefined): string {
-  const t = Date.parse(ts ?? '');
-  if (Number.isNaN(t)) return '';
-  const d = new Date(t);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return secondsText(ts) ?? '';
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** "Nov 11", local date; '' for a bad stamp. */
+/** "Nov 11" / "11 Nov", the device's own date; '' for a bad stamp. */
 export function monthDay(ts: string | null | undefined): string {
-  const t = Date.parse(ts ?? '');
-  if (Number.isNaN(t)) return '';
-  const d = new Date(t);
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  return dateText(ts) ?? '';
 }
 
 // ---------- Meta line ----------
@@ -175,15 +165,15 @@ export function scheduleShort(s: Schedule | null | undefined): string {
     case 'once':
       return 'once';
     case 'daily':
-      return `every day ${s.time}`;
+      return `every day ${wallClock(s.time)}`;
     case 'weekly': {
       const days = s.weekdays.length === 7 ? 'day' : s.weekdays.map((d) => WEEKDAYS.find((w) => w.id === d)?.label ?? d).join(', ');
-      return `every ${days} ${s.time}`;
+      return `every ${days} ${wallClock(s.time)}`;
     }
     case 'interval':
       return s.every_minutes % 60 === 0 ? `every ${s.every_minutes / 60} h` : `every ${s.every_minutes} min`;
     case 'monthly':
-      return `monthly on ${monthDaysText(s.days)} ${s.time}`;
+      return `monthly on ${monthDaysText(s.days)} ${wallClock(s.time)}`;
     case 'cron':
       return 'on a custom rule';
     default:

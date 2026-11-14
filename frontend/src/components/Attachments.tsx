@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { AlertCircle, Download, ExternalLink, FileText, Film, Image as ImageIcon, Loader2, RotateCw, X } from 'lucide-react';
 import { POINT_COPY, chipLine, pickName, pickTitle, removeText, rowLine } from '../point';
 import { AttachmentRef, PendingUpload, attachKind, attachmentUrl, fileKind, formatBytes, isInlineImage, isVideo, uploadProgressText } from '../attachments';
+import { timeText } from '../clock';
 
 /**
  * A file on a message: images as a thumbnail (opens full size), everything else as a tile.
@@ -247,7 +248,7 @@ export const ImageViewer: React.FC<{
 
 const timeLabel = (at: string | null) => {
   const t = at ? new Date(at) : null;
-  return t && !Number.isNaN(t.getTime()) ? t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
+  return t && !Number.isNaN(t.getTime()) ? timeText(t) : null;
 };
 
 /**

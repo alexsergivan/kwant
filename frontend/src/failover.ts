@@ -6,6 +6,7 @@ import type { EngineInfo } from './engines';
 import { accountStatus } from './components/EngineAccounts';
 import { Engine, Profile, ProfileSwitchedEvent, accountState, activeLimit } from './profiles';
 import { parseMetaObject } from './questions';
+import { dateText, timeText } from './clock';
 
 export const FAILOVER_CAPTION = 'When one runs out, kwant bots move to the next that still works, in this order.';
 
@@ -34,13 +35,13 @@ export function failoverOrder(profiles: Profile[]): Profile[] {
   );
 }
 
-/** A clock time in the person's own zone: "03:00", with the weekday or date when it isn't today. */
-export function clockTime(at: Date, now = Date.now()): string {
-  const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+/** A clock time in the person's own zone and format: "3:00 AM" or "03:00", with the weekday or date when it isn't today. */
+export function clockTime(at: Date, now = Date.now(), locale?: string): string {
+  const time = timeText(at, { locale }) ?? '';
   const today = new Date(now);
   if (at.toDateString() === today.toDateString()) return time;
   const days = (at.getTime() - now) / 86400_000;
-  const day = days < 6 ? at.toLocaleDateString(undefined, { weekday: 'short' }) : at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const day = days < 6 ? at.toLocaleDateString(locale, { weekday: 'short' }) : dateText(at, { locale });
   return `${day} ${time}`;
 }
 

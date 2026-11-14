@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
+import { loadBundled } from './bundle.mjs';
 
 const load = async (path) => {
   const source = await readFile(new URL(path, import.meta.url), 'utf8');
@@ -9,7 +10,7 @@ const load = async (path) => {
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 };
 
-const c = await load('../src/continuity.ts');
+const c = await loadBundled("export * from './src/continuity.ts';") // imports clock.ts, so it's bundled;
 
 /** A fake server holding the `timezone` setting, with the server's own no-overwrite rule. */
 function server(initial, { getStatus = 200, field = true } = {}) {

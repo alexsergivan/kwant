@@ -3,6 +3,7 @@ import { Loader2, RotateCcw } from 'lucide-react';
 import { DailyUsage, ModelTotals, compactTokens, formatCost, freshOf, modelUsageApi } from '../modelUsage';
 import { type EngineInfo, usageModelLabel } from '../engines';
 import { useEngines } from '../useEngines';
+import { dateText } from '../clock';
 
 interface Day {
   day: string;
@@ -28,8 +29,8 @@ export function groupDays(rows: DailyUsage[]): Day[] {
   return days;
 }
 
-/** "Today", "Yesterday" or "Mon 20 Oct" for a UTC day. */
-export function dayLabel(day: string, now = new Date()): string {
+/** "Today", "Yesterday" or "Mon, Oct 20" / "Mon 20 Oct" for a UTC day, in the device's locale. */
+export function dayLabel(day: string, now = new Date(), locale?: string): string {
   const today = now.toISOString().slice(0, 10);
   const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
   if (day === today) return 'Today';
@@ -37,7 +38,7 @@ export function dayLabel(day: string, now = new Date()): string {
   const d = new Date(`${day}T00:00:00Z`);
   return Number.isNaN(d.getTime())
     ? day
-    : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+    : (dateText(d, { locale, weekday: true, timeZone: 'UTC' }) ?? day);
 }
 
 /** The windows the switch offers. */

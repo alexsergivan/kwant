@@ -739,7 +739,7 @@ test('round 2: the Dev desk header shows the repo chip and when it was checked; 
   const chip = host.querySelector('[data-dev-repo-chip]');
   assert.equal(chip.textContent, 'demo-org/demo-app · trunk');
   assert.ok(chip.classList.contains('hidden') && chip.classList.contains('sm:inline-flex'), 'chip hides at 390');
-  assert.match(host.querySelector('[data-dev-checked]').textContent, /^Checked \d\d:\d\d$/);
+  assert.match(host.querySelector('[data-dev-checked]').textContent, /^Checked \d{1,2}:\d\d [AP]M$/);
   // style-v2 §3: tabs are .kw-dv-tab (44 px under 640 px in devStatus.css), active = 2 px underline.
   for (const t of host.querySelectorAll('[role="tab"]')) assert.ok(t.classList.contains('kw-dv-tab'));
   root.unmount();

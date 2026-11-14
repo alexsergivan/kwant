@@ -1,5 +1,5 @@
 // Waiting checks (0.9.7, #564): a check that waits on an outside service shows as one line on the
-// task card and in the task detail, "Waiting on <label> since 09:12 · next look 09:27", plus the
+// task card and in the task detail, "Waiting on <label> since 9:12 AM · next look 9:27 AM", plus the
 // last line the script printed. Past its deadline the card moves to Needs you with a Wait N h more button.
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -42,15 +42,15 @@ const task = (over = {}) => ({
 
 test('a waiting check reads as one line with its clock times, the deadline and the last printed line', () => {
   const l = w.waitLine(check(), NOW);
-  assert.equal(w.waitLineText(l), 'Waiting on ./gate.sh since 09:12 · next look 09:27');
+  assert.equal(w.waitLineText(l), 'Waiting on ./gate.sh since 9:12 AM · next look 9:27 AM');
   assert.equal(l.last, 'job 42: in_review (run 2)', "the script's last line, not kwant's run header");
-  assert.match(l.deadline, /^If it isn’t ready by \S+ 09:12, it stops and tells you\.$/, 'tells you, as in the 0.9.7 copy');
+  assert.match(l.deadline, /^If it isn’t ready by \S+ 9:12 AM, it stops and tells you\.$/, 'tells you, as in the 0.9.7 copy');
   assert.equal(l.timedOut, false);
 });
 
 test('a next look that is already due says soon; an http check waits on its address', () => {
   const l = w.waitLine(check({ next_run_at: iso('2026-11-13T09:15:00') }), NOW);
-  assert.equal(w.waitLineText(l), 'Waiting on ./gate.sh since 09:12 · next look soon');
+  assert.equal(w.waitLineText(l), 'Waiting on ./gate.sh since 9:12 AM · next look soon');
   const h = w.waitLine(check({ kind: 'http', spec: { url: 'https://status.example/jobs/42', waiting_status: 202 } }), NOW);
   assert.match(w.waitLineText(h), /^Waiting on https:\/\/status\.example\/jobs\/42 since/);
 });
@@ -68,7 +68,7 @@ test('past its deadline the card line says it did not answer, and the detail say
   assert.equal(l.hours, 72);
   assert.equal(w.detailLineText(l), 'No answer in 72 h.');
   assert.equal(w.detailLineText({ ...l, hours: null }), 'No answer in time.');
-  assert.equal(w.detailLineText(w.waitLine(check(), NOW)), 'Waiting since 09:12 · next look 09:27');
+  assert.equal(w.detailLineText(w.waitLine(check(), NOW)), 'Waiting since 9:12 AM · next look 9:27 AM');
   const det = ui.line({ line: l });
   assert.ok(!det.includes('./gate.sh'), 'the detail row already shows the label');
   assert.ok(!det.includes('<svg'), 'no second warning icon in the detail');
@@ -95,10 +95,10 @@ test('the line is labelled for screen readers and never renders HTML from the sc
   const html = ui.line({ line: w.waitLine(check({ output_excerpt: 'run 1: not ready yet\n<img src=x onerror=alert(1)>' }), NOW) });
   assert.ok(!html.includes('<img'), 'output is text');
   assert.ok(html.includes('&lt;img'));
-  assert.ok(html.includes('class="sr-only">Waiting since 09:12, next look 09:27<'));
-  assert.ok(html.includes('>Waiting since 09:12 · next look 09:27<'));
+  assert.ok(html.includes('class="sr-only">Waiting since 9:12 AM, next look 9:27 AM<'));
+  assert.ok(html.includes('>Waiting since 9:12 AM · next look 9:27 AM<'));
   assert.ok(!html.includes('text-zinc-500'), 'small grey text meets AA');
-  assert.ok(ui.line({ line: w.waitLine(check(), NOW), compact: true }).includes('class="sr-only">Waiting on ./gate.sh since 09:12 · next look 09:27<'));
+  assert.ok(ui.line({ line: w.waitLine(check(), NOW), compact: true }).includes('class="sr-only">Waiting on ./gate.sh since 9:12 AM · next look 9:27 AM<'));
   assert.ok(html.includes('It last printed: '));
   assert.ok(html.includes('data-waiting-deadline'));
   assert.ok(html.includes('aria-hidden="true"'));

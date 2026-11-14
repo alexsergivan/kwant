@@ -113,13 +113,13 @@ test('chipView: every state', () => {
   assert.equal(ck.icon, 'loader');
   assert.equal(ck.text, 'Rigel is checking the claims');
   const dh = v(watch({ state: 'dont_hold', last_check: lastCheck({ claims: 3, dont_hold: 1, needs_you: 1, cant_tell: 0, holds: 1 }) }));
-  assert.deepEqual([dh.text, dh.tone, dh.click], ['1 claim doesn’t hold · 18:14', 'rose', 'report']);
-  assert.equal(v(watch({ state: 'dont_hold', last_check: lastCheck({ claims: 3, dont_hold: 2, needs_you: 0, cant_tell: 0, holds: 1 }) })).text, '2 claims don’t hold · 18:14');
+  assert.deepEqual([dh.text, dh.tone, dh.click], ['1 claim doesn’t hold · 6:14 PM', 'rose', 'report']);
+  assert.equal(v(watch({ state: 'dont_hold', last_check: lastCheck({ claims: 3, dont_hold: 2, needs_you: 0, cant_tell: 0, holds: 1 }) })).text, '2 claims don’t hold · 6:14 PM');
   const ah = v(watch({ state: 'all_hold', last_check: lastCheck({ claims: 4, dont_hold: 0, needs_you: 0, cant_tell: 0, holds: 4 }) }));
-  assert.deepEqual([ah.text, ah.tone], ['All 4 claims hold · 18:14', 'teal']);
+  assert.deepEqual([ah.text, ah.tone], ['All 4 claims hold · 6:14 PM', 'teal']);
   const ct = v(watch({ state: 'cant_tell', last_check: lastCheck({ claims: 4, dont_hold: 0, needs_you: 0, cant_tell: 1, holds: 3 }) }));
-  assert.deepEqual([ct.text, ct.tone], ['4 claims checked · 18:14', 'muted']);
-  assert.equal(v(watch({ state: 'same_stop', last_check: lastCheck({ claims: 1, dont_hold: 0, needs_you: 0, cant_tell: 0, holds: 1 }) })).text, 'No change since the 18:14 check');
+  assert.deepEqual([ct.text, ct.tone], ['4 claims checked · 6:14 PM', 'muted']);
+  assert.equal(v(watch({ state: 'same_stop', last_check: lastCheck({ claims: 1, dont_hold: 0, needs_you: 0, cant_tell: 0, holds: 1 }) })).text, 'No change since the 6:14 PM check');
   const cr = v(watch({ state: 'cant_run', reason: { code: 'no_model', text: 'it has no model' } }));
   assert.deepEqual([cr.text, cr.tone], ['Rigel can’t check: it has no model', 'amber']);
   assert.equal(v(watch({ state: 'over_limit' })).tone, 'amber');
@@ -145,11 +145,11 @@ test('orderClaims, tints and summary chips follow the design and the server coun
 
 test('chat text, needs-you lines and code parts', () => {
   const r = w.parseReport(rawReport());
-  assert.equal(w.chatText(r, TZ), 'Checked 3 claims after the mission stopped at 18:10. 1 don’t hold, 1 needs you, 2 hold. I restarted Write the tests with Lin.');
+  assert.equal(w.chatText(r, TZ), 'Checked 3 claims after the mission stopped at 6:10 PM. 1 don’t hold, 1 needs you, 2 hold. I restarted Write the tests with Lin.');
   const all = w.parseReport(rawReport({ counts: { claims: 1, dont_hold: 0, needs_you: 0, cant_tell: 0, holds: 1 }, claims: [claim({ verdict: 'holds' })], actions: [] }));
-  assert.equal(w.chatText(all, TZ), 'Checked 1 claim after the mission stopped at 18:10. All hold.');
+  assert.equal(w.chatText(all, TZ), 'Checked 1 claim after the mission stopped at 6:10 PM. All hold.');
   const a = w.firstNeedsYou(r);
-  assert.equal(w.youText(r, a, TZ), 'Deploy the site waits for your OK to deploy since 18:12.');
+  assert.equal(w.youText(r, a, TZ), 'Deploy the site waits for your OK to deploy since 6:12 PM.');
   assert.deepEqual(w.codeParts('Ran `npm test` now'), [{ code: false, text: 'Ran ' }, { code: true, text: 'npm test' }, { code: false, text: ' now' }]);
   assert.equal(w.failedChatText('the turn timed out'), 'The check failed: the turn timed out. Nothing was restarted.');
 });
