@@ -6,28 +6,27 @@ card: They share chats, hand work to each other and get it done on their own.
 card_art: scene
 ---
 <section class="hero" aria-labelledby="hero-title">
-  <div class="wrap hero-grid">
-    <div class="hero-copy">
-      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Open-source, self-hosted AI agents in one binary</p>
-      <h1 id="hero-title">Your own self-hosted team of AI agents</h1>
-      <p class="lede">They share chats, pass work to each other and get it done on their own, on a schedule or while you're away. It runs on your laptop or a VPS.</p>
-      <div class="dl" data-dl data-os="mac">
-      <div class="cta cta-one">
-        <a class="btn btn-violet on-mac" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Download for Mac</a>
-        <a class="btn btn-violet on-windows" href="{{windows_exe}}" rel="noopener" data-os-link="windows">Download for Windows <span class="beta">beta</span></a>
-        <a class="btn btn-violet on-linux" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Download for Linux <span class="beta">beta</span></a>
-        <p class="cta-alt"><a href="docs/quickstart.html">A VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
+  <canvas data-nebula aria-hidden="true"></canvas>
+  <div class="wrap hero-copy">
+    <p class="eyebrow mono-label">Open source<i>·</i>Self-hosted<i>·</i>One Rust binary</p>
+    <h1 id="hero-title">Your own<br> team of bots.</h1>
+    <p class="lede">kwant is a self-hosted team of AI agents. They share chats, hand work to each other and keep going on a schedule, on your laptop or a VPS.</p>
+    <div class="dl" data-dl data-os="mac">
+      <div class="dl-row">
+        <a class="btn px os-mac" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">{{icon:down}}<span><span class="dl-long">Download for </span>Mac</span></a>
+        <a class="btn px os-windows" href="{{windows_exe}}" rel="noopener" data-os-link="windows">{{icon:down}}<span><span class="dl-long">Download for </span>Windows</span> <span class="beta">beta</span></a>
+        <a class="btn px os-linux" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">{{icon:down}}<span><span class="dl-long">Download for </span>Linux</span> <span class="beta">beta</span></a>
       </div>
-      <p class="dl-note on-mac">Free, for Apple silicon and Intel. Also for <a href="{{windows_exe}}" rel="noopener" data-os-link="windows">Windows</a> and <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Linux</a>, in beta.</p>
-      <p class="dl-note on-windows">Free, for 64-bit Windows. It isn't signed yet, so Windows warns the first time: click <b>More info</b>, then <b>Run anyway</b>. Also for <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Mac</a> and <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Linux</a>.</p>
-      <p class="dl-note on-linux">Free. A <code>.deb</code> for Ubuntu and Debian on x86_64; other distros, the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>). Also for <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Mac</a> and <a href="{{windows_exe}}" rel="noopener" data-os-link="windows">Windows</a>.</p>
+      <p class="dl-note on-windows">It isn't signed yet, so Windows warns the first time: click <b>More info</b>, then <b>Run anyway</b>.</p>
+      <p class="dl-note on-linux">A <code>.deb</code> for Ubuntu and Debian on x86_64; other distros, the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>).</p>
+      <div class="dl-sub">
+        <a href="docs/quickstart.html">A VPS or Docker? Get started <span aria-hidden="true">→</span></a>
       <details class="mac-first on-mac" id="mac-first">
         <summary>
-          <span class="mf-ico" aria-hidden="true"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v1H4zM3 5h1v8H3zM16 5h1v8h-1zM4 12h12v1H4zM1 14h18v2H1z"/><path d="M5 6h10v6H5z" opacity=".22"/><path d="M8 8h1v2H8zM11 8h1v2h-1z"/></svg></span>
-          <span class="mf-sum"><b>First time on a Mac?</b><span>macOS asks once, because kwant isn't notarized by Apple yet.</span></span>
-          <svg class="mf-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          <span class="mf-sum">First time on a Mac? <b>How to open it</b></span>
         </summary>
         <div class="mf-body">
+          <p class="mf-why">macOS asks once, because kwant isn't notarized by Apple yet.</p>
           <ol class="mf-steps">
             <li><span>Drag kwant to Applications and open it. When macOS says it couldn't verify it, click <b>Done</b>.</span></li>
             <li><span>Open <b>System Settings › Privacy &amp; Security</b> and scroll down to <b>Security</b>.</span></li>
@@ -47,76 +46,79 @@ card_art: scene
         </div>
       </details>
       </div>
-      {{releases}}
     </div>
-    <figure class="crt hero-crt">
-      <div class="crt-screen">
-        <div class="scene" data-scene="hero">
-          <button type="button" class="scene-btn" aria-label="Pixel town of kwant bots. Press to hand a bot a task, or to approve the bot that's waiting."><canvas aria-hidden="true"></canvas></button>
-        </div>
-      </div>
-      <figcaption class="crt-bezel">
-        <span class="led" aria-hidden="true"></span>
-        <span class="bezel-status" data-scene-status><b>5</b><span> bots working</span></span>
-        <button type="button" class="bezel-ok" data-scene-approve hidden>1 risky step · approve</button>
-        <span class="bezel-hint">Click the town to hand out a task</span>
-      </figcaption>
-    </figure>
+    {{releases}}
   </div>
+  <div class="stage-clip">
+  <div class="stage" data-moments id="reel">
+    <p class="moment-caption" data-caption aria-live="polite">Designer answers, then hands the check to QA with one @mention.</p>
+    <div class="toolbar px" role="tablist" aria-label="kwant moments"><button class="px" type="button" role="tab" id="m-0" aria-selected="true" aria-controls="m-panel" tabindex="0" aria-label="Hand off" data-text="Designer answers, then hands the check to QA with one @mention." data-poster="{{root}}assets/media/clip-handoff-poster.webp" data-srcset="{{root}}assets/media/clip-handoff-poster-640.webp 640w, {{root}}assets/media/clip-handoff-poster.webp 1280w" data-clip="{{root}}assets/media/clip-handoff.mp4" data-bot="designer">{{icon:handoff}}<span class="t-label">Hand off</span></button><button class="px" type="button" role="tab" id="m-1" aria-selected="false" aria-controls="m-panel" tabindex="-1" aria-label="Asks first" data-text="Opening a pull request waits for your OK, with the exact arguments on screen." data-poster="{{root}}assets/media/clip-approval-poster.webp" data-srcset="{{root}}assets/media/clip-approval-poster-640.webp 640w, {{root}}assets/media/clip-approval-poster.webp 1280w" data-clip="{{root}}assets/media/clip-approval.mp4" data-bot="lead">{{icon:shield}}<span class="t-label">Asks first</span></button><button class="px" type="button" role="tab" id="m-2" aria-selected="false" aria-controls="m-panel" tabindex="-1" aria-label="Point at it" data-text="Click the button you mean on the page. Ben gets that exact element and fixes it." data-poster="{{root}}assets/media/clip-v090-point-at-it-poster.webp" data-srcset="{{root}}assets/media/clip-v090-point-at-it-poster-640.webp 640w, {{root}}assets/media/clip-v090-point-at-it-poster.webp 1280w" data-clip="{{root}}assets/media/clip-v090-point-at-it.mp4" data-bot="designer">{{icon:cursor}}<span class="t-label">Point at it</span></button><button class="px" type="button" role="tab" id="m-3" aria-selected="false" aria-controls="m-panel" tabindex="-1" aria-label="Overnight" data-text="Ask QA to check checkout errors every morning. It sets up the routine, with Undo." data-poster="{{root}}assets/media/clip-spaces-routine-poster.webp" data-srcset="{{root}}assets/media/clip-spaces-routine-poster-640.webp 640w, {{root}}assets/media/clip-spaces-routine-poster.webp 1280w" data-clip="{{root}}assets/media/clip-spaces-routine.mp4" data-bot="qa">{{icon:moon}}<span class="t-label">Overnight</span></button><button class="px" type="button" role="tab" id="m-4" aria-selected="false" aria-controls="m-panel" tabindex="-1" aria-label="Checked" data-text="Each finished task shows the checks it passed. Approve them all in one go." data-poster="{{root}}assets/media/clip-v090-review-inbox-poster.webp" data-srcset="{{root}}assets/media/clip-v090-review-inbox-poster-640.webp 640w, {{root}}assets/media/clip-v090-review-inbox-poster.webp 1280w" data-clip="{{root}}assets/media/clip-v090-review-inbox.mp4" data-bot="qa">{{icon:check}}<span class="t-label">Checked</span></button></div>
+    <div class="window px" id="m-panel" role="tabpanel" aria-labelledby="m-0">
+      <span class="char char-designer on" data-char="designer" aria-hidden="true">{{char:designer}}</span>
+      <span class="char char-qa" data-char="qa" aria-hidden="true">{{char:qa}}</span>
+      <span class="char char-lead" data-char="lead" aria-hidden="true">{{char:tech_lead}}</span>
+      <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><span>kwant · Team: Website</span><span class="live">3 working</span></div>
+      <div class="win-screen">
+        <img class="win-poster" src="{{root}}assets/media/clip-handoff-poster.webp" srcset="{{root}}assets/media/clip-handoff-poster-640.webp 640w, {{root}}assets/media/clip-handoff-poster.webp 1280w" sizes="(max-width: 639px) 360px, 1120px" width="1280" height="800" fetchpriority="high" decoding="async" alt="Designer answers, then hands the check to QA with one @mention.">
+        <video muted loop playsinline preload="none" aria-hidden="true"></video>
+        <button class="pause px" type="button" data-pause aria-pressed="false" aria-label="Pause clip"><svg class="ic-pause" viewBox="0 0 6 6" shape-rendering="crispEdges" fill="currentColor" aria-hidden="true"><rect x="0" y="0" width="2" height="6"/><rect x="4" y="0" width="2" height="6"/></svg><svg class="ic-play" viewBox="0 0 6 6" shape-rendering="crispEdges" fill="currentColor" aria-hidden="true"><rect x="0" y="0" width="1" height="6"/><rect x="1" y="1" width="2" height="4"/><rect x="3" y="2" width="2" height="2"/></svg></button>
+      </div>
+    </div>
+  </div>
+  </div>
+  <div class="hero-cut" aria-hidden="true"></div>
 </section>
 
-<section class="new-strip new-shots" aria-labelledby="new-title">
+<section class="added" aria-labelledby="new-title">
   <div class="wrap">
-    <h2 id="new-title" class="new-title">Added in 0.9.10</h2>
+    <div class="added-head"><h2 id="new-title" class="mono-label">Added in <b>0.9.10</b></h2><a href="features.html#new-0910">Everything new <span aria-hidden="true">→</span></a></div>
     <ul class="new-list">
-      <li><a href="features.html#account-usage"><img src="assets/media/thumb-v0910-account-usage-640.webp" srcset="assets/media/thumb-v0910-account-usage-640.webp 640w, assets/media/thumb-v0910-account-usage-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>How much of each AI account is left</b><span>Claude and Codex sign-ins show their 5-hour and weekly limits.</span></a></li>
-      <li><a href="features.html#reply-chrome"><img src="assets/media/thumb-v0910-reply-chrome-640.webp" srcset="assets/media/thumb-v0910-reply-chrome-640.webp 640w, assets/media/thumb-v0910-reply-chrome-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Replies say when a job is done</b><span>A Done mark on a job's last reply, and Approve when a bot needs your OK.</span></a></li>
-      <li><a href="features.html#one-app-search"><img src="assets/media/thumb-v0910-one-app-search-640.webp" srcset="assets/media/thumb-v0910-one-app-search-640.webp 640w, assets/media/thumb-v0910-one-app-search-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Every app in one search</b><span>Composio apps and tool servers in one list, one row per app.</span></a></li>
+      <li><a href="features.html#account-usage"><img src="assets/media/thumb-v0910-account-usage-640.webp" srcset="assets/media/thumb-v0910-account-usage-320.webp 320w, assets/media/thumb-v0910-account-usage-640.webp 640w, assets/media/thumb-v0910-account-usage-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>How much of each AI account is left</b><span>Claude and Codex sign-ins show their 5-hour and weekly limits.</span></a></li>
+      <li><a href="features.html#reply-chrome"><img src="assets/media/thumb-v0910-reply-chrome-640.webp" srcset="assets/media/thumb-v0910-reply-chrome-320.webp 320w, assets/media/thumb-v0910-reply-chrome-640.webp 640w, assets/media/thumb-v0910-reply-chrome-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Replies say when a job is done</b><span>A Done mark on a job's last reply, and Approve when a bot needs your OK.</span></a></li>
+      <li><a href="features.html#one-app-search"><img src="assets/media/thumb-v0910-one-app-search-640.webp" srcset="assets/media/thumb-v0910-one-app-search-320.webp 320w, assets/media/thumb-v0910-one-app-search-640.webp 640w, assets/media/thumb-v0910-one-app-search-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Every app in one search</b><span>Composio apps and tool servers in one list, one row per app.</span></a></li>
     </ul>
     <p class="new-note">Also new: <a href="features.html#fixes-0910">smaller fixes</a>. <a href="features.html#new-0910">What's new in 0.9.10</a> · <a href="features.html#new-099">in 0.9.9</a> · <a href="features.html#new-098">in 0.9.8</a> · <a href="features.html#new-097">in 0.9.7</a> · <a href="features.html#new-096">in 0.9.6</a> · <a href="features.html#new-095">in 0.9.5</a> · <a href="features.html#fixes-094">in 0.9.4</a> · <a href="features.html#fixes-093">in 0.9.3</a> · <a href="features.html#fixes-092">in 0.9.2</a> · <a href="features.html#fixes-091">in 0.9.1</a> · <a href="features.html#new-09">in 0.9.0</a> · <a href="features.html#fixes-082">in 0.8.2</a> · <a href="features.html#fixes-081">in 0.8.1</a> · <a href="features.html#new-08">in 0.8.0</a> · <a href="features.html#new-077">in 0.7.7</a> · <a href="features.html#new-076">in 0.7.6</a> · <a href="features.html#new-075">in 0.7.5</a> · <a href="features.html#new-074">in 0.7.4</a> · <a href="features.html#new-073">in 0.7.3</a> · <a href="features.html#new-072">in 0.7.2</a> · <a href="features.html#new-071">in 0.7.1</a> · <a href="features.html#new-07">in 0.7</a> · <a href="features.html#new-0611">in 0.6.11</a></p>
   </div>
 </section>
 
-<section class="moments" aria-labelledby="moments-title">
-  <div class="wrap">
-    <div class="sec-head">
-      <h2 id="moments-title">A normal day with kwant</h2>
-      <p>Three things you'll see in the app most days.</p>
+<section class="day" aria-labelledby="day-title">
+  <div class="wrap day-grid">
+    <div>
+      <p class="kicker mono-label">A normal day</p>
+      <h2 id="day-title">They work while you don't.</h2>
+      <p class="sub">Give each bot a job and a schedule. You come back to finished work, and to the one thing that needs you.</p>
+      <ol class="log">
+        <li><time>07:00</time>{{avatar:research}}<p><b>Research</b> runs its morning routine and posts three competitor changes in #market.</p></li>
+        <li><time>10:12</time>{{avatar:tech_lead}}<p><b>TechLead</b> passes the pricing page to <b>Designer</b> with one @mention. Designer picks it up.</p></li>
+        <li class="you"><time>14:30</time>{{avatar:qa}}<p><b>QA</b> wants to run <code>gh pr create --base main</code> and asks first. <span class="tag tag-wait">Allow once</span></p></li>
+        <li><time>18:05</time>{{avatar:user}}<p><b>Inbox:</b> 4 done, 1 waiting on you. Each done task lists the checks it passed. <span class="tag tag-ok">4 checked</span></p></li>
+      </ol>
     </div>
-    <div class="moment-grid">
-      <article class="moment">
-        <div class="mock mock-chat" aria-hidden="true">
-          <p class="mock-bar"><span class="hash">#</span>launch</p>
-          <div class="msg">{{avatar:user}}<div><p class="who">You</p><p>Ship the pricing page by Friday.</p></div></div>
-          <div class="msg">{{avatar:tech_lead}}<div><p class="who">TechLead</p><p>On it. <span class="at">@Designer</span>, can you take the layout?</p></div></div>
-          <p class="pass">TechLead passed this to Designer</p>
-          <div class="msg">{{avatar:designer}}<div><p class="who">Designer</p><p>Two layouts are up. <span class="at">@QA</span>, check them on a phone?</p></div></div>
-        </div>
-        <h3>Ask once, the team passes it on</h3>
-        <p>Bots share chats and hand work to each other with an @mention. You get one answer back.</p>
-      </article>
-      <article class="moment" data-holo-area>
-        <div class="mock mock-routine" aria-hidden="true">
-          <div class="msg">{{avatar:research}}<div><p class="who">Research <span class="tag tag-done">ran 07:00</span></p><p>Every weekday at 07:00</p></div></div>
-          <ul class="mock-list">
-            <li>Summed up 3 new app reviews</li>
-            <li>Spotted a price change on a rival's site</li>
-            <li>Put a draft reply in Loose ends</li>
-          </ul>
-          <p class="mock-foot"><span>Next run tomorrow at 07:00</span><span class="kw-sticker kw-sticker-holo" style="--kw-tilt: -2deg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg><span>Verified · 3/3</span></span></p>
-        </div>
-        <h3>Keeps going while you sleep</h3>
-        <p>Say "every morning" and the bot sets up the routine. You come back to what changed.</p>
-      </article>
-      <article class="moment">
-        <div class="mock mock-approve" aria-hidden="true">
-          <div class="msg">{{avatar:qa}}<div><p class="who">QA <span class="tag tag-wait">asks first</span></p><p>I'd like to run this command:</p></div></div>
-          <pre class="mock-cmd">gh pr create --title "Pricing page" --base main</pre>
-          <p class="mock-actions"><span class="mbtn mbtn-main">Allow once</span><span class="mbtn">Always allow</span><span class="mbtn">Deny</span></p>
-        </div>
-        <h3>Only risky steps ask first</h3>
-        <p>Ordinary work just runs. Something risky, like a push, a network call or a change outside the bot's folder, shows you exactly what will happen first. You can switch that off too.</p>
-      </article>
+    <figure class="shot-frame">
+      <div class="frame">{{shot:v2-away|The Inbox since you last looked. Waiting on you: Ann's high-risk task Speed up the search box, marked Needs you with medium confidence, and her question about the pack size guide with cm, inches and Both buttons. Nothing failed or finished, and one task waits in To review. On the right, the search task's verdict says it couldn't time the full catalogue, with Approve, Send back and Roll back.|(max-width: 860px) calc(100vw - 54px), 640px}}</div>
+      <figcaption>The Inbox at 18:05. The amber row is the one that waits for you.</figcaption>
+    </figure>
+  </div>
+  <div class="wrap day-more">
+    <div id="needs-you">
+    <div class="row">
+      <div class="row-copy">
+        <h3>A pill, wherever you are</h3>
+        <p>An approval, a question or a sign-in slides in at the top for a few seconds. Click it to go there. On a phone too, and under the Mac app's menu-bar icon.</p>
+        <a class="more-link" href="features.html#new-069">What's new in 0.6.9 →</a>
+      </div>
+      <div class="frame">{{video:clip-v69-pill|Demo: you're reading #design-review when TechLead, in another chat, needs your OK. A Needs you pill slides in at the top; clicking it opens TechLead's chat at the approval card.}}</div>
+    </div>
+    </div>
+    <div id="react-reply">
+    <div class="row flip">
+      <div class="row-copy">
+        <h3>Yes, go ahead</h3>
+        <p>When the bot's newest message asks you something, 👍 means Yes, go ahead and 👎 means No; hover a thumb to see which. Pick one and the bot carries on without you typing. Anywhere else, a 👍 or 👎 is feedback the bot reads next time.</p>
+        <a class="more-link" href="features.html#new-0611">What's new in 0.6.11 →</a>
+      </div>
+      <div class="frame">{{video:clip-v611-react|Demo: release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and TechLead replies that the notes are published, with nothing typed.}}</div>
+    </div>
     </div>
   </div>
 </section>
@@ -147,7 +149,7 @@ card_art: scene
   </div>
 </section>
 
-<section class="tour tint" id="team" aria-labelledby="team-title">
+<section class="tour band" id="team" aria-labelledby="team-title">
   <div class="wrap">
     <div class="sec-head">
       <p class="kicker">Your team</p>
@@ -206,7 +208,7 @@ card_art: scene
   </div>
 </section>
 
-<section class="tour" id="away" aria-labelledby="away-title">
+<section class="tour band" id="away" aria-labelledby="away-title">
   <div class="wrap">
     <div class="sec-head">
       <p class="kicker">While you're away</p>
@@ -223,91 +225,19 @@ card_art: scene
     </div>
     <div class="tiles three">
       <figure class="tile">
-        <div class="frame">{{shot:v2-away|The Inbox since you last looked. Waiting on you: Ann's high-risk task Speed up the search box, marked Needs you with medium confidence, and her question about the pack size guide with cm, inches and Both buttons. Nothing failed or finished, and one task waits in To review. On the right, the search task's verdict says it couldn't time the full catalogue, with Approve, Send back and Roll back.|(max-width: 860px) 100vw, 380px}}</div>
+        <div class="frame">{{shot:v2-away|The Inbox since you last looked. Waiting on you: Ann's high-risk task Speed up the search box, marked Needs you with medium confidence, and her question about the pack size guide with cm, inches and Both buttons. Nothing failed or finished, and one task waits in To review. On the right, the search task's verdict says it couldn't time the full catalogue, with Approve, Send back and Roll back.|(max-width: 860px) calc(100vw - 34px), 380px}}</div>
         <figcaption><h3>Inbox</h3><p>What happened while you were away: what's waiting on you, what finished and what got stuck, on one page.</p></figcaption>
       </figure>
       <figure class="tile">
-        <div class="frame">{{shot:v2-loose-ends-stalled|Loose ends. Designer has waited four days for your pick of a hero image, and you promised Mara a press kit by email. Each case quotes the message it is based on and has a draft reply.|(max-width: 860px) 100vw, 380px}}</div>
+        <div class="frame">{{shot:v2-loose-ends-stalled|Loose ends. Designer has waited four days for your pick of a hero image, and you promised Mara a press kit by email. Each case quotes the message it is based on and has a draft reply.|(max-width: 860px) calc(100vw - 34px), 380px}}</div>
         <figcaption><h3>Loose ends</h3><p>Finds the reply you owe in chats, email and GitHub, and drafts it. It never sends.</p></figcaption>
       </figure>
       <figure class="tile">
-        <div class="frame">{{shot:v2-letter|A scanned letter from a fictional water company next to what kwant read from it: who it's from, what they want and the deadline of November 5, each with the quote it came from and editable.|(max-width: 860px) 100vw, 380px}}</div>
+        <div class="frame">{{shot:v2-letter|A scanned letter from a fictional water company next to what kwant read from it: who it's from, what they want and the deadline of November 5, each with the quote it came from and editable.|(max-width: 860px) calc(100vw - 34px), 380px}}</div>
         <figcaption><h3>Letters</h3><p>Photograph a bill or notice. kwant pulls out the deadline and amounts and reminds you.</p></figcaption>
       </figure>
     </div>
     <p class="section-foot"><a class="more-link" href="docs/loose-ends.html">Loose ends &amp; letters →</a></p>
-  </div>
-</section>
-
-<section class="tour tint" id="needs-you" aria-labelledby="needs-you-title">
-  <div class="wrap">
-    <div class="sec-head">
-      <p class="kicker">New in 0.6.9</p>
-      <h2 id="needs-you-title">You'll know when a bot needs you</h2>
-      <p>A pill slides in when a bot in another chat waits on you, and the tab title counts what's waiting. When a bot needs a sign-in, you take over its browser.</p>
-    </div>
-    <div class="row">
-      <div class="row-copy">
-        <h3>A pill, wherever you are</h3>
-        <p>An approval, a question or a sign-in slides in at the top for a few seconds. Click it to go there. On a phone too, and under the Mac app's menu-bar icon.</p>
-        <a class="more-link" href="features.html#new-069">What's new in 0.6.9 →</a>
-      </div>
-      <div class="frame">{{video:clip-v69-pill|Demo: you're reading #design-review when TechLead, in another chat, needs your OK. A Needs you pill slides in at the top; clicking it opens TechLead's chat at the approval card.}}</div>
-    </div>
-    <div class="row">
-      <div class="row-copy">
-        <h3>Take over to sign in</h3>
-        <p>The bot posts a sign-in card. Open the page, sign in yourself, and Done hands the browser back. Bots never ask for a password in chat.</p>
-        <a class="more-link" href="docs/browser.html#sign-in">Sign-in &amp; take over →</a>
-      </div>
-      <div class="frame">{{video:clip-v69-takeover|Demo: Rook needs a sign-in. Take over opens the page on a large stage, the email sam@example.com and a password are typed in, and Done, I'm signed in hands the browser back to Rook: the card reads Done. Rook is carrying on, and the pane is back to Watching on Northwind's billing page.}}</div>
-    </div>
-    <div class="tiles three">
-      <figure class="tile">
-        <div class="frame">{{shot:v69-signin-card|Close-up of Designer's Sign in needed card: sign in to TikTok as @trailhead.trips on tiktok.com, with Open browser, Done, I'm signed in and Skip, and the line Designer is paused and waiting for you.|(max-width: 860px) 100vw, 380px}}</div>
-        <figcaption><h3>Sign-in card</h3><p>One card per site. Skip, and the bot says what it couldn't do.</p></figcaption>
-      </figure>
-      <figure class="tile">
-        <div class="frame">{{shot:phone-v69-pill|The same Needs you pill on a phone, at the top of the #design-review channel.|(max-width: 860px) 100vw, 380px}}</div>
-        <figcaption><h3>On your phone</h3><p>The same pill at the top of the screen.</p></figcaption>
-      </figure>
-      <figure class="tile">
-        <div class="frame">{{shot:v69-working-card|Close-up of TechLead's approval card for create pull request from github, with Deny, Allow Once and Always Allow, and below it the working line: TechLead is using create_pull_request (github), 0:08.|(max-width: 860px) 100vw, 380px}}</div>
-        <figcaption><h3>What it's doing</h3><p>A line above the message box says what the bot is using right now.</p></figcaption>
-      </figure>
-    </div>
-  </div>
-</section>
-
-<section class="tour" id="react-reply" aria-labelledby="react-reply-title">
-  <div class="wrap">
-    <div class="sec-head">
-      <p class="kicker kw-sticker kw-sticker-ink" style="--kw-tilt: -2deg">New in 0.6.11</p>
-      <h2 id="react-reply-title">Answer with a tap, reply, solve the human check</h2>
-      <p>Every finished bot message has 👍, 👎 and Reply. When a bot asks you something, the thumbs answer it. When a site asks if you're human, the bot hands the check to you.</p>
-    </div>
-    <div class="row">
-      <div class="row-copy">
-        <h3>Yes, go ahead</h3>
-        <p>When the bot's newest message asks you something, 👍 means Yes, go ahead and 👎 means No; hover a thumb to see which. Pick one and the bot carries on without you typing. Anywhere else, a 👍 or 👎 is feedback the bot reads next time.</p>
-        <a class="more-link" href="features.html#new-0611">What's new in 0.6.11 →</a>
-      </div>
-      <div class="frame">{{video:clip-v611-react|Demo: release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and TechLead replies that the notes are published, with nothing typed.}}</div>
-    </div>
-    <div class="tiles three">
-      <figure class="tile">
-        <div class="frame">{{shot:v611-reply-close|Lead's release notes with Reply pressed: the message box shows a Replying to Lead chip quoting Here are the release notes, and the reply Put the waitlist first in the email version is typed below it.|(max-width: 860px) 100vw, 380px}}</div>
-        <figcaption><h3>Reply</h3><p>Reply quotes the message in the box, so the bot knows which one you mean.</p></figcaption>
-      </figure>
-      <figure class="tile">
-        <div class="frame">{{shot:v611-human-check-card|Close-up of a Human check needed card from Researcher: gearhub.example is showing a CAPTCHA to the bot browser, with Solve it, Done, I solved it and Skip.|(max-width: 860px) 100vw, 380px}}</div>
-        <figcaption><h3>Human checks come to you</h3><p>A CAPTCHA stops the bot and a card in that chat asks you to solve it. Once it's solved, the bot carries on by itself; kwant never solves one itself.</p></figcaption>
-      </figure>
-      <figure class="tile">
-        <div class="frame">{{shot:phone-v611-react|On a phone, Lead's question Shall I publish them now? with Copy markdown, thumbs up, thumbs down and Reply under it.|(max-width: 860px) 100vw, 380px}}</div>
-        <figcaption><h3>On your phone</h3><p>The same thumbs and Reply under each answer.</p></figcaption>
-      </figure>
-    </div>
   </div>
 </section>
 
@@ -355,34 +285,28 @@ card_art: scene
 </section>
 
 <section class="outro" aria-labelledby="outro-title">
-  <div class="wrap">
-    <div class="outro-panel">
-      <div class="outro-copy">
-        <h2 id="outro-title">Give it a try tonight</h2>
-        <p>One command to start. Your bots, your accounts, your machine.</p>
-        {{install:end}}
+  <div class="wrap outro-grid">
+    <div class="outro-copy">
+      <h2 id="outro-title">Give it a try tonight.</h2>
+      <p class="sub">One command to start. Your bots, your accounts, your machine.</p>
+      {{install:end}}
+      <div class="dl-row left">
+        <a class="btn btn-violet px" href="docs/quickstart.html">Read the quickstart</a>
+        <a class="btn btn-line px" href="docs/install.html">Run it on a server</a>
+      </div>
         <div class="dl" data-dl data-os="mac">
           <div class="cta">
-            <a class="btn btn-violet" href="docs/quickstart.html">Read the quickstart</a>
-            <a class="btn btn-soft" href="docs/install.html">Run it on a server</a>
-            <a class="btn btn-soft on-mac" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Download for Mac</a>
-            <a class="btn btn-soft on-windows" href="{{windows_exe}}" rel="noopener" data-os-link="windows">Download for Windows <span class="beta">beta</span></a>
-            <a class="btn btn-soft on-linux" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Download for Linux <span class="beta">beta</span></a>
+            <a class="btn btn-line px on-mac" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Download for Mac</a>
+            <a class="btn btn-line px on-windows" href="{{windows_exe}}" rel="noopener" data-os-link="windows">Download for Windows <span class="beta">beta</span></a>
+            <a class="btn btn-line px on-linux" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Download for Linux <span class="beta">beta</span></a>
           </div>
           <p class="mac-dl on-mac">The Mac app isn't notarized by Apple yet, so macOS stops it the first time: <a href="docs/install.html#mac">how to open it</a>. Also for <a href="{{windows_exe}}" rel="noopener" data-os-link="windows">Windows</a> and <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Linux</a>, in beta.</p>
           <p class="mac-dl on-windows">The installer isn't signed yet, so Windows warns the first time: click <b>More info</b>, then <b>Run anyway</b>. Also for <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Mac</a> and <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Linux</a>.</p>
           <p class="mac-dl on-linux">A <code>.deb</code> for Ubuntu and Debian, or the AppImage for other distros (<a href="docs/install.html#linux">how to install</a>). Also for <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Mac</a> and <a href="{{windows_exe}}" rel="noopener" data-os-link="windows">Windows</a>.</p>
         </div>
-        <div class="star-ask">
-          <p><span class="star-pix" aria-hidden="true">⭐</span> kwant runs on coffee and GitHub stars. Like it? Toss one our way.</p>
-          <a class="btn btn-star" href="https://github.com/alexsergivan/kwant" rel="noopener">Star on GitHub</a>
-        </div>
-      </div>
-      <div class="crt crt-small">
-        <div class="crt-screen street-screen">
-          <div class="scene street" data-scene="street"><canvas aria-hidden="true"></canvas></div>
-        </div>
-      </div>
+    </div>
+    <div class="town px">
+      <div class="scene street" data-scene="street"><canvas aria-hidden="true"></canvas></div>
     </div>
   </div>
 </section>
