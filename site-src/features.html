@@ -46,9 +46,21 @@ card_art: team
       <h2>Pick which bot fixes it, and your own documents in a space</h2>
       <p>Fix it and line notes on a PR card go to the bot you pick, with the default first. Settings › This space › Documents adds and removes the files bots quote, and a quote's chip opens the passage.</p>
     </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fix-it-send-to">Pick which bot fixes it</h3>
+        <p><strong>Fix it</strong> on a PR card names who gets the task, like <strong>Goes to Ana · lead of Edge</strong>. Press that line to pick another bot of the space: the default comes first (the PR's author bot, else the lead of the team that owns the repo), with search when a space has more than 8 bots, and a sheet on a phone. Line notes go the same way with <strong>Send N notes…</strong>, a card with no default asks you to pick, and <strong>Open task ›</strong> opens the task after the Undo window.</p>
+      </div>
+      <div class="frame">{{shot:v0911-send-to|Dev desk for demo-org/demo-app on a PR review with three findings. Under each finding's Fix it and Dismiss is "Goes to Ann · lead of Shop team". The "Who fixes this PR?" picker is open over the card, with a "Find a bot or team" search box and Ann on top as the checked default (lead of Shop team, which owns this repo), then Ben and Cody of Shop team and more bots.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="space-docs-2">Your own documents in a space</h3>
+        <p><strong>Settings › This space › Documents</strong> lists the files bots answer from and takes new ones: drop them in or choose them (.md, .markdown, .txt or a PDF with text in it, up to 2 MB each, 200 per space). A document that's already there asks before it's replaced. Only you can add or remove documents, not a bot. In chat, a quote's chip shows the file and PDF page and opens the passage on its page.</p>
+      </div>
+      <div class="frame">{{shot:v0911-space-docs|Settings › This space › Documents for Trailhead Outfitters: bots in this space answer from these files and quote them word for word. A drop zone reads "Drop files here, or choose them" (.md, .txt or a PDF with text, up to 2 MB each), and the list below shows five documents: supplier-contacts.txt, shipping-faq.md, brand-voice.md, Ridgeline 2P size chart.pdf and Returns policy 2027.pdf.}}</div>
+    </div>
     <ul class="flist">
-      <li id="fix-it-send-to" class="span3"><h3>Pick which bot fixes it</h3><p><strong>Fix it</strong> on a PR card names who gets the task, like <strong>Goes to Ana · lead of Edge</strong>. Press that line to pick another bot of the space: the default comes first (the PR's author bot, else the lead of the team that owns the repo), with search when a space has more than 8 bots, and a sheet on a phone. Line notes go the same way with <strong>Send N notes…</strong>, a card with no default asks you to pick, and <strong>Open task ›</strong> opens the task after the Undo window.</p></li>
-      <li id="space-docs-2" class="span3"><h3>Your own documents in a space</h3><p><strong>Settings › This space › Documents</strong> lists the files bots answer from and takes new ones: drop them in or choose them (.md, .markdown, .txt or a PDF with text in it, up to 2 MB each, 200 per space). A document that's already there asks before it's replaced. Only you can add or remove documents, not a bot. In chat, a quote's chip shows the file and PDF page and opens the passage on its page.</p></li>
       <li id="fixes-0911" class="span3"><h3>Smaller changes in 0.9.11</h3><p>A finished task's check line counts the parts of your request, in your words, and names one that didn't pass, like <strong>Partly checked: 1 of 2 parts checked</strong>. <strong>Download receipts</strong> under This week on the Mission board saves a CSV of the space's finished tasks from the last 30 days, 90 days or 12 months: who checked each one, how, the verdict and the evidence.</p></li>
     </ul>
   </div>
