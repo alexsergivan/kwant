@@ -57,7 +57,7 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
     mac: ['.......', '.#####.', '.#...#.', '.#...#.', '.#####.', '#######', '.......'],
     server: ['.#####.', '.#..#..', '.#####.', '.......', '.#####.', '.#..#..', '.#####.']
   };
-  var ICONS = { check: 'M20 6 9 17l-5-5', plus: 'M12 5v14M5 12h14', play: 'M7 5v14l11-7z' };
+  var ICONS = { check: 'M20 6 9 17l-5-5', plus: 'M12 5v14M5 12h14', play: 'M8 5.5v13l10-6.5z' };
 
   function glyph(kind) {
     var svg = document.createElementNS(SVG, 'svg');
@@ -79,9 +79,9 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
   function icon(name) {
     var svg = document.createElementNS(SVG, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('fill', name === 'play' ? 'currentColor' : 'none');
+    svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', name === 'play' ? '1.5' : '2.25');
+    svg.setAttribute('stroke-width', '2.25');
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
     svg.setAttribute('aria-hidden', 'true');
@@ -96,12 +96,22 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
     if (text != null) e.textContent = String(text);
     return e;
   }
-  // a long host is cut in the middle (design.md 9.2: at 30)
+  // a long host is cut in the middle (design.md 9.2: at 30), then tighter until it fits its column
+  // (design-check-switcher F3: the end of a host is what tells two servers apart, so CSS must never
+  // add an end ellipsis). Same loop as PlaceChipRow; it stops at 12.
   function midcut(s, max) {
     var a = Array.from(s);
     if (a.length <= max) return s;
     var keep = max - 1, h = Math.ceil(keep / 2);
     return a.slice(0, h).join('') + '…' + a.slice(a.length - (keep - h)).join('');
+  }
+  function fitHost(nm, name) {
+    var cut = Math.min(30, Array.from(name).length);
+    nm.textContent = midcut(name, cut);
+    while (nm.scrollWidth > nm.clientWidth && cut > 12) {
+      cut -= 1;
+      nm.textContent = midcut(name, cut);
+    }
   }
 
   // One navigation at a time: two in the same moment may lose the first.
@@ -120,6 +130,7 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
 
   var items = [];   // [{el, go(side)}]: the rows, then the actions
   var nRows = 0, sel = 0;
+  var shown = 0;    // which show() a pending fit belongs to
 
   function select(i) {
     if (!items.length) return;
@@ -140,6 +151,7 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
     items = [];
     nRows = rows.length;
     var current = -1;
+    var hosts = [];   // [{nm, name}] server names to fit once the font is in
     rows.forEach(function (r, i) {
       var row = el('div', 'kw-pick');
       row.setAttribute('role', 'option');
@@ -147,13 +159,17 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
       var tx = el('span', 'tx');
       var name = String(r.name || '');
       var nm = el('span', 'nm', r.kind === 'server' ? midcut(name, 30) : name);
-      if (r.kind === 'server') nm.title = name;
+      if (r.kind === 'server') {
+        nm.title = name;
+        row.setAttribute('aria-label', name);
+        hosts.push({ nm: nm, name: name });
+      }
       tx.appendChild(nm);
       tx.appendChild(el('span', 'sub' + (r.bad ? ' bad' : ''), r.sub || ''));
       var n = Math.max(0, Math.floor(Number(r.n) || 0));
       var right;
       if (n > 0) {
-        right = el('span', 'n', n > 99 ? '99+' : n);
+        right = el('span', 'n', n > 9 ? '9+' : String(n));
         right.setAttribute('aria-label', n + ' waiting');
       } else if (r.cur) {
         right = el('span', 'cur'); right.appendChild(icon('check'));
@@ -182,9 +198,15 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
     });
     // Enter goes to the next place by default, like switching apps
     select(nRows > 1 ? (current === 0 ? 1 : 0) : 0);
-    requestAnimationFrame(function () {
-      var h = Math.ceil(document.querySelector('.kw-picker').getBoundingClientRect().height);
-      send('size?h=' + Math.min(9999, h));
+    var me = ++shown;
+    var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+    fonts.then(function () {
+      requestAnimationFrame(function () {
+        if (me !== shown) return;   // a newer show() fits its own rows
+        hosts.forEach(function (x) { fitHost(x.nm, x.name); });
+        var h = Math.ceil(document.querySelector('.kw-picker').getBoundingClientRect().height);
+        send('size?h=' + Math.min(9999, h));
+      });
     });
   }
 
