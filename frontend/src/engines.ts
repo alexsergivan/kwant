@@ -306,6 +306,19 @@ export function ranOnLabel(meta: string | null | undefined, engines: EngineInfo[
   }
 }
 
+/** "Claude · Opus 5.5" for a model id from the usage log; the id as it is when no engine lists it. */
+export function usageModelLabel(model: string, engines: EngineInfo[] | null = null): string {
+  for (const e of engines ?? []) {
+    const m = e.models.find((x) => x.id === model);
+    if (!m) continue;
+    const name = familyLabel(FAMILY_OF[e.id] ?? 'custom').replace(/ \(.*\)$/, '');
+    return `${name} · ${shortModelLabel(m.label || m.id, name)}`;
+  }
+  // The CLI driver books "claude" when the turn reported no model.
+  const fam = FAMILIES.find((f) => f.id === model);
+  return fam ? fam.label.replace(/ \(.*\)$/, '') : model;
+}
+
 /** "checked 3 min ago" style age, or null when never checked. */
 export function checkedAgo(at: string | null, now = Date.now()): string | null {
   if (!at) return null;
