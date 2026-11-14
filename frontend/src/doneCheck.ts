@@ -75,11 +75,10 @@ function knownPart(v: unknown): CheckedPart[] {
  * - `one`: a single written part: named, with no counter.
  * - `null`: no parts, or `parts_written` false/missing: today's card, with no "parts" words.
  */
-export function partsLayout(c: Pick<Checked, 'parts' | 'parts_total' | 'parts_written'>): 'many' | 'one' | null {
-  if (c.parts_written !== true || !c.parts || c.parts.length === 0) return null;
-  if (typeof c.parts_total === 'number' && c.parts_total >= 2 && c.parts.length >= 2) return 'many';
-  if (c.parts.length === 1) return 'one';
-  return null;
+export function partsLayout(c: Pick<Checked, 'parts' | 'parts_total' | 'parts_written'>): 'many' | null {
+  if (c.parts_written !== true || !c.parts) return null;
+  // One written part: today's card; the server line already names it (design-check-ui.md fix 4).
+  return typeof c.parts_total === 'number' && c.parts_total >= 2 && c.parts.length >= 2 ? 'many' : null;
 }
 
 /** A part's or criterion's result; anything unknown reads as "no check", never passed. */
@@ -91,7 +90,6 @@ export function partKind(result: unknown): PartResult {
 export const PART_WORD: Record<PartResult, string> = { passed: 'Passed', failed: 'Not met', not_checked: 'No check' };
 export const PART_COLOUR: Record<PartResult, string> = { passed: 'text-ok', failed: 'text-bad', not_checked: 'text-warn' };
 export const PARTS_HEADING = 'Parts of your request';
-export const ONE_PART_HEADING = 'Your request';
 export const NO_CRITERIA_HELP = 'Nothing checked this part.';
 export const criteriaToggle = (open: boolean, n: number): string => (open ? 'Hide what proves it' : `Show what proves it (${n})`);
 

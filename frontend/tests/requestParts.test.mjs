@@ -97,29 +97,68 @@ test('all parts passed: every row Passed, two criteria under the first part', as
   r.root.unmount();
 });
 
-test('one part failed: "Not met" in the bad colour, its criterion says Not met; the checks list starts open as today', async () => {
+test('one part failed: "Not met" in the bad colour, its fold starts open; the checks list starts closed so the answer stays up', async () => {
   const r = await box(cx.PARTS_ONE_FAILED);
-  const row = r.qa('[data-part]')[0];
+  assert.equal(r.q('section').getAttribute('data-done-check'), 'failed');
+  const rows = r.qa('[data-part]');
+  const row = rows[0];
   assert.equal(row.getAttribute('data-part'), 'failed');
   assert.equal(text(row.querySelector('[data-part-result]')), 'Not met');
   assert.match(row.querySelector('[data-part-result]').className, /text-bad/);
-  await click(row.querySelector('[data-part-toggle]'));
+  const btn = row.querySelector('[data-part-toggle]');
+  assert.equal(btn.getAttribute('aria-expanded'), 'true', 'a part that was not met opens its fold');
+  assert.equal(text(btn), 'Hide what proves it');
+  assert.equal(row.querySelector('[data-part-criteria]').hidden, false);
   assert.equal(row.querySelector('[data-criterion]').getAttribute('data-criterion'), 'failed');
   assert.match(text(row.querySelector('[data-part-criteria]')), /Not met$/);
-  assert.equal(r.q('[data-check-list]').hidden, false, 'failed opens the checks by default, unchanged');
+  for (const other of rows.slice(1)) {
+    const t = other.querySelector('[data-part-toggle]');
+    if (t) assert.equal(t.getAttribute('aria-expanded'), 'false', 'parts that passed stay folded');
+  }
+  assert.equal(r.q('[data-check-list]').hidden, true, 'with parts shown, the checks list starts closed');
+  assert.equal(r.q('[data-check-toggle]').getAttribute('aria-expanded'), 'false');
+  await click(btn);
+  assert.equal(row.querySelector('[data-part-criteria]').hidden, true, 'and it still folds');
   r.root.unmount();
 });
 
-test('one written part: named under "Your request", no counter and no "parts" words', async () => {
-  const r = await box(cx.PARTS_ONE_WRITTEN);
-  assert.equal(r.q('[data-parts]').getAttribute('data-parts'), 'one');
-  assert.equal(text(r.q('[data-parts-heading]')), 'Your request');
-  assert.equal(r.qa('[data-part]').length, 1);
-  assert.equal(text(r.q('[data-part-text]')), 'Add the yearly discount to the FAQ');
-  const all = text(r.el);
-  assert.doesNotMatch(all, /\b1 of 1\b/);
-  assert.doesNotMatch(all, /parts/i);
+test('the fold sits on the result line: "Passed · Show what proves it (n)", the dot hidden from screen readers', async () => {
+  const r = await box(cx.PARTS_NO_CHECK);
+  const row = r.qa('[data-part]')[0];
+  const line = row.querySelector('[data-part-result]').parentElement;
+  assert.ok(line.contains(row.querySelector('[data-part-toggle]')), 'result and toggle share one line');
+  assert.deepEqual([...line.children].map(text), ['Passed', '·', 'Show what proves it (1)'], 'result, dot, toggle; the gap is CSS');
+  assert.match(line.className, /\bflex-wrap\b/);
+  assert.equal(line.querySelector('[aria-hidden="true"]').textContent, '·');
+  assert.doesNotMatch(row.querySelector('[data-part-toggle]').className, /\bmt-1\b/);
+  assert.match(r.q('[data-how-heading]').className, /\bmt-3\b/, 'the section gap is bigger than the gap between parts');
   r.root.unmount();
+});
+
+test('today\'s card is unchanged without parts: the failed card still opens its checks list', async () => {
+  const x = clone(cx.PARTS_ONE_FAILED);
+  delete x.parts_written;
+  const r = await box(x);
+  assert.equal(r.q('[data-parts]'), null);
+  assert.equal(r.q('[data-check-list]').hidden, false);
+  r.root.unmount();
+});
+
+test('one written part: exactly today\'s card, the server line names it and there is no counter', async () => {
+  const strip = (html) => html.replace(/id="[^"]*"|aria-controls="[^"]*"|aria-labelledby="[^"]*"/g, '');
+  const a = await box(cx.PARTS_ONE_WRITTEN);
+  const html = strip(a.el.innerHTML);
+  assert.equal(a.q('[data-parts]'), null);
+  assert.equal(a.q('[data-how-heading]'), null);
+  assert.match(text(a.q('[data-check-line]')), /Add the yearly discount to the FAQ/);
+  assert.doesNotMatch(text(a.el), /\b1 of 1\b/);
+  assert.doesNotMatch(text(a.el), /parts/i);
+  a.root.unmount();
+  const plain = clone(cx.PARTS_ONE_WRITTEN);
+  for (const k of ['parts', 'parts_total', 'parts_checked', 'parts_written']) delete plain[k];
+  const b = await box(plain);
+  assert.equal(html, strip(b.el.innerHTML), 'same markup as a card without the parts fields');
+  b.root.unmount();
 });
 
 test('parts_written false: exactly today\'s card, no parts rows and no "parts" words', async () => {

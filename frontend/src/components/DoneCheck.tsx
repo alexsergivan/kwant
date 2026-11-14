@@ -16,7 +16,6 @@ import {
   type ItemKind,
   MARKER,
   NO_CRITERIA_HELP,
-  ONE_PART_HEADING,
   PART_COLOUR,
   PART_WORD,
   PARTS_HEADING,
@@ -49,8 +48,9 @@ const PART_ICON: Record<PartResult, LucideIcon> = { passed: Check, failed: X, no
 /** One part of the person's request: their words, its result, and the criteria that prove it on demand. */
 const PartRow: React.FC<{ part: CheckedPart }> = ({ part }) => {
   const id = `${useId()}-criteria`;
-  const [open, setOpen] = useState(false);
   const kind = partKind(part.result);
+  // A part that was not met opens its fold, so the failing criterion shows without a tap.
+  const [open, setOpen] = useState(kind === 'failed');
   const Icon = PART_ICON[kind];
   const n = part.criteria.length;
   return (
@@ -60,31 +60,34 @@ const PartRow: React.FC<{ part: CheckedPart }> = ({ part }) => {
         <p className="text-body text-zinc-100 break-words [overflow-wrap:anywhere]" data-part-text>
           {part.text}
         </p>
-        <p className="text-meta break-words [overflow-wrap:anywhere]">
+        <div className="text-meta flex flex-wrap items-baseline gap-x-1 break-words [overflow-wrap:anywhere]">
           <span className={`font-semibold ${PART_COLOUR[kind]}`} data-part-result>
             {PART_WORD[kind]}
           </span>
           {n === 0 && <span className="text-zinc-400" data-part-no-criteria> · {NO_CRITERIA_HELP}</span>}
-        </p>
+          {n > 0 && (
+            <>
+              <span className="text-zinc-400" aria-hidden="true">·</span>
+              <button type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)} className={linkBtn} data-compact data-part-toggle>
+                {criteriaToggle(open, n)}
+                <ChevronDown size={14} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
+              </button>
+            </>
+          )}
+        </div>
         {n > 0 && (
-          <>
-            <button type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)} className={`${linkBtn} mt-1`} data-compact data-part-toggle>
-              {criteriaToggle(open, n)}
-              <ChevronDown size={14} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
-            </button>
-            <ul id={id} hidden={!open} className={`mt-1 border-l-2 border-hairline-strong pl-2 space-y-1 ${open ? 'kw-fade-in' : ''}`} data-part-criteria>
-              {part.criteria.map((c, i) => {
-                const ck = partKind(c.result);
-                return (
-                  <li key={c.id || i} className="text-meta break-words [overflow-wrap:anywhere]" data-criterion={ck}>
-                    <span className="text-zinc-200">{c.text}</span>
-                    <span className="text-zinc-400"> · </span>
-                    <span className={`font-semibold ${PART_COLOUR[ck]}`}>{PART_WORD[ck]}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </>
+          <ul id={id} hidden={!open} className={`mt-1 border-l-2 border-hairline-strong pl-2 space-y-1 ${open ? 'kw-fade-in' : ''}`} data-part-criteria>
+            {part.criteria.map((c, i) => {
+              const ck = partKind(c.result);
+              return (
+                <li key={c.id || i} className="text-meta break-words [overflow-wrap:anywhere]" data-criterion={ck}>
+                  <span className="text-zinc-200">{c.text}</span>
+                  <span className="text-zinc-400"> · </span>
+                  <span className={`font-semibold ${PART_COLOUR[ck]}`}>{PART_WORD[ck]}</span>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
     </li>
@@ -107,12 +110,14 @@ export const DoneCheck: React.FC<{
   const listId = `${useId()}-checks`;
   const state = checked.state;
   const style = STATE_STYLE[state];
-  const [open, setOpen] = useState(style.open);
+  const layout = partsLayout(checked);
+  // With parts shown, the failing criterion sits under its part, so the checks list starts closed and the answer
+  // stays above the fold on a phone (design-check-ui.md fix 1). Today's card keeps its open-when-failed rule.
+  const [open, setOpen] = useState(style.open && !layout);
   const { prefix, rest } = splitLine(state, checked.line);
   const Icon = STATE_ICON[state];
   const items = checked.items;
   const n = items.length + checked.items_dropped;
-  const layout = partsLayout(checked);
   const partsId = `${listId}-parts`;
   const howId = `${listId}-how`;
   return (
@@ -135,7 +140,7 @@ export const DoneCheck: React.FC<{
       {layout && checked.parts && (
         <div className="ml-[26px] min-w-0" data-parts={layout}>
           <p id={partsId} className="text-meta font-semibold text-zinc-300" data-parts-heading>
-            {layout === 'many' ? PARTS_HEADING : ONE_PART_HEADING}
+            {PARTS_HEADING}
           </p>
           <ul aria-labelledby={partsId} className="border-t border-hairline" data-parts-list>
             {checked.parts.map((p, i) => (
@@ -145,7 +150,7 @@ export const DoneCheck: React.FC<{
         </div>
       )}
       {layout && items.length > 0 && (
-        <p id={howId} className="ml-[26px] text-meta font-semibold text-zinc-300" data-how-heading>
+        <p id={howId} className="ml-[26px] mt-3 text-meta font-semibold text-zinc-300" data-how-heading>
           {SECTION_LABEL}
         </p>
       )}
