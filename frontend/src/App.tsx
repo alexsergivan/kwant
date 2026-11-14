@@ -87,7 +87,7 @@ import { setBadgeBots, setBadgeEngines, setBadgeProfiles } from './modelBadgeDat
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
-import { recentWork, type ChatHome } from './botHome';
+import { recentWork, teamMembersLeadFirst, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
 import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api, heldFromReply, heldLine, heldMessages, stillHeld } from './h4Status';
@@ -3773,7 +3773,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
   useEffect(() => setBadgeProfiles(profiles), [profiles]);
 
-  // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
+  // What the empty chat shows: a bot's home, #general's, a team's home, or nothing special for another channel.
   const chatHome: ChatHome = currentKwant
     ? {
         kind: 'bot',
@@ -3781,7 +3781,20 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         recent: recentWork(threadsByKwant[currentKwant.id]),
         onOpenRecent: (id: string) => openThread(currentKwant.id, id),
       }
-    : { kind: isGeneral ? 'general' : currentTeam ? 'team' : 'channel' };
+    : currentTeam && !isGeneral
+      ? {
+          kind: 'team',
+          team: {
+            name: currentTeam.name,
+            purpose: currentTeam.description,
+            lead: kwants.find((k) => k.id === currentTeam.lead_kwant_id)?.name,
+            members: teamMembersLeadFirst(
+              [...kwants.filter((k) => k.id === currentTeam.lead_kwant_id), ...currentTeamMembers],
+              currentTeam.lead_kwant_id,
+            ),
+          },
+        }
+      : { kind: isGeneral ? 'general' : 'channel' };
 
   // Delete is off while the bot runs anywhere, the open chat included.
   const workingKwants = new Set(Object.values(turns).map((t) => t.kwant_id));
