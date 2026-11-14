@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, CheckCircle2, Clock, HelpCircle, Loader2, MinusCircle } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ViaTelegram } from './TelegramMarks';
-import { ANSWER_MAX, Question, QuestionMeta, answerTextError, questionView } from '../questions';
+import { ANSWER_MAX, Question, QuestionMeta, answerTextError, answeredLine, questionView } from '../questions';
 import { whyYouText } from '../decideFirst';
 import { askedAgo } from '../waitingState';
 
@@ -45,6 +45,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
   const ago = open ? askedAgo(live?.created_at, now) : null;
   const answer = view.answer ?? sent;
   const headingId = `q-${messageId}`;
+  const line = answeredLine(answer, view.choices);
   const whyYou = whyYouText(view.why_you);
 
   const submit = async (a: { choice: number } | { text: string }) => {
@@ -89,17 +90,20 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
         <MinusCircle size={13} aria-hidden="true" /> Dismissed: {kwantName} was told you skipped it
       </span>
-    ) : !open && view.status === 'answered' && view.answered_via === 'telegram' ? (
-      // Answered in Telegram (G4): the record says where the decision came from.
-      <span className="inline-flex flex-wrap items-center gap-1.5 text-emerald-300" data-answered-via="telegram">
-        <CheckCircle2 size={13} aria-hidden="true" />
-        <b className="font-semibold">{answer && view.choices.includes(answer) ? `You picked ${answer}` : 'You answered'}</b>
-        <span aria-hidden="true">·</span>
-        <ViaTelegram />
-      </span>
     ) : !open ? (
-      <span className="inline-flex items-center gap-1.5 text-emerald-300">
-        <CheckCircle2 size={13} aria-hidden="true" /> Answered{view.status === 'open' ? ', sending…' : ''}
+      // 14c: the card says what you answered, so the answer isn't drawn again as a "You" bubble.
+      // Answered in Telegram (G4): the record also says where the decision came from.
+      <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-emerald-300" data-answered-line="" data-answered-via={view.answered_via === 'telegram' ? 'telegram' : undefined}>
+        <CheckCircle2 size={13} className="self-center shrink-0" aria-hidden="true" />
+        <b className="font-semibold">{line.lead}</b>
+        {line.text && <span className="min-w-0 text-sm text-zinc-100 whitespace-pre-wrap break-words" data-answer-text="">{line.text}</span>}
+        {view.status === 'open' && <span className="text-zinc-400">sending…</span>}
+        {view.answered_via === 'telegram' && (
+          <>
+            <span aria-hidden="true">·</span>
+            <ViaTelegram />
+          </>
+        )}
       </span>
     ) : waiting ? (
       // Not on a phone: the working strip under the chat already says the bot waits, and says it once (spec C2).
@@ -216,15 +220,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
               </button>
             </div>
           </form>
-        ) : (
-          answer &&
-          !view.choices.includes(answer) && (
-            <p className="mx-4 mb-2 px-3 py-2 rounded-xl bg-zinc-800/70 border border-zinc-700/60 text-sm text-zinc-100 whitespace-pre-wrap break-words">
-              <span className="sr-only">Your answer: </span>
-              {answer}
-            </p>
-          )
-        )}
+        ) : null}
 
         <div className="px-4 pb-1 sm:pb-3 pt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           <p role="status" aria-live="polite" className="min-w-0">

@@ -32,7 +32,7 @@ import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
-import { QuestionMeta, parseMetaObject, parseQuestionMeta } from '../questions';
+import { QuestionMeta, foldedAnswerIds, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
 import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
@@ -1357,6 +1357,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const liveBot = liveRowShown && streamingSpeakerName ? streamingSpeakerName : null;
   const arranged = useMemo(() => arrangeSharedFiles(messages, knownBots, liveBot), [messages, knownBots, liveBot]);
   const liveShareIds = useMemo(() => new Set(arranged.live.map((m) => m.id)), [arranged.live]);
+  // 14c: an answer given on a question card shows once, on the card; its saved "You" message is not
+  // drawn while that card is loaded (nothing folds when this chat doesn't draw question cards).
+  const askCards = !!renderQuestion;
+  const listed = useMemo(() => {
+    const folded = askCards ? foldedAnswerIds(arranged.messages) : null;
+    return folded?.size ? arranged.messages.filter((m) => !folded.has(m.id)) : arranged.messages;
+  }, [arranged.messages, askCards]);
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
@@ -2271,7 +2278,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <AccountCard onOpenAccounts={onOpenAccounts} />
           </div>
         )}
-        {groupDiscussionThreads(arranged.messages, { foldOpen: askOnly }).map((item, n, items) => {
+        {groupDiscussionThreads(listed, { foldOpen: askOnly }).map((item, n, items) => {
           if (item.kind === 'message') {
             const trial = trialCards.get(item.message.id);
             const above = items[n - 1];
