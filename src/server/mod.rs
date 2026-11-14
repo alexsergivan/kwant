@@ -9,11 +9,13 @@ pub mod mcp_routes;
 pub mod mcp_runtime;
 pub mod profile_routes;
 pub mod profile_turn;
+pub mod account_usage;
 pub mod engine_routes;
 pub mod engine_login;
 pub mod auth;
 pub mod signin;
 pub mod continuity;
+pub mod memory_recall;
 pub mod fresh_eyes;
 pub mod goals_remediation;
 pub mod model_usage;
@@ -257,6 +259,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
         .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))
         .route("/api/profiles/:id/check", post(profile_routes::check))
+        .route("/api/profiles/:id/usage", post(profile_routes::usage))
         .route("/api/profiles/:id/login", post(profile_routes::start_login))
         .route(
             "/api/profiles/:id/login/:flow_id",
@@ -533,6 +536,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/watch-checks/:id", get(missions::watch::get_check))
         .route("/api/graph", get(missions::graph::loose_graph))
         .route("/api/tasks", get(missions::routes::list_tasks).post(missions::routes::create_task))
+        .route("/api/tasks/receipts.csv", get(missions::receipts::receipts_csv))
         .route("/api/tasks/:id", get(missions::routes::get_task).patch(missions::routes::patch_task))
         .route("/api/tasks/:id/verify", post(missions::routes::verify_task))
         .route("/api/tasks/:id/reject", post(missions::routes::reject_task))

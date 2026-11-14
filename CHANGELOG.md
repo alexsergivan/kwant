@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.10] - 2026-11-14
+
+kwant 0.9.10: usage bars for each AI account, a Done mark and an Approve button on replies and one search for every app.
+
+### Added
+- **See how much of each AI account is left.** On Apps & accounts, each Claude or Codex sign-in shows two thin bars, like "5-hour · 93% left · resets 22:29" and "Weekly · 44% left · resets Wed 00:59"; a bar turns amber below 20% left. Claude's numbers come in with every turn. **Check now** reads them when you ask, at most once a minute and never by itself: for Claude one tiny reply on the cheapest model, for Codex its own limits read. A failed check says why, like "Codex is signed out". The model badge on a bot's avatar shows the same line, with an amber dot when its account runs low. API-key accounts show no bars. (#599, #604)
+- Bots can read and quote a space's own documents: put Markdown, text or PDF files (up to 2 MB each, 200 files) in `docs/` in the space's data folder (`<data dir>/docs` for Default). A quote is checked word for word, like a web quote, and points to the file and the PDF page. New `GET /api/spaces/:id/docs` and `POST /api/spaces/:id/docs/cite`. (#601)
+- Dev mode can give bots Google Chrome's Modern Web Guidance. When Dev mode finds web code in a team's folder, kwant offers a built-in `modern-web` skill once, as Proposed for every bot in the space; nothing changes until you approve it in Skills. The skill looks guidance up with a pinned `npx -y modern-web-guidance@1.0.0 search|retrieve|list`, which runs without an approval card under "Ask only when risky"; any other version, flag or chained command still asks, and turns kwant starts on its own still ask. Needs Node and the network the first time. (#605)
+
+### Changed
+- **Replies say when a job is done.** A job's final reply gets a **Done** mark after the bot's name, or what checked it: **Checked**, **Partly checked**, **Check failed** or **Not checked**. When a reply asks for your OK, an **Approve** / **Change…** row sits under it ("Ben is waiting for your OK"); Approve sends "Approved, go ahead.". The name line is now name, mark, time and **Details**, and Details says in words why that bot answered. Copy is a quiet icon, and the engine chip shows only when a bot switched AI mid-reply. (#602)
+- **Find any app in one list.** On Apps & accounts, the Another app search shows Composio apps, built-in tools and tool servers from the public directory in one list, one row per app. Each row says where it comes from and how it signs in, like "Sign in with your Notion account" or "Runs on this computer · needs Node.js"; other ways to add the same app fold under the row. One status line says when a source can't be reached. (#606)
+- Bots' memory search now finds notes by meaning as well as by words, with the space's own embeddings: its OpenAI API-key account or the host's OpenAI key (text-embedding-3-small), or a local Ollama with an embedding model. Without one of those it is the same keyword search as before, with no extra calls. (#603)
+
 ## [Mac 0.9.9] - 2026-11-13
 
 kwant 0.9.9: a browser panel that follows your bot, AI use over 7 or 30 days, by model and routines that are easier to set up.

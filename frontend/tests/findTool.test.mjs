@@ -1,6 +1,6 @@
-// Find a tool (composio-simple/design.md §1, §2, "Autocomplete"): suggestions from the first letter,
-// three groups, the ghost and the keys, Connect before Composio is set up opening the key field under
-// the row, the not-listed line, the public directory hiding on 404, and no plumbing words.
+// Find a tool / Another app (composio-simple/design.md "Autocomplete"; one-app-search/design.md): suggestions from
+// the first letter, one row per app with its source and how you sign in, the other ways under it, the ghost and the
+// keys, Connect before Composio is set up opening the key field under the row, one status line, and no plumbing words.
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -17,6 +17,7 @@ g.window.HTMLElement.prototype.scrollIntoView ??= () => {};
 
 const m = await loadBundled(`
   export { FindTool, buildGroups, directoryNeeds, presetPublisher, markCutDescription } from './src/components/FindTool';
+  export { mergeRows } from './src/appSearch';
   export { ConnectionsError, connectionsApi } from './src/connections';
   export { MCP_PRESETS } from './src/mcp';
   export { createRoot } from 'react-dom/client';
@@ -97,29 +98,49 @@ const key = async (el, k, opts = {}) => {
   await settle();
   return ev;
 };
-const rowNames = (host, group) => [...host.querySelectorAll(`[data-group="${group}"] [data-row-name]`)].map(text);
+const rowNames = (host) => [...host.querySelectorAll('[data-find-list] [data-row="app"] [data-row-name]')].map(text);
+const rowKeys = (host) => [...host.querySelectorAll('[data-find-list] [data-row="app"]')].map((r) => r.dataset.rowKey);
 const activeRow = (host) => host.querySelector('[data-active]');
+const click = async (el) => {
+  el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+};
 
 test('one letter already suggests, best match first, with the typed letter bold', async () => {
-  const { api } = stubApi();
+  const { api, calls } = stubApi();
   const host = await mount({ api });
   await type(host, 'g');
-  assert.deepEqual(rowNames(host, 'composio').slice(0, 3), ['Gmail', 'Google Calendar', 'Google Sheets']);
-  assert.ok(host.querySelector('[data-group="builtin"]'), 'built-in tools starting with g (GitHub, Git) are listed too');
-  const first = host.querySelector('[data-group="builtin"] [data-row-name] b');
+  const names = rowNames(host);
+  for (const n of ['Gmail', 'Google Calendar', 'Google Sheets', 'GitHub']) assert.ok(names.includes(n), `${n} is listed`);
+  assert.equal(host.querySelectorAll('[data-find-list]').length, 1, 'one list, not one per source');
+  assert.equal(host.querySelector('[data-group]'), null, 'no group headers when typed');
+  const first = host.querySelector('[data-find-list] [data-row-name] b');
   assert.equal(text(first).toLowerCase(), 'g');
-  assert.equal(host.querySelector('[data-group="directory"]'), null, 'the directory waits for two letters');
+  await settle(200);
+  assert.equal(calls.filter((c) => c[0] === 'directory').length, 0, 'the public list waits for two letters');
 });
 
-test('the three groups come in order and say where the tool comes from', async () => {
+test('one row per app: the chip says where it comes from, one sentence says how you sign in', async () => {
   const { api } = stubApi({ directory: async () => ({ entries: DIR, unavailable: false }) });
   const host = await mount({ api });
   await type(host, 'gm', 200);
-  const groups = [...host.querySelectorAll('[data-group]')].map((s) => s.dataset.group);
-  assert.deepEqual(groups, ['composio', 'directory']);
-  assert.match(text(host.querySelector('[data-group="composio"]')), /Through Composio.*Sign-ins stay on Composio’s servers/);
-  assert.match(text(host.querySelector('[data-group="directory"]')), /From the public directory.*Listed by their makers, not checked by us/);
-  assert.match(text(host.querySelector('[data-group="directory"] [data-row]')), /by example\.io.*Runs on this computer.*API key/);
+  // "Gmail tools" from the public list is Gmail too, so it folds under Composio's Gmail.
+  assert.deepEqual(rowKeys(host), ['app-gmail']);
+  const row = host.querySelector('[data-row-key="app-gmail"]');
+  assert.equal(text(row.querySelector('[data-source-chip]')), 'Through Composio');
+  assert.equal(text(row.querySelector('[data-sign-in]')), 'Sign in with your Gmail account · free Composio key first');
+  assert.equal(row.getAttribute('aria-label'), 'Gmail, through Composio, sign in with your Gmail account · free Composio key first');
+  const link = row.querySelector('[data-other-ways]');
+  assert.equal(text(link), 'Also as a community server for Gmail');
+  assert.equal(link.getAttribute('aria-expanded'), 'false');
+  assert.match(text(host.querySelector('[data-find-notes]')), /^Through Composio: sign-ins stay on Composio’s servers\.$/);
+  await click(link);
+  assert.equal(link.getAttribute('aria-expanded'), 'true');
+  assert.ok(document.getElementById(link.getAttribute('aria-controls')), 'aria-controls names the open block');
+  const other = host.querySelector('[data-row="other"]');
+  assert.equal(other.getAttribute('role'), 'option', 'each other way is an option of the same list');
+  assert.match(text(other), /Community\s*· example\.io.*Your own Gmail API key.*Add Gmail/);
+  assert.match(text(host.querySelector('[data-find-notes]')), /Community: listed by their makers, not checked by us\./);
   assert.doesNotMatch(text(host), PLUMBING);
 });
 
@@ -128,19 +149,22 @@ test('typos and other names find the app', async () => {
   const host = await mount({ api });
   for (const [q, name] of [['gmial', 'Gmail'], ['slak', 'Slack'], ['notoin', 'Notion'], ['sheets', 'Google Sheets']]) {
     await type(host, q);
-    assert.ok(rowNames(host, 'composio').includes(name), `${q} → ${name}`);
+    assert.ok(rowNames(host).includes(name), `${q} → ${name}`);
   }
 });
 
-test('"eleven" is not in the list: the not-listed line says bots find other apps themselves', async () => {
+test('nothing from any source: the empty box, with the not-listed line once Composio is added', async () => {
   const { api } = stubApi();
-  const host = await mount({ api });
-  await type(host, 'eleven');
-  const line = host.querySelector('[data-not-listed]');
-  assert.ok(line, 'the not-listed line shows');
-  assert.equal(text(line), 'Not listed? Bots with Composio find its other apps themselves.');
-  assert.equal(host.querySelectorAll('[data-group="composio"] [data-row]').length, 0);
-  assert.equal(host.querySelector('[data-find-nothing]'), null, 'not "nothing found": the line is the answer');
+  let host = await mount({ api });
+  await type(host, 'qwzx', 200);
+  assert.ok(host.querySelector('[data-find-nothing]'));
+  assert.equal(host.querySelector('[data-not-listed]'), null, 'without Composio the line would promise nothing');
+  for (const u of mounted) u();
+  const added = stubApi({ list: async () => listOf(composio({ added: true, can_connect: true })) });
+  host = await mount({ api: added.api });
+  await type(host, 'qwzx', 200);
+  assert.equal(text(host.querySelector('[data-not-listed]')), 'Not listed? Bots with Composio find its other apps themselves.');
+  assert.equal(host.querySelector('[data-find-status]'), null, 'every source answered: no status line');
 });
 
 test('Connect before Composio is set up opens the key field under that row, focused', async () => {
@@ -149,9 +173,8 @@ test('Connect before Composio is set up opens the key field under that row, focu
   window.open = (url) => (opened.push(url), { closed: false, location: {}, close() {} });
   const host = await mount({ api });
   await type(host, 'gm');
-  const row = host.querySelector('[data-row-key="composio-c-gmail"]');
-  row.querySelector('[data-row-action]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  await settle();
+  const row = host.querySelector('[data-row-key="app-gmail"]');
+  await click(row.querySelector('[data-row-action]'));
   const setup = host.querySelector('[data-composio-setup="gmail"]');
   assert.ok(setup, 'the key field opens under Gmail');
   assert.ok(row.contains(setup), 'inside the row, not somewhere else');
@@ -170,7 +193,7 @@ test('Enter on Gmail before setup opens the same field; Esc in it closes it and 
   const { api } = stubApi();
   const host = await mount({ api });
   await type(host, 'gm');
-  assert.equal(activeRow(host)?.dataset.rowKey, 'composio-c-gmail');
+  assert.equal(activeRow(host)?.dataset.rowKey, 'app-gmail');
   await key(input(host), 'Enter');
   const field = host.querySelector('[data-composio-setup="gmail"] input');
   assert.equal(document.activeElement, field);
@@ -199,7 +222,7 @@ test('a good key adds Composio, then the sign-in opens in the tab opened by the 
   assert.deepEqual(opened, ['about:blank'], 'the tab opens synchronously in the press');
   assert.equal(tab.location.href, 'https://connect.example/gmail');
   assert.match(text(host.querySelector('[data-find-notice]')), /Composio is added\. Finish signing in to Gmail in the new tab\./);
-  assert.match(text(host.querySelector('[data-row-key="composio-c-gmail"]')), /Waiting for you to finish signing in/);
+  assert.match(text(host.querySelector('[data-row-key="app-gmail"]')), /Waiting for you to finish signing in/);
 });
 
 test('a refused key stays in the field with the error and its fix next to it', async () => {
@@ -253,7 +276,7 @@ test('no ghost for a word or typo match', async () => {
   assert.equal(host.querySelector('[data-ghost]'), null);
 });
 
-test('arrows move one highlight across groups with no wrap; ↑ from the first row clears it', async () => {
+test('arrows move one highlight across rows and open other ways, with no wrap; ↑ from the first row clears it', async () => {
   const { api } = stubApi({ directory: async () => ({ entries: DIR, unavailable: false }) });
   const host = await mount({ api });
   await type(host, 'gm', 200);
@@ -265,91 +288,138 @@ test('arrows move one highlight across groups with no wrap; ↑ from the first r
   assert.equal(el.getAttribute('aria-activedescendant'), first.id);
   assert.equal(first.getAttribute('aria-selected'), 'true');
   assert.ok(first.querySelector('[data-enter-keycap]'));
+  await key(el, 'Escape'); // drop the ghost, so → opens the other ways
+  await key(el, 'ArrowRight');
+  assert.equal(host.querySelector('[data-other-ways]').getAttribute('aria-expanded'), 'true', '→ opens the row’s other ways');
   await key(el, 'ArrowDown');
-  assert.equal(activeRow(host).dataset.rowKey, 'directory-io.example/gmail-tools', 'down crosses into the next group');
+  assert.equal(activeRow(host).dataset.rowKey, 'app-gmail~d-io.example/gmail-tools', 'down reaches the other way');
+  assert.equal(el.getAttribute('aria-activedescendant'), activeRow(host).id);
   await key(el, 'ArrowDown');
-  assert.equal(activeRow(host).dataset.rowKey, 'directory-io.example/gmail-tools', 'no wrap at the end');
-  await key(el, 'ArrowUp');
+  assert.equal(activeRow(host).dataset.rowKey, 'app-gmail~d-io.example/gmail-tools', 'no wrap at the end');
+  await key(el, 'ArrowLeft');
+  assert.equal(host.querySelector('[data-row="other"]'), null, '← closes them');
+  assert.equal(activeRow(host).dataset.rowKey, 'app-gmail', 'and the highlight goes back to the row');
   await key(el, 'ArrowUp');
   assert.equal(activeRow(host), null);
   assert.equal(el.getAttribute('aria-activedescendant'), null);
-  for (const lb of host.querySelectorAll('[role="listbox"]')) assert.ok(document.getElementById(lb.getAttribute('aria-labelledby')));
+  for (const lb of host.querySelectorAll('[role="listbox"]')) assert.ok(lb.getAttribute('aria-label') || document.getElementById(lb.getAttribute('aria-labelledby')));
 });
 
-test('Enter on a built-in tool adds it; on a directory row opens its form', async () => {
+test('Enter on a built-in tool adds it; an other way’s button runs that way', async () => {
   const picked = [];
   const { api } = stubApi({ directory: async () => ({ entries: DIR, unavailable: false }) });
   const host = await mount({ api, onAddPreset: (p) => picked.push(['preset', p.id]), onAddDirectory: (e) => picked.push(['dir', e.registry_name]) });
   await type(host, 'githu');
-  assert.equal(activeRow(host).dataset.row, 'builtin');
+  assert.equal(activeRow(host).dataset.lead, 'b-github');
   await key(input(host), 'Enter');
-  await type(host, 'gmail tools', 200);
-  const dirRow = host.querySelector('[data-row-key="directory-io.example/gmail-tools"]');
-  dirRow.querySelector('[data-row-action]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  await settle();
+  await type(host, 'gm', 200);
+  await click(host.querySelector('[data-other-ways]'));
+  await click(host.querySelector('[data-row="other"] [data-row-action]'));
   assert.deepEqual(picked, [['preset', 'github'], ['dir', 'io.example/gmail-tools']]);
 });
 
-test('the public directory hides on 404 and says so when it can’t be reached', async () => {
+test('the highlight stays on its app when the public list lands', async () => {
+  let answer;
+  const late = new Promise((r) => (answer = r));
+  const { api } = stubApi({
+    apps: async () => ({ apps: [{ slug: 'elevenlabs', name: 'ElevenLabs', tools_count: 12 }], source: 'popular' }),
+    directory: () => late,
+  });
+  const host = await mount({ api });
+  await type(host, 'el', 200);
+  assert.equal(activeRow(host).dataset.rowKey, 'app-elevenlabs');
+  assert.equal(host.querySelector('[data-find-status]').dataset.findStatus, 'loading');
+  assert.equal(text(host.querySelector('[data-find-status]')), 'Searching more apps…');
+  answer({ entries: [{ registry_name: 'co.elastic/mcp', title: 'Elastic', description: '', publisher: { label: 'elastic.co', kind: 'domain' }, kind: 'remote', url: 'https://mcp.elastic.co', inputs: [] }], unavailable: false });
+  await settle();
+  assert.deepEqual(rowKeys(host).slice(0, 2), ['app-elastic', 'app-elevenlabs'], 'the official remote Elastic moves in above');
+  assert.equal(activeRow(host).dataset.rowKey, 'app-elevenlabs', 'Enter still runs ElevenLabs');
+  assert.equal(host.querySelector('[data-find-status]'), null);
+});
+
+test('the public list hides on 404 and says so when it can’t be reached', async () => {
   const missing = stubApi();
   let host = await mount({ api: missing.api });
   await type(host, 'gm', 200);
-  assert.equal(host.querySelector('[data-group="directory"]'), null, 'a server without the directory shows no group');
+  assert.equal(host.querySelector('[data-find-status]'), null, 'a server without the public list says nothing about it');
   assert.ok(missing.calls.some((c) => c[0] === 'directory'));
   for (const u of mounted) u();
 
   const down = stubApi({ directory: async () => ({ entries: [], unavailable: true }) });
   host = await mount({ api: down.api });
   await type(host, 'gm', 200);
-  const line = host.querySelector('[data-directory-state="down"]');
+  const line = host.querySelector('[data-find-status="down-directory"]');
   assert.ok(line);
-  assert.match(text(line), /Couldn’t reach the public directory\. The tools above still work\. Try again/);
+  assert.equal(line.getAttribute('role'), 'status');
+  assert.equal(text(line), 'Couldn’t reach the public list of tool servers, so only built-in tools and Composio apps are shown. Try again');
+  assert.deepEqual(rowKeys(host), ['app-gmail'], 'the other rows still show');
+});
+
+test('Composio unreachable, and both unreachable: one quiet line, Try again retries', async () => {
+  let fail = true;
+  const { api, calls } = stubApi({
+    list: async () => listOf(composio({ added: true, can_connect: true })),
+    apps: async () => {
+      calls.push(['apps']);
+      if (fail) throw new Error('timeout');
+      return { apps: APPS, source: 'all' };
+    },
+  });
+  let host = await mount({ api });
+  await type(host, 'git', 200);
+  assert.equal(text(host.querySelector('[data-find-status="down-composio"]')), 'Couldn’t reach Composio, so its apps aren’t in this list. Try again');
+  assert.ok(rowKeys(host).includes('app-github'), 'built-in tools still show');
+  fail = false;
+  await click(host.querySelector('[data-try-again]'));
+  assert.equal(host.querySelector('[data-find-status]'), null);
+  for (const u of mounted) u();
+
+  fail = true;
+  const both = stubApi({ list: api.list, apps: api.apps, directory: async () => ({ entries: [], unavailable: true }) });
+  host = await mount({ api: both.api });
+  await type(host, 'git', 200);
+  assert.equal(text(host.querySelector('[data-find-status="down-both"]')), 'Couldn’t reach Composio or the public list. Built-in tools still show. Try again');
+  assert.equal(host.querySelector('[data-find-nothing]'), null);
 });
 
 test('a directory entry that is a built-in tool is listed once, as built in', () => {
   const notion = m.MCP_PRESETS.find((p) => p.id === 'notion');
-  const groups = m.buildGroups({
-    query: 'notion',
-    composioApps: [],
-    composioAdded: false,
+  const rows = m.mergeRows('notion', {
+    presets: m.MCP_PRESETS,
+    composio: [],
     directory: [{ registry_name: 'com.notion/mcp', title: 'Notion', description: '', publisher: { label: 'notion.com' }, kind: 'remote', url: notion.form.url + '/', inputs: [] }],
     connections: [],
-    expanded: new Set(),
   });
-  assert.deepEqual(groups.map((g) => [g.key, g.rows.length]), [['builtin', 1], ['composio', 0], ['directory', 0]]);
+  assert.deepEqual(rows.map((r) => [r.key, r.lead.id, r.others.length]), [['app-notion', 'b-notion', 0]]);
 });
 
 test('a server named like a built-in tool at another address is not that tool', () => {
   // QA (mcp-finder/qa.md): a directory "Stripe" at https://api.mcp.ai/p_stripe made the built-in Stripe read "Added".
-  const groupsWith = (query, detail) =>
-    m.buildGroups({
-      query,
-      composioApps: [],
-      composioAdded: false,
-      directory: null,
-      connections: [{ id: 'mcp:s1', kind: 'mcp', name: 'Stripe', detail, status: 'ok', used_by: [] }],
-      expanded: new Set(),
-    });
-  const stripeRow = (detail) => groupsWith('stripe', detail).find((g) => g.key === 'builtin').rows.find((r) => r.preset?.id === 'stripe');
-  assert.equal(stripeRow('api.mcp.ai').added, null, 'another host is not the built-in Stripe');
-  assert.equal(stripeRow('npx').added, null, 'a local server named Stripe is not the hosted one');
-  assert.equal(stripeRow('mcp.stripe.com').added?.id, 'mcp:s1', 'the same host is');
-  assert.equal(stripeRow('MCP.Stripe.com ').added?.id, 'mcp:s1', 'host case and spaces do not matter');
-  assert.equal(stripeRow(null).added?.id, 'mcp:s1', 'no address: the name alone decides, as before');
-  const connected = (detail) => groupsWith('', detail).find((g) => g.key === 'connected');
+  const connections = (detail) => [{ id: 'mcp:s1', kind: 'mcp', name: 'Stripe', detail, status: 'ok', used_by: [] }];
+  const stripe = (detail) =>
+    m.mergeRows('stripe', { presets: m.MCP_PRESETS, composio: [], directory: null, connections: connections(detail) }).flatMap((r) => [r.lead, ...r.others]).find((s) => s.id === 'b-stripe');
+  assert.equal(stripe('api.mcp.ai').added, null, 'another host is not the built-in Stripe');
+  assert.equal(stripe('npx').added, null, 'a local server named Stripe is not the hosted one');
+  assert.equal(stripe('mcp.stripe.com').added?.id, 'mcp:s1', 'the same host is');
+  assert.equal(stripe('MCP.Stripe.com ').added?.id, 'mcp:s1', 'host case and spaces do not matter');
+  assert.equal(stripe(null).added?.id, 'mcp:s1', 'no address: the name alone decides, as before');
+  const connected = (detail) => m.buildGroups({ composioApps: [], connections: connections(detail) }).find((g) => g.key === 'connected');
   assert.equal(connected('api.mcp.ai'), undefined, 'not listed under Connected as the built-in Stripe');
   assert.deepEqual(connected('mcp.stripe.com').rows.map((r) => r.preset?.id), ['stripe']);
 });
 
-test('more than five in a group: a Show more row that is itself an option', () => {
-  const composioApps = Array.from({ length: 8 }, (_, i) => ({ slug: `g${i}`, name: `Gapp ${i}`, description: '', tools: null, connected: false }));
-  // No built-in tool matches "gapp", so Built in is left out and the group is found by its key.
-  const c = m.buildGroups({ query: 'gapp', composioApps, composioAdded: true, directory: null, connections: [], expanded: new Set() }).find((g) => g.key === 'composio');
-  assert.ok(c, 'a Through Composio group');
-  assert.equal(c.rows.length, 6);
-  assert.equal(c.rows[5].name, 'Show 3 more through Composio');
-  const all = m.buildGroups({ query: 'gapp', composioApps, composioAdded: true, directory: null, connections: [], expanded: new Set(['composio']) }).find((g) => g.key === 'composio');
-  assert.equal(all.rows.length, 8);
+test('more than eight apps: one "Show n more apps" option', async () => {
+  const many = Array.from({ length: 11 }, (_, i) => ({ slug: `gapp${i}`, name: `Gapp ${i}` }));
+  const { api } = stubApi({ apps: async () => ({ apps: many, source: 'popular' }) });
+  const host = await mount({ api });
+  await type(host, 'gapp');
+  assert.equal(rowKeys(host).length, 8);
+  const more = host.querySelector('[data-more="apps"]');
+  assert.equal(more.getAttribute('role'), 'option');
+  assert.equal(text(more), 'Show 3 more apps');
+  await click(more);
+  assert.equal(rowKeys(host).length, 11);
+  assert.equal(host.querySelector('[data-more]'), null);
 });
 
 test('nothing anywhere: the empty state offers Add by address', async () => {
@@ -384,9 +454,8 @@ test('a connected app offers Choose bots, and the live line counts suggestions',
   });
   const host = await mount({ api, onChooseBots: (t) => chosen.push(t) });
   await type(host, 'gmail', 450);
-  const row = host.querySelector('[data-row-key="composio-c-gmail"]');
-  assert.match(text(row), /Connected.*Choose bots/);
-  assert.match(text(row), /No bot can use it yet\./);
+  const row = host.querySelector('[data-row-key="app-gmail"]');
+  assert.match(text(row), /Through Composio.*Connected · No bot can use it yet\..*Choose bots/);
   await key(input(host), 'Enter');
   assert.deepEqual(chosen, [{ kind: 'composio', slug: 'gmail', name: 'Gmail' }]);
   assert.match(text(host.querySelector('[data-find-live]')), /^\d+ suggestions?$/);
@@ -401,25 +470,23 @@ test('a maker description cut at 100 characters ends in an ellipsis; a whole one
   for (const whole of [`${cut.slice(0, 99)}.`, `${cut.slice(0, 99)})`, `${cut.slice(0, 99)}\u2026`, 'Short and cut mid-wor']) assert.equal(m.markCutDescription(whole), whole);
 });
 
-test('directory rows show the cut, keep the full text in title; a one-line row centres its name on the mark', async () => {
+test('a public-list row shows the cut and keeps the full text in title', async () => {
   const description = CUT.padEnd(100, 'x');
-  const entries = [{ registry_name: 'com.stripe/mcp', title: 'Stripe tools', description, publisher: { label: 'stripe.com' }, kind: 'remote', inputs: [] }];
+  const entries = [{ registry_name: 'io.github.zeb/zebra', title: 'Zebra payments', description, publisher: { label: 'github.com/zeb', kind: 'github' }, kind: 'remote', url: 'https://zebra.example', inputs: [] }];
   const { api } = stubApi({
-    apps: async () => ({ apps: [...APPS, { slug: 'zebratool', name: 'Stripe Zebra' }], source: 'popular' }),
+    apps: async () => ({ apps: [...APPS, { slug: 'zebratool', name: 'Zebra Tool' }], source: 'popular' }),
     directory: async () => ({ entries, unavailable: false }),
   });
   const host = await mount({ api });
-  await type(host, 'stripe', 200);
-  const dir = host.querySelector('[data-row-key="directory-com.stripe/mcp"]');
+  await type(host, 'zebra', 200);
+  const dir = host.querySelector('[data-lead="d-io.github.zeb/zebra"]');
   const p = dir.querySelector('p[title]');
   assert.equal(p.getAttribute('title'), description);
-  assert.equal(p.textContent, `${description}\u2026`);
-  assert.ok(dir.querySelector('.items-start'), 'a two-line row stays top-aligned');
-  const bare = host.querySelector('[data-row-key="composio-c-zebratool"]');
+  assert.equal(p.textContent, `${description}…`);
+  assert.match(text(dir), /Community\s*· github\.com\/zeb.*Signs in when you add it, if it asks/);
+  const bare = host.querySelector('[data-lead="c-zebratool"]');
   assert.ok(bare, 'the bare Composio row is listed');
-  assert.equal(bare.querySelector('p'), null);
-  assert.ok(bare.querySelector('.items-center > [data-row-name], .items-center [data-row-name]'));
-  assert.equal(bare.querySelector('.items-start'), null);
+  assert.equal(bare.querySelector('p[title]'), null, 'no empty description line');
 });
 
 test('installing from the directory sends the Name from the form', async () => {

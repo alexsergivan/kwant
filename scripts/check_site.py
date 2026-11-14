@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks the built site/ for the SEO and accessibility basics. Exits 1 if anything fails.
 
-  - every internal link, src, srcset, poster and asset resolves to a file in site/ (or a _redirects rule)
+  - every internal link, src, srcset, poster, data-poster, data-src, data-srcset and asset resolves to a file in site/ (or a _redirects rule)
   - one <h1> per page, and headings never skip a level going down (h2 -> h4)
   - every <img> has an alt attribute
   - title, description, canonical, og:* and twitter:* tags are present; og:image points at an existing 1200x630 card
@@ -53,11 +53,12 @@ class Page(html.parser.HTMLParser):
                 self.meta[key] = a.get("content", "")
         if tag == "link" and a.get("rel") == "canonical":
             self.canonical = a.get("href")
-        for attr in ("href", "src", "poster"):
+        for attr in ("href", "src", "poster", "data-poster", "data-src"):
             if a.get(attr) and not (tag == "link" and a.get("rel") == "canonical"):
                 self.refs.append(a[attr])
-        if a.get("srcset"):
-            self.refs += [part.split()[0] for part in a["srcset"].split(",")]
+        for attr in ("srcset", "data-srcset"):
+            if a.get(attr):
+                self.refs += [part.split()[0] for part in a[attr].split(",")]
         if tag == "title":
             self._in = "title"
         if tag == "script" and a.get("type") == "application/ld+json":
