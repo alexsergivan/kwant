@@ -529,6 +529,113 @@ fn find_tools(deferred: &[Value], raw_args: &str) -> String {
     format!("Call one with {CALL_TOOL} (name and arguments):\n{}", serde_json::to_string_pretty(&found).unwrap_or_default())
 }
 
+/// Reads back the full text of a tool result this turn trimmed (see [`TurnResults`]).
+const READ_RESULT: &str = "kwnt_read_tool_result";
+/// When the older results kept whole (all but the newest `KEEP_NEWEST`) pass this many bytes,
+/// they are all trimmed in one batch. Per batch the provider's prompt cache misses once from the
+/// first trimmed result on, so a batch has to free enough to be worth that miss; 24 KB is about
+/// 6k tokens, roughly two average tool results.
+const AGE_ABOVE_BYTES: usize = 24 * 1024;
+/// The newest results are never trimmed: the model is usually still working with them.
+const KEEP_NEWEST: usize = 4;
+/// Results shorter than this are never trimmed: the note would save almost nothing.
+const AGE_MIN_BYTES: usize = 1024;
+/// How much of a trimmed result stays, after the note.
+const STUB_HEAD_CHARS: usize = 300;
+
+/// The schema of `READ_RESULT`, offered whenever a turn has tools.
+fn read_result_tool() -> Value {
+    json!({"type": "function", "function": {
+        "name": READ_RESULT,
+        "description": "Read the full text of an earlier tool result from this turn that was trimmed to save room. \
+            Its note gives the id.",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "string", "description": "The id from the trimmed result's note."}
+        }, "required": ["id"]},
+    }})
+}
+
+/// One tool result of this turn, in the message list at `index`.
+#[derive(Debug)]
+struct KeptResult {
+    id: String,
+    tool: String,
+    text: String,
+    index: usize,
+    /// Only results that worked and are at least `AGE_MIN_BYTES` long are ever trimmed.
+    can_trim: bool,
+    trimmed: bool,
+}
+
+/// The tool results of one API turn, kept whole in memory (for this turn only) so older ones can
+/// leave the prompt and still be read back with `READ_RESULT`.
+///
+/// Trimming is done in batches and only ever adds to the trimmed set, with a note that depends
+/// only on the result itself: between batches the requests only grow at the end, and a batch
+/// changes nothing before its first newly trimmed result, so the provider's prompt cache keeps
+/// hitting on everything before it.
+#[derive(Debug, Default)]
+struct TurnResults {
+    kept: Vec<KeptResult>,
+}
+
+impl TurnResults {
+    /// Adds a tool result to the message list and remembers it.
+    fn push(&mut self, messages: &mut Vec<Value>, id: &str, tool: &str, text: String, ok: bool) {
+        self.kept.push(KeptResult {
+            id: id.to_string(),
+            tool: tool.to_string(),
+            can_trim: ok && text.len() >= AGE_MIN_BYTES,
+            index: messages.len(),
+            trimmed: false,
+            text: text.clone(),
+        });
+        messages.push(json!({"role": "tool", "tool_call_id": id, "content": text}));
+    }
+
+    /// The note a trimmed result is replaced with, plus its first `STUB_HEAD_CHARS` characters.
+    fn stub(kept: &KeptResult) -> String {
+        let chars = kept.text.chars().count();
+        let head: String = kept.text.chars().take(STUB_HEAD_CHARS).collect();
+        format!(
+            "[Earlier result of {} ({chars} chars), trimmed to save room. Call {READ_RESULT} with id \"{}\" for the full text.]\n{head}…",
+            kept.tool, kept.id
+        )
+    }
+
+    /// Once the older results kept whole pass `AGE_ABOVE_BYTES`, trims every one of them (all but
+    /// the newest `KEEP_NEWEST`) in one batch. Returns how many it trimmed and the bytes saved.
+    fn age(&mut self, messages: &mut [Value]) -> (usize, usize) {
+        let older = self.kept.len().saturating_sub(KEEP_NEWEST);
+        let older = &mut self.kept[..older];
+        let whole: usize = older.iter().filter(|k| k.can_trim && !k.trimmed).map(|k| k.text.len()).sum();
+        if whole <= AGE_ABOVE_BYTES {
+            return (0, 0);
+        }
+        let (mut count, mut saved) = (0, 0);
+        for kept in older.iter_mut().filter(|k| k.can_trim && !k.trimmed) {
+            let stub = Self::stub(kept);
+            saved += kept.text.len().saturating_sub(stub.len());
+            if let Some(m) = messages.get_mut(kept.index) {
+                m["content"] = json!(stub);
+            }
+            kept.trimmed = true;
+            count += 1;
+        }
+        (count, saved)
+    }
+
+    /// `READ_RESULT`: the full text of a result from this turn, by call id.
+    fn read(&self, raw_args: &str) -> String {
+        let id = serde_json::from_str::<Value>(raw_args).ok().and_then(|a| a["id"].as_str().map(str::to_string)).unwrap_or_default();
+        match self.kept.iter().find(|k| k.id == id) {
+            Some(k) => k.text.clone(),
+            None if id.is_empty() => format!("{READ_RESULT} needs the id from a trimmed result's note."),
+            None => format!("No tool result with id \"{id}\" in this turn. Use the id from a trimmed result's note."),
+        }
+    }
+}
+
 /// OpenAI-style function tools (`McpToolSession::openai_tools`) in the Anthropic format.
 fn anthropic_tools(tools: &[Value]) -> Vec<Value> {
     tools
@@ -1070,7 +1177,13 @@ impl ApiDriver {
         event_tx: &mpsc::Sender<RuntimeEvent>,
     ) -> Result<(String, usize, bool), ApiError> {
         let menu = tool_menu(session.map(|s| s.openai_tools()).unwrap_or_default());
-        let tools = &menu.upfront;
+        let mut tools = menu.upfront.clone();
+        // Always offered with tools, so the tool list (the start of the cached prefix) never changes mid-turn
+        if !tools.is_empty() {
+            tools.push(read_result_tool());
+        }
+        let tools = &tools;
+        let mut results = TurnResults::default();
         let max_calls = request.max_calls.max(1);
         let mut tokens = 0usize;
         if request.stream && tools.is_empty() {
@@ -1094,6 +1207,10 @@ impl ApiDriver {
             return Ok((text, usage.map_or(45, |u| u.tokens() as usize), true));
         }
         for round in 0..max_calls {
+            let (trimmed, saved) = results.age(&mut messages);
+            if trimmed > 0 {
+                tracing::info!("API turn: trimmed {trimmed} older tool results ({saved} bytes) before model call {}", round + 1);
+            }
             let body = if is_anthropic(request.url) {
                 let mut body = anthropic_body(request.model, &messages, request.max_tokens);
                 if !tools.is_empty() {
@@ -1182,13 +1299,18 @@ impl ApiDriver {
                 let mut raw_args = call["function"]["arguments"].as_str().unwrap_or("{}").to_string();
                 if name == FIND_TOOLS {
                     let found = find_tools(&menu.deferred, &raw_args);
-                    messages.push(json!({"role": "tool", "tool_call_id": id, "content": found}));
+                    results.push(&mut messages, id, name, found, true);
+                    continue;
+                }
+                if name == READ_RESULT {
+                    let full = results.read(&raw_args);
+                    results.push(&mut messages, id, name, full, true);
                     continue;
                 }
                 // A looked-up tool runs, and is approved, under its own name
                 let wrapped = (name == CALL_TOOL).then(|| serde_json::from_str::<Value>(&raw_args).unwrap_or_default());
                 if let Some(wrapped) = &wrapped {
-                    name = wrapped["name"].as_str().filter(|n| *n != FIND_TOOLS && *n != CALL_TOOL).unwrap_or_default();
+                    name = wrapped["name"].as_str().filter(|n| ![FIND_TOOLS, CALL_TOOL, READ_RESULT].contains(n)).unwrap_or_default();
                     raw_args = if wrapped["arguments"].is_object() { wrapped["arguments"].to_string() } else { "{}".into() };
                 }
                 let raw_args = raw_args.as_str();
@@ -1210,7 +1332,7 @@ impl ApiDriver {
                         ),
                     })
                     .await;
-                messages.push(json!({"role": "tool", "tool_call_id": id, "content": outcome.text}));
+                results.push(&mut messages, id, name, outcome.text, outcome.status == "ok");
             }
         }
         Err(ApiError {
@@ -2226,6 +2348,220 @@ mod tests {
     fn fake_tool(name: &str, description: &str, pad: usize) -> Value {
         json!({"type": "function", "function": {"name": name, "description": format!("{description}{}", " ".repeat(pad)),
             "parameters": {"type": "object", "properties": {"x": {"type": "string"}}}}})
+    }
+
+    /// A tool result of `len` bytes that tells where it came from in its first line.
+    fn result_text(n: usize, len: usize) -> String {
+        let mut text = format!("result {n}: ");
+        let mut line = 0;
+        while text.len() < len {
+            text.push_str(&format!("line {line} of result {n}, some file or page text the tool returned\n"));
+            line += 1;
+        }
+        text.truncate(len);
+        text
+    }
+
+    /// One model call's tool round: the assistant's call and its result.
+    fn tool_round(results: &mut TurnResults, messages: &mut Vec<Value>, n: usize, len: usize, ok: bool) {
+        let id = format!("call_{n}");
+        messages.push(json!({"role": "assistant", "content": "", "tool_calls": [
+            {"id": id, "type": "function", "function": {"name": "mcp__files__read", "arguments": format!("{{\"path\":\"f{n}.txt\"}}")}}
+        ]}));
+        results.push(messages, &id, "mcp__files__read", result_text(n, len), ok);
+    }
+
+    fn start() -> Vec<Value> {
+        vec![
+            json!({"role": "system", "content": "You are a bot. ".repeat(400)}),
+            json!({"role": "user", "content": "Read the project's files and summarise them."}),
+        ]
+    }
+
+    /// One model call of [`replay`]: the request's bytes, its prompt's bytes, and how many of those
+    /// match the previous call's prompt from the start.
+    #[derive(Debug, PartialEq, Clone, Copy)]
+    struct Call {
+        body: usize,
+        prompt: usize,
+        shared: usize,
+    }
+
+    /// The recorded shape of a long API turn: 30 tool calls, one per model call, with results of
+    /// 2-20 KB (a fixed spread, averaging about 11 KB). Replays it through the message builder the
+    /// way `chat_loop` does and returns, for each of the 31 model calls, the request's bytes and how
+    /// many bytes of its prompt (tools, then messages, the order providers cache them in) match the
+    /// previous call's from the start: what a prompt cache can reuse.
+    fn replay(aging: bool) -> Vec<Call> {
+        let tools = json!((0..12).map(|i| fake_tool(&format!("mcp__t__tool{i}"), "A tool", 900)).collect::<Vec<_>>());
+        let sizes: Vec<usize> = (0..30).map(|i| 2048 + (i * 7919 % 30) * 18 * 1024 / 29).collect();
+        let mut messages = start();
+        let mut results = TurnResults::default();
+        let mut calls = Vec::new();
+        let mut previous = String::new();
+        for round in 0..=sizes.len() {
+            if aging {
+                results.age(&mut messages);
+            }
+            let body = json!({"model": "m", "messages": messages, "stream": false, "tools": tools}).to_string();
+            let listed = json!(messages).to_string();
+            let prompt = format!("{tools}{}", &listed[..listed.len() - 1]);
+            let shared = prompt.bytes().zip(previous.bytes()).take_while(|(a, b)| a == b).count();
+            calls.push(Call { body: body.len(), prompt: prompt.len(), shared });
+            previous = prompt;
+            if let Some(len) = sizes.get(round) {
+                tool_round(&mut results, &mut messages, round, *len, true);
+            }
+        }
+        calls
+    }
+
+    #[test]
+    fn measure_request_bytes_before_and_after_aging() {
+        let (before, after) = (replay(false), replay(true));
+        let total = |c: &[Call]| c.iter().map(|x| x.body).sum::<usize>();
+        // What a prompt cache can't reuse: the prompt after the part shared with the previous call
+        let fresh = |c: &[Call]| c.iter().map(|x| x.prompt - x.shared).sum::<usize>();
+        println!("| call | before bytes | before ~tokens | after bytes | after ~tokens | after, not cacheable |");
+        println!("|---:|---:|---:|---:|---:|---:|");
+        for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+            println!("| {} | {} | {} | {} | {} | {} |", i + 1, b.body, b.body / 4, a.body, a.body / 4, a.prompt - a.shared);
+        }
+        println!("| total | {} | {} | {} | {} | {} |", total(&before), total(&before) / 4, total(&after), total(&after) / 4, fresh(&after));
+        println!("before, not cacheable: {} bytes", fresh(&before));
+        // A call whose prompt doesn't start with the whole previous prompt follows a batch
+        let missed = |c: &[Call]| c.windows(2).filter(|w| w[1].shared < w[0].prompt).count();
+        assert_eq!(missed(&before), 0, "without aging every prompt starts with the previous one");
+        let batches = missed(&after);
+        println!("batches: {batches}");
+        assert!(total(&after) * 2 < total(&before), "aging at least halves the turn's request bytes");
+        assert!(after.last().unwrap().body * 3 < before.last().unwrap().body, "the last call is under a third of before");
+        assert!(batches > 0 && batches <= 10, "trimming comes in a few batches, not every call: {batches}");
+    }
+
+    #[test]
+    fn below_the_threshold_tool_results_are_left_whole() {
+        let mut messages = start();
+        let mut results = TurnResults::default();
+        for n in 0..8 {
+            tool_round(&mut results, &mut messages, n, 4000, true);
+        }
+        let sent = messages.clone();
+        assert_eq!(results.age(&mut messages), (0, 0), "4 older results of 4 KB are 16 KB, under 24 KB");
+        assert_eq!(messages, sent);
+        assert_eq!(replay(true)[..4], replay(false)[..4], "the first calls of a turn are as before");
+    }
+
+    #[test]
+    fn above_the_threshold_older_results_become_stubs_in_one_batch() {
+        let mut messages = start();
+        let mut results = TurnResults::default();
+        for n in 0..10 {
+            tool_round(&mut results, &mut messages, n, 5000, true);
+        }
+        let (count, saved) = results.age(&mut messages);
+        assert_eq!(count, 6, "all but the newest 4");
+        assert!(saved > 6 * 4000, "{saved}");
+        let content = |n: usize| messages[2 + 2 * n + 1]["content"].as_str().unwrap().to_string();
+        let stub = content(0);
+        let note = "[Earlier result of mcp__files__read (5000 chars), trimmed to save room. Call kwnt_read_tool_result with id \"call_0\" for the full text.]\n";
+        assert!(stub.starts_with(note), "{stub}");
+        assert_eq!(stub, format!("{note}{}…", &result_text(0, 5000)[..300]));
+        for n in 1..6 {
+            assert!(content(n).starts_with("[Earlier result of"), "result {n} is trimmed");
+        }
+        for n in 6..10 {
+            assert_eq!(content(n), result_text(n, 5000), "result {n} is one of the newest 4 and stays whole");
+        }
+        assert_eq!(results.age(&mut messages), (0, 0), "nothing more to trim until the older text passes 24 KB again");
+    }
+
+    #[test]
+    fn a_second_batch_never_rewrites_the_first() {
+        let mut messages = start();
+        let mut results = TurnResults::default();
+        // The previous request's messages
+        let mut sent: Vec<Value> = Vec::new();
+        let mut batches = 0;
+        for n in 0..24 {
+            let before = messages.clone();
+            let (count, _) = results.age(&mut messages);
+            if count == 0 {
+                assert_eq!(messages, before);
+                assert_eq!(messages[..sent.len()], sent[..], "between batches a request is the previous one plus new rounds");
+            } else {
+                batches += 1;
+                let first = messages.iter().zip(&before).position(|(a, b)| a != b).unwrap();
+                assert_eq!(messages[first]["role"], "tool");
+                assert_eq!(json!(messages[..first]).to_string(), json!(before[..first]).to_string(), "the prefix stays byte-identical");
+                for (i, m) in before.iter().enumerate() {
+                    if m["content"].as_str().is_some_and(|c| c.starts_with("[Earlier")) {
+                        assert!(i < first, "an earlier stub comes before the new batch");
+                        assert_eq!(messages[i], *m, "an earlier stub is never rewritten");
+                    }
+                }
+            }
+            sent = messages.clone();
+            tool_round(&mut results, &mut messages, n, 3000 + (n % 5) * 1000, true);
+        }
+        assert!(batches >= 2, "{batches}");
+        assert_eq!(messages[3]["content"], json!(TurnResults::stub(&results.kept[0])), "a stub is the same text every time");
+    }
+
+    #[test]
+    fn read_tool_result_returns_the_full_text_or_says_the_id_is_unknown() {
+        let mut messages = start();
+        let mut results = TurnResults::default();
+        for n in 0..10 {
+            tool_round(&mut results, &mut messages, n, 6000, true);
+        }
+        results.age(&mut messages);
+        assert!(messages[3]["content"].as_str().unwrap().starts_with("[Earlier"));
+        assert_eq!(results.read(r#"{"id": "call_0"}"#), result_text(0, 6000));
+        assert_eq!(results.read(r#"{"id": "call_9"}"#), result_text(9, 6000), "a result still whole reads the same");
+        assert_eq!(
+            results.read(r#"{"id": "call_99"}"#),
+            "No tool result with id \"call_99\" in this turn. Use the id from a trimmed result's note."
+        );
+        assert!(results.read("{}").contains("needs the id"));
+        assert!(results.read("not json").contains("needs the id"));
+        assert_eq!(read_result_tool()["function"]["name"], READ_RESULT);
+    }
+
+    #[test]
+    fn errors_and_tiny_results_are_never_trimmed() {
+        let mut messages = start();
+        let mut results = TurnResults::default();
+        tool_round(&mut results, &mut messages, 0, 9000, false);
+        tool_round(&mut results, &mut messages, 1, 1023, true);
+        for n in 2..12 {
+            tool_round(&mut results, &mut messages, n, 6000, true);
+        }
+        assert_eq!(results.age(&mut messages).0, 6, "results 2-7");
+        assert_eq!(messages[3]["content"], json!(result_text(0, 9000)), "an error stays whole");
+        assert_eq!(messages[5]["content"], json!(result_text(1, 1023)), "a result under 1 KB stays whole");
+        assert!(messages[7]["content"].as_str().unwrap().starts_with("[Earlier"));
+    }
+
+    #[test]
+    fn the_anthropic_body_keeps_its_cache_breakpoint_after_trimming() {
+        let mut messages = start();
+        let mut results = TurnResults::default();
+        for n in 0..10 {
+            tool_round(&mut results, &mut messages, n, 5000, true);
+        }
+        results.age(&mut messages);
+        let body = anthropic_body("claude-x", &messages, 1000);
+        assert_eq!(body["system"][0]["cache_control"], json!({"type": "ephemeral"}));
+        let last = body["messages"].as_array().unwrap().last().unwrap();
+        let block = last["content"].as_array().unwrap().last().unwrap();
+        assert_eq!((block["type"].as_str(), block["tool_use_id"].as_str()), (Some("tool_result"), Some("call_9")));
+        assert_eq!(block["cache_control"], json!({"type": "ephemeral"}), "the last tool result still carries the breakpoint");
+        assert!(breakpoints(&body) <= 4);
+        assert_eq!(body["messages"][1]["content"][0]["type"], "tool_use");
+        let first = &body["messages"][2]["content"][0];
+        assert_eq!(first["type"], "tool_result");
+        assert!(first["content"].as_str().unwrap().starts_with("[Earlier result of mcp__files__read"));
     }
 
     #[test]
