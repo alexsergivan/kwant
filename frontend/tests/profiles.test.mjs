@@ -10,7 +10,7 @@ const load = async (path) => {
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 };
 
-const profiles = await load('../src/profiles.ts');
+const profiles = await loadBundled("export * from './src/profiles.ts';") // imports clock.ts, so it's bundled;
 // auth.ts imports spaces.ts, so it's bundled.
 const auth = await loadBundled("export * from './src/auth.ts';");
 const activity = await load('../src/kwantActivity.ts');

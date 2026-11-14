@@ -2,6 +2,7 @@
 // here only reads what H5 and H3 need: `stuck` for the attention order's rank 2, the turn start for
 // "running longest first", `held` for the line under a held message, and Try again.
 import { personFetch } from './auth';
+import { timeText } from './clock';
 
 export type H4StatusKind = 'working' | 'queued' | 'needs_you' | 'quiet' | 'stuck' | 'paused' | 'available';
 
@@ -98,10 +99,7 @@ export const h4Api = {
   },
 };
 
-const hhmm = (iso?: string): string | null => {
-  const t = iso ? Date.parse(iso) : NaN;
-  return Number.isFinite(t) ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : null;
-};
+const hhmm = (iso?: string): string | null => timeText(iso);
 
 export const isGaveUp = (s?: H4Status | null): boolean => s?.status === 'stuck' && s.reason_code === 'stalled_gave_up';
 

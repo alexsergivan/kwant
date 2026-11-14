@@ -40,8 +40,8 @@ test('status words: Ready, Out until a local time, Signed out', () => {
   const out = m.priorityStatus(list[0], engine('claude'), NOW);
   assert.equal(out.tone, 'warn');
   assert.match(out.label, /^Out until /);
-  assert.match(out.label, /03:00/);
-  assert.match(out.label, /^Out until \w{3} 03:00$/, 'a reset on another day names the day');
+  assert.match(out.label, /3:00 AM/);
+  assert.match(out.label, /^Out until \w{3} 3:00 AM$/, 'a reset on another day names the day');
   assert.equal(m.priorityStatus(list[3], engine('grok'), NOW).label, 'Signed out');
   assert.equal(m.priorityStatus(profile({ last_error: 'auth' }), engine('claude'), NOW).label, 'Signed out');
   assert.equal(m.priorityStatus(profile({ enabled: false, limited_until: '2026-11-03T03:00:00' }), engine('claude'), NOW).label, 'Off');
@@ -49,7 +49,7 @@ test('status words: Ready, Out until a local time, Signed out', () => {
   // A limit that has passed is Ready again, with no action.
   assert.equal(m.priorityStatus(profile({ limited_until: '2026-11-02T19:00:00' }), engine('claude'), NOW).label, 'Ready');
   // Same-day reset is the bare time.
-  assert.equal(m.priorityStatus(profile({ limited_until: '2026-11-02T23:30:00' }), engine('claude'), NOW).label, 'Out until 23:30');
+  assert.equal(m.priorityStatus(profile({ limited_until: '2026-11-02T23:30:00' }), engine('claude'), NOW).label, 'Out until 11:30 PM');
 });
 
 test('moving rewrites only the priorities that change', () => {
@@ -93,12 +93,12 @@ test('the list groups accounts by how bots use them, titled by the AI, with a st
 test('the failover notice is one short line, naming the limit time and the model', () => {
   const e = { kwant_id: 'k', from_profile_id: 'c1', from_name: 'Work', to_profile_id: 'x1', to_name: 'Personal', class: 'quota',
     retry_at: '2026-11-02T23:30:00', from_engine: 'claude', to_engine: 'codex', to_model: 'GPT-6.1' };
-  assert.equal(m.failoverNotice(e, NOW), 'Claude is out until 23:30 · answered on Codex (GPT-6.1)');
+  assert.equal(m.failoverNotice(e, NOW), 'Claude is out until 11:30 PM · answered on Codex (GPT-6.1)');
   assert.equal(m.failoverNotice({ ...e, class: 'auth', retry_at: undefined }, NOW), 'Claude is signed out · answered on Codex (GPT-6.1)');
   assert.equal(m.failoverNotice({ ...e, retry_at: undefined }, NOW), 'Claude is out of usage · answered on Codex (GPT-6.1)');
   // An older server sends no engine or model: the account names stand in.
   assert.equal(m.failoverNotice({ ...e, from_engine: undefined, to_engine: undefined, to_model: undefined, retry_at: undefined }, NOW), 'Work is out of usage · answered on Personal');
-  assert.equal(m.failoverNotice({ ...e, to_model: undefined, to_model_label: 'GPT-6.1' }, NOW), 'Claude is out until 23:30 · answered on Codex (GPT-6.1)');
+  assert.equal(m.failoverNotice({ ...e, to_model: undefined, to_model_label: 'GPT-6.1' }, NOW), 'Claude is out until 11:30 PM · answered on Codex (GPT-6.1)');
 });
 
 test('a chat is told once per outage', () => {
@@ -143,7 +143,7 @@ test('a saved reply reads its notice from meta.failover, so it survives a reload
   const sw = { kwant_id: 'k', from_profile_id: 'c1', to_profile_id: 'x1', from_name: 'Work', to_name: 'Personal', class: 'quota', retry_at: '2026-11-03T02:00:00Z', from_engine: 'claude', to_engine: 'codex', to_model: 'gpt-6.1' };
   const now = Date.parse('2026-11-02T20:00:00Z');
   const line = m.savedFailoverNotice(JSON.stringify({ failover: [sw] }), now);
-  assert.match(line, /^Claude is out until .*\d\d:\d\d · answered on Codex \(gpt-6\.1\)$/);
+  assert.match(line, /^Claude is out until .*\d{1,2}:\d\d [AP]M · answered on Codex \(gpt-6\.1\)$/);
   // Already parsed, and a single object, read the same.
   assert.equal(m.savedFailoverNotice({ failover: sw }, now), line);
   // Two switches in one reply: first account out, last one answered.

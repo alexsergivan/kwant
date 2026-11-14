@@ -76,7 +76,7 @@ test('Settings → Usage groups days with fresh, cached and cost', () => {
   const now = new Date('2026-10-26T15:00:00Z');
   assert.equal(m.dayLabel('2026-10-26', now), 'Today');
   assert.equal(m.dayLabel('2026-10-25', now), 'Yesterday');
-  assert.equal(m.dayLabel('2026-10-24', now), 'Sat 24 Oct');
+  assert.equal(m.dayLabel('2026-10-24', now), 'Sat, Oct 24');
 
   const html = m.daily({ rows, now });
   assert.match(html, /Today/);

@@ -3,6 +3,7 @@
 // fetch wrapper adds `?space=`). The token is never returned by any route, so nothing here holds it
 // after the PUT that saves it.
 import { personFetch } from './auth';
+import { timeText } from './clock';
 
 export type TelegramState = 'off' | 'token_saved' | 'pairing' | 'paired' | 'rejected';
 export type TelegramPoll = 'listening' | 'offline' | 'throttled';
@@ -184,11 +185,8 @@ export function qrSource(svg: string): string | null {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(t)}`;
 }
 
-/** A clock time, "10:04", in the person's locale. */
-export const hhmm = (iso: string | null): string | null => {
-  const t = iso ? Date.parse(iso) : NaN;
-  return Number.isFinite(t) ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
-};
+/** A clock time, "10:04 AM" or "10:04", on the device's own clock. */
+export const hhmm = (iso: string | null, locale?: string): string | null => timeText(iso, { locale });
 /** "Nov 7". */
 export const shortDate = (iso: string | null): string | null => {
   const t = iso ? Date.parse(iso) : NaN;

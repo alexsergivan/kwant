@@ -86,7 +86,7 @@ test('an open note: kind tag with icon and word, mono tool, ×3, bots and last t
   assert.match(html, /×3/);
   assert.match(html, /Pixel/);
   assert.match(html, /Iris/);
-  assert.match(html, /last \d\d:\d\d/);
+  assert.match(html, /last \d{1,2}:\d\d [AP]M/);
   assert.match(html, /Mark fixed/);
   assert.match(html, /aria-label="Edit note"/);
   assert.match(html, /aria-label="More actions for this note"/);
@@ -109,7 +109,7 @@ test('edited and person-written notes say so; a removed connection’s tool is g
 test('a fixed note: Fixed tag, grey text, when it was fixed, Reopen and a delete icon', () => {
   const html = ui.section(props({ initialFilter: 'fixed', initialList: list([note({ state: 'fixed', fixed_at: '2026-11-10T14:20:00Z' })]) }));
   assert.match(html, /data-note-kind="fixed"/);
-  assert.match(html, /Fixed by you · \d\d:\d\d · bots no longer see it/);
+  assert.match(html, /Fixed by you · \d{1,2}:\d\d [AP]M · bots no longer see it/);
   assert.match(html, /Reopen/);
   assert.match(html, /aria-label="Delete note"/);
   assert.doesNotMatch(html, /Mark fixed/);

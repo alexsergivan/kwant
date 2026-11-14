@@ -22,6 +22,7 @@ import {
   toolLabel,
   toolNotesApi,
 } from '../toolNotes';
+import { timeText } from '../clock';
 
 export type ToolNotesApi = Pick<typeof toolNotesApi, 'list' | 'add' | 'update' | 'remove'>;
 
@@ -87,14 +88,14 @@ const WhoLine: React.FC<{ n: ToolNote }> = ({ n }) =>
     </span>
   );
 
-/** "14:02" today, otherwise relative ("yesterday", "3 days ago"). */
+/** "2:02 PM" today (the device's own clock), otherwise relative ("yesterday", "3 days ago"). */
 const shortWhen = (ts: string | null, now: number): string => {
   if (!ts) return '';
   const t = Date.parse(ts);
   if (Number.isNaN(t)) return '';
   const d = new Date(t);
   const today = new Date(now);
-  if (d.toDateString() === today.toDateString()) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (d.toDateString() === today.toDateString()) return timeText(d) ?? '';
   return relativeTime(ts, now);
 };
 

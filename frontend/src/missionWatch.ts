@@ -11,6 +11,7 @@
 import { PersonCancelledError, personFetch } from './auth';
 import { parseMetaObject } from './questions';
 import type { Mission } from './missions';
+import { timeText } from './clock';
 
 export type WatchState =
   | 'off'
@@ -313,12 +314,9 @@ export function parseCandidates(raw: unknown): WatchCandidate[] {
 
 // ---------- Times ----------
 
-/** 24-hour HH:MM in the person's zone (or the one given, for tests). */
-export function hm(at: string | null | undefined, timeZone?: string): string {
-  if (!at) return '';
-  const d = new Date(at);
-  if (!Number.isFinite(d.getTime())) return '';
-  return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(d);
+/** A clock time on the device's own clock, in the person's zone (or the one given, for tests). */
+export function hm(at: string | null | undefined, timeZone?: string, locale?: string): string {
+  return timeText(at, { timeZone, locale }) ?? '';
 }
 
 // ---------- Order and rows ----------

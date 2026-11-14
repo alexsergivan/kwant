@@ -7,6 +7,7 @@
 
 import { PersonCancelledError, personFetch } from './auth';
 import { MissionError, Tone, ago, checkKindLabel, checkTarget, formatTokens, humanize, missionStatusLabel, missionsApi, stateLabel, untilText } from './missions';
+import { dateText, timeText } from './clock';
 
 export type GoalStatus = 'draft' | 'checking' | 'met' | 'not_met' | 'fixing' | 'unknown' | 'needs_you' | 'paused' | 'waiting';
 export type GoalMode = 'watch' | 'suggest' | 'fix';
@@ -932,13 +933,13 @@ export function missionGoalLink(m: { goal_link?: unknown; goal?: unknown }): { i
   return null;
 }
 
-/** "21:40" today, "Nov 1, 21:40" before that. */
-export function clockText(iso: string | null, now: number = Date.now()): string | null {
+/** "9:40 PM" in the last 20 h, "Nov 1, 9:40 PM" before that (on the device's own clock). */
+export function clockText(iso: string | null, now: number = Date.now(), locale?: string): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return now - d.getTime() > 20 * 3600_000 ? `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}` : time;
+  const time = timeText(d, { locale })!;
+  return now - d.getTime() > 20 * 3600_000 ? `${dateText(d, { locale })}, ${time}` : time;
 }
 
 // ---------------------------------------------------------------------------

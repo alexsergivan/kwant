@@ -4,6 +4,7 @@
 
 /** Every point error carries one of these; route on it, never on the error text. */
 export type PointCode = 'nothing' | 'stale' | 'loading' | 'failed' | 'bad_request';
+import { timeText } from './clock';
 const CODES: ReadonlySet<string> = new Set(['nothing', 'stale', 'loading', 'failed', 'bad_request']);
 
 export interface PointBox {
@@ -257,11 +258,9 @@ export function chipLine(p: { picture: boolean; host: string; path: string; fram
   return `${p.host}${p.path}`;
 }
 
-/** HH:MM in the viewer's local time, or '' for a bad time. */
+/** A clock time in the viewer's local time and format, or '' for a bad time. */
 export function clockText(at: string, locale?: string): string {
-  const t = at ? new Date(at) : null;
-  if (!t || Number.isNaN(t.getTime())) return '';
-  return t.toLocaleTimeString(locale ?? [], { hour: '2-digit', minute: '2-digit', hour12: false });
+  return timeText(at, { locale }) ?? '';
 }
 
 /** The bubble row's second line: `{host}{path} · W × H · HH:MM`. */

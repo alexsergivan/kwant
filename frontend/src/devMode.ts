@@ -3,6 +3,7 @@
 // Contract: dev-mode/plan/plan.md §3.2 and §3.6, the route JSON in dev-mode/impl/lin.md.
 
 import { personFetch } from './auth';
+import { dateText } from './clock';
 
 // ---------------------------------------------------------------------------
 // Server shapes
@@ -1359,15 +1360,15 @@ export const emptyState = (): DevModeState => ({
 // ---------------------------------------------------------------------------
 // Dev desk
 
-/** "Today", "Yesterday", or "Tue 3 Nov", in the viewer's local time. */
-export function dayLabel(iso: string, now = new Date()): string {
+/** "Today", "Yesterday", or "Tue, Nov 3" / "Tue 3 Nov", in the viewer's local time and locale. */
+export function dayLabel(iso: string, now = new Date(), locale?: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((day(now) - day(d)) / 86_400_000);
   if (diff === 0) return 'Today';
   if (diff === 1) return 'Yesterday';
-  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  return dateText(d, { locale, weekday: true }) ?? '';
 }
 
 /** The day separator goes on the first card of each day, newest first. */

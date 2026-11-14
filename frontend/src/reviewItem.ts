@@ -7,6 +7,7 @@ import type { CriterionStatus, InboxItem, ReviewItem, VerdictResult } from './ap
 import { VERDICT_WORD } from './api/inbox';
 import type { RestorePreview, RestoreResult } from './missions';
 import { TIER_LABELS } from './flightSchool';
+import { timeText } from './clock';
 
 /** What the item view hands back when an action is done (Pixel's pane removes the item, opens the next). */
 export interface ReviewDone {
@@ -43,12 +44,9 @@ export function validReviewItem(i: InboxItem | null | undefined): i is ReviewIte
   return isArr(i.criteria) && isArr(i.couldnt_verify) && isArr(i.held_actions) && !!i.risk;
 }
 
-/** "14:41" in the person's own clock, or null for a missing or bad time. */
-export function clock(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+/** "2:41 PM" or "14:41" on the person's own clock, or null for a missing or bad time. */
+export function clock(iso: string | null | undefined, locale?: string): string | null {
+  return timeText(iso, { locale });
 }
 
 /** "Needs you · medium confidence"'s second half, or null (no verdict, or no confidence). */
