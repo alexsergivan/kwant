@@ -9,7 +9,7 @@ import { PersonCancelledError, personFetch } from './auth';
 import { relativeTime } from './away';
 import { Capabilities, CapabilityChange, CapabilityChangedEvent, ENGINE_CANT_SANDBOX, ProposalDecision, ProposalStatus, Scorecard, TaskTier, Tier, TierProposal } from './flightSchool';
 import type { Risk, RiskResolution, TaskRisks } from './auditor';
-import { AuditTurn, auditTurnLine, auditWhyLine, routineSkipText } from './auditor';
+import { AuditTurn, auditShortLine, auditTurnLine, auditWhyLine, routineSkipText } from './auditor';
 import { Dispute, DisputeStatus, Fact, FactChangedEvent, FactDetail, FactDisputeEvent, FactStatus, ledgerSetting } from './truthLedger';
 
 export type TaskState = 'backlog' | 'ready' | 'working' | 'needs_you' | 'review' | 'verified' | 'blocked' | 'failed' | 'cancelled';
@@ -1627,6 +1627,9 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     case 'lessons_held_out':
       // A measurement holdout. It says nothing the person can use, so the Activity list leaves it out.
       return '';
+    case 'audit_fresh_eyes':
+      // The audit's own "Checked with fresh eyes" label says this in plain words (14a).
+      return '';
     case 'class_changed':
       return `${Who} changed its kind of work${str(d.to) ? ` to ${str(d.to)}` : ''}`;
     default:
@@ -2184,6 +2187,8 @@ export interface LiveBot {
   teamName: string;
   /** One line: what it is doing. */
   what: string;
+  /** The full line for its tooltip, when `what` is a short form (an audit's, 14a). */
+  title?: string;
   kind: 'task' | 'audit' | 'room' | 'thread' | 'chat' | 'deciding';
   since?: string;
   /** Where clicking it goes. */
@@ -2205,7 +2210,7 @@ export interface LiveContext {
 }
 
 /** What one running turn is about, and where it happens. */
-export function describeTurn(turn: BoardTurn, ctx: LiveContext): Pick<LiveBot, 'what' | 'kind' | 'place' | 'taskId'> {
+export function describeTurn(turn: BoardTurn, ctx: LiveContext): Pick<LiveBot, 'what' | 'title' | 'kind' | 'place' | 'taskId'> {
   const room = ctx.rooms?.[turn.context_id];
   const place: ChatPlace = room !== undefined
     ? { channelId: turn.context_id, kwantId: null, threadId: turn.thread_id }
@@ -2215,7 +2220,9 @@ export function describeTurn(turn: BoardTurn, ctx: LiveContext): Pick<LiveBot, '
     (t) => t.state === 'working' && taskBot(t) === turn.kwant_id && (turn.thread_id ? t.thread_id === turn.thread_id : !t.thread_id && (t.channel_id ?? t.direct_kwant_id) === turn.context_id),
   );
   // 14a: an audit's turn says who is double-checking whose work and why, and opens that task.
-  if (turn.audit) return { what: auditTurnLine(turn.audit, ctx.names, { subject: false }), kind: 'audit', place, taskId: turn.audit.task_id || null };
+  if (turn.audit) {
+    return { what: auditShortLine(turn.audit, ctx.names), title: auditTurnLine(turn.audit, ctx.names, { subject: false }), kind: 'audit', place, taskId: turn.audit.task_id || null };
+  }
   if (task) return { what: task.title, kind: 'task', place, taskId: task.id };
   if (turn.purpose === 'decide') return { what: 'Deciding how to answer', kind: 'deciding', place, taskId: null };
   if (room !== undefined) return { what: `In ${room || 'a room'}`, kind: 'room', place, taskId: null };

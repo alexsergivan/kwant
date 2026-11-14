@@ -139,17 +139,29 @@ export function auditTurnLine(a: AuditTurn, names: Record<string, string>, opts:
   );
 }
 
-/** "at 8:15 PM" today, "on Nov 7, 8:15 PM" another day. */
+/**
+ * The short line for compact places (sidebar busy line, Live now chip, header pill): the bot is
+ * already the row's name, so it says which work, with no reason and no period (14a). The full
+ * `auditTurnLine` goes in the tooltip.
+ */
+export function auditShortLine(a: AuditTurn, names: Record<string, string>): string {
+  const t = (a.task_title ?? '').replace(/^Routine:\s*/, '').trim();
+  const owner = names[a.owner_kwant_id]?.trim();
+  const what = t ? `“${t}”` : `${owner ? possessive(owner) : 'a teammate’s'} ${WORK_KIND[a.source_kind] ?? 'task'}`;
+  return a.stage === 'rebuttal' ? `Answering the double-check of ${what}` : `Double-checking ${what}`;
+}
+
+/** "today at 8:15 PM" today, "on Nov 7, 8:15 PM" another day. */
 const when = (iso: string | null | undefined, now: number): string | null => {
   const c = localClock(iso, now);
-  return c ? `${c.includes(',') ? 'on' : 'at'} ${c}` : null;
+  return c ? `${c.includes(',') ? 'on' : 'today at'} ${c}` : null;
 };
 
-/** Why a routine run went unchecked: "this routine was double-checked on Nov 7, 9:00 AM; the next check is due from Nov 14, 9:00 AM". */
+/** Why a routine run went unchecked: "this routine was double-checked today at 9:00 AM; next check from Nov 14, 9:00 AM". */
 export function routineSkipText(lastAuditAt: string | null | undefined, nextFrom: string | null | undefined, now: number = Date.now()): string {
   const last = when(lastAuditAt, now);
   const next = when(nextFrom, now);
-  if (last && next) return `this routine was double-checked ${last}; the next check is due ${next.replace(/^(on|at) /, 'from ')}`;
+  if (last && next) return `this routine was double-checked ${last}; next check from ${next.replace(/^on /, '')}`;
   if (last) return `this routine was double-checked ${last}`;
   return 'this routine was double-checked in the last week';
 }

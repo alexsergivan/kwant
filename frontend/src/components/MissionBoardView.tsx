@@ -1156,7 +1156,7 @@ export const LiveStrip: React.FC<{
                       type="button"
                       onClick={onOpen ? () => onOpen(b) : undefined}
                       disabled={!onOpen}
-                      title={`${b.name}: ${b.what.replace(/\.$/, '')}${b.more ? ` (+${b.more} more)` : ''}. ${b.kind === 'audit' ? 'Open the task.' : 'Open the conversation.'}`}
+                      title={`${b.name}: ${(b.kind === 'audit' && b.title ? b.title : b.what).replace(/\.$/, '')}${b.more ? ` (+${b.more} more)` : ''}. ${b.kind === 'audit' ? 'Open the task.' : 'Open the conversation.'}`}
                       className={`group flex items-center gap-2 w-[220px] sm:w-[240px] min-h-[44px] px-2 py-1.5 rounded-xl border text-left ${
                         b.kind === 'task' || b.kind === 'audit' ? 'border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10' : 'border-emerald-500/25 bg-emerald-500/5 hover:bg-emerald-500/10'
                       } ${focusRing}`}

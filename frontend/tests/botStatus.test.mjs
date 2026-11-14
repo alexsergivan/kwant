@@ -154,17 +154,29 @@ test('the line says when a bot waits on the person, here or elsewhere', () => {
 
 test('an audit turn says whose work it double-checks and why, here or elsewhere (14a)', () => {
   const audit = { audit_id: 'a1', task_id: 't1', task_title: 'Routine: Daily digest', source_kind: 'routine', trigger: 'low_confidence', stage: 'challenge', challenger_kwant_id: 'ben', owner_kwant_id: 'ann' };
+  const titles = {};
   const lines = s.busyLines({
     turns: [{ ...turn('a', 'ben', 'ben'), audit }, { ...turn('b', 'ann', 'open'), audit: { ...audit, stage: 'rebuttal', trigger: 'high_impact' } }],
     openCtx: 'open',
     describe,
     names: { ben: 'Ben', ann: 'Ann' },
+    titles,
   });
-  assert.equal(lines.ben, 'Double-checking Ann’s routine run “Daily digest”: nothing else checks it.');
-  assert.equal(lines.ann, 'Answering Ben’s double-check of the routine run “Daily digest”: it’s marked high priority.');
+  // The visible line names the work, short and without a period; the tooltip has who and why.
+  assert.equal(lines.ben, 'Double-checking “Daily digest”');
+  assert.equal(lines.ann, 'Answering the double-check of “Daily digest”');
+  assert.deepEqual(titles, {
+    ben: 'Double-checking Ann’s routine run “Daily digest”: nothing else checks it.',
+    ann: 'Answering Ben’s double-check of the routine run “Daily digest”: it’s marked high priority.',
+  });
   // Waiting on the person still says so.
   const asked = s.busyLines({ turns: [{ ...turn('a', 'ben', 'ben'), audit }], openCtx: 'open', describe, awaiting: new Set(['a']) });
   assert.equal(asked.ben, 'Asked you a question in another conversation');
   // No names: "a teammate's".
-  assert.equal(s.busyLines({ turns: [{ ...turn('a', 'ben', 'ben'), audit }], openCtx: 'open', describe }).ben, 'Double-checking a teammate’s routine run “Daily digest”: nothing else checks it.');
+  assert.equal(s.busyLines({ turns: [{ ...turn('a', 'ben', 'ben'), audit }], openCtx: 'open', describe }).ben, 'Double-checking “Daily digest”');
+  assert.equal(s.busyLines({ turns: [{ ...turn('a', 'ben', 'ben'), audit: { ...audit, task_title: '' } }], openCtx: 'open', describe }).ben, 'Double-checking a teammate’s routine run');
+  // An ordinary turn gets no tooltip entry.
+  const none = {};
+  s.busyLines({ turns: [turn('a', 'ben', 'x')], openCtx: 'open', describe, titles: none });
+  assert.deepEqual(none, {});
 });

@@ -102,9 +102,12 @@ const AuditBlock: React.FC<{
           {auditHeaderLine(a, names, sourceKind).replace(/\.$/, '')}
         </span>
         {tokens > 0 && <span className="tabular-nums"> · {formatTokens(tokens)} tokens</span>}
-        <span className="block" data-audit-line>
-          {auditStatusText(a, names)}
-        </span>
+        {a.status !== 'challenge' && (
+          // While challenging, the heading above already says who is double-checking (14a).
+          <span className="block" data-audit-line>
+            {auditStatusText(a, names)}
+          </span>
+        )}
       </div>
       {chipState(fresh) !== 'R3' && (
         <div className="relative flex flex-wrap gap-1.5">

@@ -3,6 +3,7 @@
 // showing only the last day unless the person asks for older.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { loadBundled } from './bundle.mjs';
 
 const store = new Map();
@@ -427,7 +428,11 @@ test('an audit turn on the Live strip says who is double-checking whose work and
   const d = m.describeTurn(turn({ purpose: 'audit', audit }), { names, teams, tasks: [] });
   assert.equal(d.kind, 'audit');
   assert.equal(d.taskId, 'tk_dig');
-  assert.equal(d.what, 'Double-checking a teammate’s routine run “Daily digest”: it’s marked high priority.');
+  assert.equal(d.what, 'Double-checking “Daily digest”');
+  assert.equal(d.title, 'Double-checking a teammate’s routine run “Daily digest”: it’s marked high priority.');
+  // The chip's tooltip uses the full line.
+  const src = readFileSync(new URL('../src/components/MissionBoardView.tsx', import.meta.url), 'utf8');
+  assert.match(src, /b\.kind === 'audit' && b\.title \? b\.title : b\.what/);
   // Even when the bot also has a working task in that chat, the audit turn says it is the audit.
   const own = task({ state: 'working', owner_kwant_id: 'k_tw', title: 'Something else', channel_id: null, direct_kwant_id: 'k_tw' });
   assert.equal(m.describeTurn(turn({ audit }), { names, teams, tasks: [own] }).kind, 'audit');
