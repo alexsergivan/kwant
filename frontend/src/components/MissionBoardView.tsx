@@ -177,6 +177,7 @@ import { MissionWatchControls, WatchBoardContext, type WatchBoard } from './Miss
 import { watchApi, type WatchApi } from '../missionWatch';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { CardWaitingChecks, WaitingCheckLine } from './WaitingCheckLine';
+import { ReceiptsDownload } from './ReceiptsDownload';
 import { waitLine } from '../waitingChecks';
 
 const TONES: Record<Tone, string> = {
@@ -580,6 +581,7 @@ export const MeasuresPanel: React.FC<{ insights: Insights | null; timeZone?: str
           )}
         </dl>
       </div>
+      <ReceiptsDownload />
     </section>
   );
 };
