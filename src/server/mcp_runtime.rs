@@ -191,6 +191,10 @@ impl ToolApprover for BrokerApprover {
     }
 
     async fn tier_gate(&self, req: &ToolApprovalRequest) -> Option<String> {
+        // A customer's turn: every call goes to the approver and asks, whatever else says it may run
+        if every_call(&req.turn_id) {
+            return Some(EVERY_CALL_REASON.to_string());
+        }
         // Boxed: keeps this future (and every caller's) small
         Box::pin(super::missions::flight_school::tier_gate(&self.db, &self.data_dir, req)).await
     }
@@ -207,6 +211,29 @@ impl ToolApprover for BrokerApprover {
             }
             None => self.decide(req).await,
         }
+    }
+}
+
+/// Turns where every tool call asks the person, whatever the bot's approvals say: a business
+/// customer's Telegram turn (customer chats). Marked by [`prepare_turn_with_opts`], cleared by
+/// [`finish_turn`].
+static EVERY_CALL_TURNS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// What a card in an [`every_call`] turn says. Product copy is Mira's.
+pub const EVERY_CALL_REASON: &str = "A customer's message started this turn, so every step asks you first.";
+
+/// Whether every call in turn `turn_id` must ask the person (see [`EVERY_CALL_TURNS`]).
+pub fn every_call(turn_id: &str) -> bool {
+    EVERY_CALL_TURNS.lock().unwrap_or_else(|e| e.into_inner()).contains(turn_id)
+}
+
+fn mark_every_call(turn_id: &str, on: bool) {
+    let mut m = EVERY_CALL_TURNS.lock().unwrap_or_else(|e| e.into_inner());
+    if on {
+        m.insert(turn_id.to_string());
+    } else {
+        m.remove(turn_id);
     }
 }
 
@@ -337,6 +364,9 @@ impl BrokerApprover {
         // own rather than from the person's message.
         if super::missions::truth_ledger::is_tainted(&req.turn_id) {
             details["tainted"] = json!(true);
+        }
+        if every_call(&req.turn_id) {
+            details["customer_chat"] = json!(true);
         }
         if self.always_ask {
             details["always_ask"] = json!(true);
@@ -571,7 +601,11 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     let target = kwant.clone();
     let (broker, tool_name) = (state.broker.clone(), approval.tool_name.clone());
     // The same agent and effort as the turn that asked, not what Laya makes of this prompt
-    let opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    let mut opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    // A customer's turn goes on as one: the person allowed this call, not the ones after it
+    if chat["purpose"].as_str() == Some(super::telegram::customers::PURPOSE) {
+        super::telegram::customers::customer_opts(&mut opts);
+    }
     tokio::spawn(async move {
         let _job = job;
         let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
@@ -684,7 +718,11 @@ pub async fn retry_expired(state: &AppState, ticket_id: &str) -> Option<Value> {
     };
     let prompt = expired_retry_prompt(&approval.tool_name, &arguments);
     let target = kwant.clone();
-    let opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    let mut opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    // A customer's turn goes on as one: the person allowed this call, not the ones after it
+    if chat["purpose"].as_str() == Some(super::telegram::customers::PURPOSE) {
+        super::telegram::customers::customer_opts(&mut opts);
+    }
     tokio::spawn(async move {
         let _job = job;
         let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
@@ -765,6 +803,9 @@ pub struct TurnApprovalOpts {
     /// The turn's purpose (`TurnOpts::purpose`), kept on its cards as `purpose`: a late answer to
     /// a card of a hidden audit turn is closed, never resumed (see [`resume_late_approval`]).
     pub purpose: Option<String>,
+    /// Every tool call asks the person, approvals off, "Ask only when risky", "always allow" and
+    /// the bot's own free tools included: a business customer's turn (see [`every_call`]).
+    pub every_call: bool,
 }
 
 /// The "would have…" lines of a replay turn.
@@ -895,6 +936,9 @@ pub async fn prepare_turn_with_opts(
     if let Some(scope) = self_scope.as_mut() {
         scope.turn_id.get_or_insert_with(|| turn_id.clone());
     }
+    if opts.every_call {
+        mark_every_call(&turn_id, true);
+    }
     // A turn that always asks reads outside text from the start (contract §2.4)
     if opts.always_ask {
         super::missions::truth_ledger::taint(&turn_id);
@@ -942,7 +986,7 @@ pub async fn prepare_turn_with_opts(
         max_tool_iterations: max_tool_iterations(setting),
         approvals: {
             let mode = state.db.kwant_approvals(&kwant.id).await.map(|m| Approvals::from_mode(&m.effective)).unwrap_or_default();
-            if (opts.always_ask && opts.strict_ask) || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
+            if opts.every_call || (opts.always_ask && opts.strict_ask) || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
                 // A strict turn asks whatever the setting says, and a Dev mode brief only reads: never tell either to just go ahead
                 Approvals::Ask
             } else if opts.always_ask && mode != Approvals::Off {
@@ -966,6 +1010,7 @@ pub async fn finish_turn(state: &AppState, token: &str) {
     state.self_tools.lock().await.remove(token);
     let session = state.mcp_sessions.lock().await.remove(token);
     if let Some(session) = session {
+        mark_every_call(&session.turn_id, false);
         super::missions::truth_ledger::end_turn(&session.turn_id);
         session.close().await;
     }
