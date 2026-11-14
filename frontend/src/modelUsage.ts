@@ -140,6 +140,31 @@ export function replyTokens(tokensUsed: number | null | undefined, meta: string 
   return { count: tokensUsed, label: `${compactTokens(tokensUsed)} tokens`, detail: `${tokensUsed.toLocaleString('en-US')} tokens, cache reads included` };
 }
 
+/**
+ * reply-chrome part 4: a reply's cost row in words, "About $0.04 · 11,812 tokens of new work", with the cache
+ * reads as a separate note. Every number is the server's (or a sum of its parts, as replyTokens counts them).
+ */
+export function replyCostWords(meta: string | null | undefined): { text: string; note: string | null } | null {
+  const u = parseTurnUsage(meta);
+  if (!u) return null;
+  const fresh = u.fresh_input + u.cache_write + u.output;
+  const fmt = (n: number) => n.toLocaleString('en-US');
+  const parts: string[] = [];
+  if (u.cost_usd != null && Number.isFinite(u.cost_usd) && u.cost_usd >= 0) parts.push(u.cost_usd < 0.01 ? 'Under 1¢' : `About $${u.cost_usd.toFixed(2)}`);
+  parts.push(`${fmt(fresh)} ${fresh === 1 ? 'token' : 'tokens'} of new work`);
+  const note = u.cache_read > 0 ? `(plus ${fmt(u.cache_read)} re-read from earlier at a small part of the price)` : null;
+  return { text: parts.join(' · '), note };
+}
+
+/** reply-chrome part 4: "Claude Sonnet 5.5, on your Work account" from ranOnLabel's "Claude · Sonnet 5.5" and the account. */
+export function ranOnWords(ranOn: string | null | undefined, account: string | null | undefined): string | null {
+  const model = ranOn ? ranOn.split(' · ').join(' ') : null;
+  const acct = account?.trim();
+  if (!model) return acct ? (/account$/i.test(acct) ? `Your ${acct}` : `The ${acct} account`) : null;
+  if (!acct) return model;
+  return /account$/i.test(acct) ? `${model}, on your ${acct}` : `${model}, on the ${acct} account`;
+}
+
 export const modelUsageApi = {
   get: (kwantId: string, limit = 20) =>
     request<ModelUsage>('GET', `/api/kwants/${encodeURIComponent(kwantId)}/model-usage?limit=${limit}`),
