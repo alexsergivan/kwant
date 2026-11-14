@@ -96,6 +96,10 @@ export interface DevFinding {
   sent_at: string | null;
   /** §3.6 item 4. */
   sent_to: string | null;
+  /** Fix it "Send to…" (#609): how the bot was picked; `chosen` when the person picked it. */
+  sent_via?: 'author' | 'team_lead' | 'chosen';
+  /** #609: the chosen bot's id (only with `sent_via: 'chosen'`). */
+  sent_to_id?: string | null;
   task_id: string | null;
   send_error: string | null;
   dismissed: { reason: DismissReason; note: string; by: string; at: string | null } | null;
@@ -225,7 +229,7 @@ export interface BackupResult {
 
 // ---- Props (agreed with Pixel through this file) ----
 
-export type FindingAction = { action: 'fix' } | { action: 'undo_fix' } | { action: 'dismiss'; reason: DismissReason; note?: string };
+export type FindingAction = { action: 'fix'; to?: string } | { action: 'undo_fix' } | { action: 'dismiss'; reason: DismissReason; note?: string };
 
 export interface RollupProps {
   rollup: DevRollup;
@@ -282,6 +286,48 @@ export interface ReviewCardProps {
   lineNotes?: import('./lineNotesApi').LineNotesApi;
   /** 0.9.0 G1: "Open {bot}'s chat" after a send. */
   onOpenChat?: (botId: string) => void;
+  /** Fix it "Send to…" (#609): `GET /api/dev/cards/:id/recipients`. Without it there is no "Goes to" line and
+   *  Fix it sends to the server's default, as before. */
+  recipients?: (cardId: string) => Promise<DevRecipients>;
+  /** #609: "Open task ›" after the Undo window (App's pending task). Without it the link hides. */
+  onOpenTask?: (taskId: string) => void;
+}
+
+// ---- Fix it "Send to…" (#609, impl.md "API for Mira and Iris" §1) ----
+
+export type RecipientVia = 'author' | 'team_lead';
+export interface RecipientBot {
+  id: string;
+  name: string;
+  team?: string;
+}
+export interface RecipientDefault extends RecipientBot {
+  via: RecipientVia;
+}
+export interface DevRecipients {
+  default: RecipientDefault | null;
+  nobody: string | null;
+  bots: RecipientBot[];
+}
+
+/** The `/recipients` answer, or null when it isn't one. A bot without an id or name is skipped. */
+export function parseRecipients(v: unknown): DevRecipients | null {
+  if (!isObj(v) || !Array.isArray(v.bots)) return null;
+  const bot = (b: unknown): RecipientBot | null => {
+    if (!isObj(b)) return null;
+    const id = str(b.id, 200);
+    const name = str(b.name, 80);
+    if (!id || !name) return null;
+    const team = str(b.team, 80);
+    return team ? { id, name, team } : { id, name };
+  };
+  const d = isObj(v.default) ? bot(v.default) : null;
+  const via = isObj(v.default) && v.default.via === 'author' ? 'author' : 'team_lead';
+  return {
+    default: d ? { ...d, via } : null,
+    nobody: str(v.nobody, 400),
+    bots: v.bots.map(bot).filter((b): b is RecipientBot => !!b),
+  };
 }
 
 export interface ReleaseNotesSheetProps {
@@ -397,6 +443,8 @@ export function finding(v: unknown): DevFinding | null {
     state: oneOf(v.state, ['open', 'sent', 'dismissed'] as const, 'open'),
     sent_at: str(v.sent_at, 64),
     sent_to: str(v.sent_to, 80),
+    ...(v.sent_via === 'author' || v.sent_via === 'team_lead' || v.sent_via === 'chosen' ? { sent_via: v.sent_via } : {}),
+    ...(str(v.sent_to_id, 200) ? { sent_to_id: str(v.sent_to_id, 200) } : {}),
     task_id: str(v.task_id, 80),
     send_error: str(v.send_error, 200),
     dismissed: d

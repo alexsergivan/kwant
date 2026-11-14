@@ -54,7 +54,8 @@ const MRow: React.FC<{
   now: number;
   busy: boolean;
   act?: (f: DevFinding, a: FindingAction) => Promise<void> | void;
-}> = ({ r, i, now, busy, act }) => {
+  onFix?: (f: DevFinding, el: HTMLElement) => void;
+}> = ({ r, i, now, busy, act, onFix }) => {
   const st = STATE[r.state];
   const f = itemFinding(r);
   // api-decisions 25: the findings' own Dismiss-with-a-reason, on the item's k{n}.
@@ -131,7 +132,7 @@ const MRow: React.FC<{
             act &&
             !dismiss.draft.open && (
               <>
-                <button type="button" className="tk-btn-sm" disabled={busy} onClick={() => void act(f, { action: 'fix' })} aria-label={`Fix it: line ${i + 1}`} data-fix={f.id}>
+                <button type="button" className="tk-btn-sm" disabled={busy} onClick={(e) => (onFix ? onFix(f, e.currentTarget) : void act(f, { action: 'fix' }))} aria-label={`Fix it: line ${i + 1}`} data-fix={f.id}>
                   {busy ? <Loader2 size={12} className="tk-spin" aria-hidden="true" /> : null}
                   {f.send_error ? 'Try again' : 'Fix it'}
                 </button>
@@ -167,9 +168,13 @@ export interface TicketMatchesProps {
   lead?: string | null;
   busy?: boolean;
   act?: (f: DevFinding, a: FindingAction) => Promise<void> | void;
+  /** Fix it "Send to…" (#609): ReviewCard's Fix it, which adds the card's pick. */
+  onFix?: (f: DevFinding, el: HTMLElement) => void;
+  /** The one shared "Goes to" line under the section head (design §1). */
+  goesTo?: React.ReactNode;
 }
 
-export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Date.now(), origins = [], lead = null, busy = false, act }) => {
+export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Date.now(), origins = [], lead = null, busy = false, act, onFix, goesTo = null }) => {
   const { met, total } = matchCount(matches.items);
   const all = matches.verdict === 'met' && total > 0 && met === total;
   const url = onSite(matches.url, origins);
@@ -194,6 +199,11 @@ export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Dat
           </span>
         )}
       </div>
+      {goesTo && (
+        <div data-matches-goes-to className="mb-1 flex flex-wrap items-center">
+          {goesTo}
+        </div>
+      )}
       <p className="tk-asked">
         Checked against the <b>Done when</b> lines in {lead ? `${lead}’s brief` : 'the brief'}, not against the PR’s own description.
       </p>
@@ -203,7 +213,7 @@ export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Dat
         <SiteOrigins.Provider value={origins}>
           <ul className="tk-mrows" role="list">
             {matches.items.map((r, i) => (
-              <MRow key={r.id ?? i} r={r} i={i} now={now} busy={busy} act={act} />
+              <MRow key={r.id ?? i} r={r} i={i} now={now} busy={busy} act={act} onFix={onFix} />
             ))}
           </ul>
         </SiteOrigins.Provider>

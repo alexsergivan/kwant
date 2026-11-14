@@ -339,7 +339,9 @@ export const filesWord = (n: number) => plural(n, 'file');
 export const notesWord = (n: number) => plural(n, 'note');
 export const draftsWord = (n: number) => plural(n, 'draft');
 export const addAria = (l: DiffLine) => (l.kind === 'del' ? `Add a note on removed line ${l.old}` : `Add a note on line ${l.new}`);
-export const sendLabel = (n: number, bot: string) => (n === 1 ? `Send note to ${bot}` : `Send ${n} notes to ${bot}`);
+/** With no bot yet (no default, no pick: Fix it "Send to…" §7) the label ends in "…" and opens the picker. */
+export const sendLabel = (n: number, bot: string | null) =>
+  bot ? (n === 1 ? `Send note to ${bot}` : `Send ${n} notes to ${bot}`) : n === 1 ? 'Send note…' : `Send ${n} notes…`;
 export const sendShort = (n: number) => `Send ${n}`;
 export const sentLine = (n: number, bot: string, at: string | null) => `Sent ${notesWord(n)} to ${bot}${at ? ` · ${at}` : ''}`;
 export const discardAsk = (n: number) => (n === 1 ? 'Discard 1 draft?' : `Discard ${n} drafts?`);
