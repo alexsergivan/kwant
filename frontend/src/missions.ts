@@ -15,7 +15,7 @@ export type TaskState = 'backlog' | 'ready' | 'working' | 'needs_you' | 'review'
 export type MissionStatus = 'draft' | 'active' | 'done' | 'cancelled';
 export type SourceKind = 'mission' | 'person' | 'delegation' | 'routine' | 'zombie' | 'work_ahead' | 'chat';
 export type CheckKind = 'command' | 'http' | 'file_exists' | 'file_contains' | 'file_sha256' | 'peer_review' | 'person';
-export type CheckStatus = 'pending' | 'needs_approval' | 'running' | 'passed' | 'failed' | 'error';
+export type CheckStatus = 'pending' | 'needs_approval' | 'running' | 'waiting' | 'passed' | 'failed' | 'error';
 export type ChecksStatus = 'not_checked' | 'pending' | 'passed' | 'failed';
 
 export type StateCounts = Record<TaskState, number>;
@@ -63,6 +63,7 @@ export interface NeedsYouItem {
     | 'approval'
     | 'human_step'
     | 'check_approval'
+    | 'check_timed_out'
     | 'may_be_invalid'
     | 'autofix_suggested'
     | 'fix_needed'
@@ -72,6 +73,9 @@ export interface NeedsYouItem {
     | 'rests_on_disputed_fact';
   id: string;
   text: string;
+  /** check_timed_out: what the person can do ("wait_more", "verify") and how long Wait adds. */
+  actions?: string[];
+  wait_more_hours?: number;
   /** fact_changed, rests_on_disputed_fact: the fact (id = fact_id), its status now and what replaced it. */
   fact_id?: string;
   status?: string;
@@ -95,6 +99,8 @@ export interface ChecksSummary {
   needs_approval?: number;
   /** How many of `needs_approval` are required, so hold the task (older servers leave it out). */
   required_needs_approval?: number;
+  /** Checks that count and wait on an outside service, or waited too long (older servers leave it out). */
+  waiting?: number;
   total: number;
 }
 
@@ -385,6 +391,14 @@ export interface Check {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** A check waiting on an outside service (exit 75): the round's first "not yet", its next run and
+   * its deadline. `timed_out_at` is set when it stopped at the deadline (status `error`). Older
+   * servers leave them out. */
+  waiting_since?: string | null;
+  next_run_at?: string | null;
+  wait_until?: string | null;
+  runs?: number;
+  timed_out_at?: string | null;
 }
 
 export type EvidenceKind = 'file' | 'url' | 'note' | 'screenshot' | 'check_output';
@@ -528,8 +542,11 @@ export function columnOfTask(t: Pick<Task, 'state' | 'flags' | 'needs_you'>): Co
   return c && (openFlags(t).length || (t.needs_you ?? []).some((n) => PERSON_ITEMS.has(n.kind))) ? 'needs_you' : c;
 }
 
+/** How many of the task's checks stopped waiting on an outside service (Needs-you `check_timed_out`). */
+export const stoppedWaiting = (t: Pick<Task, 'needs_you'>): number => (t.needs_you ?? []).filter((n) => n.kind === 'check_timed_out').length;
+
 /** Items that wait for the person whatever the task's state, so its card sits in Needs you. */
-const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change', 'check_approval', ENGINE_CANT_SANDBOX]);
+const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change', 'check_approval', 'check_timed_out', ENGINE_CANT_SANDBOX]);
 
 /**
  * The lane a phone opens on: Needs you when something waits on the person, else Working, else Ready.
@@ -827,11 +844,15 @@ function optionalWaitingCount(s: ChecksSummary): number {
  * `total`: an optional check waiting for you isn't a check that didn't pass. A task that has never
  * been checked says so, plainly.
  */
-export function checksText(s: ChecksSummary): { text: string; tone: Tone } {
+export function checksText(s: ChecksSummary, stopped = 0): { text: string; tone: Tone } {
   const n = (k: number, one: string, many: string) => (k === 1 ? one : many.replace('#', String(k)));
   if (approvalHolds(s)) return { text: n(s.required_needs_approval ?? 0, '1 check needs your OK', '# checks need your OK'), tone: 'amber' };
   if (s.status === 'not_checked') return { text: 'Not checked', tone: 'zinc' };
   if (s.status === 'failed') return { text: n(s.failed, '1 check failed', '# checks failed'), tone: 'rose' };
+  // #564 counts a check that stopped waiting in `waiting` too; the person has to act on those.
+  if (s.status === 'pending' && stopped > 0) return { text: n(stopped, '1 check stopped waiting', '# checks stopped waiting'), tone: 'amber' };
+  const waiting = (s.waiting ?? 0) - stopped;
+  if (s.status === 'pending' && waiting > 0) return { text: n(waiting, '1 check waiting', '# checks waiting'), tone: 'zinc' };
   if (s.status === 'pending') return { text: s.passed > 0 ? n(s.passed, '1 check passed, still checking', '# checks passed, still checking') : 'Checking', tone: 'zinc' };
   return { text: s.passed > 1 ? `${s.passed} checks passed` : 'Check passed', tone: 'emerald' };
 }
@@ -892,6 +913,9 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
       if (t.checks_summary.status === 'not_checked') {
         return t.reviewer?.name ? `Waiting for ${t.reviewer.name} to review` : 'Bot says done. Not checked yet';
       }
+      if (stoppedWaiting(t) > 0) return 'Waiting for you: wait longer, or verify by hand';
+      // Between looks nothing is checking: the waiting line says what it waits on.
+      if (t.checks_summary.status === 'pending' && (t.checks_summary.waiting ?? 0) > 0) return 'Bot says done';
       // While a required check runs the card reads as checking; the grey note covers optional ones.
       if (t.checks_summary.status === 'pending') return 'Bot says done. Checking';
       return optionalWaitingText(optionalWaitingCount(t.checks_summary)) ?? 'Bot says done. Checking';
@@ -1395,6 +1419,7 @@ export const CHECK_STATUS: Record<CheckStatus, { label: string; tone: Tone }> = 
   failed: { label: 'Failed', tone: 'rose' },
   error: { label: 'Couldn’t run', tone: 'rose' },
   running: { label: 'Running', tone: 'violet' },
+  waiting: { label: 'Waiting', tone: 'sky' },
   pending: { label: 'Not run yet', tone: 'zinc' },
   needs_approval: { label: 'Needs your OK', tone: 'amber' },
 };
@@ -1439,7 +1464,7 @@ export function buildReceipt(d: Pick<TaskDetail, 'task' | 'checks' | 'evidence'>
     .sort((a, b) => Date.parse(b.finished_at ?? b.created_at) - Date.parse(a.finished_at ?? a.created_at))
     .map<ReceiptLine>((c) => ({
       check: c,
-      status: checkStatusLabel(c.status),
+      status: c.status === 'error' && c.timed_out_at ? { label: 'Stopped waiting', tone: 'amber' } : checkStatusLabel(c.status),
       target: checkTarget(c),
       by: c.checked_by ? actorName(c.checked_by, c.checked_by_name, names) : null,
       output: c.evidence_id ? byId.get(c.evidence_id) ?? null : null,
@@ -1529,6 +1554,8 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     case 'check_started':
       return 'A check started';
     case 'check_result':
+      if (str(d.status) === 'waiting') return 'A check is still waiting';
+      if (str(d.status) === 'error' && d.timed_out) return 'A check stopped waiting';
       return `A check ${str(d.status) === 'passed' ? 'passed' : str(d.status) === 'error' ? 'couldn’t run' : 'failed'}`;
     case 'review':
       return `${Who} reviewed it: ${str(d.verdict) === 'pass' ? 'pass' : 'fail'}${note ? `. ${note}` : ''}`;
@@ -1824,6 +1851,8 @@ export const missionsApi = {
   tasks: () => call<{ tasks: Task[] }>('/api/tasks?limit=500').then((r) => r.tasks),
   task: (id: string) => call<TaskDetail>(`/api/tasks/${enc(id)}`),
   approveCheck: (id: string) => call<Check>(`/api/checks/${enc(id)}/approve`, 'POST', {}),
+  /** A check that stopped waiting on an outside service: wait `wait_more_hours` longer (person only). */
+  waitMore: (id: string) => call<Check>(`/api/checks/${enc(id)}/wait-more`, 'POST', {}),
   graph: (missionId: string) => call<WorkGraph>(`/api/missions/${enc(missionId)}/graph`),
   scan: (missionId: string) => call<GraphScanResult>(`/api/missions/${enc(missionId)}/graph/scan`, 'POST', {}),
   /** Settle a flag. The key rides along on `redo` too, since a verified task's redo makes a copy. */

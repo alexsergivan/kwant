@@ -1089,6 +1089,9 @@ struct ClaudeStream {
     running: std::collections::HashSet<String>,
     /// Tool calls already reported, so a repeated message isn't reported twice.
     seen: std::collections::HashSet<String>,
+    /// Running tool calls that open a page in the bot's browser, by `tool_use` id: their tool
+    /// name, so the page title in their answer reaches the activity step (`page_title`).
+    page_opens: std::collections::HashMap<String, String>,
     result_line: Option<String>,
     /// Output that isn't JSON (an older claude without `stream-json`).
     plain: String,
@@ -1208,6 +1211,9 @@ impl ClaudeStream {
                         _ => b["input"].clone(),
                     };
                     let name = b["name"].as_str().unwrap_or("tool").to_string();
+                    if super::activity::opens_page(&name) {
+                        self.page_opens.insert(id.to_string(), name.clone());
+                    }
                     events.push(RuntimeEvent::ToolCallPending { id: id.to_string(), name, args });
                 }
             }
@@ -1221,6 +1227,10 @@ impl ClaudeStream {
                         serde_json::json!({ "status": "error", "error": crate::mcp::truncate_text(&tool_result_text(&b["content"]), CLAUDE_ERROR_MAX) })
                     } else {
                         serde_json::json!({ "status": "ok" })
+                    };
+                    let result = match self.page_opens.remove(id) {
+                        Some(name) => super::activity::with_page_title(result, &name, &tool_result_text(&b["content"])),
+                        None => result,
                     };
                     events.push(RuntimeEvent::ToolCallCompleted { id: id.to_string(), result });
                 }
@@ -2255,6 +2265,32 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// 0.9.8 browser panel: a `browser_open` that went fine carries the page's title to its
+    /// activity step; other tools don't, and a failed open doesn't.
+    #[test]
+    fn claude_stream_passes_the_opened_pages_title_on() {
+        let t0 = Instant::now();
+        let mut s = ClaudeStream::default();
+        let page = serde_json::json!({"url": "http://roastco.example.com/", "title": "RoastCo · Shop", "status": "navigated"}).to_string();
+        let call = |id: &str, name: &str| {
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":id,"name":name,"input":{"url":"http://roastco.example.com/"}}]}}).to_string()
+        };
+        let answer = |id: &str, is_error: bool| {
+            serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":id,"is_error":is_error,"content":[{"type":"text","text":page}]}]}}).to_string()
+        };
+        let result_of = |events: Vec<RuntimeEvent>| match events.as_slice() {
+            [RuntimeEvent::ToolCallCompleted { result, .. }] => result.clone(),
+            other => panic!("{other:?}"),
+        };
+        s.line(&call("o", "mcp__kwnt_tools__browser_open"), t0);
+        assert_eq!(result_of(s.line(&answer("o", false), t0)), serde_json::json!({"status": "ok", "title": "RoastCo · Shop"}));
+        s.line(&call("f", "WebFetch"), t0);
+        assert_eq!(result_of(s.line(&answer("f", false), t0)), serde_json::json!({"status": "ok"}));
+        s.line(&call("e", "mcp__kwnt_tools__browser_open"), t0);
+        assert!(result_of(s.line(&answer("e", true), t0)).get("title").is_none());
+        assert!(s.page_opens.is_empty(), "nothing left over once the calls end");
     }
 
     #[test]

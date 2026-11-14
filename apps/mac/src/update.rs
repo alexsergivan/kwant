@@ -11,7 +11,7 @@
 use kwnt::app_update::{Available, State, Status, UpdateHub, Updater};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 const RELEASES: &str = "https://github.com/alexsergivan/kwant/releases";
@@ -44,17 +44,12 @@ pub fn menu_item(status: &Status) -> Option<(String, bool)> {
 }
 
 /// Registers the updater on kwant's hub and starts the checks. Only when this app runs the
-/// server: an attached kwant serves its own `/api/app/update`.
-pub fn start(app: &AppHandle) {
+/// server: an attached kwant serves its own `/api/app/update`. The registration is done when
+/// this returns (the checks run later, on their own thread), so a window that asks after it
+/// hears `supported: true`. Call it once: `crate::start_updates` makes sure of that.
+pub fn start<R: Runtime>(app: &AppHandle<R>) {
     let hub = UpdateHub::shared();
-    let current = app.package_info().version.to_string();
-    let updater = Arc::new(MacUpdater {
-        app: app.clone(),
-        hub: hub.clone(),
-        found: Arc::new(Mutex::new(None)),
-    });
-    hub.register(&current, updater);
-    tracing::info!(current, "in-app updates on");
+    register(app, hub.clone());
     std::thread::Builder::new()
         .name("kwant-update-check".into())
         .spawn(move || {
@@ -72,6 +67,18 @@ pub fn start(app: &AppHandle) {
         .ok();
 }
 
+/// Puts this app's updater on `hub`: from now on it answers `supported: true` and can install.
+fn register<R: Runtime>(app: &AppHandle<R>, hub: Arc<UpdateHub>) {
+    let current = app.package_info().version.to_string();
+    let updater = Arc::new(MacUpdater {
+        app: app.clone(),
+        hub: hub.clone(),
+        found: Arc::new(Mutex::new(None)),
+    });
+    hub.register(&current, updater);
+    tracing::info!(current, "in-app updates on");
+}
+
 /// Due on the first look, then once `CHECK_EVERY` has passed on the wall clock (or the clock
 /// went back).
 fn check_due(last: Option<SystemTime>, now: SystemTime) -> bool {
@@ -83,14 +90,14 @@ fn check_due(last: Option<SystemTime>, now: SystemTime) -> bool {
     }
 }
 
-struct MacUpdater {
-    app: AppHandle,
+struct MacUpdater<R: Runtime> {
+    app: AppHandle<R>,
     hub: Arc<UpdateHub>,
     /// The last check's release, which install downloads.
     found: Arc<Mutex<Option<Update>>>,
 }
 
-impl Updater for MacUpdater {
+impl<R: Runtime> Updater for MacUpdater<R> {
     fn check(&self) {
         let (app, hub, found) = (self.app.clone(), self.hub.clone(), self.found.clone());
         tauri::async_runtime::spawn(async move {
@@ -196,6 +203,22 @@ mod tests {
             check_due(Some(t + Duration::from_secs(60)), t),
             "clock went back"
         );
+    }
+
+    /// The hub answers `supported: true` as soon as `register` returns, not after the first check:
+    /// `ensure_local` relies on it to register before it hands a window the port.
+    #[test]
+    fn a_registered_updater_is_supported_at_once() {
+        let app = tauri::test::mock_app();
+        let hub = Arc::new(UpdateHub::new());
+        hub.mark_desktop_app();
+        assert!(!hub.status().supported, "a desktop app's hub is off until its updater registers");
+        register(app.handle(), hub.clone());
+        let s = hub.status();
+        assert!(s.supported);
+        assert!(s.can_install);
+        assert_eq!(s.state, State::Idle, "no check has run yet");
+        assert_eq!(s.current, app.package_info().version.to_string());
     }
 
     #[test]
