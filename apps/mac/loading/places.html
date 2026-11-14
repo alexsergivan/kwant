@@ -1,0 +1,206 @@
+<!doctype html>
+<!-- The place picker (design: /home/maus/shared/ship-software-safely/autonomy/desktop-island/design.md 9.2,
+     mockups/src/places.css). A bundled page in its own small window ("places"), with no command
+     capability. Rust gives it the rows with window.eval("kwantPlaces.show({...})"); it answers only by
+     navigating to kwant-places://… (ready, switch?i=N&side=0|1, add, run-here, close, size?h=N), which
+     on_navigation catches and refuses (src/picker.rs, rules in src/switcher.rs). A row is named by its
+     index in the rows Rust gave, never by a name or an address. Every name and status goes in with
+     textContent; only our own glyphs and icons are built as SVG elements. -->
+<html><head><meta charset="utf-8"><meta name="color-scheme" content="dark">
+<title>Places</title>
+<style>
+@font-face { font-family: "Pixelify Sans"; src: url("pixelify-sans.woff2") format("woff2"); font-weight: 400 700; font-display: block; }
+html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; -webkit-user-select: none; cursor: default; }
+/* 16 px of transparent margin around the card for its shadow (switcher.rs PICKER_MARGIN) */
+#root { padding: 16px; width: 300px; }
+.kw-picker { box-sizing: border-box; width: 300px; padding: 6px; border-radius: 12px; background: #1a1538;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .10), 0 18px 48px rgb(0 0 0 / .55), 0 2px 6px rgb(0 0 0 / .4);
+  color: #f7f6ff; font: 400 13px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, sans-serif;
+  animation: kw-pick-in 120ms cubic-bezier(.2, .8, .2, 1) backwards; }
+@keyframes kw-pick-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .kw-picker { animation: none; } }
+.kw-picker h1 { margin: 4px 8px 6px; font: 500 12px/20px "Pixelify Sans", monospace; letter-spacing: .06em; text-transform: uppercase; color: #bcb7de; }
+.kw-pick { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 18px; align-items: center; column-gap: 10px; height: 44px; padding: 0 8px; border-radius: 8px; cursor: pointer; outline: none; }
+.kw-pick.is-sel { background: #231d4b; box-shadow: inset 0 0 0 1px rgb(184 173 255 / .45); }
+.kw-pick .tile { width: 28px; height: 28px; border-radius: 7px; background: #231d4b; display: grid; place-items: center; color: #b8adff; }
+.kw-pick.is-sel .tile { background: #2c2552; }
+.kw-pick .tile .glyph { width: 14px; height: 14px; }
+.kw-pick .tx { min-width: 0; }
+.kw-pick .nm { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kw-pick .sub { display: block; font-size: 12px; color: #9a94c4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kw-pick .sub.bad { color: #fda4af; }
+.kw-pick .n { min-width: 20px; height: 20px; padding: 0 5px; box-sizing: border-box; border-radius: 5px; background: #ffb020; color: #1b1033; font: 700 12px/20px -apple-system, "Segoe UI", Inter, sans-serif; text-align: center; font-variant-numeric: tabular-nums; }
+.kw-pick .cur { color: #b8adff; display: inline-flex; } .kw-pick .cur svg { width: 16px; height: 16px; }
+.kw-pick kbd { width: 18px; height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .14); color: #9a94c4; font: 500 11px/18px -apple-system, "Segoe UI", Inter, sans-serif; text-align: center; }
+.kw-pick.act { grid-template-columns: 28px 1fr; height: 40px; color: #d9d6f0; }
+.kw-pick.act .nm { font-weight: 500; }
+.kw-pick.act .tile { background: transparent; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .14); color: #bcb7de; }
+.kw-pick.act .tile svg { width: 15px; height: 15px; }
+.kw-picker hr { border: 0; height: 1px; background: rgb(255 255 255 / .07); margin: 6px 4px; }
+.kw-picker .hint { display: flex; gap: 12px; padding: 6px 8px 2px; font-size: 11px; line-height: 17px; color: #9a94c4; }
+.kw-picker .hint kbd { font: inherit; color: #bcb7de; }
+</style></head>
+<body>
+<div id="root"><div class="kw-picker" role="dialog" aria-label="Places">
+  <h1>Places</h1>
+  <div id="rows" role="listbox" aria-label="Places"></div>
+  <hr>
+  <div id="acts"></div>
+  <div class="hint"><span><kbd>↑↓</kbd> move</span><span><kbd>↩</kbd> switch</span><span><kbd id="side-key">⌥↩</kbd> open side by side</span></div>
+</div></div>
+<script>
+(function () {
+  'use strict';
+  var SVG = 'http://www.w3.org/2000/svg';
+  // 7x7 pixel glyphs (mockups/src/perch.js)
+  var GLYPHS = {
+    mac: ['.......', '.#####.', '.#...#.', '.#...#.', '.#####.', '#######', '.......'],
+    server: ['.#####.', '.#..#..', '.#####.', '.......', '.#####.', '.#..#..', '.#####.']
+  };
+  var ICONS = { check: 'M20 6 9 17l-5-5', plus: 'M12 5v14M5 12h14', play: 'M7 5v14l11-7z' };
+
+  function glyph(kind) {
+    var svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('class', 'glyph');
+    svg.setAttribute('viewBox', '0 0 7 7');
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.setAttribute('aria-hidden', 'true');
+    (GLYPHS[kind] || GLYPHS.server).forEach(function (line, y) {
+      for (var x = 0; x < line.length; x++) {
+        if (line[x] !== '#') continue;
+        var r = document.createElementNS(SVG, 'rect');
+        r.setAttribute('x', x); r.setAttribute('y', y); r.setAttribute('width', 1); r.setAttribute('height', 1);
+        r.setAttribute('fill', 'currentColor');
+        svg.appendChild(r);
+      }
+    });
+    return svg;
+  }
+  function icon(name) {
+    var svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', name === 'play' ? 'currentColor' : 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', name === 'play' ? '1.5' : '2.25');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    var p = document.createElementNS(SVG, 'path');
+    p.setAttribute('d', ICONS[name] || ICONS.plus);
+    svg.appendChild(p);
+    return svg;
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = String(text);
+    return e;
+  }
+  // a long host is cut in the middle (design.md 9.2: at 30)
+  function midcut(s, max) {
+    var a = Array.from(s);
+    if (a.length <= max) return s;
+    var keep = max - 1, h = Math.ceil(keep / 2);
+    return a.slice(0, h).join('') + '…' + a.slice(a.length - (keep - h)).join('');
+  }
+
+  // One navigation at a time: two in the same moment may lose the first.
+  var queue = [], busy = false;
+  function send(what) {
+    queue.push(what);
+    if (!busy) pump();
+  }
+  function pump() {
+    var next = queue.shift();
+    if (next === undefined) { busy = false; return; }
+    busy = true;
+    location.href = 'kwant-places://' + next;
+    setTimeout(pump, 40);
+  }
+
+  var items = [];   // [{el, go(side)}]: the rows, then the actions
+  var nRows = 0, sel = 0;
+
+  function select(i) {
+    if (!items.length) return;
+    sel = Math.max(0, Math.min(items.length - 1, i));
+    items.forEach(function (it, j) {
+      it.el.classList.toggle('is-sel', j === sel);
+      if (it.row) it.el.setAttribute('aria-selected', j === sel ? 'true' : 'false');
+    });
+  }
+
+  function show(data) {
+    data = data || {};
+    var rows = Array.isArray(data.rows) ? data.rows : [];
+    var acts = Array.isArray(data.actions) ? data.actions : [];
+    document.getElementById('side-key').textContent = data.mac ? '⌥↩' : 'Alt+↩';
+    var list = document.getElementById('rows'), actList = document.getElementById('acts');
+    list.replaceChildren(); actList.replaceChildren();
+    items = [];
+    nRows = rows.length;
+    var current = -1;
+    rows.forEach(function (r, i) {
+      var row = el('div', 'kw-pick');
+      row.setAttribute('role', 'option');
+      var tile = el('span', 'tile'); tile.appendChild(glyph(r.kind === 'mac' ? 'mac' : 'server'));
+      var tx = el('span', 'tx');
+      var name = String(r.name || '');
+      var nm = el('span', 'nm', r.kind === 'server' ? midcut(name, 30) : name);
+      if (r.kind === 'server') nm.title = name;
+      tx.appendChild(nm);
+      tx.appendChild(el('span', 'sub' + (r.bad ? ' bad' : ''), r.sub || ''));
+      var n = Math.max(0, Math.floor(Number(r.n) || 0));
+      var right;
+      if (n > 0) {
+        right = el('span', 'n', n > 99 ? '99+' : n);
+        right.setAttribute('aria-label', n + ' waiting');
+      } else if (r.cur) {
+        right = el('span', 'cur'); right.appendChild(icon('check'));
+        right.setAttribute('aria-label', 'You are here');
+      } else {
+        right = el('span');
+      }
+      if (r.cur) current = i;
+      row.append(tile, tx, right, el('kbd', '', i < 9 ? i + 1 : ''));
+      var go = function (side) { send('switch?i=' + i + '&side=' + (side ? 1 : 0)); };
+      items.push({ el: row, go: go, row: true });
+      list.appendChild(row);
+    });
+    acts.forEach(function (a) {
+      var id = a.id === 'run-here' ? 'run-here' : 'add';
+      var row = el('div', 'kw-pick act');
+      row.setAttribute('role', 'button');
+      var tile = el('span', 'tile'); tile.appendChild(icon(a.icon === 'play' ? 'play' : 'plus'));
+      row.append(tile, el('span', 'nm', a.label || ''));
+      items.push({ el: row, go: function () { send(id); } });
+      actList.appendChild(row);
+    });
+    items.forEach(function (it, j) {
+      it.el.addEventListener('mousemove', function () { if (sel !== j) select(j); });
+      it.el.addEventListener('click', function (e) { it.go(e.altKey); });
+    });
+    // Enter goes to the next place by default, like switching apps
+    select(nRows > 1 ? (current === 0 ? 1 : 0) : 0);
+    requestAnimationFrame(function () {
+      var h = Math.ceil(document.querySelector('.kw-picker').getBoundingClientRect().height);
+      send('size?h=' + Math.min(9999, h));
+    });
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { e.preventDefault(); send('close'); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); select(sel + 1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); select(sel - 1); return; }
+    if (e.key === 'Enter') { e.preventDefault(); if (items[sel]) items[sel].go(e.altKey); return; }
+    if (!e.metaKey && !e.ctrlKey && /^Digit[1-9]$/.test(e.code)) {
+      var i = Number(e.code.slice(5)) - 1;
+      if (i < nRows) { e.preventDefault(); items[i].go(e.altKey); }
+    }
+  });
+
+  window.kwantPlaces = { show: show };
+  send('ready');
+})();
+</script>
+</body></html>
