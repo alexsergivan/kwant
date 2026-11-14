@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Features: self-hosted AI agent orchestration · kwant</title>
 <meta name="description" content="Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
-<meta name="theme-color" content="#f4f1ff">
-<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#0d0a1f">
+<meta name="color-scheme" content="dark">
 <link rel="canonical" href="https://kwant.si/features">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="kwant">
@@ -28,22 +28,22 @@
 <link rel="icon" href="favicon.svg?v=0abbeedab4" type="image/svg+xml">
 <link rel="icon" href="favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1bc2442f39">
-<link rel="preload" href="assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=f5c1c666c5">
+<link rel="preload" href="assets/fonts/pixelify-sans.woff2?v=4840ba0cdf" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/inter-var.woff2?v=977e43492e" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/jetbrains-mono.woff2?v=8247becaf0" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/css/site.css?v=6aad372047">
 </head>
 <body class="page-features">
 <a class="skip" href="#main">Skip to content</a>
-<header class="site-header">
-  <div class="wrap">
+<header class="topbar">
+  <nav class="pill px" aria-label="Main">
     <a class="brand" href="./" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
-    <nav class="nav" aria-label="Main">
-      <a href="/features" aria-current="page">Features</a>
-      <a href="/docs/quickstart">Docs</a>
-      <a href="/blog/">Blog</a>
-      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
-    </nav>
-  </div>
+    <a class="nl" href="/features" aria-current="page">Features</a>
+    <a class="nl" href="/docs/quickstart">Docs</a>
+    <a class="nl" href="/blog/">Blog</a>
+    <a class="nl stars" href="https://github.com/alexsergivan/kwant" rel="noopener" aria-label="kwant on GitHub, 527 stars"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><b>★ 527</b></a>
+    <a class="btn btn-solid btn-get px" href="/docs/quickstart">Get started</a>
+  </nav>
 </header>
 <main id="main">
 <section class="page-head">
@@ -54,30 +54,12 @@
   </div>
 </section>
 
-<nav class="jump-bar" aria-labelledby="jump-label">
+<nav class="jump-bar" aria-label="On this page">
   <div class="wrap">
     <div class="jump-scroll">
-      <p class="jump-label" id="jump-label">On this page</p>
+      <p class="jump-label" aria-hidden="true">Jump</p>
+      <ul class="jump"><li><a class="ver" href="#new-0910">0.9.10</a></li><li><a class="ver" href="#new-099">0.9.9</a></li><li><a class="ver" href="#new-098">0.9.8</a></li><li><a class="ver" href="#new-097">0.9.7</a></li><li><a class="ver" href="#new-096">0.9.6</a></li><li><a class="ver" href="#new-095">0.9.5</a></li></ul><span class="sep" aria-hidden="true"></span>
       <ul class="jump">
-        <li><a href="#new-097">New in 0.9.7</a></li>
-        <li><a href="#new-096">New in 0.9.6</a></li>
-        <li><a href="#new-095">New in 0.9.5</a></li>
-        <li><a href="#new-09">New in 0.9.4</a></li>
-        <li><a href="#new-08">New in 0.8.2</a></li>
-        <li><a href="#new-077">New in 0.7.7</a></li>
-        <li><a href="#new-076">New in 0.7.6</a></li>
-        <li><a href="#new-075">New in 0.7.5</a></li>
-        <li><a href="#new-074">New in 0.7.4</a></li>
-        <li><a href="#new-073">New in 0.7.3</a></li>
-        <li><a href="#new-072">New in 0.7.2</a></li>
-        <li><a href="#new-071">New in 0.7.1</a></li>
-        <li><a href="#new-07">New in 0.7</a></li>
-        <li><a href="#new-0611">New in 0.6.11</a></li>
-        <li><a href="#new-069">New in 0.6.9</a></li>
-        <li><a href="#new-065">New in 0.6.5</a></li>
-        <li><a href="#new-064">New in 0.6.4</a></li>
-        <li><a href="#new-06">New in 0.6</a></li>
-        <li><a href="#new-05">New in 0.5</a></li>
         <li><a href="#discovery">Suggested routines</a></li>
         <li><a href="#new-teams">Hand-offs &amp; review</a></li>
         <li><a href="#performance">Performance &amp; audits</a></li>
@@ -98,10 +80,134 @@
   </div>
 </nav>
 
+<section id="new-0910" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.10</span><time datetime="2026-11-14">Nov 14, 2026</time></p>
+      <h2>How much of each AI account is left, and a Done mark on finished replies</h2>
+      <p>Each Claude or Codex sign-in shows how much of its 5-hour and weekly limit is left. A job's last reply shows a Done mark, and a reply that needs your OK has Approve under it. The Another app search lists every app once, with how it signs in.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="account-usage">How much of each AI account is left</h3>
+        <p>Each Claude or Codex sign-in on <strong>Apps &amp; accounts</strong> shows two thin bars, like <strong>5-hour · 93% left · resets 22:29</strong> and <strong>Weekly · 44% left</strong>. A bar turns amber below 20% left. Claude's numbers come in with every turn; <strong>Check now</strong> reads them when you ask, at most once a minute and never by itself. A failed check says why, like <strong>Codex is signed out</strong>. The model badge on a bot's avatar shows the same line. API-key accounts show no bars.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v0910-account-usage-2880.webp?v=adf88cc3e1" data-caption="Settings › Apps &amp; accounts with &quot;Sign-ins and settings&quot; open. The Claude Code CLI sign-in card shows &quot;Usage · checked 14 min ago&quot; with a Check now button, a 5-hour bar at 93% left (resets 10:34 AM) and an amber Weekly bar at 17% left (resets Mon 12:13 PM). The OpenAI Codex CLI card below reads &quot;Usage · press Check now&quot;."><img class="app" src="assets/media/v0910-account-usage-1440.webp?v=72ce2c91dd" srcset="assets/media/v0910-account-usage-1440.webp?v=72ce2c91dd 1440w, assets/media/v0910-account-usage-2880.webp?v=adf88cc3e1 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings › Apps &amp; accounts with &quot;Sign-ins and settings&quot; open. The Claude Code CLI sign-in card shows &quot;Usage · checked 14 min ago&quot; with a Check now button, a 5-hour bar at 93% left (resets 10:34 AM) and an amber Weekly bar at 17% left (resets Mon 12:13 PM). The OpenAI Codex CLI card below reads &quot;Usage · press Check now&quot;."></a></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="reply-chrome">Replies say when a job is done</h3>
+        <p>A job's final reply gets a <strong>Done</strong> mark after the bot's name, or what checked it: <strong>Checked</strong>, <strong>Partly checked</strong>, <strong>Check failed</strong> or <strong>Not checked</strong>. When a reply asks for your OK, <strong>Approve</strong> and <strong>Change…</strong> sit under it. The name line is just name, mark, time and <strong>Details</strong>, which says in words why that bot answered.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v0910-reply-done-2880.webp?v=3d5c7dcc93" data-caption="Ann&#x27;s direct chat. Her reply on the Ridgeline 2P size chart (12 sizes match the supplier sheet, floor 218 × 132 cm, peak height 104 cm, packed weight 1.9 kg) ends &quot;Done: the Ridgeline 2P size chart matches the supplier sheet.&quot; A holographic Checked mark sits by her name, and the line under the reply reads &quot;Checked: 2 of 2 checks passed, the criterion has evidence.&quot;"><img class="app" src="assets/media/v0910-reply-done-1440.webp?v=4aa627384c" srcset="assets/media/v0910-reply-done-1440.webp?v=4aa627384c 1440w, assets/media/v0910-reply-done-2880.webp?v=3d5c7dcc93 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Ann&#x27;s direct chat. Her reply on the Ridgeline 2P size chart (12 sizes match the supplier sheet, floor 218 × 132 cm, peak height 104 cm, packed weight 1.9 kg) ends &quot;Done: the Ridgeline 2P size chart matches the supplier sheet.&quot; A holographic Checked mark sits by her name, and the line under the reply reads &quot;Checked: 2 of 2 checks passed, the criterion has evidence.&quot;"></a></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="one-app-search">Every app in one search</h3>
+        <p>The <strong>Another app</strong> search on <strong>Apps &amp; accounts</strong> shows Composio apps, built-in tools and tool servers from the public directory in one list, one row per app. Each row says where it comes from and how it signs in, like <strong>Sign in with your Notion account</strong>; other ways to add the same app fold under it.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v0910-one-app-search-2880.webp?v=48e74752a2" data-caption="Settings › Apps &amp; accounts, Another app, searching &quot;stripe&quot;. Stripe is one row with &quot;Official · stripe.com&quot;, &quot;Sign in with your Stripe account&quot; and Connect. Its &quot;2 other ways to add it&quot; is open: Through Composio (sign in with your account, Connect) and Community · github.com/paylabs (your own Stripe API key, Add). Stripe Helper is its own row (Community · stripe-helper.com, your own Stripe API key)."><img class="app" src="assets/media/v0910-one-app-search-1440.webp?v=2b83d2be05" srcset="assets/media/v0910-one-app-search-1440.webp?v=2b83d2be05 1440w, assets/media/v0910-one-app-search-2880.webp?v=48e74752a2 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings › Apps &amp; accounts, Another app, searching &quot;stripe&quot;. Stripe is one row with &quot;Official · stripe.com&quot;, &quot;Sign in with your Stripe account&quot; and Connect. Its &quot;2 other ways to add it&quot; is open: Through Composio (sign in with your account, Connect) and Community · github.com/paylabs (your own Stripe API key, Add). Stripe Helper is its own row (Community · stripe-helper.com, your own Stripe API key)."></a></div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0910" class="span3"><h3>Smaller changes in 0.9.10</h3><p>Memory search finds notes by meaning when the space has an OpenAI key or a local Ollama embedding model. Bots can quote a space's own documents from its docs folder, checked word for word. Dev mode offers a modern-web skill once for web projects, so bots look up Google Chrome's Modern Web Guidance before writing browser code.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-099" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.9</span><time datetime="2026-11-13">Nov 13, 2026</time></p>
+      <h2>A browser panel that follows your bot, and AI use over 7 or 30 days, by model</h2>
+      <p>The browser panel opens when your bot browses and lists the pages it opened. See your AI use for 7 or 30 days, day by day and by model. Routines open from the sidebar, with a Weekdays chip and schedules in words.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="browser-panel">A browser panel that follows your bot</h3>
+        <p>When a bot opens a page in its browser, the panel opens by itself, with the bot's name, a <strong>Browsing now</strong> or <strong>Finished</strong> line and a Live pill, and closes again shortly after the bot is done, unless you used it. <strong>Pages this reply</strong> lists each page the reply opened, by title, with <strong>Now</strong> on the current one. A chip on the reply, like <strong>Ben opened 2 pages</strong>, reopens it; on a phone it opens as a sheet. <strong>Point</strong> and <strong>Take over</strong> sit under the preview, and <strong>Enlarge</strong> shows the page bigger, view only.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v099-browser-panel-2880.webp?v=5a7a9ced2b" data-caption="Ben is working on &quot;Can you compare our two tents on the shop and check both pages are right?&quot;. The chip &quot;Ben is on shop.example.com · 2 pages&quot; sits in the reply&#x27;s steps. Ben&#x27;s browser panel opened by itself on the right: &quot;Browsing now&quot;, a Live pill on the Summit 3P Tent page, and &quot;Pages this reply · 2&quot; with Summit 3P Tent marked Now."><img class="app" src="assets/media/v099-browser-panel-1440.webp?v=49ff7edd72" srcset="assets/media/v099-browser-panel-1440.webp?v=49ff7edd72 1440w, assets/media/v099-browser-panel-2880.webp?v=5a7a9ced2b 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Ben is working on &quot;Can you compare our two tents on the shop and check both pages are right?&quot;. The chip &quot;Ben is on shop.example.com · 2 pages&quot; sits in the reply&#x27;s steps. Ben&#x27;s browser panel opened by itself on the right: &quot;Browsing now&quot;, a Live pill on the Summit 3P Tent page, and &quot;Pages this reply · 2&quot; with Summit 3P Tent marked Now."></a></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="usage-history">AI use over 7 or 30 days, by model</h3>
+        <p><strong>AI use</strong> in Settings › All spaces › Usage switches between <strong>7 days</strong> and <strong>30 days</strong>: the total, a bar for each day (a quiet day shows as a gap), and <strong>By model</strong>, each model's share. When no model reported a cost, it counts fresh tokens instead.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v099-usage-history-2880.webp?v=279aa7fcb2" data-caption="Settings › AI use at 7 days: &quot;$8.36 in the last 7 days&quot;, a bar per day from Sun 8 Nov to today with one quiet day, and a hovered bar reading &quot;Yesterday: $1.31&quot;. Below are By model (claude-sonnet-5-5 $4.91 59%, claude-opus-5-5 $3.44 41%, Codex · GPT-5.5 &quot;No cost reported&quot;) and By day, which shows fresh tokens, cache reads and cost per bot."><img class="app" src="assets/media/v099-usage-history-1440.webp?v=e6ebf36bdb" srcset="assets/media/v099-usage-history-1440.webp?v=e6ebf36bdb 1440w, assets/media/v099-usage-history-2880.webp?v=279aa7fcb2 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings › AI use at 7 days: &quot;$8.36 in the last 7 days&quot;, a bar per day from Sun 8 Nov to today with one quiet day, and a hovered bar reading &quot;Yesterday: $1.31&quot;. Below are By model (claude-sonnet-5-5 $4.91 59%, claude-opus-5-5 $3.44 41%, Codex · GPT-5.5 &quot;No cost reported&quot;) and By day, which shows fresh tokens, cache reads and cost per bot."></a></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="routines-setup">Routines are easier to set up</h3>
+        <p>The sidebar has a <strong>Routines</strong> row. With none yet, one card explains what a routine is. The form gives examples, shows your time zone in one line (<strong>Kyiv time GMT+2</strong>), and a weekly routine has a <strong>Weekdays</strong> chip. Each card shows the first line of its instructions, when it runs next, and its schedule in words, like <strong>Weekdays at 08:30, Kyiv time</strong>.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v099-routines-setup-2880.webp?v=ba42b66b49" data-caption="Settings › Routines for Trailhead Outfitters with three cards. Competitor prices is OK, next run Mon, Nov 16, 08:30 AM, &quot;Weekdays at 08:30, Kyiv time · Ben · direct chat&quot;. Size chart sync is Failed, running every day at 07:00 with Ann. Shipping recap is switched off and Paused, every Monday at 09:00 with Cody. Each card has Run now, History, Edit and Delete, and Suggested routines sits below."><img class="app" src="assets/media/v099-routines-setup-1440.webp?v=1fc909476a" srcset="assets/media/v099-routines-setup-1440.webp?v=1fc909476a 1440w, assets/media/v099-routines-setup-2880.webp?v=ba42b66b49 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings › Routines for Trailhead Outfitters with three cards. Competitor prices is OK, next run Mon, Nov 16, 08:30 AM, &quot;Weekdays at 08:30, Kyiv time · Ben · direct chat&quot;. Size chart sync is Failed, running every day at 07:00 with Ann. Shipping recap is switched off and Paused, every Monday at 09:00 with Cody. Each card has Run now, History, Edit and Delete, and Suggested routines sits below."></a></div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-099" class="span3"><h3>Smaller changes in 0.9.9</h3><p>Update checks are ready at launch; Settings asks again and links to the latest release. Tool server names are unique regardless of case. Chrome start-up errors lead with the real cause.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-098" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.8</span><time datetime="2026-11-13">Nov 13, 2026</time></p>
+      <h2>A first screen for anyone, and done items that say what checked them</h2>
+      <p>A fresh install starts with a small team and asks what you want done. A done item says what checked it, and says so when nothing did. Asking a bot to try again on a pre-push card now lets its fixed push go without a second card. Mission checks can wait for outside services without spending bot turns. A chat that only needs your answer says so in one line. A routine's message shows as a routine row, not as your own. In a team discussion, the teammate someone @mentions speaks next.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="first-screen">A first screen anyone can start from</h3>
+        <p>A fresh install starts with a small team, <strong>@helpers</strong>: Assistant leads, with Researcher and Writer. #general opens with <strong>What do you want done?</strong>, your team's faces and three example asks. With no AI account yet, the chat says <strong>Connect an AI account to start</strong>, with a <strong>Connect an account</strong> button. Dev mode and Approvals now live in Settings › This space › General, and the space header shows them in one line. Existing installs keep their bots and teams as they are.</p>
+      </div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v098-first-screen-poster.webp?v=ba6fe6c20f" width="1280" height="800" aria-label="A fresh install&#x27;s #general reads &quot;What do you want done?&quot;, above the faces of Assistant, Researcher and Writer and three example asks. Someone types &quot;Plan my week: a supplier call Monday, the dentist Wednesday&quot; and sends it. Assistant picks it up and answers with a plan table for Monday to Friday."><source src="assets/media/clip-v098-first-screen.mp4?v=0adcbafa07" type="video/mp4"></video></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="done-check">Done items say what checked them</h3>
+        <p>A done item in the Inbox says what checked it, in one box above the answer: <strong>Checked</strong>, <strong>Partly checked</strong>, <strong>Failed</strong> or <strong>Not checked</strong>. <strong>Show what was checked</strong> lists each check with its result and evidence. A criterion marked met without evidence counts as a claim, not a check. When nothing checked a result, the box says so, and a routine's box has <strong>Add a check</strong>.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v098-done-check-2880.webp?v=c32a87d947" data-caption="An Inbox item for Ann&#x27;s &quot;Update the size chart for the Ridgeline 2P tent&quot;. A green &quot;Checked: 2 of 2 checks passed&quot; box lists the size script passing (12 of 12 sizes match the supplier sheet), the page answering HTTP 200, and the criterion met with evidence."><img class="app" src="assets/media/v098-done-check-1440.webp?v=2a255e27f5" srcset="assets/media/v098-done-check-1440.webp?v=2a255e27f5 1440w, assets/media/v098-done-check-2880.webp?v=c32a87d947 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="An Inbox item for Ann&#x27;s &quot;Update the size chart for the Ridgeline 2P tent&quot;. A green &quot;Checked: 2 of 2 checks passed&quot; box lists the size script passing (12 of 12 sizes match the supplier sheet), the page answering HTTP 200, and the criterion met with evidence."></a></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="prepush-grant">Try again on a pre-push card lets the push go</h3>
+        <p>When a pre-push check stops a bot's push and you press <strong>Ask Ben to try again</strong>, Ben's next push of that branch goes without another approval card, once its checks pass: one push, within 2 hours. <strong>Push anyway</strong> works the same way. The card follows the push in one line, up to <strong>Pushed</strong>. Production and payment approvals still ask, and Needs you shows one item per branch.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v098-prepush-grant-2880.webp?v=d81f5b3173" data-caption="Ben&#x27;s chat. Asking Ben to fix and push again counted as the OK (&quot;once the checks pass, its next push of tent-sizes goes without asking you&quot;). The card now reads &quot;Pushed · 22:15 · See the push&quot;, and the push line says &quot;your retry was the OK, so it didn&#x27;t ask again&quot; with a Show checks link."><img class="app" src="assets/media/v098-prepush-grant-1440.webp?v=87cf0644e4" srcset="assets/media/v098-prepush-grant-1440.webp?v=87cf0644e4 1440w, assets/media/v098-prepush-grant-2880.webp?v=d81f5b3173 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Ben&#x27;s chat. Asking Ben to fix and push again counted as the OK (&quot;once the checks pass, its next push of tent-sizes goes without asking you&quot;). The card now reads &quot;Pushed · 22:15 · See the push&quot;, and the push line says &quot;your retry was the OK, so it didn&#x27;t ask again&quot; with a Show checks link."></a></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="waiting-checks">Checks that wait for outside services</h3>
+        <p>A mission check can wait for something that finishes elsewhere, such as a store review or a build farm. A command check that exits <code>75</code>, or an http check that gets its waiting status, keeps the task in review and runs again every 15 minutes, with no bot turns. The task card says <strong>Waiting on ./gate.sh since 09:12 · next look 09:27</strong>, with the last line the script printed. After 72 hours it stops and tells you once in <strong>Needs you</strong>. On the task, press <strong>Wait 24 h more</strong> or verify it by hand.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v098-waiting-check-2880.webp?v=c31987b070" data-caption="The Mission board Review column. The &quot;Put the spring sale page live&quot; card says &quot;Waiting on ./gate.sh since 21:35 · next look 22:49&quot;, followed by the last line the check printed: &quot;Deploy queued: 2 jobs a…&quot;."><img class="app" src="assets/media/v098-waiting-check-1440.webp?v=f3eff7a4c8" srcset="assets/media/v098-waiting-check-1440.webp?v=f3eff7a4c8 1440w, assets/media/v098-waiting-check-2880.webp?v=c31987b070 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="The Mission board Review column. The &quot;Put the spring sale page live&quot; card says &quot;Waiting on ./gate.sh since 21:35 · next look 22:49&quot;, followed by the last line the check printed: &quot;Deploy queued: 2 jobs a…&quot;."></a></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="waiting-state">A chat says when it's waiting for you</h3>
+        <p>When the only thing left in a chat is a bot's question, one amber line says <strong>Waiting for you: Ben needs one answer to finish</strong>, with <strong>Answer</strong> to bring the question into view. The working card, the paused box and the red Stop hide; press a choice or just type your answer. The question says how long ago it was asked, and in the sidebar teammates who already replied read <strong>Done · replied here</strong>.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v098-waiting-state-2880.webp?v=71aaa182bd" data-caption="Ben&#x27;s chat with the line &quot;Waiting for you: Ben needs one answer&quot; (with Answer and Stop) above Ben&#x27;s question &quot;Which banner should go on the spring sale page?&quot; and three choices."><img class="app" src="assets/media/v098-waiting-state-1440.webp?v=c205bb808d" srcset="assets/media/v098-waiting-state-1440.webp?v=c205bb808d 1440w, assets/media/v098-waiting-state-2880.webp?v=71aaa182bd 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Ben&#x27;s chat with the line &quot;Waiting for you: Ben needs one answer&quot; (with Answer and Stop) above Ben&#x27;s question &quot;Which banner should go on the spring sale page?&quot; and three choices."></a></div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="routine-row">A routine's run shows as a routine</h3>
+        <p>A routine's message in a chat used to look like your own. It now shows as one row with a clock, <strong>Routine · Morning brief</strong>, the time and its instructions on one line. Press it to read them in full. Messages you type still show as You.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v098-routine-row-2880.webp?v=a612223db9" data-caption="Ann&#x27;s chat with a compact &quot;Routine · Shipping report · 9:35 PM&quot; row between messages, followed by Ann&#x27;s report of 38 orders shipped yesterday, 2 of them a day late."><img class="app" src="assets/media/v098-routine-row-1440.webp?v=6db54bd3d6" srcset="assets/media/v098-routine-row-1440.webp?v=6db54bd3d6 1440w, assets/media/v098-routine-row-2880.webp?v=a612223db9 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Ann&#x27;s chat with a compact &quot;Routine · Shipping report · 9:35 PM&quot; row between messages, followed by Ann&#x27;s report of 38 orders shipped yesterday, 2 of them a day late."></a></div>
+    </div>
+    <ul class="flist">
+      <li id="mention-order" class="span3"><h3>An @mentioned teammate goes next</h3><p>In a team discussion, when the speaker writes <strong>@Cody please get the table sizes first</strong>, Cody speaks next, ahead of the planned order, shown as asked by the speaker. A teammate who was already planned moves up instead of speaking twice.</p></li>
+      <li id="fixes-098" class="span3"><h3>Smaller changes in 0.9.8</h3><p>No Concierge is made before an AI account can answer it. Don't ask also covers work a bot starts on its own. A mission task whose browser stays busy ends once with a fix line, without running again. Small fixes to bot budgets and model badges. Adding a tool from the public directory works without renaming it. File pickers in the live browser view work.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-097" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.9.7</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.7</span><time datetime="2026-11-13">Nov 13, 2026</time></p>
       <h2>Your bot at work while a reply is coming, and which AI each bot runs on</h2>
       <p>While a reply is coming, you see the bot itself at work instead of grey lines. Each bot's avatar shows the AI it runs on, live while it works. One search box finds a tool, built in, through Composio or from the public directory.</p>
     </div>
@@ -110,21 +216,21 @@
         <h3 id="working-avatar">Your bot at work while a reply is coming</h3>
         <p>Before the first words of a reply arrive, the bubble shows the bot's own avatar at a small pixel laptop: it types, the screen fills and clears, and the line next to it says <strong>Ben is working on it</strong>. In a team chat it's the bot that is speaking. The first words fade in where the picture was, at the same height, so nothing jumps. With reduced motion on, the picture stands still, and screen readers hear "Ben is working on the answer".</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v097-working-avatar-poster.webp?v=e8b643b19c" width="1280" height="800" aria-label="Sending &quot;Is the stock count on the Ridgeline 2P page live?&quot; to Ben. The working scene appears in his reply bubble, then his answer fades in at the same height: &quot;Yes, it&#x27;s live…&quot;."><source src="assets/media/clip-v097-working-avatar.mp4?v=65310117a0" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v097-working-avatar-poster.webp?v=e8b643b19c" width="1280" height="800" aria-label="Sending &quot;Is the stock count on the Ridgeline 2P page live?&quot; to Ben. The working scene appears in his reply bubble, then his answer fades in at the same height: &quot;Yes, it&#x27;s live…&quot;."><source src="assets/media/clip-v097-working-avatar.mp4?v=65310117a0" type="video/mp4"></video></div>
     </div>
     <div class="row">
       <div class="row-copy">
         <h3 id="model-badge">Each bot's AI on its avatar</h3>
         <p>A small mark at the bottom left of a bot's avatar shows the AI it runs on: Anthropic, OpenAI, xAI, Ollama, a chip for a custom engine, or ✦ when Laya picks the model. While a bot works, the mark shows what it runs on right now and changes if the bot moves to another engine. A resting bot that Laya picks for shows its last reply's mark, faded, with a small ✦. A pinned bot whose engine is signed out, off or not set up is greyed, and the tooltip says why: <strong>Runs on Claude · Sonnet · signed out</strong>. Running out of usage doesn't grey it.</p>
       </div>
-      <div class="frame"><a class="zoom" href="assets/media/v097-model-badge-2880.webp?v=1506a9e3e3" data-caption="The Shop team chat in Trailhead Outfitters. Ann, Ben and Cody each answer with their avatar mark: Anthropic on Ann and Ben, OpenAI on Cody. Ben&#x27;s reply chip reads &quot;Claude · Sonnet · This machine&quot;. In the sidebar, the tooltip &quot;Runs on Claude · Sonnet&quot; is open next to Ben."><img class="app" src="assets/media/v097-model-badge-1440.webp?v=f1a52c62d7" srcset="assets/media/v097-model-badge-1440.webp?v=f1a52c62d7 1440w, assets/media/v097-model-badge-2880.webp?v=1506a9e3e3 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="The Shop team chat in Trailhead Outfitters. Ann, Ben and Cody each answer with their avatar mark: Anthropic on Ann and Ben, OpenAI on Cody. Ben&#x27;s reply chip reads &quot;Claude · Sonnet · This machine&quot;. In the sidebar, the tooltip &quot;Runs on Claude · Sonnet&quot; is open next to Ben."></a></div>
+      <div class="frame"><a class="zoom" href="assets/media/v097-model-badge-2880.webp?v=5ff7fe6243" data-caption="The Shop team chat in Trailhead Outfitters. Ann, Ben and Cody each answer with their avatar mark: Anthropic on Ann and Ben, OpenAI on Cody. Ben&#x27;s reply chip reads &quot;Claude · Sonnet · This machine&quot;. In the sidebar, the tooltip &quot;Runs on Claude · Sonnet&quot; is open next to Ben."><img class="app" src="assets/media/v097-model-badge-1440.webp?v=1263d1f9fd" srcset="assets/media/v097-model-badge-1440.webp?v=1263d1f9fd 1440w, assets/media/v097-model-badge-2880.webp?v=5ff7fe6243 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="The Shop team chat in Trailhead Outfitters. Ann, Ben and Cody each answer with their avatar mark: Anthropic on Ann and Ben, OpenAI on Cody. Ben&#x27;s reply chip reads &quot;Claude · Sonnet · This machine&quot;. In the sidebar, the tooltip &quot;Runs on Claude · Sonnet&quot; is open next to Ben."></a></div>
     </div>
     <div class="row">
       <div class="row-copy">
         <h3 id="find-a-tool">Find a tool in one search box</h3>
-        <p>One search box finds a tool to add, in <strong>Add a tool</strong> and on <strong>Apps &amp; accounts</strong>. Suggestions start from the first letter and forgive typos and short names ("gmial", "11labs", "pg"). Results come in three groups: <strong>Built in</strong>, <strong>Through Composio</strong>, and <strong>From the public directory</strong>, a copy of the official MCP Registry that kwant refreshes every 6 hours. <strong>Add &amp; test</strong> installs a tool from there in one step. Connecting a Composio app before Composio is set up asks for the key right there.</p>
+        <p>One search box finds a tool to add, in <strong>Add a tool</strong> and on <strong>Apps &amp; accounts</strong>. Suggestions start from the first letter and forgive typos and short names ("gmial", "11labs", "pg"). Results come from three places: <strong>Built in</strong>, <strong>Through Composio</strong>, and <strong>the public directory</strong>, a copy of the official MCP Registry that kwant refreshes every 6 hours. Since 0.9.10, Apps &amp; accounts shows each app once, with where it comes from and how it signs in. <strong>Add &amp; test</strong> installs a tool from there in one step. Connecting a Composio app before Composio is set up asks for the key right there.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v097-find-a-tool-poster.webp?v=32d5e233c3" width="1280" height="800" aria-label="Find a tool. Typing &quot;gmai&quot; shows Gmail and Mailchimp through Composio, and Gmail Tools and MailSweep from the public directory. Typing &quot;11labs&quot; shows ElevenLabs through Composio and Voicebox from the public directory. Add opens the form with Voicebox and https://voices.example.com/mcp, then Add &amp; test. It ends on the tools list with Voicebox &quot;Working · 2 tools&quot; (text to speech, list voices)."><source src="assets/media/clip-v097-find-a-tool.mp4?v=95f0d1ce48" type="video/mp4"></video></div>
+      <div class="frame"><a class="zoom" href="assets/media/v097-find-a-tool-2880.webp?v=8af3361eff" data-caption="Apps &amp; accounts, Another app, searching &quot;stripe&quot;: one Stripe row (Official · stripe.com, Sign in with your Stripe account, 2 other ways to add it) and a Stripe Helper row, with the keyboard hints below."><img class="app" src="assets/media/v097-find-a-tool-1440.webp?v=cdec101e4c" srcset="assets/media/v097-find-a-tool-1440.webp?v=cdec101e4c 1440w, assets/media/v097-find-a-tool-2880.webp?v=8af3361eff 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Apps &amp; accounts, Another app, searching &quot;stripe&quot;: one Stripe row (Official · stripe.com, Sign in with your Stripe account, 2 other ways to add it) and a Stripe Helper row, with the keyboard hints below."></a></div>
     </div>
     <ul class="flist">
       <li id="fixes-097" class="span3"><h3>Smaller changes in 0.9.7</h3><p>Through Composio finds any Composio app. Signing in to tool servers like ElevenLabs works.</p></li>
@@ -135,7 +241,7 @@
 <section id="new-096" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.9.6</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.6</span><time datetime="2026-11-13">Nov 13, 2026</time></p>
       <h2>A team from your own words, and what your bots did while you were away</h2>
       <p>Describe what you need and kwant suggests a team. The Inbox shows what your bots finished while you were away, with the answer, what they did and why. A bot that stops either continues by itself or asks you once. Settings says in one card whether you're on the latest kwant. kwant's Chrome looks like normal Chrome, and opens a window when Google insists on one.</p>
     </div>
@@ -144,7 +250,7 @@
         <h3 id="team-from-words">A team from your words</h3>
         <p>Write what your bots should do in the "What should your bots do?" box on the Get ready card, from <strong>Describe your own</strong> in the sidebar, or with "Describe what this team should do" in New team, and press <strong>Suggest a team</strong>. One of your ready AI accounts drafts it, without tools, usually in under a minute. The <strong>Suggested team</strong> sheet shows 2 to 6 bots with the lead first: untick or rename them, or <strong>Try again</strong> with the same words, then <strong>Create team</strong>, with Undo. The draft never gives a bot tools, accounts or routines, and the team's pinned instructions quote your words.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v096-team-from-words-poster.webp?v=8ff559618a" width="1280" height="800" aria-label="Describing an outdoor shop&#x27;s team in words and pressing Suggest a team, then the Suggested team sheet: StockWatch unticked, PageKeeper renamed PageCare, Create team, and the new team in the sidebar."><source src="assets/media/clip-v096-team-from-words.mp4?v=8efc6a8912" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v096-team-from-words-poster.webp?v=8ff559618a" width="1280" height="800" aria-label="Describing an outdoor shop&#x27;s team in words and pressing Suggest a team, then the Suggested team sheet: StockWatch unticked, PageKeeper renamed PageCare, Create team, and the new team in the sidebar."><source src="assets/media/clip-v096-team-from-words.mp4?v=8efc6a8912" type="video/mp4"></video></div>
     </div>
     <div class="row">
       <div class="row-copy">
@@ -172,7 +278,7 @@
         <h3 id="real-chrome">Sign in to Google in kwant's Chrome</h3>
         <p>kwant's Chrome now tells sites it is Chrome, with Chrome's own version details, and no longer marks itself as automated. It prefers an installed Google Chrome over Chromium, and nothing is injected into pages. Google still refuses sign-ins in a Chrome without a window, so the live view then says "Google only allows sign-in in a normal Chrome window." with <strong>Sign in in Chrome</strong>. On a computer with a screen, that opens Chrome in a window for the sign-in, and it goes back to no window once you're signed in. <a href="/docs/browser">Browser</a></p>
       </div>
-      <div class="frame"><a class="zoom" href="assets/media/v096-real-chrome-signin-2880.webp?v=f137bde2b5" data-caption="Ben&#x27;s chat with the bot browser on a Google sign-in refusal page, and the notice that Google only allows sign-in in a normal Chrome window, with Sign in in Chrome."><img class="app" src="assets/media/v096-real-chrome-signin-1440.webp?v=551aef2d57" srcset="assets/media/v096-real-chrome-signin-1440.webp?v=551aef2d57 1440w, assets/media/v096-real-chrome-signin-2880.webp?v=f137bde2b5 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Ben&#x27;s chat with the bot browser on a Google sign-in refusal page, and the notice that Google only allows sign-in in a normal Chrome window, with Sign in in Chrome."></a></div>
+      <div class="frame"><a class="zoom" href="assets/media/v096-real-chrome-signin-2880.webp?v=5092e433f7" data-caption="Ben&#x27;s chat with the bot browser on a Google sign-in refusal page, and the notice that Google only allows sign-in in a normal Chrome window, with Sign in in Chrome."><img class="app" src="assets/media/v096-real-chrome-signin-1440.webp?v=6f375400dc" srcset="assets/media/v096-real-chrome-signin-1440.webp?v=6f375400dc 1440w, assets/media/v096-real-chrome-signin-2880.webp?v=5092e433f7 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Ben&#x27;s chat with the bot browser on a Google sign-in refusal page, and the notice that Google only allows sign-in in a normal Chrome window, with Sign in in Chrome."></a></div>
     </div>
     <ul class="flist">
       <li id="fixes-096" class="span3"><h3>Smaller changes in 0.9.6</h3><p>A new space's Get started card names that space's own bots (<strong>Keep the bots you have</strong>) instead of the main space's starter bots. If kwant's Chrome closes right after it starts, you're told why at once, with Chrome's last lines. A mission task that finds the browser busy tries again twice by itself.</p></li>
@@ -183,7 +289,7 @@
 <section id="new-095" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.9.5</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.5</span><time datetime="2026-11-13">Nov 13, 2026</time></p>
       <h2>Apps in one place, a budget for each bot</h2>
       <p>Apps, AI accounts and tool servers now share one settings page, and connecting an app takes 3 steps. Each bot can have a monthly budget. When a bot's connection stops working, its chat says which one and why, and the team browser copes when it's busy.</p>
     </div>
@@ -201,7 +307,7 @@
         <p>Press a tile and the Connect sheet has 3 steps: make a free Composio account, paste your Composio link (an API key is optional), and pick the bots that may use the app.</p>
         <p>No bot is picked for you, and Composio is on only for the bots you pick. <a href="/docs/mcp#composio">Composio</a></p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v095-connect-app-poster.webp?v=0cfd371916" width="1280" height="800" aria-label="Clip: the person opens Slack&#x27;s Connect sheet, opens Composio, pastes the Composio link and an API key, ticks Ann and Ben, and presses Connect Slack. The Slack tile turns Connected and a banner says &#x27;Slack is on for Ann and Ben.&#x27;"><source src="assets/media/clip-v095-connect-app.mp4?v=215760e0c4" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v095-connect-app-poster.webp?v=0cfd371916" width="1280" height="800" aria-label="Clip: the person opens Slack&#x27;s Connect sheet, opens Composio, pastes the Composio link and an API key, ticks Ann and Ben, and presses Connect Slack. The Slack tile turns Connected and a banner says &#x27;Slack is on for Ann and Ben.&#x27;"><source src="assets/media/clip-v095-connect-app.mp4?v=215760e0c4" type="video/mp4"></video></div>
     </div>
     <div class="row">
       <div class="row-copy">
@@ -229,7 +335,7 @@
 <section id="new-09" class="fgroup" data-covers="0.9.0 0.9.1 0.9.2 0.9.3 0.9.4">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.9.0 to 0.9.4</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.0–0.9.4</span><time datetime="2026-11-12">Nov 12, 2026</time></p>
       <h2>Check a bot's work before it counts</h2>
       <p>A second checker on another model runs a task's checks again before you see it, and everything waiting on your review sits in one place in the Inbox. Roll work back even after you approved it, point at the part of a page you mean, leave notes on diff lines, and give each bot task its own worktree.</p>
     </div>
@@ -239,7 +345,7 @@
         <p>Inbox › New has a <strong>To review</strong> group, highest risk first. Each item shows its verdict (Pass, Fail, Needs you or Not checked yet), who checked it, what it <strong>couldn't check</strong> and why, and folds for the decisions made, what done looks like and the evidence. Press <strong>Approve</strong>, <strong>Send back</strong> with a note that becomes a new criterion, or <strong>Roll back</strong>.</p>
         <p>When two or more low-risk items passed every check with high confidence, <strong>Approve all</strong> approves them one at a time. An item with a held action, a Needs you verdict or anything it couldn't check is never in the batch.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v090-review-inbox-poster.webp?v=1c6681fdc1" width="1280" height="800" aria-label="Clip: in the Inbox, the person opens &#x27;Speed up the search box&#x27; (Needs you, &#x27;What done looks like 2 of 2 met&#x27;), then the size-chart task&#x27;s Pass verdict (&#x27;4 of 4 met&#x27;), approves it, opens a task with no checks, then presses &#x27;Approve all 3&#x27; on the low-risk batch. It ends on &#x27;Approved 3 of 3&#x27; with each item ticked."><source src="assets/media/clip-v090-review-inbox.mp4?v=c3df506af8" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v090-review-inbox-poster.webp?v=1c6681fdc1" width="1280" height="800" aria-label="Clip: in the Inbox, the person opens &#x27;Speed up the search box&#x27; (Needs you, &#x27;What done looks like 2 of 2 met&#x27;), then the size-chart task&#x27;s Pass verdict (&#x27;4 of 4 met&#x27;), approves it, opens a task with no checks, then presses &#x27;Approve all 3&#x27; on the low-risk batch. It ends on &#x27;Approved 3 of 3&#x27; with each item ticked."><source src="assets/media/clip-v090-review-inbox.mp4?v=c3df506af8" type="video/mp4"></video></div>
     </div>
     <div class="row">
       <div class="row-copy">
@@ -247,14 +353,14 @@
         <p>In Watch live, press <strong>Point</strong> and click the part of the page you mean. It goes into your message as a chip, and the bot gets the page address, a selector, the element's HTML, its size and styles, and a picture of it.</p>
         <p>Point only reads: it never clicks or types in the page, and the page's own scripts can't see it. <a href="/docs/browser#watch-live">Watch live</a></p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v090-point-at-it-poster.webp?v=9ea6d47109" width="1280" height="800" aria-label="Clip: the person turns on Point in Ben&#x27;s bot browser, hovers over parts of the tent page as they light up with their size, picks the Add to cart button, and types &#x27;Make this button full width on phones&#x27;."><source src="assets/media/clip-v090-point-at-it.mp4?v=a1a03c8697" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v090-point-at-it-poster.webp?v=9ea6d47109" width="1280" height="800" aria-label="Clip: the person turns on Point in Ben&#x27;s bot browser, hovers over parts of the tent page as they light up with their size, picks the Add to cart button, and types &#x27;Make this button full width on phones&#x27;."><source src="assets/media/clip-v090-point-at-it.mp4?v=a1a03c8697" type="video/mp4"></video></div>
     </div>
     <div class="row">
       <div class="row-copy">
         <h3 id="line-notes">Notes on diff lines, sent as one message</h3>
         <p>On a Dev desk review card, click beside a line, or drag for a range, and write a note. Notes stay as drafts until you send them, and the bot gets them all in one message with each file, line and code. After its next push, each note says whether that line changed. Nothing is posted to GitHub. <a href="/docs/dev-mode#reviews">Dev mode reviews</a></p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v090-line-notes-poster.webp?v=31914be9ce" width="1280" height="800" aria-label="Clip: on the Dev desk, the person adds notes to diff lines in the size chart change, and they collect as drafts, which are then sent to Ann."><source src="assets/media/clip-v090-line-notes.mp4?v=e8c4126443" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v090-line-notes-poster.webp?v=31914be9ce" width="1280" height="800" aria-label="Clip: on the Dev desk, the person adds notes to diff lines in the size chart change, and they collect as drafts, which are then sent to Ann."><source src="assets/media/clip-v090-line-notes.mp4?v=e8c4126443" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="second-check">
@@ -300,7 +406,7 @@
 <section id="new-08" class="fgroup" data-covers="0.8.0 0.8.1 0.8.2">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.8.0 to 0.8.2</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.8.0–0.8.2</span><time datetime="2026-11-10">Nov 10, 2026</time></p>
       <h2>Bots that do the work, and show it</h2>
       <p>With approvals off, bots now get on with it instead of offering to. When you ask to see something, the picture lands in the chat, and a change you can see comes with a before and an after. Drop files anywhere on a chat, bring your bots from more places, and let a fresh pair of eyes check code before it's pushed.</p>
     </div>
@@ -318,7 +424,7 @@
         <p>Drag files from Finder, Explorer or your desktop and drop them anywhere on a chat: the whole chat is the drop target. Before you let go, it says which bot gets them and which files can't be sent. It works in the web app and in the Mac, Linux and Windows apps.</p>
         <p>Images, videos, PDFs and text or code files work.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v080-drop-files-poster.webp?v=7b9c9a4ac9" width="1280" height="800" aria-label="Demo: a PDF named trail-map.pdf is dragged onto Ann&#x27;s chat, the whole chat lights up as the drop target, and after the drop the file is attached in the message box."><source src="assets/media/clip-v080-drop-files.mp4?v=395dc084f9" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v080-drop-files-poster.webp?v=7b9c9a4ac9" width="1280" height="800" aria-label="Demo: a PDF named trail-map.pdf is dragged onto Ann&#x27;s chat, the whole chat lights up as the drop target, and after the drop the file is attached in the message box."><source src="assets/media/clip-v080-drop-files.mp4?v=395dc084f9" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="just-do-it">
@@ -353,7 +459,7 @@
 <section id="new-077" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.7.7</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.7.7</span><time datetime="2026-11-09">Nov 9, 2026</time></p>
       <h2>Keys safe from tricked Claude bots, and kwant on Windows</h2>
       <p>On Linux, a web page, file or bot that tricks Claude can't make it read your sign-ins or keys: Claude works in a sealed box with no internet. kwant now has a Windows installer (beta). Get started can bring your bots from other apps, and Dev mode reviews only fresh work.</p>
     </div>
@@ -363,7 +469,7 @@
         <p>If a web page, a file or another bot talks Claude into misbehaving, it still can't read your sign-ins or keys, or go online by itself: anything it does outside goes through kwant's own tools, under the bot's approval settings. In VM mode, the switch <strong>Protect your keys from tricked Claude bots</strong> (called Run Claude inside the VM in 0.7.7) runs each bot's Claude replies in a sealed box with no internet that sees only the task folder. Your real sign-in stays outside: kwant passes on only the model calls Claude needs, up to 200 per reply, and refuses everything else.</p>
         <p>The tradeoff: while it's on, Claude can't use its own web search or web fetch (bots browse with kwant's browser tools), and outside MCP servers such as Notion are left out until you turn it off. Codex, Grok and Claude API-key accounts still run on your computer, and the chips under the switch say where each one runs. Linux, off by default. <a href="/docs/agents-in-vm">What it protects, and what it doesn't</a></p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v077-claude-vm-poster.webp?v=4b54c32881" width="1280" height="800" aria-label="Demo: turning on Protect your keys from tricked Claude bots in Settings; Claude&#x27;s chip goes from Not isolated to Getting ready to Isolated."><source src="assets/media/clip-v077-claude-vm.mp4?v=6d17e27103" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v077-claude-vm-poster.webp?v=4b54c32881" width="1280" height="800" aria-label="Demo: turning on Protect your keys from tricked Claude bots in Settings; Claude&#x27;s chip goes from Not isolated to Getting ready to Isolated."><source src="assets/media/clip-v077-claude-vm.mp4?v=6d17e27103" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="isolation-notice">
@@ -396,7 +502,7 @@
 <section id="new-076" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.7.6</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.7.6</span><time datetime="2026-11-08">Nov 8, 2026</time></p>
       <h2>Recipes you can cook from, and a first start that sets itself up</h2>
       <p>A recipe in a reply becomes a card that rescales to your servings. A new person starts with one Get started card: choose your AI, sign in, pick a team. ChatGPT and Grok sign in from that card, a Linux server installs with one line, and after each update kwant shows what's new.</p>
     </div>
@@ -405,11 +511,11 @@
         <h3 id="recipes">Recipes you can cook from</h3>
         <p>When a reply holds one recipe, with an ingredients list and a method, it shows as a recipe card: the ingredients in their groups, numbered steps, and any times and notes. Change the servings (1 to 24) and every amount kwant can read rescales, in kitchen fractions such as ¼, ⅓ and ½. Changed amounts are highlighted, and <strong>Back to 4</strong> puts them back. Oven temperatures, and anything kwant can't read, stay as written. <strong>Show as text</strong> always gives you the reply word for word. <a href="/docs/smart-results#recipes">How recipe cards work</a></p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v076-recipe-poster.webp?v=b7555ec296" width="1280" height="800" aria-label="Demo: a camp chili recipe card in a kwant chat. Plus is pressed twice and the servings go from 4 to 6, so 1 tbsp olive oil becomes 1½ tbsp and 500 g ground beef becomes 750 g. Then Back to 4 puts the amounts back."><source src="assets/media/clip-v076-recipe.mp4?v=4dbc33d499" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v076-recipe-poster.webp?v=b7555ec296" width="1280" height="800" aria-label="Demo: a camp chili recipe card in a kwant chat. Plus is pressed twice and the servings go from 4 to 6, so 1 tbsp olive oil becomes 1½ tbsp and 500 g ground beef becomes 750 g. Then Back to 4 puts the amounts back."><source src="assets/media/clip-v076-recipe.mp4?v=4dbc33d499" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="get-started">
-        <span class="shot"><a class="zoom" href="assets/media/v076-get-started-card-2880.webp?v=7bc0b59edb" data-caption="kwant&#x27;s Get started card under Welcome to kwant bots. Step 1, Choose your AI, says it gets ready by itself, with tiles for Claude and ChatGPT, both marked Installed, sign in next, then Grok and an API key."><img src="assets/media/v076-get-started-card-1440.webp?v=409a2b9be9" srcset="assets/media/v076-get-started-card-1440.webp?v=409a2b9be9 1440w, assets/media/v076-get-started-card-2880.webp?v=7bc0b59edb 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="kwant&#x27;s Get started card under Welcome to kwant bots. Step 1, Choose your AI, says it gets ready by itself, with tiles for Claude and ChatGPT, both marked Installed, sign in next, then Grok and an API key."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v076-get-started-card-2880.webp?v=64362c311d" data-caption="kwant&#x27;s Get started card under Welcome to kwant bots. Step 1, Choose your AI, says it gets ready by itself, with tiles for Claude and ChatGPT, both marked Installed, sign in next, then Grok and an API key."><img src="assets/media/v076-get-started-card-1440.webp?v=82bda8ba76" srcset="assets/media/v076-get-started-card-1440.webp?v=82bda8ba76 1440w, assets/media/v076-get-started-card-2880.webp?v=64362c311d 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="kwant&#x27;s Get started card under Welcome to kwant bots. Step 1, Choose your AI, says it gets ready by itself, with tiles for Claude and ChatGPT, both marked Installed, sign in next, then Grok and an API key."></a></span>
         <div class="card-body"><h3>Get started in three steps</h3><p>A new person's #general opens with one card instead of the old welcome. <strong>Choose your AI</strong>: Claude, ChatGPT, Grok or an API key. <strong>Sign in</strong>. <strong>Pick a team</strong>, or keep the starter bots. Choosing an AI installs it when it's missing, so there's nothing to type in a Terminal. <a href="/docs/quickstart#get-started">Your first start</a></p></div>
       </article>
       <article class="card" id="device-sign-in">
@@ -438,7 +544,7 @@
 <section id="new-075" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.7.5</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.7.5</span><time datetime="2026-11-07">Nov 7, 2026</time></p>
       <h2>This Mac and your servers side by side, and work from Jira and Telegram</h2>
       <p>The app opens This Mac and every server you add at the same time, each in its own window. Ready-made teams start in one step. Dev mode takes work from Jira tickets, Telegram brings your bots to your phone, and you can watch a bot's browser live or show it a task once.</p>
     </div>
@@ -465,7 +571,7 @@
         <h3>Show it once</h3>
         <p>Do a task once in a bot's browser while kwant writes the steps down. Passwords, one-time codes, card details and anything a saved login fills in are kept as placeholders, never as their text. You check the steps, the bot writes a skill from them, and <strong>Try it once</strong> runs it in the bot's chat before you approve it. Start it from a bot's <strong>Skills</strong> tab, or with <strong>Record steps</strong> while you've taken over its browser.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v075-show-once-poster.webp?v=1f888e8d04" width="1280" height="800" aria-label="Demo: on a shop&#x27;s orders page in the bot&#x27;s browser, a person records three steps: Status set to Paid, Dates set to Last 7 days, then Export CSV. They stop, check the list of steps and choose Write the skill, and the chat says Ann wrote the skill."><source src="assets/media/clip-v075-show-once.mp4?v=81a18f7cd2" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v075-show-once-poster.webp?v=1f888e8d04" width="1280" height="800" aria-label="Demo: on a shop&#x27;s orders page in the bot&#x27;s browser, a person records three steps: Status set to Paid, Dates set to Last 7 days, then Export CSV. They stop, check the list of steps and choose Write the skill, and the chat says Ann wrote the skill."><source src="assets/media/clip-v075-show-once.mp4?v=81a18f7cd2" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="watch-live">
@@ -489,7 +595,7 @@
 <section id="new-074" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.7.4</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.7.4</span><time datetime="2026-11-07">Nov 7, 2026</time></p>
       <h2>Use kwant from your coding agent, and a daily spending stop</h2>
       <p>Claude Code, Codex or Cursor can hand work to your bots and get the reply back. A daily stop caps what all bots spend. Dev mode reviews merge requests on GitLab, Gitea and Forgejo, and "Ask only when risky" now asks before a bot adds a new package.</p>
     </div>
@@ -499,7 +605,7 @@
         <div class="card-body"><h3>Use kwant from your coding agent</h3><p>Claude Code, Codex, Cursor and other MCP clients can ask your bots for work and get the reply back where you're coding. Each connection has its own token, shown once, reaches only the spaces and bots you pick, and is revoked at once. The agent is never you: it can't approve anything, and its token opens nothing else in kwant. <a href="/docs/agents-connect">Connect one</a></p></div>
       </article>
       <article class="card" id="spend-stop">
-        <span class="shot"><a class="zoom" href="assets/media/v074-spend-stop-card-2880.webp?v=4b3f0d6864" data-caption="Settings, Usage. The daily spending stop is set to 2,000,000 tokens and 5 dollars a day. Today&#x27;s use is 1.43 million tokens and 3.62 dollars, broken down by bot for each day."><img class="app" src="assets/media/v074-spend-stop-card-1440.webp?v=11d586298b" srcset="assets/media/v074-spend-stop-card-1440.webp?v=11d586298b 1440w, assets/media/v074-spend-stop-card-2880.webp?v=4b3f0d6864 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, Usage. The daily spending stop is set to 2,000,000 tokens and 5 dollars a day. Today&#x27;s use is 1.43 million tokens and 3.62 dollars, broken down by bot for each day."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v074-spend-stop-card-2880.webp?v=3d44221c03" data-caption="Settings, Usage. The daily spending stop is set to 2,000,000 tokens and 5 dollars a day. Today&#x27;s use is 1.43 million tokens and 3.62 dollars, broken down by bot for each day."><img class="app" src="assets/media/v074-spend-stop-card-1440.webp?v=d0eeaec19e" srcset="assets/media/v074-spend-stop-card-1440.webp?v=d0eeaec19e 1440w, assets/media/v074-spend-stop-card-2880.webp?v=3d44221c03 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, Usage. The daily spending stop is set to 2,000,000 tokens and 5 dollars a day. Today&#x27;s use is 1.43 million tokens and 3.62 dollars, broken down by bot for each day."></a></span>
         <div class="card-body"><h3>A daily spending stop</h3><p><strong>Settings → All spaces → Usage</strong> can cap what all bots together use in a day, in tokens, dollars or both, right next to today's use. Both are off until you set them. Past the cap no new work starts, from a chat, a hand-off, a routine, a mission or a coding agent; work already running finishes. <a href="/docs/mission-board#spend-stop">How the stop works</a></p></div>
       </article>
       <article class="card" id="forge-reviews">
@@ -516,7 +622,7 @@
         <h3>Connected in a minute</h3>
         <p>Name the connection, pick its spaces and bots, and copy the one-line setup for Claude Code, Codex or Cursor. Its first ask shows up under <strong>Recent activity</strong>, and the bot's thread is in kwant for you to read along. Each connection can make 60 asks an hour, and its work counts toward the spending stop.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v074-coding-agents-poster.webp?v=7f3bfa9463" width="1280" height="800" aria-label="Demo: in Settings, All spaces, Coding agents, a new connection is created and named, its Claude Code setup line is copied, and Done is pressed. A moment later its first request comes in, and Recent activity on the connection shows Asked Ann."><source src="assets/media/clip-v074-coding-agents.mp4?v=d1d58fae47" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v074-coding-agents-poster.webp?v=7f3bfa9463" width="1280" height="800" aria-label="Demo: in Settings, All spaces, Coding agents, a new connection is created and named, its Claude Code setup line is copied, and Done is pressed. A moment later its first request comes in, and Recent activity on the connection shows Asked Ann."><source src="assets/media/clip-v074-coding-agents.mp4?v=d1d58fae47" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="spend-notice">
@@ -546,7 +652,7 @@
 <section id="new-073" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.7.3</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.7.3</span><time datetime="2026-11-07">Nov 7, 2026</time></p>
       <h2>Videos in chat, and Dev mode reads any git repo</h2>
       <p>Send a video and it plays right in the chat, without the long wait first. Dev mode reads repos on GitLab, Gitea or any git server. Connect GitHub opens where you press it, and saving a token while some bots don't ask first is your choice. New to Dev mode? <a href="#new-07">Start with 0.7</a>, further down.</p>
     </div>
@@ -573,7 +679,7 @@
         <h3>Three videos, without the wait</h3>
         <p>Drop three videos and keep typing while they upload; each chip shows how much is up, like 3.1 of 7.9 MB. Press send and they play in the chat. A file kwant can't take is refused the moment it's dropped, and a dropped connection retries by itself twice before showing Retry.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v073-videos-poster.webp?v=3271f1978e" width="1280" height="800" aria-label="Demo: three video files are dropped on Ann&#x27;s message box and upload with progress while the person types Here are three screen recordings from the shop. After send, the three players appear, trail-map.webm plays, and Ann replies that she got all three and will start with checkout-bug.mp4."><source src="assets/media/clip-v073-videos.mp4?v=c5badfbc55" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v073-videos-poster.webp?v=3271f1978e" width="1280" height="800" aria-label="Demo: three video files are dropped on Ann&#x27;s message box and upload with progress while the person types Here are three screen recordings from the shop. After send, the three players appear, trail-map.webm plays, and Ann replies that she got all three and will start with checkout-bug.mp4."><source src="assets/media/clip-v073-videos.mp4?v=c5badfbc55" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li id="nvidia"><h3>NVIDIA's free models</h3><p>A preset for custom servers fills in build.nvidia.com's address. Paste an NVIDIA API key (it starts with nvapi-) and pick a model. <a href="/docs/models#engines">Engines</a></p></li>
@@ -586,7 +692,7 @@
 <section id="new-072" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.7.2</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.7.2</span><time datetime="2026-11-06">Nov 6, 2026</time></p>
       <h2>Dev mode watches every team's repo</h2>
       <p>A space no longer has one watched repo. Each team brings its own, up to 10 per space, and Dev mode watches all of them. A <strong>?</strong> beside the switch says what Dev mode does, and the switch has a new look. New to Dev mode? <a href="#new-07">Start with 0.7</a>, further down.</p>
     </div>
@@ -613,7 +719,7 @@
         <h3>Link a repo, and it's watched</h3>
         <p>A team with no repo shows as one quiet line on the Dev desk. Press <strong>Link a repo</strong>, type the repo, and its row reads Watching. Linking a repo never turns Dev mode on by itself.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v072-link-repo-poster.webp?v=9f0fa6ce36" width="1280" height="800" aria-label="Demo: on the Dev desk of the Trailhead Outfitters space, Show repos opens the repo list. Link a repo, typing demo-org/docs and pressing Enter adds the Docs team&#x27;s repo, and its row reads Watching. The line on top now says Watching 4 of 5 repos."><source src="assets/media/clip-v072-link-repo.mp4?v=2198279938" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v072-link-repo-poster.webp?v=9f0fa6ce36" width="1280" height="800" aria-label="Demo: on the Dev desk of the Trailhead Outfitters space, Show repos opens the repo list. Link a repo, typing demo-org/docs and pressing Enter adds the Docs team&#x27;s repo, and its row reads Watching. The line on top now says Watching 4 of 5 repos."><source src="assets/media/clip-v072-link-repo.mp4?v=2198279938" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li id="seen-times"><h3>The badge and the roll-up keep their own seen time</h3><p>Opening the Dev desk clears the new-reviews badge, from a link too, and <strong>Mark seen</strong> starts the "since you last looked" roll-up over. Before, opening the desk emptied the roll-up as well.</p></li>
@@ -626,7 +732,7 @@
 <section id="new-071" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.7.1</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.7.1</span><time datetime="2026-11-06">Nov 6, 2026</time></p>
       <h2>Post a review to GitHub, and Dev mode in one press</h2>
       <p>A bot's review of a pull request can go onto GitHub as your comment, and only when you press it. Dev mode now finds the repo itself, and turning it off takes two presses. New to Dev mode? <a href="#new-07">Start with 0.7</a>, just below.</p>
     </div>
@@ -653,7 +759,7 @@
         <h3>On, and the last five merges written up</h3>
         <p>One press on the switch. kwant names the repo it found, reads the last five merges and writes a plain-words card for each.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v071-dev-on-poster.webp?v=7c37f29be2" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="assets/media/clip-v071-dev-on.mp4?v=8ef32af3fe" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v071-dev-on-poster.webp?v=7c37f29be2" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="assets/media/clip-v071-dev-on.mp4?v=8ef32af3fe" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li id="wallet-payments"><h3>Crypto wallet sends always ask</h3><p>A tool whose arguments carry an amount and a wallet address or crypto asset now counts as a payment, so it asks in every approval mode, even with approvals off. <a href="/docs/flight-school#payments">Payments always ask</a></p></li>
@@ -666,7 +772,7 @@
 <section id="new-07" class="fgroup alt" data-covers="0.6.12 0.6.13">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.7</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.7</span><time datetime="2026-11-05">Nov 5, 2026</time></p>
       <h2>Dev mode and the Idea jar</h2>
       <p>Point a space at its GitHub repo: every merge becomes a plain-words card, a second bot reviews every pull request, and anything that can reach production asks first. And drop the ideas you're not ready for in a jar, for a free bot to think through.</p>
     </div>
@@ -693,7 +799,7 @@
         <h3>From an idea to a draft mission</h3>
         <p>Drop an idea with /idea. When a bot is free, its take comes in, and Do it turns the plan into a mission that waits for your OK.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v07-idea-jar-poster.webp?v=0ab3178a49" width="1280" height="800" aria-label="Demo: an idea is dropped in with /idea in the message box. A bot&#x27;s take appears with its verdict, effort and plan, and Do it turns it into a draft mission that waits for your OK."><source src="assets/media/clip-v07-idea-jar.mp4?v=def90d9ef4" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v07-idea-jar-poster.webp?v=0ab3178a49" width="1280" height="800" aria-label="Demo: an idea is dropped in with /idea in the message box. A bot&#x27;s take appears with its verdict, effort and plan, and Do it turns it into a draft mission that waits for your OK."><source src="assets/media/clip-v07-idea-jar.mp4?v=def90d9ef4" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li id="no-tools"><h3>Bots can't act on a pull request's text</h3><p>Dev mode cards and idea takes run with no tools at all, on every engine. A turn that can't run that way fails instead.</p></li>
@@ -706,7 +812,7 @@
 <section id="new-0611" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.6.11</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.6.11</span><time datetime="2026-11-04">Nov 4, 2026</time></p>
       <h2>Answer with a tap, reply to a message, solve the human check</h2>
       <p>Every finished bot message has 👍, 👎 and Reply next to Copy markdown. When a site asks if the bot is human, the check comes to you.</p>
     </div>
@@ -733,7 +839,7 @@
         <h3>Yes, go ahead, and the bot carries on</h3>
         <p>The bot asks whether to publish the release notes. One tap answers it, and the reply comes back with nothing typed.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v611-react-poster.webp?v=ca5f17b10b" width="1280" height="800" aria-label="Demo: release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and TechLead replies that the notes are published, with nothing typed."><source src="assets/media/clip-v611-react.mp4?v=cdde9cdbe2" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v611-react-poster.webp?v=ca5f17b10b" width="1280" height="800" aria-label="Demo: release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and TechLead replies that the notes are published, with nothing typed."><source src="assets/media/clip-v611-react.mp4?v=cdde9cdbe2" type="video/mp4"></video></div>
     </div>
   </div>
 </section>
@@ -741,7 +847,7 @@
 <section id="new-069" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.6.9</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.6.9</span><time datetime="2026-11-04">Nov 4, 2026</time></p>
       <h2>Know when a bot needs you, and take over its browser</h2>
       <p>A pill tells you when a bot is waiting on you in another chat, wherever you are. When a bot needs you to sign in, you take over its browser, sign in yourself and hand it back.</p>
     </div>
@@ -768,7 +874,7 @@
         <h3>A pill, then one click to the approval</h3>
         <p>You're reading one channel when TechLead needs your OK in another. The pill shows who and what for a few seconds.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v69-pill-poster.webp?v=dc3c9d54cc" width="1280" height="800" aria-label="Demo: you&#x27;re reading #design-review when TechLead, in another chat, needs your OK. A Needs you pill slides in at the top; clicking it opens TechLead&#x27;s chat at the approval card."><source src="assets/media/clip-v69-pill.mp4?v=4e864d538e" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-v69-pill-poster.webp?v=dc3c9d54cc" width="1280" height="800" aria-label="Demo: you&#x27;re reading #design-review when TechLead, in another chat, needs your OK. A Needs you pill slides in at the top; clicking it opens TechLead&#x27;s chat at the approval card."><source src="assets/media/clip-v69-pill.mp4?v=4e864d538e" type="video/mp4"></video></div>
     </div>
     <div class="row">
       <div class="row-copy">
@@ -788,7 +894,7 @@
 <section id="new-065" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.6.5</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.6.5</span><time datetime="2026-11-03">Nov 3, 2026</time></p>
       <h2>Replies you can sort, goals that stay true, models that cover for each other</h2>
       <p>A table or list in a reply becomes a card, goals keep what matters working, and when one account runs out the next one answers. It's all on from the start, and so is everything that used to wait for a switch.</p>
     </div>
@@ -824,7 +930,7 @@
 <section id="new-064" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.6.4 · Who answers</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.6.4</span><time datetime="2026-11-02">Nov 2, 2026</time><span>Who answers</span></p>
       <h2>The right bot answers, says why, and learns when it's wrong</h2>
       <p>In a channel, kwant picks the bot that fits your message and shows you why. Wrong bot? sends it on and teaches routing. Each bot also gets rules from you: what it's good for, what it's not for, and which sites its browser may open.</p>
     </div>
@@ -858,7 +964,7 @@
 <section id="new-06" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.6 · Mission Control</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.6</span><time datetime="2026-11-01">Nov 1, 2026</time><span>Mission Control</span></p>
       <h2>Freedom bots earn, facts they agree on, results you can count</h2>
       <p>Bots ask for more freedom when their record earns it, conflicting facts wait for you, and the board counts verified results and what each one cost. Since 0.6.5, Flight School and the Truth Ledger are on from the start.</p>
     </div>
@@ -887,7 +993,7 @@
 <section id="new-05" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.5 · Browser &amp; status</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.5</span><time datetime="2026-10-31">Oct 31, 2026</time><span>Browser &amp; status</span></p>
       <h2>Bots that show their work</h2>
       <p>Web facts come with a link to the exact quote, the browser tells a bot what each step changed, and every bot's avatar says what it's doing.</p>
     </div>
@@ -906,7 +1012,7 @@
 <section id="discovery" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.5 · Automation Discovery</p>
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.5</span><time datetime="2026-10-31">Oct 31, 2026</time><span>Automation Discovery</span></p>
       <h2>Routines that suggest themselves</h2>
       <p>kwant notices tasks you ask for on a rhythm and offers a routine for them. Nothing is made until you press Accept. On from 0.6.5.</p>
     </div>
@@ -998,7 +1104,7 @@
         <p>A load-test report misses its p95 latency, so the check fails. AutoFix runs it again with what the check said, and the task ends Verified.</p>
         <a class="more-link" href="/docs/mission-board#autofix">How AutoFix works →</a>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-autofix-poster.webp?v=0ed847e244" width="1280" height="800" aria-label="Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why it failed and AutoFix&#x27;s plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified."><source src="assets/media/clip-autofix.mp4?v=dc97a6694b" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-autofix-poster.webp?v=0ed847e244" width="1280" height="800" aria-label="Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why it failed and AutoFix&#x27;s plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified."><source src="assets/media/clip-autofix.mp4?v=dc97a6694b" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li><h3>Missions</h3><p>Group tasks toward one goal, with a token limit if you want one. Tasks wait for the ones they build on.</p></li>
@@ -1025,7 +1131,7 @@
         <p>QA works at Sandbox on releases. It may change files in its task folder, but a build command asks, and the card says why. You allow it once, and the task ends Verified.</p>
         <a class="more-link" href="/docs/flight-school#sandbox">What Sandbox asks about →</a>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-sandbox-poster.webp?v=28a4a80e5f" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified."><source src="assets/media/clip-sandbox.mp4?v=9195606fc7" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-sandbox-poster.webp?v=28a4a80e5f" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified."><source src="assets/media/clip-sandbox.mp4?v=9195606fc7" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="tiers">
@@ -1068,7 +1174,7 @@
         <p>Asked about search clicks, TechLead reads the site itself, then offers Google Search Console. Press Connect, sign in on the app's own page, and the card says Connected.</p>
         <a class="more-link" href="/docs/mcp">MCP tools &amp; Composio →</a>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-connect-poster.webp?v=f43bbdb217" width="1280" height="800" aria-label="Demo: asked why organic clicks dropped, TechLead reads the site&#x27;s page source, says the page looks healthy and offers a Google Search Console connection card. The user presses Connect, the card waits for the sign-in, then shows Connected."><source src="assets/media/clip-connect.mp4?v=f566f90447" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" data-poster="assets/media/clip-connect-poster.webp?v=f43bbdb217" width="1280" height="800" aria-label="Demo: asked why organic clicks dropped, TechLead reads the site&#x27;s page source, says the page looks healthy and offers a Google Search Console connection card. The user presses Connect, the card waits for the sign-in, then shows Connected."><source src="assets/media/clip-connect.mp4?v=f566f90447" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="way-round">
@@ -1121,7 +1227,7 @@
     </div>
     <div class="grid two">
       <article class="card">
-        <span class="shot"><a class="zoom" href="assets/media/v2-space-settings-2880.webp?v=e317b472f3" data-caption="Settings for one space (This space), General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don&#x27;t ask, and Archive space."><img class="app" src="assets/media/v2-space-settings-1440.webp?v=e9f622c635" srcset="assets/media/v2-space-settings-1440.webp?v=e9f622c635 1440w, assets/media/v2-space-settings-2880.webp?v=e317b472f3 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings for one space (This space), General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don&#x27;t ask, and Archive space."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v2-space-settings-2880.webp?v=a55117abe1" data-caption="Settings for one space (This space), General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don&#x27;t ask, and Archive space."><img class="app" src="assets/media/v2-space-settings-1440.webp?v=1226fac1f0" srcset="assets/media/v2-space-settings-1440.webp?v=1226fac1f0 1440w, assets/media/v2-space-settings-2880.webp?v=a55117abe1 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings for one space (This space), General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don&#x27;t ask, and Archive space."></a></span>
         <div class="card-body"><h3>Rules per space</h3><p>Each space has its own approval rule and hiring rule.</p></div>
       </article>
       <article class="card">
@@ -1152,7 +1258,7 @@
     </div>
     <div class="grid two">
       <article class="card">
-        <span class="shot"><a class="zoom" href="assets/media/v2-routines-2880.webp?v=a3dc554670" data-caption="Settings, Routines: suggested routines, with none right now, then a Monday metrics digest, a paused competitor price scan whose last run failed and a weekday morning release check, each with Run now, History, Edit and Delete."><img class="app" src="assets/media/v2-routines-1440.webp?v=e0daaabd4b" srcset="assets/media/v2-routines-1440.webp?v=e0daaabd4b 1440w, assets/media/v2-routines-2880.webp?v=a3dc554670 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, Routines: suggested routines, with none right now, then a Monday metrics digest, a paused competitor price scan whose last run failed and a weekday morning release check, each with Run now, History, Edit and Delete."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v2-routines-2880.webp?v=d205e2ee27" data-caption="Settings, Routines: suggested routines, with none right now, then a Monday metrics digest, a paused competitor price scan whose last run failed and a weekday morning release check, each with Run now, History, Edit and Delete."><img class="app" src="assets/media/v2-routines-1440.webp?v=b49e2c3d16" srcset="assets/media/v2-routines-1440.webp?v=b49e2c3d16 1440w, assets/media/v2-routines-2880.webp?v=d205e2ee27 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, Routines: suggested routines, with none right now, then a Monday metrics digest, a paused competitor price scan whose last run failed and a weekday morning release check, each with Run now, History, Edit and Delete."></a></span>
         <div class="card-body"><h3>Routines</h3><p>Once, daily, weekly, monthly, every few minutes or hours, or a cron rule. Run now, history and pause for each.</p></div>
       </article>
       <article class="card">
@@ -1350,11 +1456,13 @@
 
 </main>
 <footer class="site-footer">
+  <div class="ground" aria-hidden="true"><div class="crew"><svg class="char-svg" viewBox="5 1 16 20" shape-rendering="crispEdges" aria-hidden="true"><rect x="7" y="20" width="12" height="1" fill="#261d4a"/><rect x="12" y="2" width="2" height="1" fill="#ffe066"/><rect x="11" y="3" width="4" height="2" fill="#ffe066"/><rect x="12" y="3" width="1" height="1" fill="#ffffff"/><rect x="12" y="5" width="2" height="1" fill="#8a8aa8"/><rect x="12" y="6" width="2" height="1" fill="#1b1033"/><rect x="9" y="7" width="8" height="1" fill="#9be564"/><rect x="8" y="8" width="10" height="1" fill="#9be564"/><rect x="7" y="9" width="12" height="7" fill="#9be564"/><rect x="8" y="16" width="10" height="1" fill="#9be564"/><rect x="9" y="17" width="8" height="1" fill="#5e9e33"/><rect x="18" y="9" width="1" height="7" fill="#5e9e33"/><rect x="17" y="16" width="1" height="1" fill="#5e9e33"/><rect x="7" y="15" width="1" height="1" fill="#5e9e33"/><rect x="8" y="16" width="1" height="1" fill="#5e9e33"/><rect x="10" y="8" width="2" height="1" fill="#e2ffc7"/><rect x="9" y="9" width="1" height="1" fill="#e2ffc7"/><rect x="10" y="10" width="2" height="3" fill="#1b1033"/><rect x="14" y="10" width="2" height="3" fill="#1b1033"/><rect x="10" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="14" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="8" y="13" width="2" height="1" fill="#ff6b81"/><rect x="16" y="13" width="2" height="1" fill="#ff6b81"/><rect x="11" y="14" width="1" height="1" fill="#1b1033"/><rect x="14" y="14" width="1" height="1" fill="#1b1033"/><rect x="12" y="15" width="2" height="1" fill="#1b1033"/><rect x="9" y="18" width="2" height="1" fill="#1b1033"/><rect x="15" y="18" width="2" height="1" fill="#1b1033"/></svg><svg class="char-svg" viewBox="5 1 16 20" shape-rendering="crispEdges" aria-hidden="true"><rect x="7" y="20" width="12" height="1" fill="#261d4a"/><rect x="9" y="5" width="8" height="2" fill="#6d4fd6"/><rect x="8" y="6" width="1" height="1" fill="#6d4fd6"/><rect x="13" y="4" width="1" height="1" fill="#6d4fd6"/><rect x="10" y="5" width="2" height="1" fill="#9a7cff"/><rect x="9" y="7" width="8" height="1" fill="#ff8a7a"/><rect x="8" y="8" width="10" height="1" fill="#ff8a7a"/><rect x="7" y="9" width="12" height="7" fill="#ff8a7a"/><rect x="8" y="16" width="10" height="1" fill="#ff8a7a"/><rect x="9" y="17" width="8" height="1" fill="#cf5446"/><rect x="18" y="9" width="1" height="7" fill="#cf5446"/><rect x="17" y="16" width="1" height="1" fill="#cf5446"/><rect x="7" y="15" width="1" height="1" fill="#cf5446"/><rect x="8" y="16" width="1" height="1" fill="#cf5446"/><rect x="10" y="8" width="2" height="1" fill="#ffd6cf"/><rect x="9" y="9" width="1" height="1" fill="#ffd6cf"/><rect x="10" y="10" width="2" height="3" fill="#1b1033"/><rect x="14" y="10" width="2" height="3" fill="#1b1033"/><rect x="10" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="14" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="8" y="13" width="2" height="1" fill="#ff6b81"/><rect x="16" y="13" width="2" height="1" fill="#ff6b81"/><rect x="11" y="14" width="1" height="1" fill="#1b1033"/><rect x="14" y="14" width="1" height="1" fill="#1b1033"/><rect x="12" y="15" width="2" height="1" fill="#1b1033"/><rect x="9" y="18" width="2" height="1" fill="#1b1033"/><rect x="15" y="18" width="2" height="1" fill="#1b1033"/></svg><svg class="char-svg" viewBox="5 1 16 20" shape-rendering="crispEdges" aria-hidden="true"><rect x="7" y="20" width="12" height="1" fill="#261d4a"/><rect x="15" y="6" width="1" height="1" fill="#1b1033"/><rect x="15" y="3" width="2" height="2" fill="#5ce1ff"/><rect x="15" y="3" width="1" height="1" fill="#ffffff"/><rect x="9" y="7" width="8" height="1" fill="#fdc934"/><rect x="8" y="8" width="10" height="1" fill="#fdc934"/><rect x="7" y="9" width="12" height="7" fill="#fdc934"/><rect x="8" y="16" width="10" height="1" fill="#fdc934"/><rect x="9" y="17" width="8" height="1" fill="#d98a1f"/><rect x="18" y="9" width="1" height="7" fill="#d98a1f"/><rect x="17" y="16" width="1" height="1" fill="#d98a1f"/><rect x="7" y="15" width="1" height="1" fill="#d98a1f"/><rect x="8" y="16" width="1" height="1" fill="#d98a1f"/><rect x="10" y="8" width="2" height="1" fill="#fff0a0"/><rect x="9" y="9" width="1" height="1" fill="#fff0a0"/><rect x="10" y="10" width="2" height="3" fill="#1b1033"/><rect x="14" y="10" width="2" height="3" fill="#1b1033"/><rect x="10" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="14" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="8" y="13" width="2" height="1" fill="#ff6b81"/><rect x="16" y="13" width="2" height="1" fill="#ff6b81"/><rect x="11" y="14" width="1" height="1" fill="#1b1033"/><rect x="14" y="14" width="1" height="1" fill="#1b1033"/><rect x="12" y="15" width="2" height="1" fill="#1b1033"/><rect x="9" y="18" width="2" height="1" fill="#1b1033"/><rect x="15" y="18" width="2" height="1" fill="#1b1033"/></svg><svg class="char-svg" viewBox="5 1 16 20" shape-rendering="crispEdges" aria-hidden="true"><rect x="7" y="20" width="12" height="1" fill="#261d4a"/><rect x="9" y="5" width="8" height="1" fill="#ff6b81"/><rect x="8" y="6" width="1" height="3" fill="#ff6b81"/><rect x="17" y="6" width="1" height="3" fill="#ff6b81"/><rect x="6" y="10" width="2" height="3" fill="#ff6b81"/><rect x="18" y="10" width="2" height="3" fill="#ff6b81"/><rect x="9" y="7" width="8" height="1" fill="#5ce1ff"/><rect x="8" y="8" width="10" height="1" fill="#5ce1ff"/><rect x="7" y="9" width="12" height="7" fill="#5ce1ff"/><rect x="8" y="16" width="10" height="1" fill="#5ce1ff"/><rect x="9" y="17" width="8" height="1" fill="#2a92c9"/><rect x="18" y="9" width="1" height="7" fill="#2a92c9"/><rect x="17" y="16" width="1" height="1" fill="#2a92c9"/><rect x="7" y="15" width="1" height="1" fill="#2a92c9"/><rect x="8" y="16" width="1" height="1" fill="#2a92c9"/><rect x="10" y="8" width="2" height="1" fill="#d2f7ff"/><rect x="9" y="9" width="1" height="1" fill="#d2f7ff"/><rect x="10" y="10" width="2" height="3" fill="#1b1033"/><rect x="14" y="10" width="2" height="3" fill="#1b1033"/><rect x="10" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="14" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="8" y="13" width="2" height="1" fill="#ff6b81"/><rect x="16" y="13" width="2" height="1" fill="#ff6b81"/><rect x="11" y="14" width="1" height="1" fill="#1b1033"/><rect x="14" y="14" width="1" height="1" fill="#1b1033"/><rect x="12" y="15" width="2" height="1" fill="#1b1033"/><rect x="9" y="18" width="2" height="1" fill="#1b1033"/><rect x="15" y="18" width="2" height="1" fill="#1b1033"/></svg><svg class="char-svg" viewBox="5 1 16 20" shape-rendering="crispEdges" aria-hidden="true"><rect x="7" y="20" width="12" height="1" fill="#261d4a"/><rect x="9" y="7" width="8" height="1" fill="#ff6b6b"/><rect x="8" y="8" width="10" height="1" fill="#ff6b6b"/><rect x="7" y="9" width="12" height="7" fill="#ff6b6b"/><rect x="8" y="16" width="10" height="1" fill="#ff6b6b"/><rect x="9" y="17" width="8" height="1" fill="#c43c4c"/><rect x="18" y="9" width="1" height="7" fill="#c43c4c"/><rect x="17" y="16" width="1" height="1" fill="#c43c4c"/><rect x="7" y="15" width="1" height="1" fill="#c43c4c"/><rect x="8" y="16" width="1" height="1" fill="#c43c4c"/><rect x="10" y="8" width="2" height="1" fill="#ffc9c9"/><rect x="9" y="9" width="1" height="1" fill="#ffc9c9"/><rect x="10" y="10" width="2" height="3" fill="#1b1033"/><rect x="14" y="10" width="2" height="3" fill="#1b1033"/><rect x="10" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="14" y="10" width="1" height="1" fill="#f5f2ff"/><rect x="8" y="13" width="2" height="1" fill="#ff6b81"/><rect x="16" y="13" width="2" height="1" fill="#ff6b81"/><rect x="11" y="14" width="1" height="1" fill="#1b1033"/><rect x="14" y="14" width="1" height="1" fill="#1b1033"/><rect x="12" y="15" width="2" height="1" fill="#1b1033"/><rect x="9" y="18" width="2" height="1" fill="#1b1033"/><rect x="15" y="18" width="2" height="1" fill="#1b1033"/><rect x="7" y="8" width="12" height="1" fill="#1b1033"/><rect x="9" y="7" width="3" height="2" fill="#5ce1ff"/><rect x="14" y="7" width="3" height="2" fill="#5ce1ff"/><rect x="9" y="7" width="1" height="1" fill="#ffffff"/><rect x="14" y="7" width="1" height="1" fill="#ffffff"/></svg></div></div>
   <div class="wrap">
+    <div class="foot-grid">
     <div class="foot-brand">
       <a class="brand" href="./" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
       <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
-      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="https://github.com/alexsergivan/kwant" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="https://github.com/alexsergivan/kwant" rel="noopener">Toss one our way <svg class="pi" viewBox="0 0 9 8" shape-rendering="crispEdges" fill="currentColor" aria-hidden="true"><rect x="4" y="0" width="1" height="1"/><rect x="3" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="1"/><rect x="1" y="3" width="7" height="1"/><rect x="2" y="4" width="5" height="1"/><rect x="2" y="5" width="2" height="1"/><rect x="5" y="5" width="2" height="1"/><rect x="1" y="6" width="2" height="1"/><rect x="6" y="6" width="2" height="1"/></svg></a></p>
     </div>
     <nav aria-label="Product">
       <h2>Product</h2>
@@ -1386,14 +1494,17 @@
       <a href="/terms">Terms of use</a>
       <a href="/terms#license">License</a>
     </nav>
-    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
-    <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
-    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+    </div>
+    <div class="foot-base">
+      <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+      <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
+      <p class="foot-made">Made in Germany with <svg class="pi" viewBox="0 0 7 6" shape-rendering="crispEdges" fill="currentColor" role="img" aria-label="love"><rect x="1" y="0" width="2" height="1"/><rect x="4" y="0" width="2" height="1"/><rect x="0" y="1" width="7" height="1"/><rect x="0" y="2" width="7" height="1"/><rect x="1" y="3" width="5" height="1"/><rect x="2" y="4" width="3" height="1"/><rect x="3" y="5" width="1" height="1"/></svg></p>
+    </div>
   </div>
 </footer>
-<script src="assets/js/site.js?v=6d3de1ef56" defer></script>
-<script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-13","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
-<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
+<script src="assets/js/site.js?v=0f53ed50bc" defer></script>
+<script src="assets/js/pixel.js?v=0a1a3bf1e2" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-14","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>
 </body>
 </html>

@@ -88,7 +88,8 @@ test('Settings → Usage groups days with fresh, cached and cost', () => {
 
 test('Settings → Usage loading, empty and error states', () => {
   assert.match(m.daily({ rows: null }), /Loading usage/);
-  assert.match(m.daily({ rows: [] }), /No bot replies in the last two weeks/);
+  assert.match(m.daily({ rows: [] }), /No AI use in the last 7 days/);
+  assert.match(m.daily({ rows: [], range: 30 }), /No AI use in the last 30 days/);
   assert.match(m.daily({ rows: null, error: 'Request failed (HTTP 500).', onReload: () => {} }), /role="alert".*HTTP 500.*Retry/s);
 });
 

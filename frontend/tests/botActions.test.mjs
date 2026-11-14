@@ -47,7 +47,7 @@ test('applied routine card: summary, routine facts, Undo, Edit and Pause', () =>
   const t = text(html);
   assert.match(t, /Coach set up a routine/);
   assert.match(t, /Created routine 'Morning motivation'/);
-  assert.match(t, /When Every day at 07:00 \(Europe\/Berlin\)/);
+  assert.match(t, /When Every day at 07:00, Berlin time/);
   assert.match(t, /Runs as Coach/);
   assert.match(t, /Posts in #general/);
   assert.match(t, /Next run/);
@@ -138,8 +138,8 @@ test('non-routine actions: no routine facts, verb fallback', () => {
 });
 
 test('schedules in words: ours for known shapes, the server text otherwise', () => {
-  assert.equal(b.scheduleWords({ type: 'monthly', time: '09:00', days: [1, 'last'], tz: 'UTC' }), 'Every month on the 1st and last day at 09:00 (UTC)');
-  assert.equal(b.scheduleWords({ type: 'cron', expression: '0 9 * * MON#2', tz: 'UTC' }), 'Custom rule 0 9 * * MON#2 (UTC)');
+  assert.equal(b.scheduleWords({ type: 'monthly', time: '09:00', days: [1, 'last'], tz: 'UTC' }), 'Every month on the 1st and last day at 09:00, UTC');
+  assert.equal(b.scheduleWords({ type: 'cron', expression: '0 9 * * MON#2', tz: 'UTC' }), 'Custom rule 0 9 * * MON#2, UTC');
   assert.equal(b.scheduleWords({ type: 'lunar' }, 'when the moon is full'), 'When the moon is full');
   assert.equal(b.scheduleWords(null, ''), 'Unknown schedule');
   assert.equal(b.asSchedule({ type: 'monthly', time: '09:00', days: [0, 5, 'last', 'x'], tz: 'UTC' }).days.join(), '5,last');

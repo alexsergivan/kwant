@@ -38,6 +38,8 @@ import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
+import { BrowsedChip } from './BrowsedChip';
+import { pagesOfReply, type ReplyPage } from '../browserPages';
 import { FailoverNote, ReplyMeta } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
@@ -281,6 +283,16 @@ export interface ChatViewProps {
   vmBotNames?: Record<string, string>;
   /** Show it once: the single bot this chat's browser belongs to (absent in teams and channels). */
   vmShowOnceBot?: { id: string; name: string };
+  /** 0.9.8 browser panel: this chat's browser owner has a turn running (Live / Browsing now). */
+  vmRunning?: boolean;
+  /** 0.9.8: the person opened the panel (a chip): opens it, or marks a panel the bot opened as theirs. */
+  onVmOpenByPerson?: () => void;
+  /** 0.9.8: the person used the panel, so it won't close itself. */
+  onVmTouch?: () => void;
+  /** 0.9.8: control and pending Point picks, which also keep it open. */
+  onVmUsage?: (u: { control: boolean; pointPending: boolean }) => void;
+  /** 0.9.8: the panel is playing its close animation. */
+  vmClosing?: boolean;
   /** Pinned team/channel instructions, shown collapsed above the messages. */
   pinned?: PinnedItem[];
   /** Opens the channel's instructions editor; only for channels. */
@@ -543,6 +555,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   vmPagePick,
   vmBotNames,
   vmShowOnceBot,
+  vmRunning = false,
+  onVmOpenByPerson,
+  onVmTouch,
+  onVmUsage,
+  vmClosing = false,
   pinned = [],
   onEditInstructions,
   highlightMessageId,
@@ -601,6 +618,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // rows while in use. Desktop never changes.
   const phone = useMedia(PHONE_QUERY);
   const touch = useMedia(TOUCH_QUERY);
+
   const [composerFocused, setComposerFocused] = useState(false);
   const kbd = keyboardMode({ phone, touch, focused: composerFocused });
   const [fieldWidth, setFieldWidth] = useState(0);
@@ -684,6 +702,52 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (home?.kind === 'bot' && home.bot) all.push({ id: home.bot.id, name: home.bot.name });
     return all;
   }, [activeKwants, teamMembers, home]);
+
+  // ---------- 0.9.8 browser panel (design browser-panel/design.md A, B) ----------
+  // The trail the panel shows: the reply whose chip was tapped; else the running turn's; else the newest reply that browsed.
+  const [trailFrom, setTrailFrom] = useState<string | null>(null);
+  const liveTurnId = liveActivity?.turnId ?? null;
+  useEffect(() => {
+    // A new turn browses: the panel follows it, not an older chip's reply
+    if (liveTurnId) setTrailFrom(null);
+  }, [liveTurnId]);
+  const liveSpeaker = streamingSpeakerName || title;
+  const livePages = useMemo(() => pagesOfReply(liveActivity?.steps), [liveActivity?.steps]);
+  const savedTrail = useMemo((): { id: string; bot: string; pages: ReplyPage[] } | null => {
+    const from = (m: ChatMessage) => {
+      if (m.sender_role !== 'kwant' || !m.meta) return null;
+      const pages = pagesOfReply(parseActivityMeta(m.meta)?.steps);
+      return pages.length ? { id: m.id, bot: botDisplayName(m.sender_id, knownBots), pages } : null;
+    };
+    if (trailFrom) {
+      const m = messages.find((x) => x.id === trailFrom);
+      const t = m && from(m);
+      if (t) return t;
+    }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const t = from(messages[i]);
+      if (t) return t;
+    }
+    return null;
+  }, [messages, trailFrom, knownBots]);
+  const showLiveTrail = !trailFrom && livePages.length > 0;
+  const paneTrail = showLiveTrail ? livePages : savedTrail?.pages ?? [];
+  const paneBot = showLiveTrail ? liveSpeaker : savedTrail?.bot ?? (home?.kind === 'bot' ? home.bot?.name ?? null : null);
+  // "Finished 10:46 PM": when this chat's turn ended here, else the newest page of the shown trail
+  const [endedAt, setEndedAt] = useState<string | null>(null);
+  const wasRunning = useRef(vmRunning);
+  useEffect(() => {
+    if (wasRunning.current && !vmRunning) setEndedAt(new Date().toISOString());
+    wasRunning.current = vmRunning;
+  }, [vmRunning]);
+  useEffect(() => setEndedAt(null), [teamId]);
+  const paneFinishedAt = trailFrom ? paneTrail[0]?.at ?? null : endedAt ?? paneTrail[0]?.at ?? null;
+  const openBrowserFor = (msgId: string | null) => {
+    playSfx('click');
+    setTrailFrom(msgId);
+    if (onVmOpenByPerson) onVmOpenByPerson();
+    else if (!vmOpen) toggleVm();
+  };
   // Each routed reply's question: the person's latest saved message before it ("Wrong bot?").
   const questionOf = useMemo(() => questionsOfReplies(messages), [messages]);
   const activeTeams = teamsProp || internalTeams;
@@ -1812,8 +1876,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
 
           {/* Action row (reply-chrome part 3): Reply, the thumbs, then Copy as a quiet icon; smart-result actions portal in after Copy */}
+          {/* 0.9.8: on a phone the browsed chip gets its own 44 px row above the action row (it would wrap) */}
+          {!isUser && !filesOnly && phone && savedActivity && (
+            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0">
+              <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} phone onOpen={() => openBrowserFor(msg.id)} />
+            </div>
+          )}
           {!isUser && !filesOnly && (
             <div className="mt-2 flex flex-wrap items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0">
+              {!phone && savedActivity && (
+                <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} onOpen={() => openBrowserFor(msg.id)} />
+              )}
               {msg.sender_role === 'kwant' && !workAhead && !msg.id.startsWith('temp-') && (
                 <>
                   <ReplyButton botName={displayName} active={replyTo?.id === msg.id} onReply={() => startReply(msg)} />
@@ -2364,7 +2437,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && <LiveActivityList live={liveActivity} idBase={`live-${liveActivity.turnId}`} compact={phone} />}
+              {liveActivity && (
+                <LiveActivityList
+                  live={liveActivity}
+                  idBase={`live-${liveActivity.turnId}`}
+                  compact={phone}
+                  lead={
+                    livePages.length > 0 ? (
+                      <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
+                    ) : undefined
+                  }
+                />
+              )}
 
               {streamingThinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
@@ -2863,6 +2947,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
       botNames={vmBotNames}
       showOnceBot={vmShowOnceBot}
       point={pointSink}
+      running={vmRunning}
+      finishedAt={paneFinishedAt}
+      browsingBot={paneBot}
+      trail={paneTrail}
+      onTouch={onVmTouch}
+      onUsage={onVmUsage}
+      closing={vmClosing}
     />
   </div>
       {layerPhase && (

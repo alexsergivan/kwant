@@ -74,10 +74,17 @@ export interface DailyUsage extends UsageSums {
   kwant_name?: string | null;
 }
 
+/** One model's totals over the same window (`model` is the id the call reported). */
+export interface ModelTotals extends UsageSums {
+  model: string;
+}
+
 export interface DailyUsageResponse {
   days: number;
   /** Newest day first. */
   rows: DailyUsage[];
+  /** Highest cost first; missing from servers before 0.9.9. */
+  models?: ModelTotals[];
 }
 
 /** Tokens the model had to take in or write new: everything but cache reads. */

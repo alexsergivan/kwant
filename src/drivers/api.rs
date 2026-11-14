@@ -1200,10 +1200,14 @@ impl ApiDriver {
                 let _ = event_tx
                     .send(RuntimeEvent::ToolCallCompleted {
                         id: id.to_string(),
-                        result: json!({
-                            "status": outcome.status,
-                            "content": crate::mcp::truncate_text(&outcome.text, crate::mcp::RECORD_RESULT_MAX_CHARS),
-                        }),
+                        result: super::activity::with_page_title(
+                            json!({
+                                "status": outcome.status,
+                                "content": crate::mcp::truncate_text(&outcome.text, crate::mcp::RECORD_RESULT_MAX_CHARS),
+                            }),
+                            name,
+                            &outcome.text,
+                        ),
                     })
                     .await;
                 messages.push(json!({"role": "tool", "tool_call_id": id, "content": outcome.text}));

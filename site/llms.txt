@@ -11,7 +11,7 @@ Key facts:
 - kwant has no token (no coin, no crypto). The official X account is @kwantbot (https://x.com/kwantbot).
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
-- Windows app (beta, 64-bit): https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.7/kwant_0.9.7_windows_x64_beta_setup.exe (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
+- Windows app (beta, 64-bit): https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.10/kwant_0.9.10_windows_x64_beta_setup.exe (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
 - Run Claude inside the VM (Linux, off by default): each bot's Claude replies run in a container with no network, and the real key stays outside. https://kwant.si/docs/agents-in-vm
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers. The kwant.si website sets no cookies and counts page views with
