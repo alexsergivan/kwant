@@ -963,7 +963,8 @@ mod tests {
 
     #[test]
     fn a_write_goes_through_a_hidden_temporary_file_and_replaces_a_link_instead_of_following_it() {
-        let (tmp, dir) = docs_folder();
+        // `_tmp` keeps the folder alive; only the unix link check below reads it
+        let (_tmp, dir) = docs_folder();
         let docs = Dir::open(&dir).unwrap();
         write_doc(&docs, "new.md", b"fresh words").unwrap();
         assert_eq!(std::fs::read(dir.join("new.md")).unwrap(), b"fresh words");
@@ -975,11 +976,11 @@ mod tests {
         assert!(bad_name(".upload-0123.part").is_some());
         #[cfg(unix)]
         {
-            std::fs::write(tmp.path().join("secret.md"), "outside").unwrap();
-            std::os::unix::fs::symlink(tmp.path().join("secret.md"), dir.join("link.md")).unwrap();
+            std::fs::write(_tmp.path().join("secret.md"), "outside").unwrap();
+            std::os::unix::fs::symlink(_tmp.path().join("secret.md"), dir.join("link.md")).unwrap();
             assert_eq!(existing(&docs, "link.md"), Existing::Other);
             write_doc(&docs, "link.md", b"inside").unwrap();
-            assert_eq!(std::fs::read_to_string(tmp.path().join("secret.md")).unwrap(), "outside");
+            assert_eq!(std::fs::read_to_string(_tmp.path().join("secret.md")).unwrap(), "outside");
             assert!(std::fs::symlink_metadata(dir.join("link.md")).unwrap().file_type().is_file());
         }
         assert_eq!(existing(&docs, "faq.md"), Existing::File);
