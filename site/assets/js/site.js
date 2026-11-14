@@ -3,6 +3,38 @@
   "use strict";
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
 
+  // Demo video posters, and the home page's lazy images (data-src), load only when they come within 600 px of the
+  // screen, so they never compete with the page's first image. Without JS the videos and images come from their
+  // <noscript> copy.
+  var lazy = document.querySelectorAll("video[data-poster], img[data-src]");
+  function show(el) {
+    if (el.tagName === "VIDEO") { if (!el.getAttribute("poster")) el.poster = el.dataset.poster; return; }
+    if (el.dataset.srcset) el.srcset = el.dataset.srcset;
+    el.src = el.dataset.src;
+    el.removeAttribute("data-src");
+    el.removeAttribute("data-srcset");
+  }
+  if ("IntersectionObserver" in window) {
+    var near = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { show(e.target); near.unobserve(e.target); } });
+    }, { rootMargin: "600px 0px" });
+    lazy.forEach(function (el) { near.observe(el); });
+  } else {
+    lazy.forEach(show);
+  }
+
+  // Cloudflare Web Analytics (see CF_ANALYTICS in build_site.py): added after the page has loaded and painted.
+  var beacon = document.getElementById("cf-beacon");
+  function analytics() {
+    var s = document.createElement("script");
+    s.src = "https://static.cloudflareinsights.com/beacon.min.js";
+    s.defer = true;
+    s.setAttribute("data-cf-beacon", beacon.textContent);
+    document.body.appendChild(s);
+  }
+  function later() { requestAnimationFrame(function () { setTimeout(analytics, 0); }); }
+  if (beacon) { if (document.readyState === "complete") later(); else window.addEventListener("load", later, { once: true }); }
+
   // Demo videos play while on screen, unless the visitor prefers reduced motion.
   var videos = document.querySelectorAll("video[data-autoplay]");
   if (videos.length && "IntersectionObserver" in window) {
