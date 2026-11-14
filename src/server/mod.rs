@@ -48,6 +48,7 @@ pub mod mcp_suggest;
 pub mod page_source;
 pub mod tool_failures;
 pub mod tool_notes;
+pub mod openai_key;
 pub mod transcribe;
 pub mod connection_suggest;
 pub mod bot_actions;
@@ -170,6 +171,8 @@ pub struct AppState {
     pub spend: Arc<spend_stop::Clock>,
     /// Claude replies run inside the VM ("Run Claude inside the VM", Linux only, off by default)
     pub agent_vm: Arc<crate::sandbox::agent_vm::AgentVm>,
+    /// Dictation's 2-at-once slots and the wait for one (a test shortens the wait).
+    pub dictation: Arc<transcribe::Slots>,
 }
 
 impl AppState {
@@ -226,6 +229,7 @@ impl AppState {
             mission_runs: Arc::default(),
             spend: Arc::default(),
             agent_vm,
+            dictation: Arc::default(),
         }
     }
 

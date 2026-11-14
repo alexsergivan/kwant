@@ -3,7 +3,8 @@
 //! nothing reaches a bot before they press Send.
 //!
 //! The words come from the space's own OpenAI account, in the order hybrid recall uses for
-//! embeddings (`memory_recall::source_for_space`), minus Ollama, which has no speech-to-text:
+//! embeddings ([`super::openai_key`], shared with `memory_recall::source_for_space`), minus
+//! Ollama, which has no speech-to-text:
 //! 1. an enabled OpenAI API-key account of the space (an `api_key` profile on Codex) with a key;
 //! 2. the host's OpenAI key (Settings, else `OPENAI_API_KEY`), unless This machine is off for
 //!    Codex in the space;
@@ -12,16 +13,21 @@
 //!
 //! Nothing is stored: the audio stays in memory for the one call (at most [`MAX_AUDIO_BYTES`]),
 //! no attachment row, no file, no chat message, no memory. Only the person transcribes: a bot's
-//! turn token is refused, so no bot can spend the space's OpenAI money through here. At most
-//! [`MAX_AT_ONCE`] recordings are sent at a time; the next waits up to [`QUEUE_WAIT`]. The key never appears in an answer or a log
-//! line, and neither does OpenAI's own error text (its 401 quotes part of the key).
+//! turn token is refused, so no bot can spend the space's OpenAI money through here.
+//!
+//! Memory: at most [`MAX_AT_ONCE`] recordings are in memory at a time. A request takes its slot
+//! before reading the body, so one waiting for its turn (up to [`QUEUE_WAIT`]) holds no audio, and
+//! one that gets `busy` is never read. A call holds one copy of the audio: the upload to OpenAI
+//! sends that same buffer between the form fields, for the fallback model too.
+//!
+//! The key never appears in an answer or a log line, and neither does OpenAI's own error text
+//! (its 401 quotes part of the key).
 
+use super::openai_key::{self, NoKey};
 use super::AppState;
 use crate::db::spaces::SpaceId;
-use crate::drivers::engines::EngineId;
-use crate::profiles::Engine;
 use axum::{
-    body::Body,
+    body::{Body, Bytes, HttpBody},
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -30,19 +36,23 @@ use axum::{
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
+use std::convert::Infallible;
+use std::pin::Pin;
 use std::sync::LazyLock;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
 /// OpenAI's own limit for one recording.
 pub const MAX_AUDIO_BYTES: u64 = 25 * 1024 * 1024;
-/// Longest wait for OpenAI's answer, per model tried.
+/// Longest wait for OpenAI's answer, per model tried (so up to twice this when the fallback runs).
 pub const TIMEOUT: Duration = Duration::from_secs(60);
 /// The model asked first, and the one tried when OpenAI says the first doesn't exist.
 pub const MODEL: &str = "gpt-4o-mini-transcribe";
 pub const FALLBACK_MODEL: &str = "whisper-1";
-/// Recordings sent to OpenAI at the same time, across all spaces. One more waits up to
-/// [`QUEUE_WAIT`] for its turn, then gets 429 `busy`.
+/// Recordings read and sent to OpenAI at the same time, across all spaces. One more waits up to
+/// [`QUEUE_WAIT`] for its turn, before its body is read, then gets 429 `busy`.
 pub const MAX_AT_ONCE: usize = 2;
 pub const QUEUE_WAIT: Duration = Duration::from_secs(30);
 /// Test seam: another OpenAI address (only with the `test-seams` feature, like Telegram's).
@@ -54,6 +64,7 @@ pub const WHY_HOST_OFF: &str =
     "This machine is turned off for OpenAI in this space, so its key isn't used. Add an OpenAI API key to this space in Apps & accounts to dictate.";
 pub const WHY_ENGINE_OFF: &str = "The OpenAI API is turned off in Apps & accounts. Turn it on to dictate.";
 pub const WHY_KEY_REFUSED: &str = "The OpenAI key was refused.";
+pub const WHY_TIMEOUT: &str = "OpenAI didn't answer in time. Try again in a minute.";
 
 /// The recording types the mic button can send (`MediaRecorder` gives webm in Chrome and
 /// Firefox, mp4 in Safari), with the file name OpenAI is told. Parameters such as
@@ -95,56 +106,25 @@ impl TranscribeSource {
     }
 }
 
-/// What decides a space's source, read from the database and Settings.
-#[derive(Debug, Default, Clone)]
-pub struct KeyFacts {
-    /// The OpenAI API engine is on (Settings).
-    pub openai_on: bool,
-    /// The key of the space's first enabled Codex `api_key` account that has one.
-    pub space_key: Option<String>,
-    /// This machine is off for Codex in the space.
-    pub host_off: bool,
-    /// The host's key (Settings, else `OPENAI_API_KEY`).
-    pub host_key: Option<String>,
-}
+pub use super::openai_key::KeyFacts;
 
-/// The key to use, or why there is none (a sentence for the person). Pure: the order lives here.
+/// The key to use, or why there is none (a sentence for the person), in [`openai_key::pick`]'s
+/// order.
 pub fn pick(facts: &KeyFacts) -> Result<String, &'static str> {
-    let usable = |k: &Option<String>| k.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(str::to_string);
-    if !facts.openai_on {
-        return Err(if usable(&facts.space_key).is_some() || usable(&facts.host_key).is_some() { WHY_ENGINE_OFF } else { WHY_NO_KEY });
-    }
-    if let Some(k) = usable(&facts.space_key) {
-        return Ok(k);
-    }
-    match usable(&facts.host_key) {
-        Some(_) if facts.host_off => Err(WHY_HOST_OFF),
-        Some(k) => Ok(k),
-        None => Err(WHY_NO_KEY),
-    }
+    openai_key::pick(facts).map_err(why_no_key)
 }
 
-/// Reads [`KeyFacts`] for `space`: only the database and the environment, never a network call.
-pub async fn key_facts(state: &AppState, space: &SpaceId) -> KeyFacts {
-    let db = &state.db;
-    let profiles = db.list_profiles(space).await.unwrap_or_default();
-    let mut space_key = None;
-    for p in profiles.iter().filter(|p| p.engine == "codex" && p.kind == "api_key" && p.enabled) {
-        if let Ok(Some(key)) = db.get_profile_key(&p.id).await {
-            if !key.0.trim().is_empty() {
-                space_key = Some(key.0);
-                break;
-            }
-        }
+fn why_no_key(no: NoKey) -> &'static str {
+    match no {
+        NoKey::EngineOff => WHY_ENGINE_OFF,
+        NoKey::HostOff => WHY_HOST_OFF,
+        NoKey::Missing => WHY_NO_KEY,
     }
-    let host_off = profiles.iter().any(|p| p.kind == "system" && !p.enabled && Engine::parse(&p.engine) == Some(Engine::Codex));
-    let host_key = db.get_setting("openai_api_key").await.ok().flatten().or_else(|| std::env::var("OPENAI_API_KEY").ok()).filter(|k| !k.trim().is_empty());
-    KeyFacts { openai_on: state.engines.is_enabled(EngineId::OpenaiApi), space_key, host_off, host_key }
 }
 
 /// The space's dictation source, or why there is none.
 pub async fn transcribe_source_for_space(state: &AppState, space: &SpaceId) -> Result<TranscribeSource, &'static str> {
-    pick(&key_facts(state, space).await).map(|key| TranscribeSource::OpenAi { base: api_base(), key })
+    openai_key::key_for_space(state, space).await.map(|key| TranscribeSource::OpenAi { base: api_base(), key }).map_err(why_no_key)
 }
 
 fn api_base() -> String {
@@ -211,7 +191,25 @@ pub struct TranscribeQuery {
     pub lang: Option<String>,
 }
 
-static AT_ONCE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(MAX_AT_ONCE));
+/// The [`MAX_AT_ONCE`] slots and the wait for one, one per server ([`AppState::dictation`]).
+pub struct Slots {
+    pub at_once: Semaphore,
+    pub queue_wait: Duration,
+}
+
+impl Default for Slots {
+    fn default() -> Self {
+        Self::with_wait(QUEUE_WAIT)
+    }
+}
+
+impl Slots {
+    /// [`MAX_AT_ONCE`] slots with another wait (a test's shorter one).
+    pub fn with_wait(queue_wait: Duration) -> Self {
+        Self { at_once: Semaphore::new(MAX_AT_ONCE), queue_wait }
+    }
+}
+
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 /// The pooled client for api.openai.com, or a new one for any other base (only a test-seams
@@ -229,8 +227,9 @@ fn client_for(base: &str) -> reqwest::Client {
 /// `POST /api/spaces/:id/transcribe[?lang=xx]` with the recording as the raw body → 200
 /// `{text, source}`. Refusals come before any byte is read where they can: 403 for a bot's
 /// token, 404 no space, 409 archived space, 413 a declared length over 25 MB, 415 not a
-/// recording type, 400 a bad `lang`, 409 `no_transcriber`; then 413 at the byte that passes
-/// 25 MB, 400 `empty_audio`, 429 `busy`, 502 `transcriber_failed` (see docs/dictation.md).
+/// recording type, 400 a bad `lang`, 409 `no_transcriber`, 429 `busy` (no slot within
+/// [`QUEUE_WAIT`]); then, holding the slot, 400 `interrupted`, 413 at the byte that passes 25 MB,
+/// 400 `empty_audio`, 502 `transcriber_failed` (see docs/dictation.md).
 pub async fn transcribe(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -263,22 +262,14 @@ pub async fn transcribe(
         Ok(s) => s,
         Err(why) => return no_transcriber(why),
     };
-    let mut audio = Vec::with_capacity(declared.unwrap_or(0).min(MAX_AUDIO_BYTES) as usize);
-    let mut stream = body.into_data_stream();
-    while let Some(chunk) = stream.next().await {
-        let Ok(chunk) = chunk else {
-            return refusal(StatusCode::BAD_REQUEST, "interrupted", "The recording was interrupted.");
-        };
-        if audio.len() as u64 + chunk.len() as u64 > MAX_AUDIO_BYTES {
-            return too_large();
-        }
-        audio.extend_from_slice(&chunk);
-    }
-    if audio.is_empty() {
-        return refusal(StatusCode::BAD_REQUEST, "empty_audio", "The recording is empty.");
-    }
-    let Ok(Ok(_slot)) = tokio::time::timeout(QUEUE_WAIT, AT_ONCE.acquire()).await else {
+    // The slot before the body: a recording waiting for its turn holds no memory, and one that
+    // gets `busy` is never read.
+    let Ok(Ok(_slot)) = tokio::time::timeout(state.dictation.queue_wait, state.dictation.at_once.acquire()).await else {
         return refusal(StatusCode::TOO_MANY_REQUESTS, "busy", "Other recordings are being turned into text. Try again in a moment.");
+    };
+    let audio = match read_audio(body, declared).await {
+        Ok(a) => a,
+        Err(r) => return r,
     };
     let size = audio.len();
     match send(&source, audio, file_name, lang.as_deref()).await {
@@ -293,13 +284,32 @@ pub async fn transcribe(
     }
 }
 
+/// The whole body, refused at the byte that passes [`MAX_AUDIO_BYTES`], or when empty.
+async fn read_audio(body: Body, declared: Option<u64>) -> Result<Bytes, Response> {
+    let mut audio = Vec::with_capacity(declared.unwrap_or(0).min(MAX_AUDIO_BYTES) as usize);
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else {
+            return Err(refusal(StatusCode::BAD_REQUEST, "interrupted", "The recording was interrupted."));
+        };
+        if audio.len() as u64 + chunk.len() as u64 > MAX_AUDIO_BYTES {
+            return Err(too_large());
+        }
+        audio.extend_from_slice(&chunk);
+    }
+    if audio.is_empty() {
+        return Err(refusal(StatusCode::BAD_REQUEST, "empty_audio", "The recording is empty."));
+    }
+    Ok(Bytes::from(audio))
+}
+
 fn too_large() -> Response {
     refusal(StatusCode::PAYLOAD_TOO_LARGE, "too_large", "The recording is over 25 MB. Record a shorter message.")
 }
 
 /// Sends the recording with [`MODEL`], then [`FALLBACK_MODEL`] if OpenAI says the first doesn't
 /// exist. `Ok((text, model))`, or a plain reason that never has the key or OpenAI's own words.
-pub async fn send(source: &TranscribeSource, audio: Vec<u8>, file_name: &str, lang: Option<&str>) -> Result<(String, &'static str), &'static str> {
+pub async fn send(source: &TranscribeSource, audio: Bytes, file_name: &str, lang: Option<&str>) -> Result<(String, &'static str), &'static str> {
     match send_one(source, &audio, file_name, lang, MODEL).await {
         Err(Upstream::ModelMissing) => match send_one(source, &audio, file_name, lang, FALLBACK_MODEL).await {
             Ok(text) => Ok((text, FALLBACK_MODEL)),
@@ -327,41 +337,75 @@ impl Upstream {
             Upstream::Status(413) => "The recording is too large for OpenAI.",
             Upstream::Status(400 | 404 | 415 | 422) | Upstream::ModelMissing => "OpenAI couldn't read this recording.",
             Upstream::Status(_) => "OpenAI had a problem. Try again in a minute.",
-            Upstream::Timeout => "OpenAI didn't answer within 60 seconds.",
+            Upstream::Timeout => WHY_TIMEOUT,
             Upstream::Unreachable => "OpenAI couldn't be reached.",
             Upstream::Unreadable => "OpenAI's answer couldn't be read.",
         }
     }
 }
 
-/// One `multipart/form-data` body for `/v1/audio/transcriptions`.
-fn multipart(boundary: &str, audio: &[u8], file_name: &str, lang: Option<&str>, model: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(audio.len() + 512);
+/// One `multipart/form-data` body for `/v1/audio/transcriptions`: the form fields, then `audio`
+/// itself (the caller's buffer, not a copy), then the closing boundary.
+fn multipart(boundary: &str, audio: &Bytes, file_name: &str, lang: Option<&str>, model: &str) -> Parts {
+    let mut head = String::with_capacity(512);
     let mut field = |name: &str, value: &str| {
-        out.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes());
+        head.push_str(&format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"));
     };
     field("model", model);
     field("response_format", "json");
     if let Some(l) = lang {
         field("language", l);
     }
-    out.extend_from_slice(
-        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n")
-            .as_bytes(),
-    );
-    out.extend_from_slice(audio);
-    out.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    out
+    head.push_str(&format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    ));
+    Parts::new([Bytes::from(head), audio.clone(), Bytes::from(format!("\r\n--{boundary}--\r\n"))])
 }
 
-async fn send_one(source: &TranscribeSource, audio: &[u8], file_name: &str, lang: Option<&str>, model: &str) -> Result<String, Upstream> {
+/// A request body sent as a few buffers in turn, with its exact length declared up front (so the
+/// upload has a `Content-Length`, as one buffer would).
+struct Parts {
+    parts: VecDeque<Bytes>,
+    left: u64,
+}
+
+impl Parts {
+    fn new(parts: impl IntoIterator<Item = Bytes>) -> Self {
+        let parts: VecDeque<Bytes> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+        let left = parts.iter().map(|p| p.len() as u64).sum();
+        Self { parts, left }
+    }
+}
+
+impl HttpBody for Parts {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Result<hyper::body::Frame<Bytes>, Infallible>>> {
+        let next = self.parts.pop_front();
+        if let Some(p) = &next {
+            self.left -= p.len() as u64;
+        }
+        Poll::Ready(next.map(|p| Ok(hyper::body::Frame::data(p))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.parts.is_empty()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        hyper::body::SizeHint::with_exact(self.left)
+    }
+}
+
+async fn send_one(source: &TranscribeSource, audio: &Bytes, file_name: &str, lang: Option<&str>, model: &str) -> Result<String, Upstream> {
     let TranscribeSource::OpenAi { base, key } = source;
     let boundary = format!("kwnt-{}", uuid::Uuid::new_v4().simple());
     let resp = client_for(base)
         .post(format!("{}/v1/audio/transcriptions", base.trim_end_matches('/')))
         .bearer_auth(key)
         .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
-        .body(multipart(&boundary, audio, file_name, lang, model))
+        .body(reqwest::Body::wrap(multipart(&boundary, audio, file_name, lang, model)))
         .timeout(TIMEOUT)
         .send()
         .await
@@ -464,19 +508,45 @@ mod tests {
         assert!(!model_missing(400, &json!({"error": {"param": "file"}})));
         assert!(!model_missing(401, &json!({"error": {"code": "model_not_found"}})));
         assert_eq!(Upstream::Status(401).why(), WHY_KEY_REFUSED);
-        assert_eq!(Upstream::Timeout.why(), "OpenAI didn't answer within 60 seconds.");
+        // With the fallback model a call can wait 2 × 60 s, so the reason names no number
+        assert_eq!(Upstream::Timeout.why(), "OpenAI didn't answer in time. Try again in a minute.");
+    }
+
+    /// The parts one after another, as the upload sends them.
+    fn flat(mut parts: Parts) -> Vec<u8> {
+        let declared = parts.size_hint().exact().unwrap();
+        let mut out = Vec::new();
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        while let Poll::Ready(Some(Ok(frame))) = Pin::new(&mut parts).poll_frame(&mut cx) {
+            out.extend_from_slice(&frame.into_data().unwrap());
+        }
+        assert!(parts.is_end_stream());
+        assert_eq!(declared, out.len() as u64, "the declared length is the length sent");
+        out
     }
 
     #[test]
     fn the_multipart_body_has_the_fields_and_the_bytes() {
-        let body = multipart("B", b"\x00\x01RIFF", "audio.wav", Some("de"), MODEL);
+        let audio = Bytes::from_static(b"\x00\x01RIFF");
+        let body = flat(multipart("B", &audio, "audio.wav", Some("de"), MODEL));
         let text = String::from_utf8_lossy(&body);
         assert!(text.starts_with("--B\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-4o-mini-transcribe\r\n"), "{text}");
         assert!(text.contains("name=\"language\"\r\n\r\nde\r\n"));
         assert!(text.contains("name=\"response_format\"\r\n\r\njson\r\n"));
         assert!(text.contains("filename=\"audio.wav\""));
-        assert!(body.windows(6).any(|w| w == b"\x00\x01RIFF"));
+        assert!(text.contains("Content-Type: application/octet-stream\r\n\r\n\u{0}\u{1}RIFF\r\n--B--\r\n"), "{text}");
         assert!(text.ends_with("\r\n--B--\r\n"));
-        assert!(!String::from_utf8_lossy(&multipart("B", b"x", "audio.webm", None, MODEL)).contains("language"));
+        assert!(!String::from_utf8_lossy(&flat(multipart("B", &Bytes::from_static(b"x"), "audio.webm", None, MODEL))).contains("language"));
+    }
+
+    #[test]
+    fn every_model_tried_sends_the_one_audio_buffer() {
+        let audio = Bytes::from(vec![7u8; 4096]);
+        for model in [MODEL, FALLBACK_MODEL] {
+            let parts = multipart("B", &audio, "audio.webm", None, model);
+            let sent = parts.parts.iter().find(|p| p.len() == audio.len()).expect("the audio is one part");
+            assert_eq!(sent.as_ptr(), audio.as_ptr(), "{model}: the same bytes, not a copy");
+        }
     }
 }
