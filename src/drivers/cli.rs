@@ -1089,6 +1089,9 @@ struct ClaudeStream {
     running: std::collections::HashSet<String>,
     /// Tool calls already reported, so a repeated message isn't reported twice.
     seen: std::collections::HashSet<String>,
+    /// Running tool calls that open a page in the bot's browser, by `tool_use` id: their tool
+    /// name, so the page title in their answer reaches the activity step (`page_title`).
+    page_opens: std::collections::HashMap<String, String>,
     result_line: Option<String>,
     /// Output that isn't JSON (an older claude without `stream-json`).
     plain: String,
@@ -1105,6 +1108,8 @@ struct ClaudeStream {
     /// Tools, MCP servers, skills and slash commands claude's `init` line said it has; `None`
     /// until that line arrives.
     offered: Option<Vec<String>>,
+    /// The account's windows from the last `rate_limit_event` line.
+    rate_limits: Option<crate::profiles::usage::UsageReading>,
 }
 
 /// Longest reason kept from a failed tool result.
@@ -1140,6 +1145,11 @@ impl ClaudeStream {
         let blocks = v["message"]["content"].as_array().map(Vec::as_slice).unwrap_or_default();
         match v["type"].as_str() {
             Some("result") => self.result_line = Some(line.to_string()),
+            Some("rate_limit_event") => {
+                if let Some(reading) = crate::profiles::usage::from_claude_event(&v) {
+                    self.rate_limits = Some(reading);
+                }
+            }
             Some("system") if v["subtype"] == "init" => {
                 let offered = self.offered.get_or_insert_with(Vec::new);
                 for key in ["tools", "mcp_servers", "skills", "slash_commands"] {
@@ -1208,6 +1218,9 @@ impl ClaudeStream {
                         _ => b["input"].clone(),
                     };
                     let name = b["name"].as_str().unwrap_or("tool").to_string();
+                    if super::activity::opens_page(&name) {
+                        self.page_opens.insert(id.to_string(), name.clone());
+                    }
                     events.push(RuntimeEvent::ToolCallPending { id: id.to_string(), name, args });
                 }
             }
@@ -1221,6 +1234,10 @@ impl ClaudeStream {
                         serde_json::json!({ "status": "error", "error": crate::mcp::truncate_text(&tool_result_text(&b["content"]), CLAUDE_ERROR_MAX) })
                     } else {
                         serde_json::json!({ "status": "ok" })
+                    };
+                    let result = match self.page_opens.remove(id) {
+                        Some(name) => super::activity::with_page_title(result, &name, &tool_result_text(&b["content"])),
+                        None => result,
                     };
                     events.push(RuntimeEvent::ToolCallCompleted { id: id.to_string(), result });
                 }
@@ -1878,13 +1895,15 @@ impl Driver for CliDriver {
                         return Err(no_tools_broken(&self.tool_kind, &what));
                     }
                 }
+                // The account's windows, from a container run too (its stdout is the same stream)
+                let rate_limits = claude_stream.rate_limits.take();
                 let stdout = claude_stream.into_stdout();
                 if let Some(t) = isolated.take() {
                     if let Some(notice) = isolated_end(&t, &input, &stdout, exit) {
                         if let Some(u) = ClaudeResult::parse(&stdout).and_then(|r| r.split().map(|u| (r.main_model(), u))) {
                             record_cli_usage(&input, u.0, &u.1).await;
                         }
-                        return Ok(notice);
+                        return Ok(notice.with_usage(rate_limits));
                     }
                 }
 
@@ -1914,7 +1933,7 @@ impl Driver for CliDriver {
                             let bare_limit = crate::profiles::classify::is_limit_line(&result.result);
                             if (result.is_error && result.num_turns <= 1) || bare_limit {
                                 if let Some(failure) = refusal(&result.result) {
-                                    return Ok(TurnOutput::refused(failure));
+                                    return Ok(TurnOutput::refused(failure).with_usage(rate_limits));
                                 }
                             }
                             tokens = result.tokens();
@@ -1957,6 +1976,7 @@ impl Driver for CliDriver {
                     tokens_used: tokens,
                     usage,
                     is_error,
+                    usage_windows: rate_limits,
                     ..Default::default()
                 })
             }
@@ -2222,6 +2242,25 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
         assert_eq!(parsed.tokens(), Some(7));
     }
 
+    /// account-usage: the stream keeps the last `rate_limit_event` (a recorded turn) and the
+    /// result line still parses.
+    #[test]
+    fn claude_stream_keeps_the_accounts_windows_from_a_recorded_turn() {
+        let t0 = Instant::now();
+        let mut s = ClaudeStream::default();
+        for line in include_str!("../../tests/fixtures/claude_rate_limit_event.jsonl").lines() {
+            s.line(line, t0);
+        }
+        let r = s.rate_limits.clone().expect("the rate_limit_event was kept");
+        assert_eq!(r.status.as_deref(), Some("ok"));
+        assert_eq!(r.windows.iter().map(|w| (w.kind.as_str(), w.used_pct)).collect::<Vec<_>>(), vec![("five_hour", 14), ("weekly", 56)]);
+        // A later event wins; an empty one doesn't wipe what was read
+        s.line(r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","unifiedWindows":{"five_hour":{"utilization":0.9,"resetsAt":1794605400}}}}"#, t0);
+        s.line(r#"{"type":"rate_limit_event","rate_limit_info":{}}"#, t0);
+        assert_eq!(s.rate_limits.as_ref().unwrap().status.as_deref(), Some("warning"));
+        assert_eq!(ClaudeResult::parse(&s.into_stdout()).unwrap().result, "OK");
+    }
+
     /// 0.9.5: claude's init line names servers that failed or want a sign-in (said like the API
     /// driver says them), and a failed tool result keeps why it failed.
     #[test]
@@ -2255,6 +2294,32 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// 0.9.8 browser panel: a `browser_open` that went fine carries the page's title to its
+    /// activity step; other tools don't, and a failed open doesn't.
+    #[test]
+    fn claude_stream_passes_the_opened_pages_title_on() {
+        let t0 = Instant::now();
+        let mut s = ClaudeStream::default();
+        let page = serde_json::json!({"url": "http://roastco.example.com/", "title": "RoastCo · Shop", "status": "navigated"}).to_string();
+        let call = |id: &str, name: &str| {
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":id,"name":name,"input":{"url":"http://roastco.example.com/"}}]}}).to_string()
+        };
+        let answer = |id: &str, is_error: bool| {
+            serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":id,"is_error":is_error,"content":[{"type":"text","text":page}]}]}}).to_string()
+        };
+        let result_of = |events: Vec<RuntimeEvent>| match events.as_slice() {
+            [RuntimeEvent::ToolCallCompleted { result, .. }] => result.clone(),
+            other => panic!("{other:?}"),
+        };
+        s.line(&call("o", "mcp__kwnt_tools__browser_open"), t0);
+        assert_eq!(result_of(s.line(&answer("o", false), t0)), serde_json::json!({"status": "ok", "title": "RoastCo · Shop"}));
+        s.line(&call("f", "WebFetch"), t0);
+        assert_eq!(result_of(s.line(&answer("f", false), t0)), serde_json::json!({"status": "ok"}));
+        s.line(&call("e", "mcp__kwnt_tools__browser_open"), t0);
+        assert!(result_of(s.line(&answer("e", true), t0)).get("title").is_none());
+        assert!(s.page_opens.is_empty(), "nothing left over once the calls end");
     }
 
     #[test]

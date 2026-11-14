@@ -13,10 +13,11 @@ Shortcodes in the HTML:
   {{root}}                                relative path back to site/
   {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*); desktop ones not in
                                           CLOSEUPS get class="app", the window bar in site.css
-  {{video:NAME|LABEL}}                    a muted looping demo clip with its poster (class="app", window bar too)
+  {{video:NAME|LABEL}}                    a muted looping demo clip; site.js sets its poster near the screen (class="app", window bar too)
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
   {{CONTACT_EMAIL}}                       the contact address, from OPERATOR below (marked placeholder while empty)
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
+  {{char:ROLE}}                           the same creature without its frame (hero and footer crew)
   {{releases}}                            the release line under the hero: latest Mac version and date, release count
                                           since the first one, licence (from CHANGELOG.md, see release_line)
   {{windows_exe}}                         the latest release's Windows (beta) installer URL (from CHANGELOG.md, see
@@ -45,6 +46,7 @@ import datetime
 import hashlib
 import html
 import json
+import os
 import pathlib
 import posixpath
 import re
@@ -52,10 +54,12 @@ import shutil
 import struct
 import subprocess
 import sys
+import urllib.request
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "site-src"
+MEDIA = ROOT / "site" / "assets" / "media"
 OUT = ROOT / "site"
 SITE_URL = "https://kwant.si"
 GITHUB = "https://github.com/alexsergivan/kwant"
@@ -67,10 +71,29 @@ OPERATOR = {
 
 # Cloudflare Web Analytics: counts page views without cookies, local storage or fingerprinting. The token is the kwant.si
 # site in Cloudflare (automatic install is off there). site/_headers allows its two hosts in script-src and connect-src.
-CF_ANALYTICS = (
-    "<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' "
-    "data-cf-beacon='{\"token\": \"7f6ed395033a43eea3885ad0943890c2\"}'></script><!-- End Cloudflare Web Analytics -->"
-)
+# The page only carries the token; site.js adds the beacon script after the first paint, so it never competes with the
+# page's own files.
+CF_ANALYTICS = '<script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>'
+
+
+# On the home page every lazy image waits for site.js, which loads it when it comes within 600 px of the screen. Native
+# lazy loading starts them at the first layout, before the first paint, where on a phone they compete with the hero
+# poster (the LCP image). Until then the image shows an empty picture of the same size; <noscript> keeps the real one.
+LAZY_IMG = re.compile(r'<img\b[^>]*\bloading="lazy"[^>]*>')
+
+
+def defer_images(page_html):
+    def one(m):
+        tag = m[0]
+        before = m.string[:m.start()]
+        if before.rfind("<picture") > before.rfind("</picture>"):
+            return tag  # a <picture> picks its own source; leave it to the browser's lazy loading
+        w, h = re.search(r'\bwidth="(\d+)"', tag)[1], re.search(r'\bheight="(\d+)"', tag)[1]
+        empty = f"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}'/%3E"
+        lazy = re.sub(r'\ssrc="', f' src="{empty}" data-src="', tag, count=1).replace(' srcset="', ' data-srcset="', 1)
+        return f"{lazy}<noscript>{tag}</noscript>"
+    return LAZY_IMG.sub(one, page_html)
+
 
 DOC_GROUPS = [
     ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run")]),
@@ -178,6 +201,65 @@ def avatar(role):
     return f'<svg class="av" viewBox="0 0 26 26" width="34" height="34" shape-rendering="crispEdges" aria-hidden="true">{"".join(parts)}</svg>'
 
 
+def char(role):
+    """{{char:role}}: the avatar creature alone, no frame or screen (the redesign's hero and footer crew)."""
+    rects = "".join(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{c}"/>' for x, y, w, h, c in avatar_rects(role))
+    return f'<svg class="char-svg" viewBox="5 1 16 20" shape-rendering="crispEdges" aria-hidden="true">{rects}</svg>'
+
+
+def px_icon(rows, cls="pi", label=None):
+    """A pixel icon from strings of '#' and '.', one rect per run, drawn in currentColor."""
+    h, w = len(rows), max(len(r) for r in rows)
+    rects = "".join(
+        f'<rect x="{m.start()}" y="{y}" width="{m.end() - m.start()}" height="1"/>'
+        for y, row in enumerate(rows) for m in re.finditer(r"#+", row)
+    )
+    aria = f'role="img" aria-label="{label}"' if label else 'aria-hidden="true"'
+    return f'<svg class="{cls}" viewBox="0 0 {w} {h}" shape-rendering="crispEdges" fill="currentColor" {aria}>{rects}</svg>'
+
+
+# Pixel icons (Mira's site redesign, Nov 2026). One string per row, '#' is a filled pixel.
+IC = {
+    "handoff": [".........", "....#....", "....##...", "#######..", "########.", "#######..", "....##...", "....#....", "........."],
+    "shield": [".#######.", ".#######.", ".##...##.", ".##...##.", ".##...##.", "..##.##..", "..##.##..", "...###...", "....#...."],
+    "cursor": ["#........", "##.......", "###......", "####.....", "#####....", "######...", "###......", "#..##....", "....##..."],
+    "moon": ["...####..", "..##.....", ".##......", ".##......", ".##......", ".##......", "..##...#.", "...#####.", "........."],
+    "check": [".........", ".......##", "......##.", ".....##..", "##..##...", ".####....", "..##.....", ".........", "........."],
+    "down": ["...##...", "...##...", "...##...", "#..##..#", "##.##.##", ".######.", "..####..", "...##...", "########"],
+    "star": ["....#....", "...###...", "#########", ".#######.", "..#####..", "..##.##..", ".##...##.", "........."],
+    "heart": [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."],
+    "pause": ["##..##", "##..##", "##..##", "##..##", "##..##", "##..##"],
+    "play": ["#.....", "###...", "#####.", "#####.", "###...", "#....."],
+    "arrow": ["....#...", ".....#..", "########", ".....#..", "....#..."],
+}
+
+# The GitHub star count in the nav, read once per build. The build never needs the network: offline, rate-limited or
+# slow, it falls back to STARS_FALLBACK. KWANT_STARS=<n> pins it (KWANT_STARS=off skips the call).
+STARS_FALLBACK = 522
+_STARS = None
+
+
+def stars():
+    global _STARS
+    if _STARS is None:
+        pinned = os.environ.get("KWANT_STARS", "")
+        n = STARS_FALLBACK
+        if pinned.isdigit():
+            n = int(pinned)
+        elif pinned != "off":
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/alexsergivan/kwant",
+                    headers={"Accept": "application/vnd.github+json", "User-Agent": "kwant-site-build"},
+                )
+                with urllib.request.urlopen(req, timeout=4) as r:
+                    n = int(json.load(r)["stargazers_count"]) or STARS_FALLBACK
+            except Exception:
+                n = STARS_FALLBACK
+        _STARS = f"{n / 1000:.1f}k".replace(".0k", "k") if n >= 1000 else str(n)
+    return _STARS
+
+
 def parse(path):
     text = path.read_text()
     head, body = text.split("\n---\n", 1)
@@ -201,7 +283,9 @@ CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-hum
             "v090-attention-card", "v090-ci-fixit-card", "v090-ci-verdict-card", "v090-line-notes-card", "v090-point-at-it-card", "v090-review-inbox-card", "v090-roll-back-card", "v090-roll-back-restore-card", "v090-scope-warning-card", "v090-tool-notes-card", "v090-tool-notes-chat-card", "v090-verdict-card", "v090-watch-chat-card", "v090-watch-mission-card", "v090-worktrees-card",
             "v095-apps-accounts-tiles", "v095-budget-overview-card", "v095-bot-budget-card", "v095-tool-failure-line-card",
             "v096-real-chrome-signin-card",
-            "v097-working-avatar-card"}
+            "v097-working-avatar-card",
+            "v098-done-check-card",
+            "v099-update-off-race-card"}
 
 
 def shot(root, name, alt, sizes):
@@ -211,9 +295,11 @@ def shot(root, name, alt, sizes):
     sizes = sizes or "(max-width: 1024px) 100vw, 680px"
     a = html.escape(alt, quote=True)
     app = "" if phone or name in CLOSEUPS else ' class="app"'
+    # A 720w copy, where one exists, keeps phones from fetching the 1440w file.
+    mid = f"{base}-720.webp 720w, " if not phone and (MEDIA / f"{name}-720.webp").exists() else ""
     return (
         f'<a class="zoom" href="{base}-{big}.webp" data-caption="{a}">'
-        f'<img{app} src="{base}-{small}.webp" srcset="{base}-{small}.webp {small}w, {base}-{big}.webp {big}w" '
+        f'<img{app} src="{base}-{small}.webp" srcset="{mid}{base}-{small}.webp {small}w, {base}-{big}.webp {big}w" '
         f'sizes="{sizes}" width="{w}" height="{h}" loading="lazy" decoding="async" alt="{a}"></a>'
     )
 
@@ -223,7 +309,7 @@ def video(root, name, label, eager=False):
     lbl = html.escape(label, quote=True)
     return (
         f'<video class="app" data-autoplay controls muted playsinline loop preload="{"metadata" if eager else "none"}" '
-        f'poster="{base}-poster.webp" width="1280" height="800" aria-label="{lbl}">'
+        f'data-poster="{base}-poster.webp" width="1280" height="800" aria-label="{lbl}">'
         f'<source src="{base}.mp4" type="video/mp4"></video>'
     )
 
@@ -302,15 +388,50 @@ def operator(key):
     return html.escape(value)
 
 
+RELEASE_KICKER = re.compile(r'<p class="kicker">New in (\d+(?:\.\d+)+)(?: to (\d+(?:\.\d+)+))?(?: · ([^<]*))?</p>')
+JUMP_VERSIONS = 6
+
+
+def release_kickers(body):
+    """features.html: the "New in 0.9.7" kicker above each release h2 becomes an amber `v0.9.7` chip and the release
+    date (design.md: "amber v0.9.7 chip + date"). The page source keeps "New in X" so release edits stay the same."""
+    dates = {v: d for v, d in releases()}
+
+    def chip(m):
+        first, last, extra = m[1], m[2], m[3]
+        newest = last or first
+        day = dates.get(newest if newest.count(".") == 2 else newest + ".0")
+        ver = f"v{first}" + (f"–{last}" if last else "")
+        when = f'<time datetime="{day.isoformat()}">{day:%b} {day.day}, {day.year}</time>' if day else ""
+        more = f"<span>{extra}</span>" if extra else ""
+        return f'<p class="rel-kick"><span class="sr-only">New in </span><span class="ver">{ver}</span>{when}{more}</p>'
+
+    return RELEASE_KICKER.sub(chip, body)
+
+
+def jump_versions(body):
+    """The newest releases as mono links at the start of the features jump bar, then a divider before the topics."""
+    found = re.findall(r'<section id="(new-\d+)"[^>]*>\s*<div class="wrap">\s*<div class="section-head">\s*'
+                       r'<p class="kicker">New in (\d+(?:\.\d+)+)(?: to (\d+(?:\.\d+)+))?', body)
+    links = "".join(f'<li><a class="ver" href="#{sid}">{last or first}</a></li>' for sid, first, last in found[:JUMP_VERSIONS])
+    return f'<ul class="jump">{links}</ul><span class="sep" aria-hidden="true"></span>' if links else ""
+
+
 def expand(body, root):
     body = body.replace("{{root}}", root)
     body = re.sub(r"\{\{(" + "|".join(OPERATOR) + r")\}\}", lambda m: operator(m[1]), body)
     body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
     if "{{releases}}" in body:
         body = body.replace("{{releases}}", release_line())
+    if "{{jump:versions}}" in body:
+        body = body.replace("{{jump:versions}}", jump_versions(body))
+    if '<p class="kicker">New in ' in body:
+        body = release_kickers(body)
     if "{{windows_exe}}" in body:
         body = body.replace("{{windows_exe}}", windows_installer())
     body = re.sub(r"\{\{avatar:([a-z_]+)\}\}", lambda m: avatar(m[1]), body)
+    body = re.sub(r"\{\{char:([a-z_]+)\}\}", lambda m: char(m[1]), body)
+    body = re.sub(r"\{\{icon:([a-z]+)\}\}", lambda m: px_icon(IC[m[1]]), body)
     body = re.sub(r"\{\{shot:([^|}]+)\|([^|}]+)(?:\|([^}]*))?\}\}", lambda m: shot(root, m[1], m[2], m[3]), body)
     body = re.sub(
         r"\{\{video(!?):([^|}]+)\|([^}]+)\}\}", lambda m: video(root, m[2], m[3], eager=m[1] == "!"), body
@@ -318,34 +439,76 @@ def expand(body, root):
     return body
 
 
-def header(root, active):
-    home = root or "./"
-    def cur(name):
-        return ' aria-current="page"' if active == name else ""
-    blog = f'      <a href="{root}blog/index.html"{cur("blog")}>Blog</a>\n' if BLOG_LIVE else ""
+# The "Watch it work · 0:52" reel (home page, desktop). The pill and its lightbox are only emitted once the video is in
+# site/assets/media, so the site never links to a missing file. The description is the reel's text alternative.
+REEL = "assets/media/reel.mp4"
+REEL_VTT = "assets/media/reel.vtt"
+REEL_POSTERS = ("assets/media/reel-poster-960.webp", "assets/media/reel-poster-1920.webp")
+REEL_DESC = ("kwant demo, 52 seconds. A team of bots picks up a task and hands it on, you point at the exact spot on a "
+             "page that's wrong, a bot asks before running a risky command, each task shows the checks it passed, and a "
+             "routine keeps watching overnight. Recorded on a sample demo workspace, with no real account or repo.")
+# The real length (Kit's reel.json: 51.8 s). The label never claims a full minute.
+REEL_LENGTH = "0:52"
 
-    return f"""<a class="skip" href="#main">Skip to content</a>
-<header class="site-header">
-  <div class="wrap">
-    <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
-    <nav class="nav" aria-label="Main">
-      <a href="{root}features.html"{cur("features")}>Features</a>
-      <a href="{root}docs/quickstart.html"{cur("docs")}>Docs</a>
-{blog}      <a class="btn btn-soft" href="{GITHUB}" rel="noopener">{GH_ICON}<span>GitHub</span></a>
-    </nav>
+
+def reel_markup(root):
+    """The reel pill and its <dialog>. Without JS the pill is a plain link to the mp4. hero.js opens the dialog and only
+    then sets the video's src and poster, so nothing of the reel loads with the page."""
+    if not (OUT / REEL).exists():
+        return "", ""
+    posters = " ".join(f'data-poster-{w}="{root}{p}"' for w, p in zip(("sm", "lg"), REEL_POSTERS) if (OUT / p).exists())
+    track = (f'\n      <track kind="captions" srclang="en" label="English" data-src="{root}{REEL_VTT}">'
+             if (OUT / REEL_VTT).exists() else "")
+    pill = (f'\n  <div class="reel"><a class="btn btn-line px" href="{root}{REEL}" data-reel aria-haspopup="dialog" '
+            f'aria-controls="reel-dialog">{px_icon(IC["play"])}Watch it work <span>{REEL_LENGTH}</span></a></div>')
+    dialog = f"""
+<dialog class="reel-dialog" id="reel-dialog" aria-labelledby="reel-title" aria-describedby="reel-desc">
+  <div class="reel-bar"><h2 id="reel-title">Watch kwant work</h2><button type="button" class="reel-close" data-reel-close aria-label="Close video">Close</button></div>
+  <div class="reel-frame">
+    <video controls playsinline preload="none" data-src="{root}{REEL}" {posters} aria-describedby="reel-desc">{track}
+    </video>
+    <button type="button" class="reel-play" data-reel-play hidden aria-label="Play video">{px_icon(IC["play"])}</button>
   </div>
-</header>"""
+  <p class="sr-only" id="reel-desc">{REEL_DESC}</p>
+</dialog>"""
+    return pill, dialog
 
 
-def footer(root):
+def header(root, active, home_page=False):
+    """The floating pill nav (Mira's site redesign): brand, Features, Docs, Blog once it is live, the GitHub star
+    count written at build time, and Get started. The home page adds the reel pill and its dialog."""
+    reel, dialog = reel_markup(root) if home_page else ("", "")
+    home = root or "./"
+    def nl(href, text, name):
+        cur = ' aria-current="page"' if active == name else ""
+        return f'<a class="nl" href="{href}"{cur}>{text}</a>'
+    blog = nl(f"{root}blog/index.html", "Blog", "blog") + "\n    " if BLOG_LIVE else ""
+    n = stars()
+    return f"""<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <nav class="pill px" aria-label="Main">
+    <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
+    {nl(f"{root}features.html", "Features", "features")}
+    {nl(f"{root}docs/quickstart.html", "Docs", "docs")}
+    {blog}<a class="nl stars" href="{GITHUB}" rel="noopener" aria-label="kwant on GitHub, {n} stars">{GH_ICON}<b>★ {n}</b></a>
+    <a class="btn btn-solid btn-get px" href="{root}docs/quickstart.html">Get started</a>
+  </nav>{reel}
+</header>{dialog}"""
+
+
+def footer(root, home_page=False):
     home = root or "./"
     blog = f'      <a href="{root}blog/index.html">Blog</a>\n' if BLOG_LIVE else ""
+    crew = "".join(char(r) for r in ("research", "designer", "brand", "tech_lead", "qa"))
+    hero_js = f'\n<script src="{root}assets/js/hero.js" defer></script>' if home_page else ""
     return f"""<footer class="site-footer">
+  <div class="ground" aria-hidden="true"><div class="crew">{crew}</div></div>
   <div class="wrap">
+    <div class="foot-grid">
     <div class="foot-brand">
       <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
       <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
-      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="{GITHUB}" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="{GITHUB}" rel="noopener">Toss one our way {px_icon(IC["star"])}</a></p>
     </div>
     <nav aria-label="Product">
       <h2>Product</h2>
@@ -376,11 +539,14 @@ def footer(root):
       <a href="{root}terms.html">Terms of use</a>
       <a href="{root}terms.html#license">License</a>
     </nav>
-    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
-    <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
-    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+    </div>
+    <div class="foot-base">
+      <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+      <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
+      <p class="foot-made">Made in Germany with {px_icon(IC["heart"], label="love")}</p>
+    </div>
   </div>
-</footer>
+</footer>{hero_js}
 <script src="{root}assets/js/site.js" defer></script>
 <script src="{root}assets/js/pixel.js" defer></script>"""
 
@@ -400,16 +566,24 @@ def docs_shell(root, current, body):
     prev_link = next_link = ""
     if idx > 0:
         s, l = DOCS[idx - 1]
-        prev_link = f'<a class="prev" href="{root}docs/{s}.html"><small>Previous</small>{html.escape(l)}</a>'
+        prev_link = f'<a class="prev px" href="{root}docs/{s}.html"><small>Previous</small>{html.escape(l)}</a>'
     if idx < len(DOCS) - 1:
         s, l = DOCS[idx + 1]
-        next_link = f'<a class="next" href="{root}docs/{s}.html"><small>Next</small>{html.escape(l)}</a>'
+        next_link = f'<a class="next px" href="{root}docs/{s}.html"><small>Next</small>{html.escape(l)}</a>'
+    # Phones: the same groups in a <details> at the top of the article (Mira's docs-menu-390).
+    here_label = html.escape(DOCS[idx][1])
     return f"""<div class="wrap docs">
   <nav class="docs-nav" aria-label="Docs">
     <h2>Docs</h2>
 {items}
   </nav>
   <article class="prose">
+    <details class="crumb-mobile">
+      <summary class="px">{here_label} <span>Docs menu</span></summary>
+      <nav aria-label="Docs (menu)">
+{items.replace('<h3>', '<p class="docs-h">').replace('</h3>', '</p>')}
+      </nav>
+    </details>
 {body}
     <nav class="pager" aria-label="Docs pages">{prev_link}{next_link}</nav>
   </article>
@@ -559,8 +733,8 @@ def page(meta, body, root, dates):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(full_title)}</title>
 <meta name="description" content="{desc}">
-<meta name="theme-color" content="#f4f1ff">
-<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#0d0a1f">
+<meta name="color-scheme" content="dark">
 {robots}<link rel="canonical" href="{url}">
 <meta property="og:type" content="{"article" if meta.get("nav") or meta.get("kind") == "post" else "website"}">
 <meta property="og:site_name" content="kwant">
@@ -584,14 +758,15 @@ def page(meta, body, root, dates):
 <link rel="apple-touch-icon" href="{root}apple-touch-icon.png">
 <link rel="preload" href="{root}assets/fonts/pixelify-sans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="{root}assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
 <body class="page-{meta.get("active", "docs" if meta.get("nav") else "home") if not is404 else "404"}">
-{header(root, "docs" if meta.get("nav") else meta.get("active", "home"))}
+{header(root, "docs" if meta.get("nav") else meta.get("active", "home"), meta["path"] == "index.html")}
 <main id="main">
 {body}
 </main>
-{footer(root)}
+{footer(root, meta["path"] == "index.html")}
 {structured_data(meta, url, title, image, dates, body)}{CF_ANALYTICS}
 </body>
 </html>
@@ -1098,7 +1273,10 @@ def main(argv=None):
         if meta.get("nav"):
             body = docs_shell(root, meta["nav"], body)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(clean_links(version_urls(page(meta, body, root, dates)), meta["path"]))
+        built = version_urls(page(meta, body, root, dates))
+        if meta["path"] == "index.html":
+            built = defer_images(built)
+        out.write_text(clean_links(built, meta["path"]))
         written.append(meta["path"])
     if posts:
         root = "../"

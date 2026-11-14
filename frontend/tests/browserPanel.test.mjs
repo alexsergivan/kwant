@@ -42,14 +42,19 @@ test('once the bot has opened a page the live frame shows', () => {
   assert.doesNotMatch(html, /Browser idle/);
 });
 
-test('the footer says where Chrome runs and where you see it', () => {
-  assert.equal(m.browserFooterLabel(settings('local'), true), 'Chrome shown here (no window)');
-  assert.equal(m.browserFooterLabel(settings('local', true), true), 'Chrome window on your computer');
-  assert.equal(m.browserFooterLabel(settings('local'), false), 'Chrome offline');
-  assert.equal(m.browserFooterLabel(settings('vm'), true), 'Browser Ready');
-  assert.equal(m.browserFooterLabel(settings('vm'), false), 'Browser Offline');
+test('the footer says whose browser it is and what it is doing, in sentence case', () => {
+  const ben = { botName: 'Ben', browsing: true };
+  assert.equal(m.browserFooterLabel(settings('local'), true, ben), "Live view of Ben's browser");
+  assert.equal(m.browserFooterLabel(settings('vm'), true, ben), "Live view of Ben's browser");
+  assert.equal(m.browserFooterLabel(settings('local', true), true, ben), "Ben's browser is open in a Chrome window");
+  assert.equal(m.browserFooterLabel(settings('vm'), true, { botName: 'Ben', browsing: false }), "Ben's browser is idle");
+  assert.equal(m.browserFooterLabel(settings('local'), false, ben), "Ben's browser is off");
+  assert.equal(m.browserFooterLabel(settings('vm'), false, ben), "Ben's browser is off");
+  // The team page has no bot owner.
+  assert.equal(m.browserFooterLabel(settings('vm'), false), "The team's browser is off");
+  assert.equal(m.browserFooterLabel(settings('vm'), true, { browsing: true }), "Live view of the team's browser");
   // Settings not loaded yet: no claim about the user's computer.
-  assert.equal(m.browserFooterLabel(null, true), 'Browser Ready');
+  assert.equal(m.browserFooterLabel(null, true, { botName: 'Ben' }), "Ben's browser is idle");
 });
 
 // On a phone, Back to the list unmounts the chat while the pane stays open; it must come back on
@@ -69,4 +74,49 @@ test('a remounted pane comes back on the tab chosen for that bot', () => {
   assert.deepEqual(pressedTab(pane({ teamId: 'bot-a' })), ['Terminal']);
   // Another bot keeps its own tab
   assert.deepEqual(pressedTab(pane({ teamId: 'bot-b' })), ['Browser']);
+});
+
+// ---------- 0.9.8 browser panel (design browser-panel/design.md C) ----------
+const trail = [
+  { at: '2026-11-13T10:46:00Z', url: 'https://roastco.example.com/cart', host: 'roastco.example.com', stepTitle: 'Your cart · RoastCo' },
+  { at: '2026-11-13T10:45:00Z', url: 'https://roastco.example.com/shop/coffee/1kg', host: 'roastco.example.com', stepTitle: null },
+];
+
+test('the header says whose browser it is and whether it browses now; no Take over, Point, Key or Refresh up there', () => {
+  const html = pane({ teamName: 'Spring launch', browsingBot: 'Ben', running: true, activeUrl: 'https://roastco.example.com/cart' });
+  assert.match(html, /data-pane-title="">Ben&#x27;s browser</);
+  assert.match(html, /data-pane-status="browsing"[\s\S]*?Browsing now · @Spring launch/);
+  const header = html.slice(0, html.indexOf('aria-pressed'));
+  assert.doesNotMatch(header, /data-takeover-button|data-point-button|Saved logins|Refresh/);
+  assert.match(html, /data-pane-pill="live"[^>]*>[\s\S]*?Live</);
+});
+
+test('after the turn: Finished with the time, a muted frame and no Live pill; with no run, Idle and no pill', () => {
+  const html = pane({ browsingBot: 'Ben', running: false, finishedAt: '2026-11-13T22:46:00Z', activeUrl: 'https://roastco.example.com/' });
+  assert.match(html, /data-pane-status="finished"[\s\S]*?Finished \d{1,2}:46/);
+  assert.match(html, /data-pane-pill="finished"/);
+  assert.match(html, /data-frame-finished="true"[^>]*saturate-\[\.6\] brightness-\[\.82\]/);
+  const idle = pane({ activeUrl: 'https://roastco.example.com/' });
+  assert.match(idle, /data-pane-status="idle"[\s\S]*?Idle · @Team/);
+  assert.match(idle, /data-pane-title="">The team&#x27;s browser</);
+  assert.doesNotMatch(idle, /data-pane-pill/);
+});
+
+test('the trail lists the reply\'s pages, newest first, each opening in a new tab; the current one says Now while live', () => {
+  const html = pane({ browsingBot: 'Ben', running: true, trail, activeUrl: 'https://roastco.example.com/cart' });
+  assert.match(html, /Pages this reply · 2/);
+  const rows = [...html.matchAll(/<a href="([^"]+)" target="_blank" rel="noopener noreferrer"/g)].map((x) => x[1]);
+  assert.deepEqual(rows, ['https://roastco.example.com/cart', 'https://roastco.example.com/shop/coffee/1kg']);
+  assert.match(html, /Your cart · RoastCo/);
+  assert.equal((html.match(/> Now</g) ?? []).length, 1);
+  assert.doesNotMatch(pane({ browsingBot: 'Ben', running: false, trail, activeUrl: 'https://roastco.example.com/' }), /> Now</);
+  assert.doesNotMatch(pane({ activeUrl: 'https://roastco.example.com/' }), /Pages this reply/);
+});
+
+test('the frame has an Enlarge button; the footer offers Refresh and "Restart browser"', () => {
+  const html = pane({ activeUrl: 'https://roastco.example.com/', onRefresh: () => {}, onRestartVm: () => {} });
+  assert.match(html, /aria-label="Enlarge"/);
+  assert.match(html, />Refresh</);
+  assert.match(html, /Restart browser/);
+  assert.doesNotMatch(html, /Restart Browser/);
 });

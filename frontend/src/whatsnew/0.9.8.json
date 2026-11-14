@@ -1,0 +1,56 @@
+{
+  "version": "0.9.8",
+  "date": "2026-11-13",
+  "highlights": [
+    {
+      "id": "first-screen",
+      "title": "A first screen anyone can start from",
+      "text": "A fresh install starts with @helpers: Assistant, Researcher and Writer. Your own bots and teams stay as they are. Dev mode and Approvals now live in Settings › This space › General.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "done-check",
+      "title": "Done items say what checked them",
+      "text": "A done item in the Inbox shows Checked, Partly checked, Failed or Not checked above the answer, with the list of checks and their evidence.",
+      "image": null,
+      "open": "inbox"
+    },
+    {
+      "id": "prepush-grant",
+      "title": "Try again on a pre-push card lets the push go",
+      "text": "Press \"Ask Ben to try again\" and Ben's next push of that branch goes once its checks pass, with no second card. The card follows it to Pushed.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "waiting-checks",
+      "title": "Checks can wait for outside services",
+      "text": "A mission check can wait for a store review or a build farm: it runs again every 15 minutes with no bot turns, and tells you after 72 hours.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "waiting-state",
+      "title": "A chat says when it's waiting for you",
+      "text": "When a bot only needs your answer, one amber line says so, with Answer to jump to the question. Press a choice or just type your reply.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "routine-row",
+      "title": "A routine's run shows as a routine",
+      "text": "A routine's message in a chat is one row with a clock and the routine's name, not a You bubble. Press it to read the instructions.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "With no AI account yet, your first message no longer makes a Concierge that can't answer; you get the Add an account card.",
+    "Don't ask now also covers work a bot starts on its own; payments and production changes still ask.",
+    "A mission task whose browser stays busy now ends once with a fix line, instead of running the whole task again.",
+    "A message to a paused bot shows only the pause bar, and a bot pinned to an AI that can't run shows a grey dot.",
+    "Adding a tool from the public directory no longer fails until you rename it.",
+    "\"Select video\" and other file pickers in the live browser view now open a Choose file… sheet, where clicking them did nothing."
+  ]
+}

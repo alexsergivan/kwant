@@ -40,6 +40,28 @@ export interface Profile {
   last_error: 'quota' | 'auth' | null;
   /** Custom API accounts only. */
   custom?: CustomServer | null;
+  /** How much of its 5-hour and weekly limit a Claude or Codex sign-in has left, as last read. null or
+   *  missing: never read (or a server before account-usage). */
+  usage?: AccountUsage | null;
+}
+
+/** A subscription's limit: the rolling 5-hour one or the weekly one. */
+export type UsageKind = 'five_hour' | 'weekly';
+
+export interface UsageWindow {
+  kind: UsageKind;
+  /** 0–100, rounded. The UI shows 100 − this as "% left". */
+  used_pct: number;
+  resets_at: string | null;
+}
+
+/** GET /api/profiles `usage`, and what POST /api/profiles/:id/usage returns. */
+export interface AccountUsage {
+  checked_at: string;
+  /** "turn": read off a bot's reply; "check": the person pressed Check now. */
+  source: 'turn' | 'check';
+  status: 'ok' | 'warning' | 'out' | null;
+  windows: UsageWindow[];
 }
 
 export type LoginStatus = 'starting' | 'waiting' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
@@ -150,6 +172,115 @@ export function formatUntil(at: Date, now = Date.now()): string {
   return at.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+/** Below this much left, a limit's bar and the avatar badge turn amber (account-usage design §2.2). */
+export const USAGE_LOW_LEFT = 20;
+/** Numbers older than this are dimmed and say so (design §2.4). */
+export const USAGE_STALE_MS = 60 * 60_000;
+/** The server answers Check now from its copy for this long after a read, so the button waits too. */
+export const USAGE_CHECK_COOLDOWN_MS = 60_000;
+
+const USAGE_LABEL: Record<UsageKind, '5-hour' | 'Weekly'> = { five_hour: '5-hour', weekly: 'Weekly' };
+
+/** One limit on an account row: "5-hour · 93% left · resets 22:29". */
+export interface UsageRow {
+  kind: UsageKind;
+  label: '5-hour' | 'Weekly';
+  /** 0–100; null once its reset has passed (the old number is wrong and the new one isn't known yet). */
+  left: number | null;
+  /** "93% left"; null once reset. */
+  leftText: string | null;
+  /** "resets 22:29", "resets Wed 00:59", "resets Nov 20"; "reset at 14:29" once passed; null when not known. */
+  reset: string | null;
+  /** low: under 20% left (amber); out: nothing left (empty amber track); reset: its reset has passed. */
+  tone: 'ok' | 'low' | 'out' | 'reset';
+}
+
+/** Only sign-ins to Claude or Codex have these limits; API keys and Custom API accounts never show them. */
+export const hasUsageLimits = (p: Pick<Profile, 'engine' | 'kind'>) => (p.engine === 'claude' || p.engine === 'codex') && (p.kind === 'system' || p.kind === 'cli_home');
+
+/** A time on the person's own clock: "22:29" or "10:29 PM". */
+const clockOf = (at: Date) => at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+const weekday = (at: Date) => at.toLocaleDateString(undefined, { weekday: 'short' });
+
+/** When a limit resets: the time today, "Wed 00:59" within 6 days, else "Nov 20". */
+export function usageResetTime(at: Date, now = Date.now()): string {
+  if (sameDay(at, new Date(now))) return clockOf(at);
+  if (at.getTime() - now < 6 * 86400_000) return `${weekday(at)} ${clockOf(at)}`;
+  return at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** An account's limits, 5-hour first; [] when it has none or they were never read. */
+export function usageRows(p: Pick<Profile, 'engine' | 'kind' | 'usage'>, now = Date.now()): UsageRow[] {
+  if (!hasUsageLimits(p) || !p.usage?.windows?.length) return [];
+  const rows: UsageRow[] = [];
+  for (const kind of ['five_hour', 'weekly'] as const) {
+    const w = p.usage.windows.find((x) => x.kind === kind);
+    if (!w || typeof w.used_pct !== 'number' || !Number.isFinite(w.used_pct)) continue;
+    const parsed = w.resets_at ? new Date(w.resets_at) : null;
+    const at = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+    const label = USAGE_LABEL[kind];
+    if (at && at.getTime() <= now) {
+      const when = sameDay(at, new Date(now)) ? clockOf(at) : `${weekday(at)} ${clockOf(at)}`;
+      rows.push({ kind, label, left: null, leftText: null, reset: `reset at ${when}`, tone: 'reset' });
+      continue;
+    }
+    const left = Math.max(0, Math.min(100, Math.round(100 - w.used_pct)));
+    rows.push({
+      kind,
+      label,
+      left,
+      leftText: `${left}% left`,
+      reset: at ? `resets ${usageResetTime(at, now)}` : null,
+      tone: left <= 0 ? 'out' : left < USAGE_LOW_LEFT ? 'low' : 'ok',
+    });
+  }
+  return rows;
+}
+
+/** "checked just now", "… 4 min ago", "… 6 h ago", "… yesterday", then "checked Nov 11"; null when never read. */
+export function usageCheckedText(usage: Pick<AccountUsage, 'checked_at'> | null | undefined, now = Date.now()): string | null {
+  const t = usage?.checked_at ? Date.parse(usage.checked_at) : NaN;
+  if (Number.isNaN(t)) return null;
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 60) return 'checked just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `checked ${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `checked ${h} h ago`;
+  const at = new Date(t);
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  return sameDay(at, yesterday) ? 'checked yesterday' : `checked ${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+}
+
+/** Read more than an hour ago: dimmed, with a labelled Check now. */
+export const usageStale = (usage: Pick<AccountUsage, 'checked_at'> | null | undefined, now = Date.now()) => {
+  const t = usage?.checked_at ? Date.parse(usage.checked_at) : NaN;
+  return !Number.isNaN(t) && now - t > USAGE_STALE_MS;
+};
+
+/** Read under a minute ago: Check now would only get the server's copy back, so it waits. */
+export const usageCoolingDown = (usage: Pick<AccountUsage, 'checked_at'> | null | undefined, now = Date.now()) => {
+  const t = usage?.checked_at ? Date.parse(usage.checked_at) : NaN;
+  return !Number.isNaN(t) && now - t >= 0 && now - t < USAGE_CHECK_COOLDOWN_MS;
+};
+
+/**
+ * The model-badge hover's line (design §5): "5-hour 93% left · Weekly 44% left". A low window adds its reset
+ * ("5-hour 12% left, resets 22:29"), a reset one is left out, stale numbers add " · checked 6 h ago", and `name`
+ * (given when 2+ accounts of that engine could run) goes first. `low` draws the badge's amber dot. null when there's
+ * nothing to say.
+ */
+export function usageSummary(p: Pick<Profile, 'engine' | 'kind' | 'usage'>, now = Date.now(), name?: string | null): { text: string; low: boolean } | null {
+  const rows = usageRows(p, now).filter((r) => r.tone !== 'reset');
+  if (!rows.length) return null;
+  const parts = rows.map((r) => `${r.label} ${r.leftText}${r.tone !== 'ok' && r.reset ? `, ${r.reset}` : ''}`);
+  if (name) parts.unshift(name);
+  if (usageStale(p.usage, now)) parts.push(usageCheckedText(p.usage, now)!);
+  return { text: parts.join(' · '), low: rows.some((r) => r.tone !== 'ok') };
+}
+
 /** What the server's account label says when Claude Code is set up for another provider, not a Claude login. */
 const THIRD_PARTY_LABELS = new Set(['Amazon Bedrock', 'Google Vertex AI', 'Microsoft Foundry', 'a third-party provider', 'third_party']);
 export const isThirdPartyLabel = (label: string | null | undefined) => !!label && THIRD_PARTY_LABELS.has(label);
@@ -239,7 +370,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
       // no JSON body
     }
     if (res.status === 409 && message.startsWith('Request failed')) message = 'A profile with that name or folder already exists.';
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status: res.status });
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -269,6 +400,8 @@ export const profilesApi = {
   ) => request<Profile>('PATCH', `/api/profiles/${enc(id)}`, body),
   /** Checks a Custom API account's server again now. */
   check: (id: string) => request<Profile>('POST', `/api/profiles/${enc(id)}/check`),
+  /** Reads fresh 5-hour and weekly numbers (one tiny model call; the server answers from its copy within 60 s). */
+  usage: (id: string) => request<AccountUsage>('POST', `/api/profiles/${enc(id)}/usage`),
   remove: (id: string) => request<void>('DELETE', `/api/profiles/${enc(id)}`),
   setKey: (id: string, apiKey: string) => request<void>('PUT', `/api/profiles/${enc(id)}/key`, { api_key: apiKey }),
   removeKey: (id: string) => request<void>('DELETE', `/api/profiles/${enc(id)}/key`),

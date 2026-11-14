@@ -1372,7 +1372,7 @@ async fn call_tool(
                 return ("query needs at least one word".into(), true);
             };
             let limit = args["limit"].as_i64().unwrap_or(10);
-            match db.search_memories(&scope.kwant_id, query, limit).await {
+            match super::memory_recall::search(state, &scope.kwant_id, query, limit).await {
                 Ok(mut hits) => {
                     // With the Truth Ledger on, only notes whose fact is in force
                     if let Some(visible) = super::missions::truth_ledger::visible_memory_ids(state, &scope.kwant_id).await {

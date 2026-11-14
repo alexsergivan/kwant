@@ -1,0 +1,46 @@
+{
+  "version": "0.9.10",
+  "date": "2026-11-14",
+  "highlights": [
+    {
+      "id": "account-usage",
+      "title": "See how much of each AI account is left",
+      "text": "A Claude or Codex sign-in on Apps & accounts shows its 5-hour and weekly limits, like \"93% left · resets 22:29\". A bar turns amber when it runs low.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "account-usage-check",
+      "title": "Check an account's limits when you want",
+      "text": "Check now reads the latest numbers, at most once a minute and never by itself. The model badge on a bot's avatar shows them too.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "reply-done",
+      "title": "See when a job is done",
+      "text": "A job's last reply gets a Done mark after the bot's name, or what checked it: Checked, Partly checked, Check failed or Not checked.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "reply-approve",
+      "title": "Approve right from the reply",
+      "text": "When a bot asks for your OK, Approve and Change… sit under its reply. Approve tells it \"Approved, go ahead.\"",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "one-app-search",
+      "title": "Find any app in one list",
+      "text": "Another app on Apps & accounts lists Composio apps and tool servers together, one row per app, with how it signs in.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Bots find their notes by meaning, not just exact words, when the space has an OpenAI key or a local Ollama embedding model.",
+    "Bots can quote documents you put in a space's docs folder (Markdown, text or PDF), with the page for PDFs.",
+    "Dev mode offers a modern-web skill once for web projects, so bots follow Google Chrome's Modern Web Guidance."
+  ]
+}

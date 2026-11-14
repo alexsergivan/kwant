@@ -305,7 +305,7 @@ test('Accept → edit → Add routine sends one key, only the edits, and shows t
   assert.equal(form.querySelector('input[type="checkbox"]:not([role])')?.closest('label').textContent.includes('Enabled'), false, 'no Enabled box: it starts on');
   // Masked specs are text, never an input that could be edited back into a secret
   for (const input of form.querySelectorAll('input, textarea')) assert.ok(!String(input.value).includes('••••'), 'no masked spec in an input');
-  const name = form.querySelector('input[placeholder="Morning digest"]');
+  const name = form.querySelector('input[placeholder="Competitor prices"]');
   assert.equal(name.value, 'Weekly status report');
   await act(async () => setValue(name, 'Monday report'));
   const keepBoxes = [...form.querySelectorAll('fieldset input[type="checkbox"]')];
@@ -411,7 +411,7 @@ test('blocked: off is one quiet line; board off and no time zone each show their
 
 test('empty, loading and error states', async () => {
   let v = await renderSection({ 'GET /api/automation-discovery': listing({ suggestions: [] }) });
-  assert.match(v.host.querySelector('[data-testid="discovery-empty"]').textContent, /No suggestions right now\..*at most 2 new suggestions a day/);
+  assert.match(v.host.querySelector('[data-testid="discovery-empty"]').textContent, /None right now\..*at most 2 a day\)\./);
   v.done();
 
   g.fetch = () => new Promise(() => {});

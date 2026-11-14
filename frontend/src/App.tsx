@@ -40,7 +40,8 @@ import {
   openStepsByKwant,
   turnsAwaitingStep,
 } from './humanSteps';
-import { notifyBrowserPages, pageTeam, stepPage } from './browserPages';
+import { noteTitle, notifyBrowserPages, pageTeam, stepPage } from './browserPages';
+import { AUTO_CLOSE_DELAY_MS, PANE_EXIT_MS, PHONE_PANE_QUERY, type PaneOpener, shouldAutoClose, shouldAutoOpen } from './browserPanel';
 import { McpSuggestionCard, type SuggestionSignInResult } from './components/McpSuggestionCard';
 import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
@@ -82,7 +83,7 @@ import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, forgetLastRuns, resetTurns, turnEnded, turnRunsOn, turnStarted } from './kwantActivity';
-import { setBadgeBots, setBadgeEngines } from './modelBadgeData';
+import { setBadgeBots, setBadgeEngines, setBadgeProfiles } from './modelBadgeData';
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
@@ -1016,6 +1017,41 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // running turns are in and the chat's browser is active. Otherwise (an unknown, malformed or idle
   // link) it shows the plain "this bot isn't browsing now" page (W-L4).
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
+  // 0.9.8 browser panel (design browser-panel/design.md D): who opened it, and whether the person used it.
+  // Only a panel a bot opened closes itself, after that bot's turn, and never while the person uses it.
+  const [paneOpenedBy, setPaneOpenedBy] = useState<PaneOpener | null>(null);
+  const [paneTouched, setPaneTouched] = useState(false);
+  const [paneUsage, setPaneUsage] = useState({ control: false, pointPending: false });
+  const [paneClosing, setPaneClosing] = useState(false);
+  const markPaneTouched = useCallback(() => setPaneTouched(true), []);
+  // Set by autoOpenPane just before it opens the panel; the open effect below reads it to mark `bot`
+  const autoOpeningRef = useRef<string | null>(null);
+  const isVmPaneOpenRef = useRef(false);
+  isVmPaneOpenRef.current = isVmPaneOpen;
+  /** A browser event opens the panel: on desktop, when it's closed. Never on a phone (the live chip is the way in). */
+  const autoOpenPane = (owner: string) => {
+    const narrow = typeof window !== 'undefined' && !!window.matchMedia?.(PHONE_PANE_QUERY).matches;
+    if (!shouldAutoOpen({ open: isVmPaneOpenRef.current, narrow })) return;
+    autoOpeningRef.current = owner;
+    isVmPaneOpenRef.current = true;
+    setIsVmPaneOpen(true);
+  };
+  const wasPaneOpen = useRef(false);
+  useEffect(() => {
+    if (isVmPaneOpen && !wasPaneOpen.current) {
+      // Every open but a browser event's is the person's: the chip, the Bot browser button, a step, a link
+      const bot = autoOpeningRef.current;
+      setPaneOpenedBy(bot ? { by: 'bot', owner: bot } : { by: 'person', owner: activeSandboxIdRef.current || 'default' });
+      setPaneTouched(false);
+      setPaneUsage({ control: false, pointPending: false });
+    }
+    if (!isVmPaneOpen) {
+      setPaneOpenedBy(null);
+      setPaneClosing(false);
+    }
+    autoOpeningRef.current = null;
+    wasPaneOpen.current = isVmPaneOpen;
+  }, [isVmPaneOpen]);
   const [liveGate, setLiveGate] = useState<null | 'pending' | 'miss'>(() => (initialTarget?.live ? 'pending' : null));
   // W1: chats whose browser is active right now, from the browser events every stream gets
   const [browsing, setBrowsing] = useState<BrowsingMap>({});
@@ -1678,6 +1714,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'BrowserNavigated': {
             const teamId = event.data?.team_id;
             notifyBrowserPages(teamId);
+            noteTitle(event.data?.url, event.data?.title);
             setBrowsing((m) => noteBrowser(m, teamId, event.data?.url, Date.now()));
             const currentTid = activeSandboxIdRef.current;
             const k = currentKwantRef.current;
@@ -1694,7 +1731,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (isMatch) {
               if (event.data?.url) setActiveUrl(event.data.url);
               if (event.data?.title) setPageTitle(event.data.title);
-              setIsVmPaneOpen(true);
+              autoOpenPane(activeSandboxIdRef.current || teamId || 'default');
               playSfx('blip');
             }
             break;
@@ -1720,7 +1757,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               setIsVmRunning(true);
               if (event.data?.image_base64) setScreenshotBase64(event.data.image_base64);
               if (event.data?.url) setActiveUrl(event.data.url);
-              setIsVmPaneOpen(true);
+              autoOpenPane(activeSandboxIdRef.current || teamId || 'default');
               playSfx('blip');
             }
             break;
@@ -3578,6 +3615,52 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   }, [browsingKey]);
   const globes = globeRows(liveBrowsing, runningTurns, channels, teamOfCh);
   const browserNeedsYou = new Set(Object.values(humanSteps).filter((st) => st.status === 'open' && st.sandbox_target).map((st) => st.sandbox_target!));
+
+  // 0.9.8 D: close a panel the bot opened once that bot's turn ends (not the one-minute browsing expiry,
+  // which fires mid-turn while a bot reads), 600 ms later so the final step lands, unless the person uses it.
+  const openerRunning = !!paneOpenedBy && ownerStillRunning(paneOpenedBy.owner, runningTurns, channels, teamOfCh);
+  // Only a turn the app saw running ends: a panel opened before the turns are in must not close at once
+  const [openerSeenRunning, setOpenerSeenRunning] = useState(false);
+  useEffect(() => {
+    if (!paneOpenedBy) setOpenerSeenRunning(false);
+    else if (openerRunning) setOpenerSeenRunning(true);
+  }, [paneOpenedBy, openerRunning]);
+  const openerHumanStep =
+    !!paneOpenedBy && [...browserNeedsYou].some((target) => target === paneOpenedBy.owner || pageTeam(target) === paneOpenedBy.owner);
+  const paneAutoCloses =
+    isVmPaneOpen &&
+    openerSeenRunning &&
+    shouldAutoClose({
+      by: paneOpenedBy?.by ?? null,
+      touched: paneTouched,
+      control: paneUsage.control,
+      humanStep: openerHumanStep,
+      pointPending: paneUsage.pointPending,
+      running: openerRunning,
+    });
+  useEffect(() => {
+    if (!paneAutoCloses) return;
+    const still = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let exit: number | undefined;
+    const wait = window.setTimeout(() => {
+      if (still) {
+        setIsVmPaneOpen(false);
+        return;
+      }
+      setPaneClosing(true);
+      exit = window.setTimeout(() => setIsVmPaneOpen(false), PANE_EXIT_MS);
+    }, AUTO_CLOSE_DELAY_MS);
+    return () => {
+      window.clearTimeout(wait);
+      if (exit !== undefined) window.clearTimeout(exit);
+      setPaneClosing(false);
+    };
+  }, [paneAutoCloses]);
+  /** The person opens the panel (a reply's chip): open it, or make a panel the bot opened theirs. */
+  const openPaneByPerson = () => {
+    if (isVmPaneOpen) setPaneOpenedBy({ by: 'person', owner: activeSandboxId });
+    else setIsVmPaneOpen(true);
+  };
   const describeOwner = (owner: string) => {
     const t = teams.find((x) => x.id === owner);
     if (t) return { kind: 'team' as const, label: t.name };
@@ -3688,6 +3771,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     forgetLastRuns();
   }, [kwants]);
   useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
+  useEffect(() => setBadgeProfiles(profiles), [profiles]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
@@ -3973,6 +4057,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         showPage('board');
         playSfx('click');
       }}
+      onOpenRoutines={() => {
+        // From the sidebar, no card's Edit or Pause focus carries over.
+        setRoutineFocus(null);
+        openSpaceSettings('routines');
+      }}
       devDeskActive={page === 'dev'}
       onOpenDevDesk={() => {
         showPage('dev');
@@ -4179,6 +4268,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           vmSolveRequest={solveRequest}
           vmPagePick={pagePick}
           vmBotNames={kwantNames}
+          vmRunning={ownerStillRunning(activeSandboxId, runningTurns, channels, teamOfCh)}
+          onVmOpenByPerson={openPaneByPerson}
+          onVmTouch={markPaneTouched}
+          onVmUsage={setPaneUsage}
+          vmClosing={paneClosing}
           vmShowOnceBot={currentKwant && !currentTeam ? { id: currentKwant.id, name: currentKwant.name } : undefined}
           pinned={pinned}
           onEditInstructions={
