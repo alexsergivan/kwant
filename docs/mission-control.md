@@ -1522,3 +1522,15 @@ GET /api/kwants/:id/lessons    {enabled, window_days, lines: [{key, source, text
 ### Known limits
 
 Routine and hand-off turns aren't tied to a task, so they get the chat-sized block with no holdout and no attribution. A goal line reflects the goal's status at the last check, so it can lag a fix until the goal's next run.
+
+## 24. Memory recall by meaning (hybrid recall)
+
+A bot's `memory_search` finds notes by meaning as well as by words, using the space's own embeddings (`src/server/memory_recall.rs`).
+
+**Provider.** First the space's OpenAI account: a Codex API-key account, else the host's OpenAI key (Settings, else `OPENAI_API_KEY`) unless This machine is off for Codex. Both need the OpenAI API engine enabled, and use `text-embedding-3-small`. Else a local Ollama whose last check was ready and that has an embedding model pulled (`nomic-embed-text`, then `mxbai-embed-large`, then any `*embed*`). Claude has no embeddings API. Picking the provider reads only the database and the cached engine checks.
+
+**No provider: today's search.** The result is exactly the FTS5 keyword search, with no HTTP call and nothing added to the wait.
+
+**With a provider.** The query is embedded once, with a 1.5 s timeout. The keyword top 20 and the cosine top 20 (cosine ≥ 0.2) are merged by Reciprocal Rank Fusion (score = Σ 1/(60 + rank)), then the Truth Ledger view filters the result as before. If the query can't be embedded in time, the search is keyword-only and that provider isn't asked again for 60 s.
+
+**Vectors.** They live in `kwant_memory_vectors(memory_id, model, dim, vec, text_hash)` as little-endian f32. They are filled in the background after each memory write, and lazily when a search finds missing or stale ones: the text or the model changed. Each fill embeds up to 4 batches of 32 notes, and only one runs per bot at a time. Deleting a note deletes its vector through a trigger.
