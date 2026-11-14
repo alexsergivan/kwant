@@ -161,7 +161,6 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
       var nm = el('span', 'nm', r.kind === 'server' ? midcut(name, 30) : name);
       if (r.kind === 'server') {
         nm.title = name;
-        row.setAttribute('aria-label', name);
         hosts.push({ nm: nm, name: name });
       }
       tx.appendChild(nm);
@@ -176,6 +175,12 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
         right.setAttribute('aria-label', 'You are here');
       } else {
         right = el('span');
+      }
+      // F10: the label replaces the row's whole name, so it carries the status, count and ✓ too.
+      // The status is often the count already ("2 waiting"): then it is said once.
+      if (r.kind === 'server') {
+        var sub = String(r.sub || ''), count = n > 0 ? n + ' waiting' : '';
+        row.setAttribute('aria-label', [name, sub, count === sub ? '' : count, r.cur ? 'You are here' : ''].filter(Boolean).join(', '));
       }
       if (r.cur) current = i;
       row.append(tile, tx, right, el('kbd', '', i < 9 ? i + 1 : ''));
