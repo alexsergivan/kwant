@@ -14,7 +14,7 @@ use kwnt::{
     config::Config,
     db::{
         models::{NewLlmProfile, ProfileKey},
-        spaces::{NewSpace, SpaceId},
+        spaces::{NewSpace, SpaceId, DEFAULT_SPACE_ID},
         Database,
     },
     drivers::engines::EngineId,
@@ -28,6 +28,9 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use tempfile::{tempdir, TempDir};
+
+/// The Default space every fresh database starts with (`spc_default`, not "default").
+const DEF: &str = DEFAULT_SPACE_ID;
 use tower::ServiceExt;
 
 /// One request the stub got: (key, model, language, file name, audio bytes).
@@ -175,12 +178,12 @@ fn files(root: &Path) -> HashSet<String> {
 #[tokio::test]
 async fn with_no_key_it_is_unavailable_and_says_why() {
     let (app, _state, _tmp) = setup().await;
-    let (code, v) = status(&app, "default").await;
+    let (code, v) = status(&app, DEF).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(v, json!({"available": false, "source": null, "why": transcribe::WHY_NO_KEY}));
 
     let before = CALLS.lock().unwrap().len();
-    let (code, v) = call(&app, audio_post("default", "", "audio/webm", vec![1; 1000])).await;
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![1; 1000])).await;
     assert_eq!(code, StatusCode::CONFLICT);
     assert_eq!(v, json!({"error": transcribe::WHY_NO_KEY, "code": "no_transcriber", "why": transcribe::WHY_NO_KEY}));
     assert_eq!(CALLS.lock().unwrap().len(), before, "no upstream call without a key");
@@ -196,12 +199,12 @@ async fn the_space_key_transcribes_and_nothing_is_stored() {
     let (app, state, tmp) = setup().await;
     state.db.set_setting("openai_api_key", "sk-host-unused").await.unwrap();
     space_key(&state, &SpaceId::default_space(), "sk-space").await;
-    let (_, v) = status(&app, "default").await;
+    let (_, v) = status(&app, DEF).await;
     assert_eq!(v, json!({"available": true, "source": "openai", "why": null}));
 
     let before = files(tmp.path());
     let audio: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
-    let (code, v) = call(&app, audio_post("default", "?lang=DE", "audio/webm;codecs=opus", audio)).await;
+    let (code, v) = call(&app, audio_post(DEF, "?lang=DE", "audio/webm;codecs=opus", audio)).await;
     assert_eq!(code, StatusCode::OK, "{v}");
     assert_eq!(v, json!({"text": "hello from sk-space via gpt-4o-mini-transcribe", "source": "openai"}));
     assert_eq!(
@@ -211,7 +214,7 @@ async fn the_space_key_transcribes_and_nothing_is_stored() {
     );
     assert!(calls_with("sk-host-unused").is_empty());
     assert_eq!(files(tmp.path()), before, "no file is left behind");
-    let attachments: Vec<String> = state.db.list_attachments_in("default", 10).await.unwrap().into_iter().map(|a| a.id).collect();
+    let attachments: Vec<String> = state.db.list_attachments_in(DEF, 10).await.unwrap().into_iter().map(|a| a.id).collect();
     assert!(attachments.is_empty(), "{attachments:?}");
 }
 
@@ -219,7 +222,7 @@ async fn the_space_key_transcribes_and_nothing_is_stored() {
 async fn the_host_key_is_used_unless_this_machine_is_off() {
     let (app, state, _tmp) = setup().await;
     state.db.set_setting("openai_api_key", "sk-host").await.unwrap();
-    let (code, v) = call(&app, audio_post("default", "", "audio/mp4", vec![7; 2048])).await;
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/mp4", vec![7; 2048])).await;
     assert_eq!(code, StatusCode::OK, "{v}");
     assert_eq!(v["text"], "hello from sk-host via gpt-4o-mini-transcribe");
     assert!(calls_with("sk-host").iter().any(|c| c.3 == "audio.mp4" && c.4 == 2048 && c.2.is_none()));
@@ -260,7 +263,7 @@ async fn a_refused_key_is_a_502_without_the_key() {
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let (code, v) = call(&app, audio_post("default", "", "audio/wav", vec![3; 500])).await;
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/wav", vec![3; 500])).await;
     assert_eq!(code, StatusCode::BAD_GATEWAY);
     assert_eq!(v, json!({"error": "The OpenAI key was refused.", "code": "transcriber_failed"}));
     assert_eq!(calls_with("sk-bad").len(), 1, "a refused key isn't retried with the other model");
@@ -286,7 +289,7 @@ impl Write for Capture {
 async fn other_upstream_failures_and_the_fallback_model() {
     let (app, state, _tmp) = setup().await;
     space_key(&state, &SpaceId::default_space(), "sk-old").await;
-    let (code, v) = call(&app, audio_post("default", "", "audio/mpeg", vec![3; 100])).await;
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/mpeg", vec![3; 100])).await;
     assert_eq!(code, StatusCode::OK, "{v}");
     assert_eq!(v["text"], "hello from sk-old via whisper-1");
     let models: Vec<String> = calls_with("sk-old").into_iter().map(|c| c.1).collect();
@@ -310,7 +313,7 @@ async fn refusals_come_before_anything_goes_upstream() {
     space_key(&state, &SpaceId::default_space(), "sk-refusals").await;
 
     // 26 MB declared: refused before a byte is read
-    let req = Request::post("/api/spaces/default/transcribe")
+    let req = Request::post(format!("/api/spaces/{DEF}/transcribe"))
         .header("content-type", "audio/webm")
         .header("content-length", (26 * 1024 * 1024).to_string())
         .body(Body::from(vec![0u8; 10]))
@@ -321,7 +324,7 @@ async fn refusals_come_before_anything_goes_upstream() {
 
     // No length declared: refused at the byte that passes 25 MB
     let chunks = (0..26).map(|_| Ok::<_, std::io::Error>(Bytes::from(vec![0u8; 1024 * 1024])));
-    let req = Request::post("/api/spaces/default/transcribe")
+    let req = Request::post(format!("/api/spaces/{DEF}/transcribe"))
         .header("content-type", "audio/webm")
         .body(Body::from_stream(futures::stream::iter(chunks)))
         .unwrap();
@@ -329,7 +332,7 @@ async fn refusals_come_before_anything_goes_upstream() {
     assert_eq!((code, v["code"].clone()), (StatusCode::PAYLOAD_TOO_LARGE, json!("too_large")));
 
     // Exactly 25 MB goes through
-    let (code, v) = call(&app, audio_post("default", "", "audio/webm", vec![0u8; transcribe::MAX_AUDIO_BYTES as usize])).await;
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![0u8; transcribe::MAX_AUDIO_BYTES as usize])).await;
     assert_eq!(code, StatusCode::OK, "{v}");
 
     for (ct, query, want_code, want) in [
@@ -337,15 +340,15 @@ async fn refusals_come_before_anything_goes_upstream() {
         ("video/webm", "", StatusCode::UNSUPPORTED_MEDIA_TYPE, "bad_audio_type"),
         ("audio/webm", "?lang=english", StatusCode::BAD_REQUEST, "bad_lang"),
     ] {
-        let (code, v) = call(&app, audio_post("default", query, ct, vec![1; 10])).await;
+        let (code, v) = call(&app, audio_post(DEF, query, ct, vec![1; 10])).await;
         assert_eq!((code, v["code"].as_str().unwrap()), (want_code, want), "{ct} {query}");
     }
-    let (code, v) = call(&app, audio_post("default", "", "audio/webm", Vec::new())).await;
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", Vec::new())).await;
     assert_eq!((code, v["code"].clone()), (StatusCode::BAD_REQUEST, json!("empty_audio")));
 
     // A bot's turn token is refused: dictation is the person's
     state.self_tools.lock().await.insert("turn-token".into(), SelfScope::default());
-    let mut req = audio_post("default", "", "audio/webm", vec![1; 10]);
+    let mut req = audio_post(DEF, "", "audio/webm", vec![1; 10]);
     req.headers_mut().insert("authorization", "Bearer turn-token".parse().unwrap());
     let (code, _) = call(&app, req).await;
     assert_eq!(code, StatusCode::FORBIDDEN);

@@ -43,7 +43,7 @@ The recording is the raw body. `Content-Type` is `audio/webm`, `audio/mp4`, `aud
 ISO-639-1 hint (`en`, `de`). At most 25 MB.
 
 ```
-POST /api/spaces/default/transcribe?lang=en
+POST /api/spaces/spc_default/transcribe?lang=en
 Content-Type: audio/webm;codecs=opus
 
 <recording bytes>
