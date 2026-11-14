@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
-- **Bots can open menus that show only on hover.** On pages like Google Flow, a clip's tile opens when clicked but isn't a button, and its ⋮ menu stays invisible until the mouse is over the tile. A bot's list of controls now shows such tiles, up to 40, by their names, and the hidden buttons, up to 40, as `button "More" (on hover) · Clip 1`. Clicking one moves the mouse over the tile first, checks the button is now showing, then clicks it, so a bot can open the menu and pick Download. A new **hover** action moves the mouse over something without clicking and says what appeared. Buttons that show only an icon are named by it (More, Download, Close, Delete, Edit, Share). The payment check is unchanged.
+- Bots can open menus that show only on hover, like a video tile's ⋮ menu: the tile and its hidden buttons now appear in the bot's list of controls, clicking one moves the mouse over the tile first, and a new hover action shows what appears. The payment check is unchanged.
 
 ## [Mac 0.9.10] - 2026-11-14
 
