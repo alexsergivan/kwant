@@ -98,11 +98,24 @@ export const isBlankPage = (url: string | null | undefined) => {
   return u === '' || u === 'about:blank';
 };
 
-/** The browser panel's footer: where Chrome runs and where you see it. */
-export function browserFooterLabel(s: ComputerSettings | null | undefined, ready: boolean): string {
-  if (s?.mode !== 'local') return ready ? 'Browser Ready' : 'Browser Offline';
-  if (s.window.visible) return 'Chrome window on your computer';
-  return ready ? 'Chrome shown here (no window)' : 'Chrome offline';
+/** "Ben's" for a bot's browser, "the team's" for the team page. */
+export const browserOwnerWord = (botName: string | null | undefined) => (botName?.trim() ? `${botName.trim()}'s` : "the team's");
+
+const capitalise = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
+/**
+ * The browser panel's footer, in sentence case: whose browser it is and what it's doing
+ * ("Live view of Ben's browser", "Ben's browser is idle", "Ben's browser is off").
+ */
+export function browserFooterLabel(
+  s: ComputerSettings | null | undefined,
+  ready: boolean,
+  who: { botName?: string | null; browsing?: boolean } = {},
+): string {
+  const whose = browserOwnerWord(who.botName);
+  if (s?.mode === 'local' && s.window.visible) return capitalise(`${whose} browser is open in a Chrome window`);
+  if (!ready) return capitalise(`${whose} browser is off`);
+  return who.browsing ? `Live view of ${whose} browser` : capitalise(`${whose} browser is idle`);
 }
 
 /** Fired on window after a successful switch so every open control shows the new mode. */
