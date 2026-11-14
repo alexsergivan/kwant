@@ -525,3 +525,119 @@ test('10. line notes: the default needs no to, a pick sends it, bad_recipient sh
   assert.match($('[data-ln-bad]').textContent, /The notes didn’t send: Mo isn’t in this space\. Pick another bot\./);
   assert.equal(st.resets, 1, 'refetch and drop the pick');
 });
+
+// ---------------------------------------------------------------------------------------------------
+// Mira's design check (design-check.md fixes 1-3)
+
+test('fix 1: scrolling the page under the trigger closes the popover, without refocusing; the list’s own scroll doesn’t', async () => {
+  sessionStorage.clear();
+  const r = fakeRoutes();
+  await card({ recipients: r.recipients, onFinding: r.onFinding });
+  click(goes('f1'));
+  await settle();
+  const list = $('[data-recipient-picker] [role="listbox"]');
+  list.dispatchEvent(new window.Event('scroll'));
+  await settle();
+  assert.ok($('[data-recipient-picker]'), 'scrolling inside the list keeps it open');
+  const trigger = goes('f1');
+  document.dispatchEvent(new window.Event('scroll'));
+  await settle();
+  assert.ok(!$('[data-recipient-picker]'), 'page scroll closes it');
+  await new Promise((res) => setTimeout(res, 5));
+  assert.notEqual(document.activeElement, trigger, 'focus is not pulled back to the trigger');
+  // an ancestor of the trigger scrolling closes it too
+  click(goes('f1'));
+  await settle();
+  assert.ok($('[data-recipient-picker]'));
+  host.dispatchEvent(new window.Event('scroll'));
+  await settle();
+  assert.ok(!$('[data-recipient-picker]'));
+});
+
+test('fix 2: no ring when the picker opens; with no default no row is active; arrows bring the ring, the pointer takes it away', async () => {
+  sessionStorage.clear();
+  const r = fakeRoutes({ list: NONE });
+  await card({ recipients: r.recipients, onFinding: r.onFinding });
+  click(goes('f1'));
+  await settle();
+  const list = $('[data-recipient-picker] [role="listbox"]');
+  const ringed = () => $$('[role="option"]').filter((o) => o.className.includes('outline-sky-400/60')).map((o) => o.dataset.bot);
+  const lit = () => $$('[role="option"]').filter((o) => o.className.includes('bg-white/[.07]')).map((o) => o.dataset.bot);
+  assert.deepEqual(ringed(), []);
+  assert.deepEqual(lit(), [], 'nothing preselected with no default');
+  assert.equal(list.getAttribute('aria-activedescendant'), null);
+  key(list, 'Enter');
+  await settle();
+  assert.ok($('[data-recipient-picker]'), 'Enter with nothing active does nothing');
+  key(list, 'ArrowDown');
+  await settle();
+  assert.deepEqual(ringed(), ['bot_ana'], 'the first arrow goes to row 0, with the ring');
+  $('[data-bot="bot_ben"]').dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true }));
+  await settle();
+  assert.deepEqual(ringed(), [], 'the pointer takes the ring away');
+  assert.deepEqual(lit(), ['bot_ben']);
+  key(list, 'Escape');
+  await settle();
+  // with a default: it starts lit (its ✓ says chosen) but without the ring
+  sessionStorage.clear();
+  const r2 = fakeRoutes();
+  await card({ recipients: r2.recipients, onFinding: r2.onFinding });
+  click(goes('f1'));
+  await settle();
+  assert.deepEqual(lit(), ['bot_ana']);
+  assert.deepEqual(ringed(), []);
+});
+
+test('fix 3: a send error waits for the list, and stays hidden when nobody can receive', async () => {
+  sessionStorage.clear();
+  const errCard = { ...CARD, findings: CARD.findings.map((f) => (f.id === 'f1' ? { ...f, state: 'open', send_error: 'Ben was removed from this space before the task started.' } : f)) };
+  let release;
+  const slow = () => new Promise((res) => (release = res));
+  await card({ card: errCard, recipients: slow, onFinding: async () => errCard });
+  assert.equal(goes('f1').dataset.goesTo, 'loading');
+  assert.equal(errLine('f1'), null, 'hidden while the list loads');
+  release(rec(LEAD));
+  await settle();
+  assert.equal(errLine('f1'), 'Couldn’t send it: Ben was removed from this space before the task started.');
+  sessionStorage.clear();
+  const r = fakeRoutes({ list: EMPTY });
+  await card({ card: errCard, recipients: r.recipients, onFinding: r.onFinding });
+  assert.ok(fixBtn('f1').disabled);
+  assert.equal(errLine('f1'), null, 'nobody can receive: the disabled Fix it says why');
+  // no recipients route at all: as before
+  await card({ card: errCard, onFinding: async () => errCard });
+  assert.match(errLine('f1'), /Ben was removed/);
+});
+
+test('fix 1: moving through the list never scrolls the page (that would close the popover)', async () => {
+  sessionStorage.clear();
+  const r = fakeRoutes();
+  await card({ recipients: r.recipients, onFinding: r.onFinding });
+  let calls = 0;
+  const orig = window.HTMLElement.prototype.scrollIntoView;
+  window.HTMLElement.prototype.scrollIntoView = function () { calls++; };
+  try {
+    click(goes('f1'));
+    await settle();
+    const list = $('[data-recipient-picker] [role="listbox"]');
+    key(list, 'ArrowDown');
+    await settle();
+    key(list, 'End');
+    await settle();
+    assert.equal(calls, 0, 'no scrollIntoView: only the list scrolls');
+    assert.ok($('[data-recipient-picker]'), 'still open');
+  } finally {
+    window.HTMLElement.prototype.scrollIntoView = orig;
+  }
+});
+
+test('opening the desktop popover puts focus in it (once it is placed and visible)', async () => {
+  sessionStorage.clear();
+  const r = fakeRoutes();
+  await card({ recipients: r.recipients, onFinding: r.onFinding });
+  click(goes('f1'));
+  await settle();
+  const pop = $('[data-recipient-picker]');
+  assert.ok(pop.style.visibility !== 'hidden', 'placed');
+  assert.ok(pop.contains(document.activeElement), 'focus moved into the popover');
+});

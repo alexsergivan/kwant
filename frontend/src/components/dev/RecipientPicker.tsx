@@ -168,7 +168,8 @@ export interface RecipientPickerProps {
   /** `owner/name` for the no-default footer. */
   repo: string | null;
   onPick: (bot: RecipientBot) => void;
-  onClose: () => void;
+  /** `false` skips putting focus back on the trigger (closed by scrolling). */
+  onClose: (refocus?: boolean) => void;
 }
 
 const POP_W = 320;
@@ -182,20 +183,41 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
   const [q, setQ] = useState('');
   const shown = useMemo(() => filterBots(rows, q), [rows, q]);
   const current = target(r, pick)?.id ?? null;
-  const [active, setActive] = useState(() => Math.max(0, rows.findIndex((b) => b.id === current)));
+  // The current pick (or default) starts active, but with no ring; nothing is active when there's neither (Mira #615 fix 2).
+  const [active, setActive] = useState(() => rows.findIndex((b) => b.id === current));
+  // The sky ring is for the keyboard: on after arrows, Home/End or typing; off on pointer movement.
+  const [kbd, setKbd] = useState(false);
   const search = rows.length > SEARCH_FROM;
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
-  // Typing keeps the active row on the first match.
-  useEffect(() => setActive(0), [q]);
+  // Typing keeps the active row on the first match (not on open: that would preselect the first row).
+  const typed = useRef(false);
   useEffect(() => {
-    (search ? inputRef.current : listRef.current)?.focus({ preventScroll: true });
-  }, [search]);
+    if (!typed.current) {
+      typed.current = true;
+      return;
+    }
+    setActive(0);
+    setKbd(true);
+  }, [q]);
+  // Desktop: the panel is visibility:hidden until it's placed, and a hidden element can't take focus, so wait for pos.
+  const placed = phone || pos !== null;
   useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>(`[data-i="${active}"]`)?.scrollIntoView?.({ block: 'nearest' });
+    if (placed) (search ? inputRef.current : listRef.current)?.focus({ preventScroll: true });
+  }, [search, placed]);
+  useEffect(() => {
+    // Scroll the list only, never the page: a page scroll would close the popover (fix 1).
+    const list = listRef.current;
+    const row = list?.querySelector<HTMLElement>(`[data-i="${active}"]`);
+    if (!list || !row) return;
+    const top = row.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (top + row.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + row.offsetHeight - list.clientHeight;
   }, [active]);
 
   // Desktop: under the trigger, flipped above it when there's no room below.
@@ -210,12 +232,18 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
       if (a.bottom + 6 + h > vh - 8 && a.top - 6 - h > 8) setPos({ left, bottom: vh - a.top + 6 });
       else setPos({ left, top: a.bottom + 6 });
     };
+    // Scrolling the page under the trigger closes it, like every other popover (Mira #615 fix 1); the list's own
+    // scroll doesn't. No refocus: the person is scrolling.
+    const scrolled = (e: Event) => {
+      const t = e.target;
+      if (t === document || (t instanceof Node && t.contains(anchor))) onCloseRef.current(false);
+    };
     place();
     window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
+    window.addEventListener('scroll', scrolled, true);
     return () => {
       window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('scroll', scrolled, true);
     };
   }, [phone, anchor]);
 
@@ -242,19 +270,23 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
       onClose();
     } else if (e.key === 'ArrowDown' && n) {
       e.preventDefault();
+      setKbd(true);
       setActive((i) => Math.min(n - 1, i + 1));
     } else if (e.key === 'ArrowUp' && n) {
       e.preventDefault();
+      setKbd(true);
       setActive((i) => Math.max(0, i - 1));
     } else if (e.key === 'Home' && n && e.currentTarget === listRef.current) {
       e.preventDefault();
+      setKbd(true);
       setActive(0);
     } else if (e.key === 'End' && n && e.currentTarget === listRef.current) {
       e.preventDefault();
+      setKbd(true);
       setActive(n - 1);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      choose(shown[active]);
+      if (active >= 0) choose(shown[active]);
     } else if (e.key === 'Tab' && !phone) {
       onClose();
     }
@@ -272,7 +304,7 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
           <p className="text-meta text-zinc-400">{PICKER_CAPTION}</p>
         </div>
         {phone && (
-          <button type="button" aria-label="Close" onClick={onClose} className={`-mr-2 -mt-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-zinc-300 hover:bg-white/[.06] ${RING}`}>
+          <button type="button" aria-label="Close" onClick={() => onClose()} className={`-mr-2 -mt-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-zinc-300 hover:bg-white/[.06] ${RING}`}>
             <X size={18} aria-hidden="true" />
           </button>
         )}
@@ -291,7 +323,7 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
               role="combobox"
               aria-expanded="true"
               aria-controls={listId}
-              aria-activedescendant={shown.length ? optId(active) : undefined}
+              aria-activedescendant={shown.length && active >= 0 ? optId(active) : undefined}
               aria-autocomplete="list"
               className={`min-w-0 flex-1 bg-transparent py-2 text-zinc-100 placeholder:text-zinc-500 outline-none ${phone ? 'text-[16px]' : 'text-[13px]'}`}
             />
@@ -309,7 +341,7 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
           role="listbox"
           tabIndex={search ? -1 : 0}
           aria-labelledby={titleId}
-          aria-activedescendant={search ? undefined : optId(active)}
+          aria-activedescendant={search || active < 0 ? undefined : optId(active)}
           onKeyDown={search ? undefined : onKey}
           className={`mt-2 overflow-y-auto px-1.5 pb-1.5 outline-none ${phone ? 'max-h-[calc(82vh-140px)]' : 'max-h-[300px]'} focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400`}
         >
@@ -325,9 +357,12 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
                   data-bot={b.id}
                   role="option"
                   aria-selected={sel}
-                  onPointerMove={() => setActive(i)}
+                  onPointerMove={() => {
+                    setActive(i);
+                    setKbd(false);
+                  }}
                   onClick={() => choose(b)}
-                  className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2 ${phone ? 'min-h-[52px]' : 'min-h-[40px]'} py-1 ${i === active ? 'bg-white/[.07] outline outline-1 outline-sky-400/60' : ''}`}
+                  className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2 ${phone ? 'min-h-[52px]' : 'min-h-[40px]'} py-1 ${i === active ? `bg-white/[.07]${kbd ? ' outline outline-1 outline-sky-400/60' : ''}` : ''}`}
                 >
                   <span aria-hidden="true" className="inline-flex shrink-0">
                     <ModernAvatar name={b.name} size={24} />
@@ -361,7 +396,7 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
 
   const node = phone ? (
     <div className="fixed inset-0 z-[60]" data-recipient-picker="sheet">
-      <div aria-hidden="true" className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div aria-hidden="true" className="absolute inset-0 bg-black/50" onClick={() => onClose()} />
       <div
         ref={panelRef}
         role="dialog"
@@ -464,11 +499,11 @@ export function useSendTo(
   const anchorRef = useRef<HTMLElement | null>(null);
   anchorRef.current = anchor;
   // Closing gives focus back to the trigger that opened the picker (design §2).
-  const close = React.useCallback(() => {
+  const close = React.useCallback((refocus: boolean = true) => {
     const a = anchorRef.current;
     setAnchor(null);
     after.current = null;
-    if (a) window.setTimeout(() => a.isConnected && a.focus({ preventScroll: true }), 0);
+    if (a && refocus) window.setTimeout(() => a.isConnected && a.focus({ preventScroll: true }), 0);
   }, []);
 
   if (!fetcher) return { st: null, picker: null, say: '' };

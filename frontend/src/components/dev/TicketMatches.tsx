@@ -55,7 +55,8 @@ const MRow: React.FC<{
   busy: boolean;
   act?: (f: DevFinding, a: FindingAction) => Promise<void> | void;
   onFix?: (f: DevFinding, el: HTMLElement) => void;
-}> = ({ r, i, now, busy, act, onFix }) => {
+  showSendError: boolean;
+}> = ({ r, i, now, busy, act, onFix, showSendError }) => {
   const st = STATE[r.state];
   const f = itemFinding(r);
   // api-decisions 25: the findings' own Dismiss-with-a-reason, on the item's k{n}.
@@ -100,7 +101,7 @@ const MRow: React.FC<{
             )}
           </p>
         )}
-        {f?.send_error && f.state === 'open' && (
+        {f?.send_error && f.state === 'open' && showSendError && (
           <p className="tk-err" role="alert">
             Couldn’t send it: {f.send_error}
           </p>
@@ -172,9 +173,11 @@ export interface TicketMatchesProps {
   onFix?: (f: DevFinding, el: HTMLElement) => void;
   /** The one shared "Goes to" line under the section head (design §1). */
   goesTo?: React.ReactNode;
+  /** False while the bot list loads or when nobody can receive: the send error would contradict the screen. */
+  showSendError?: boolean;
 }
 
-export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Date.now(), origins = [], lead = null, busy = false, act, onFix, goesTo = null }) => {
+export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Date.now(), origins = [], lead = null, busy = false, act, onFix, goesTo = null, showSendError = true }) => {
   const { met, total } = matchCount(matches.items);
   const all = matches.verdict === 'met' && total > 0 && met === total;
   const url = onSite(matches.url, origins);
@@ -213,7 +216,7 @@ export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Dat
         <SiteOrigins.Provider value={origins}>
           <ul className="tk-mrows" role="list">
             {matches.items.map((r, i) => (
-              <MRow key={r.id ?? i} r={r} i={i} now={now} busy={busy} act={act} onFix={onFix} />
+              <MRow key={r.id ?? i} r={r} i={i} now={now} busy={busy} act={act} onFix={onFix} showSendError={showSendError} />
             ))}
           </ul>
         </SiteOrigins.Provider>

@@ -178,6 +178,8 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act, st =
   const left = undoLeft(f, now);
   // §3: no bot at all in the space: Fix it is off, with the server's sentence as its title.
   const nobody = st?.load.s === 'ready' && st.load.r.bots.length === 0 ? st.load.r.nobody ?? 'There’s no bot in this space to send it to.' : null;
+  // One message per state (Mira #615 fix 3): the send error waits for the list, and goes when nobody can receive.
+  const showSendError = !st || (st.load.s === 'ready' && st.load.r.bots.length > 0);
 
   return (
     <li data-finding={f.id} data-state={f.state} className={`rounded-xl border border-zinc-700/60 border-l-[3px] bg-zinc-900/60 p-3 text-xs shadow-[var(--kws-shadow)] ${STRIPE[f.severity]}`}>
@@ -223,7 +225,7 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act, st =
                 {st && <GoesTo load={st.load} pick={st.pick} phone={st.phone} expanded={!!st.anchor && st.anchor.dataset.goesFor === f.id} onOpen={(el) => { el.dataset.goesFor = f.id; st.open(el); }} onRetry={st.retry} />}
               </>
             )}
-            {f.state === 'open' && f.send_error && <span className="text-bad">Couldn’t send it: {f.send_error}</span>}
+            {f.state === 'open' && f.send_error && showSendError && <span className="text-bad">Couldn’t send it: {f.send_error}</span>}
             {f.state === 'sent' && (
               <>
                 <span className="inline-flex items-center gap-1 text-ok">
@@ -699,6 +701,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
           busy={busy !== null}
           act={act}
           onFix={st ? fix : undefined}
+          showSendError={!st || (st.load.s === 'ready' && st.load.r.bots.length > 0)}
           goesTo={
             st && ticketMatches.items.some((it) => itemFinding(it)?.state === 'open') ? (
               <GoesTo size="sm" load={st.load} pick={st.pick} phone={st.phone} expanded={!!st.anchor && st.anchor.dataset.goesFor === 'matches'} onOpen={(el) => { el.dataset.goesFor = 'matches'; st.open(el); }} onRetry={st.retry} />
