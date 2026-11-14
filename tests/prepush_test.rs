@@ -126,10 +126,15 @@ async fn a_switched_off_test_blocks_the_push_until_the_person_overrides() {
     assert_eq!(card["fresh_eyes"]["checked"], true, "{card}");
     assert_eq!(card["fresh_eyes"]["saw"], json!(["diff"]));
     assert_eq!(card["fresh_eyes"]["reviewer_kwant_id"], json!(reviewer));
-    let mut seen = Vec::new();
-    while let Ok(e) = rx.try_recv() {
-        if let RuntimeEvent::DevPrepush { id, status, .. } = e {
-            seen.push((id, status));
+    // check() saves the verdict before it sends the "blocked" event, so the card can read blocked
+    // a moment before the event is out: wait for it (up to 10 s) instead of draining what's there
+    let mut seen: Vec<(String, String)> = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !seen.iter().any(|(_, s)| s == "blocked") {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Ok(RuntimeEvent::DevPrepush { id, status, .. })) => seen.push((id, status)),
+            Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            _ => break,
         }
     }
     assert_eq!(seen, [(row.id.clone(), "checking".to_string()), (row.id.clone(), "blocked".to_string())]);
