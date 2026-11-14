@@ -460,7 +460,7 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
 .new-shots .new-list img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; margin-bottom: 12px; background: #140f26; border-radius: 8px; }
 .new-shots .new-list b, .new-shots .new-list span { padding: 0 4px; }
 .new-note { margin: 0; color: var(--muted); font-size: 14px; }
-.new-strip.more-strip { margin-top: 0; padding: 0; }
+.new-strip.more-strip { margin-top: 0; padding: 72px 0 0; } /* it follows a .band section, so it needs its own room */
 .more-strip .section-foot { flex-basis: 100%; margin-top: 0; }
 .fgroup .runs-list + .grid { margin-top: 28px; }
 .moments { padding-top: 24px; padding-bottom: 56px; }
@@ -901,6 +901,7 @@ html:has(.jump-bar) { scroll-padding-top: 156px; }
   .dl[data-os="mac"] .os-mac, .dl[data-os="windows"] .os-windows, .dl[data-os="linux"] .os-linux { display: flex; width: 100%; }
   .tour { padding: 72px 0; }
   .setup { padding: 64px 0; }
+  .new-strip.more-strip { padding-top: 48px; }
   .install { white-space: normal; }
 }
 
