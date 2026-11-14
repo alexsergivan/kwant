@@ -269,7 +269,7 @@ pub async fn transcribe(
     };
     let audio = match read_audio(body, declared).await {
         Ok(a) => a,
-        Err(r) => return r,
+        Err(bad) => return bad.refusal(),
     };
     let size = audio.len();
     match send(&source, audio, file_name, lang.as_deref()).await {
@@ -284,21 +284,37 @@ pub async fn transcribe(
     }
 }
 
+/// Why a recording's body was refused while reading it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BadAudio {
+    Interrupted,
+    TooLarge,
+    Empty,
+}
+
+impl BadAudio {
+    fn refusal(self) -> Response {
+        match self {
+            BadAudio::Interrupted => refusal(StatusCode::BAD_REQUEST, "interrupted", "The recording was interrupted."),
+            BadAudio::TooLarge => too_large(),
+            BadAudio::Empty => refusal(StatusCode::BAD_REQUEST, "empty_audio", "The recording is empty."),
+        }
+    }
+}
+
 /// The whole body, refused at the byte that passes [`MAX_AUDIO_BYTES`], or when empty.
-async fn read_audio(body: Body, declared: Option<u64>) -> Result<Bytes, Response> {
+async fn read_audio(body: Body, declared: Option<u64>) -> Result<Bytes, BadAudio> {
     let mut audio = Vec::with_capacity(declared.unwrap_or(0).min(MAX_AUDIO_BYTES) as usize);
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
-        let Ok(chunk) = chunk else {
-            return Err(refusal(StatusCode::BAD_REQUEST, "interrupted", "The recording was interrupted."));
-        };
+        let chunk = chunk.map_err(|_| BadAudio::Interrupted)?;
         if audio.len() as u64 + chunk.len() as u64 > MAX_AUDIO_BYTES {
-            return Err(too_large());
+            return Err(BadAudio::TooLarge);
         }
         audio.extend_from_slice(&chunk);
     }
     if audio.is_empty() {
-        return Err(refusal(StatusCode::BAD_REQUEST, "empty_audio", "The recording is empty."));
+        return Err(BadAudio::Empty);
     }
     Ok(Bytes::from(audio))
 }
