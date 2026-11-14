@@ -85,6 +85,9 @@ test('approval card on a phone: header, one sentence, two key facts, details clo
   // title comes before repo in the spec's order; body/head/base stay in the details.
   assert.deepEqual(m.keyFacts(pr().details.arguments), [['title', 'Behind the seat: timed checkout'], ['repo', 'acme/site']]);
   assert.match(html, /data-approval-facts/);
+  // #593: an array of strings (browser_upload's `files`) joins into one line instead of hiding.
+  assert.deepEqual(m.keyFacts({ files: ['downloads/Self-checkout.mp4'] }), [['files', 'downloads/Self-checkout.mp4']]);
+  assert.deepEqual(m.keyFacts({ files: ['a.txt', 'b.txt'] }), [['files', 'a.txt, b.txt']]);
   // Details start closed: the JSON is not in the markup, the toggle says so.
   assert.doesNotMatch(html, /data-approval-details=""/);
   assert.doesNotMatch(html, /&quot;head&quot;/);

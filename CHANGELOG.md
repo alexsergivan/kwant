@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- Bots can download and upload files in their browser: a download is saved in the bot's own folder under downloads/ and never replaces a file already there, and a new browser_upload tool gives a page's file picker a file from the bot's folder or a chat attachment. Under Ask, each upload asks you first.
+
 ## [Mac 0.9.10] - 2026-11-14
 
 kwant 0.9.10: usage bars for each AI account, a Done mark and an Approve button on replies and one search for every app.

@@ -1258,6 +1258,9 @@ pub struct BrowserController {
     needs_wake: Arc<AtomicBool>,
     /// How many live views show this page now: a watched page is never frozen.
     watchers: Arc<AtomicUsize>,
+    /// The bot session's own download/chooser connection (see [`super::browser_downloads`]),
+    /// started once this controller has a working folder to land downloads in.
+    downloads: Arc<std::sync::Mutex<Option<super::browser_downloads::DownloadCenter>>>,
 }
 
 /// Stops media in a page that is put to rest, so a feed or video doesn't keep decoding. Media it
@@ -1346,6 +1349,7 @@ impl BrowserController {
             ws_generation: Arc::default(),
             needs_wake: Arc::default(),
             watchers: Arc::default(),
+            downloads: Arc::default(),
         }
     }
 
@@ -1448,6 +1452,56 @@ impl BrowserController {
         ctrl.target_id = target_id;
         ctrl.browser_level = browser_level;
         ctrl
+    }
+
+    /// Starts this session's own download/chooser connection, landing downloads under
+    /// `workspace/downloads/` and reporting (but not auto-answering) file pickers it opens.
+    /// Idempotent: a session already running its own connection keeps it. `local`, `context_id`
+    /// and `staging_root` are passed straight to [`super::browser_downloads::DownloadCenter::start`].
+    pub async fn configure_downloads(
+        &self,
+        workspace: std::path::PathBuf,
+        local: bool,
+        context_id: Option<String>,
+        staging_root: std::path::PathBuf,
+    ) {
+        if self.downloads.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+            return;
+        }
+        let center = super::browser_downloads::DownloadCenter::start(self.clone(), workspace, local, context_id, staging_root).await;
+        let mut guard = self.downloads.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            *guard = Some(center);
+        }
+    }
+
+    /// One line worth telling the bot about its most recent download, if the session has its own
+    /// connection running and there's something new to say.
+    pub fn latest_download_report(&self) -> Option<serde_json::Value> {
+        self.downloads.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.report()
+    }
+
+    /// The current download's status, like `latest_download_report`, but without consuming a
+    /// terminal state: for a page read that's a side effect of something else, so the bot's own
+    /// dedicated "did it finish" check still gets to see the terminal state once.
+    pub fn peek_download_report(&self) -> Option<serde_json::Value> {
+        self.downloads.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.peek()
+    }
+
+    /// The currently open file picker on this session, if any.
+    pub fn open_chooser_report(&self) -> Option<serde_json::Value> {
+        self.downloads.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.open_chooser()
+    }
+
+    /// Answers the currently open chooser on this session with `files`. Refuses with a plain
+    /// message if no download/chooser connection is running (the session was never configured)
+    /// or no picker is open.
+    pub async fn answer_upload(&self, local: bool, files: Vec<super::browser_downloads::UploadFile>) -> Result<Vec<String>, String> {
+        let center = self.downloads.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(center) = center else {
+            return Err("This session isn't set up to answer file pickers yet.".into());
+        };
+        center.answer_chooser(local, files).await
     }
 
     /// The person's control for one live view. Refused with [`BrowserError::HeldByPerson`] while

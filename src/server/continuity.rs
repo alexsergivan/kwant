@@ -730,6 +730,21 @@ fn browser_tools() -> Vec<Value> {
                 "required": ["action"],
             },
         }),
+        json!({
+            "name": BROWSER_UPLOAD,
+            "description": "Answer a file picker your browser has open (browser_page says so with a note starting \"A file picker opened\"). Give one or more files, each either a path in your own folder (for instance a file you downloaded earlier, downloads/clip.mp4) or a chat attachment's id. Refused if no picker is open.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Each a path under your folder, or a chat attachment id.",
+                    },
+                },
+                "required": ["files"],
+            },
+        }),
     ]
 }
 
@@ -738,6 +753,7 @@ pub const BROWSER_PAGE: &str = "browser_page";
 pub const BROWSER_ACT: &str = "browser_act";
 pub const BROWSER_SCREENSHOT: &str = "browser_screenshot";
 pub const BROWSER_CITE: &str = "browser_cite";
+pub const BROWSER_UPLOAD: &str = "browser_upload";
 
 /// `browser_screenshot`: MCP content blocks (a text line and the JPEG), and whether it is an error.
 /// Same holds as the other browser tools: the person's sign-in/CAPTCHA step or their control.
@@ -857,7 +873,7 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
         }
         Err(super::routes::PageRefusal::Unavailable) => {}
     }
-    let (text, is_error, busy) = run_browser_tool_coded(state, target, &reader, name, args).await;
+    let (text, is_error, busy) = run_browser_tool_coded(state, target, &reader, name, args, Some(scope)).await;
     super::busy_retry::note(&reader, name, args, busy);
     // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left. Also
     // when the call itself failed: a click that stalled, was covered or timed out because a
@@ -904,16 +920,29 @@ fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> S
 /// `reader` names who reads (empty: nobody known), for `browser_page` to answer "unchanged" when
 /// that reader's last page (from any browser tool) still reads the same.
 async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &str, args: &Value) -> (String, bool) {
-    let (text, is_error, _) = run_browser_tool_coded(state, target, reader, name, args).await;
+    let (text, is_error, _) = run_browser_tool_coded(state, target, reader, name, args, None).await;
     (text, is_error)
 }
 
 /// [`run_browser_tool`], plus whether the handler answered that the browser is busy (matched on
-/// the answer's `code`, see [`super::busy_retry::is_busy`]).
-async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, name: &str, args: &Value) -> (String, bool, bool) {
+/// the answer's `code`, see [`super::busy_retry::is_busy`]). `scope`: the calling turn, when one
+/// is driving this call (always `browser_upload`'s caller, since it alone touches attachments);
+/// `None` for the scope-less re-reads this module does on its own (see [`run_browser_tool`]).
+async fn run_browser_tool_coded(
+    state: &AppState,
+    target: &str,
+    reader: &str,
+    name: &str,
+    args: &Value,
+    scope: Option<&SelfScope>,
+) -> (String, bool, bool) {
     use super::routes::{
         act_sandbox_allowed, cite_sandbox, get_sandbox_page, navigate_sandbox, unchanged_read, CitePayload, InteractPayload, NavigatePayload,
-        PageQuery,
+        PageQuery, UploadCaller,
+    };
+    let caller = match scope {
+        Some(s) => UploadCaller::Turn(s),
+        None => UploadCaller::None,
     };
     let ctrl = match reader {
         "" => None,
@@ -937,6 +966,25 @@ async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, na
             let payload = CitePayload { text: args["text"].as_str().map(str::to_string), block: args["block"].as_str().map(str::to_string) };
             cite_sandbox(state, target, Json(payload)).await
         }
+        BROWSER_UPLOAD => {
+            let files: Vec<String> = args["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
+            if files.is_empty() {
+                return ("files is required: a path in your folder or a chat attachment id, one or more".into(), true, false);
+            }
+            let payload = InteractPayload {
+                action: "upload".to_string(),
+                x: None,
+                y: None,
+                text: None,
+                key: None,
+                code: None,
+                delta_x: None,
+                delta_y: None,
+                ref_: None,
+                files: Some(files),
+            };
+            act_sandbox_allowed(state, target, Json(payload), caller).await
+        }
         _ => {
             let Some(action) = args["action"].as_str() else {
                 return ("action is required: click, type, key or scroll".into(), true, false);
@@ -951,9 +999,10 @@ async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, na
                 delta_x: None,
                 delta_y: args["delta_y"].as_f64(),
                 ref_: Some(args["ref"].clone()).filter(|r| !r.is_null()),
+                files: None,
             };
             // SelfToolsApprover already gave a payment its card (browser_act_payment)
-            act_sandbox_allowed(state, target, Json(payload)).await
+            act_sandbox_allowed(state, target, Json(payload), caller).await
         }
     };
     match result {
@@ -1339,7 +1388,7 @@ async fn call_tool(
         }
         // on the turn's own page (its job page in a chat), so a page held for another job's
         // sign-in doesn't stop this one
-        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE => match super::browser_pages::scope_page(scope) {
+        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE | BROWSER_UPLOAD => match super::browser_pages::scope_page(scope) {
             Some(target) => call_browser_tool(state, scope, &target, name, args).await,
             None => (format!("Unknown tool {name}."), true),
         },

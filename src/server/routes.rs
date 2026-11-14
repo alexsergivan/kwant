@@ -6306,6 +6306,10 @@ pub struct InteractPayload {
     /// click (or type): a numbered ref from the page's clickable list instead of a label
     #[serde(default, rename = "ref")]
     pub ref_: Option<serde_json::Value>,
+    /// upload: each a workspace-relative path under `downloads/` (or elsewhere in the bot's
+    /// folder) or a chat attachment id, answering the currently open file picker.
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
 }
 
 pub async fn interact_sandbox(
@@ -6372,17 +6376,23 @@ pub async fn interact_sandbox(
 /// Compact, text-only page state for agents (no base64 image to wade through).
 async fn sandbox_page_state(ctrl: &crate::sandbox::BrowserController) -> serde_json::Value {
     let snap = ctrl.snapshot().await;
-    page_state_from(ctrl, snap, "").await
+    page_state_from(ctrl, snap, "", false).await
 }
 
 /// [`sandbox_page_state`] from a snapshot already read (`None`: the page couldn't be read).
 /// `find`: the bot's words for what it looks for, to list the matching controls first on a page
 /// with more than [`reads::SHOWN_CONTROLS`](crate::sandbox::reads::SHOWN_CONTROLS). `hash` says
-/// what the read shows, for [`get_sandbox_page`]'s `since`.
+/// what the read shows, for [`get_sandbox_page`]'s `since`. `consume`: whether a download's
+/// terminal status, once reported here, should stop being reported again. Only the one dedicated
+/// `browser_page` read a bot polls to learn a download finished should pass `true`; every other
+/// read that happens to build a page state as a side effect of something else (an action's own
+/// before/after snapshot, a navigation's result) must pass `false`, or it can win the race and
+/// swallow the terminal report before the bot's own poll ever sees it.
 async fn page_state_from(
     ctrl: &crate::sandbox::BrowserController,
     snap: Option<crate::sandbox::progress::Snapshot>,
     find: &str,
+    consume: bool,
 ) -> serde_json::Value {
     use crate::sandbox::reads;
     let (url, title, text) = match snap {
@@ -6418,6 +6428,13 @@ async fn page_state_from(
     }
     if let Some(captcha) = captcha {
         page["captcha"] = json!(captcha);
+    }
+    let download = if consume { ctrl.latest_download_report() } else { ctrl.peek_download_report() };
+    if let Some(download) = download {
+        page["download"] = download;
+    }
+    if let Some(chooser) = ctrl.open_chooser_report() {
+        page["file_chooser"] = chooser;
     }
     page
 }
@@ -6493,6 +6510,22 @@ impl BotCall {
     fn page_in(team: &str) -> impl Fn(&BotCall) -> String + '_ {
         move |by| super::browser_pages::call_page(team, Some(&by.kwant), by.chat.as_deref())
     }
+}
+
+/// Who a `browser_upload` call may answer a chat attachment id for. Not every path that reaches
+/// [`act_sandbox_allowed`] has a full turn to check an id against: a turn (the MCP path, which
+/// also honors the chat a delegated task came from — see [`super::attachments::visible`]), the
+/// bot (and chat, when the route names one) a curl call came in as, or neither, when no id can
+/// match and only a workspace path is accepted.
+#[derive(Clone, Copy, Default)]
+pub enum UploadCaller<'a> {
+    #[default]
+    None,
+    Turn(&'a super::continuity::SelfScope),
+    Bot {
+        kwant: &'a str,
+        chat: Option<&'a str>,
+    },
 }
 
 /// `POST /api/sandbox/:id/bot/:kwant_id/navigate`: the browser API a bot's prompt gave it before
@@ -6607,7 +6640,11 @@ async fn act_as(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let page = by.as_ref().map_or_else(|| team_id.clone(), BotCall::page_in(&team_id));
     refuse_while_held(&state, &page, by.is_some()).await?;
-    let result = act_sandbox(State(state.clone()), Path(page.clone()), payload).await;
+    let caller = match &by {
+        Some(b) => UploadCaller::Bot { kwant: &b.kwant, chat: b.chat.as_deref() },
+        None => UploadCaller::None,
+    };
+    let result = act_sandbox(State(state.clone()), Path(page.clone()), payload, caller).await;
     ask_on_wall(&state, &team_id, &page, by.as_ref().map(BotCall::caller), result).await
 }
 
@@ -6740,7 +6777,7 @@ pub async fn get_sandbox_page(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let snap = ctrl.snapshot().await;
-    let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default()).await;
+    let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default(), true).await;
     if query.wants_blocks() {
         add_blocks(&ctrl, &mut page).await;
     }
@@ -6788,14 +6825,23 @@ pub async fn cite_sandbox(
 
 /// What a read of a page that still reads the same returns instead of it.
 pub fn unchanged_read(page: &serde_json::Value) -> serde_json::Value {
-    json!({
+    let mut out = json!({
         "url": page["url"],
         "title": page["title"],
         "hash": page["hash"],
         "blocked": page["blocked"],
         "unchanged": true,
         "note": crate::sandbox::reads::UNCHANGED_NOTE,
-    })
+    });
+    // A download or an open chooser is news on its own, never folded into the page's hash: say so
+    // even on an otherwise unchanged read, so it's never missed between two look-the-same reads.
+    if page.get("download").is_some() {
+        out["download"] = page["download"].clone();
+    }
+    if page.get("file_chooser").is_some() {
+        out["file_chooser"] = page["file_chooser"].clone();
+    }
+    out
 }
 
 /// Agent-facing action endpoint (`POST /api/sandbox/:id/act`, the shell bots' browser API):
@@ -6807,6 +6853,7 @@ pub async fn act_sandbox(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
+    caller: UploadCaller<'_>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let args = json!({"action": payload.action, "text": payload.text, "key": payload.key, "ref": payload.ref_});
@@ -6819,7 +6866,134 @@ pub async fn act_sandbox(
         ));
         return Ok(Json(page));
     }
-    act_sandbox_allowed(State(state), Path(team_id), Json(payload)).await
+    act_sandbox_allowed(State(state), Path(team_id), Json(payload), caller).await
+}
+
+/// Turns `browser_upload`'s file list into what [`crate::sandbox::browser_downloads`] needs to
+/// answer a chooser: each entry is a chat attachment id visible to `caller` (same rule as
+/// `read_attachment`/`share_file`: the turn's own chat, the chat a delegated task came from, and
+/// files this bot shared — see [`super::attachments::visible`]; an id outside that falls through
+/// to the plain "isn't a file in your folder" refusal below, same as an id that doesn't exist, so
+/// a call never learns that an id exists in another chat) or, failing that, a path under the
+/// bot's own folder (opened through [`safe_fs`](crate::sandbox::safe_fs), so `..` and a symlink
+/// out of the folder are refused). Remote delivery (no filesystem in common with this Chrome)
+/// reads every file's bytes, capped at 100 MB in all; local delivery stages a copy made from the
+/// handle already opened and checked above (see [`stage_upload_copy`]) and passes that copy's
+/// path, rather than the original attachment blob or workspace path — Chrome may not actually
+/// read the file until well after this call returns, and by then a path handed back by name alone
+/// could point at something else.
+async fn resolve_upload_files(
+    state: &AppState,
+    workspace: &std::path::Path,
+    local: bool,
+    files: &[String],
+    caller: UploadCaller<'_>,
+) -> Result<Vec<crate::sandbox::browser_downloads::UploadFile>, String> {
+    use crate::sandbox::browser_downloads::{UploadFile, UploadSource};
+    use crate::sandbox::safe_fs;
+    const REMOTE_CAP: u64 = 100 * 1024 * 1024;
+    const TOO_BIG: &str = "That's more than this browser can take over a remote connection: 100 MB in all. Pick a smaller file.";
+    let mut remaining = REMOTE_CAP;
+    let mut out = Vec::with_capacity(files.len());
+    for raw in files {
+        let found = match caller {
+            UploadCaller::Turn(scope) => super::attachments::visible(state, scope, raw).await,
+            UploadCaller::Bot { kwant, chat } => super::attachments::visible_to(state, chat, Some(kwant), raw).await,
+            UploadCaller::None => None,
+        };
+        if let Some(a) = found {
+            if a.context_id.as_deref().is_some_and(|c| c.starts_with("document:")) {
+                return Err(format!("{} can't be used this way.", a.name));
+            }
+            let root = super::attachments::root(state);
+            let blob = super::attachments::blob_path(&root, &a.sha256)
+                .ok_or_else(|| format!("{} is missing.", a.name))?;
+            let last_modified_ms = a.created_at.timestamp_millis();
+            if local {
+                let src = std::fs::File::open(&blob).map_err(|_| format!("{} is missing.", a.name))?;
+                let path = stage_upload_copy(state, &a.name, src).await.map_err(|_| format!("Couldn't read {}.", a.name))?;
+                out.push(UploadFile { name: a.name, mime: a.mime, last_modified_ms, source: UploadSource::Path(path) });
+            } else {
+                let size = a.size.max(0) as u64;
+                if size > remaining {
+                    return Err(TOO_BIG.to_string());
+                }
+                let bytes = tokio::fs::read(&blob).await.map_err(|_| format!("Couldn't read {}.", a.name))?;
+                remaining -= size;
+                out.push(UploadFile { name: a.name, mime: a.mime, last_modified_ms, source: UploadSource::Bytes(bytes) });
+            }
+            continue;
+        }
+        let rel = std::path::Path::new(raw.trim_start_matches('/'));
+        let dir = safe_fs::Dir::open_strict(workspace).map_err(|_| "Your folder couldn't be opened.".to_string())?;
+        // An id-shaped `raw` that fell through here might be an attachment id in a chat `caller`
+        // can't see: echoing it back would tell the call it exists, so this refusal drops it
+        // (same wording as a path that isn't found); a path keeps its name, since that's never
+        // someone else's id.
+        let mut file = dir.open_file(rel).map_err(|_| match uuid::Uuid::parse_str(raw) {
+            Ok(_) => "isn't a file in your folder.".to_string(),
+            Err(_) => format!("{raw} isn't a file in your folder."),
+        })?;
+        let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        let last_modified_ms = chrono::Utc::now().timestamp_millis();
+        if local {
+            let path = stage_upload_copy(state, &name, file).await.map_err(|_| format!("Couldn't read {raw}."))?;
+            out.push(UploadFile { name, mime: String::new(), last_modified_ms, source: UploadSource::Path(path) });
+        } else {
+            let bytes = safe_fs::read_capped(&mut file, remaining).map_err(|_| TOO_BIG.to_string())?;
+            remaining -= bytes.len() as u64;
+            let mime = mime_guess::from_path(rel).first_or_octet_stream().to_string();
+            out.push(UploadFile { name, mime, last_modified_ms, source: UploadSource::Bytes(bytes) });
+        }
+    }
+    Ok(out)
+}
+
+const UPLOAD_TMP_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+const UPLOAD_TMP_ORPHAN_AGE: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A copy of `src` (an attachment blob, or a workspace file — in both cases a handle
+/// [`resolve_upload_files`] already opened and checked, read from directly rather than by
+/// re-opening its path afterward) under a short-lived folder of kwnt's own, outside every bot's
+/// workspace: same pattern as `browser_stream.rs`'s `chooser-tmp` for the live-view sheet.
+/// `DOM.setFileInputFiles` names the file from its path's own basename, so the copy is named
+/// after the real name, sanitized through [`super::attachments::clean_name`]. Staging outside the
+/// workspace, from the handle rather than the path, closes the window between the check already
+/// done on `src` and whenever Chrome actually reads the staged copy (the page may only do that
+/// once the person acts on it, e.g. only once a form is submitted, so the copy can't be removed
+/// right after this call returns either — it's swept up after `UPLOAD_TMP_TTL`, with
+/// `sweep_upload_tmp` as a backstop for an orphan left behind by a restart).
+async fn stage_upload_copy(state: &AppState, name: &str, mut src: std::fs::File) -> std::io::Result<PathBuf> {
+    let tmp_root = super::attachments::root(state).join("upload-tmp");
+    sweep_upload_tmp(&tmp_root).await;
+    let dir = tmp_root.join(uuid::Uuid::new_v4().to_string());
+    tokio::fs::create_dir_all(&dir).await?;
+    let dest = dir.join(super::attachments::clean_name(name));
+    let dest_for_copy = dest.clone();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let mut out = std::fs::File::create(&dest_for_copy)?;
+        std::io::copy(&mut src, &mut out)?;
+        Ok(())
+    })
+    .await
+    .map_err(std::io::Error::other)??;
+    tokio::spawn(async move {
+        tokio::time::sleep(UPLOAD_TMP_TTL).await;
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    });
+    Ok(dest)
+}
+
+/// Deletes any `upload-tmp` directory older than `UPLOAD_TMP_ORPHAN_AGE`, a backstop for the
+/// scheduled cleanup in [`stage_upload_copy`] if the process restarted before it ran.
+async fn sweep_upload_tmp(tmp_root: &std::path::Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(tmp_root).await else { return };
+    let cutoff = std::time::SystemTime::now() - UPLOAD_TMP_ORPHAN_AGE;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.metadata().await.ok().and_then(|m| m.modified().ok()).is_some_and(|m| m < cutoff) {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
 }
 
 /// [`act_sandbox`] without the payment check: for `browser_act`, whose approver already asked.
@@ -6827,6 +7001,7 @@ pub async fn act_sandbox_allowed(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
+    caller: UploadCaller<'_>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
@@ -6845,7 +7020,7 @@ pub async fn act_sandbox_allowed(
     let here = before.as_ref().map(|b| b.url.clone()).unwrap_or_default();
     let repeat = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).before(&here, key.as_deref());
     if let Some(stop) = repeat {
-        let mut page = page_state_from(&ctrl, before, "").await;
+        let mut page = page_state_from(&ctrl, before, "", false).await;
         page["stalled"] = json!(true);
         page["error"] = json!(stop);
         return Ok(Json(page));
@@ -6886,9 +7061,46 @@ pub async fn act_sandbox_allowed(
             .await
             .map(|_| "scrolled".to_string())
             .map_err(|e| e.to_string()),
+        ("upload", _) => {
+            let files = payload.files.clone().unwrap_or_default();
+            if files.is_empty() {
+                Err("files is required: a path in your folder or a chat attachment id.".to_string())
+            } else {
+                // `team_id` here is the page key: a job page (bot+chat) key for the common case,
+                // not a team/channel/kwant id by itself, so it's resolved the same way
+                // `controller_for` resolves this very controller's own workspace (open_page ->
+                // controller_for both strip the page key down to its team/bot id first).
+                match resolve_sandbox_target_info(&state, super::browser_pages::page_team(&team_id)).await {
+                    Some((_, workspace)) => {
+                        let local = state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local;
+                        match resolve_upload_files(&state, &workspace, local, &files, caller).await {
+                            Ok(resolved) => {
+                                let requested = resolved.len();
+                                ctrl.answer_upload(local, resolved).await.map(|names| {
+                                    let mut message = format!(
+                                        "Gave the page {}. Check the page shows it before you go on.",
+                                        names.join(", ")
+                                    );
+                                    if names.len() < requested {
+                                        if let Some(first) = names.first() {
+                                            message.push_str(&format!(
+                                                " This picker takes one file, so only {first} was used."
+                                            ));
+                                        }
+                                    }
+                                    message
+                                })
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    None => Err("Couldn't find your folder.".to_string()),
+                }
+            }
+        }
         ("click_text" | "click", None) => Err("click needs ref (a number from the clickable list) or text (a label).".to_string()),
         (other, _) => Err(format!(
-            "Unknown action \"{}\". Use click (with ref or text), type (with text), key (with key) or scroll (with delta_y).",
+            "Unknown action \"{}\". Use click (with ref or text), type (with text), key (with key), scroll (with delta_y) or upload (with files).",
             other
         )),
     };
@@ -6923,7 +7135,7 @@ pub async fn act_sandbox_allowed(
         }
     }
     let stall = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).after(changed.is_some());
-    let mut page = page_state_from(&ctrl, after, "").await;
+    let mut page = page_state_from(&ctrl, after, "", false).await;
     page["changed"] = json!(changed.as_deref().unwrap_or("Nothing on the page changed."));
     match result {
         Ok(done) => page["result"] = json!(done),
