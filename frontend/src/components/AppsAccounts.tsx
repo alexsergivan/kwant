@@ -1,4 +1,4 @@
-// Settings › This space › Apps & accounts (0.9.5): app tiles first, then Find a tool, the AI
+// Settings › This space › Apps & accounts (0.9.5): app tiles first, then Another app, the AI
 // accounts the bots think with, and a closed Advanced (tool servers, Telegram, notes from bots).
 // Connecting an app is one sheet with three steps; the bots picked in step 3 get it, turned on.
 
@@ -705,14 +705,16 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
         {data && !composio && <p className="text-[11px] text-zinc-400">This server can’t connect apps yet. Update kwant bots to connect them here.</p>}
       </section>
 
-      {/* Find a tool: built in, through Composio, and the public directory */}
+      {/* Another app: built in, through Composio and the public list, one row per app */}
       {data && (
         <section aria-labelledby="apps-find" className="space-y-2" data-apps-search>
           <h3 id="apps-find" className={sectionTitle}>
-            Find a tool
+            Another app
           </h3>
           <FindTool
             browseWhenEmpty={false}
+            label="Find any app"
+            placeholder="Search any app, like ElevenLabs, Stripe or Airtable"
             data={data}
             api={p.findApi}
             phone={p.phone}
