@@ -4,6 +4,9 @@
 //!
 //! - `CALLTOOL:<tool>:<base64 json args>` in the prompt: call that tool and reply with its text
 //!   (the last marker counts, and each marker runs once: later turns see it again in history).
+//!   It calls kwnt's own tools straight away; with `ASKFIRST` in the prompt too it first asks
+//!   kwnt's permission prompt (`--permission-prompt-tool`), as claude does, and on a deny replies
+//!   `TOOLDENIED` without calling.
 //! - `REPLYTAG:<tag>`: reply "answer <tag>" (after any tool call).
 //! - `REPLYTEXT:<base64 text>`: reply exactly that text (say, a markdown table), and nothing else.
 //! - `REPLYSEQ:<tag>`: reply the test's planned answers in turn: the files `seq-<tag>-1`, `seq-<tag>-2`, …
@@ -151,8 +154,23 @@ if m and "--mcp-config" in args:
     open(done, "w").close()
     cfg = json.load(open(args[args.index("--mcp-config") + 1]))
     srv = cfg["mcpServers"]["kwnt_tools"]
+    call_args = json.loads(base64.b64decode(m.group(2)))
+    # ASKFIRST: ask kwnt's permission prompt first, as claude does before an MCP tool call
+    if "ASKFIRST" in prompt and "--permission-prompt-tool" in args:
+        perm = cfg["mcpServers"]["kwnt"]
+        ask = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
+            "arguments": {"tool_name": "mcp__kwnt_tools__" + m.group(1), "input": call_args, "tool_use_id": "toolu_askfirst"}}}).encode()
+        preq = urllib.request.Request(perm["url"], data=ask, method="POST",
+            headers={"content-type": "application/json", **perm.get("headers", {})})
+        verdict = json.loads(json.load(urllib.request.urlopen(preq, timeout=600))["result"]["content"][0]["text"])
+        if verdict.get("behavior") == "allow":
+            call_args = verdict.get("updatedInput", call_args)
+        else:
+            reply.append("TOOLDENIED")
+            m = None
+if m and "--mcp-config" in args:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": m.group(1), "arguments": json.loads(base64.b64decode(m.group(2)))}}).encode()
+        "params": {"name": m.group(1), "arguments": call_args}}).encode()
     req = urllib.request.Request(srv["url"], data=body, method="POST",
         headers={"content-type": "application/json", **srv.get("headers", {})})
     try:

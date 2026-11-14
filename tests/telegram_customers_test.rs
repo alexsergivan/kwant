@@ -278,10 +278,11 @@ async fn a_tool_call_waits_for_the_person_even_with_approvals_off() {
     env.state.db.set_space_approvals(&SpaceId::default_space(), "off").await.unwrap();
     let bot = customers_on(&env, tg, 40).await;
     let marker = call_tool_marker("memory_search", json!({"query": "opening hours"}));
-    tg.text(&bot, &ANN, &format!("Please look this up {marker} REPLYTAG:tool40"));
+    // ASKFIRST: the fake CLI asks kwnt's permission prompt before the call, as claude does
+    tg.text(&bot, &ANN, &format!("Please look this up {marker} ASKFIRST REPLYTAG:tool40"));
 
     // A read-only tool that runs unasked with approvals off still gets a card
-        wait_for("the card", || {
+    wait_for("the card", || {
         let db = env.state.db.clone();
         let a = env.a.clone();
         async move { !db.list_approvals(&SpaceId::default_space(), Some("pending"), Some(&a)).await.unwrap().is_empty() }
@@ -307,6 +308,7 @@ async fn a_tool_call_waits_for_the_person_even_with_approvals_off() {
     assert_eq!(s, StatusCode::OK);
     let reply = tg.wait_send(&bot, |c| c.text().contains("answer tool40")).await;
     assert_eq!(reply.chat(), ANN.id);
+    assert!(reply.text().contains("TOOLDENIED") && !reply.text().contains("TOOL["), "the tool never ran: {}", reply.text());
     for c in tg.sent(&bot) {
         assert!(c.buttons().is_empty() && !c.text().contains(&card.id), "never an approval: {}", c.text());
     }
