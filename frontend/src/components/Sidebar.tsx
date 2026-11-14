@@ -16,7 +16,7 @@ import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
-import { type AttentionRow, type NeedsYouRow, PINNED_RANK, workingIds, directIds, rollupLabel } from '../chatsTab';
+import { type AttentionRow, type NeedsYouRow, PINNED_RANK, NEEDS_YOU_LABEL, workingIds, directIds, rollupLabel } from '../chatsTab';
 import type { InboxItem } from '../api/inbox';
 import { useDevMode } from './DevModeSwitch';
 import { MovedPointer, SpaceSubline } from './FirstScreenBits';
@@ -300,7 +300,7 @@ const MoreMenu: React.FC<{
 export const PINNED_MAX = 5;
 
 /**
- * H5 desktop: "Needs attention · n", ranks 1–4 above Channels. Gone when empty. The count is announced
+ * H5 desktop: "Needs you · n" (14c: the phone's name too), ranks 1–4 above Channels. Gone when empty. The count is announced
  * politely, at most once per 10 s, from a live region holding only the heading's words.
  */
 const NeedsAttention: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<Kwant>) => React.ReactNode; onOpenInbox?: () => void }> = ({ rows, row, onOpenInbox }) => {
@@ -319,12 +319,12 @@ const NeedsAttention: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: Attention
   const more = n - PINNED_MAX;
   return (
     <section data-needs-attention aria-labelledby="needs-attention-head" className="rounded-xl border border-hairline bg-white/[0.015] my-1.5 pb-1.5">
-      <h2 id="needs-attention-head" className="px-2 pt-1.5 pb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-amber-300" aria-label={`Needs attention, ${n}`}>
+      <h2 id="needs-attention-head" className="px-2 pt-1.5 pb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-amber-300" aria-label={`${NEEDS_YOU_LABEL}, ${n}`}>
         <Hand size={12} aria-hidden="true" />
-        <span aria-hidden="true">Needs attention · {n}</span>
+        <span aria-hidden="true">{NEEDS_YOU_LABEL} · {n}</span>
       </h2>
       <span className="sr-only" aria-live="polite" data-needs-attention-live>
-        {said !== n || lastSaid.current ? `Needs attention, ${said}` : ''}
+        {said !== n || lastSaid.current ? `${NEEDS_YOU_LABEL}, ${said}` : ''}
       </span>
       <div className="space-y-0.5 px-0.5">
         {rows.slice(0, PINNED_MAX).map((a) => (
@@ -461,7 +461,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const byRank = (r: number) => (chatsTab && attention ? attention.filter((a) => a.rank === r) : []);
   const phoneSections = chatsTab && attention
     ? ([
-        { key: 'needs', head: 'Needs you', tone: '!text-[11px] !leading-4 !tracking-[0.06em] !text-warn', rows: byRank(1) },
+        { key: 'needs', head: NEEDS_YOU_LABEL, tone: '!text-[11px] !leading-4 !tracking-[0.06em] !text-warn', rows: byRank(1) },
         { key: 'stuck', head: 'Stuck', tone: '!text-rose-300', rows: byRank(2) },
         { key: 'review', head: 'To review', tone: '!text-sky-300', rows: byRank(3) },
         { key: 'finished', head: 'Finished', tone: '', rows: byRank(4) },
