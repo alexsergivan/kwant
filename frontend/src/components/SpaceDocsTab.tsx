@@ -40,8 +40,14 @@ export function problemText(kind: string, file: { name: string; size: number }):
       return tooBig(file.size);
     case 'no_text':
       return 'It has no text bots can read (it looks like a scan). Export it with text, or paste the words into a .txt.';
+    case 'unreadable':
+      return 'Bots couldn’t read it. Save it again as UTF-8 text or a fresh PDF, then add it.';
+    case 'docs_link':
+      return 'This space’s documents folder is a link, so kwant won’t write into it.';
     case 'limit':
       return 'This space already has 200 documents. Remove one to add another.';
+    case 'archived':
+      return 'This space is archived, so its documents can’t change.';
     default:
       return 'Something went wrong while adding it. Try again.';
   }
@@ -98,10 +104,15 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
       setSaid(`${file.name} added`);
       await load();
     } else if (r.kind === 'exists') update(id, { id, file, state: 'exists' });
-    else if (r.kind === 'no_route') {
+    else if (r.kind === 'no_route' || r.kind === 'person_only') {
+      // No add here (an older server, or a view that isn't the person's): hide it, no row.
       update(id, null);
       setCanEdit(false);
-    } else update(id, { id, file, state: 'problem', text: problemText(r.kind, file) });
+    } else {
+      update(id, { id, file, state: 'problem', text: problemText(r.kind, file) });
+      // Full: the list catches up, so the 200-documents box replaces the drop zone.
+      if (r.kind === 'limit') await load();
+    }
   };
 
   /** Several files at once go one at a time, each with its own row. */

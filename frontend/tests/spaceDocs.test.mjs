@@ -135,18 +135,60 @@ test('words: sizes, meta line, marks, folder and problem rows', () => {
   assert.equal(m.copyQuote('thirty days', 'faq.md', null), 'thirty days — faq.md');
 });
 
-test('add: each server answer becomes the row the design asks for', () => {
-  for (const [status, error, kind] of [
-    [400, 'file must be a document’s own name', 'bad_name'],
-    [415, 'wrong kind', 'wrong_kind'],
-    [413, 'over 2 MB', 'too_large'],
-    [422, 'PDF has no text layer', 'no_text'],
-    [409, 'faq.md already exists', 'exists'],
-    [409, 'this space has 200 documents, the limit', 'limit'],
-    [409, 'docs is a link', 'failed'],
-    [500, '', 'failed'],
+test('add: the error code decides the row, never the status or the words', () => {
+  for (const [status, code, error, kind] of [
+    [400, 'bad_name', 'names can’t start with a dot', 'bad_name'],
+    [415, 'wrong_kind', 'wrong kind', 'wrong_kind'],
+    [413, 'too_large', 'kwant reads documents up to 2 MB', 'too_large'],
+    [413, '', '', 'too_large'],
+    [422, 'no_text', 'PDF has no text layer', 'no_text'],
+    [422, 'unreadable', 'faq.md isn’t UTF-8 text', 'unreadable'],
+    [409, 'exists', 'almost.md is already in this space’s documents', 'exists'],
+    [409, 'exists', 'faq200.md is already in this space’s documents; the most', 'exists'],
+    [409, 'full', 'this space has 200 documents, the most kwant reads', 'limit'],
+    [409, 'docs_link', 'the space’s docs isn’t a plain folder', 'docs_link'],
+    [409, '', 'this space is archived; restore it first', 'archived'],
+    [403, 'person_only', 'only the person', 'person_only'],
+    [400, 'interrupted', 'The upload was interrupted.', 'failed'],
+    [422, 'something_new', 'already exists', 'failed'],
+    [500, '', '', 'failed'],
   ])
-    assert.equal(m.addResultOf(status, error).kind, kind, `${status} ${error}`);
+    assert.equal(m.addResultOf(status, code, error).kind, kind, `${status} ${code} ${error}`);
+  for (const kind of ['bad_name', 'wrong_kind', 'no_text', 'unreadable', 'docs_link', 'limit', 'archived'])
+    assert.notEqual(m.problemText(kind, { name: 'a.md', size: 1 }), m.problemText('failed', { name: 'a.md', size: 1 }), kind);
+});
+
+test('add: the file is the raw body and its name is in the query', async () => {
+  const real = globalThis.fetch;
+  const calls = [];
+  const reply = (status, body) => async (url, init) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    const file = new File(['return any item within 30 days'], 'Returns & FAQ #2.md', { type: 'text/markdown' });
+    globalThis.fetch = reply(201, { name: 'Returns & FAQ #2.md', size: 30, modified: '2026-11-14T00:00:00Z' });
+    const ok = await m.spaceDocsApi.add('spc 1', file);
+    assert.equal(ok.ok, true);
+    assert.equal(calls[0].url, '/api/spaces/spc%201/docs?name=Returns%20%26%20FAQ%20%232.md');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[0].init.body, file, 'the File itself, not FormData');
+    assert.ok(!(calls[0].init.body instanceof FormData));
+    assert.equal(calls[0].init.headers, undefined, 'no Content-Type override');
+
+    globalThis.fetch = reply(201, { name: 'faq.md', size: 1, modified: '2026-11-14T00:00:00Z' });
+    await m.spaceDocsApi.add('s', new File(['x'], 'faq.md'), true);
+    assert.equal(calls[1].url, '/api/spaces/s/docs?name=faq.md&replace=1');
+
+    globalThis.fetch = reply(409, { error: 'almost.md is already in this space’s documents', code: 'exists' });
+    assert.equal((await m.spaceDocsApi.add('s', new File(['x'], 'almost.md'))).kind, 'exists');
+    globalThis.fetch = reply(409, { error: 'dir.md is a folder', code: 'exists' });
+    assert.equal((await m.spaceDocsApi.add('s', new File(['x'], 'dir.md'), true)).kind, 'failed', 'replace refused: no second clash row');
+    globalThis.fetch = reply(422, { error: 'x isn’t UTF-8 text', code: 'unreadable' });
+    assert.equal((await m.spaceDocsApi.add('s', new File(['x'], 'x.txt'))).kind, 'unreadable');
+  } finally {
+    globalThis.fetch = real;
+  }
 });
 
 test('routes probe and page text: a missing route is told apart from a missing file', async () => {

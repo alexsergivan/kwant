@@ -232,12 +232,18 @@ export function _resetCiteCache() {
 
 const base = (space: string) => `/api/spaces/${encodeURIComponent(space)}/docs`;
 
-async function errorText(r: Response): Promise<string> {
-  const body = await r
+/** The server's `{ error, code }`; both '' when the answer has no JSON error of its own. */
+async function errorOf(r: Response): Promise<{ error: string; code: string }> {
+  const body = (await r
     .clone()
     .json()
-    .catch(() => null);
-  return (body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string' && (body as { error: string }).error) || '';
+    .catch(() => null)) as { error?: unknown; code?: unknown } | null;
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  return body && typeof body === 'object' ? { error: str(body.error), code: str(body.code) } : { error: '', code: '' };
+}
+
+async function errorText(r: Response): Promise<string> {
+  return (await errorOf(r)).error;
 }
 
 /** A 404 or 405 from a route the server doesn't have yet (no JSON error of its own). */
@@ -247,21 +253,50 @@ async function routeMissing(r: Response): Promise<boolean> {
   return !(await errorText(r));
 }
 
-export type AddResult =
-  | { ok: true; doc: SpaceDoc }
-  | { ok: false; kind: 'exists' | 'bad_name' | 'wrong_kind' | 'too_large' | 'no_text' | 'limit' | 'no_route' | 'failed'; detail?: string };
+export type AddProblem =
+  | 'exists'
+  | 'bad_name'
+  | 'wrong_kind'
+  | 'too_large'
+  | 'no_text'
+  | 'unreadable'
+  | 'docs_link'
+  | 'limit'
+  | 'archived'
+  | 'person_only'
+  | 'no_route'
+  | 'failed';
 
-/** Maps an add's answer (Vega's route) to what the row says. */
-export function addResultOf(status: number, error: string): Exclude<AddResult, { ok: true }> {
-  const e = error.toLowerCase();
-  if (status === 400) return { ok: false, kind: 'bad_name', detail: error };
-  if (status === 415) return { ok: false, kind: 'wrong_kind', detail: error };
-  if (status === 413) return { ok: false, kind: 'too_large', detail: error };
-  if (status === 422) return { ok: false, kind: 'no_text', detail: error };
-  if (status === 409 && /200|limit|most/.test(e)) return { ok: false, kind: 'limit', detail: error };
-  if (status === 409 && /exist|already/.test(e)) return { ok: false, kind: 'exists', detail: error };
+export type AddResult = { ok: true; doc: SpaceDoc } | { ok: false; kind: AddProblem; detail?: string };
+
+const ADD_CODES: Record<string, AddProblem> = {
+  bad_name: 'bad_name',
+  wrong_kind: 'wrong_kind',
+  too_large: 'too_large',
+  exists: 'exists',
+  docs_link: 'docs_link',
+  full: 'limit',
+  no_text: 'no_text',
+  unreadable: 'unreadable',
+  person_only: 'person_only',
+};
+
+/**
+ * Maps an add's answer (Vega's route) to what the row says. The error's `code` decides, never the status or the
+ * words: two 409s and two 422s mean different things, and the words carry the file's own name. Without a code,
+ * only a proxy's bare 413 and the archived space's 409 (the one 409 without a code) are told apart.
+ */
+export function addResultOf(status: number, code: string, error = ''): Exclude<AddResult, { ok: true }> {
+  const kind = ADD_CODES[code];
+  if (kind) return { ok: false, kind, detail: error };
+  if (!code && status === 413) return { ok: false, kind: 'too_large', detail: error };
+  if (!code && status === 409) return { ok: false, kind: 'archived', detail: error };
   return { ok: false, kind: 'failed', detail: error };
 }
+
+/** The add route's address: the name in the query, as the file goes as the raw body. */
+export const addUrl = (space: string, name: string, replace = false) =>
+  `${base(space)}?name=${encodeURIComponent(name)}${replace ? '&replace=1' : ''}`;
 
 export const spaceDocsApi = {
   list: async (space: string): Promise<SpaceDocList> => {
@@ -284,12 +319,11 @@ export const spaceDocsApi = {
     }
   },
 
+  /** The file is the raw body and its name is in the query (Vega's route has no multipart): no FormData, no Content-Type. */
   add: async (space: string, file: File, replace = false): Promise<AddResult> => {
-    const form = new FormData();
-    form.append('file', file, file.name);
     let r: Response;
     try {
-      r = await personFetch(`${base(space)}${replace ? '?replace=1' : ''}`, { method: 'POST', body: form });
+      r = await personFetch(addUrl(space, file.name, replace), { method: 'POST', body: file });
     } catch {
       return { ok: false, kind: 'failed' };
     }
@@ -298,7 +332,10 @@ export const spaceDocsApi = {
       return { ok: true, doc: doc && typeof doc.name === 'string' ? doc : { name: file.name, size: file.size, modified: new Date().toISOString() } };
     }
     if (await routeMissing(r)) return { ok: false, kind: 'no_route' };
-    return addResultOf(r.status, await errorText(r));
+    const { error, code } = await errorOf(r);
+    const res = addResultOf(r.status, code, error);
+    // A replace refused as `exists` is a folder with the document's name: asking again can't help.
+    return replace && res.kind === 'exists' ? { ok: false, kind: 'failed', detail: error } : res;
   },
 
   /** 'ok', 'no_route' (hide remove), or an error to show. */
