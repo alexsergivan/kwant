@@ -4404,7 +4404,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     />
   );
   const attentionRankOf = new Map((attention ?? []).map((a) => [a.kwant.id, a.rank]));
-  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title, rank: attentionRankOf.get(k.id) }))} defaultBotId={!isChannel ? selectedId : null} onOpenChat={(id, thread) => { if (thread) { openThread(id, thread); return; } if (!openTarget({ channel_id: null, kwant_id: id })) pushToast('That bot no longer exists.'); }} />;
+  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title, rank: attentionRankOf.get(k.id) }))} defaultBotId={!isChannel ? selectedId : null} onOpenTask={missionBoard ? (id) => { setPendingTaskId(id); showPage('board'); } : undefined} onOpenChat={(id, thread) => { if (thread) { openThread(id, thread); return; } if (!openTarget({ channel_id: null, kwant_id: id })) pushToast('That bot no longer exists.'); }} />;
   const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…

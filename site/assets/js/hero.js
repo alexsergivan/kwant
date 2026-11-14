@@ -2,7 +2,7 @@
 // Mira's design (Nov 13 2026), built by Pixel. Runs after first paint, needs no library. Home page only.
 // Nebula: after load; 8 fps only on a desktop with a mouse, one still frame on phones and touch screens and under reduced motion;
 // paused off screen or in a hidden tab; each frame drawn in slices of at most 8 ms.
-// Moments: an ARIA tablist; it never switches by itself.
+// Moments: an ARIA tablist; it never switches by itself. Full size (or a click on the clip) opens the clip in the reel dialog.
 (function () {
   "use strict";
   function afterPaint(fn) {
@@ -110,6 +110,7 @@
     var poster = root.querySelector(".win-poster");
     var panel = root.querySelector('[role="tabpanel"]');
     var pause = root.querySelector("[data-pause]");
+    var full = root.querySelector("[data-full]");
     function paused() { return pause.getAttribute("aria-pressed") === "true"; }
     // The poster image stays under the video; the video shows once it has a frame to show.
     video.addEventListener("playing", function () { video.classList.add("on"); });
@@ -124,6 +125,7 @@
       video.classList.remove("on");
       if (video.dataset.ready) { video.src = tab.dataset.clip; if (!paused()) video.play().catch(function () {}); }
       panel.setAttribute("aria-labelledby", tab.id);
+      if (full) { full.href = tab.dataset.clip; full.setAttribute("aria-label", "Watch the " + tab.getAttribute("aria-label") + " clip full size"); }
       chars.forEach(function (c) { c.classList.toggle("on", c.dataset.char === tab.dataset.bot); });
       if (focus) tab.focus();
     }
@@ -160,41 +162,65 @@
       else arm();
     }
     afterPaint(watch);
+    // Full size: the Full size button in the window bar, or a click on the clip, opens the current clip in the reel
+    // dialog. The hero clip pauses while the dialog is open (for the reel too) and carries on afterwards unless the
+    // visitor had paused it.
+    function current() { return tabs.filter(function (t) { return t.getAttribute("aria-selected") === "true"; })[0]; }
+    function openFull(from) {
+      var tab = current();
+      reel.open({ mode: "clip", src: tab.dataset.clip, poster: tab.dataset.poster, title: tab.getAttribute("aria-label"),
+                  desc: tab.dataset.text, loop: true, from: from });
+    }
+    var wasOn = false;
+    document.addEventListener("reel:open", function () { wasOn = !video.paused; video.pause(); });
+    document.addEventListener("reel:close", function () { if (wasOn && !paused()) video.play().catch(function () {}); });
+    if (full && reel) {
+      full.addEventListener("click", function (e) { if (!reel.plain(e)) return; e.preventDefault(); openFull(full); });
+      root.querySelector(".win-screen").addEventListener("click", function (e) {
+        if (e.target.closest("[data-pause]")) return;
+        openFull(full);
+      });
+    }
     var start = new URLSearchParams(location.search).get("tab");
     if (start && tabs[+start]) select(tabs[+start]);
   }
 
-  // The "Watch it work" reel (it has a voiceover; the hero clips stay muted). Without JS (or <dialog>) the pill is a plain link to the mp4. The video's src and
-  // poster are set only when the dialog opens, so the page loads none of it. Esc, Close and a click on the backdrop
-  // close it; closing pauses and rewinds; the native dialog returns focus to the pill.
-  function startReel(pill) {
+  // The reel dialog: the "Watch it work" reel (it has a voiceover) and, from the moments window, the current hero clip at
+  // full size (muted, looping). Without JS (or <dialog>) the pill and the Full size button are plain links to the mp4.
+  // A video's src and poster are set only when the dialog opens, so the page loads none of it. Esc, Close and a click on
+  // the backdrop close it; closing pauses and rewinds, and focus goes back to whatever opened it.
+  function makeReel() {
     var dlg = document.getElementById("reel-dialog");
-    if (!dlg || typeof dlg.showModal !== "function") return;
+    if (!dlg || typeof dlg.showModal !== "function") return null;
     var video = dlg.querySelector("video"), play = dlg.querySelector("[data-reel-play]");
-    function arm() {
-      if (video.dataset.ready) return;
-      video.dataset.ready = "1";
-      var big = (window.innerWidth * (window.devicePixelRatio || 1)) > 1280;
-      var poster = (big && video.dataset.posterLg) || video.dataset.posterSm || video.dataset.posterLg;
-      if (poster) video.poster = poster;
-      var track = video.querySelector("track[data-src]");
-      if (track) track.src = track.dataset.src;
-      video.src = video.dataset.src;
-    }
-    pill.addEventListener("click", function (e) {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      e.preventDefault();
-      arm();
+    var title = dlg.querySelector("#reel-title"), desc = dlg.querySelector("#reel-desc");
+    var track = video.querySelector("track[data-src]");
+    var reel = { title: title.textContent, desc: desc.textContent };
+    var from = null;
+    // o: { mode, src, poster, title, desc, sound, loop, captions, from (focus returns here) }
+    // Opening and closing fire "reel:open" and "reel:close" on the document, so the hero clip can pause meanwhile.
+    function open(o) {
+      from = o.from;
+      dlg.dataset.mode = o.mode;
+      title.textContent = o.title; desc.textContent = o.desc;
+      if (track) { if (o.captions) { if (!track.src) track.src = track.dataset.src; video.appendChild(track); } else if (track.parentNode) video.removeChild(track); }
+      if (video.dataset.cur !== o.src) {
+        video.dataset.cur = o.src;
+        video.removeAttribute("poster"); if (o.poster) video.poster = o.poster;
+        video.src = o.src;
+      }
+      video.loop = !!o.loop;
+      video.muted = !o.sound;
       document.documentElement.classList.add("reel-open");
       dlg.showModal();
+      document.dispatchEvent(new Event("reel:open"));
       if (reduce.matches) { play.hidden = false; play.focus(); return; }
-      // Unmuted, inside the click: the click is the gesture that allows sound. If the browser still refuses, the
-      // native controls and the poster stay up; it is never retried muted.
+      // Unmuted (reel only), inside the click: the click is the gesture that allows sound. If the browser still refuses,
+      // the native controls and the poster stay up; it is never retried muted.
       play.hidden = true;
-      video.muted = false;
       video.focus();
       video.play().catch(function () {});
-    });
+    }
     play.addEventListener("click", function () { play.hidden = true; video.focus(); video.play().catch(function () {}); });
     video.addEventListener("play", function () { play.hidden = true; });
     dlg.querySelector("[data-reel-close]").addEventListener("click", function () { dlg.close(); });
@@ -204,10 +230,22 @@
       video.pause();
       try { video.currentTime = 0; } catch (err) {}
       document.documentElement.classList.remove("reel-open");
-      pill.focus();
+      if (from) from.focus();
+      document.dispatchEvent(new Event("reel:close"));
     });
+    function plain(e) { return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey; }
+    return {
+      open: open, plain: plain,
+      openReel: function (pill) {
+        var big = (window.innerWidth * (window.devicePixelRatio || 1)) > 1280;
+        open({ mode: "reel", src: video.dataset.src, poster: (big && video.dataset.posterLg) || video.dataset.posterSm || video.dataset.posterLg,
+               title: reel.title, desc: reel.desc, sound: true, captions: true, from: pill });
+      }
+    };
   }
-  var reelPill = document.querySelector("[data-reel]"); if (reelPill) startReel(reelPill);
+  var reel = makeReel();
+  var reelPill = document.querySelector("[data-reel]");
+  if (reel && reelPill) reelPill.addEventListener("click", function (e) { if (!reel.plain(e)) return; e.preventDefault(); reel.openReel(reelPill); });
 
   // Extra work waits for the load event and then for the frame after it: on a fast load the load event comes before
   // the first paint, and anything started then would hold that paint up.
