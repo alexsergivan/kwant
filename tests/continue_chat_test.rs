@@ -360,7 +360,7 @@ async fn files_come_along_by_reference_for_the_bot_up_to_the_cut() {
             .await
             .unwrap();
         let m = e.say(Some(&k), None, None, "user", &format!("here is {name}")).await;
-        e.state.db.link_attachments(&[a.id.clone()], &m, &k, None, Some(&k), None).await.unwrap();
+        e.state.db.link_attachments(std::slice::from_ref(&a.id), &m, &k, None, Some(&k), None).await.unwrap();
         files.push(a);
         said.push(m);
     }
