@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- kwant.si's home page clips (hand off, asks first, point at it, overnight, hand-off pill, PR react, new bot, review inbox) were re-recorded on current main, since they still showed an old app. `site-src/media-versions.json` now tracks the release each clip and the reel were recorded on, and `scripts/site_release_gate.py` fails a release once one falls behind (an older minor, or more than 3 patch releases on the same minor).
+
 ## [Mac 0.9.12] - 2026-11-14
 
 kwant 0.9.12: Dev mode that says when it finds your code and lighter long jobs on API engines.
