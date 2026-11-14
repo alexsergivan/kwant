@@ -976,6 +976,10 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
 .dv-cmd pre .ps { color: var(--accent); user-select: none; }
 
 @media (prefers-reduced-motion: reduce) {
+  .kw-dict-spin, .kw-dict-pop { animation: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
   .dv-led::after, .dv-led[data-ping]::after, .dv-node::before, .dv-caret, .dv-stamp { animation: none !important; }
   .dv-led[data-s="run"]::after { opacity: .5; transform: scale(1.6); }
 }
@@ -1020,3 +1024,9 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
 @media (prefers-reduced-motion: no-preference) {
   .kw-pin-enter { animation: kw-pin-enter 160ms ease-out; }
 }
+
+/* Dictation (design.md §4, §6): the spinner turns in 0.9 s, the popover rises 4 px in 140 ms; both still under reduced motion. */
+.kw-dict-spin { animation: kw-dict-spin 0.9s linear infinite; }
+@keyframes kw-dict-spin { to { transform: rotate(360deg); } }
+.kw-dict-pop { animation: kw-dict-pop 140ms ease-out both; }
+@keyframes kw-dict-pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
