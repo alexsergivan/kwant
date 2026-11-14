@@ -14,6 +14,9 @@ import {
 } from 'lucide-react';
 import { FreshEyesChip } from './FreshEyesChip';
 import { ChangesSection } from './LineNotes';
+import { GoesTo, SEND_TO_PHONE, useSendTo, type SendTo } from './RecipientPicker';
+import { useMedia } from '../../useMedia';
+import { badRecipientFix, toFor } from '../../dev/recipients';
 import { verdictShort } from '../../api/inbox';
 import { inboxNav, openReview, reviewForPr, useInbox } from '../../inboxStore';
 import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
@@ -151,9 +154,13 @@ interface FindingRowProps {
   now: number;
   busy: boolean;
   act: (f: DevFinding, a: FindingAction) => Promise<void>;
+  /** Fix it "Send to…" (#609): who Fix it goes to; null without the recipients route. */
+  st?: SendTo | null;
+  onFix?: (f: DevFinding, el: HTMLElement) => void;
+  onOpenTask?: (taskId: string) => void;
 }
 
-const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) => {
+const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act, st = null, onFix, onOpenTask }) => {
   const dismiss = useDismiss(f, act);
   const { draft, send } = dismiss;
   const formId = `dismiss-${f.id}`;
@@ -169,6 +176,10 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
   }
 
   const left = undoLeft(f, now);
+  // §3: no bot at all in the space: Fix it is off, with the server's sentence as its title.
+  const nobody = st?.load.s === 'ready' && st.load.r.bots.length === 0 ? st.load.r.nobody ?? 'There’s no bot in this space to send it to.' : null;
+  // One message per state (Mira #615 fix 3): the send error waits for the list, and goes when nobody can receive.
+  const showSendError = !st || (st.load.s === 'ready' && st.load.r.bots.length > 0);
 
   return (
     <li data-finding={f.id} data-state={f.state} className={`rounded-xl border border-zinc-700/60 border-l-[3px] bg-zinc-900/60 p-3 text-xs shadow-[var(--kws-shadow)] ${STRIPE[f.severity]}`}>
@@ -197,16 +208,24 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
           <div className="mt-2 flex flex-wrap items-center gap-2" aria-live="polite">
             {f.state === 'open' && !draft.open && (
               <>
-                <button type="button" disabled={busy} onClick={() => void act(f, { action: 'fix' })} className="kw-btn-primary min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0">
+                <button
+                  type="button"
+                  data-fix-it
+                  disabled={busy || !!nobody}
+                  title={nobody ?? undefined}
+                  onClick={(e) => (onFix ? onFix(f, e.currentTarget) : void act(f, { action: 'fix' }))}
+                  className="kw-btn-primary min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0"
+                >
                   <Wrench size={13} aria-hidden="true" />
                   Fix it
                 </button>
                 <button type="button" disabled={busy} aria-expanded={false} aria-controls={formId} onClick={() => send({ type: 'open' })} className="kw-btn-ghost min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0">
                   Dismiss
                 </button>
+                {st && <GoesTo load={st.load} pick={st.pick} phone={st.phone} expanded={!!st.anchor && st.anchor.dataset.goesFor === f.id} onOpen={(el) => { el.dataset.goesFor = f.id; st.open(el); }} onRetry={st.retry} />}
               </>
             )}
-            {f.state === 'open' && f.send_error && <span className="text-bad">Couldn’t send it: {f.send_error}</span>}
+            {f.state === 'open' && f.send_error && showSendError && <span className="text-bad">Couldn’t send it: {f.send_error}</span>}
             {f.state === 'sent' && (
               <>
                 <span className="inline-flex items-center gap-1 text-ok">
@@ -216,6 +235,16 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
                 {left > 0 && (
                   <button type="button" disabled={busy} onClick={() => void act(f, { action: 'undo_fix' })} className="kw-btn-ghost min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0">
                     Undo <span className="text-zinc-400">({Math.ceil(left / 1000)} s)</span>
+                  </button>
+                )}
+                {left <= 0 && f.task_id && onOpenTask && (
+                  <button
+                    type="button"
+                    data-open-task={f.task_id}
+                    onClick={() => onOpenTask(f.task_id as string)}
+                    className="inline-flex min-h-[44px] items-center rounded px-1 font-semibold text-violet-300 hover:underline sm:min-h-0 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+                  >
+                    Open task ›
                   </button>
                 )}
               </>
@@ -417,7 +446,7 @@ const Stamp: React.FC<{ id: string; reviewer: string }> = ({ id, reviewer }) => 
 };
 
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel, jiraOrigins = [], lineNotes, onOpenChat }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel, jiraOrigins = [], lineNotes, onOpenChat, recipients, onOpenTask }) => {
   const [card, setCard] = useState<Review>(given);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(() => Date.now());
@@ -437,6 +466,32 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
     return () => window.clearInterval(t);
   }, [undoing]);
 
+  // Fix it "Send to…" (#609, design §1–§6): the card's list and pick, and its one picker.
+  const phone = useMedia(SEND_TO_PHONE);
+  const sentToChosen = card.findings.some((f) => !!f.sent_to_id);
+  const { st, picker, say } = useSendTo(given.id, sample ? undefined : recipients, given.repo_name ?? given.repo, phone, sentToChosen);
+  // §5: a chosen bot deleted in the Undo window comes back from the server (a card update) as an open
+  // finding with a send_error: refetch, so a pick that's gone falls back to the default.
+  const errKey = given.findings.filter((f) => f.state === 'open' && f.send_error).map((f) => `${f.id}:${f.send_error}`).join('|');
+  const lastErr = useRef(errKey);
+  useEffect(() => {
+    if (errKey && errKey !== lastErr.current) st?.refresh();
+    lastErr.current = errKey;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [errKey]);
+
+  /** One tap to the default; a pick adds `to`, and so does every press once the picker has been shown (N1);
+   * no default and no pick opens the picker instead (§3). */
+  const fix = (f: DevFinding, el: HTMLElement) => {
+    const r = st?.load.s === 'ready' ? st.load.r : null;
+    if (st && r && r.bots.length > 0 && !r.default && !st.pick) {
+      st.open(el);
+      return;
+    }
+    const to = st ? toFor(r, st.pick, st.pinned) : undefined;
+    void act(f, to ? { action: 'fix', to } : { action: 'fix' });
+  };
+
   const act = async (f: DevFinding, a: FindingAction) => {
     if (busy) return;
     setBusy(f.id);
@@ -445,7 +500,13 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       setTick(Date.now());
     } catch (err) {
       if (a.action === 'dismiss') throw err;
-      const msg = err instanceof Error ? err.message : 'it didn’t go through';
+      const bad = (err as { code?: unknown } | null)?.code === 'bad_recipient';
+      let msg = err instanceof Error ? err.message : 'it didn’t go through';
+      if (bad) {
+        // §5: name the picked bot from the cached list, then refetch and fall back to the default.
+        msg = badRecipientFix(st?.pick?.name ?? null).replace(/^Couldn’t send it: /, '');
+        st?.reset();
+      }
       setCard((c) => ({
         ...c,
         findings: c.findings.map((x) => (x.id === f.id ? { ...x, send_error: msg } : x)),
@@ -589,6 +650,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
           headSha={card.head_sha}
           prUrl={card.links.pr ?? null}
           onOpenChat={onOpenChat}
+          sendTo={st}
         />
       )}
 
@@ -631,7 +693,21 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
 
       {/* 3. Intent, or Matches the ticket (0.7.6) */}
       {ticketMatches && (
-        <TicketMatches matches={ticketMatches} now={now} origins={jiraOrigins} lead={author?.name ?? null} busy={busy !== null} act={act} />
+        <TicketMatches
+          matches={ticketMatches}
+          now={now}
+          origins={jiraOrigins}
+          lead={author?.name ?? null}
+          busy={busy !== null}
+          act={act}
+          onFix={st ? fix : undefined}
+          showSendError={!st || (st.load.s === 'ready' && st.load.r.bots.length > 0)}
+          goesTo={
+            st && ticketMatches.items.some((it) => itemFinding(it)?.state === 'open') ? (
+              <GoesTo size="sm" load={st.load} pick={st.pick} phone={st.phone} expanded={!!st.anchor && st.anchor.dataset.goesFor === 'matches'} onOpen={(el) => { el.dataset.goesFor = 'matches'; st.open(el); }} onRetry={st.retry} />
+            ) : null
+          }
+        />
       )}
       {card.intent && !ticketMatches && (
         <section className="mt-4" aria-label="Did it do what was asked?">
@@ -718,7 +794,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
         ) : (
           <ul role="list" className="space-y-1.5">
             {listed.map((f) => (
-              <FindingRow key={f.id} f={f} author={author?.name ?? null} now={now} busy={busy !== null} act={act} />
+              <FindingRow key={f.id} f={f} author={author?.name ?? null} now={now} busy={busy !== null} act={act} st={st} onFix={st ? fix : undefined} onOpenTask={sample ? undefined : onOpenTask} />
             ))}
           </ul>
         )}
@@ -764,6 +840,12 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
         onPost={() => void post()}
       />
       )}
+      {st && (
+        <p className="sr-only" aria-live="polite" data-send-to-say>
+          {say}
+        </p>
+      )}
+      {picker}
     </article>
   );
 };
