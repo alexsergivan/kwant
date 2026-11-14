@@ -83,7 +83,7 @@ import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, forgetLastRuns, resetTurns, turnEnded, turnRunsOn, turnStarted } from './kwantActivity';
-import { setBadgeBots, setBadgeEngines } from './modelBadgeData';
+import { setBadgeBots, setBadgeEngines, setBadgeProfiles } from './modelBadgeData';
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
@@ -3771,6 +3771,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     forgetLastRuns();
   }, [kwants]);
   useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
+  useEffect(() => setBadgeProfiles(profiles), [profiles]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant

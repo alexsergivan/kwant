@@ -9,6 +9,7 @@ pub mod mcp_routes;
 pub mod mcp_runtime;
 pub mod profile_routes;
 pub mod profile_turn;
+pub mod account_usage;
 pub mod engine_routes;
 pub mod engine_login;
 pub mod auth;
@@ -258,6 +259,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
         .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))
         .route("/api/profiles/:id/check", post(profile_routes::check))
+        .route("/api/profiles/:id/usage", post(profile_routes::usage))
         .route("/api/profiles/:id/login", post(profile_routes::start_login))
         .route(
             "/api/profiles/:id/login/:flow_id",
@@ -309,8 +311,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
         .route("/api/approvals/:id/retry", post(routes::retry_expired_approval))
         .route("/api/spaces/:id/approvals", get(approval_modes::get_space).put(approval_modes::put_space))
-        .route("/api/spaces/:id/docs", get(space_docs::list))
+        .route("/api/spaces/:id/docs", get(space_docs::list).post(space_docs::upload))
         .route("/api/spaces/:id/docs/cite", post(space_docs::cite))
+        .route("/api/spaces/:id/docs/page", get(space_docs::page))
+        .route("/api/spaces/:id/docs/:name", delete(space_docs::remove))
         .route("/api/spaces/:id/dev_mode", get(dev::routes::get_mode).put(dev::routes::put_mode))
         .route("/api/spaces/:id/dev_mode/check", post(dev::routes::check))
         .route("/api/spaces/:id/dev_mode/seen", post(dev::routes::desk_seen))
@@ -535,6 +539,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/watch-checks/:id", get(missions::watch::get_check))
         .route("/api/graph", get(missions::graph::loose_graph))
         .route("/api/tasks", get(missions::routes::list_tasks).post(missions::routes::create_task))
+        .route("/api/tasks/receipts.csv", get(missions::receipts::receipts_csv))
         .route("/api/tasks/:id", get(missions::routes::get_task).patch(missions::routes::patch_task))
         .route("/api/tasks/:id/verify", post(missions::routes::verify_task))
         .route("/api/tasks/:id/reject", post(missions::routes::reject_task))

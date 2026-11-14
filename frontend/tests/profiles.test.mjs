@@ -124,3 +124,94 @@ test('a kwant works until every turn it started has ended, whatever the outcome'
   activity.turnEnded('k1', 'y');
   assert.deepEqual(seen, [true, false, true, false, true, false]);
 });
+
+// ---- account-usage: 5-hour and weekly limits on Claude/Codex sign-ins (design.md §3) ----
+
+const at = (d, h, m = 0) => new Date(2026, 10, d, h, m); // local time, Nov 2026 (13th is a Friday)
+const clock = (d) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const wd = (d) => d.toLocaleDateString(undefined, { weekday: 'short' });
+const usage = (fiveUsed, weekUsed, over = {}) => ({
+  checked_at: at(13, 20, 31).toISOString(),
+  source: 'turn',
+  status: 'ok',
+  windows: [
+    { kind: 'weekly', used_pct: weekUsed, resets_at: at(18, 0, 59).toISOString() },
+    { kind: 'five_hour', used_pct: fiveUsed, resets_at: at(13, 22, 29).toISOString() },
+  ],
+  ...over,
+});
+const NOW = at(13, 20, 32).getTime();
+
+test('usageRows: % left, 5-hour first, reset today vs. within the week vs. later', () => {
+  const rows = profiles.usageRows(profile({ usage: usage(7, 56) }), NOW);
+  assert.deepEqual(rows.map((r) => [r.label, r.left, r.leftText, r.tone]), [
+    ['5-hour', 93, '93% left', 'ok'],
+    ['Weekly', 44, '44% left', 'ok'],
+  ]);
+  assert.equal(rows[0].reset, `resets ${clock(at(13, 22, 29))}`);
+  assert.equal(rows[1].reset, `resets ${wd(at(18, 0, 59))} ${clock(at(18, 0, 59))}`); // "resets Wed 00:59"
+  const later = profiles.usageRows(profile({ usage: usage(7, 56, { windows: [{ kind: 'weekly', used_pct: 1, resets_at: at(20, 9).toISOString() }] }) }), NOW);
+  assert.equal(later[0].reset, `resets ${at(20, 9).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`);
+  assert.equal(profiles.usageRows(profile({ usage: usage(7, 56, { windows: [{ kind: 'five_hour', used_pct: 7, resets_at: null }] }) }), NOW)[0].reset, null);
+});
+
+test('usageRows: amber below 20% left, out at 0, clamped', () => {
+  const tones = (u5, uw) => profiles.usageRows(profile({ usage: usage(u5, uw) }), NOW).map((r) => r.tone);
+  assert.deepEqual(tones(80, 81), ['ok', 'low']); // 20% left is not low; 19% is
+  assert.deepEqual(tones(100, 130), ['out', 'out']);
+  assert.equal(profiles.usageRows(profile({ usage: usage(-5, 0) }), NOW)[0].left, 100);
+  assert.equal(profiles.usageRows(profile({ usage: usage(12.4, 0) }), NOW)[0].leftText, '88% left');
+});
+
+test('usageRows: a reset that has passed shows "reset at …" with no %', () => {
+  const [five, week] = profiles.usageRows(profile({ usage: usage(97, 10) }), at(13, 23, 0).getTime());
+  assert.deepEqual([five.left, five.leftText, five.tone], [null, null, 'reset']);
+  assert.equal(five.reset, `reset at ${clock(at(13, 22, 29))}`);
+  assert.equal(week.tone, 'ok');
+  const [next] = profiles.usageRows(profile({ usage: usage(97, 10) }), at(14, 9, 0).getTime());
+  assert.equal(next.reset, `reset at ${wd(at(13, 22, 29))} ${clock(at(13, 22, 29))}`);
+});
+
+test('usageRows: nothing for API keys, Custom API, Grok, or never read', () => {
+  assert.deepEqual(profiles.usageRows(profile({ kind: 'api_key', usage: usage(7, 56) }), NOW), []);
+  assert.deepEqual(profiles.usageRows(profile({ engine: 'custom', kind: 'custom_api', usage: usage(7, 56) }), NOW), []);
+  assert.deepEqual(profiles.usageRows(profile({ engine: 'grok', usage: usage(7, 56) }), NOW), []);
+  assert.deepEqual(profiles.usageRows(profile({ usage: null }), NOW), []);
+  assert.deepEqual(profiles.usageRows(profile({}), NOW), []);
+  assert.equal(profiles.usageRows(profile({ engine: 'codex', kind: 'system', usage: usage(7, 56) }), NOW).length, 2);
+});
+
+test('usageCheckedText: the "checked … ago" wording', () => {
+  const t = (s) => profiles.usageCheckedText({ checked_at: new Date(NOW - s * 1000).toISOString() }, NOW);
+  assert.equal(t(10), 'checked just now');
+  assert.equal(t(60), 'checked 1 min ago');
+  assert.equal(t(4 * 60 + 30), 'checked 4 min ago');
+  assert.equal(t(59 * 60), 'checked 59 min ago');
+  assert.equal(t(6 * 3600 + 1200), 'checked 6 h ago');
+  assert.equal(profiles.usageCheckedText({ checked_at: at(12, 9).toISOString() }, NOW), 'checked yesterday');
+  assert.equal(profiles.usageCheckedText({ checked_at: at(11, 9).toISOString() }, NOW), `checked ${at(11, 9).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`);
+  assert.equal(profiles.usageCheckedText(null, NOW), null);
+  assert.equal(profiles.usageCheckedText({ checked_at: 'nope' }, NOW), null);
+});
+
+test('usageStale over 60 min, and Check now waits 60 s after a read', () => {
+  const ago = (s) => ({ checked_at: new Date(NOW - s * 1000).toISOString() });
+  assert.equal(profiles.usageStale(ago(3600), NOW), false);
+  assert.equal(profiles.usageStale(ago(3601), NOW), true);
+  assert.equal(profiles.usageStale(null, NOW), false);
+  assert.equal(profiles.usageCoolingDown(ago(30), NOW), true);
+  assert.equal(profiles.usageCoolingDown(ago(60), NOW), false);
+  assert.equal(profiles.usageCoolingDown(null, NOW), false);
+});
+
+test('usageSummary: the badge hover line (design §5)', () => {
+  const sum = (u, now = NOW, name) => profiles.usageSummary(profile({ usage: u }), now, name);
+  assert.deepEqual(sum(usage(7, 56)), { text: '5-hour 93% left · Weekly 44% left', low: false });
+  assert.deepEqual(sum(usage(88, 56)), { text: `5-hour 12% left, resets ${clock(at(13, 22, 29))} · Weekly 44% left`, low: true });
+  assert.equal(sum(usage(100, 69)).text, `5-hour 0% left, resets ${clock(at(13, 22, 29))} · Weekly 31% left`);
+  assert.equal(sum(usage(7, 56), NOW, 'Work').text, 'Work · 5-hour 93% left · Weekly 44% left');
+  // Stale: the reset window drops out and the age is added; both reset: no line.
+  assert.equal(sum(usage(7, 56), at(14, 3, 0).getTime()).text, 'Weekly 44% left · checked 6 h ago');
+  assert.equal(sum(usage(7, 56), at(19, 3, 0).getTime()), null);
+  assert.equal(profiles.usageSummary(profile({ kind: 'api_key', usage: usage(7, 56) }), NOW), null);
+});

@@ -3195,7 +3195,8 @@ async fn run_kwant_turn_inner(
         }
         // 10c: a space with its own documents tells the bot how to quote them with the word-for-word
         // check (the web cite call lives in the browser block, which doesn't know the space)
-        if !opts.no_tools && !opts.fresh_eyes {
+        // (QA F1: chat, routine and hand-off turns only, the allow-list tool notes use)
+        if !opts.no_tools && !opts.fresh_eyes && super::tool_notes::wants(opts.purpose.as_deref()) {
             let space = crate::db::spaces::SpaceId::new(&target_kwant.space_id);
             lessons.push_str(&super::space_docs::prompt_block(state, &space).await);
         }
@@ -3693,6 +3694,12 @@ async fn run_kwant_turn_inner(
                 break;
             }
             let result = driver_task.await;
+            // The account's 5-hour/weekly windows, when the engine reported them (refused turns too)
+            if let (Some(p), Ok(Ok(out))) = (profile, &result) {
+                if let Some(reading) = out.usage_windows.clone() {
+                    super::account_usage::record(state, p, reading, "turn").await;
+                }
+            }
             // Isolated Claude didn't start, or hit its request cap: the notice is the turn's end,
             // saved like a stall (a kwant message with meta), never another account or this computer
             if let Ok(Ok(out)) = &result {
@@ -3783,7 +3790,7 @@ async fn run_kwant_turn_inner(
             }
             if let Some(p) = profile {
                 if had_state.contains_key(&p.id) && matches!(result, Ok(Ok(_))) {
-                    let _ = state.db.clear_profile_state(&p.id).await;
+                    let _ = state.db.clear_profile_failure(&p.id).await;
                 }
             }
             // Sent once the failure is saved, so the chat it refreshes already shows it
