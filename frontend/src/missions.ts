@@ -1521,8 +1521,9 @@ export const safeHttps = (url: string | null | undefined): string | null => {
 // ---------------------------------------------------------------------------
 // Activity
 
+const QUIET_EVENTS = new Set(['lessons_held_out', 'audit_fresh_eyes']);
 /** Events the Activity list leaves out: they have no text for the person. */
-export const isQuietEvent = (e: Pick<TaskEvent, 'kind'>): boolean => e.kind === 'lessons_held_out';
+export const isQuietEvent = (e: Pick<TaskEvent, 'kind'>): boolean => QUIET_EVENTS.has(e.kind);
 
 /** One plain line per event for the activity list. */
 export function eventText(e: TaskEvent, names: Record<string, string> = {}): string {
