@@ -55,6 +55,7 @@ fn ctx(dir: &std::path::Path, approver: Arc<dyn ToolApprover>) -> McpTurnContext
         max_tool_iterations: 8,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     }
 }
 

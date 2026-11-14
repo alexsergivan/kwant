@@ -168,6 +168,7 @@ pub fn recent_turns(history: &[Message], prompt: &str) -> (Vec<(String, String)>
     }
     let label = |m: &Message| match crate::drivers::from_agent(m) {
         Some(agent) => format!("{} (agent)", crate::drivers::frame_safe_name(&agent)),
+        None if crate::drivers::from_customer(m).is_some() => format!("{} (customer)", crate::drivers::frame_safe_name(&crate::drivers::from_customer(m).unwrap_or_default())),
         None if is_persons(m) => "person".to_string(),
         None if m.sender_role == "user" => "a bot".to_string(),
         None => m.sender_id.clone(),

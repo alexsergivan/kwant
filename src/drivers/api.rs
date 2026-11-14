@@ -269,9 +269,10 @@ fn summary_request(bot: &str, earlier: Option<&str>, messages: &[crate::db::mode
             "kwant" if m.sender_id == bot => format!("{bot} (you)"),
             "kwant" => m.sender_id.clone(),
             "system" => "kwnt notice".into(),
-            _ => match super::from_agent(m) {
-                Some(agent) => format!("Outside agent {} (not the person)", agent.replace(['[', ']', '\n', '\r'], " ")),
-                None => "Person".into(),
+            _ => match (super::from_agent(m), super::from_customer(m)) {
+                (_, Some(customer)) => format!("Customer {} (an outside person, not the person)", customer.replace(['[', ']', '\n', '\r'], " ")),
+                (Some(agent), None) => format!("Outside agent {} (not the person)", agent.replace(['[', ']', '\n', '\r'], " ")),
+                (None, None) => "Person".into(),
             },
         };
         let text = crate::mcp::truncate_text(&m.text, SUMMARY_MESSAGE_MAX_CHARS);
@@ -1871,6 +1872,7 @@ mod tests {
             max_tool_iterations: 4,
             approvals: crate::mcp::Approvals::Ask,
             records: Default::default(),
+            kwnt_only: false,
         });
         match driver.stream_turn(input, tx).await {
             Err(DriverError::Execution(why)) => assert!(why.contains("MCP servers"), "{why}"),
@@ -2036,6 +2038,7 @@ mod tests {
                 max_tool_iterations: 4,
                 approvals: crate::mcp::Approvals::Off,
                 records: Default::default(),
+                kwnt_only: false,
             });
             input.delivery = Some(crate::router::delivery::keyword_plan(complaint, &[]));
             driver.stream_turn(input, tx).await.unwrap();

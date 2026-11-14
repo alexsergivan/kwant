@@ -462,6 +462,20 @@ pub fn no_tools_refusal(tool_kind: &str, input: &TurnInput) -> Option<String> {
     }
 }
 
+/// B1: only claude's launch is checked to hold a customer's turn ([`McpTurnContext::kwnt_only`])
+/// to kwnt's own tools, every call carded. codex and grok run that turn with no tools at all and
+/// answer in text; any other CLI refuses it (see [`no_tools_refusal`]).
+///
+/// [`McpTurnContext::kwnt_only`]: crate::mcp::McpTurnContext::kwnt_only
+pub fn kwnt_only_without_tools(tool_kind: &str, mut input: TurnInput) -> TurnInput {
+    if tool_kind != "claude" && input.mcp.as_ref().is_some_and(|c| c.kwnt_only) {
+        input.drop_app_tools();
+        input.mcp = None;
+        input.no_tools = true;
+    }
+    input
+}
+
 /// Why this driver won't run a read-only turn ([`TurnInput::read_only`]), or `None` when it runs
 /// it read-only: claude through its permission hook (so it needs the turn's MCP context, whose
 /// approver holds every call), codex in its own read-only sandbox. No other CLI can be held to
@@ -585,8 +599,8 @@ pub fn build_cli_prompt(input: &TurnInput) -> String {
             parts.push(super::peer_message(&msg.sender_id, &msg.text));
             continue;
         }
-        // A connected outside agent's message is framed too: it isn't the person's
-        if super::from_agent(msg).is_some() {
+        // A connected outside agent's or a customer's message is framed too: it isn't the person's
+        if super::from_outsider(msg) {
             parts.push(super::user_history_text(msg));
             continue;
         }
@@ -1501,6 +1515,7 @@ impl Driver for CliDriver {
         event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<TurnOutput, DriverError> {
         let start = Instant::now();
+        let input = kwnt_only_without_tools(&self.tool_kind, input);
         if let Some(why) = no_tools_refusal(&self.tool_kind, &input).or_else(|| read_only_refusal(&self.tool_kind, &input)) {
             tracing::warn!(cli = %self.tool_kind, "{why}");
             return Err(DriverError::Execution(why));
@@ -1764,8 +1779,10 @@ impl Driver for CliDriver {
                 }
                 // kwnt's routines and teammates, never claude's own scheduler or sessions
                 cmd.args(claude_disallowed_args());
-                if input.no_tools {
-                    // No built-in tools or skills; no MCP server either, as `input.mcp` is None
+                if input.no_tools || input.mcp.as_ref().is_some_and(|c| c.kwnt_only) {
+                    // No built-in tools or skills; no MCP server either, as `input.mcp` is None.
+                    // B1: a customer's turn keeps only kwnt's own servers (`--strict-mcp-config`
+                    // above), each call carded, so allow rules in claude's settings match nothing
                     cmd.args(CLAUDE_NO_TOOLS_ARGS);
                 }
                 if let Some(ctx) = &input.mcp {
@@ -2649,6 +2666,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 max_tool_iterations: 4,
                 approvals: crate::mcp::Approvals::Ask,
                 records: Default::default(),
+                kwnt_only: false,
             }
         }
 
@@ -2797,6 +2815,27 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             with_mcp.mcp = Some(mcp_context(tmp.path()));
             for kind in ["claude", "codex", "grok"] {
                 assert!(no_tools_refusal(kind, &with_mcp).unwrap().contains("MCP servers"), "{kind}");
+            }
+        }
+
+        /// B1: a customer's turn keeps kwnt's tools on claude only; codex, grok and the rest get
+        /// none (codex and grok then run it with no tools, the rest refuse it)
+        #[test]
+        fn a_customer_turn_runs_with_no_tools_on_every_cli_but_claude() {
+            let tmp = tempfile::tempdir().unwrap();
+            let customer = || TurnInput { mcp: Some(crate::mcp::McpTurnContext { kwnt_only: true, ..mcp_context(tmp.path()) }), ..turn(false) };
+            let claude = kwnt_only_without_tools("claude", customer());
+            assert!(claude.mcp.is_some() && !claude.no_tools);
+            for kind in ["codex", "grok", "gemini"] {
+                let t = kwnt_only_without_tools(kind, customer());
+                assert!(t.mcp.is_none() && t.no_tools, "{kind}");
+                assert_eq!(no_tools_refusal(kind, &t).is_some(), kind == "gemini", "{kind}");
+            }
+            // The person's own turns keep their tools on every CLI
+            let mine = || TurnInput { mcp: Some(mcp_context(tmp.path())), ..turn(false) };
+            for kind in ["claude", "codex", "grok"] {
+                let t = kwnt_only_without_tools(kind, mine());
+                assert!(t.mcp.is_some() && !t.no_tools, "{kind}");
             }
         }
 

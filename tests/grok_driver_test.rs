@@ -332,6 +332,7 @@ fn mcp_ctx(dir: &Path) -> McpTurnContext {
         max_tool_iterations: 8,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     }
 }
 

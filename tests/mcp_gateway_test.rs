@@ -71,6 +71,7 @@ async fn register(state: &AppState, token: &str, approver: Arc<dyn ToolApprover>
         max_tool_iterations: 8,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     };
     state.mcp_sessions.lock().await.insert(
         token.into(),
@@ -263,6 +264,7 @@ async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
         max_tool_iterations: 8,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     };
     state
         .mcp_sessions

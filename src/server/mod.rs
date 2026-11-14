@@ -423,6 +423,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/connections/telegram/unpair", post(telegram::routes::unpair))
         .route("/api/connections/telegram/unpair/undo", post(telegram::routes::undo_unpair))
         .route("/api/connections/telegram/test", post(telegram::routes::test))
+        .route(
+            "/api/connections/telegram/customers",
+            get(telegram::customers::get).patch(telegram::customers::patch).delete(telegram::customers::delete),
+        )
+        .route("/api/connections/telegram/customers/token", put(telegram::customers::put_token))
+        .route("/api/connections/telegram/customers/chats/:chat_id/reply", post(telegram::customers::reply))
         .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/connections/composio/switch", post(connections::switch_composio))
         .route("/api/connections/composio/key", put(connections::replace_composio_key))
