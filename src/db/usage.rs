@@ -94,6 +94,16 @@ pub struct DailyUsage {
     pub totals: UsageTotals,
 }
 
+/// One model's calls over a window, for Settings → Usage "By model".
+#[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
+pub struct ModelTotals {
+    /// The model id the call reported, e.g. `claude-opus-5-5`.
+    pub model: String,
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub totals: UsageTotals,
+}
+
 impl Database {
     pub(super) async fn migrate_usage(&self) -> Result<(), DbError> {
         for stmt in [
@@ -192,6 +202,17 @@ impl Database {
         .fetch_all(&self.pool)
         .await?)
     }
+
+    /// Every bot's totals per model since `since`: highest cost first, then most fresh tokens.
+    pub async fn usage_by_model(&self, since: DateTime<Utc>) -> Result<Vec<ModelTotals>, DbError> {
+        Ok(sqlx::query_as(&format!(
+            "SELECT model, {SUMS} FROM model_usage WHERE created_at >= ? GROUP BY model \
+             ORDER BY COALESCE(SUM(cost_usd), -1) DESC, SUM(fresh_input) + SUM(cache_write) + SUM(output) DESC, model"
+        ))
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?)
+    }
 }
 
 #[cfg(test)]
@@ -236,5 +257,50 @@ mod tests {
         let later = Utc::now() + chrono::Duration::minutes(1);
         assert_eq!(db.usage_totals("k1", Some(later)).await.unwrap().0, UsageTotals::default());
         assert_eq!(db.usage_totals("nobody", None).await.unwrap().0.calls, 0);
+    }
+
+    #[tokio::test]
+    async fn usage_is_summed_per_model_over_the_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let call = |model: &str, output, cost_usd| NewUsage {
+            kwant_id: "k1".into(),
+            context_id: "c".into(),
+            purpose: PURPOSE_REPLY,
+            model: model.into(),
+            fresh_input: 10,
+            output,
+            reported: true,
+            cost_usd,
+            ..Default::default()
+        };
+        db.record_usage(&call("gpt-5", 5000, None)).await.unwrap();
+        db.record_usage(&call("claude-opus-5-5", 100, Some(0.25))).await.unwrap();
+        db.record_usage(&call("claude-opus-5-5", 200, Some(0.5))).await.unwrap();
+        db.record_usage(&call("claude-haiku-5-5", 50, Some(0.01))).await.unwrap();
+        // Two days back: inside a 7-day window, outside one that starts today.
+        sqlx::query("UPDATE model_usage SET created_at = ? WHERE model = 'claude-haiku-5-5'")
+            .bind(Utc::now() - chrono::Duration::days(2))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let week = db.usage_by_model(Utc::now() - chrono::Duration::days(7)).await.unwrap();
+        let got: Vec<_> = week.iter().map(|m| (m.model.as_str(), m.totals.calls, m.totals.output_tokens, m.totals.cost_usd)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("claude-opus-5-5", 2, 300, Some(0.75)),
+                ("claude-haiku-5-5", 1, 50, Some(0.01)),
+                ("gpt-5", 1, 5000, None),
+            ],
+            "highest cost first, models without a cost last"
+        );
+
+        let today = db.usage_by_model(Utc::now() - chrono::Duration::hours(1)).await.unwrap();
+        assert_eq!(today.iter().map(|m| m.model.as_str()).collect::<Vec<_>>(), vec!["claude-opus-5-5", "gpt-5"]);
+        // The per-day rows still cover both days.
+        assert_eq!(db.daily_usage(Utc::now() - chrono::Duration::days(7)).await.unwrap().len(), 2);
+        assert!(db.usage_by_model(Utc::now() + chrono::Duration::minutes(1)).await.unwrap().is_empty());
     }
 }

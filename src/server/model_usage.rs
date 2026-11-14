@@ -53,13 +53,14 @@ pub struct DailyQuery {
     pub days: Option<i64>,
 }
 
-/// `GET /api/usage/daily`: every bot's tokens and cost per UTC day, newest first, for
-/// Settings → Usage. Covers CLI and API-key bots alike.
+/// `GET /api/usage/daily`: every bot's tokens and cost per UTC day, newest first, and the same
+/// window's totals per model (`models`), for Settings → Usage. Covers CLI and API-key bots alike.
 pub async fn get_daily(State(state): State<AppState>, Query(q): Query<DailyQuery>) -> Response {
     let days = q.days.unwrap_or(14).clamp(1, 90);
     let since = (Utc::now() - chrono::Duration::days(days - 1)).date_naive().and_hms_opt(0, 0, 0).map(|t| t.and_utc());
-    match state.db.daily_usage(since.unwrap_or(DateTime::<Utc>::MIN_UTC)).await {
-        Ok(rows) => Json(json!({ "days": days, "rows": rows })).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let since = since.unwrap_or(DateTime::<Utc>::MIN_UTC);
+    match tokio::join!(state.db.daily_usage(since), state.db.usage_by_model(since)) {
+        (Ok(rows), Ok(models)) => Json(json!({ "days": days, "rows": rows, "models": models })).into_response(),
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }

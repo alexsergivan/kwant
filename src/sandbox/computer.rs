@@ -784,15 +784,21 @@ impl Launched {
         self.exit.get().cloned()
     }
 
-    /// The error for a Chrome that closed before it answered: in plain words first, with its last
-    /// stderr line, then up to its last three lines.
+    /// The error for a Chrome that closed before it answered: in plain words first, with the stderr
+    /// line that most likely says why (see [`headline_line`]), then up to three of its other last
+    /// lines. The headline is not listed again; with no other lines there is no list.
     pub fn closed_message(&self, how: &ChildExit) -> String {
         let lines = self.stderr.as_deref().map(stderr_tail).unwrap_or_default();
-        let Some(last) = lines.last() else {
+        let Some(headline) = headline_line(&lines) else {
             return format!("kwant's Chrome closed right after starting ({}) and printed no error.", how.describe());
         };
-        let mut text = format!("kwant's Chrome closed right after starting: {last}\n\nIts last lines ({}):", how.describe());
-        for line in &lines {
+        let others: Vec<&String> = lines.iter().filter(|line| *line != headline).collect();
+        let listed = &others[others.len().saturating_sub(LISTED_LINES)..];
+        if listed.is_empty() {
+            return format!("kwant's Chrome closed right after starting: {headline} ({})", how.describe());
+        }
+        let mut text = format!("kwant's Chrome closed right after starting: {headline}\n\nIts last lines ({}):", how.describe());
+        for line in listed {
             text.push('\n');
             text.push_str(line);
         }
@@ -800,7 +806,35 @@ impl Launched {
     }
 }
 
-/// The last (up to) three non-blank lines of the stderr file at `path`, each cut to 300 characters.
+/// How many of Chrome's last stderr lines [`stderr_tail`] keeps for the headline to be picked from.
+const TAIL_LINES: usize = 8;
+
+/// How many lines besides the headline [`Launched::closed_message`] lists.
+const LISTED_LINES: usize = 3;
+
+/// Chrome prints dbus failures (`Failed to connect to the bus: ...`) on most Linux machines,
+/// often after the line that says why it closed, and they almost never are the reason.
+fn is_dbus_noise(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    line.contains("dbus") || line.contains("failed to connect to the bus")
+}
+
+/// Chrome's own `[pid:tid:...:ERROR:file.cc(n)]` / `:FATAL:` lines, and plain ones such as the
+/// loader's "error while loading shared libraries".
+fn names_an_error(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    line.contains("error") || line.contains("fatal")
+}
+
+/// The line that most likely says why Chrome closed: the last error line that is not dbus noise,
+/// else the last line that is not dbus noise, else the last line. None when there are no lines.
+fn headline_line(lines: &[String]) -> Option<&String> {
+    let clean = || lines.iter().rev().filter(|line| !is_dbus_noise(line));
+    clean().find(|line| names_an_error(line)).or_else(|| clean().next()).or_else(|| lines.last())
+}
+
+/// The last (up to) [`TAIL_LINES`] non-blank lines of the stderr file at `path`, each cut to 300
+/// characters.
 pub fn stderr_tail(path: &Path) -> Vec<String> {
     use std::io::{Read, Seek, SeekFrom};
     let Ok(mut file) = std::fs::File::open(path) else { return Vec::new() };
@@ -818,7 +852,7 @@ pub fn stderr_tail(path: &Path) -> Vec<String> {
             None => line.to_string(),
         })
         .collect();
-    lines[lines.len().saturating_sub(3)..].to_vec()
+    lines[lines.len().saturating_sub(TAIL_LINES)..].to_vec()
 }
 
 /// Waits for kwant's Chrome to end and records how, never killing it. Looks often while Chrome
@@ -1477,7 +1511,7 @@ mod tests {
     async fn a_chrome_that_closes_at_once_stops_the_wait_with_its_last_lines() {
         let dir = tempfile::tempdir().unwrap();
         let stderr = dir.path().join(STDERR_FILE);
-        std::fs::write(&stderr, "one\n\ntwo\nthree\n  \nlibnss3.so: cannot open shared object file\n\n").unwrap();
+        std::fs::write(&stderr, "zero\none\n\ntwo\nthree\n  \nlibnss3.so: cannot open shared object file\n\n").unwrap();
         let started = std::time::Instant::now();
         let timing = LaunchTiming { start: Duration::from_secs(20), ..fast() };
         let error = ensure_chrome_with(dir.path(), || async { None }, || {
@@ -1486,9 +1520,97 @@ mod tests {
             Ok(launched)
         }, timing).await.unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
-        assert!(error.starts_with("kwant's Chrome closed right after starting: libnss3.so: cannot open shared object file\n"), "{error}");
-        assert!(error.contains("(exit code 127):\ntwo\nthree\nlibnss3.so"), "{error}");
-        assert!(!error.contains("one"), "only the last three lines: {error}");
+        assert_eq!(
+            error,
+            "kwant's Chrome closed right after starting: libnss3.so: cannot open shared object file\n\n\
+             Its last lines (exit code 127):\none\ntwo\nthree"
+        );
+    }
+
+    /// The headline of a Chrome that closed, from these stderr lines.
+    fn closed_with(stderr: &str, how: ChildExit) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STDERR_FILE);
+        std::fs::write(&path, stderr).unwrap();
+        let launched = Launched::tracked(Some(path));
+        launched.closed(how.clone());
+        launched.closed_message(&how)
+    }
+
+    /// Real Chrome with no display (Rigel's #557 QA): the cause is an ERROR line, and dbus lines
+    /// printed after it are not the headline. The cause is said once, not again in the list.
+    #[tokio::test]
+    async fn the_headline_is_the_last_error_line_not_dbus_noise_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let stderr = dir.path().join(STDERR_FILE);
+        std::fs::write(&stderr, "\
+[9:9:1113/054200.101:WARNING:chrome_main_linux.cc(80)] Read channel stable from /opt/chromium/CHROME_VERSION_EXTRA
+[9:9:1113/054200.102:ERROR:ozone_platform_x11.cc(240)] Missing X server or $DISPLAY
+[9:30:1113/054200.103:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type
+[9:31:1113/054200.104:ERROR:object_proxy.cc(576)] Failed to call method: org.freedesktop.DBus.Properties.Get
+").unwrap();
+        let error = ensure_chrome_with(dir.path(), || async { None }, || {
+            let launched = Launched::tracked(Some(stderr.clone()));
+            launched.closed(ChildExit::Code(1));
+            Ok(launched)
+        }, fast()).await.unwrap_err();
+        assert!(
+            error.starts_with("kwant's Chrome closed right after starting: [9:9:1113/054200.102:ERROR:ozone_platform_x11.cc(240)] Missing X server or $DISPLAY\n\nIts last lines (exit code 1):\n"),
+            "{error}"
+        );
+        assert_eq!(error.matches("Missing X server").count(), 1, "said once: {error}");
+        assert!(error.ends_with("Unknown address type\n[9:31:1113/054200.104:ERROR:object_proxy.cc(576)] Failed to call method: org.freedesktop.DBus.Properties.Get"), "{error}");
+        assert!(error.contains("(exit code 1):\n[9:9:1113/054200.101:WARNING"), "the other lines are listed: {error}");
+    }
+
+    /// The pick: an error line wins over a later plain line, a plain "error while loading" counts,
+    /// the cause is found further back than the three listed lines, and repeats of it aren't listed.
+    #[test]
+    fn the_headline_prefers_errors_and_looks_past_the_listed_lines() {
+        let error = closed_with("[1:1:ERROR:gpu_init.cc] GPU process isn't usable\nOpening in existing browser session.\n", ChildExit::Code(0));
+        assert_eq!(
+            error,
+            "kwant's Chrome closed right after starting: [1:1:ERROR:gpu_init.cc] GPU process isn't usable\n\n\
+             Its last lines (exit code 0):\nOpening in existing browser session."
+        );
+        let error = closed_with(
+            "[1:1:ERROR:sandbox_linux.cc] starting up\nchrome: error while loading shared libraries: libnss3.so\n",
+            ChildExit::Code(127),
+        );
+        assert!(error.starts_with("kwant's Chrome closed right after starting: chrome: error while loading shared libraries: libnss3.so\n"), "{error}");
+        let dbus = "[1:2:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address\n";
+        let error = closed_with(&format!("[1:1:FATAL:zygote_host_impl_linux.cc] No usable sandbox!\n{}", dbus.repeat(5)), ChildExit::Signal(5));
+        assert!(error.starts_with("kwant's Chrome closed right after starting: [1:1:FATAL:zygote_host_impl_linux.cc] No usable sandbox!\n"), "{error}");
+        assert_eq!(error.lines().filter(|line| line.contains("Failed to connect")).count(), 3, "at most three listed: {error}");
+        let error = closed_with("[1:1:ERROR:a.cc] same cause\nother\n[1:1:ERROR:a.cc] same cause\n", ChildExit::Code(1));
+        assert_eq!(error, "kwant's Chrome closed right after starting: [1:1:ERROR:a.cc] same cause\n\nIts last lines (exit code 1):\nother");
+    }
+
+    /// Only dbus lines: today's headline (the last line), not repeated in the list.
+    #[test]
+    fn all_dbus_lines_fall_back_to_the_last_line() {
+        let error = closed_with(
+            "Failed to connect to the bus: first\n[1:2:ERROR:bus.cc(407)] Failed to connect to the bus: second\n",
+            ChildExit::Code(1),
+        );
+        assert_eq!(
+            error,
+            "kwant's Chrome closed right after starting: [1:2:ERROR:bus.cc(407)] Failed to connect to the bus: second\n\n\
+             Its last lines (exit code 1):\nFailed to connect to the bus: first"
+        );
+    }
+
+    /// One line is the headline alone, still with how Chrome ended; blank stderr printed no error.
+    #[test]
+    fn one_line_has_no_list_and_blank_stderr_printed_no_error() {
+        assert_eq!(
+            closed_with("\n  libnss3.so: cannot open shared object file\n\n", ChildExit::Code(127)),
+            "kwant's Chrome closed right after starting: libnss3.so: cannot open shared object file (exit code 127)"
+        );
+        assert_eq!(
+            closed_with("\n   \n\n", ChildExit::Signal(6)),
+            "kwant's Chrome closed right after starting (signal 6) and printed no error."
+        );
     }
 
     /// One that printed nothing still says it closed, and how.
@@ -1531,10 +1653,10 @@ mod tests {
         text.push_str("\nlast\n");
         std::fs::write(&path, text).unwrap();
         let tail = stderr_tail(&path);
-        assert_eq!(tail.len(), 3);
-        assert_eq!(tail[0], "early line");
-        assert_eq!(tail[1], format!("{}…", "x".repeat(300)));
-        assert_eq!(tail[2], "last");
+        assert_eq!(tail.len(), TAIL_LINES);
+        assert_eq!(tail[TAIL_LINES - 3], "early line");
+        assert_eq!(tail[TAIL_LINES - 2], format!("{}…", "x".repeat(300)));
+        assert_eq!(tail[TAIL_LINES - 1], "last");
     }
 
     /// A port file left by a Chrome that is gone is removed and one fresh Chrome starts.
