@@ -1,0 +1,226 @@
+/* kwant perch: the page's styles. From Mira's reference CSS (autonomy/desktop-island/mockups/src/perch.css,
+   spec design.md). Motion: transform + opacity only. Floating perches follow the system appearance;
+   notched ones are always black. */
+@font-face { font-family: "Pixelify Sans"; src: url("pixelify-sans.woff2") format("woff2"); font-weight: 400 700; font-display: block; }
+
+.perch {
+  /* geometry: Rust sets --notch-w / --notch-h from NSScreen (design.md §2.1); 0 on floating perches */
+  --notch-w: 185px; --notch-h: 37px; --ear: 60px; --band: var(--notch-h); --wide: 460px; --cell: 2px;
+  /* dark tokens: notch Macs always; floating perches in dark appearance */
+  --bg: #120e26; --edge: rgb(255 255 255 / .10);
+  --row: #1a1538; --chip: #231d4b; --chip-hover: #2c2552; --chip-edge: rgb(184 173 255 / .22);
+  --t1: #f7f6ff; --t2: #bcb7de; --t3: #9a94c4;
+  --amber: #ffb020; --amber-ink: #1b1033; --amber-rim: transparent; --needs-head: #ffb020;
+  --violet: #b8adff; --ok: #5eead4; --bad: #fda4af;
+  --primary: linear-gradient(135deg, #6c58e0 0%, #5b47d6 100%); --on-primary: #ffffff;
+  --shadow: drop-shadow(0 10px 22px rgb(0 0 0 / .45)) drop-shadow(0 1px 2px rgb(0 0 0 / .35));
+  --focus: #b8adff;
+  --num: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, "Noto Sans", sans-serif;
+  position: relative; display: inline-block; box-sizing: border-box; color: var(--t1);
+  font: 400 12px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none;
+  filter: var(--shadow);
+  transform-origin: 50% 0;
+}
+.perch[data-shape="notch"] { --bg: #000000; --edge: transparent; --shadow: drop-shadow(0 8px 18px rgb(0 0 0 / .35)); }
+.perch[data-shape="float"] { --notch-w: 0px; --notch-h: 0px; --band: 30px; }
+@media (prefers-color-scheme: light) {
+  .perch[data-shape="float"] {
+  --bg: #ffffff; --edge: rgb(29 24 64 / .14);
+  --row: #f5f3ff; --chip: #ece9ff; --chip-hover: #e2ddff; --chip-edge: rgb(58 47 124 / .18);
+  --t1: #1d1840; --t2: #5a5383; --t3: #6b6494;
+  --amber-rim: #1b1033; --needs-head: #8f5600; --violet: #5845bd; --ok: #0f766e; --bad: #be123c;
+  --shadow: drop-shadow(0 10px 22px rgb(29 24 64 / .18)) drop-shadow(0 1px 2px rgb(29 24 64 / .14));
+  --focus: #6c58e0;
+}
+}
+
+/* ---- the shape: square top (it hangs from the top edge), stepped pixel corners at the bottom ---- */
+.perch__edge, .perch__fill { position: absolute; inset: 0; pointer-events: none;
+  clip-path: polygon(0 0, 100% 0,
+    100% calc(100% - 5 * var(--cell)), calc(100% - 1 * var(--cell)) calc(100% - 5 * var(--cell)),
+    calc(100% - 1 * var(--cell)) calc(100% - 3 * var(--cell)), calc(100% - 2 * var(--cell)) calc(100% - 3 * var(--cell)),
+    calc(100% - 2 * var(--cell)) calc(100% - 2 * var(--cell)), calc(100% - 3 * var(--cell)) calc(100% - 2 * var(--cell)),
+    calc(100% - 3 * var(--cell)) calc(100% - 1 * var(--cell)), calc(100% - 5 * var(--cell)) calc(100% - 1 * var(--cell)),
+    calc(100% - 5 * var(--cell)) 100%, calc(5 * var(--cell)) 100%,
+    calc(5 * var(--cell)) calc(100% - 1 * var(--cell)), calc(3 * var(--cell)) calc(100% - 1 * var(--cell)),
+    calc(3 * var(--cell)) calc(100% - 2 * var(--cell)), calc(2 * var(--cell)) calc(100% - 2 * var(--cell)),
+    calc(2 * var(--cell)) calc(100% - 3 * var(--cell)), calc(1 * var(--cell)) calc(100% - 3 * var(--cell)),
+    calc(1 * var(--cell)) calc(100% - 5 * var(--cell)), 0 calc(100% - 5 * var(--cell))); }
+.perch__edge { background: var(--edge); }
+.perch__fill { background: var(--bg); }
+.perch[data-shape="float"] .perch__fill { inset: 0 1px 1px; }
+.perch[data-state="peek"], .perch[data-state="expanded"] { --cell: 3px; }
+.perch > .perch__in { position: relative; }
+
+/* ---- the band: two ears around the notch (floating: the same ears, no gap) ---- */
+.perch__band { display: flex; align-items: center; height: var(--band); }
+.perch__ear { flex: none; width: var(--ear); height: 100%; display: flex; align-items: center; box-sizing: border-box; }
+.perch__ear--l { padding-left: 12px; justify-content: flex-start; }
+.perch__ear--r { padding-right: 12px; justify-content: flex-end; }
+.perch__gap { flex: 1 0 var(--notch-w); }
+.perch[data-shape="float"] .perch__gap { flex: 1 0 8px; }
+.perch[data-shape="float"][data-state="rest"] .perch__ear, .perch[data-shape="float"][data-state="celebrate"] .perch__ear { width: auto; padding-left: 10px; padding-right: 10px; }
+.perch[data-shape="float"][data-state="rest"] .perch__gap, .perch[data-shape="float"][data-state="celebrate"] .perch__gap { flex: 0 0 0; }
+
+/* faces: the working bots' own pixel creatures, 16 px, overlapping by 4 px, each bobs while it works */
+.perch__faces { display: flex; align-items: flex-end; }
+.perch__faces .kw-face { display: block; width: var(--face, 20px); height: var(--face, 20px); image-rendering: pixelated; }
+.perch[data-shape="float"] { --face: 18px; }
+.perch__faces > span { display: block; margin-left: -4px; }
+.perch__faces > span:first-child { margin-left: 0; }
+.perch__faces > span[data-working] { animation: perch-bob 1200ms steps(1, end) infinite; }
+.perch__faces > span[data-working]:nth-child(2) { animation-delay: -400ms; }
+.perch__faces > span[data-working]:nth-child(3) { animation-delay: -800ms; }
+.perch__more { margin-left: 3px; font: 700 12px/16px var(--num); color: var(--t2); font-variant-numeric: tabular-nums; }
+@keyframes perch-bob { 0% { transform: none; } 50% { transform: translateY(-2px); } }
+
+/* right ear: the amber count (needs you), the violet count (only working), or the holo check (celebrate) */
+.perch__count { min-width: 20px; height: 20px; padding: 0 5px; box-sizing: border-box; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 700 13px/20px var(--num); font-variant-numeric: tabular-nums; }
+.perch__count--needs { background: var(--amber); color: var(--amber-ink); box-shadow: inset 0 0 0 1px var(--amber-rim); }
+.perch__count--work { color: var(--violet); padding: 0 2px; }
+.perch__count[data-pop] { animation: perch-pop 160ms cubic-bezier(.34, 1.56, .64, 1) backwards; }
+
+/* holo check: the app's sticker foil (modern.css .kw-sticker-holo), 20 px square plate */
+.perch__holo { position: relative; width: 20px; height: 20px; box-sizing: border-box; border: 2px solid #fff; border-radius: 6px 4px 6px 4px;
+  background: #f4f1ff; overflow: hidden; isolation: isolate; transform: rotate(-3deg);
+  display: inline-grid; place-items: center; box-shadow: 0 1px 0 rgb(0 0 0 / .3), 0 3px 8px rgb(0 0 0 / .35);
+  animation: perch-press 160ms cubic-bezier(.2, .7, .2, 1) backwards; }
+.perch__holo::before { content: ''; position: absolute; inset: 0 -50%; z-index: 0; mix-blend-mode: multiply; opacity: .8;
+  background: linear-gradient(105deg, #ff6ec7 0%, #ffd36e 10%, #7dffb0 20%, #5ee0ff 30%, #9b7bff 40%, #ff6ec7 50%, #ffd36e 60%, #7dffb0 70%, #5ee0ff 80%, #9b7bff 90%, #ff6ec7 100%);
+  animation: perch-drift 200ms cubic-bezier(.2, .7, .2, 1) backwards; }
+.perch__holo svg { position: relative; z-index: 1; width: 12px; height: 12px; }
+@keyframes perch-press { from { transform: rotate(-3deg) scale(1.25); opacity: 0; } to { transform: rotate(-3deg); opacity: 1; } }
+@keyframes perch-drift { from { transform: translateX(-12%); } to { transform: none; } }
+@keyframes perch-pop { from { transform: scale(.4); opacity: 0; } to { transform: none; opacity: 1; } }
+/* celebrate: the finishing bot hops once (up 3 px, down), then the check stays 2.4 s */
+.perch__faces > span[data-hop] { animation: perch-hop 240ms 1 backwards; }
+@keyframes perch-hop { 0% { transform: none; } 40% { transform: translateY(-3px); } 100% { transform: none; } }
+
+/* ---- the body: peek and expanded ---- */
+.perch__body { padding: 8px 14px 16px; }
+.perch[data-shape="float"] .perch__body { padding-top: 4px; }
+.perch__item { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 8px; row-gap: 10px; align-items: center; }
+.perch__item .kw-face { width: 20px; height: 20px; display: block; image-rendering: pixelated; }
+.perch__line { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; line-height: 20px; color: var(--t2); }
+.perch__line b { font-weight: 600; color: var(--t1); display: inline-block; max-width: 40%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.perch__head .n { font: 600 12px/20px var(--num); letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; opacity: .9; }
+.perch__line bdi { unicode-bidi: isolate; }
+.perch__aside { font-size: 12px; line-height: 20px; color: var(--t3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.perch__acts { grid-column: 2 / 4; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.perch__where { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--t3); font-size: 12px; line-height: 16px; }
+.perch__note { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--t2); font-size: 12px; line-height: 16px; }
+
+.pb { box-sizing: border-box; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; flex: none;
+  display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 12px; line-height: 16px; font-weight: 600; cursor: pointer;
+  background: var(--chip); color: var(--t1); box-shadow: inset 0 0 0 1px var(--chip-edge); transition: transform 80ms ease-out; }
+.pb:hover { background: var(--chip-hover); }
+.pb:active { transform: scale(.97); }
+.pb:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pb--primary { background: var(--primary); color: var(--on-primary); box-shadow: none; }
+.pb--ghost { background: transparent; box-shadow: none; color: var(--t2); padding: 0 8px; }
+.pb--ghost:hover { background: var(--chip); color: var(--t1); }
+.pb svg { width: 13px; height: 13px; flex: none; }
+.pb--chip { border-radius: 14px; font-weight: 500; max-width: 132px; flex: 0 1 auto; min-width: 52px; padding: 0 10px; }
+.perch__acts:has(.pb--chip) { gap: 4px; }
+.perch__card .perch__acts:has(.pb--chip) { grid-column: 1 / 4; }
+.perch__acts { overflow: hidden; padding: 2px; margin: -2px; }
+.pb--chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* expanded sections */
+.perch__sec + .perch__sec { margin-top: 12px; }
+.perch__head { display: flex; align-items: baseline; gap: 6px; height: 20px; margin-bottom: 4px;
+  font: 500 12px/20px "Pixelify Sans", monospace; letter-spacing: .06em; text-transform: uppercase; color: var(--t2); }
+.perch__head--needs { color: var(--needs-head); }
+.perch__head--work { color: var(--violet); }
+.perch__card { background: var(--row); border-radius: 10px; padding: 10px; }
+.perch__card + .perch__card { margin-top: 6px; }
+.perch__row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; height: 28px; padding: 0 4px; border-radius: 8px; cursor: pointer; }
+.perch__row:hover { background: var(--row); }
+.perch__row .kw-face { width: 20px; height: 20px; display: block; image-rendering: pixelated; }
+.perch__row .perch__line bdi.t { color: var(--t2); }
+.perch__row[data-unseen] .perch__line bdi.t { color: var(--t1); font-weight: 600; }
+.perch__more-line { display: block; padding: 4px 4px 0; font-size: 12px; line-height: 20px; color: var(--t2); }
+.perch__more-line u { text-decoration: none; color: var(--violet); font-weight: 600; }
+.perch__check { font-size: 12px; line-height: 20px; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
+.perch__check--ok { color: var(--ok); } .perch__check--none { color: var(--t3); } .perch__check--bad { color: var(--bad); }
+.perch__check svg { width: 12px; height: 12px; }
+
+.perch__ask { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 4px 0 6px; border-radius: 10px; background: var(--row); box-shadow: inset 0 0 0 1px var(--chip-edge); }
+.perch__ask-who { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px 0 4px; border-radius: 7px; background: var(--chip); font-size: 12px; font-weight: 600; color: var(--t1); flex: none; max-width: 120px; }
+.perch__ask-who .kw-face { width: 16px; height: 16px; image-rendering: pixelated; }
+.perch__ask-who > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perch__ask-who svg.chev { width: 12px; height: 12px; color: var(--t3); flex: none; }
+.perch__ask input { flex: 1; min-width: 0; height: 28px; border: 0; background: transparent; color: var(--t1); font: inherit; font-size: 13px; outline: none; }
+.perch__ask input::placeholder { color: var(--t3); }
+.perch__ask .send { width: 28px; height: 28px; padding: 0; justify-content: center; }
+.perch__sent { display: flex; align-items: center; gap: 4px; padding: 6px 4px 0; font-size: 12px; color: var(--t2); }
+.perch__sent svg { width: 12px; height: 12px; color: var(--ok); }
+
+.perch__places { display: flex; gap: 6px; min-width: 0; }
+.perch__place:not(:has(.glyph)) { flex: none; }
+.perch__place[aria-current] { flex: none; }
+.perch__place { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 8px;
+  background: transparent; box-shadow: inset 0 0 0 1px var(--chip-edge); color: var(--t2); font-size: 12px; font-weight: 500; cursor: pointer; }
+.perch__place[aria-current] { background: var(--chip); color: var(--t1); box-shadow: inset 0 0 0 1px var(--violet); }
+.perch__place[data-off] { color: var(--t3); }
+.perch__place > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perch__place .n { flex: none; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 4px; background: var(--amber); color: var(--amber-ink);
+  box-shadow: inset 0 0 0 1px var(--amber-rim); font: 700 11px/16px var(--num); font-variant-numeric: tabular-nums; text-align: center; }
+.perch__place svg.glyph { width: 14px; height: 14px; flex: none; image-rendering: pixelated; }
+.perch__sec--places { margin-top: 12px; }
+.perch__foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--chip-edge); }
+.perch__keys { font-size: 12px; color: var(--t3); }
+.perch__keys kbd { font: inherit; padding: 1px 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--chip-edge); color: var(--t2); }
+.perch__quiet { display: flex; align-items: center; gap: 10px; padding: 6px 4px 2px; color: var(--t2); font-size: 13px; }
+.perch__quiet .kw-face { width: 32px; height: 32px; image-rendering: pixelated; }
+
+/* ---- motion: enter / grow / leave (Rust resizes the panel; the page animates with transform + opacity) ---- */
+.perch[data-enter] { animation: perch-in 200ms cubic-bezier(.34, 1.56, .64, 1) backwards, perch-fade 120ms linear backwards; }
+.perch[data-grow] .perch__body { animation: perch-body 160ms cubic-bezier(.2, .7, .2, 1) backwards, perch-fade 120ms 40ms linear backwards; }
+.perch[data-leave] { animation: perch-out 160ms cubic-bezier(.4, 0, 1, 1) forwards; }
+@keyframes perch-in { from { transform: scale(.82, .6); } to { transform: none; } }
+@keyframes perch-body { from { transform: translateY(-6px); } to { transform: none; } }
+@keyframes perch-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes perch-out { to { transform: scale(.9, .7); opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .perch[data-enter] { animation: perch-fade 160ms linear backwards; }
+  .perch[data-grow] .perch__body { animation: perch-fade 160ms linear backwards; }
+  .perch[data-leave] { animation: perch-fadeout 160ms linear forwards; }
+  .perch__faces > span[data-working], .perch__faces > span[data-hop], .perch__count[data-pop], .perch__holo, .perch__holo::before { animation: none; }
+  .pb:active { transform: none; }
+}
+@keyframes perch-fadeout { to { opacity: 0; } }
+
+/* ---- widths ---- */
+.perch[data-shape="notch"] { width: calc(var(--notch-w) + 2 * var(--ear)); }
+.perch[data-state="peek"], .perch[data-state="expanded"] { width: var(--wide); }
+.perch[data-shape="float"][data-state="peek"] .perch__band, .perch[data-shape="float"][data-state="expanded"] .perch__band { height: 30px; }
+.face { display: inline-block; line-height: 0; }
+.ico { display: contents; }
+
+/* ---- the page around the perch ---- */
+html, body { margin: 0; background: transparent; overflow: hidden; cursor: default; }
+/* open states get 24 px of transparent margin left, right and below for the shadow (perch.rs MARGIN) */
+#stage { display: inline-block; vertical-align: top; }
+#stage[data-open] { padding: 0 24px 24px; }
+#stage[hidden] { display: none; }
+.perch__band { cursor: pointer; }
+.perch__more-line { cursor: pointer; }
+.perch__more-line:focus-visible, .perch__row:focus-visible, .perch__place:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.perch__ask-who select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; font: inherit; }
+.perch__ask-who:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.perch__fail { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--bad); font-size: 12px; line-height: 16px; }
+.perch__sent u { text-decoration: none; color: var(--violet); font-weight: 600; cursor: pointer; margin-left: 4px; }
+.pb[data-busy] { pointer-events: none; opacity: .8; }
+.pb[data-busy]::after { content: ''; width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: perch-spin 700ms linear infinite; }
+.pb[disabled] { cursor: default; opacity: .55; }
+@keyframes perch-spin { to { transform: rotate(360deg); } }
+.perch__body[data-swap] { animation: perch-fade 120ms linear backwards; }
+@media (prefers-reduced-motion: reduce) {
+  .pb[data-busy]::after { animation: none; border-right-color: currentColor; opacity: .6; }
+  .perch__body[data-swap] { animation: none; }
+}
