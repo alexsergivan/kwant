@@ -1122,6 +1122,7 @@ pub(crate) mod tests {
             max_tool_iterations: 4,
             approvals,
             records: Default::default(),
+            kwnt_only: false,
         });
         i
     }

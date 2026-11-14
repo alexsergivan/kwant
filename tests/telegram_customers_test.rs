@@ -361,6 +361,40 @@ async fn kwants_tools_refuse_a_customer_turns_call_nobody_allowed() {
     assert_eq!(all(&env).await.len(), 1, "one card for one call");
 }
 
+/// B1: claude's own allow rules (here for Bash and a mail server the bot has) never run a tool in
+/// a customer's turn: it launches with no built-in tools and only kwnt's own MCP servers. The
+/// person's own turns launch as before.
+#[tokio::test]
+async fn allow_rules_cant_run_bash_or_another_server_in_a_customer_turn() {
+    use base64::Engine;
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    env.state.db.set_space_approvals(&SpaceId::default_space(), "off").await.unwrap();
+    let (s, v) = call(&env.app, "POST", "/api/mcp/servers", Some(json!({"name": "mail", "transport": "http", "url": "http://127.0.0.1:9/mcp"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let rules = |tag: &str| {
+        let allow = base64::engine::general_purpose::STANDARD.encode(json!(["Bash", "mcp__mail"]).to_string());
+        format!("TRYTOOLS:{allow} REPLYTAG:{tag}")
+    };
+
+    let bot = customers_on(&env, tg, 43).await;
+    tg.text(&bot, &ANN, &format!("Email me my order {}", rules("try43")));
+    let reply = tg.wait_send(&bot, |c| c.text().contains("answer try43")).await;
+    assert_eq!(reply.chat(), ANN.id);
+    let said = reply.text();
+    assert!(said.contains("NOTOOL[Bash]") && said.contains("NOTOOL[mcp__mail]") && !said.contains("RAN["), "nothing ran: {said}");
+    assert!(said.contains("TOOLS[]") && said.contains("STRICT[True]") && said.contains("SERVERS[kwnt,kwnt_tools]"), "launch: {said}");
+    let launch = invocations_with("REPLYTAG:try43").pop().expect("the customer turn's launch");
+    assert!(launch.contains("\n--tools\n\n--disable-slash-commands\n") && launch.contains("\n--strict-mcp-config\n"), "{launch}");
+    assert!(env.state.db.list_approvals(&SpaceId::default_space(), None, Some(&env.a)).await.unwrap().is_empty());
+
+    // The person's own chat with the same bot: built-ins and the mail server, as before
+    common::send_direct(&env, &env.a, &format!("Email me my order {}", rules("own43")), json!({})).await;
+    let mine = common::wait_reply(&env, &env.a, "answer own43").await;
+    assert!(mine.text.contains("RAN[Bash]") && mine.text.contains("RAN[mcp__mail]"), "{}", mine.text);
+    assert!(mine.text.contains("TOOLS[default]") && mine.text.contains("SERVERS[kwnt,kwnt_tools,mail]"), "{}", mine.text);
+}
+
 #[tokio::test]
 async fn a_bot_that_cant_answer_hands_the_chat_to_the_person() {
     use base64::Engine;

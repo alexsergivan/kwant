@@ -959,6 +959,11 @@ pub async fn prepare_turn_with_opts(
             Vec::new()
         }
     };
+    // B1: a customer's message starts this turn, so none of the bot's other servers (mail,
+    // calendar...) is even started: the agent CLI would run them under its own allow rules
+    if opts.every_call {
+        servers.clear();
+    }
     let token = uuid::Uuid::new_v4().simple().to_string();
     isolate_stdio_servers(state, &mut servers, cwd.as_deref(), &token).await;
     if servers.is_empty() && self_scope.is_none() {
@@ -1039,6 +1044,7 @@ pub async fn prepare_turn_with_opts(
             }
         },
         records: Default::default(),
+        kwnt_only: opts.every_call,
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);

@@ -531,6 +531,7 @@ async fn kwants_own_github_tools_go_through_the_pre_push_card() {
         max_tool_iterations: 8,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     };
     let session = kwnt::server::mcp_runtime::PermissionSession::new(env.a.clone(), "A".into(), "gh-turn".into(), ctx, None);
     env.state.mcp_sessions.lock().await.insert("gh-tok".into(), session);

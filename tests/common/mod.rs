@@ -142,6 +142,27 @@ if rt:
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 1,
         "result": base64.b64decode(rt[-1]).decode()}))
     sys.exit(0)
+# TRYTOOLS:<base64 JSON list>: allow rules in the CLI's own settings ("Bash", "mcp__mail"); like
+# claude, a tool its rules allow runs with no permission prompt whenever this launch offers it.
+# Replies RAN[rule] or NOTOOL[rule] for each, then the launch's TOOLS[..], STRICT[..], SERVERS[..]
+tt = re.findall(r"TRYTOOLS:([A-Za-z0-9+/=]+)", prompt)
+if tt:
+    tools = args[args.index("--tools") + 1] if "--tools" in args else None
+    strict = "--strict-mcp-config" in args
+    servers = sorted(json.load(open(args[args.index("--mcp-config") + 1]))["mcpServers"]) if "--mcp-config" in args else []
+    out = []
+    for rule in json.loads(base64.b64decode(tt[-1])):
+        if rule.startswith("mcp__"):
+            # without --strict-mcp-config the user's own servers load too
+            offered = rule.split("__")[1] in servers or not strict
+        else:
+            offered = tools is None or rule in tools.split(",")
+        out.append(("RAN[%s]" if offered else "NOTOOL[%s]") % rule)
+    out += ["TOOLS[%s]" % ("default" if tools is None else tools), "STRICT[%s]" % strict, "SERVERS[%s]" % ",".join(servers)]
+    t = re.findall(r"REPLYTAG:([A-Za-z0-9_]+)", prompt)
+    out.append("answer " + (t[-1] if t else "none"))
+    print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": " ".join(out)}))
+    sys.exit(0)
 reply = []
 m = ([None] + list(re.finditer(r"CALLTOOL:([a-z_]+):([A-Za-z0-9+/=]+)", prompt)))[-1]
 done = None
