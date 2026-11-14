@@ -230,3 +230,30 @@ export function ringDevSettings(doc: Document = document, tries = 20): void {
     }, reduce ? 0 : 160);
   }, 1200);
 }
+
+/** The static arrival outline on the Dev mode card (design.md §3); Tailwind sees the classes here. */
+const ARRIVED = ['outline', 'outline-2', 'outline-offset-2', 'outline-sky-400/60'];
+
+/**
+ * From the #general suggestion (dev-mode-visibility design.md §3): once the Dev mode card has mounted in
+ * Settings › General, bring it into view and focus its Turn on button (the card itself when Dev mode is
+ * already on), with a static outline on the card until focus first leaves it. No animation.
+ */
+export function focusDevSettings(doc: Document = document, tries = 40): void {
+  const el = doc.querySelector<HTMLElement>('[data-dev-settings]');
+  if (!el) {
+    if (tries > 0) setTimeout(() => focusDevSettings(doc, tries - 1), 50);
+    return;
+  }
+  el.scrollIntoView?.({ block: 'start', behavior: 'auto' });
+  (el.querySelector<HTMLElement>('[data-dev-turn-on]') ?? el).focus({ preventScroll: true });
+  el.classList.add(...ARRIVED);
+  el.setAttribute('data-dev-arrived', '');
+  const off = (e: FocusEvent) => {
+    if (e.relatedTarget instanceof Node && el.contains(e.relatedTarget)) return;
+    el.classList.remove(...ARRIVED);
+    el.removeAttribute('data-dev-arrived');
+    el.removeEventListener('focusout', off);
+  };
+  el.addEventListener('focusout', off);
+}
