@@ -4,8 +4,8 @@
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   // Demo video posters, and the home page's lazy images (data-src), load only when they come within 600 px of the
-  // screen, so they never compete with the page's first image. Without JS the videos show no poster, just the play
-  // control, and the images come from their <noscript> copy.
+  // screen, so they never compete with the page's first image. Without JS the videos and images come from their
+  // <noscript> copy.
   var lazy = document.querySelectorAll("video[data-poster], img[data-src]");
   function show(el) {
     if (el.tagName === "VIDEO") { if (!el.getAttribute("poster")) el.poster = el.dataset.poster; return; }
