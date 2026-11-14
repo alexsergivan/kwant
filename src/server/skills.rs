@@ -49,7 +49,7 @@ fn skill_error(e: SkillError) -> Response {
 }
 
 /// Sends `skill_updated`; a shown draft carries its `shown` facts (see `super::show_once`).
-async fn changed(state: &AppState, skill: &Skill) {
+pub(crate) async fn changed(state: &AppState, skill: &Skill) {
     let skill = super::show_once::skill_json(state, skill).await;
     let _ = state.event_sender.send(RuntimeEvent::SkillUpdated { skill });
 }
