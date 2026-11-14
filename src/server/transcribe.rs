@@ -172,7 +172,7 @@ pub fn audio_file_name(content_type: Option<&str>) -> Option<&'static str> {
 }
 
 /// An ISO-639-1 hint: two ASCII letters, lower-cased.
-pub fn clean_lang(lang: Option<&str>) -> Result<Option<String>, ()> {
+fn clean_lang(lang: Option<&str>) -> Result<Option<String>, ()> {
     match lang.map(str::trim).filter(|l| !l.is_empty()) {
         None => Ok(None),
         Some(l) if l.len() == 2 && l.bytes().all(|b| b.is_ascii_alphabetic()) => Ok(Some(l.to_ascii_lowercase())),

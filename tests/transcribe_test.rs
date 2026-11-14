@@ -174,7 +174,7 @@ fn files(root: &Path) -> HashSet<String> {
 
 #[tokio::test]
 async fn with_no_key_it_is_unavailable_and_says_why() {
-    let (app, state, _tmp) = setup().await;
+    let (app, _state, _tmp) = setup().await;
     let (code, v) = status(&app, "default").await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(v, json!({"available": false, "source": null, "why": transcribe::WHY_NO_KEY}));
@@ -189,7 +189,6 @@ async fn with_no_key_it_is_unavailable_and_says_why() {
     assert_eq!(code, StatusCode::NOT_FOUND);
     let (code, _) = call(&app, audio_post("spc_missing", "", "audio/webm", vec![1; 10])).await;
     assert_eq!(code, StatusCode::NOT_FOUND);
-    drop(state);
 }
 
 #[tokio::test]
