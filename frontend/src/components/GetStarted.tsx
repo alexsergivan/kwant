@@ -105,7 +105,7 @@ const Spinner: React.FC = () => (
   />
 );
 
-const Btn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { kind?: 'primary' | 'secondary' | 'link'; phone: boolean }> = ({
+export const Btn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { kind?: 'primary' | 'secondary' | 'link'; phone: boolean }> = ({
   kind = 'secondary',
   phone,
   className = '',
