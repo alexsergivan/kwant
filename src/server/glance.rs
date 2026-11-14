@@ -279,6 +279,15 @@ async fn ask_targets(state: &AppState) -> Result<Vec<Value>, crate::db::DbError>
     Ok(rows.into_iter().map(|(id, name, space)| json!({"kwant_id": id, "name": line(&name, 60), "space_id": space})).collect())
 }
 
+/// A bot's saved `avatar_sprite` (as the bot's own settings return it), or `null` when the item
+/// names no bot, the bot is gone, or its sprite is empty.
+pub fn avatar_of(avatars: &HashMap<String, String>, kwant_id: Option<&str>) -> Value {
+    match kwant_id.filter(|k| !k.is_empty()).and_then(|k| avatars.get(k)) {
+        Some(sprite) if !sprite.trim().is_empty() => Value::String(sprite.clone()),
+        _ => Value::Null,
+    }
+}
+
 /// The glance without `now`, which the ETag is taken over.
 pub async fn build(state: &AppState, now: DateTime<Utc>) -> Result<Value, crate::db::DbError> {
     let spaces: Vec<Space> = state.db.list_spaces().await?.into_iter().filter(|s| s.archived_at.is_none()).collect();
@@ -326,6 +335,16 @@ pub async fn build(state: &AppState, now: DateTime<Utc>) -> Result<Value, crate:
     work.sort_by(|a, b| b.since.cmp(&a.since).then_with(|| b.value["turn_id"].as_str().cmp(&a.value["turn_id"].as_str())));
     work.truncate(WORKING_MAX);
 
+    // The bot's face for every item that names one (`null` when there's no bot or no sprite).
+    // It is part of the body, so a changed face gives a new ETag.
+    let avatars: HashMap<String, String> = state.db.avatar_sprites().await?.into_iter().collect();
+    let mut work: Vec<Value> = work.into_iter().map(|w| w.value).collect();
+    let mut targets = ask_targets(state).await?;
+    for v in needs_you.iter_mut().chain(work.iter_mut()).chain(finished.iter_mut()).chain(targets.iter_mut()) {
+        let avatar = avatar_of(&avatars, v["kwant_id"].as_str());
+        v["avatar"] = avatar;
+    }
+
     Ok(json!({
         "counts": {
             "needs_you": needs_you_count,
@@ -333,9 +352,9 @@ pub async fn build(state: &AppState, now: DateTime<Utc>) -> Result<Value, crate:
             "finished_unseen": finished_unseen,
         },
         "needs_you": needs_you,
-        "working": work.into_iter().map(|w| w.value).collect::<Vec<_>>(),
+        "working": work,
         "finished": finished,
-        "ask_targets": ask_targets(state).await?,
+        "ask_targets": targets,
     }))
 }
 
@@ -478,6 +497,16 @@ mod tests {
         assert!(inline_refusal(&mcp("composio", "GITHUB_MERGE_A_PULL_REQUEST", json!({}))).is_some());
         assert!(inline_refusal(&mcp("runner", "run", json!({"cmd": "cd x && git push origin main"}))).is_some());
         assert!(inline_refusal(&mcp("github", "create_issue", json!({"owner": "o", "repo": "r", "title": "Bug"}))).is_none());
+    }
+
+    #[test]
+    fn avatars_are_the_saved_sprite_or_null() {
+        let avatars: HashMap<String, String> = [("a".to_string(), "architect".to_string()), ("b".to_string(), "  ".to_string())].into();
+        assert_eq!(avatar_of(&avatars, Some("a")), json!("architect"));
+        assert_eq!(avatar_of(&avatars, Some("b")), Value::Null);
+        assert_eq!(avatar_of(&avatars, Some("gone")), Value::Null);
+        assert_eq!(avatar_of(&avatars, Some("")), Value::Null);
+        assert_eq!(avatar_of(&avatars, None), Value::Null);
     }
 
     #[test]

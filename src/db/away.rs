@@ -120,6 +120,11 @@ impl Database {
         .await?)
     }
 
+    /// Every bot's saved avatar sprite, by bot id (the glance puts the face on each item).
+    pub async fn avatar_sprites(&self) -> Result<Vec<(String, String)>, DbError> {
+        Ok(sqlx::query_as("SELECT id, avatar_sprite FROM kwants").fetch_all(&self.pool).await?)
+    }
+
     pub async fn away_count_open_questions(&self, space: &SpaceId) -> Result<i64, DbError> {
         Ok(sqlx::query_scalar(&format!("SELECT COUNT(*) FROM ({OPEN_QUESTIONS})"))
             .bind(Utc::now())

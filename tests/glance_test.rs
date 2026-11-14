@@ -12,7 +12,7 @@ use kwnt::{
     broker::{ApprovalDecision, ApprovalRequest, PermissionBroker},
     config::Config,
     db::{
-        models::{NewApproval, NewChannel, NewKwant, NewMessage},
+        models::{NewApproval, NewChannel, NewKwant, NewMessage, UpdateKwant},
         questions::QuestionPlace,
         spaces::{NewSpace, SpaceId},
         threads::NewDelegation,
@@ -121,6 +121,20 @@ async fn approval(state: &AppState, kwant: &str, tool_name: &str, details: Value
     (a.id, rx)
 }
 
+/// Gives a bot a hand-picked face ("" = none), keeping the rest of it.
+async fn set_sprite(state: &AppState, id: &str, sprite: &str) {
+    let k = state.db.get_kwant(id).await.unwrap().unwrap();
+    let input = UpdateKwant {
+        name: k.name,
+        title: k.title,
+        persona_prompt: k.persona_prompt,
+        soul: k.soul,
+        avatar_sprite: sprite.into(),
+        preferred_model: k.preferred_model,
+    };
+    state.db.update_kwant(id, &input).await.unwrap().unwrap();
+}
+
 fn new_bot(name: &str) -> NewKwant {
     NewKwant {
         name: name.into(),
@@ -160,6 +174,9 @@ async fn the_glance_lists_what_needs_you_works_and_finished_and_leaks_nothing() 
     let space = SpaceId::default_space();
     let kwants = state.db.list_kwants(&space).await.unwrap();
     let (lead, spec) = (kwants[0].clone(), kwants[1].clone());
+    // A face picked by hand, and a bot with none
+    set_sprite(&state, &spec.id, "fox").await;
+    set_sprite(&state, &lead.id, "").await;
 
     // Empty: every list there, nothing in them
     let (v, _) = glance(&app).await;
@@ -318,6 +335,26 @@ async fn the_glance_lists_what_needs_you_works_and_finished_and_leaks_nothing() 
     assert!(targets.len() <= 8 && !targets.is_empty());
     assert_eq!(targets[0]["kwant_id"], spec.id);
     assert_eq!(targets[0]["space_id"], "spc_default");
+
+    // Every item that names a bot carries its saved face, or null when it has none
+    let face = |id: &str| match id {
+        i if i == spec.id => json!("fox"),
+        i if i == lead.id => Value::Null,
+        i => kwants.iter().find(|k| k.id == i && !k.avatar_sprite.is_empty()).map_or(Value::Null, |k| json!(k.avatar_sprite)),
+    };
+    for list in ["needs_you", "working", "finished", "ask_targets"] {
+        let items = v[list].as_array().unwrap();
+        assert!(!items.is_empty(), "{list}");
+        for it in items {
+            let id = it["kwant_id"].as_str().unwrap();
+            assert_eq!(it.get("avatar"), Some(&face(id)), "{list}: {it}");
+        }
+    }
+    assert_eq!(qi["avatar"], "fox");
+    assert_eq!(find(&v["needs_you"], &plain)["avatar"], Value::Null);
+    assert_eq!(w["avatar"], "fox");
+    assert_eq!(f["avatar"], "fox");
+    assert_eq!(targets[0]["avatar"], "fox");
     drop(activity);
 }
 
@@ -340,8 +377,16 @@ async fn an_unchanged_glance_is_a_304() {
     state.db.create_question(&place, "Go?", &["Yes".into()]).await.unwrap();
     let (s, h, v) = send(&app, "GET", "/api/glance", Req { if_none_match: Some(&tag), ..Default::default() }).await;
     assert_eq!(s, StatusCode::OK);
-    assert_ne!(h["etag"].to_str().unwrap(), tag);
+    let tag = h["etag"].to_str().unwrap().to_string();
+    assert_ne!(tag, "");
     assert_eq!(v["counts"]["needs_you"], 1);
+
+    // A new face is a change too
+    set_sprite(&state, &bot.id, "owl").await;
+    let (s, h, v) = send(&app, "GET", "/api/glance", Req { if_none_match: Some(&tag), ..Default::default() }).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_ne!(h["etag"].to_str().unwrap(), tag);
+    assert_eq!(v["needs_you"][0]["avatar"], "owl");
 }
 
 #[tokio::test]
