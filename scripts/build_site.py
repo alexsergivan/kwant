@@ -13,7 +13,7 @@ Shortcodes in the HTML:
   {{root}}                                relative path back to site/
   {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*); desktop ones not in
                                           CLOSEUPS get class="app", the window bar in site.css
-  {{video:NAME|LABEL}}                    a muted looping demo clip; site.js sets its poster near the screen (class="app", window bar too)
+  {{video:NAME|LABEL}}                    a muted looping demo clip; site.js sets its poster near the screen, <noscript> has it (class="app", window bar too)
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
   {{CONTACT_EMAIL}}                       the contact address, from OPERATOR below (marked placeholder while empty)
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
@@ -307,11 +307,13 @@ def shot(root, name, alt, sizes):
 def video(root, name, label, eager=False):
     base = f"{root}assets/media/{name}"
     lbl = html.escape(label, quote=True)
-    return (
-        f'<video class="app" data-autoplay controls muted playsinline loop preload="{"metadata" if eager else "none"}" '
-        f'data-poster="{base}-poster.webp" width="1280" height="800" aria-label="{lbl}">'
-        f'<source src="{base}.mp4" type="video/mp4"></video>'
-    )
+    attrs = (f'class="app" data-autoplay controls muted playsinline loop preload="{"metadata" if eager else "none"}" '
+             f'width="1280" height="800" aria-label="{lbl}"')
+    src = f'<source src="{base}.mp4" type="video/mp4"></video>'
+    # The poster waits in data-poster for site.js. Without JS, site.css hides this copy and the <noscript> one, with its
+    # real poster, shows instead (the same way as the home page's lazy images).
+    return (f'<video {attrs} data-poster="{base}-poster.webp">{src}'
+            f'<noscript><video {attrs} poster="{base}-poster.webp">{src}</noscript>')
 
 
 INSTALL = [
