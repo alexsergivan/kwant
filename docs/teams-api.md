@@ -425,5 +425,9 @@ Every refusal under `/api/` (any 4xx or 5xx) answers in one JSON shape:
   proposal `stale`, a suggestion `dismissed`).
 - Successful answers, downloads, streams (SSE, WebSocket), and error bodies over 64 KB or of unknown length are sent
   as the route wrote them. JSON-RPC answers (`/api/mcp/...`) keep their own `error` object.
+- The MCP transport endpoints (`/api/mcp/agents`, `/api/mcp/gateway`, `/api/mcp/gateway/grok`,
+  `/api/mcp/permission/:token`, `/api/mcp/self`) are left alone entirely: MCP clients call them, and an unknown or
+  revoked bearer there is still a bare `401` with an empty body. The management routes under `/api/mcp/` (servers,
+  OAuth, registry, suggestions) get the shape like any other route.
 
 The layer is `src/server/error_shape.rs`, the outermost layer of the router.

@@ -11,7 +11,9 @@
 //! - **a JSON body with a string `error` and no `code`** (the per-module `error()` helpers) gets
 //!   the status's code ([`status_code`]); every other field stays as it is.
 //!
-//! Everything else passes through untouched: success responses, bodies that already have a
+//! Everything else passes through untouched: the MCP transport endpoints ([`mcp_transport`]:
+//! `/api/mcp/agents`, `/api/mcp/gateway…`, `/api/mcp/permission/…`, `/api/mcp/self`, whose
+//! unauthenticated answer is a bare 401), success responses, bodies that already have a
 //! `code`, JSON that isn't `{error: "…"}` (JSON-RPC answers included), any other content type
 //! (downloads, HTML, event streams), and bodies that may be larger than [`MAX_BODY`] or have no
 //! known length (a stream is never buffered).
@@ -174,9 +176,21 @@ fn reshape(status: StatusCode, kind: &Kind, bytes: &[u8]) -> Option<Value> {
     }
 }
 
+/// The MCP transport endpoints MCP clients and engines call (JSON-RPC over HTTP). Their refusals
+/// belong to the MCP side, not kwant's API: an unknown or revoked bearer is a bare 401 there
+/// (docs/agents-connect contract), so the layer leaves them alone. The management routes under
+/// `/api/mcp/` (servers, OAuth, registry, suggestions) are ordinary API and keep the shape.
+fn mcp_transport(path: &str) -> bool {
+    path == super::agents_connect::ENDPOINT
+        || path.starts_with("/api/mcp/gateway")
+        || path.starts_with("/api/mcp/permission/")
+        || path == "/api/mcp/self"
+}
+
 /// The layer: see the module docs.
 pub async fn layer(req: Request, next: Next) -> Response {
-    let api = req.uri().path().starts_with("/api/");
+    let path = req.uri().path();
+    let api = path.starts_with("/api/") && !mcp_transport(path);
     let resp = next.run(req).await;
     if !api {
         return resp;
@@ -260,6 +274,10 @@ mod tests {
             )
             .route("/api/rpc", get(|| async { (StatusCode::BAD_REQUEST, Json(json!({"jsonrpc": "2.0", "error": "x"}))) }))
             .route("/plain", get(|| async { (StatusCode::NOT_FOUND, "404 Not Found") }))
+            .route("/api/mcp/agents", post(|| async { StatusCode::UNAUTHORIZED }))
+            .route("/api/mcp/gateway", post(|| async { StatusCode::UNAUTHORIZED }))
+            .route("/api/mcp/self", post(|| async { StatusCode::UNAUTHORIZED }))
+            .route("/api/mcp/servers", post(|| async { StatusCode::UNAUTHORIZED }))
             .layer(axum::middleware::from_fn(layer))
     }
 
@@ -355,6 +373,19 @@ mod tests {
         // Outside /api/ nothing changes
         let (_, _, b) = call("GET", "/plain", None, "").await;
         assert_eq!(b, b"404 Not Found");
+    }
+
+    /// CI 43615734542: an MCP client's unauthenticated call is a bare 401, as agents-connect promises;
+    /// kwant's own `/api/mcp/servers` management route still gets the shape.
+    #[tokio::test]
+    async fn mcp_transport_endpoints_keep_their_bare_401() {
+        for uri in ["/api/mcp/agents", "/api/mcp/gateway", "/api/mcp/self"] {
+            let (s, _, b) = call("POST", uri, None, "").await;
+            assert_eq!((s, b.len()), (StatusCode::UNAUTHORIZED, 0), "{uri}");
+        }
+        let (s, _, b) = call("POST", "/api/mcp/servers", None, "").await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(json_of(&b), json!({"error": "kwant needs a valid sign-in for that.", "code": "unauthorized"}));
     }
 
     #[test]
