@@ -75,6 +75,8 @@ test('criteria fold under each part: closed by default, a keyboard-reachable but
   assert.equal(text(btn), 'Show what proves it (1)');
   const list = document.getElementById(btn.getAttribute('aria-controls'));
   assert.ok(list && list.hidden, 'controls a hidden list');
+  // A display utility (flex, grid, block) on the list would beat the hidden attribute and show it while folded.
+  for (const ul of r.qa('[data-part-criteria], [data-check-list], [data-parts-list]')) assert.doesNotMatch(ul.className, /(^|\s)(flex|grid|block|inline-flex)(\s|$)/, 'no display class on a foldable list');
   await click(btn);
   assert.equal(btn.getAttribute('aria-expanded'), 'true');
   assert.equal(text(btn), 'Hide what proves it');

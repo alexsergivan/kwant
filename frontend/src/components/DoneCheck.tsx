@@ -72,7 +72,7 @@ const PartRow: React.FC<{ part: CheckedPart }> = ({ part }) => {
               {criteriaToggle(open, n)}
               <ChevronDown size={14} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
             </button>
-            <ul id={id} hidden={!open} className={`mt-1 border-l-2 border-hairline-strong pl-2 flex flex-col gap-1 ${open ? 'kw-fade-in' : ''}`} data-part-criteria>
+            <ul id={id} hidden={!open} className={`mt-1 border-l-2 border-hairline-strong pl-2 space-y-1 ${open ? 'kw-fade-in' : ''}`} data-part-criteria>
               {part.criteria.map((c, i) => {
                 const ck = partKind(c.result);
                 return (
