@@ -3018,6 +3018,9 @@ async fn run_kwant_turn_inner(
         let mut final_prompt = prompt.clone();
         // A replay opens no page: the bot's browser isn't its scratch folder
         let target_url_opt = if opts.rehearse.is_some() || opts.no_tools { None } else { opts.nav_target() };
+        // 13a: the request's link couldn't be opened before the turn (it didn't load, or a site rule
+        // refused it). A failed first step that isn't in the turn's activity
+        let mut page_failed = false;
 
         if let Some(target_url) = target_url_opt {
             event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -3074,6 +3077,7 @@ async fn run_kwant_turn_inner(
                     };
                 }
                 Err(crate::sandbox::BrowserError::Navigation(reason)) => {
+                    page_failed = true;
                     let shown_url = ctrl.current_url.lock().await.clone().unwrap_or_else(|| target_url.clone());
                     if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
                         event_broadcast.send(RuntimeEvent::BrowserScreenshot {
@@ -3089,6 +3093,7 @@ async fn run_kwant_turn_inner(
                     );
                 }
                 Err(crate::sandbox::BrowserError::SiteRule(refusal)) => {
+                    page_failed = true;
                     final_prompt = format!(
                         "{}\n\n[Sandbox Browser State: {} Tell the user this address is outside the sites your browser may open; don't try another way to reach it.]",
                         prompt, refusal.message
@@ -3998,8 +4003,18 @@ async fn run_kwant_turn_inner(
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
                 }
                 // 0.9.4: a reply that ends with `Blocked: <what>. <what unblocks it>` says so in its meta
-                if let Some(blocked) = super::keep_going::blocked_line(&asst_msg.text) {
-                    meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = serde_json::json!({ "text": blocked });
+                // 13a: with no such line, a turn whose last tool step failed (or was declined, or whose
+                // link didn't open and it ran no tool) and whose reply ends waiting on the person in
+                // prose is blocked too, in the bot's own words. Not while kwnt sends the turn one more
+                // try (a continuation): that reply isn't the last word
+                let blocked = super::keep_going::blocked_line(&asst_msg.text)
+                    .map(|text| serde_json::json!({ "text": text }))
+                    .or_else(|| {
+                        let text = super::delivery_check::failed_step_blocked(&asst_msg.text, activity.as_ref(), page_failed).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
+                        Some(serde_json::json!({ "text": text, "from": "failed_step" }))
+                    });
+                if let Some(blocked) = blocked {
+                    meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = blocked;
                 }
                 let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);

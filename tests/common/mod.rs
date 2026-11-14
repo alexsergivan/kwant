@@ -16,8 +16,9 @@
 //!   slow reply, or a stall when it waits past the stall limit).
 //! - `FAILTURN`: die with no output. `APIERROR:<tag>` / `APIERRORPLAIN:<tag>`: end with "API Error:
 //!   500 test stub" as claude's error result / as plain text, once per tag.
-//! - `FAILSTEP:<tag>` / `BLOCKSTEP:<tag>` in the current request (not the history): run a Bash
-//!   tool step that fails, then end on a plan ("I'll retry the render…") / on a `Blocked:` line.
+//! - `FAILSTEP:<tag>` / `BLOCKSTEP:<tag>` / `WAITSTEP:<tag>` in the current request (not the
+//!   history): run a Bash tool step that fails, then end on a plan ("I'll retry the render…") / on a
+//!   `Blocked:` line / waiting on the person in prose ("If you approve the command, …").
 //! - `STREAMLINES:<base64 text>`: print that text (claude `stream-json` lines: an init line, tool
 //!   calls and their results) before the reply; once per marker.
 //!
@@ -97,10 +98,10 @@ if cap:
         text = "partial " + cap[-1] + note
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": text}))
     sys.exit(0)
-# FAILSTEP:<tag> / BLOCKSTEP:<tag> in the current request: a Bash step that fails, then a reply
-# that ends on a plan / on a Blocked: line
+# FAILSTEP:<tag> / BLOCKSTEP:<tag> / WAITSTEP:<tag> in the current request: a Bash step that fails,
+# then a reply that ends on a plan / on a Blocked: line / waiting on the person in prose
 req = prompt.rsplit("Current User Request:\n", 1)[-1]
-fs = re.findall(r"(FAIL|BLOCK)STEP:([A-Za-z0-9_]+)", req)
+fs = re.findall(r"(FAIL|BLOCK|WAIT)STEP:([A-Za-z0-9_]+)", req)
 if fs:
     kind, tag = fs[-1]
     tid = "toolu_" + tag
@@ -108,8 +109,9 @@ if fs:
         {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "render.sh", "description": "render the intro"}}]}}))
     print(json.dumps({"type": "user", "message": {"content": [
         {"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": "Permission to use Bash has been denied."}]}}))
-    end = ("I'll retry the render with a smaller size next." if kind == "FAIL"
-        else "Blocked: terminal commands are off for this bot. Allow Terminal for this team, then say continue.")
+    end = {"FAIL": "I'll retry the render with a smaller size next.",
+        "BLOCK": "Blocked: terminal commands are off for this bot. Allow Terminal for this team, then say continue.",
+        "WAIT": "If you approve the command, I'll run the render right away."}[kind]
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 2,
         "result": "The render command was refused (" + tag + ").\n\n" + end}))
     sys.exit(0)
