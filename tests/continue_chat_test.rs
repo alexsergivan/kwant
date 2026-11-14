@@ -71,6 +71,8 @@ struct Env {
     state: AppState,
     bot: String,
     other: String,
+    /// Bot replies are stored under the bot's name (what the prompt builder matches on)
+    bot_name: String,
     _tmp: tempfile::TempDir,
 }
 
@@ -120,7 +122,8 @@ async fn setup() -> Env {
         assert_eq!(s, StatusCode::OK, "{v}");
         ids.push(id);
     }
-    Env { app, state, bot: ids[0].clone(), other: ids[1].clone(), _tmp: tmp }
+    let bot_name = state.db.get_kwant(&ids[0]).await.unwrap().unwrap().name;
+    Env { app, state, bot: ids[0].clone(), other: ids[1].clone(), bot_name, _tmp: tmp }
 }
 
 impl Env {
@@ -130,7 +133,7 @@ impl Env {
             channel_id: channel.map(Into::into),
             direct_kwant_id: direct.map(Into::into),
             sender_role: role.into(),
-            sender_id: if role == "user" { "user".into() } else { self.bot.clone() },
+            sender_id: if role == "user" { "user".into() } else { self.bot_name.clone() },
             text: text.into(),
             reasoning_content: Some(format!("why {text}")),
             tool_calls: Some(json!([{"name": "read", "output": text}])),
@@ -199,7 +202,7 @@ async fn continuing_the_main_chat_copies_up_to_the_pressed_message_and_leaves_it
 }
 
 #[tokio::test]
-async fn continuing_a_thread_keeps_its_order_and_team_and_the_next_turn_reads_the_copies() {
+async fn continuing_a_thread_keeps_its_order_and_the_next_turn_reads_the_copies() {
     let e = setup().await;
     let k = e.bot.clone();
     let t = e.state.db.create_thread(&k, "Wifi help", "chat", None, "user").await.unwrap();
@@ -219,7 +222,8 @@ async fn continuing_a_thread_keeps_its_order_and_team_and_the_next_turn_reads_th
     assert_eq!(e.texts(&tid).await, want, "oldest first, up to and including the pressed one");
     assert_eq!(e.texts(&t.id).await, before, "the source thread is unchanged");
 
-    // The new chat's next turn sees the newest 20 copies as its history (routes.rs loads 20 rows)
+    // The new chat's next turn reads the copies as its history (routes.rs loads 20 rows; the CLI
+    // prompt shows the newest 10), the bot's copied replies as its own
     let (s, r) = call(&e.app, "POST", "/api/chat/send", None, Some(json!({"thread_id": tid, "prompt": "NEXTTURN go on", "sender_id": "user"}))).await;
     assert_eq!(s, StatusCode::OK, "{r}");
     for _ in 0..300 {
@@ -231,7 +235,8 @@ async fn continuing_a_thread_keeps_its_order_and_team_and_the_next_turn_reads_th
     let prompts = prompts_with("NEXTTURN");
     assert_eq!(prompts.len(), 1, "one turn");
     let p = &prompts[0];
-    assert!(p.contains("OLDMARK22") && p.contains("OLDMARK04"), "the copies are its history");
+    assert!(p.contains("User: OLDMARK22") && p.contains("Assistant: OLDMARK21") && p.contains("OLDMARK13"), "the copies are its history: {p}");
+    assert!(!p.contains("another assistant"), "its own copied replies aren't a teammate's: {p}");
     assert!(!p.contains("OLDMARK23") && !p.contains("OLDMARK24"), "nothing after the pressed message");
     assert!(e.texts(&t.id).await.iter().all(|m| m != "answer" && !m.contains("NEXTTURN")), "the old thread got nothing");
 }
