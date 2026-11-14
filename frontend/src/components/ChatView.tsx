@@ -14,9 +14,9 @@ import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
-import { AccountCard, BotHome } from './BotHome';
+import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
-import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
+import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
@@ -827,8 +827,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.
   const stickRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  // The empty chat's home opens at its top: on a phone a team home is taller than the screen, and its faces come first (13d).
+  const homeShowingRef = useRef(false);
   const pinToBottom = (el: HTMLDivElement) => {
-    el.scrollTop = el.scrollHeight;
+    el.scrollTop = homeShowingRef.current ? 0 : el.scrollHeight;
     lastScrollTopRef.current = el.scrollTop;
   };
   // A waiting card whose buttons are off screen while the person reads further up.
@@ -1839,14 +1841,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
     );
   };
 
-  // The empty chat shows the bot home (a bot's own chat, or #general) instead of a bare pane and a row of chips
+  // The empty chat shows a home (a bot's own chat, #general, or a team's chat) instead of a bare pane and a row of chips
   const showHome =
-    !!home && (home.kind === 'bot' || home.kind === 'general') && !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
-  // first-screen E: nothing can run and Get started (the welcome) isn't on screen. A bot's chat and #general
-  // show it inside the home; an empty team chat shows it on its own.
+    !!home &&
+    (home.kind === 'bot' || home.kind === 'general' || (home.kind === 'team' && !!home.team)) &&
+    !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
+  homeShowingRef.current = showHome;
+  // first-screen E: nothing can run and Get started (the welcome) isn't on screen. The home shows it in place of its asks.
   const accountCard = accountCardShows({ canRun, getStartedShowing: !!welcome });
-  const teamAccountCard =
-    accountCard && home?.kind === 'team' && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
   // Who answers what's typed: the chat decides, an @mention overrides
   const target = answerTarget({
     kind: home?.kind ?? 'channel',
@@ -2248,18 +2250,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <BotHome
               home={home}
               spaceName={spaceName}
-              team={activeKwants}
+              team={home.kind === 'team' ? home.team?.members : activeKwants}
               prompts={suggestions}
+              answerLine={home.kind === 'team' ? teamAnswerLine(teamName) : undefined}
               canRun={canRun}
               onPick={handlePromptSuggestion}
               accountCard={accountCard}
               onOpenAccounts={onOpenAccounts}
             />
-          </div>
-        )}
-        {teamAccountCard && (
-          <div className="mx-auto flex w-full max-w-3xl px-1">
-            <AccountCard onOpenAccounts={onOpenAccounts} />
           </div>
         )}
         {groupDiscussionThreads(arranged.messages, { foldOpen: askOnly }).map((item, n, items) => {

@@ -28,6 +28,38 @@ export interface ChatHome {
   /** The bot's most recent other conversations, newest first; absent until they are loaded. */
   recent?: RecentItem[];
   onOpenRecent?: (id: string) => void;
+  /** The team, for a team's chat: all of it from App's state, no new request. */
+  team?: HomeTeam;
+}
+
+/** What a team's empty chat shows: its name, purpose, lead and members (lead first). */
+export interface HomeTeam {
+  name: string;
+  /** The team's description; blank or absent means the home says who is in it instead. */
+  purpose?: string;
+  /** The lead's name. */
+  lead?: string;
+  members: HomeBot[];
+}
+
+/**
+ * The team home's subtitle: its purpose when it has one, else who is in it ("3 bots who work together.
+ * Ada leads."). One bot is "1 bot in this team."; no lead drops the second sentence.
+ */
+export function teamHomeLine(team: Pick<HomeTeam, 'purpose' | 'lead' | 'members'>): string {
+  const purpose = clean(team.purpose ?? '');
+  if (purpose) return purpose;
+  const n = team.members.length;
+  const who = n === 0 ? 'No bots in this team yet.' : n === 1 ? '1 bot in this team.' : `${n} bots who work together.`;
+  const lead = clean(team.lead ?? '');
+  return lead && n > 0 ? `${who} ${lead} leads.` : who;
+}
+
+/** Lead first, then the other members, each once: the faces and chips of a team home. */
+export function teamMembersLeadFirst<T extends { id: string }>(members: T[], leadId?: string | null): T[] {
+  const seen = new Set<string>();
+  const lead = leadId ? members.filter((m) => m.id === leadId) : [];
+  return [...lead, ...members].filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)));
 }
 
 const MAX_CHIPS = 4;
@@ -110,6 +142,11 @@ export function answerTarget(opts: {
     return { kind: 'team', label: t, detail: `${t} answers. Type @ and a name to ask one member.` };
   }
   return { kind: 'team', label: 'This channel', detail: 'The bots in this channel answer. Type @ and a name to ask one.' };
+}
+
+/** The team home's footer: one @ (the line's own icon), and the team named like the composer pill. */
+export function teamAnswerLine(teamName?: string): string {
+  return `${teamName ? `The ${teamName} team` : 'The team'} answers. Type @ and a name to ask one member.`;
 }
 
 /** "5m ago", "2h ago", "3d ago", else the date: short, for the recent-work cards. */
