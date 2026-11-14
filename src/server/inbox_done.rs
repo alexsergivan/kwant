@@ -1354,7 +1354,7 @@ mod tests {
             evidence: vec![evidence("ev1", "report.pdf", None)],
             ..Default::default()
         };
-        let v = checked(&[t.clone()], None);
+        let v = checked(std::slice::from_ref(&t), None);
         assert_eq!(v["state"], "partly", "every item passed, but a part has no check");
         assert_eq!(v["line"], "Partly checked: 1 of 2 parts checked; \"send it to Ana\": no check.");
         assert_eq!((v["parts_checked"].as_i64(), v["parts_total"].as_i64(), v["parts_written"].as_bool()), (Some(1), Some(2), Some(true)));
