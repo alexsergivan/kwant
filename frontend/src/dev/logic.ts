@@ -22,8 +22,6 @@ const pad = (n: number) => String(n).padStart(2, '0');
 
 /** "7:26 PM" / "19:26" on the viewer's own clock, or null. */
 export function clock(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
   return timeText(iso);
 }
 
