@@ -2126,7 +2126,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   aria-label="Manage team"
                 >
                   <Settings2 size={12} className="text-zinc-400" aria-hidden="true" />
-                  {headLabel('Manage', 'Team')}
+                  {headLabel('Manage team', 'Team')}
                 </button>
               )}
             </div>

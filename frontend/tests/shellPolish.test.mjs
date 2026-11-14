@@ -98,6 +98,9 @@ test('header: every icon button keeps its aria-label and has a phone caption und
   const btns = [...head.querySelectorAll('.kw-head-btn')];
   const named = btns.map((b) => [b.getAttribute('aria-label'), b.querySelector('[data-head-caption]')?.textContent]);
   assert.deepEqual(named, [['Manage team', 'Team'], ['Pin instructions', 'Pin'], ['Edit Frontend', 'Edit'], ['Bot browser', 'Browser']]);
+  // One name per button: the desktop label is the same phrase the phone caption shortens
+  const wide = btns.map((b) => b.querySelector('.hidden.sm\\:inline')?.textContent);
+  assert.deepEqual(wide, ['Manage team', 'Pin', 'Edit', 'Bot browser']);
   for (const b of btns) {
     const cap = b.querySelector('[data-head-caption]');
     assert.match(cap.className, /sm:hidden/, 'the caption is phone-only');

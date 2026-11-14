@@ -222,7 +222,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
           </form>
         ) : null}
 
-        <div className="px-4 pb-1 sm:pb-3 pt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+        <div className={`px-4 ${open ? 'pb-1' : 'pb-3'} sm:pb-3 pt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]`}>
           <p role="status" aria-live="polite" className="min-w-0">
             {status}
           </p>
