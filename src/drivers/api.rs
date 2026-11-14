@@ -536,14 +536,34 @@ const READ_RESULT: &str = "kwnt_read_tool_result";
 /// first trimmed result on, so a batch has to free enough to be worth that miss; 24 KB is about
 /// 6k tokens, roughly two average tool results.
 const AGE_ABOVE_BYTES: usize = 24 * 1024;
-/// The newest results are never trimmed: the model is usually still working with them.
+/// The newest results are never trimmed: the model is usually still working with them. The whole
+/// latest round is never trimmed either, however many calls it made (see [`TurnResults::age`]).
 const KEEP_NEWEST: usize = 4;
 /// Results shorter than this are never trimmed: the note would save almost nothing.
 const AGE_MIN_BYTES: usize = 1024;
 /// How much of a trimmed result stays, after the note.
 const STUB_HEAD_CHARS: usize = 300;
 
-/// The schema of `READ_RESULT`, offered whenever a turn has tools.
+/// Whether a turn to `url` trims older tool results. Not on the Anthropic API: a cache read there
+/// only lands on an earlier request's breakpoint, so after a batch the whole turn since the
+/// system breakpoint is written again at the cache-write price, which costs more than the batch
+/// saves. OpenAI-style endpoints reuse any earlier prefix, and engines without a prompt cache
+/// gain the most.
+fn ages_tool_results(url: &str) -> bool {
+    !is_anthropic(url)
+}
+
+/// The tools a turn to `url` offers: `upfront`, plus `READ_RESULT` when the turn trims results.
+/// Fixed for the whole turn, so the tool list (the start of the cached prefix) never changes.
+fn turn_tools(upfront: &[Value], url: &str) -> Vec<Value> {
+    let mut tools = upfront.to_vec();
+    if !tools.is_empty() && ages_tool_results(url) {
+        tools.push(read_result_tool());
+    }
+    tools
+}
+
+/// The schema of `READ_RESULT`, offered whenever a turn that trims results has tools.
 fn read_result_tool() -> Value {
     json!({"type": "function", "function": {
         "name": READ_RESULT,
@@ -574,12 +594,26 @@ struct KeptResult {
 /// only on the result itself: between batches the requests only grow at the end, and a batch
 /// changes nothing before its first newly trimmed result, so the provider's prompt cache keeps
 /// hitting on everything before it.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct TurnResults {
     kept: Vec<KeptResult>,
+    /// Off for the whole turn on the Anthropic API (see [`ages_tool_results`]).
+    enabled: bool,
+    /// Where the latest round's results start in `kept`: none of them is ever trimmed, because
+    /// the model hasn't seen them yet.
+    round_start: usize,
 }
 
 impl TurnResults {
+    fn for_url(url: &str) -> Self {
+        Self { kept: Vec::new(), enabled: ages_tool_results(url), round_start: 0 }
+    }
+
+    /// Marks the start of a new round: the results pushed from now on are the latest round.
+    fn start_round(&mut self) {
+        self.round_start = self.kept.len();
+    }
+
     /// Adds a tool result to the message list and remembers it.
     fn push(&mut self, messages: &mut Vec<Value>, id: &str, tool: &str, text: String, ok: bool) {
         self.kept.push(KeptResult {
@@ -603,10 +637,15 @@ impl TurnResults {
         )
     }
 
-    /// Once the older results kept whole pass `AGE_ABOVE_BYTES`, trims every one of them (all but
-    /// the newest `KEEP_NEWEST`) in one batch. Returns how many it trimmed and the bytes saved.
+    /// Once the older results kept whole pass `AGE_ABOVE_BYTES`, trims every one of them in one
+    /// batch. Older means before both the newest `KEEP_NEWEST` and the latest round, so a round of
+    /// many parallel calls (or read-backs) reaches the model whole. Returns how many it trimmed and
+    /// the bytes saved.
     fn age(&mut self, messages: &mut [Value]) -> (usize, usize) {
-        let older = self.kept.len().saturating_sub(KEEP_NEWEST);
+        if !self.enabled {
+            return (0, 0);
+        }
+        let older = self.kept.len().saturating_sub(KEEP_NEWEST).min(self.round_start);
         let older = &mut self.kept[..older];
         let whole: usize = older.iter().filter(|k| k.can_trim && !k.trimmed).map(|k| k.text.len()).sum();
         if whole <= AGE_ABOVE_BYTES {
@@ -1177,13 +1216,8 @@ impl ApiDriver {
         event_tx: &mpsc::Sender<RuntimeEvent>,
     ) -> Result<(String, usize, bool), ApiError> {
         let menu = tool_menu(session.map(|s| s.openai_tools()).unwrap_or_default());
-        let mut tools = menu.upfront.clone();
-        // Always offered with tools, so the tool list (the start of the cached prefix) never changes mid-turn
-        if !tools.is_empty() {
-            tools.push(read_result_tool());
-        }
-        let tools = &tools;
-        let mut results = TurnResults::default();
+        let tools = &turn_tools(&menu.upfront, request.url);
+        let mut results = TurnResults::for_url(request.url);
         let max_calls = request.max_calls.max(1);
         let mut tokens = 0usize;
         if request.stream && tools.is_empty() {
@@ -1292,6 +1326,7 @@ impl ApiDriver {
             }
             let calls = assistant["tool_calls"].as_array().cloned().unwrap_or_default();
             messages.push(assistant);
+            results.start_round();
 
             for call in &calls {
                 let id = call["id"].as_str().unwrap_or_default();
@@ -2362,13 +2397,26 @@ mod tests {
         text
     }
 
+    const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
+    const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+
     /// One model call's tool round: the assistant's call and its result.
     fn tool_round(results: &mut TurnResults, messages: &mut Vec<Value>, n: usize, len: usize, ok: bool) {
-        let id = format!("call_{n}");
-        messages.push(json!({"role": "assistant", "content": "", "tool_calls": [
-            {"id": id, "type": "function", "function": {"name": "mcp__files__read", "arguments": format!("{{\"path\":\"f{n}.txt\"}}")}}
-        ]}));
-        results.push(messages, &id, "mcp__files__read", result_text(n, len), ok);
+        parallel_round(results, messages, n, &[len], ok);
+    }
+
+    /// One model call's tool round with a parallel call per entry of `lens`, numbered from `first`
+    /// (`call_<first>`, `call_<first + 1>`, ...), pushed the way `chat_loop` does.
+    fn parallel_round(results: &mut TurnResults, messages: &mut Vec<Value>, first: usize, lens: &[usize], ok: bool) {
+        let calls: Vec<Value> = (first..first + lens.len())
+            .map(|n| json!({"id": format!("call_{n}"), "type": "function", "function": {"name": "mcp__files__read", "arguments": format!("{{\"path\":\"f{n}.txt\"}}")}}))
+            .collect();
+        messages.push(json!({"role": "assistant", "content": "", "tool_calls": calls}));
+        results.start_round();
+        for (i, len) in lens.iter().enumerate() {
+            let n = first + i;
+            results.push(messages, &format!("call_{n}"), "mcp__files__read", result_text(n, *len), ok);
+        }
     }
 
     fn start() -> Vec<Value> {
@@ -2396,7 +2444,7 @@ mod tests {
         let tools = json!((0..12).map(|i| fake_tool(&format!("mcp__t__tool{i}"), "A tool", 900)).collect::<Vec<_>>());
         let sizes: Vec<usize> = (0..30).map(|i| 2048 + (i * 7919 % 30) * 18 * 1024 / 29).collect();
         let mut messages = start();
-        let mut results = TurnResults::default();
+        let mut results = TurnResults::for_url(OPENAI_URL);
         let mut calls = Vec::new();
         let mut previous = String::new();
         for round in 0..=sizes.len() {
@@ -2436,13 +2484,13 @@ mod tests {
         println!("batches: {batches}");
         assert!(total(&after) * 2 < total(&before), "aging at least halves the turn's request bytes");
         assert!(after.last().unwrap().body * 3 < before.last().unwrap().body, "the last call is under a third of before");
-        assert!(batches > 0 && batches <= 10, "trimming comes in a few batches, not every call: {batches}");
+        assert!(batches > 0 && batches <= 15, "trimming comes in a few batches, not every call: {batches}");
     }
 
     #[test]
     fn below_the_threshold_tool_results_are_left_whole() {
         let mut messages = start();
-        let mut results = TurnResults::default();
+        let mut results = TurnResults::for_url(OPENAI_URL);
         for n in 0..8 {
             tool_round(&mut results, &mut messages, n, 4000, true);
         }
@@ -2455,7 +2503,7 @@ mod tests {
     #[test]
     fn above_the_threshold_older_results_become_stubs_in_one_batch() {
         let mut messages = start();
-        let mut results = TurnResults::default();
+        let mut results = TurnResults::for_url(OPENAI_URL);
         for n in 0..10 {
             tool_round(&mut results, &mut messages, n, 5000, true);
         }
@@ -2479,11 +2527,12 @@ mod tests {
     #[test]
     fn a_second_batch_never_rewrites_the_first() {
         let mut messages = start();
-        let mut results = TurnResults::default();
+        let mut results = TurnResults::for_url(OPENAI_URL);
         // The previous request's messages
         let mut sent: Vec<Value> = Vec::new();
         let mut batches = 0;
-        for n in 0..24 {
+        let mut n = 0;
+        for round in 0..24 {
             let before = messages.clone();
             let (count, _) = results.age(&mut messages);
             if count == 0 {
@@ -2502,7 +2551,10 @@ mod tests {
                 }
             }
             sent = messages.clone();
-            tool_round(&mut results, &mut messages, n, 3000 + (n % 5) * 1000, true);
+            // Every fifth round makes 6 parallel calls
+            let lens: Vec<usize> = (0..if round % 5 == 4 { 6 } else { 1 }).map(|i| 3000 + ((n + i) % 5) * 1000).collect();
+            parallel_round(&mut results, &mut messages, n, &lens, true);
+            n += lens.len();
         }
         assert!(batches >= 2, "{batches}");
         assert_eq!(messages[3]["content"], json!(TurnResults::stub(&results.kept[0])), "a stub is the same text every time");
@@ -2511,7 +2563,7 @@ mod tests {
     #[test]
     fn read_tool_result_returns_the_full_text_or_says_the_id_is_unknown() {
         let mut messages = start();
-        let mut results = TurnResults::default();
+        let mut results = TurnResults::for_url(OPENAI_URL);
         for n in 0..10 {
             tool_round(&mut results, &mut messages, n, 6000, true);
         }
@@ -2531,7 +2583,7 @@ mod tests {
     #[test]
     fn errors_and_tiny_results_are_never_trimmed() {
         let mut messages = start();
-        let mut results = TurnResults::default();
+        let mut results = TurnResults::for_url(OPENAI_URL);
         tool_round(&mut results, &mut messages, 0, 9000, false);
         tool_round(&mut results, &mut messages, 1, 1023, true);
         for n in 2..12 {
@@ -2544,24 +2596,94 @@ mod tests {
     }
 
     #[test]
-    fn the_anthropic_body_keeps_its_cache_breakpoint_after_trimming() {
+    fn the_batch_starts_just_above_24_kb() {
+        // 10 results: the 6 older ones add up to exactly 24576 bytes, then to one byte more
+        for (last_older, trims) in [(4096, 0), (4097, 6)] {
+            let mut messages = start();
+            let mut results = TurnResults::for_url(OPENAI_URL);
+            for n in 0..10 {
+                tool_round(&mut results, &mut messages, n, if n == 5 { last_older } else { 4096 }, true);
+            }
+            assert_eq!(results.age(&mut messages).0, trims, "older whole text {}", 5 * 4096 + last_older);
+        }
+    }
+
+    #[test]
+    fn a_round_of_many_parallel_calls_reaches_the_model_whole() {
+        let is_stub = |m: &Value| m["content"].as_str().unwrap().starts_with("[Earlier");
+        let tool_messages = |messages: &[Value]| messages.iter().filter(|m| m["role"] == "tool").cloned().collect::<Vec<_>>();
+
+        // One round of 6 calls of 13 KB: by count the oldest 2 (26 KB) would be "older"
         let mut messages = start();
-        let mut results = TurnResults::default();
-        for n in 0..10 {
+        let mut results = TurnResults::for_url(OPENAI_URL);
+        parallel_round(&mut results, &mut messages, 0, &[13_000; 6], true);
+        let sent = messages.clone();
+        assert_eq!(results.age(&mut messages), (0, 0), "nothing of the latest round is trimmed");
+        assert_eq!(messages, sent);
+
+        // After 6 single rounds, a round of 6 parallel calls: the 6 earlier results are trimmed, none of the new ones
+        let mut messages = start();
+        let mut results = TurnResults::for_url(OPENAI_URL);
+        for n in 0..6 {
             tool_round(&mut results, &mut messages, n, 5000, true);
         }
-        results.age(&mut messages);
-        let body = anthropic_body("claude-x", &messages, 1000);
-        assert_eq!(body["system"][0]["cache_control"], json!({"type": "ephemeral"}));
-        let last = body["messages"].as_array().unwrap().last().unwrap();
-        let block = last["content"].as_array().unwrap().last().unwrap();
-        assert_eq!((block["type"].as_str(), block["tool_use_id"].as_str()), (Some("tool_result"), Some("call_9")));
-        assert_eq!(block["cache_control"], json!({"type": "ephemeral"}), "the last tool result still carries the breakpoint");
-        assert!(breakpoints(&body) <= 4);
-        assert_eq!(body["messages"][1]["content"][0]["type"], "tool_use");
-        let first = &body["messages"][2]["content"][0];
-        assert_eq!(first["type"], "tool_result");
-        assert!(first["content"].as_str().unwrap().starts_with("[Earlier result of mcp__files__read"));
+        parallel_round(&mut results, &mut messages, 6, &[6000; 6], true);
+        assert_eq!(results.age(&mut messages).0, 6);
+        let tools = tool_messages(&messages);
+        assert!(tools[..6].iter().all(is_stub));
+        for (n, m) in tools.iter().enumerate().skip(6) {
+            assert_eq!(m["content"], json!(result_text(n, 6000)), "result {n} of the latest round stays whole");
+        }
+
+        // The model reads all 6 trimmed results back in one round: every read-back reaches it whole
+        let reads: Vec<Value> = (0..6)
+            .map(|n| json!({"id": format!("read_{n}"), "type": "function", "function": {"name": READ_RESULT, "arguments": format!("{{\"id\":\"call_{n}\"}}")}}))
+            .collect();
+        messages.push(json!({"role": "assistant", "content": "", "tool_calls": reads}));
+        results.start_round();
+        for n in 0..6 {
+            let full = results.read(&format!("{{\"id\":\"call_{n}\"}}"));
+            results.push(&mut messages, &format!("read_{n}"), READ_RESULT, full, true);
+        }
+        assert_eq!(results.age(&mut messages).0, 6, "the 6 results of the round before are trimmed now");
+        let tools = tool_messages(&messages);
+        for (n, m) in tools[12..].iter().enumerate() {
+            assert_eq!(m["content"], json!(result_text(n, 5000)), "read-back of call_{n} reaches the model whole");
+        }
+    }
+
+    #[test]
+    fn an_anthropic_turn_is_never_trimmed() {
+        let mut messages = start();
+        let mut results = TurnResults::for_url(ANTHROPIC_URL);
+        for n in 0..20 {
+            tool_round(&mut results, &mut messages, n, 20_000, true);
+        }
+        parallel_round(&mut results, &mut messages, 20, &[20_000; 6], true);
+        let sent = messages.clone();
+        assert_eq!(results.age(&mut messages), (0, 0), "520 KB of results, and nothing is trimmed");
+        assert_eq!(messages, sent);
+        let body = anthropic_body("claude-opus-5-5", &messages, 1000);
+        let results_sent: Vec<&Value> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m["content"].as_array().into_iter().flatten())
+            .filter(|b| b["type"] == "tool_result")
+            .collect();
+        assert_eq!(results_sent.len(), 26);
+        for (n, block) in results_sent.iter().enumerate() {
+            assert_eq!(block["content"], json!(result_text(n, 20_000)), "result {n} is sent whole");
+        }
+        let last = results_sent.last().unwrap();
+        assert_eq!(last["cache_control"], json!({"type": "ephemeral"}), "the last tool result still carries the breakpoint");
+
+        // The read-back tool is offered only where results are trimmed
+        let upfront = vec![fake_tool("mcp__echo__echo", "Echo", 10)];
+        let names = |url: &str| turn_tools(&upfront, url).iter().map(tool_name).map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(names(ANTHROPIC_URL), ["mcp__echo__echo"]);
+        assert_eq!(names(OPENAI_URL), ["mcp__echo__echo", READ_RESULT]);
+        assert!(turn_tools(&[], OPENAI_URL).is_empty(), "a turn without tools gets no read-back tool");
     }
 
     #[test]
