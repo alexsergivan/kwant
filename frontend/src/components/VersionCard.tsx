@@ -2,7 +2,7 @@
 // One card everywhere: the Mac app installs the update; elsewhere Update says how (one command).
 import React, { useEffect, useId, useState } from 'react';
 import { AlertTriangle, ArrowUpCircle, Check, CheckCircle2, ChevronRight, Copy, ExternalLink, Loader2, RotateCw } from 'lucide-react';
-import { type HowToUpdate, type UpdateModel, type VersionLine, checkedAgo, versionLine } from '../appUpdate';
+import { type HowToUpdate, LATEST_RELEASE_URL, type UpdateModel, type VersionLine, checkedAgo, versionLine } from '../appUpdate';
 import { useAppUpdate } from './AppUpdateBanner';
 import { WhatsNewMark } from './WhatsNewSheet';
 import { RELEASES_URL, type WhatsNewEntry, entrySummary, openWhatsNew, shortDate } from '../whatsNewSheet';
@@ -223,7 +223,25 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
           </span>
         );
       case 'off':
-        return <span className="text-zinc-400">Update checks are turned off here.</span>;
+        // Not a dead end: ask again, or get the release by hand
+        return (
+          <>
+            <span className="text-zinc-400">Update checks are turned off here.</span>
+            <button
+              type="button"
+              onClick={() => !line.rechecking && onCheck()}
+              aria-disabled={line.rechecking || undefined}
+              className={`${quiet} aria-disabled:cursor-default aria-disabled:opacity-70`}
+              data-version-recheck
+            >
+              {line.rechecking ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+              {line.rechecking ? 'Checking…' : 'Check again'}
+            </button>
+            <a href={LATEST_RELEASE_URL} target="_blank" rel="noreferrer" className={`${quiet} max-md:-ml-1.5 max-md:basis-full max-md:w-fit`} data-version-latest>
+              Get the latest version <ExternalLink size={12} aria-hidden="true" />
+            </a>
+          </>
+        );
     }
   })();
 
@@ -249,9 +267,12 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
         <HowToUpdatePanel id={howId} how={model.status?.how ?? null} version={line.version} url={line.url} />
       )}
       {entry && <WhatsNewButton entry={entry} onPick={onWhatsNew} />}
-      <a href={RELEASES_URL} target="_blank" rel="noreferrer" className={`mt-2 inline-flex items-center gap-1.5 py-1 text-xs text-sky-300 hover:underline max-md:min-h-[44px] ${focus}`}>
-        All releases on GitHub <ExternalLink size={13} aria-hidden="true" />
-      </a>
+      {/* Off already links the latest release; one GitHub link is enough */}
+      {line.kind !== 'off' && (
+        <a href={RELEASES_URL} target="_blank" rel="noreferrer" className={`mt-2 inline-flex items-center gap-1.5 py-1 text-xs text-sky-300 hover:underline max-md:min-h-[44px] ${focus}`}>
+          All releases on GitHub <ExternalLink size={13} aria-hidden="true" />
+        </a>
+      )}
     </section>
   );
 };
@@ -270,9 +291,9 @@ export const VersionCard: React.FC = () => {
   const { model, ctrl } = useAppUpdate();
   const now = useNow();
   const known = model.status !== null;
-  // Opening Settings checks again when the last answer is over an hour old
+  // Opening Settings checks again when the last answer is over an hour old, and always when it was off
   useEffect(() => {
-    if (known) void ctrl.checkIfStale();
+    if (known || ctrl.get().unsupported) void ctrl.checkIfStale();
   }, [known, ctrl]);
   return (
     <VersionCardView
