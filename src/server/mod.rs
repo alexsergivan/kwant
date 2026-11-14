@@ -335,6 +335,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dev/prepush/:id/override", post(dev::prepush::override_card))
         .route("/api/dev/prepush/:id/retry", post(dev::prepush::retry_card))
         .route("/api/dev/cards/:id", get(dev::routes::card))
+        .route("/api/dev/cards/:id/recipients", get(dev::routes::recipients))
         .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/dev/cards/:id/post", post(dev::post::post))
         .route("/api/dev/cards/:id/changes", get(dev::line_notes::changes))

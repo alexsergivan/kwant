@@ -1219,7 +1219,9 @@ export const devApi = {
   /** Flow F6 (Juno): the person opened the Dev desk, so new_reviews goes back to 0 on every device. */
   deskSeen: (space: string) => call<unknown>(`/api/spaces/${enc(space)}/dev_mode/seen`, 'POST').then((r) => r.data),
   reviews: (space: string, repo?: string | null) => call<unknown>(`/api/spaces/${enc(space)}/dev/reviews${repo ? `?repo=${enc(repo)}` : ''}`).then((r) => r.data),
-  finding: (card: string, fid: string, body: { action: string; reason?: string; note?: string }) =>
+  /** #609: who Fix it and line notes on this card can go to (raw; `parseRecipients` in dev/types.ts). */
+  recipients: (card: string) => call<unknown>(`/api/dev/cards/${enc(card)}/recipients`).then((r) => r.data),
+  finding: (card: string, fid: string, body: { action: string; reason?: string; note?: string; to?: string }) =>
     call<unknown>(`/api/dev/cards/${enc(card)}/findings/${enc(fid)}`, 'POST', body).then((r) => r.data),
   /** 0.7.1 Post to {Forge}: one PR review from this card. 200 with the card, `post_error` set when the forge refused. */
   post: (card: string) => call<unknown>(`/api/dev/cards/${enc(card)}/post`, 'POST', {}).then((r) => r.data),
