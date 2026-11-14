@@ -6931,7 +6931,7 @@ async fn resolve_upload_files(
         // (same wording as a path that isn't found); a path keeps its name, since that's never
         // someone else's id.
         let mut file = dir.open_file(rel).map_err(|_| match uuid::Uuid::parse_str(raw) {
-            Ok(_) => "isn't a file in your folder.".to_string(),
+            Ok(_) => "That isn't a file in your folder or an attachment in this chat.".to_string(),
             Err(_) => format!("{raw} isn't a file in your folder."),
         })?;
         let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
