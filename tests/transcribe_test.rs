@@ -486,6 +486,47 @@ async fn while_two_are_held_the_next_waits_unread_then_gets_busy_or_its_turn() {
 }
 
 #[tokio::test]
+async fn a_stalled_upload_is_interrupted_and_gives_its_slot_back() {
+    // Its own slots, and a short stall instead of 15 s
+    let (app, state, _tmp) = setup_with(|s| {
+        s.dictation = Arc::new(transcribe::Slots { read_stall: Duration::from_secs(1), ..Default::default() })
+    })
+    .await;
+    space_key(&state, &SpaceId::default_space(), "sk-stall").await;
+    // Two uploads send 1 KB, then nothing, and never end: both slots are taken
+    let stalled = || {
+        let body = Body::from_stream(futures::stream::once(async { Ok::<_, std::io::Error>(Bytes::from(vec![1u8; 1000])) }).chain(futures::stream::pending()));
+        Request::post(format!("/api/spaces/{DEF}/transcribe")).header("content-type", "audio/webm").body(body).unwrap()
+    };
+    let held: Vec<_> = (0..2)
+        .map(|_| {
+            let (app, req) = (app.clone(), stalled());
+            tokio::spawn(async move { call(&app, req).await })
+        })
+        .collect();
+    let taken = tokio::time::timeout(Duration::from_secs(5), async {
+        while state.dictation.at_once.available_permits() > 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    });
+    taken.await.expect("both stalled uploads hold a slot while they read");
+
+    // After the stall each one is refused as interrupted, nothing went upstream, and both slots are back
+    for h in held {
+        let (code, v) = tokio::time::timeout(Duration::from_secs(5), h).await.expect("a stalled upload ends").unwrap();
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{v}");
+        assert_eq!(v["code"], "interrupted", "{v}");
+    }
+    assert_eq!(state.dictation.at_once.available_permits(), transcribe::MAX_AT_ONCE);
+    assert!(calls_with("sk-stall").is_empty(), "a stalled upload never goes to OpenAI");
+
+    // A normal recording gets a slot and its text
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![1; 100])).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(calls_with("sk-stall").len(), 1);
+}
+
+#[tokio::test]
 async fn every_upload_declares_its_length() {
     let (app, state, _tmp) = setup().await;
     space_key(&state, &SpaceId::default_space(), "sk-sized").await;

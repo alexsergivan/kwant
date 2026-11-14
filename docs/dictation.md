@@ -77,7 +77,7 @@ Every refusal is `{"error": "<a sentence for the person>", "code": "<code>"}`; 4
 | 400 | `bad_lang` | `lang must be a two-letter language code such as en.` |
 | 409 | `no_transcriber` | the `why` from GET, also as `why` |
 | 429 | `busy` | `Other recordings are being turned into text. Try again in a moment.` (no slot within 30 s; the body isn't read) |
-| 400 | `interrupted` | `The recording was interrupted.` |
+| 400 | `interrupted` | `The recording was interrupted.` (the upload broke off, or sent nothing for 15 s) |
 | 413 | `too_large` | as above, at the byte that passes 25 MB |
 | 400 | `empty_audio` | `The recording is empty.` |
 | 502 | `transcriber_failed` | one of the reasons below |

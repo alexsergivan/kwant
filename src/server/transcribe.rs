@@ -55,6 +55,9 @@ pub const FALLBACK_MODEL: &str = "whisper-1";
 /// [`QUEUE_WAIT`] for its turn, before its body is read, then gets 429 `busy`.
 pub const MAX_AT_ONCE: usize = 2;
 pub const QUEUE_WAIT: Duration = Duration::from_secs(30);
+/// How long an upload may send nothing before it counts as interrupted, so a client that goes
+/// quiet mid-upload gives its slot back instead of holding it until the connection drops.
+pub const READ_STALL: Duration = Duration::from_secs(15);
 /// Test seam: another OpenAI address (only with the `test-seams` feature, like Telegram's).
 pub const API_BASE_ENV: &str = "KWNT_OPENAI_API_BASE";
 const OPENAI_API: &str = "https://api.openai.com";
@@ -195,6 +198,8 @@ pub struct TranscribeQuery {
 pub struct Slots {
     pub at_once: Semaphore,
     pub queue_wait: Duration,
+    /// [`READ_STALL`], or a test's shorter one.
+    pub read_stall: Duration,
 }
 
 impl Default for Slots {
@@ -206,7 +211,7 @@ impl Default for Slots {
 impl Slots {
     /// [`MAX_AT_ONCE`] slots with another wait (a test's shorter one).
     pub fn with_wait(queue_wait: Duration) -> Self {
-        Self { at_once: Semaphore::new(MAX_AT_ONCE), queue_wait }
+        Self { at_once: Semaphore::new(MAX_AT_ONCE), queue_wait, read_stall: READ_STALL }
     }
 }
 
@@ -267,7 +272,7 @@ pub async fn transcribe(
     let Ok(Ok(_slot)) = tokio::time::timeout(state.dictation.queue_wait, state.dictation.at_once.acquire()).await else {
         return refusal(StatusCode::TOO_MANY_REQUESTS, "busy", "Other recordings are being turned into text. Try again in a moment.");
     };
-    let audio = match read_audio(body, declared).await {
+    let audio = match read_audio(body, declared, state.dictation.read_stall).await {
         Ok(a) => a,
         Err(bad) => return bad.refusal(),
     };
@@ -302,11 +307,12 @@ impl BadAudio {
     }
 }
 
-/// The whole body, refused at the byte that passes [`MAX_AUDIO_BYTES`], or when empty.
-async fn read_audio(body: Body, declared: Option<u64>) -> Result<Bytes, BadAudio> {
+/// The whole body, refused at the byte that passes [`MAX_AUDIO_BYTES`], when empty, or as
+/// interrupted once `stall` passes with no bytes (the slot is held while this reads).
+async fn read_audio(body: Body, declared: Option<u64>, stall: Duration) -> Result<Bytes, BadAudio> {
     let mut audio = Vec::with_capacity(declared.unwrap_or(0).min(MAX_AUDIO_BYTES) as usize);
     let mut stream = body.into_data_stream();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = tokio::time::timeout(stall, stream.next()).await.map_err(|_| BadAudio::Interrupted)? {
         let chunk = chunk.map_err(|_| BadAudio::Interrupted)?;
         if audio.len() as u64 + chunk.len() as u64 > MAX_AUDIO_BYTES {
             return Err(BadAudio::TooLarge);
