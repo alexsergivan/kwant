@@ -1,0 +1,30 @@
+{
+  "version": "0.9.11",
+  "date": "2026-11-14",
+  "highlights": [
+    {
+      "id": "send-to",
+      "title": "Pick which bot fixes it",
+      "text": "Each finding on a PR card says who Fix it goes to, like \"Goes to Ana · lead of Edge\". Press it to pick another bot of the space. Line notes work the same way.",
+      "image": "send-to.webp",
+      "open": null
+    },
+    {
+      "id": "space-docs",
+      "title": "Add your own documents to a space",
+      "text": "Add .md, .txt or PDF files in Settings › This space › Documents, and bots quote them word for word. Only you can add or remove them. A quote's chip opens the passage.",
+      "image": "space-docs.webp",
+      "open": "settings/docs"
+    },
+    {
+      "id": "request-parts",
+      "title": "Done cards check every part of what you asked",
+      "text": "Leads cut your request into parts, in your words, and link each to its checks. A done card says \"Partly checked\" and names the part that has no check.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Download receipts under This week on the Mission board saves a CSV of finished tasks: who checked, how, the verdict and the evidence."
+  ]
+}

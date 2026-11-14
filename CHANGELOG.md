@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.11] - 2026-11-14
+
+kwant 0.9.11: Fix it and line notes that go to the bot you pick, a Documents tab for the files bots quote and done cards that check each part of what you asked.
+
+### Added
+- **Pick which bot fixes it.** Each open finding on a PR card now says who **Fix it** goes to, like **Goes to Ana · lead of Edge**. Press that line to pick another bot of the space from a list (a popover on desktop, a sheet on a phone, with search when the space has more than 8 bots); the default stays first: the PR's author bot, else the lead of the team that owns the repo. Line notes go the same way with **Send N notes…**, a card with no default asks you to pick a bot, and **Open task ›** opens the task once the Undo window has passed. Behind it are the new `GET /api/dev/cards/:id/recipients` and an optional `to` on Fix it and line notes (a bot of another space is a 400 `bad_recipient`); the task, and its redelivery after a restart, goes to the bot you picked. (#609, #615)
+- **Add and remove a space's documents in the app.** Settings › This space › **Documents** lists the files bots quote and takes new ones: drop them in or **Choose files** (.md, .markdown, .txt or a PDF with text in it, up to 2 MB each, 200 per space). A document that's already there asks before it's replaced, and the bin removes one. Only you can add or remove documents, not a bot. In chat, a quote from a document shows a chip with the file and its PDF page; it opens the passage on its page, marked. New `POST /api/spaces/:id/docs?name=` (the file as the body, `&replace=1` to replace), `DELETE /api/spaces/:id/docs/:name` and `GET /api/spaces/:id/docs/page?file=&page=&quote=`. (#614, #613)
+- **Done cards check each part of what you asked.** A lead now cuts your request into parts, in your own words, and links each part to the criteria that prove it. A finished task's check line on its Inbox done card then counts parts and names one that didn't pass, like `Partly checked: 1 of 2 parts checked; "send it to Ana": no check.` A part passes only when every criterion linked to it passed with evidence, so a bot's claim never counts. Tasks without parts read as before. The task contract (`GET/PUT /api/tasks/:id/contract`) has a new `parts` list; no migration. (#619)
+- **Download receipts.** Under This week on the Mission board, **Download receipts** saves a CSV of the space's finished tasks from the last 30 days, 90 days or 12 months, with who checked each one, how, the latest verdict and the evidence (17 columns). Days are UTC, both ends included. Behind it is the new `GET /api/tasks/receipts.csv?from=&to=&state=`: `state` is `closed` (default), `verified`, `failed` or `cancelled`. The file is safe to open in Excel and Sheets (RFC 4180 quoting, cells starting with = + - or @ are guarded) and holds up to 10,000 rows (`X-Kwant-Truncated: true` when cut, and the app says so). (#611, #621)
+
 ## [Mac 0.9.10] - 2026-11-14
 
 kwant 0.9.10: usage bars for each AI account, a Done mark and an Approve button on replies and one search for every app.
