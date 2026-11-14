@@ -11,6 +11,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **One call for the desktop island.** `GET /api/glance` sums up every active space in one response: what needs you (exactly what `/api/away` lists as waiting, with an inline Allow only for plain approvals, never risky, money or push steps), which bots are working and on what step, and the last 5 finishes in 24 h. It answers `304` while nothing changed. `POST /api/glance/ask {space_id, kwant_id, text}` sends a quick message into your chat with a bot (up to 8,000 characters). Both are for you only, not for bots.
 
+## [Mac 0.9.12] - 2026-11-14
+
+kwant 0.9.12: Dev mode that says when it finds your code and lighter long jobs on API engines.
+
+### Added
+- Dictate into the message box, server side: new `GET /api/spaces/:id/transcribe` says whether dictation works in a space (and why not, in one sentence), and `POST /api/spaces/:id/transcribe` turns a recording (webm, mp4, mpeg, wav or ogg, up to 25 MB) into text with OpenAI speech-to-text, using the space's own OpenAI API-key account, else the host's OpenAI key unless This machine is off for the space. Only the person can dictate (bots get 403); the audio isn't stored, and the text comes back for editing, so nothing is sent before you press Send. The app has no mic button yet. (#610)
+
+### Changed
+- **Dev mode is easier to find.** It's now the first card in Space settings › General, and when kwant finds a team's repo the card says so, like **Found octocat/Hello-World in Web team. Turn it on and your bots review pull requests, show what landed and guard deploys.**, with **Turn on Dev mode** and **Details** (branch to watch and backup command). #general shows a strip, like **Code space has code: octocat/Hello-World**, whose **Turn on Dev mode** opens that card without turning anything on; **Not now** hides the strip for that space. With no repo found, the card asks for one (**Add a repo first.**), and a folder without git doesn't count as found code. (#629)
+- **Long jobs on API engines send much less.** On API-key engines (OpenAI-style, OpenRouter, Ollama and the Anthropic API), once a turn's older tool results add up to more than 24 KB, they are cut in one batch to a short note with their first 300 characters, so the prompt cache keeps working; the newest 4 results, errors and results under 1 KB stay whole. The bot reads any trimmed result back in full with the new built-in `kwnt_read_tool_result`. In a 30-step test turn this sent 66% fewer bytes, and the last request was 85% smaller. The claude and codex sign-in engines are unchanged. (#620)
+
 ## [Mac 0.9.11] - 2026-11-14
 
 kwant 0.9.11: Fix it and line notes that go to the bot you pick, a Documents tab for the files bots quote and done cards that check each part of what you asked.
