@@ -214,6 +214,18 @@ pub struct TranscribeQuery {
 static AT_ONCE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(MAX_AT_ONCE));
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
+/// The pooled client for api.openai.com, or a new one for any other base (only a test-seams
+/// build has one: a stub). Each `#[tokio::test]` runs on its own runtime, and a connection pooled
+/// during one test dies with that test's runtime, so a shared pool let a test's upload ride a
+/// connection that was cut halfway ("OpenAI couldn't be reached.", #610 CI at 06:02).
+fn client_for(base: &str) -> reqwest::Client {
+    if base == OPENAI_API {
+        CLIENT.clone()
+    } else {
+        reqwest::Client::new()
+    }
+}
+
 /// `POST /api/spaces/:id/transcribe[?lang=xx]` with the recording as the raw body → 200
 /// `{text, source}`. Refusals come before any byte is read where they can: 403 for a bot's
 /// token, 404 no space, 409 archived space, 413 a declared length over 25 MB, 415 not a
@@ -345,7 +357,7 @@ fn multipart(boundary: &str, audio: &[u8], file_name: &str, lang: Option<&str>, 
 async fn send_one(source: &TranscribeSource, audio: &[u8], file_name: &str, lang: Option<&str>, model: &str) -> Result<String, Upstream> {
     let TranscribeSource::OpenAi { base, key } = source;
     let boundary = format!("kwnt-{}", uuid::Uuid::new_v4().simple());
-    let resp = CLIENT
+    let resp = client_for(base)
         .post(format!("{}/v1/audio/transcriptions", base.trim_end_matches('/')))
         .bearer_auth(key)
         .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
@@ -353,7 +365,14 @@ async fn send_one(source: &TranscribeSource, audio: &[u8], file_name: &str, lang
         .timeout(TIMEOUT)
         .send()
         .await
-        .map_err(|e| if e.is_timeout() { Upstream::Timeout } else { Upstream::Unreachable })?;
+        .map_err(|e| {
+            if e.is_timeout() {
+                return Upstream::Timeout;
+            }
+            // The error without its address; the key is a header and is never in it.
+            tracing::warn!(error = %e.without_url(), "dictation: OpenAI couldn't be reached");
+            Upstream::Unreachable
+        })?;
     let status = resp.status().as_u16();
     if status != 200 {
         let body: Value = resp.json().await.unwrap_or(Value::Null);

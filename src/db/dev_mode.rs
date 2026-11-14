@@ -5,6 +5,7 @@
 //! Only the person writes `dev_mode_spaces` and `dev_repos` (the routes refuse agent tokens).
 //! Add-only except for one rebuild of `dev_cards` (T2), so a 0.7.1 build still reads this database.
 
+use super::skills::{Skill, SkillText};
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
@@ -230,6 +231,11 @@ pub struct DevModeRow {
     /// Its own column since 0.7.2, so opening the desk no longer empties the landed rollup.
     #[sqlx(default)]
     pub reviews_seen_at: Option<DateTime<Utc>>,
+    /// When kwant offered the built-in `modern-web` skill here (web-guidance W3). Set once, at
+    /// the offer, so the skill is never offered again: not after a reject or delete, nor when
+    /// Dev mode goes off and on.
+    #[sqlx(default)]
+    pub web_guidance_offered_at: Option<DateTime<Utc>>,
 }
 
 /// One card: what landed, a review of an open PR head, or a release-notes draft.
@@ -333,7 +339,60 @@ impl Database {
         self.migrate_line_notes().await?;
         // 0.9.0: worktrees kwant made (H1, dev_worktrees.rs)
         self.migrate_worktrees().await?;
+        // 0.10: the modern-web skill's one-time offer (web-guidance W3). Additive; older builds
+        // never name it
+        let has: Option<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('dev_mode_spaces') WHERE name = 'web_guidance_offered_at'")
+            .fetch_optional(&self.pool)
+            .await?;
+        if has.is_none() {
+            sqlx::query("ALTER TABLE dev_mode_spaces ADD COLUMN web_guidance_offered_at TIMESTAMP").execute(&self.pool).await?;
+        }
         Ok(())
+    }
+
+    /// Offers a skill to every bot in the space once, as a pending shared proposal the person
+    /// approves or rejects in Skills (web-guidance W3). The space is marked in the same
+    /// transaction, before anything else, so a skill is offered at most once per space whatever
+    /// happens to it later. `None` when there is nothing to offer: Dev mode was never turned on
+    /// here, it was offered already, or the space already has a skill of that name (then only
+    /// the mark is set, so the person's own skill is left alone).
+    pub async fn offer_web_guidance_once(&self, space_id: &str, text: &SkillText) -> Result<Option<Skill>, DbError> {
+        let now = Utc::now();
+        let mut tx = self.begin_write().await?;
+        let marked = sqlx::query("UPDATE dev_mode_spaces SET web_guidance_offered_at = ? WHERE space_id = ? AND web_guidance_offered_at IS NULL")
+            .bind(now)
+            .bind(space_id)
+            .execute(&mut *tx)
+            .await?;
+        if marked.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+        let named: Option<(String,)> = sqlx::query_as("SELECT id FROM skills WHERE space_id = ? AND name = ? LIMIT 1")
+            .bind(space_id)
+            .bind(&text.name)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if named.is_some() {
+            tx.commit().await?;
+            return Ok(None);
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO skills (id, kwant_id, name, description, body, status, source, proposed_by, replaces_id, created_at, updated_at, space_id)
+             VALUES (?, NULL, ?, ?, ?, 'pending', 'agent', NULL, NULL, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&text.name)
+        .bind(&text.description)
+        .bind(&text.body)
+        .bind(now)
+        .bind(now)
+        .bind(space_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        self.get_skill(&id).await
     }
 
     async fn dev_cards_has(&self, column: &str) -> Result<bool, DbError> {

@@ -84,7 +84,7 @@ import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, forgetLastRuns, resetTurns, turnEnded, turnRunsOn, turnStarted } from './kwantActivity';
-import { setBadgeBots, setBadgeEngines } from './modelBadgeData';
+import { setBadgeBots, setBadgeEngines, setBadgeProfiles } from './modelBadgeData';
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
@@ -3774,6 +3774,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     forgetLastRuns();
   }, [kwants]);
   useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
+  useEffect(() => setBadgeProfiles(profiles), [profiles]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
@@ -4408,7 +4409,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     />
   );
   const attentionRankOf = new Map((attention ?? []).map((a) => [a.kwant.id, a.rank]));
-  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title, rank: attentionRankOf.get(k.id) }))} defaultBotId={!isChannel ? selectedId : null} onOpenChat={(id, thread) => { if (thread) { openThread(id, thread); return; } if (!openTarget({ channel_id: null, kwant_id: id })) pushToast('That bot no longer exists.'); }} />;
+  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title, rank: attentionRankOf.get(k.id) }))} defaultBotId={!isChannel ? selectedId : null} onOpenTask={missionBoard ? (id) => { setPendingTaskId(id); showPage('board'); } : undefined} onOpenChat={(id, thread) => { if (thread) { openThread(id, thread); return; } if (!openTarget({ channel_id: null, kwant_id: id })) pushToast('That bot no longer exists.'); }} />;
   const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…

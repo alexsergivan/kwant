@@ -59,6 +59,9 @@ pub struct ProfileOut {
     pub last_error: Option<String>,
     /// A Custom API account's server and last check; `None` for every other kind.
     pub custom: Option<CustomOut>,
+    /// The account's 5-hour and weekly limits as last read; `None` before the first reading,
+    /// and always for API-key and Custom API accounts.
+    pub usage: Option<crate::profiles::usage::AccountUsage>,
 }
 
 /// A Custom API account's server, as the API shows it (never its key).
@@ -120,6 +123,7 @@ pub(super) async fn views(state: &AppState, profiles: Vec<LlmProfile>) -> Vec<Pr
     let own_keys = state.db.profile_ids_with_key().await.unwrap_or_default();
     let keyed = keyed_ids(state, &profiles).await;
     let states = state.db.list_profile_states().await.unwrap_or_default();
+    let mut usage = state.db.list_profile_usage().await.unwrap_or_default();
     let statuses = state.profiles.statuses(&profiles, &keyed).await;
     profiles
         .into_iter()
@@ -141,6 +145,7 @@ pub(super) async fn views(state: &AppState, profiles: Vec<LlmProfile>) -> Vec<Pr
                 }
             });
             ProfileOut {
+                usage: usage.remove(&p.id).filter(|_| super::account_usage::has_windows(&p)),
                 custom,
                 home_dir: state
                     .profiles
@@ -513,6 +518,38 @@ pub async fn check(State(state): State<AppState>, Path(id): Path<String>) -> Res
     }
     super::profile_turn::refresh_custom(&state, &p, true).await;
     view_of(&state, &id).await
+}
+
+/// `POST /api/profiles/:id/usage`: reads fresh 5-hour and weekly numbers for a Claude or Codex
+/// sign-in and returns its `usage`. At most once a minute per account: a press within the minute
+/// returns the last reading (429 when there is none yet). Never called on a timer.
+pub async fn usage(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let p = match load(&state, &id).await {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    if !super::account_usage::has_windows(&p) {
+        return err(StatusCode::BAD_REQUEST, "only Claude and Codex sign-ins have 5-hour and weekly limits");
+    }
+    if !state.profiles.claim_usage_check(&id) {
+        let last = state.db.get_profile_usage(&id).await.ok().flatten();
+        return match last {
+            Some(u) => Json(u).into_response(),
+            None => {
+                let mut r = err(StatusCode::TOO_MANY_REQUESTS, "checked less than a minute ago; try again shortly");
+                r.headers_mut().insert(
+                    axum::http::header::RETRY_AFTER,
+                    axum::http::HeaderValue::from(crate::profiles::usage::CHECK_EVERY.as_secs()),
+                );
+                r
+            }
+        };
+    }
+    match super::account_usage::check(&state, &p).await {
+        Ok(u) => Json(u).into_response(),
+        Err(super::account_usage::CheckError::Unsupported(why)) => err(StatusCode::BAD_REQUEST, why),
+        Err(super::account_usage::CheckError::Failed(why)) => err(StatusCode::BAD_GATEWAY, why),
+    }
 }
 
 /// `DELETE /api/profiles/:id/key`

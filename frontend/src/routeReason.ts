@@ -1,6 +1,9 @@
 // The line under "Sending your question to X" on Laya's routing card: why that bot, in words that
 // match how it was actually picked.
 
+/** The router bot's name. One place, so the routing line and Details say the same name. */
+export const ROUTER_NAME = 'Laya';
+
 export type RouteBasis =
   | 'skills'
   | 'lead'
@@ -77,36 +80,18 @@ export function routeReasonText(r: RouteReasonInput): string | null {
   }
 }
 
-/** The two or three words on the chip beside a reply's name: how this bot was picked. The full
- *  sentence (routeReasonText / routingLine) opens when the chip is tapped. */
-export function routeChipLabel(r: { basis?: string; fallback?: boolean }): string {
-  if (r.fallback) return 'By keywords';
-  switch (r.basis) {
-    case 'skills':
-      return 'Matched skills';
-    case 'keywords':
-      return 'Matched words';
-    case 'lead':
-    case 'team':
-      return 'Team lead';
-    case 'only':
-      return 'Only bot here';
-    case 'several':
-      return 'Best of several';
-    case 'discuss':
-      return 'Team discussion';
-    case 'asked':
-    case 'ask':
-      return 'You chose';
-    case 'last':
-      return 'Same as last time';
-    case 'concierge':
-      return 'General answer';
-    case 'handback':
-      return 'Handed over';
-    case 'learned':
-      return 'Learned from you';
-    default:
-      return 'Picked by Laya';
+/**
+ * reply-chrome part 4: "Why {Name}" in a reply's Details, in words. A keyword fallback says who was offline and
+ * which words matched; any other pick reads as routeReasonText; with nothing known, who picked it.
+ */
+export function routeWhyText(r: RouteReasonInput, routerName: string = ROUTER_NAME): string {
+  const name = r.kwantName || 'this bot';
+  if (r.fallback) {
+    const terms = (r.matchedTerms ?? []).filter(Boolean).slice(0, 4);
+    const head = `${routerName}, who picks the bot, was offline, so ${name} was picked by matching words in your message`;
+    return terms.length ? `${head}: ${terms.join(', ')}.` : `${head}.`;
   }
+  const said = routeReasonText(r);
+  if (said && !/^laya picked\b/i.test(said)) return /[.!?]$/.test(said) ? said : `${said}.`;
+  return `${routerName} picked ${name} for this.`;
 }

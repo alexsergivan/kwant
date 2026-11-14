@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, Terminal } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
@@ -8,6 +8,11 @@ import type { ReplyPart, ReplySource } from './results/registry';
 import { SmartResult } from './results/SmartResult';
 import { ReplyText } from './results/ReplyText';
 import { inlineCodeClass, linkClass } from './markdownInline';
+import { DOC_SCHEME } from '../spaceDocs';
+import { DocQuoteChip } from './DocQuoteChip';
+
+/** react-markdown drops unknown schemes; a space document's address is kept for its quote chip. */
+const urlTransform = (url: string) => (url.startsWith(DOC_SCHEME) ? url : defaultUrlTransform(url));
 
 interface CodeBlockProps {
   language?: string;
@@ -180,6 +185,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     <div className={`markdown-content text-sm leading-relaxed text-zinc-200 ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={urlTransform}
         rehypePlugins={smart ? [rehypeSmartIndex as never, ...(section ? [rehypeSmartSection(content, results) as never] : [])] : undefined}
         components={{
           // Pre element pass-through to let CodeBlock handle layout
@@ -348,7 +354,10 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           hr: () => <hr className="my-4 border-zinc-800" />,
 
           // Links
-          a: ({ href, children }) => (
+          a: ({ href, children }) =>
+            href?.startsWith(DOC_SCHEME) ? (
+              <DocQuoteChip href={href} fallback={children} />
+            ) : (
             <a
               href={href}
               target="_blank"
@@ -357,7 +366,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             >
               {children}
             </a>
-          ),
+            ),
         }}
       >
         {content}

@@ -1,0 +1,39 @@
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:02.090
+kwant is your own team of bots.
+
+2
+00:00:03.000 --> 00:00:06.474
+On a fresh team, you start with Ann, Ben, and Cody.
+
+3
+00:00:06.700 --> 00:00:13.649
+You ask once, in plain words. One bot answers, then hands the rest
+on to a teammate who picks it up.
+
+4
+00:00:14.200 --> 00:00:19.816
+You can point at the exact thing that's wrong on the page, and the
+right bot gets it and fixes it.
+
+5
+00:00:23.200 --> 00:00:28.764
+Before a risky step runs, it shows you the exact command, and waits
+for your approval.
+
+6
+00:00:30.827 --> 00:00:36.443
+Done doesn't just mean finished. Each task shows you the checks it
+passed before it's marked done.
+
+7
+00:00:37.056 --> 00:00:43.560
+Set a routine once, like checking for checkout errors every morning,
+and it keeps watching while you're away.
+
+8
+00:00:43.771 --> 00:00:50.955
+That's kwant: your own team of bots, on Mac, Windows, Linux, or your
+own server. kwant.si

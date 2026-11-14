@@ -138,6 +138,10 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) {
                             return;
                         }
                         poll_space(&state, &row.space_id).await;
+                        // The modern-web skill's one-time offer (web_guidance.rs); done once marked
+                        if all && row.web_guidance_offered_at.is_none() {
+                            super::web_guidance::offer_soon(&state, &crate::db::spaces::SpaceId::new(&row.space_id));
+                        }
                     }
                 }
                 Err(e) => tracing::warn!("dev: could not list Dev mode spaces: {e}"),

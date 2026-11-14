@@ -88,7 +88,8 @@ Every refusal is `{"error": "<a sentence for the person>", "code": "<code>"}`; 4
 - `OpenAI's answer couldn't be read.`
 
 The key never appears in an answer or a log line. The log has one line per recording
-(`dictation transcribed` or `dictation failed`, with the space, size, model or reason).
+(`dictation transcribed` or `dictation failed`, with the space, size, model or reason). When
+OpenAI can't be reached, one more line has the connection error, without its address.
 
 ## Tests
 

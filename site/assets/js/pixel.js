@@ -414,9 +414,20 @@
   });
 
   // ---- Closing panel and 404: the same town, quieter ----
-  Array.prototype.forEach.call(document.querySelectorAll("[data-scene=street]"), function (el) {
-    guard(function () {
-      town(el.querySelector("canvas"), { low: true, host: el, count: el.hasAttribute("data-lost") ? 1 : 6 }).start();
+  // They wait until the page has loaded and the browser is idle (the still image shows until then), so they never
+  // hold up the first paint.
+  function streets() {
+    Array.prototype.forEach.call(document.querySelectorAll("[data-scene=street]"), function (el) {
+      guard(function () {
+        town(el.querySelector("canvas"), { low: true, host: el, count: el.hasAttribute("data-lost") ? 1 : 6 }).start();
+      });
     });
-  });
+  }
+  // The load event can come before the first paint, so wait one more frame as well.
+  function idleStreets() {
+    requestAnimationFrame(function () {
+      setTimeout(function () { if ("requestIdleCallback" in window) requestIdleCallback(streets, { timeout: 1500 }); else setTimeout(streets, 200); }, 0);
+    });
+  }
+  if (document.readyState === "complete") idleStreets(); else window.addEventListener("load", idleStreets, { once: true });
 })();

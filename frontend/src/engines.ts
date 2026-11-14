@@ -1,5 +1,6 @@
 // Engines: whether each way of running a model (a CLI, an API key, Ollama) can run right now, from
 // GET /api/engines, and the shared Engine → Model choice stored in a kwant's preferred_model.
+import { hasUsageLimits, usageSummary, type Profile } from './profiles';
 
 export type EngineId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama' | 'custom_api';
 export type EngineKind = 'cli' | 'api' | 'local';
@@ -513,6 +514,27 @@ export function pinnedCantRun(
   if (!kwant || kwant.profile_failover !== false) return null;
   const badge = modelBadgeFor({ preferred_model: kwant.preferred_model }, null, engines ?? null);
   return badge && !badge.auto && badge.cantRun ? badge.label : null;
+}
+
+/**
+ * The badge hover's usage line (account-usage design §5) for the account a bot's next turn would use: the first
+ * engine of its family that can run, and the account it runs on now (`uses`). The account's name goes first when
+ * 2+ accounts of that engine are signed in and on. `low` (a window under 20% left) draws the amber dot. null for
+ * Laya's ✦, an API key or Custom API account, or when nothing was read yet.
+ */
+export function badgeUsageFor(
+  mark: BadgeMark | null | undefined,
+  engines: EngineInfo[] | null | undefined,
+  profiles: Profile[] | null | undefined,
+  now = Date.now(),
+): { text: string; low: boolean } | null {
+  if (!mark || mark === 'laya' || !engines?.length || !profiles?.length) return null;
+  const engine = engines.find((e) => FAMILY_OF[e.id] === mark && isUsable(e) && e.uses?.profile_id);
+  const account = engine ? profiles.find((p) => p.id === engine.uses!.profile_id) : null;
+  if (!account || !hasUsageLimits(account)) return null;
+  const signedIn = profiles.filter((p) => p.engine === account.engine && hasUsageLimits(p) && p.enabled && p.signed_in === true);
+  const name = signedIn.length > 1 ? (account.kind === 'system' ? account.account_label || 'This computer' : account.name) : null;
+  return usageSummary(account, now, name);
 }
 
 /** The badge's diameter for an avatar of `size` px: none under 24, 14 at 28–34, larger on big avatars. */

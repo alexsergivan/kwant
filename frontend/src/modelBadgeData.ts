@@ -1,6 +1,7 @@
 // What the avatar's model badge needs besides the live turn: each bot's pick and last reply's engine
 // (from the app's bot list), and which engines can run (GET /api/engines). The app fills it, like botLooks.
 import type { EngineInfo, RunsOn } from './engines';
+import type { Profile } from './profiles';
 
 export interface BadgeBot {
   id: string;
@@ -11,6 +12,7 @@ export interface BadgeBot {
 
 let bots = new Map<string, BadgeBot>();
 let engines: EngineInfo[] | null = null;
+let profiles: Profile[] | null = null;
 let rev = 0;
 const listeners = new Set<() => void>();
 const bump = () => {
@@ -30,8 +32,16 @@ export function setBadgeEngines(list: EngineInfo[] | null): void {
   bump();
 }
 
+/** The space's accounts, for the hover's "5-hour 93% left · Weekly 44% left" (account-usage). */
+export function setBadgeProfiles(list: Profile[] | null): void {
+  if (list === profiles) return;
+  profiles = list;
+  bump();
+}
+
 export const badgeBotOf = (id: string | undefined): BadgeBot | undefined => (id ? bots.get(id) : undefined);
 export const badgeEngines = (): EngineInfo[] | null => engines;
+export const badgeProfiles = (): Profile[] | null => profiles;
 export const badgeDataRev = (): number => rev;
 export function subscribeBadgeData(fn: () => void): () => void {
   listeners.add(fn);

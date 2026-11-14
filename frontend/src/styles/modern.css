@@ -1030,3 +1030,11 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
 @keyframes kw-dict-spin { to { transform: rotate(360deg); } }
 .kw-dict-pop { animation: kw-dict-pop 140ms ease-out both; }
 @keyframes kw-dict-pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* Fix it "Send to…" (#609, design §8): the picker's popover and phone sheet. Static under reduced motion. */
+@keyframes kw-st-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes kw-st-sheet { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  .kw-st-pop { animation: kw-st-pop 140ms ease-out both; }
+  .kw-st-sheet { animation: kw-st-sheet 180ms ease-out both; }
+}

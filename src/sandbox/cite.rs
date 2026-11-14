@@ -315,6 +315,56 @@ fn joined(text: &str) -> Vec<char> {
     page_lines(text).join("\n").chars().collect()
 }
 
+/// [`joined`] with, for each of its characters, the byte offset in `text` it came from (a joined
+/// space or line break points at the next word's first character).
+fn joined_with_offsets(text: &str) -> (Vec<char>, Vec<usize>) {
+    let (mut chars, mut at) = (Vec::new(), Vec::new());
+    let mut start = 0;
+    for line in text.split('\n') {
+        let base = start;
+        start += line.len() + 1;
+        let (mut gap, mut any) = (false, false);
+        for (i, c) in line.char_indices() {
+            if c.is_whitespace() {
+                gap = any;
+                continue;
+            }
+            if !any && !chars.is_empty() {
+                chars.push('\n');
+                at.push(base + i);
+            } else if gap {
+                chars.push(' ');
+                at.push(base + i);
+            }
+            chars.push(c);
+            at.push(base + i);
+            (gap, any) = (false, true);
+        }
+    }
+    (chars, at)
+}
+
+/// Where `quote` is in `text` when [`cite_text`] would cite it from there (word for word, once,
+/// in whole words), as a byte range of `text` itself, so a viewer can highlight the very words a
+/// cited link points at without matching them again. `None` when it would refuse.
+pub fn locate(text: &str, quote: &str) -> Option<std::ops::Range<usize>> {
+    let q = normalize(quote);
+    if q.is_empty() {
+        return None;
+    }
+    let pat: Vec<char> = q.chars().collect();
+    let (hay, at) = joined_with_offsets(text);
+    let [p] = all_matches(&hay, &pat)[..] else {
+        return None;
+    };
+    let e = p + pat.len();
+    if mid_word(&hay, p) || mid_word(&hay, e) {
+        return None;
+    }
+    let last = at[e - 1];
+    Some(at[p]..last + text[last..].chars().next()?.len_utf8())
+}
+
 /// Every place `pat` is in `hay`, as start positions.
 fn all_matches(hay: &[char], pat: &[char]) -> Vec<usize> {
     (0..hay.len()).filter(|&p| match_at(hay, p, pat).is_some()).collect()
@@ -560,6 +610,29 @@ mod tests {
         let f = Fragment { prefix: None, start: "s".into(), end: None, suffix: None };
         assert_eq!(resolve(&Folded::new(&hay), &f), Some((usize::MAX, usize::MAX)));
         assert!(cite_text(&page("Send your résumé"), "your resume").unwrap_err().contains("accents (\"your résumé\")"));
+    }
+
+    #[test]
+    fn locate_finds_the_very_words_cite_ticks_in_the_original_text() {
+        let text = "# Returns\r\n\n  You can   return any item\nwithin 30 days.  Café closes at 5.\n";
+        // Runs of spaces and a line break inside the quote: the range covers the page's own text
+        let r = locate(text, "return any item within 30 days").unwrap();
+        assert_eq!(&text[r], "return any item\nwithin 30 days");
+        let r = locate(text, "Café closes").unwrap();
+        assert_eq!(&text[r], "Café closes");
+        assert_eq!(&text[locate(text, "Returns").unwrap()], "Returns");
+        // Whatever cite_text refuses, locate doesn't place: not there, twice, mid-word, other case, empty
+        let twice = "Open daily. Open daily.";
+        for (t, q) in [(text, "return any item within 60 days"), (twice, "Open daily."), (text, "eturn any"), (text, "café"), (text, "  ")] {
+            assert_eq!(locate(t, q), None, "{q:?}");
+            assert!(cite_text(&page(t), q).is_err(), "{q:?}");
+        }
+        // And whatever it cites, locate places, at the same words
+        for q in ["You can return", "30 days. Café", "closes at 5."] {
+            let c = cite_text(&page(text), q).unwrap();
+            let r = locate(text, q).unwrap();
+            assert_eq!(normalize(&text[r]), c.quote, "{q:?}");
+        }
     }
 
     #[test]

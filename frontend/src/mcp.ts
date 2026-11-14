@@ -100,6 +100,8 @@ export interface McpPreset {
   /** Where the setup comes from: the vendor's docs or the package page. */
   source: string;
   form: McpFormState;
+  /** The maker's own domain, when the server's address is on another one (GitHub's is api.githubcopilot.com). */
+  domain?: string;
 }
 
 /** A preset's secret: name, placeholder, and whether the server needs it to work. */
@@ -160,6 +162,7 @@ export const MCP_PRESETS: McpPreset[] = [
     needs: ['Token'],
     source: 'https://github.com/github/github-mcp-server',
     form: httpPreset('github', 'https://api.githubcopilot.com/mcp/', [['Authorization', 'Bearer ghp_…', true]]),
+    domain: 'github.com',
   },
   {
     // PyPI mcp-server-fetch 2026.10.10

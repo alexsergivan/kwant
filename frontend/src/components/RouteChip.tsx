@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Loader2, Sparkles } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 export interface Reroute {
   /** The reply's id, for element ids. */
@@ -9,30 +9,25 @@ export interface Reroute {
 }
 
 export interface RouteInfo {
-  /** The two or three words on the chip ("Matched skills"). */
-  label: string;
-  /** The whole reason, shown when the chip is opened and as the chip's tooltip. */
+  /** Why this bot answered, in words (routeWhyText): Details' "Why {Name}" row. */
   text: string;
   fallback?: boolean;
   reroute?: Reroute;
 }
 
 /**
- * Why this bot answered, split in two so the header can put the chip on its own line next to the name
- * while the opened reason and the "Send to another bot" picker sit under the header. With `reroute`,
- * "Wrong bot?" opens the other bots; picking one teaches routing and asks that bot.
+ * Why this bot answered, for a reply's Details (reply-chrome part 4: no chip on the name line). Returns the
+ * sentence, the "Wrong bot?" button that goes after it, and the panel (the "Send to another bot" picker and
+ * its result) that goes under the Details facts. With `reroute`, picking a bot teaches routing and asks it.
  */
-export function useRouteChip(route: RouteInfo | null | undefined): { chip: React.ReactNode; panel: React.ReactNode } {
-  const [open, setOpen] = useState(false);
+export function useRouteChip(route: RouteInfo | null | undefined): { reason: string | null; wrongBot: React.ReactNode; panel: React.ReactNode } {
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
-  if (!route) return { chip: null, panel: null };
+  if (!route) return { reason: null, wrongBot: null, panel: null };
 
   const { reroute } = route;
-  const warn = !!route.fallback;
-  const reasonId = `why-${reroute?.key ?? 'reply'}`;
   const pickerId = reroute ? `reroute-${reroute.key}` : undefined;
   const canReroute = !!reroute && reroute.targets.length > 0;
 
@@ -49,47 +44,23 @@ export function useRouteChip(route: RouteInfo | null | undefined): { chip: React
     }
   };
 
-  const chip = (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-1" data-routing-line>
+  const wrongBot =
+    canReroute && !sentTo ? (
       <button
         type="button"
         data-compact
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls={open ? reasonId : undefined}
-        title={route.text}
-        className={`inline-flex min-h-6 max-w-full min-w-0 items-center gap-1 rounded-full border px-2 text-[11px] font-medium transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
-          warn
-            ? 'border-amber-400/40 bg-amber-400/10 text-amber-200 hover:bg-amber-400/15'
-            : 'border-sky-400/35 bg-sky-400/10 text-sky-200 hover:bg-sky-400/15'
-        }`}
+        data-wrong-bot=""
+        onClick={() => setPicking((v) => !v)}
+        aria-expanded={picking}
+        aria-controls={picking ? pickerId : undefined}
+        className="ml-1 inline rounded px-1 text-xs text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 underline decoration-dotted underline-offset-2 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
       >
-        <Sparkles size={11} className="shrink-0" aria-hidden="true" />
-        <span className="truncate">{route.label}</span>
-        <span className="sr-only">: why this bot answered</span>
+        Wrong bot?
       </button>
-      {canReroute && !sentTo && (
-        <button
-          type="button"
-          data-compact
-          onClick={() => setPicking((v) => !v)}
-          aria-expanded={picking}
-          aria-controls={picking ? pickerId : undefined}
-          className="shrink-0 rounded-full px-2 min-h-6 text-[11px] text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 underline decoration-dotted underline-offset-2 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-        >
-          Wrong bot?
-        </button>
-      )}
-    </span>
-  );
+    ) : null;
 
   const panel = (
     <>
-      {open && (
-        <p id={reasonId} className="mb-1.5 max-w-2xl break-words text-xs leading-snug text-zinc-300">
-          {route.text}
-        </p>
-      )}
       {picking && reroute && (
         <div id={pickerId} role="group" aria-label="Send to another bot" className="mb-2 max-w-full rounded-xl border border-zinc-700/70 bg-zinc-900/80 px-3 py-2.5 shadow-[var(--kws-shadow)]">
           <p className="mb-2 text-xs text-zinc-300">Send your message to:</p>
@@ -132,5 +103,5 @@ export function useRouteChip(route: RouteInfo | null | undefined): { chip: React
     </>
   );
 
-  return { chip, panel };
+  return { reason: route.text, wrongBot, panel };
 }

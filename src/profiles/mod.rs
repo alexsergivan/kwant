@@ -4,6 +4,7 @@
 pub mod classify;
 pub mod login;
 pub mod status;
+pub mod usage;
 
 use crate::db::models::{LlmProfile, LlmProfileState, ProfileKey};
 use chrono::{DateTime, Utc};

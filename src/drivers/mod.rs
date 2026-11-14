@@ -896,6 +896,10 @@ pub struct TurnOutput {
     /// a caller that opts in (`TurnOpts::error_result_fails`) gets it as the turn's error.
     #[serde(skip)]
     pub is_error: bool,
+    /// The account's 5-hour and weekly windows as the engine reported them during the turn
+    /// (Claude's last `rate_limit_event`), kept per profile by the turn's caller.
+    #[serde(skip)]
+    pub usage_windows: Option<crate::profiles::usage::UsageReading>,
 }
 
 impl TurnOutput {
@@ -907,6 +911,11 @@ impl TurnOutput {
     /// A turn the provider refused before anything visible happened.
     pub fn refused(failure: crate::profiles::ProviderFailure) -> Self {
         Self { failure: Some(failure), ..Default::default() }
+    }
+
+    /// The same output, carrying the account's windows read during the turn.
+    pub fn with_usage(self, usage_windows: Option<crate::profiles::usage::UsageReading>) -> Self {
+        Self { usage_windows: usage_windows.or(self.usage_windows), ..self }
     }
 }
 

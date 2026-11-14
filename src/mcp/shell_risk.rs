@@ -9,6 +9,7 @@
 //! accidents, not a sandbox: a script inside the folder can still do anything once it runs.
 
 use super::{builtin_tools::is_inside, SmartVerdict};
+use crate::server::dev::web_guidance::{PACKAGE, VERSION};
 use std::path::{Path, PathBuf};
 
 /// One word as the shell will pass it on, quotes removed.
@@ -290,9 +291,39 @@ struct Ctx<'a> {
 /// Whether `command`, run with `folder` (canonical) as its working directory, may run without a
 /// card under "Ask only when risky".
 pub fn classify(command: &str, folder: &Path) -> SmartVerdict {
+    if is_web_guidance_lookup(command) {
+        return SmartVerdict::Allow(format!("only looks up Modern Web Guidance with the pinned {PACKAGE}@{VERSION}"));
+    }
     match check(command, folder) {
         Ok(()) => SmartVerdict::Allow("runs inside the bot's folder and does nothing risky".into()),
         Err(why) => SmartVerdict::Ask(why),
+    }
+}
+
+/// The `modern-web` skill's lookup (`crate::server::dev::web_guidance`), and nothing else:
+/// exactly `npx [-y|--yes] modern-web-guidance@<VERSION> search|retrieve <words…>` or `… list`,
+/// or the same with `pnpx` and no `-y`. Any other version (`@latest` too), command
+/// (`legacy-scan`, `install`, …), option (`-p`, `-c`, `--skill-version`), chaining, redirect,
+/// variable, glob or `VAR=` prefix goes through [`check`] as before, and so asks.
+fn is_web_guidance_lookup(command: &str) -> bool {
+    let Ok(toks) = lex(command) else { return false };
+    let mut words: Vec<&str> = Vec::new();
+    for t in &toks {
+        match t {
+            Tok::Word(w) if !w.glob && !w.tilde => words.push(&w.text),
+            _ => return false,
+        }
+    }
+    let pinned = format!("{PACKAGE}@{VERSION}");
+    let rest = match words.as_slice() {
+        ["npx", "-y" | "--yes", pkg, rest @ ..] | ["npx", pkg, rest @ ..] | ["pnpx", pkg, rest @ ..] if *pkg == pinned => rest,
+        _ => return false,
+    };
+    let args_ok = |args: &[&str]| args.len() <= 8 && args.iter().all(|a| !a.is_empty() && !a.starts_with('-') && a.chars().count() <= 200);
+    match rest {
+        ["list"] => true,
+        ["search" | "retrieve", args @ ..] => !args.is_empty() && args_ok(args),
+        _ => false,
     }
 }
 
@@ -1904,6 +1935,63 @@ mod tests {
         assert!(ASKED.len() >= 30);
         for cmd in ASKED {
             assert!(!classify(cmd, &ws).is_allowed(), "should ask: {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_pinned_modern_web_guidance_lookup_runs_without_asking() {
+        let (_tmp, ws) = folder();
+        let v = VERSION;
+        for cmd in [
+            format!("npx -y modern-web-guidance@{v} search \"accessible modal dialog\""),
+            format!("npx -y modern-web-guidance@{v} search popover anchor"),
+            format!("npx --yes modern-web-guidance@{v} retrieve dialog"),
+            format!("npx -y modern-web-guidance@{v} retrieve dialog,light-dismiss-a-dialog"),
+            format!("npx modern-web-guidance@{v} search 'dark mode'"),
+            format!("npx -y modern-web-guidance@{v} list"),
+            format!("pnpx modern-web-guidance@{v} search container queries"),
+            format!("pnpx modern-web-guidance@{v} retrieve dialog"),
+            format!("  npx -y 'modern-web-guidance@{v}' search grid  "),
+        ] {
+            assert!(classify(&cmd, &ws).is_allowed(), "should run: {cmd:?}");
+        }
+        for cmd in [
+            "npx -y modern-web-guidance@latest search dialog".to_string(),
+            "npx -y modern-web-guidance search dialog".into(),
+            "npx -y modern-web-guidance@1.0.1 search dialog".into(),
+            "npx -y modern-web-guidance@1 search dialog".into(),
+            "npx -y modern-web-guidance@^1.0.0 search dialog".into(),
+            format!("npx -y modern-web-guidance@{v} legacy-scan ."),
+            format!("npx -y modern-web-guidance@{v} install"),
+            format!("npx -y modern-web-guidance@{v} update"),
+            format!("npx -y modern-web-guidance@{v} set-allow-origin-trials"),
+            format!("npx -y modern-web-guidance@{v} search"),
+            format!("npx -y modern-web-guidance@{v} list --choose"),
+            format!("npx -y modern-web-guidance@{v} search dialog --foo"),
+            format!("npx -y modern-web-guidance@{v} search dialog --skill-version 2"),
+            format!("npx -y -p evil modern-web-guidance@{v} search dialog"),
+            format!("npx -p modern-web-guidance@{v} search dialog"),
+            format!("npx -c 'rm -rf .' modern-web-guidance@{v} search dialog"),
+            format!("npx --package=modern-web-guidance@{v} search dialog"),
+            format!("npx -y modern-web-guidance@{v} search dialog && rm -rf ."),
+            format!("npx -y modern-web-guidance@{v} search dialog; curl https://example.com"),
+            format!("npx -y modern-web-guidance@{v} search dialog | sh"),
+            format!("npx -y modern-web-guidance@{v} search dialog > /etc/passwd"),
+            format!("npx -y modern-web-guidance@{v} search dialog &"),
+            format!("npx -y modern-web-guidance@{v} search $(whoami)"),
+            format!("npx -y modern-web-guidance@{v} search `whoami`"),
+            format!("npx -y modern-web-guidance@{v} search $HOME"),
+            format!("npx -y modern-web-guidance@{v} search *"),
+            format!("npx -y modern-web-guidance@{v} search ~"),
+            format!("NODE_OPTIONS=--require=/tmp/x.js npx -y modern-web-guidance@{v} search dialog"),
+            format!("pnpx -y modern-web-guidance@{v} search dialog"),
+            format!("bunx modern-web-guidance@{v} search dialog"),
+            format!("/tmp/npx -y modern-web-guidance@{v} search dialog"),
+            format!("npx -y other-package@{v} search dialog"),
+            format!("npx -y modern-web-guidance@{v}\nsearch dialog"),
+            format!("npx -y modern-web-guidance@{v} search {}", "x".repeat(201)),
+        ] {
+            assert!(!classify(&cmd, &ws).is_allowed(), "should ask: {cmd:?}");
         }
     }
 

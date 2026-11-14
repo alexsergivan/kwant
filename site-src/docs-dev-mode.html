@@ -162,6 +162,14 @@ card_art: avatar:devops
 <p>The card follows the ticket through review to landed. It shows <strong>Matches the ticket</strong> only when every done-when line is met. A token Jira rejects, an address with no Jira, a token that sees no projects, and Jira asking kwant to slow down each get their own message.</p>
 <p class="note">Jira only changes when you say so. Comments on tickets are off unless you turn them on, and your bots never move or close tickets. Turning it off pauses tickets in progress and keeps their cards, branches and briefs.</p>
 
+<h2 id="modern-web">Modern web guidance</h2>
+<p>When a team's folder has web code (a <code>package.json</code>, or HTML, CSS, TSX, JSX, Vue or Svelte files in its top two levels), kwant offers its built-in <strong>modern-web</strong> skill once. The skill has a bot look up Google Chrome's <a href="https://github.com/GoogleChrome/modern-web-guidance">Modern Web Guidance</a> before it writes browser code, and follow its Baseline support and fallbacks. Its text is adapted from Google's skill (Apache-2.0).</p>
+<ul>
+  <li><strong>One offer per space.</strong> It waits in every bot's Skills tab as a skill for every bot in the space, and a notification opens it. Approve, edit or reject it there. Rejected or deleted, it isn't offered again, even when Dev mode goes off and on.</li>
+  <li><strong>A pinned version.</strong> The bot runs <code>npx -y modern-web-guidance@1.0.0 search</code> or <code>retrieve</code>, and only those exact commands run without asking. kwant itself never runs them.</li>
+  <li><strong>Needs Node and the network</strong> the first time. If the lookup fails, the bot says "Couldn't load Modern Web Guidance here" once and carries on.</li>
+</ul>
+
 <h2 id="turn-off">Turn it off</h2>
 <p>Turning Dev mode off takes two presses. The first press changes the switch to <strong>Off?</strong> and says <em>Press again to turn off</em>. A second press within 5 seconds turns it off. Escape, clicking elsewhere or waiting keeps it on. The off note has <strong>Turn back on</strong>.</p>
 <figure>
