@@ -3203,7 +3203,8 @@ async fn run_kwant_turn_inner(
         }
         // 10c: a space with its own documents tells the bot how to quote them with the word-for-word
         // check (the web cite call lives in the browser block, which doesn't know the space)
-        if !no_tools && !opts.fresh_eyes {
+        // (QA F1: chat, routine and hand-off turns only, the allow-list tool notes use)
+        if !no_tools && !opts.fresh_eyes && super::tool_notes::wants(opts.purpose.as_deref()) {
             let space = crate::db::spaces::SpaceId::new(&target_kwant.space_id);
             lessons.push_str(&super::space_docs::prompt_block(state, &space).await);
         }
