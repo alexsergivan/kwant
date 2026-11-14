@@ -2025,6 +2025,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
     requestAnimationFrame(() => checkMention(next, next.length));
   };
 
+  // 14c: on a phone the header's icon buttons carry a small caption under the icon (no hover there,
+  // so a title alone was never seen); from sm up they keep their inline word.
+  const headLabel = (wide: string, short: string = wide) => (
+    <>
+      <span className="hidden sm:inline">{wide}</span>
+      <span className="sm:hidden text-[10px] leading-3 font-medium" data-head-caption>{short}</span>
+    </>
+  );
+  const headPhone = 'max-sm:flex-col max-sm:gap-0.5 max-sm:h-11 max-sm:min-w-11 max-sm:px-1';
   return (
     <div
       ref={rootRef}
@@ -2105,12 +2114,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <button
                   type="button"
                   onClick={onManageTeam}
-                  className="kw-head-btn flex items-center justify-center gap-1.5 max-sm:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+                  className={`kw-head-btn ${headPhone} flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
                   title="Team members and settings"
                   aria-label="Manage team"
                 >
-                  <Settings2 size={12} className="text-zinc-400" />
-                  <span className="hidden sm:inline">Manage</span>
+                  <Settings2 size={12} className="text-zinc-400" aria-hidden="true" />
+                  {headLabel('Manage', 'Team')}
                 </button>
               )}
             </div>
@@ -2120,12 +2129,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onEditInstructions}
-              className="kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+              className={`kw-head-btn ${headPhone} flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
               title="Pin instructions every bot reads in this channel"
               aria-label="Pin instructions"
             >
-              <Pin size={12} className="text-amber-300" />
-              <span className="hidden sm:inline">Pin</span>
+              <Pin size={12} className="text-amber-300" aria-hidden="true" />
+              {headLabel('Pin')}
             </button>
           )}
 
@@ -2133,12 +2142,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onEditKwant}
-              className="kw-head-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+              className={`kw-head-btn ${headPhone} flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
               title={`Edit ${title}'s name, avatar, model and persona`}
               aria-label={`Edit ${title}`}
             >
-              <Pencil size={12} className="text-zinc-400" />
-              <span className="hidden sm:inline">Edit</span>
+              <Pencil size={12} className="text-zinc-400" aria-hidden="true" />
+              {headLabel('Edit')}
             </button>
           )}
 
@@ -2150,7 +2159,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               playSfx('click');
               toggleVm();
             }}
-            className={`kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+            className={`kw-head-btn ${headPhone} max-sm:rounded-lg flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
               vmOpen
                 ? 'text-sky-200 bg-sky-400/15 border-sky-300/40'
                 : 'text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] border-hairline-strong hover:text-zinc-50'
@@ -2160,7 +2169,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-pressed={vmOpen}
           >
             <Monitor size={12} aria-hidden="true" />
-            <span className="hidden sm:inline">Bot browser</span>
+            {headLabel('Bot browser', 'Browser')}
           </button>
         </div>
       </div>
