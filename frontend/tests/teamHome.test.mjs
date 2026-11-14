@@ -66,9 +66,9 @@ test('members: lead first, each once', () => {
   assert.deepEqual(m.teamMembersLeadFirst([lin, pix], null).map((b) => b.name), ['Lin', 'Pixel']);
 });
 
-test('who answers: the team home reuses the composer pill words', () => {
+test('who answers: the composer pill tooltip (the team home says it without the second @)', () => {
   const t = m.answerTarget({ kind: 'team', text: '', teamName: 'engineering', names: [] });
-  assert.equal(t.detail, 'The engineering team answers. Type @ and a name to ask one member.');
+  assert.equal(t.detail, '@engineering team answers. Type @ and a name to ask one member.');
 });
 
 const teamHome = (purpose) => ({ kind: 'team', team: { name: 'engineering', purpose, lead: 'Ada', members: [ada, lin, pix] } });
