@@ -16,6 +16,8 @@ export interface ActivityStep {
   /** The thinking step's whole text (set once it ends; live text is in `LiveActivity.thinking`). */
   text?: string;
   ref_id?: string;
+  /** A browser open/navigate step: the title the page reported once it loaded (server 0.9.8+, optional). */
+  page_title?: string;
   started_at: string;
   ended_at?: string;
   duration_ms?: number;
@@ -54,6 +56,7 @@ export function parseStep(raw: unknown): ActivityStep | null {
     detail: str(s.detail),
     text: str(s.text),
     ref_id: str(s.ref_id),
+    page_title: str(s.page_title),
     started_at: typeof s.started_at === 'string' ? s.started_at : '',
     ended_at: str(s.ended_at),
     duration_ms: typeof s.duration_ms === 'number' ? s.duration_ms : undefined,
