@@ -100,6 +100,8 @@ export interface McpPreset {
   /** Where the setup comes from: the vendor's docs or the package page. */
   source: string;
   form: McpFormState;
+  /** The maker's own domain, when the server's address is on another one (GitHub's is api.githubcopilot.com). */
+  domain?: string;
 }
 
 /** A preset's secret: name, placeholder, and whether the server needs it to work. */
@@ -160,6 +162,7 @@ export const MCP_PRESETS: McpPreset[] = [
     needs: ['Token'],
     source: 'https://github.com/github/github-mcp-server',
     form: httpPreset('github', 'https://api.githubcopilot.com/mcp/', [['Authorization', 'Bearer ghp_…', true]]),
+    domain: 'github.com',
   },
   {
     // PyPI mcp-server-fetch 2026.10.10
@@ -533,6 +536,16 @@ export const toServerName = (label: string): string =>
     .replace(/_{2,}/g, '_')
     .replace(/^[-_]+|[-_]+$/g, '')
     .slice(0, 48);
+
+/**
+ * The server name a public-directory listing starts with: its title made valid ("ElevenLabs Voices" →
+ * "elevenlabs-voices"), else the last part of its registry name, so Add & test works without a rename.
+ */
+export const directoryServerName = (entry: { title?: string | null; registry_name: string }): string =>
+  toServerName(entry.title ?? '') ||
+  toServerName(entry.registry_name.split('/').pop() ?? '') ||
+  toServerName(entry.registry_name) ||
+  'tool';
 
 /** Returns a friendly message for the first problem in the form, or null when it can be saved. */
 export const validateMcpForm = (form: McpFormState): string | null => {

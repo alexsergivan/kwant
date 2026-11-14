@@ -295,3 +295,68 @@ test('turn_runs_on for a turn whose start went unseen still lets go when it ends
   assert.equal(m.liveRunOf('k9'), undefined);
   assert.equal(m.lastRunOf('k9').model, 'haiku');
 });
+
+test('0.9.8 #7: a bot pinned to a signed-out engine with failover off gets no green dot; failover on keeps it', () => {
+  const gout = ENGINES.map((e) => (e.id === 'grok' ? { ...e, status: 'signed_out', ready: false } : e));
+  const grokBot = { preferred_model: 'grok/grok-4' };
+  assert.equal(m.pinnedCantRun({ ...grokBot, profile_failover: false }, gout), 'Runs on Grok · Grok 4 · signed out', 'the badge’s own tip');
+  assert.equal(m.pinnedCantRun({ ...grokBot, profile_failover: true }, gout), null, 'failover on: its turn moves on and runs');
+  assert.equal(m.pinnedCantRun(grokBot, gout), null, 'unknown failover is the server default (on)');
+  assert.equal(m.pinnedCantRun({ ...grokBot, profile_failover: false }, ENGINES), null, 'Grok signed in');
+  assert.equal(m.pinnedCantRun({ preferred_model: 'auto', profile_failover: false }, gout), null, 'Laya picks: never pinned');
+  assert.equal(m.pinnedCantRun({ ...grokBot, profile_failover: false }, null), null, 'engines not loaded yet: no claim');
+  // The sidebar row passes it to the dot: can't run (grey) with the badge's tip instead of the green Available
+  const side = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
+  assert.match(side, /const pinnedTip = pinnedCantRun\(k, engines\.engines\);\n\s+const status = asked \? 'needs_you' : statusOf\(k\.id, botStatus, pinnedTip \? false : canRun\);/);
+  assert.match(side, /title=\{status === 'cant_run' \? pinnedTip \?\? "Can't run yet: no account works here"/);
+});
+
+// ---- account-usage: the hover's usage line for the account the next turn would use ----
+
+test('badgeUsageFor: the account its engine uses now; nothing for Laya, API keys or unread', () => {
+  const u = (five, week) => ({ checked_at: new Date().toISOString(), source: 'turn', status: 'ok', windows: [
+    { kind: 'five_hour', used_pct: five, resets_at: new Date(Date.now() + 3600e3).toISOString() },
+    { kind: 'weekly', used_pct: week, resets_at: new Date(Date.now() + 86400e3).toISOString() },
+  ] });
+  const acct = (id, over) => ({ id, engine: 'claude', name: id, kind: 'cli_home', enabled: true, is_default: false, priority: 1, home_dir: null, has_key: false, signed_in: true, account_label: null, limited_until: null, last_error: null, ...over });
+  const engines = [ready('claude', { uses: { profile_id: 'work', label: 'Work' } }), ready('anthropic_api', { kind: 'api', uses: { profile_id: 'key', label: 'Key' } })];
+  const profs = [acct('work', { usage: u(7, 56) }), acct('key', { kind: 'api_key', has_key: true })];
+  assert.deepEqual(m.badgeUsageFor('claude', engines, profs), { text: '5-hour 93% left · Weekly 44% left', low: false });
+  assert.equal(m.badgeUsageFor('claude', engines, [acct('work', { usage: u(90, 10) })]).low, true);
+  assert.equal(m.badgeUsageFor('laya', engines, profs), null);
+  assert.equal(m.badgeUsageFor('claude', [{ ...engines[0], ready: false, status: 'error' }, engines[1]], profs), null); // API key next: no limits
+  assert.equal(m.badgeUsageFor('claude', engines, [acct('work', {})]), null);
+  assert.equal(m.badgeUsageFor('codex', engines, profs), null);
+  // Two signed-in Claude accounts: the one in use is named.
+  assert.equal(m.badgeUsageFor('claude', engines, [...profs, acct('play', { usage: u(1, 1) })]).text, 'work · 5-hour 93% left · Weekly 44% left');
+  assert.equal(m.badgeUsageFor('claude', engines, [...profs, acct('play', { signed_in: false })]).text, '5-hour 93% left · Weekly 44% left');
+});
+
+test('the badge tip adds the usage line and an amber dot only when low', async () => {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const u = (five) => ({ checked_at: new Date().toISOString(), source: 'turn', status: 'ok', windows: [{ kind: 'five_hour', used_pct: five, resets_at: null }, { kind: 'weekly', used_pct: 56, resets_at: null }] });
+  const acct = { id: 'work', engine: 'claude', name: 'Work', kind: 'cli_home', enabled: true, is_default: true, priority: 1, home_dir: null, has_key: false, signed_in: true, account_label: null, limited_until: null, last_error: null, usage: u(7) };
+  m.setBadgeEngines([ready('claude', { uses: { profile_id: 'work', label: 'Work' }, models: [{ id: 'sonnet', label: 'Sonnet', default: true }] })]);
+  m.setBadgeBots([{ id: 'ku', preferred_model: 'claude/sonnet' }]);
+  m.setBadgeProfiles([acct]);
+  flushSync(() => root.render(h(m.ModernAvatar, { kwantId: 'ku', size: 40, modelBadge: true })));
+  await settle();
+  let b = host.querySelector('[data-model-badge]');
+  assert.equal(b.getAttribute('title'), 'Runs on Claude · Sonnet\n5-hour 93% left · Weekly 44% left');
+  assert.equal(b.getAttribute('aria-label'), 'Runs on Claude · Sonnet. 5-hour 93% left · Weekly 44% left');
+  assert.equal(host.querySelector('[data-badge-low]'), null);
+  flushSync(() => m.setBadgeProfiles([{ ...acct, usage: u(85) }]));
+  await settle();
+  b = host.querySelector('[data-model-badge]');
+  assert.equal(b.getAttribute('title'), 'Runs on Claude · Sonnet\n5-hour 15% left · Weekly 44% left');
+  const dot = host.querySelector('[data-badge-low]');
+  assert.ok(dot);
+  assert.equal(dot.style.width, '5px'); // 40 px avatar → 14 px badge → 5 px dot (design §5)
+  flushSync(() => m.setBadgeProfiles(null));
+  await settle();
+  assert.equal(host.querySelector('[data-model-badge]').getAttribute('title'), 'Runs on Claude · Sonnet');
+  root.unmount();
+  host.remove();
+});

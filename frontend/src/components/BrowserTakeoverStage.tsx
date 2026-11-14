@@ -20,7 +20,7 @@ import { PageInput, Pt, createGestureTracker } from '../browserGestures';
 import { domainOf } from '../humanSteps';
 import type { BrowserStream } from '../useBrowserStream';
 import { BOT_BUSY_TEXT } from '../useBrowserStream';
-import { GHOST_BUTTON, PRIMARY_BUTTON, PageDialogModal, SelectPopover } from './BrowserPopups';
+import { FileChooserModal, FileChooserToast, GHOST_BUTTON, PRIMARY_BUTTON, PageDialogModal, SelectPopover } from './BrowserPopups';
 import { ModernAvatar } from './ModernAvatar';
 import { sendPageInput } from './BrowserControlOverlay';
 
@@ -216,7 +216,7 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
   const wheel = useMemo(() => createWheelCoalescer(raf, (m) => sendRef.current({ ...m })), [raf]);
   const keyboard = useMemo(() => createKeyboard(mac, (m) => sendRef.current(m as unknown as Record<string, unknown>)), [mac]);
 
-  const popupOpen = !!stream.select || !!stream.dialog;
+  const popupOpen = !!stream.select || !!stream.dialog || !!stream.fileChooser;
   const popupRef = useRef(popupOpen);
   popupRef.current = popupOpen;
 
@@ -777,6 +777,20 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
               }}
             />
           )}
+          {stream.fileChooser && (
+            <FileChooserModal
+              key={stream.fileChooser.id}
+              request={stream.fileChooser}
+              failure={stream.fileChooserError}
+              onAnswer={(attachmentIds) => stream.answerFileChooser(stream.fileChooser!.id, attachmentIds)}
+              onCancel={() => {
+                stream.cancelFileChooser(stream.fileChooser!.id);
+                focusPage();
+              }}
+              onClearFailure={stream.clearFileChooserError}
+            />
+          )}
+          {!stream.fileChooser && stream.fileChooserDone && <FileChooserToast names={stream.fileChooserDone.names} onDone={stream.clearFileChooserDone} />}
 
           <textarea
             ref={sinkRef}

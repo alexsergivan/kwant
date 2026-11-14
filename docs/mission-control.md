@@ -93,8 +93,8 @@ outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_
 
 | kind | spec | passes when | who may add it |
 |---|---|---|---|
-| `command` | `{"command": "cargo test -q", "timeout_secs": 300}` | exit code 0. Runs in the mission's folder with `bash -c`. | The person, or a bot in `mission_plan` (approved with the mission). A bot adding one later gets `approved:false`, and it runs only after the person approves it. |
-| `http` | `{"url": "https://…", "expect_status": 200, "contains": "optional text"}` | GET returns the status (default any 2xx) and the text if given | Anyone. A URL on this computer or a private network needs the person's approval (same rule as WebFetch). |
+| `command` | `{"command": "cargo test -q", "timeout_secs": 300, "recheck_mins?": 15, "wait_hours?": 72}` | exit code 0. Exit 75 means "not ready yet" (the check waits, below); any other code fails. Runs in the mission's folder with `bash -c`. | The person, or a bot in `mission_plan` (approved with the mission). A bot adding one later gets `approved:false`, and it runs only after the person approves it. |
+| `http` | `{"url": "https://…", "expect_status": 200, "contains": "optional text", "waiting_status?": 202, "waiting_contains?": "pending", "recheck_mins?": 15, "wait_hours?": 72}` | GET returns the status (default any 2xx) and the text if given. A `waiting_status` reply, or a body with `waiting_contains`, means "not ready yet" and wins over pass or fail. | Anyone. A URL on this computer or a private network needs the person's approval (same rule as WebFetch). |
 | `file_exists` | `{"path": "dist/app.dmg"}` | the file exists inside the mission's folder | Anyone (the task's own bot: see below) |
 | `file_contains` | `{"path": "CHANGELOG.md", "text": "0.1.4"}` | the file contains the text | Anyone |
 | `file_sha256` | `{"path": "out.zip", "sha256": "…"}` | the hash matches | Anyone |
@@ -104,8 +104,8 @@ outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_
 - Paths are relative to the mission's folder (the team's workspace when the mission came from a team
   chat, else the lead bot's folder). `..`, absolute paths outside it, symlinks out of it and
   password/key files are refused.
-- `status`: `pending` | `needs_approval` | `running` | `passed` | `failed` | `error` (couldn't run, e.g.
-  a timeout; counts as not passed). `output_excerpt` is at most 2 000 chars, with secrets left as the
+- `status`: `pending` | `needs_approval` | `running` | `waiting` | `passed` | `failed` | `error` (couldn't
+  run, e.g. a timeout; counts as not passed). `output_excerpt` is at most 2 000 chars, with secrets left as the
   command printed them, so commands that print secrets are the person's responsibility.
 - kwant runs `command`, `http` and `file_*` checks itself (`checked_by: "kwant"`) and stores the output
   as evidence (`kind: "check_output"`).
@@ -129,14 +129,83 @@ outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_
   and `checks_summary.needs_approval` counts it.
 - A task with no checks stays in `review` ("not checked") until a peer review or the person verifies it.
 
+### Waiting checks (exit 75)
+
+A `command` check that exits **75**, or an `http` check that gets its `waiting_status` or finds its
+`waiting_contains`, means "not ready yet": the thing it checks is real but still running elsewhere.
+
+- The check gets `status: "waiting"`, `waiting_since` (the round's first "not yet"), `next_run_at`,
+  `wait_until` (the deadline) and `runs` (runs this round). Its verdict holds the task in `review`.
+- Waiting costs nothing: no failure row, no Needs-you item, no AutoFix attempt, no tokens, no lease and
+  no bot turn. Every run still stores its output as `check_output` evidence.
+- The missions tick runs waiting checks again when `next_run_at` is due (at most 8 per tick, one
+  at a time, in the background, only while the task is in `review`). `recheck_mins` (default 15,
+  5–1440) is the gap; the last run is never later than the deadline. A restart keeps the schedule;
+  a waiting check that was running when kwant stopped waits again and is due at once.
+- `wait_hours` (default 72, 1–336) is the deadline from the round's first "not yet". A "not yet" at or
+  past it ends the check `error` with `timed_out_at` set and failure class `waited_too_long`, which
+  AutoFix never retries (a `skipped` attempt, `not_retryable`). The task stays in `review` and gets one
+  Needs-you item: `{"kind": "check_timed_out", "id": <check id>, "text": "<label> didn't answer in
+  72 h. Wait longer, or verify by hand.", "actions": ["wait_more", "verify"], "wait_more_hours": 24}`,
+  for required checks that count. **Wait 24 h more** is `POST /api/checks/:id/wait-more` (person
+  only): the deadline moves 24 h past the later of now and the old deadline, and the check is due at
+  once. **Verify** is the person's usual `POST /api/tasks/:id/verify`, which settles waiting and
+  timed-out checks.
+- Exit 0 passes, any other code fails as before (`check_failed` → `retry_with_diagnostics`, so the
+  bot gets the output). The next round starts at run 1 with a new key.
+- Waiting is Mission Control's only. The Verifier, goals, Foundry and AutoFix's own runs of a check
+  read exit 75 or a waiting reply as not passed.
+- A `command` check runs with these environment variables:
+
+  | variable | value |
+  |---|---|
+  | `KWANT_TASK_ID`, `KWANT_TASK_TITLE`, `KWANT_TASK_ACCEPTANCE` | the task |
+  | `KWANT_CHECK_ID` | the check |
+  | `KWANT_CHECK_RUN` | 1, 2, 3… within the round |
+  | `KWANT_CHECK_ROUND` | how many times the task has gone to `review` (1 the first time) |
+  | `KWANT_IDEMPOTENCY_KEY` | sha256 of `<check id>:<round>`: the same for every run of a round, new after a fail sends the task back |
+
+  This `KWANT_IDEMPOTENCY_KEY` is the check's own. The `KWANT_IDEMPOTENCY_KEY=` line in an AutoFix
+  retry prompt is the attempt's key for the bot's tool calls, a different value.
+
 `checks_summary` on each task: `{"status": "not_checked" | "pending" | "passed" | "failed",
-"passed": n, "failed": n, "needs_approval": n, "required_needs_approval": n, "total": n}`.
+"passed": n, "failed": n, "waiting": n, "needs_approval": n, "required_needs_approval": n, "total": n}`.
+`waiting` counts checks that count and are waiting or waited too long; `status` stays `pending` while
+one waits, and a timed-out check is never counted in `failed`.
 `passed`/`failed` count checks that count; `needs_approval` counts checks waiting for the person, and
 `required_needs_approval` how many of those are required (so hold the task in `review`). A card shows
 "Needs you" only when `required_needs_approval > 0`; `status: "pending"` with
 `required_needs_approval: 0` means a required check is still running, not that the person is needed. `status` is `passed` only when the task
 could be verified on them, and `pending` while a required check waits for approval (an optional
 one waiting is counted in `needs_approval` but doesn't hold the task).
+
+### Gate on an outside service
+
+When the work finishes somewhere else (a store review, a build farm, a payout, a slow export), make the
+check start the job once and then ask how it is going. Use `$KWANT_IDEMPOTENCY_KEY` so a second run
+never starts a second job, and exit 75 while it is still going:
+
+```bash
+#!/usr/bin/env bash
+# spec: {"command": "./gate.sh", "recheck_mins": 30, "wait_hours": 48}
+set -u
+state=".gate-$KWANT_IDEMPOTENCY_KEY"            # one job per round
+if [ "$KWANT_CHECK_RUN" = 1 ] || [ ! -f "$state" ]; then
+  job=$(curl -fsS -X POST "$SERVICE_URL/jobs" \
+        -H "Idempotency-Key: $KWANT_IDEMPOTENCY_KEY" | jq -r .id) || exit 1
+  echo "$job" > "$state"
+fi
+status=$(curl -fsS "$SERVICE_URL/jobs/$(cat "$state")" | jq -r .status) || exit 75
+echo "job $(cat "$state"): $status (run $KWANT_CHECK_RUN)"
+case "$status" in
+  done)    exit 0 ;;                            # passed: the task can be verified
+  failed)  exit 1 ;;                            # failed: the bot gets this output
+  *)       exit 75 ;;                           # not ready yet: ask again later
+esac
+```
+
+A network hiccup while asking exits 75 too, so it is asked again instead of failing the task; past
+`wait_hours` the person decides. Keep keys out of the script (it is shown, masked, in the task).
 
 ## 5. Bot tools (MCP self tools; only while `mission_board` is on)
 
@@ -187,6 +256,8 @@ POST   /api/tasks/:id/cancel                   -> Task
 POST   /api/tasks/:id/checks  {kind, spec, required?}  -> Check   (approved, runs if the task is in review)
 POST   /api/tasks/:id/checks/run               -> {checks: [Check], task: Task}
 POST   /api/checks/:id/approve                 -> Check   (needs_approval -> runs)
+POST   /api/checks/:id/wait-more               -> Check   (person only; a waiting or timed-out check of a
+                                                     task in review waits 24 h more; 409 otherwise)
                                                     (runs in review or verified; on a verified task the
                                                      result is recorded and the state never changes)
 ```
@@ -213,9 +284,10 @@ claim conflict), 403 (bot token on a person route).
  "depends_on": ["task id"], "waiting_on": ["task id not verified yet"],
  "claim": null | {"kwant_id","claimed_at","expires_at"},
  "needs_you": [{"kind": "question"|"approval"|"human_step"|"check_approval", "id", "text"}],
- "checks_summary": {"status","passed","failed","needs_approval","required_needs_approval","total"}}
+ "checks_summary": {"status","passed","failed","waiting","needs_approval","required_needs_approval","total"}}
 // needs_you: question/approval/human_step while working or needs_you; check_approval (id = the
-// check's id, approve it with POST /api/checks/:id/approve) while in review, for required checks only
+// check's id, approve it with POST /api/checks/:id/approve) while in review, for required checks only;
+// check_timed_out (id = the check's id, actions wait_more | verify) for a required check that waited too long
 
 // TaskDetail = {"task": Task, "checks": [Check], "evidence": [Evidence], "events": [Event]}   (events oldest first, max 500)
 // MissionDetail = {"mission": Mission, "tasks": [Task]}
@@ -502,13 +574,13 @@ acceptance, a routine) is only ever proposed; it applies when the person approve
 ### Failures
 
 - `task_failures` (append-only): `id`, `task_id`, `attempt`, `source` (`check`, `turn`, `lease`, `budget`, `routine`, `handoff`), `class`, `summary`, `excerpt`, `checkpoint_id` (the last good `after_run`), `created_at`, and server-only `diagnostics_path`.
-- `classify(source, status, text)` is deterministic. A check that failed is `check_failed`, or `bad_spec` when its command can't run (exit 127, "command not found"). A check that errored is `transient` for a timeout or 429/5xx (an `http` check whose connection was refused, dropped or timed out says "network error" by reqwest's error kind, not its wording), else `bad_spec`. A lease that ran out or a turn that ended without a review is `stalled`; over budget is `budget`; a denied action is `denied`; a task waiting on the person is `needs_input`. Other errors are `quota` (a usage limit or empty balance: Claude's "usage limit reached" / "hit your limit" / "5-hour limit reached", credit too low, insufficient_quota, 402, and kwant's own "is out of usage" / "Quota exceeded"), then `auth` (not logged in, 401, expired token, and kwant's own "signed out or its key was rejected" / "No account can run bots" / no other account on), then `transient` (rate limit, overloaded, timeouts, connection errors, 429/500/502/503/504/529 as whole numbers), else `unknown`.
+- `classify(source, status, text)` is deterministic. A check that failed is `check_failed`, or `bad_spec` when its command can't run (exit 127, "command not found"). A check that errored is `transient` for a timeout or 429/5xx (an `http` check whose connection was refused, dropped or timed out says "network error" by reqwest's error kind, not its wording), else `bad_spec`. A lease that ran out or a turn that ended without a review is `stalled`; over budget is `budget`; a denied action is `denied`; a task waiting on the person is `needs_input`; a waiting check past its `wait_hours` is `waited_too_long`. Other errors are `quota` (a usage limit or empty balance: Claude's "usage limit reached" / "hit your limit" / "5-hour limit reached", credit too low, insufficient_quota, 402, and kwant's own "is out of usage" / "Quota exceeded"), then `auth` (not logged in, 401, expired token, and kwant's own "signed out or its key was rejected" / "No account can run bots" / no other account on), then `transient` (rate limit, overloaded, timeouts, connection errors, 429/500/502/503/504/529 as whole numbers), else `unknown`.
 - The text is redacted before it is stored. Labelled values are masked however short they are: `password=`/`token=`/`secret=`/`key=` and their `--flag value` / `--flag=value` forms (including `--…-key`), `"key": "…"`, `Authorization:` (the scheme is kept), the password in `user:pass@host`, and `-p`/`-a` only on a line that runs `mysql`, `mysqldump`, `mysqladmin`, `mariadb`, `sshpass` or `redis-cli`. A bare word is masked when it has a known key prefix (`sk-`, `xai-`, `ghp_`…) or reads as generated: 20+ letters and digits that break into short pieces (a hex or mixed-case key). Names built from words and a number, paths, URLs and UUIDs stay readable, and only the secret word itself is replaced. Masking is idempotent, so text masked twice is unchanged. A short bare password with no label can't be told from a word and is not masked. A check's spec is masked the same way wherever it is shown (task JSON, Needs-you text, failure excerpt, retry prompt, workflow changes); the stored spec keeps the real values, and a `workflow_propose` whose spec still holds `[redacted]` is refused. The excerpt is at most 2,000 characters. The full redacted output goes to `<data_dir>/autofix/<task_id>/<uuid>.log` (folder 0700, file 0600, 256 KB). No route returns that path.
 
 ### Attempts
 
 - `autofix_attempts`: `id`, `task_id`, `failure_id`, `strategy`, `status` (`suggested`, `scheduled`, `running`, `succeeded`, `failed`, `skipped`), `not_before`, `reason`, `retry_task_id`, `tokens_spent`, `created_at`, `finished_at`, and server-only `idempotency_key` (unique: sha256 of task, failure and strategy, so a failure is never planned twice). At most one `scheduled`/`running` attempt per task (`autofix_one_live`), and a trigger refuses one past the task's `max_attempts`.
-- Strategies: `transient` → `wait_and_retry` after 1, 5, then 25 minutes; `stalled` → `retry_from_checkpoint` (the folder is as the run left it) or `retry_same`; `check_failed` → `retry_with_diagnostics`; `bad_spec` → `propose_change` (a `check_spec` proposal making the check optional; the attempt stays `suggested` and never runs); `unknown` → `retry_same`, once per task. `auth`, `quota`, `budget` and `denied` are never retried: a `skipped` attempt (reason `not_retryable: <what to do>`) and a `fix_needed` Needs-you item saying what to do. Neither repeats the failure's summary, which the task already shows. `needs_input` and hand-off tasks get no attempt.
+- Strategies: `transient` → `wait_and_retry` after 1, 5, then 25 minutes; `stalled` → `retry_from_checkpoint` (the folder is as the run left it) or `retry_same`; `check_failed` → `retry_with_diagnostics`; `bad_spec` → `propose_change` (a `check_spec` proposal making the check optional; the attempt stays `suggested` and never runs); `unknown` → `retry_same`, once per task. `auth`, `quota`, `budget`, `denied` and `waited_too_long` are never retried: a `skipped` attempt (reason `not_retryable: <what to do>`) and a `fix_needed` Needs-you item saying what to do (for `waited_too_long`, whose task stays in `review`, the `check_timed_out` item instead). Neither repeats the failure's summary, which the task already shows. `needs_input` and hand-off tasks get no attempt.
 - Limits, checked when planning and again when starting: a `blocked` task is never moved (`not_retryable`); no attempts left (`no_attempts_left`); `recovery_spent_tokens` plus the average spend per attempt over the recovery budget (`over_recovery_budget`). A limit makes the attempt `skipped` with that reason; a skip for `over_recovery_budget` also gives the failed task a `fix_needed` Needs-you item ("Retry budget used up: raise it or retry by hand.").
 - While attempts are left and AutoFix isn't off, a failure parks the task in `failed` instead of `ready` (no "failed" chat line). The retry moves it `failed → ready` as `Actor::AutoFix`, the only move that actor may make, with a task event of kind `autofix`. A routine run is retried as a new routine run; its task gets `forked_from` = the failed task and counts on from its attempts, and the failed task stays `failed`.
 - Recovery spend: a claim taken while an attempt runs carries its `autofix_id`, and that claim's spend (at hand-in and at turn end) also adds to `tasks.recovery_spent_tokens` and the attempt's `tokens_spent`. Plain runs never count as recovery. Token budgets (the task's and the recovery budget) count fresh input, cache writes and output, as Phase A spend does; cached input that is read again (`cache_read`) is left out. `model_usage.cost_usd` is the real-money figure.
@@ -1395,7 +1467,7 @@ A bot's earlier tasks teach its next ones. Lessons are derived on read from kwan
 | `review` | the person's send-back with a reason | `rejected:<hash of the reason's content words>`; alike reasons (`router::team::alike`) share the first one's key |
 | `goal` | a "Keep this true" goal made from a task the bot finished verified, confirmed not met after that (`goal_lapses_of_bot`) and still `not_met` now | `goal:<goal id>` (one per goal, its newest lapse) |
 
-`quota`, `auth`, `budget`, `transient`, `bad_spec` and `needs_input` are not the bot's doing and never become a lesson. The window is the last 30 days.
+`quota`, `auth`, `budget`, `transient`, `bad_spec`, `needs_input` and `waited_too_long` are not the bot's doing and never become a lesson. The window is the last 30 days.
 
 ### Lines
 
@@ -1450,3 +1522,15 @@ GET /api/kwants/:id/lessons    {enabled, window_days, lines: [{key, source, text
 ### Known limits
 
 Routine and hand-off turns aren't tied to a task, so they get the chat-sized block with no holdout and no attribution. A goal line reflects the goal's status at the last check, so it can lag a fix until the goal's next run.
+
+## 24. Memory recall by meaning (hybrid recall)
+
+A bot's `memory_search` finds notes by meaning as well as by words, using the space's own embeddings (`src/server/memory_recall.rs`).
+
+**Provider.** First the space's OpenAI account: a Codex API-key account, else the host's OpenAI key (Settings, else `OPENAI_API_KEY`) unless This machine is off for Codex. Both need the OpenAI API engine enabled, and use `text-embedding-3-small`. Else a local Ollama whose last check was ready and that has an embedding model pulled (`nomic-embed-text`, then `mxbai-embed-large`, then any `*embed*`). Claude has no embeddings API. Picking the provider reads only the database and the cached engine checks.
+
+**No provider: today's search.** The result is exactly the FTS5 keyword search, with no HTTP call and nothing added to the wait.
+
+**With a provider.** The query is embedded once, with a 1.5 s timeout. The keyword top 20 and the cosine top 20 (cosine ≥ 0.2) are merged by Reciprocal Rank Fusion (score = Σ 1/(60 + rank)), then the Truth Ledger view filters the result as before. If the query can't be embedded in time, the search is keyword-only and that provider isn't asked again for 60 s.
+
+**Vectors.** They live in `kwant_memory_vectors(memory_id, model, dim, vec, text_hash)` as little-endian f32. They are filled in the background after each memory write, and lazily when a search finds missing or stale ones: the text or the model changed. Each fill embeds up to 4 batches of 32 notes, and only one runs per bot at a time. Deleting a note deletes its vector through a trigger.

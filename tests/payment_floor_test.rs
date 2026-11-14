@@ -170,6 +170,8 @@ fn approver(e: &Env, timeout: Duration) -> mcp_runtime::BrokerApprover {
         conversation: e.general.clone(),
         chat: None,
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     }
 }
 
@@ -247,6 +249,19 @@ async fn smart_allow_and_always_allow_never_skip_a_payment() {
         assert_eq!(a.decide(bash(&e, STRIPE_POST)).await, ApprovalOutcome::Unanswered, "{mode}");
         assert_eq!(a.decide(bash(&e, "touch x")).await, ApprovalOutcome::Allowed, "{mode}");
     }
+}
+
+/// Approvals off wins in a turn kwant started on its own (0.9.7), but never over a payment.
+#[tokio::test]
+async fn a_payment_still_asks_with_approvals_off_in_a_kwant_started_turn() {
+    let e = setup().await;
+    set_approvals(&e, "off").await;
+    let a = mcp_runtime::BrokerApprover { always_ask: true, started_by: Some("Loose ends".into()), ..approver(&e, Duration::from_millis(200)) };
+    assert_eq!(a.decide(bash(&e, "touch x")).await, ApprovalOutcome::Allowed);
+    assert_eq!(a.decide(bash(&e, STRIPE_POST)).await, ApprovalOutcome::Unanswered);
+    let (_, rows) = call(&e.app, "GET", "/api/approvals", None, None).await;
+    let row = rows.as_array().unwrap().iter().find(|r| r["details"]["payment_reason"].is_string()).expect("the card is on record");
+    assert_eq!(row["details"]["started_by"], "Loose ends", "{row}");
 }
 
 #[tokio::test]

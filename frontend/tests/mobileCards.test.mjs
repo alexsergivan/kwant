@@ -285,11 +285,12 @@ test('engine chip: the model alone on a phone, the full label from sm up and on 
   assert.match(html, /<span class="[^"]*hidden sm:inline[^"]*">Claude · claude-opus-5-5 · Booktuning<\/span>/);
 });
 
-test('reply header on a phone: one row, the time never shrinks, the chip gives way', () => {
+test('reply header on a phone: one row, the time never shrinks, no engine chip (reply-chrome part 4)', () => {
   const html = m.meta({ name: 'Architect', at: '2026-11-02T11:42:00Z', now: Date.parse('2026-11-02T12:00:00Z'), ranOn: 'Custom API · claude-opus-5-5', account: 'Anthropic API' });
   assert.match(html, /<div class="[^"]*flex-nowrap sm:flex-wrap[^"]*">/);
   assert.match(html, /<span class="[^"]*shrink-0 whitespace-nowrap[^"]*" data-reply-time="">/);
-  assert.match(html, /<span class="[^"]*sm:hidden[^"]*max-w-\[160px\][^"]*"[^>]*>claude-opus-5-5<\/span>/);
+  assert.doesNotMatch(html, /data-engine-chip/);
+  assert.doesNotMatch(html, /claude-opus-5-5/);
 });
 
 // --- Rigel's #309 HOLD on b48683c ------------------------------------------------------------

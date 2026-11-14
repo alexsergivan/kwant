@@ -567,6 +567,37 @@ The card sees only what kwant runs or is asked about, so these pushes skip it:
 - A bot's MCP servers other than kwant's stay on in fresh-eyes turns; only kwant's own tools are
   limited to the review's allowlist.
 
+## Modern web guidance
+
+When a Dev mode space has web code, kwant offers its built-in `modern-web` skill once. The skill
+has a bot look up [Modern Web Guidance](https://github.com/GoogleChrome/modern-web-guidance)
+(Google Chrome's guides to current HTML, CSS and browser APIs, with Baseline support and
+fallbacks) before it writes browser code. Its text is adapted from Google's skill (Apache-2.0); the
+skill's first line says so.
+
+- **What counts as web code:** a `package.json`, or a `.html`, `.css`, `.tsx`, `.jsx`, `.vue` or
+  `.svelte` file, in the top two levels of a team's folder. Hidden folders, `node_modules`,
+  `target` and symlinks are skipped, and the look stops after 3 seconds. A watched repo with no
+  local folder isn't looked at.
+- **When:** when Dev mode is turned on, and on the poller's full pass (every 5 minutes). Never on a
+  page load. kwant itself never runs `npx`.
+- **One offer per space.** The skill arrives as one pending skill shared with every bot in the
+  space: it shows in each bot's Skills tab ("Every bot in this space"), and a notification named
+  for the lead of the team whose folder has web code opens that bot's Skills. Approve or Reject it
+  there; you can also edit it, or give it to one bot only. kwant marks the space when it makes the
+  offer, so it never offers it again: not after a reject or a delete, and not when Dev mode goes
+  off and on. A space that already has a skill called `modern-web` keeps its own.
+- **The pinned version.** The skill runs `npx -y modern-web-guidance@1.0.0 search|retrieve|list …`
+  (or `pnpx modern-web-guidance@1.0.0 …`). Exactly those forms run without an approval card in
+  "Ask only when risky"; `@latest`, another version, `legacy-scan`, `install`, extra options and
+  chaining still ask. A new version is a kwant change (`VERSION` in
+  `src/server/dev/web_guidance.rs`), reviewed like any other.
+- **What it needs:** Node (for `npx`) and the network the first time, to download the package. If
+  the lookup fails or takes more than 90 seconds, the bot says once "Couldn't load Modern Web
+  Guidance here" and carries on. It never installs Node and doesn't retry in a loop.
+- **Remove it:** delete or turn off the `modern-web` skill in any bot's Skills tab. It isn't
+  offered again.
+
 ## Tests
 
 Run these focused tests:
@@ -576,6 +607,8 @@ cargo test --lib -- server::dev:: prod_floor auth::tests::person_only zombie::gi
 cargo test --test dev_post_test --test dev_github_test
 cargo test --lib -- db::dev_mode::tests
 cargo test --test dev_team_repos_test --test dev_autodetect_test
+cargo test --lib -- web_guidance shell_risk
+cargo test --test dev_web_guidance_test
 ```
 
 `tests/dev_team_repos_test.rs` covers 0.7.2's repos: two teams' repos with PR #12 in both (two cards,

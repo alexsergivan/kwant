@@ -130,10 +130,18 @@ pub struct BrokerApprover {
     /// The chat a card left unanswered resumes in after a late Allow (see [`turn_chat`]);
     /// `None` resumes in the bot's direct chat.
     pub chat: Option<Value>,
-    /// Ask even when the bot's approvals are off, and don't use "always allow" answers: for
-    /// turns kwnt starts on its own that nobody asked for (the loose-ends owner). A call the
-    /// person allowed on a card (late Allow) still runs once.
+    /// kwnt started this turn on its own, nobody asked for it (the loose-ends owner, Watch,
+    /// Verify, an audit…): "always allow" answers don't count and, under Ask or "Ask only when
+    /// risky", every call that could change something asks, with the card saying why
+    /// (`details.started_by`). Approvals off still runs everything (0.9.7): only
+    /// [`BrokerApprover::strict_ask`] turns ask then. A call the person allowed on a card (late
+    /// Allow) still runs once.
     pub always_ask: bool,
+    /// Asks even when the bot's approvals are off: a turn that runs something the person hasn't
+    /// reviewed (a Skill Foundry draft). Only with `always_ask`.
+    pub strict_ask: bool,
+    /// What kwnt started the turn for (its label, "Watch"), shown on an `always_ask` turn's card.
+    pub started_by: Option<String>,
     /// Where task folders resolve, for the side-effect ledger (`turn_tool_calls`).
     pub data_dir: PathBuf,
 }
@@ -186,9 +194,76 @@ impl ToolApprover for BrokerApprover {
         // Boxed: keeps this future (and every caller's) small
         Box::pin(super::missions::flight_school::tier_gate(&self.db, &self.data_dir, req)).await
     }
+
+    async fn decide_granted(&self, req: ToolApprovalRequest, grant: &mcp::PrepushGrant) -> ApprovalOutcome {
+        match Box::pin(self.granted(&req, grant)).await {
+            Some(approval_id) => {
+                if super::missions::truth_ledger::request_reads_outside(&req) {
+                    super::missions::truth_ledger::taint(&req.turn_id);
+                }
+                let note = super::dev::prepush::grant_note(grant);
+                super::missions::checkpoints::log_call_noted(&self.db, &self.data_dir, &req, "approved", approval_id.as_deref(), Some(&note)).await;
+                ApprovalOutcome::Allowed
+            }
+            None => self.decide(req).await,
+        }
+    }
+}
+
+/// One of claude's plain read tools (Read, Glob, Grep).
+fn plain_read(req: &ToolApprovalRequest) -> bool {
+    req.builtin.is_some() && matches!(req.tool.as_str(), "Read" | "Glob" | "Grep")
+}
+
+/// A claude Bash call whose command only reads, in the bot's folder (see
+/// [`mcp::shell_risk::reads_only`]).
+fn shell_reads_only(req: &ToolApprovalRequest) -> bool {
+    let Some(cwd) = req.builtin.as_ref().and_then(|b| b.cwd.as_deref()) else { return false };
+    let Some(command) = req.arguments.get("command").and_then(Value::as_str) else { return false };
+    if req.tool != "Bash" {
+        return false;
+    }
+    let folder = std::path::Path::new(cwd).canonicalize().unwrap_or_else(|_| PathBuf::from(cwd));
+    mcp::shell_risk::reads_only(command, &folder)
 }
 
 impl BrokerApprover {
+    /// A push the person's Retry or Override covers (0.9.7): uses the grant up and records the call
+    /// as approved by it (`Some(approval id)`), with no card. `None` when it must ask as usual: the
+    /// payment floor, Flight School or the production floor wants a card (exactly as in
+    /// [`Self::classified`]), it names kwnt's secrets, or the grant was used or expired.
+    async fn granted(&self, req: &ToolApprovalRequest, grant: &mcp::PrepushGrant) -> Option<Option<String>> {
+        if req.payment.is_some() || mcp::payment_floor::reason(req, None).is_some() {
+            return None;
+        }
+        if self.tier_gate(req).await.is_some() || super::dev::floor::for_call(&self.db, req).await.is_some() {
+            return None;
+        }
+        let cwd = req.builtin.as_ref().and_then(|b| b.cwd.as_deref()).map(std::path::Path::new);
+        if crate::sandbox::credentials::call_touches_kwnt_secrets(&req.arguments, cwd) {
+            return None;
+        }
+        if !super::dev::prepush::use_grant(&self.db, &self.events, grant).await {
+            return None;
+        }
+        tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, grant = %grant.id, card = %grant.pressed_card_id, "ran a push the person's {} approved", grant.kind);
+        let mut details = match &req.builtin {
+            Some(b) => json!({"source": "claude_builtin", "tool": req.tool, "arguments": req.arguments, "cwd": b.cwd, "outside_folder": b.outside_folder}),
+            None => json!({"source": "mcp", "server": req.server, "tool": req.tool, "arguments": req.arguments}),
+        };
+        details["kwant_id"] = json!(req.kwant_id);
+        details["kwant_name"] = json!(req.kwant_name);
+        details["prepush_grant"] = grant_details(grant);
+        let record = NewApproval { turn_id: req.turn_id.clone(), kwant_id: req.kwant_id.clone(), tool_name: req.tool_name.clone(), parameters: details };
+        match self.db.save_granted(&record).await {
+            Ok(id) => Some(Some(id)),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not record a push the person's grant approved");
+                Some(None)
+            }
+        }
+    }
+
     /// [`ToolApprover::decide`], with the ledger's decision class and the card's id.
     async fn classified(&self, req: ToolApprovalRequest) -> (ApprovalOutcome, &'static str, Option<String>) {
         // Approvals the person switched off: run, and keep a record of what ran. A setting that
@@ -212,15 +287,19 @@ impl BrokerApprover {
         // follow approvals off even in an always-asking audit turn; its other tools still ask
         let audit_call = req.server == mcp::SELF_SERVER_NAME
             && (super::missions::auditor::TOOL_NAMES.contains(&req.tool.as_str()) || req.tool == super::missions::verifier::TOOL);
-        let off = !forced && (!self.always_ask || audit_call) && mode.as_ref().is_some_and(|m| m.is_off());
+        // Approvals off means off in a turn kwant started on its own too (0.9.7): only a strict one
+        // (it runs something the person hasn't reviewed) still asks.
+        let strict = self.always_ask && self.strict_ask;
+        let off = !forced && (!strict || audit_call) && mode.as_ref().is_some_and(|m| m.is_off());
         // "Ask only when risky": what the caller made of this call; nothing known asks. A turn that
-        // always asks (kwant started it on its own) still lets claude's plain read tools through.
+        // always asks (kwant started it on its own) still lets claude's plain read tools through,
+        // and a shell command that only reads (`git show`, `grep`) unless the turn is strict.
         let smart = mode
             .as_ref()
             .is_some_and(|m| m.is_smart())
             .then(|| req.smart.clone())
             .flatten()
-            .filter(|_| !self.always_ask || (req.builtin.is_some() && matches!(req.tool.as_str(), "Read" | "Glob" | "Grep")))
+            .filter(|_| !self.always_ask || plain_read(&req) || (!strict && shell_reads_only(&req)))
             .filter(|_| !forced);
         let mut details = match &req.builtin {
             Some(b) => json!({
@@ -261,6 +340,13 @@ impl BrokerApprover {
         }
         if self.always_ask {
             details["always_ask"] = json!(true);
+            // The card picks its sentence from this, not from the label (Ada, #569 round 2)
+            if self.strict_ask {
+                details["strict_ask"] = json!(true);
+            }
+            if let Some(label) = self.started_by.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+                details["started_by"] = json!(label);
+            }
         }
         let record = NewApproval {
             turn_id: req.turn_id.clone(),
@@ -666,9 +752,12 @@ pub struct TurnApprovalOpts {
     /// The turn's (agent, effort): a card it leaves unanswered resumes on the same ones after a
     /// late Allow.
     pub routed: Option<(String, String)>,
-    /// Every call that could change something asks, approvals off or not (see
-    /// [`BrokerApprover::always_ask`]).
+    /// kwnt started the turn on its own (see [`BrokerApprover::always_ask`]).
     pub always_ask: bool,
+    /// Asks even with approvals off (see [`BrokerApprover::strict_ask`]).
+    pub strict_ask: bool,
+    /// The turn's label, for its cards (see [`BrokerApprover::started_by`]).
+    pub started_by: Option<String>,
     /// A Skill Foundry replay: nothing that could change anything outside the scratch folder
     /// runs, and every such call is logged here as what the bot would have done (see
     /// [`RehearseApprover`]).
@@ -743,13 +832,30 @@ impl ToolApprover for PrepushApprover {
         self.inner.tier_gate(req).await
     }
 
-    async fn prepush_gate(&self, req: &ToolApprovalRequest) -> Result<Vec<String>, String> {
-        Box::pin(super::dev::prepush::check_mcp(&self.state, &req.kwant_id, &req.server, &req.tool, &req.arguments)).await.map(|p| p.overrides)
+    async fn prepush_gate(&self, req: &ToolApprovalRequest) -> Result<mcp::PrepushPass, String> {
+        Box::pin(super::dev::prepush::check_mcp(&self.state, &req.kwant_id, &req.server, &req.tool, &req.arguments))
+            .await
+            .map(|p| mcp::PrepushPass { overrides: p.overrides, grant: p.grant })
     }
 
     async fn prepush_use(&self, overrides: &[String]) -> Option<String> {
-        super::dev::prepush::use_up(&self.state, &super::dev::prepush::Pass { overrides: overrides.to_vec(), pinned: None }).await
+        super::dev::prepush::use_up(&self.state, &super::dev::prepush::Pass { overrides: overrides.to_vec(), ..Default::default() }).await
     }
+
+    async fn decide_granted(&self, req: ToolApprovalRequest, grant: &mcp::PrepushGrant) -> ApprovalOutcome {
+        self.inner.decide_granted(req, grant).await
+    }
+}
+
+/// What an approval record keeps about the grant that approved its call (0.9.7).
+pub fn grant_details(grant: &mcp::PrepushGrant) -> Value {
+    json!({
+        "id": grant.id,
+        "kind": grant.kind,
+        "card_id": grant.pressed_card_id,
+        "push_card_id": grant.card_id,
+        "note": super::dev::prepush::grant_note(grant),
+    })
 }
 
 /// [`prepare_turn_with_self`] with [`TurnApprovalOpts`].
@@ -810,6 +916,8 @@ pub async fn prepare_turn_with_opts(
         conversation: turn_conversation(state, &turn_id),
         chat,
         always_ask: opts.always_ask,
+        strict_ask: opts.strict_ask,
+        started_by: opts.started_by.clone(),
         data_dir: state.config.data_dir.clone(),
     });
     let approver: Arc<dyn ToolApprover> = if let Some(log) = opts.rehearse.clone() {
@@ -832,11 +940,17 @@ pub async fn prepare_turn_with_opts(
         permission_url: Some(format!("{}/api/mcp/permission/{token}", local_base_url(state))),
         gateway: Some(GatewayAccess { url: format!("{}/api/mcp/gateway", local_base_url(state)), token: token.clone() }),
         max_tool_iterations: max_tool_iterations(setting),
-        approvals: if opts.always_ask || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
-            // An audit turn asks whatever the setting says, and a Dev mode brief only reads: never tell either to just go ahead
-            Approvals::Ask
-        } else {
-            state.db.kwant_approvals(&kwant.id).await.map(|m| Approvals::from_mode(&m.effective)).unwrap_or_default()
+        approvals: {
+            let mode = state.db.kwant_approvals(&kwant.id).await.map(|m| Approvals::from_mode(&m.effective)).unwrap_or_default();
+            if (opts.always_ask && opts.strict_ask) || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
+                // A strict turn asks whatever the setting says, and a Dev mode brief only reads: never tell either to just go ahead
+                Approvals::Ask
+            } else if opts.always_ask && mode != Approvals::Off {
+                // A turn kwant started on its own asks under "Ask only when risky" too
+                Approvals::Ask
+            } else {
+                mode
+            }
         },
         records: Default::default(),
     };
@@ -949,7 +1063,7 @@ fn noted_request(session: &PermissionSession, tool_name: &str, server: &str, too
 /// Answers one claude permission prompt. MCP tools from the kwant's own servers get their
 /// approval card; claude's own tools follow [`mcp::builtin_tools`]; tools from servers the
 /// kwant doesn't have are denied.
-async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value {
+async fn decide(session: &PermissionSession, args: &Value, smart: bool, grant: Option<&mcp::PrepushGrant>) -> Value {
     let tool_name = args["tool_name"].as_str().unwrap_or("");
     let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
     let tool_use_id = args["tool_use_id"].as_str().unwrap_or("").to_string();
@@ -1016,7 +1130,7 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
             }
         }
     };
-    let approval = session.ctx.approver.decide(ToolApprovalRequest {
+    let req = ToolApprovalRequest {
         kwant_id: session.kwant_id.clone(),
         kwant_name: session.kwant_name.clone(),
         turn_id: session.turn_id.clone(),
@@ -1027,7 +1141,14 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
         builtin,
         smart: verdict,
         payment: None,
-    });
+    };
+    // A push the person's Retry or Override covers skips the ordinary card (0.9.7)
+    let approval = async {
+        match grant {
+            Some(g) => session.ctx.approver.decide_granted(req, g).await,
+            None => session.ctx.approver.decide(req).await,
+        }
+    };
     // Dropping the approval withdraws its card when the turn ends first
     let outcome = tokio::select! {
         outcome = approval => outcome,
@@ -1107,7 +1228,7 @@ pub async fn permission_endpoint(
             let decision = match prepush {
                 Err(why) => json!({"behavior": "deny", "message": why}),
                 Ok(pass) => {
-                    let mut decision = decide(&session, args, smart).await;
+                    let mut decision = decide(&session, args, smart, pass.grant.as_ref()).await;
                     if decision["behavior"] == "allow" {
                         // The override goes with the push that runs, never one the person declined
                         if let Some(why) = super::dev::prepush::use_up(&state, &pass).await {

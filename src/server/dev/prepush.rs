@@ -26,9 +26,11 @@
 use super::facts::{Author, CiState, DevFacts, FileDiff, Kind, KwantRef, Links};
 use super::git::{GitError, Repo};
 use super::scan::{self, Finding, State, Tile};
-use crate::db::dev_prepush::{PrepushRow, BLOCKED, CHECKING, CLEAR, NEEDS_YOU_TRIES, OVERRIDDEN, PREPUSH_FAILED, PUSHED, RETRIED};
+use crate::db::dev_prepush::{
+    PrepushGrantRow, PrepushRow, BLOCKED, CHECKING, CLEAR, GRANT_OVERRIDE, GRANT_RETRY, NEEDS_YOU_TRIES, OVERRIDDEN, PREPUSH_FAILED, PUSHED, RETRIED, SUPERSEDED,
+};
 use crate::drivers::events::RuntimeEvent;
-use crate::mcp::prod_floor;
+use crate::mcp::{prod_floor, PrepushGrant};
 use crate::server::AppState;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -303,6 +305,7 @@ fn deny_text_for(row: &PrepushRow) -> String {
             )
         }
         RETRIED => format!("The person asked kwant to check this push of {branch} again (card {id}). Nothing was pushed. Run the same push again."),
+        SUPERSEDED => format!("Pre-push card {id} for {branch} was replaced by a newer push of the branch. Nothing was pushed. Push your newest commit."),
         _ => format!("kwant's pre-push card {id} for {branch} doesn't let this push go. Nothing was pushed."),
     }
 }
@@ -320,6 +323,12 @@ pub struct Pass {
     /// <sha>:refs/heads/<branch>`), so a commit made by a parallel call in the same turn isn't
     /// what goes. `None` for a shape kwant doesn't rewrite ([`pin`]).
     pub pinned: Option<String>,
+    /// The person's Retry or Override that approved this push already (0.9.7): the approver skips
+    /// the ordinary card and uses it up ([`ToolApprover::decide_granted`]). Only for a command or
+    /// call that makes one push.
+    ///
+    /// [`ToolApprover::decide_granted`]: crate::mcp::ToolApprover::decide_granted
+    pub grant: Option<PrepushGrant>,
 }
 
 /// Whether `command` may run now (`Ok`: no push, Dev mode off, the production floor asks
@@ -361,6 +370,7 @@ pub async fn check_command(state: &AppState, kwant_id: &str, command: &str, fold
         }
         if one {
             pass.pinned = pin(command, &checked.head_sha, &checked.branch, local_src);
+            pass.grant = checked.grant;
         }
     }
     Ok(pass)
@@ -458,6 +468,8 @@ struct Checked {
     status: String,
     branch: String,
     head_sha: String,
+    /// The person's grant that covers this push, if one does ([`grant_for`]).
+    grant: Option<PrepushGrant>,
 }
 
 /// The card a push goes on, and whether its source is `HEAD` or a local branch (see [`pin`]).
@@ -520,6 +532,15 @@ async fn gate_card(
             // The person asked for the checks again: a new card, back at try 1
             row = None;
             fresh_start = true;
+        } else if r.status == SUPERSEDED {
+            // The bot pushes an older commit again: its card waits for the person again, and is
+            // now the branch's one waiting card
+            if let Some(again) = state.db.revive_superseded_prepush_card(&r.id).await.ok().flatten() {
+                notify(state, &again);
+                supersede_beside(state, &again).await;
+                return Err(deny_text(&again));
+            }
+            return Err(deny_text(r));
         } else if r.status == PUSHED {
             // The override let one push go: this one waits for the person again
             let again = state.db.reblock_pushed_prepush_card(&r.id).await.ok().flatten();
@@ -544,6 +565,11 @@ async fn gate_card(
             match made {
                 Some(r) => {
                     notify(state, &r);
+                    supersede_beside(state, &r).await;
+                    // The person's Retry follows the bot's push to its new card, for the card's story
+                    if let Ok(Some(g)) = state.db.live_prepush_grant(space_id, kwant_id, &key, &branch, GRANT_RETRY).await {
+                        let _ = state.db.point_prepush_grant(&g.id, &r.id).await;
+                    }
                     tokio::spawn(check(state.clone(), r.clone(), src(), base.to_string()));
                     r
                 }
@@ -553,9 +579,56 @@ async fn gate_card(
         }
     };
     match row.status.as_str() {
-        CLEAR | OVERRIDDEN => Ok(Checked { id: row.id, status: row.status, branch, head_sha: sha }),
+        CLEAR | OVERRIDDEN => {
+            let grant = grant_for(state, kwant_id, &row).await;
+            Ok(Checked { id: row.id, status: row.status, branch, head_sha: sha, grant })
+        }
         _ => Err(deny_text(&row)),
     }
+}
+
+/// The person's grant that covers a push going on `card` (0.9.7), if one does: for a `clear`
+/// card, the bot's Retry grant on the branch, made before the card was; for an `overridden` card,
+/// the Override grant the person made on that card. Unused and not expired in both cases.
+async fn grant_for(state: &AppState, kwant_id: &str, card: &PrepushRow) -> Option<PrepushGrant> {
+    let (kind, row) = match card.status.as_str() {
+        CLEAR => (GRANT_RETRY, state.db.live_prepush_grant(&card.space_id, kwant_id, &card.folder, &card.branch, GRANT_RETRY).await.ok().flatten()?),
+        OVERRIDDEN => (GRANT_OVERRIDE, state.db.live_prepush_grant(&card.space_id, kwant_id, &card.folder, &card.branch, GRANT_OVERRIDE).await.ok().flatten()?),
+        _ => return None,
+    };
+    let covers = match kind {
+        GRANT_RETRY => row.granted_at <= card.created_at,
+        _ => row.card_id == card.id,
+    };
+    covers.then(|| PrepushGrant { id: row.id, kind: row.kind, pressed_card_id: row.card_id, card_id: card.id.clone() })
+}
+
+/// Makes the other waiting cards of `newer`'s branch `superseded` and tells open pages (0.9.7).
+async fn supersede_beside(state: &AppState, newer: &PrepushRow) {
+    match state.db.supersede_prepush_cards_beside(newer).await {
+        Ok(rows) => rows.iter().for_each(|r| notify(state, r)),
+        Err(e) => tracing::warn!(card = %newer.id, "dev: could not supersede older pre-push cards: {e}"),
+    }
+}
+
+/// Uses the person's grant for the push it covers (0.9.7): true when this push may go without
+/// the ordinary card; false when another push used it first or it expired (the push asks as
+/// usual). Tells open pages about the cards it shows on.
+pub async fn use_grant(db: &crate::db::Database, events: &tokio::sync::broadcast::Sender<RuntimeEvent>, grant: &PrepushGrant) -> bool {
+    if !db.use_prepush_grant(&grant.id, &grant.card_id).await.unwrap_or(false) {
+        return false;
+    }
+    for id in [&grant.pressed_card_id, &grant.card_id] {
+        if let Ok(Some(row)) = db.prepush_card(id).await {
+            let _ = events.send(RuntimeEvent::DevPrepush { space_id: row.space_id.clone(), id: row.id.clone(), kwant_id: row.kwant_id.clone(), status: row.status.clone() });
+        }
+    }
+    true
+}
+
+/// The line the side-effect ledger and the approval record keep for a push a grant let go.
+pub fn grant_note(grant: &PrepushGrant) -> String {
+    format!("approved by the person's {} on pre-push card {}", grant.kind, grant.pressed_card_id)
 }
 
 async fn resolve(repo: &Repo, src: &str) -> Result<String, GitError> {
@@ -920,6 +993,7 @@ pub async fn check_mcp(state: &AppState, kwant_id: &str, server: &str, tool: &st
     if checked.status == OVERRIDDEN {
         pass.overrides.push(checked.id);
     }
+    pass.grant = checked.grant;
     Ok(pass)
 }
 
@@ -1100,8 +1174,22 @@ pub fn parse_semgrep(json_text: &str, prefix: &str) -> Option<Vec<Finding>> {
 // ---------------------------------------------------------------------------------------------
 // Routes (person only: `/api/spaces/:id/dev/…` and `/api/dev/…` are in `auth::person_only`)
 
-/// A card as the API returns it (fresh-eyes-audit.md §4.2).
-pub fn card_json(row: &PrepushRow) -> Value {
+/// A grant as a card shows it (0.9.7): `{kind, at, expires_at, used_at, card_id, next_card_id}`,
+/// all times ms epoch. `card_id` is the card the person pressed, `next_card_id` the newest card
+/// the bot's push made after it (then the one it let go).
+pub fn grant_json(g: &PrepushGrantRow) -> Value {
+    json!({"kind": g.kind, "at": g.granted_at, "expires_at": g.expires_at, "used_at": g.used_at, "card_id": g.card_id, "next_card_id": g.next_card_id})
+}
+
+/// [`card_json`] with the card's grant read from the database.
+pub async fn card_json_of(state: &AppState, row: &PrepushRow) -> Value {
+    let grant = state.db.prepush_grant_of_card(&row.id).await.ok().flatten();
+    card_json(row, grant.as_ref())
+}
+
+/// A card as the API returns it (fresh-eyes-audit.md §4.2), with `grant`: the person's grant
+/// pressed on this card or followed to it (0.9.7), else null.
+pub fn card_json(row: &PrepushRow, grant: Option<&PrepushGrantRow>) -> Value {
     let card = row.card.as_deref().and_then(|c| serde_json::from_str::<Value>(c).ok());
     let waiting = row.status == BLOCKED || row.status == PREPUSH_FAILED;
     let no_change = card.as_ref().is_some_and(|c| c["no_change"] == json!(true));
@@ -1109,6 +1197,8 @@ pub fn card_json(row: &PrepushRow) -> Value {
         "id": row.id,
         "space_id": row.space_id,
         "kwant_id": row.kwant_id,
+        // Needs-you dedupe is per (bot, folder, branch), as in the DB row
+        "folder": row.folder,
         "branch": row.branch,
         "head_sha": row.head_sha,
         "base_sha": card.as_ref().map(|c| c["base_sha"].clone()),
@@ -1127,6 +1217,10 @@ pub fn card_json(row: &PrepushRow) -> Value {
         "auto_retried": card.as_ref().is_some_and(|c| c["auto_retried"] == json!(true)),
         "last_override": row.overridden_by.as_ref().filter(|_| row.status != OVERRIDDEN && row.status != PUSHED).map(|by| json!({"by": by, "reason": row.override_reason, "at": row.overridden_at})),
         "card": card,
+        // 0.9.7: the person's Retry or Override grant on this card, and the card that replaced a
+        // `superseded` one
+        "grant": grant.map(grant_json),
+        "superseded_by": row.superseded_by,
         "overridden_by": row.overridden_by,
         "overridden_at": row.overridden_at,
         "created_at": row.created_at,
@@ -1224,10 +1318,14 @@ pub async fn list(
         Ok(s) => s,
         Err(r) => return r,
     };
-    match state.db.prepush_cards(space.as_str(), 50).await {
-        Ok(rows) => axum::Json(json!({"cards": rows.iter().map(card_json).collect::<Vec<_>>()})).into_response(),
-        Err(e) => super::routes::internal(e),
-    }
+    let rows = match state.db.prepush_cards(space.as_str(), 50).await {
+        Ok(rows) => rows,
+        Err(e) => return super::routes::internal(e),
+    };
+    // Newest first: a card shows the newest grant pressed on it or followed to it
+    let grants = state.db.prepush_grants(space.as_str(), 200).await.unwrap_or_default();
+    let of = |row: &PrepushRow| grants.iter().find(|g| g.card_id == row.id || g.next_card_id.as_deref() == Some(row.id.as_str()));
+    axum::Json(json!({"cards": rows.iter().map(|r| card_json(r, of(r))).collect::<Vec<_>>()})).into_response()
 }
 
 #[allow(clippy::result_large_err)]
@@ -1250,7 +1348,7 @@ pub async fn get_one(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     match row_for(&state, &headers, &id).await {
-        Ok(row) => axum::Json(card_json(&row)).into_response(),
+        Ok(row) => axum::Json(card_json_of(&state, &row).await).into_response(),
         Err(r) => r,
     }
 }
@@ -1282,8 +1380,12 @@ pub async fn override_card(
     let reason: String = reason.chars().take(MAX_REASON_CHARS).collect();
     match state.db.override_prepush_card(&row.id, "person", &reason).await {
         Ok(Some(r)) => {
+            // 0.9.7: the one push the override lets go doesn't ask the person again
+            if let Err(e) = state.db.add_prepush_grant(&r, GRANT_OVERRIDE).await {
+                tracing::warn!(card = %r.id, "dev: could not save the override's grant: {e}");
+            }
             notify(&state, &r);
-            axum::Json(card_json(&r)).into_response()
+            axum::Json(card_json_of(&state, &r).await).into_response()
         }
         Ok(None) => route_error(axum::http::StatusCode::CONFLICT, "conflict", "only a blocked or failed card can be overridden"),
         Err(e) => super::routes::internal(e),
@@ -1305,8 +1407,13 @@ pub async fn retry_card(
     };
     match state.db.retry_prepush_card(&row.id).await {
         Ok(Some(r)) => {
+            // 0.9.7: the bot's next push of the branch goes without asking again, once its card
+            // comes back clear (within GRANT_MS)
+            if let Err(e) = state.db.add_prepush_grant(&r, GRANT_RETRY).await {
+                tracing::warn!(card = %r.id, "dev: could not save the retry's grant: {e}");
+            }
             notify(&state, &r);
-            axum::Json(card_json(&r)).into_response()
+            axum::Json(card_json_of(&state, &r).await).into_response()
         }
         Ok(None) => route_error(axum::http::StatusCode::CONFLICT, "conflict", "only a blocked or failed card can be checked again"),
         Err(e) => super::routes::internal(e),
@@ -1382,6 +1489,8 @@ mod tests {
             tries: 1,
             created_at: 0,
             updated_at: 0,
+            superseded_by: None,
+            superseded_status: None,
         };
         let failed = failed_card(&row, "no main here");
         let rows = checks(PREPUSH_FAILED, Some(&failed));
@@ -1446,6 +1555,7 @@ mod tests {
         let row = PrepushRow {
             id: "pp".into(), space_id: "s".into(), kwant_id: "k".into(), folder: "/f".into(), branch: "juno-x".into(), head_sha: "a".repeat(40),
             status: CHECKING.into(), card: None, overridden_by: None, overridden_at: None, override_reason: None, tries: 1, created_at: 0, updated_at: 0,
+            superseded_by: None, superseded_status: None,
         };
         assert!(errored(PREPUSH_FAILED, &failed_card(&row, "the repo's git couldn't be read")));
         let mut slow = failed_card(&row, "the checks took longer than 12 minutes");
@@ -1711,7 +1821,15 @@ mod tests {
             tries: 1,
             created_at: 0,
             updated_at: 0,
+            superseded_by: None,
+            superseded_status: None,
         }
+    }
+
+    #[test]
+    fn card_json_names_the_folder_for_needs_you_dedupe() {
+        let v = card_json(&row(BLOCKED, None), None);
+        assert_eq!((v["kwant_id"].as_str(), v["folder"].as_str(), v["branch"].as_str()), (Some("k"), Some("/f"), Some("juno-x")));
     }
 
     #[test]

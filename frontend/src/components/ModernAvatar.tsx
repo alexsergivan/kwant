@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { HardHat, useDevModeOn } from './DevModeSwitch';
 import { isKwantWorking, lastRunOf, liveRunOf, subscribeKwant } from '../kwantActivity';
-import { modelBadgeFor, modelBadgeSize, type ModelBadge } from '../engines';
-import { badgeBotOf, badgeEngines, subscribeBadgeData } from '../modelBadgeData';
+import { badgeUsageFor, modelBadgeFor, modelBadgeSize, type ModelBadge } from '../engines';
+import { badgeBotOf, badgeEngines, badgeProfiles, subscribeBadgeData } from '../modelBadgeData';
 import { EngineMark } from './EngineMark';
 import { AvatarMood, useKwantMood, useKwantNotices } from './AvatarMood';
 import { moodLabel, restingUntilOf } from '../kwantMood';
@@ -21,6 +21,8 @@ interface ModernAvatarProps {
   kwantId?: string;
   /** The AI model badge (bottom-left) on avatars of 24 px and up; off for reply avatars in the chat. */
   modelBadge?: boolean;
+  /** Eyes shut and still: the empty chat while nothing can run yet (first-screen E). */
+  asleep?: boolean;
 }
 
 const noopUnsubscribe = () => undefined;
@@ -59,6 +61,14 @@ export const useModelBadge = (kwantId: string | undefined): ModelBadge | null =>
   );
 };
 
+/** The hover's usage line for the account the bot's next turn would use, re-read when accounts or engines change. */
+const useBadgeUsage = (badge: ModelBadge | null) => {
+  const engines = useSyncExternalStore(subscribeBadgeData, badgeEngines, () => null);
+  const profiles = useSyncExternalStore(subscribeBadgeData, badgeProfiles, () => null);
+  const mark = badge && !badge.cantRun ? badge.mark : null;
+  return useMemo(() => badgeUsageFor(mark, engines, profiles), [mark, engines, profiles]);
+};
+
 const prefersReducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 const BadgeFace: React.FC<{ badge: ModelBadge; glyph: number; className?: string }> = ({ badge, glyph, className = '' }) => (
@@ -73,6 +83,7 @@ const BadgeFace: React.FC<{ badge: ModelBadge; glyph: number; className?: string
 /** Bottom-left, the mirror of the status dot. A changed mark cross-fades in 150 ms (instant under reduced motion). */
 export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ kwantId, size }) => {
   const badge = useModelBadge(kwantId);
+  const usage = useBadgeUsage(badge);
   const d = modelBadgeSize(size);
   const [leaving, setLeaving] = useState<ModelBadge | null>(null);
   const shownRef = useRef<ModelBadge | null>(badge);
@@ -92,19 +103,28 @@ export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ 
   }, [key]);
   if (!badge || !d) return null;
   const glyph = Math.round(d * (badge.mark === 'custom' ? 0.7 : 0.64));
+  const tip = usage ? `${badge.label}\n${usage.text}` : badge.label;
   return (
     <span
       className={`kw-model-badge ring-2 ring-zinc-950 ${badge.cantRun ? 'bg-zinc-950' : 'bg-zinc-900'}`}
       style={{ width: d, height: d }}
       role="img"
-      aria-label={badge.label}
-      title={badge.label}
+      aria-label={tip.replace('\n', '. ')}
+      title={tip}
       data-model-badge={badge.mark}
       data-badge-resting={badge.resting || undefined}
       data-badge-cant-run={badge.cantRun ?? undefined}
     >
       {leaving && <BadgeFace key={`out:${leaving.key}`} badge={leaving} glyph={glyph} className="kw-mb-out" />}
       <BadgeFace key={badge.key} badge={badge} glyph={glyph} className={leaving ? 'kw-mb-in' : ''} />
+      {usage?.low && (
+        <span
+          className="absolute -top-px -right-px rounded-full bg-amber-400 ring-1 ring-zinc-950"
+          style={{ width: Math.max(4, Math.round(d * 0.36)), height: Math.max(4, Math.round(d * 0.36)) }}
+          aria-hidden="true"
+          data-badge-low
+        />
+      )}
       {badge.resting && badge.auto && (
         <span className="kw-mb-spark text-violet-300" style={{ fontSize: Math.max(8, Math.round(d * 0.55)) }} aria-hidden="true" data-badge-spark>
           ✦
@@ -433,6 +453,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   className = '',
   kwantId,
   modelBadge = true,
+  asleep = false,
 }) => {
   const working = useKwantWorking(kwantId);
   // Never green (or idle grey) while a turn runs: the turn stream wins over a stale status.
@@ -480,7 +501,15 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
           <g className="kw-avatar-body">
             {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
             {/* One blink when the person sends this bot a message: the eyes close for 160 ms. */}
-            {notices > 0 && (
+            {asleep && (
+              <g data-asleep>
+                {px(10, 10, 2, 2, creature.body, 'sl1')}
+                {px(14, 10, 2, 2, creature.body, 'sl2')}
+                {px(10, 12, 2, 1, creature.shade, 'sl3')}
+                {px(14, 12, 2, 1, creature.shade, 'sl4')}
+              </g>
+            )}
+            {!asleep && notices > 0 && (
               <g key={notices} className="kw-avatar-blink">
                 {px(10, 10, 2, 3, creature.body, 'bl1')}
                 {px(14, 10, 2, 3, creature.body, 'bl2')}

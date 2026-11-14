@@ -9,11 +9,13 @@ pub mod mcp_routes;
 pub mod mcp_runtime;
 pub mod profile_routes;
 pub mod profile_turn;
+pub mod account_usage;
 pub mod engine_routes;
 pub mod engine_login;
 pub mod auth;
 pub mod signin;
 pub mod continuity;
+pub mod memory_recall;
 pub mod fresh_eyes;
 pub mod goals_remediation;
 pub mod model_usage;
@@ -75,6 +77,7 @@ pub mod missions;
 pub mod goals;
 pub mod app_update_routes;
 pub mod smart_results;
+pub mod space_docs;
 pub mod dev;
 pub(crate) mod gitfile;
 pub mod show_once;
@@ -256,6 +259,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
         .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))
         .route("/api/profiles/:id/check", post(profile_routes::check))
+        .route("/api/profiles/:id/usage", post(profile_routes::usage))
         .route("/api/profiles/:id/login", post(profile_routes::start_login))
         .route(
             "/api/profiles/:id/login/:flow_id",
@@ -307,6 +311,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
         .route("/api/approvals/:id/retry", post(routes::retry_expired_approval))
         .route("/api/spaces/:id/approvals", get(approval_modes::get_space).put(approval_modes::put_space))
+        .route("/api/spaces/:id/docs", get(space_docs::list))
+        .route("/api/spaces/:id/docs/cite", post(space_docs::cite))
         .route("/api/spaces/:id/dev_mode", get(dev::routes::get_mode).put(dev::routes::put_mode))
         .route("/api/spaces/:id/dev_mode/check", post(dev::routes::check))
         .route("/api/spaces/:id/dev_mode/seen", post(dev::routes::desk_seen))
@@ -566,6 +572,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tasks/:id/checks", post(missions::routes::add_task_check))
         .route("/api/tasks/:id/checks/run", post(missions::routes::run_task_checks))
         .route("/api/checks/:id/approve", post(missions::routes::approve_check))
+        .route("/api/checks/:id/wait-more", post(missions::routes::wait_more))
         .route("/api/questions/:id/cancel", post(questions::cancel))
         .route("/api/human-steps", get(human_steps::list))
         .route("/api/human-steps/:id", get(human_steps::get))

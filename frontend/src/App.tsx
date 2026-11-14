@@ -9,6 +9,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -26,6 +27,8 @@ import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
 import { liveNamingOrder, namesToFill } from './workingStrip';
+import { doneLines } from './waitingState';
+import { botOf } from './sharedFiles';
 import {
   HumanStep,
   HumanStepMeta,
@@ -37,7 +40,8 @@ import {
   openStepsByKwant,
   turnsAwaitingStep,
 } from './humanSteps';
-import { notifyBrowserPages, pageTeam, stepPage } from './browserPages';
+import { noteTitle, notifyBrowserPages, pageTeam, stepPage } from './browserPages';
+import { AUTO_CLOSE_DELAY_MS, PANE_EXIT_MS, PHONE_PANE_QUERY, type PaneOpener, shouldAutoClose, shouldAutoOpen } from './browserPanel';
 import { McpSuggestionCard, type SuggestionSignInResult } from './components/McpSuggestionCard';
 import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
@@ -79,7 +83,7 @@ import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, forgetLastRuns, resetTurns, turnEnded, turnRunsOn, turnStarted } from './kwantActivity';
-import { setBadgeBots, setBadgeEngines } from './modelBadgeData';
+import { setBadgeBots, setBadgeEngines, setBadgeProfiles } from './modelBadgeData';
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
@@ -159,7 +163,7 @@ import { isNotificationOpen, placeOfNotification, showDeviceNotification } from 
 import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { BudgetNeedsYou } from './components/BotBudget';
-import { budgetStore, isBudgetMessage, requestBudgetFocus } from './botBudget';
+import { budgetStore, isBudgetMessage, requestBudgetFocus, sendWaitsForBudget } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
@@ -372,6 +376,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(tab);
     playSfx('click');
   };
+  // First-screen A: the "moved" pointer under the space header, until Open or ✕ (0.9.8 and 0.9.9).
+  const [movedHidden, setMovedHidden] = useState(movedSeen);
+  const hideMoved = () => {
+    markMovedSeen();
+    setMovedHidden(true);
+  };
+  const openMoved = () => {
+    openSpaceSettings('general');
+    ringDevSettings();
+    hideMoved();
+  };
   // Settings › All spaces: what applies to every space and to the app.
   const openAppSettings = () => {
     setSettingsScope('app');
@@ -569,7 +584,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const devOn = useDevModeOn(space.id);
   // 0.8.0 B3: the space's pre-push cards (Dev mode only): the bot's thread and the Inbox read them.
   const prepush = usePrepushCards(space.id, devOn);
-  const prepushWaiting = prepushNeedsYou(prepush.cards).length;
+  const prepushWaiting = prepushNeedsYou(prepush.cards, prepush.acted).length;
   const kwantNames = useMemo(() => Object.fromEntries(kwants.map((k) => [k.id, k.name])), [kwants]);
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
@@ -1002,6 +1017,41 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // running turns are in and the chat's browser is active. Otherwise (an unknown, malformed or idle
   // link) it shows the plain "this bot isn't browsing now" page (W-L4).
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
+  // 0.9.8 browser panel (design browser-panel/design.md D): who opened it, and whether the person used it.
+  // Only a panel a bot opened closes itself, after that bot's turn, and never while the person uses it.
+  const [paneOpenedBy, setPaneOpenedBy] = useState<PaneOpener | null>(null);
+  const [paneTouched, setPaneTouched] = useState(false);
+  const [paneUsage, setPaneUsage] = useState({ control: false, pointPending: false });
+  const [paneClosing, setPaneClosing] = useState(false);
+  const markPaneTouched = useCallback(() => setPaneTouched(true), []);
+  // Set by autoOpenPane just before it opens the panel; the open effect below reads it to mark `bot`
+  const autoOpeningRef = useRef<string | null>(null);
+  const isVmPaneOpenRef = useRef(false);
+  isVmPaneOpenRef.current = isVmPaneOpen;
+  /** A browser event opens the panel: on desktop, when it's closed. Never on a phone (the live chip is the way in). */
+  const autoOpenPane = (owner: string) => {
+    const narrow = typeof window !== 'undefined' && !!window.matchMedia?.(PHONE_PANE_QUERY).matches;
+    if (!shouldAutoOpen({ open: isVmPaneOpenRef.current, narrow })) return;
+    autoOpeningRef.current = owner;
+    isVmPaneOpenRef.current = true;
+    setIsVmPaneOpen(true);
+  };
+  const wasPaneOpen = useRef(false);
+  useEffect(() => {
+    if (isVmPaneOpen && !wasPaneOpen.current) {
+      // Every open but a browser event's is the person's: the chip, the Bot browser button, a step, a link
+      const bot = autoOpeningRef.current;
+      setPaneOpenedBy(bot ? { by: 'bot', owner: bot } : { by: 'person', owner: activeSandboxIdRef.current || 'default' });
+      setPaneTouched(false);
+      setPaneUsage({ control: false, pointPending: false });
+    }
+    if (!isVmPaneOpen) {
+      setPaneOpenedBy(null);
+      setPaneClosing(false);
+    }
+    autoOpeningRef.current = null;
+    wasPaneOpen.current = isVmPaneOpen;
+  }, [isVmPaneOpen]);
   const [liveGate, setLiveGate] = useState<null | 'pending' | 'miss'>(() => (initialTarget?.live ? 'pending' : null));
   // W1: chats whose browser is active right now, from the browser events every stream gets
   const [browsing, setBrowsing] = useState<BrowsingMap>({});
@@ -1664,6 +1714,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'BrowserNavigated': {
             const teamId = event.data?.team_id;
             notifyBrowserPages(teamId);
+            noteTitle(event.data?.url, event.data?.title);
             setBrowsing((m) => noteBrowser(m, teamId, event.data?.url, Date.now()));
             const currentTid = activeSandboxIdRef.current;
             const k = currentKwantRef.current;
@@ -1680,7 +1731,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (isMatch) {
               if (event.data?.url) setActiveUrl(event.data.url);
               if (event.data?.title) setPageTitle(event.data.title);
-              setIsVmPaneOpen(true);
+              autoOpenPane(activeSandboxIdRef.current || teamId || 'default');
               playSfx('blip');
             }
             break;
@@ -1706,7 +1757,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               setIsVmRunning(true);
               if (event.data?.image_base64) setScreenshotBase64(event.data.image_base64);
               if (event.data?.url) setActiveUrl(event.data.url);
-              setIsVmPaneOpen(true);
+              autoOpenPane(activeSandboxIdRef.current || teamId || 'default');
               playSfx('blip');
             }
             break;
@@ -1855,13 +1906,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setDiscussionState({ inProgress: false });
       setRoutingState(null);
     }
-    streamingContextIdRef.current = targetId;
-    if (!(targetId in liveRef.current)) {
-      streamsRef.current[targetId] = { text: '', thinking: '' };
-      setStreamingText('');
-      setStreamingThinking('');
+    // A bot paused at its monthly budget: the message is saved and waits, and nothing starts (QA F1), so
+    // no "getting started", timer or Stop. Continue starts the turn, and its events show it working.
+    const budgetWait = (): boolean => !threadId && !isTargetChannel && sendWaitsForBudget(budgetStore.get().byBot, targetId);
+    if (!budgetWait()) {
+      streamingContextIdRef.current = targetId;
+      if (!(targetId in liveRef.current)) {
+        streamsRef.current[targetId] = { text: '', thinking: '' };
+        setStreamingText('');
+        setStreamingThinking('');
+      }
+      markLive(targetId, speakerName);
     }
-    markLive(targetId, speakerName);
 
     // Optimistically add user message
     const tempId = `temp-${Date.now()}`;
@@ -1911,6 +1967,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         throw new Error(message);
       }
       const reply = await res.json().catch(() => null);
+      // Paused while this was on its way (the list caught up since): drop the working state it started
+      if (budgetWait() && turnsIn(turnsRef.current, targetId).length === 0) {
+        clearLive(targetId);
+        if (streamingContextIdRef.current === targetId) streamingContextIdRef.current = null;
+      }
       const held = heldFromReply(reply, tempId);
       if (held) {
         // H3: saved, but no turn starts yet, so no "thinking" for it; the line under the message says why.
@@ -2304,10 +2365,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // The card call first; a 409 means the card moved on, so fetch it again (Rigel QA 1). Then the
   // chat message: if only that fails, say the change applied (Ada Later 7).
+  // 0.9.7 prepush-grant: the Inbox item goes the moment the person presses, before the server answers;
+  // it comes back only if the press didn't apply.
   const prepushAct = async (c: PrepushCardData, act: () => Promise<PrepushCardData>, message: string) => {
+    prepush.setActed(c.id, true);
     try {
       prepush.put(await act());
     } catch (e) {
+      prepush.setActed(c.id, false);
       if (e instanceof DevModeError && e.status === 409) void prepush.refresh(c.id);
       throw e;
     }
@@ -3260,7 +3325,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const chatSubtitle = !isChannel
     ? currentKwant?.title || 'Kwant bot'
     : isGeneral
-      ? `Laya picks who answers, from the ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} in ${space.name}`
+      ? `The best fit of your ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} answers`
       : currentTeam?.description || currentChannel?.description || `A team in ${space.name}`;
 
   // "Suggested:" prompts from who is in this chat, so a kitchen team isn't offered developer prompts
@@ -3454,6 +3519,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const awaitingTurns = new Set([...turnsAwaitingAnswer(questions), ...browserTurns]);
   const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
   const awaitingBrowserHere = awaitingHere && openTurns.some((t) => t.state === 'running' && browserTurns.has(t.turn_id));
+  // The bot whose question the chat waits on, for the waiting banner (UX audit #2).
+  const awaitingTurnHere = awaitingHere ? openTurns.find((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) : undefined;
+  const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
   // The open chat's running turn's live steps (the newest, when several reply at once).
   const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
   const needsYouByKwant = openStepsByKwant(humanSteps);
@@ -3547,6 +3615,52 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   }, [browsingKey]);
   const globes = globeRows(liveBrowsing, runningTurns, channels, teamOfCh);
   const browserNeedsYou = new Set(Object.values(humanSteps).filter((st) => st.status === 'open' && st.sandbox_target).map((st) => st.sandbox_target!));
+
+  // 0.9.8 D: close a panel the bot opened once that bot's turn ends (not the one-minute browsing expiry,
+  // which fires mid-turn while a bot reads), 600 ms later so the final step lands, unless the person uses it.
+  const openerRunning = !!paneOpenedBy && ownerStillRunning(paneOpenedBy.owner, runningTurns, channels, teamOfCh);
+  // Only a turn the app saw running ends: a panel opened before the turns are in must not close at once
+  const [openerSeenRunning, setOpenerSeenRunning] = useState(false);
+  useEffect(() => {
+    if (!paneOpenedBy) setOpenerSeenRunning(false);
+    else if (openerRunning) setOpenerSeenRunning(true);
+  }, [paneOpenedBy, openerRunning]);
+  const openerHumanStep =
+    !!paneOpenedBy && [...browserNeedsYou].some((target) => target === paneOpenedBy.owner || pageTeam(target) === paneOpenedBy.owner);
+  const paneAutoCloses =
+    isVmPaneOpen &&
+    openerSeenRunning &&
+    shouldAutoClose({
+      by: paneOpenedBy?.by ?? null,
+      touched: paneTouched,
+      control: paneUsage.control,
+      humanStep: openerHumanStep,
+      pointPending: paneUsage.pointPending,
+      running: openerRunning,
+    });
+  useEffect(() => {
+    if (!paneAutoCloses) return;
+    const still = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let exit: number | undefined;
+    const wait = window.setTimeout(() => {
+      if (still) {
+        setIsVmPaneOpen(false);
+        return;
+      }
+      setPaneClosing(true);
+      exit = window.setTimeout(() => setIsVmPaneOpen(false), PANE_EXIT_MS);
+    }, AUTO_CLOSE_DELAY_MS);
+    return () => {
+      window.clearTimeout(wait);
+      if (exit !== undefined) window.clearTimeout(exit);
+      setPaneClosing(false);
+    };
+  }, [paneAutoCloses]);
+  /** The person opens the panel (a reply's chip): open it, or make a panel the bot opened theirs. */
+  const openPaneByPerson = () => {
+    if (isVmPaneOpen) setPaneOpenedBy({ by: 'person', owner: activeSandboxId });
+    else setIsVmPaneOpen(true);
+  };
   const describeOwner = (owner: string) => {
     const t = teams.find((x) => x.id === owner);
     if (t) return { kind: 'team' as const, label: t.name };
@@ -3590,6 +3704,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
+  // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
+  const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
 
   // Avatar moods and the background-tab signal come from the same state as the sidebar's dots.
@@ -3655,6 +3771,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     forgetLastRuns();
   }, [kwants]);
   useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
+  useEffect(() => setBadgeProfiles(profiles), [profiles]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
@@ -3794,10 +3911,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         bots={kwants}
         engines={engines.engines}
         reloadEngines={engines.reload}
-        onDismissed={() => undefined}
+        // Someone who finishes Get started in 0.9.8 never saw the old sidebar controls: no "moved" pointer.
+        onDismissed={hideMoved}
         spaceName={space.name}
         onImported={reloadAfterImport}
         mainSpace={space.is_default}
+        teams={teams}
       />
     ) : null;
   const setupChecklist = (
@@ -3875,6 +3994,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      doneKwants={doneKwants}
       browsingOwners={globes.owners}
       browsingBots={globes.bots}
       browserNeedsYou={browserNeedsYou}
@@ -3937,12 +4057,20 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         showPage('board');
         playSfx('click');
       }}
+      onOpenRoutines={() => {
+        // From the sidebar, no card's Edit or Pause focus carries over.
+        setRoutineFocus(null);
+        openSpaceSettings('routines');
+      }}
       devDeskActive={page === 'dev'}
       onOpenDevDesk={() => {
         showPage('dev');
         playSfx('click');
       }}
       onConnectDevGitHub={connectDevGitHub}
+      movedPointer={movedPointerShows({ established: whatsNewEstablished, seen: movedHidden })}
+      onOpenMoved={openMoved}
+      onHideMoved={hideMoved}
       ideaJarCount={ideaJarCount}
       ideaJarActive={page === 'jar'}
       onOpenIdeaJar={() => {
@@ -3972,7 +4100,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       top={
         <>
-          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
+          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} acted={prepush.acted} />
           <SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />
           <BudgetNeedsYou onRaise={raiseBudget} />
         </>
@@ -4064,7 +4192,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           pendingApprovals={approvalsHere}
           prepush={
             devOn && currentKwant && !viewingHistory ? (
-              <PrepushThread cards={threadCards(prepush.cards, currentKwant.id)} bot={currentKwant.name} live={prepush.live} onRetry={prepushRetry} onOverride={prepushOverride} />
+              <PrepushThread
+                cards={threadCards(prepush.cards, currentKwant.id)}
+                all={prepush.cards}
+                bot={currentKwant.name}
+                live={prepush.live}
+                onRetry={prepushRetry}
+                onOverride={prepushOverride}
+                approvals={approvalsHere}
+                onOpenApproval={setHighlightMessageId}
+              />
             ) : devOn && isChannel && !viewingHistory && pointerMemberIds.length > 0 ? (
               // 0.8.1 F3: team chats and channels get one pointer line per member bot; the card stays in the 1:1.
               <PrepushPointers
@@ -4131,6 +4268,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           vmSolveRequest={solveRequest}
           vmPagePick={pagePick}
           vmBotNames={kwantNames}
+          vmRunning={ownerStillRunning(activeSandboxId, runningTurns, channels, teamOfCh)}
+          onVmOpenByPerson={openPaneByPerson}
+          onVmTouch={markPaneTouched}
+          onVmUsage={setPaneUsage}
+          vmClosing={paneClosing}
           vmShowOnceBot={currentKwant && !currentTeam ? { id: currentKwant.id, name: currentKwant.name } : undefined}
           pinned={pinned}
           onEditInstructions={
@@ -4203,6 +4345,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onSendToOtherBot={openThreadId ? undefined : handleSendToOtherBot}
           awaitingAnswer={awaitingHere}
           awaitingBrowser={awaitingBrowserHere}
+          awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
           renderHumanStep={renderHumanStep}
           contextKey={openCtx}

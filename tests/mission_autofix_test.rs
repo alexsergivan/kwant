@@ -517,6 +517,79 @@ async fn a_mission_task_turn_that_ends_on_a_busy_browser_step_is_retried_and_the
     assert!(runner::is_running(&e.state, &mid), "the runner holds the task through the cooldown");
 }
 
+// 0.9.7 busy-retry-transient: a task whose browser stays busy through both of kwnt's own retries
+// ends `failed` once, with a plain fix line: AutoFix doesn't run it again (its retries already
+// waited), and the person gets one notification. The cooldowns are cut to 300 ms for this chat
+#[tokio::test]
+async fn a_mission_task_whose_browser_stays_busy_ends_once_with_a_fix_line_and_no_autofix_rerun() {
+    let e = setup().await;
+    autofix(&e, "on", 25).await;
+    kwnt::server::busy_retry::quick_cooldown_in(&e.general, Duration::from_millis(300));
+    let ann = cli_bot(&e).await;
+    let (watch, notes) = finished_notes(&e.state, &ann);
+    let body = json!({"title": "Ship it", "goal": "a release", "lead_kwant_id": ann, "budget_tokens": 900_000,
+                      "channel_id": e.general, "tasks": [{"title": "SLOWBUSY", "owner": ann, "budget_tokens": 50_000,
+                      "checks": failing_check()}]});
+    let mid = id(&person(&e, "POST", "/api/missions", Some(body)).await);
+    let tid = id(&person(&e, "GET", &format!("/api/missions/{mid}"), None).await["tasks"][0]);
+    let row = e.state.db.get_mission(&mid).await.unwrap().unwrap();
+    std::fs::create_dir_all(&row.workspace_path).unwrap();
+    person(&e, "POST", &format!("/api/missions/{mid}/run"), Some(json!({"max_tasks": 1}))).await;
+
+    // Every runner turn of Ann's ends on a busy browser step: the turn, then 2 retries
+    let mut busy: Vec<String> = Vec::new();
+    for _ in 0..1600 {
+        for t in e.state.turns.active_turns().into_iter().filter(|t| t.kwant_id == ann && t.state == "running") {
+            if !busy.contains(&t.turn_id) {
+                kwnt::server::busy_retry::note(&t.turn_id, "browser_act", &json!({"action": "scroll"}), true);
+                busy.push(t.turn_id);
+            }
+        }
+        if task(&e, &tid).await["state"] == "failed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    runner_idle(&e.state, &mid).await;
+    assert_eq!(busy.len(), 3, "the turn and 2 retries, never a third");
+    assert_eq!(prompts(&tid).len(), 3);
+
+    // It ended once: failed, a temporary error, with the plain fix line, and no AutoFix rerun
+    let t = task(&e, &tid).await;
+    assert_eq!(t["state"], "failed", "{t}");
+    assert_eq!(t["last_failure"]["class"], "transient", "{t}");
+    assert!(t["last_failure"]["summary"].as_str().unwrap().contains("stayed busy after 2 automatic retries"), "{t}");
+    let fix: Vec<&Value> = t["needs_you"].as_array().unwrap().iter().filter(|i| i["kind"] == "fix_needed").collect();
+    assert_eq!(fix.len(), 1, "{t}");
+    assert_eq!(fix[0]["text"], kwnt::server::missions::autofix::BUSY_FIX, "{t}");
+    let a = attempts(&e, &tid).await;
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert_eq!((a[0].strategy.as_str(), a[0].status.as_str()), ("none", "skipped"), "{a:?}");
+    assert!(a[0].reason.starts_with("not_retryable: The browser stayed busy."), "{a:?}");
+    assert_eq!(failures(&e, &tid).await.len(), 1, "one failure, recorded once the retries ran out");
+    kwnt::server::missions::autofix::run_due(&e.state).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(prompts(&tid).len(), 3, "AutoFix runs nothing more");
+    assert_eq!(task(&e, &tid).await["state"], "failed");
+
+    // One notification for the task's outcome, none per retry
+    for _ in 0..40 {
+        if !notes.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let got = notes.lock().unwrap().clone();
+    assert_eq!(got.len(), 1, "one notification for the outcome: {got:?}");
+    watch.abort();
+
+    // The person's Retry still runs it again, as the fix line says
+    let (status, v) = send(&e.app, "POST", &format!("/api/tasks/{tid}/autofix"), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["strategy"], "retry_same", "{v}");
+}
+
 // 3
 #[tokio::test]
 async fn off_records_only_and_suggest_waits_for_the_person() {

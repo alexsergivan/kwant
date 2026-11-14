@@ -44,7 +44,7 @@ test('quotaLine: "Out of quota until …" while the limit lasts, the server word
   assert.equal(m.quotaLine(null, undefined, NOW), null);
 });
 
-test('reply meta is one line, name · engine chip (engine + account, spec §4) · time, with tokens behind Details', () => {
+test('reply meta is one line, name · time, with the engine, account and tokens behind Details (reply-chrome part 4)', () => {
   const html = m.meta({
     name: 'Architect',
     at: '2026-11-02T11:42:00Z',
@@ -57,8 +57,9 @@ test('reply meta is one line, name · engine chip (engine + account, spec §4) �
   assert.match(html, /data-reply-time/);
   assert.match(html, /aria-expanded="false"/);
   assert.match(html, />Details</);
-  // The engine chip reads "engine · account" (Mira's spec §4); folded, the tokens stay hidden. No cost, no duration.
-  assert.match(html, /data-engine-chip[^>]*>.*Claude · Opus 5\.5 · Personal/);
+  // reply-chrome: the engine waits in Details now (only a mid-reply engine switch shows on the line); folded, nothing else shows.
+  assert.doesNotMatch(html, /data-engine-chip/);
+  assert.doesNotMatch(html, /Opus 5\.5/);
   assert.doesNotMatch(html, /1\.2k tokens/);
 });
 
@@ -94,7 +95,7 @@ test('first-run welcome: what kwant bots are, the bots, one action', () => {
     onAction: () => clicked++,
   });
   assert.match(html, /data-first-run-welcome/);
-  assert.match(html, /Laya picks who answers/);
+  assert.match(html, /the best fit answers/);
   assert.match(html, /Architect<\/span><span[^>]*> · Systems Architect/);
   assert.match(html, />TechLead</);
   assert.equal(html.split('<button').length, 2, 'exactly one button');

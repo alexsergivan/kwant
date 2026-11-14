@@ -276,13 +276,9 @@ test('QA d: nothing tells the person to look in Settings → Profiles any more',
   }
 });
 
-test('header (dev-mode-explainer §1): the name row holds no switch; the Space controls block under it holds Dev mode, on desktop and phone', () => {
+test('header (first-screen A): no Dev mode switch or controls block in the sidebar, on desktop and phone; the subtitle stays the space summary', () => {
   for (const html of [ui.sidebar(base), ui.sidebar({ ...base, phone: true, section: 'chats' })]) {
-    const header = html.slice(0, html.indexOf('data-space-controls'));
-    assert.doesNotMatch(header, /data-dev-switch[ =>]/, 'no switch in the name row');
-    assert.doesNotMatch(html, /data-dev-switch-row|data-dev-meta/);
-    const block = html.slice(html.indexOf('data-space-controls'));
-    assert.match(block, /data-sc-row="dev"[\s\S]*data-dev-switch/);
-    assert.match(header, />0 bots · no account yet</, 'the subtitle stays the space summary');
+    assert.doesNotMatch(html, /data-dev-switch[ =>]|data-dev-switch-row|data-dev-meta|data-space-controls/);
+    assert.match(html, />0 bots · no account yet</, 'the subtitle stays the space summary');
   }
 });

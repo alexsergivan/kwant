@@ -463,3 +463,89 @@ test('F3 and F6 overview: 44 px phone targets, "N% used" chip, readable no-budge
   assert.equal(src2.match(/min-h-\[44px\] sm:min-h-0 px-2 -mx-2/g)?.length, 2, 'both Retry buttons');
   assert.match(src2, /text-\[11px\] text-zinc-400" data-budget-none/);
 });
+
+// ---------------------------------------------------------------- 0.9.8 follow-ups (pixel-fixes-098)
+
+test('0.9.8 #1: a send to a paused bot shows no working state; the app checks before it marks the chat live', async () => {
+  const { send } = fake({ 'GET /api/usage/budgets': [200, LIST([PAUSED, B({ kwant_id: 'k3', kwant_name: 'Vega', percent: 86 }), OFF])] });
+  m.budgetStore.reset(send);
+  await m.budgetStore.refresh();
+  const { byBot } = m.budgetStore.get();
+  assert.equal(m.sendWaitsForBudget(byBot, 'k1'), true, 'paused: the message waits, nothing starts');
+  assert.equal(m.sendWaitsForBudget(byBot, 'k3'), false, '80% still runs');
+  assert.equal(m.sendWaitsForBudget(byBot, 'k2'), false, 'no budget');
+  assert.equal(m.sendWaitsForBudget(byBot, 'nobody'), false);
+  assert.equal(m.sendWaitsForBudget(byBot, null), false);
+  m.budgetStore.put(m.parseBudget({ ...PAUSED, state: 'continued' }));
+  assert.equal(m.sendWaitsForBudget(m.budgetStore.get().byBot, 'k1'), false, 'after Continue it starts as before');
+  // Wiring: in handleSendMessage the check guards markLive (no "getting started", timer or Stop) and runs
+  // again on the reply, so a pause that the list learnt of meanwhile clears the working state it started.
+  const app = src('App.tsx');
+  const sendFn = app.slice(app.indexOf('const handleSendMessage = async'), app.indexOf('const handleChangeDecision'));
+  const guard = sendFn.indexOf('if (!budgetWait()) {');
+  assert.ok(guard > 0 && guard < sendFn.indexOf('markLive(targetId, speakerName)'), 'markLive sits inside the budget check');
+  assert.match(sendFn, /!threadId && !isTargetChannel && sendWaitsForBudget\(budgetStore\.get\(\)\.byBot, targetId\)/);
+  assert.match(sendFn, /if \(budgetWait\(\) && turnsIn\(turnsRef\.current, targetId\)\.length === 0\) \{\n\s+clearLive\(targetId\);/);
+});
+
+test('0.9.8 #2: the 80% line keeps the numbers it was posted with, not the live count', async () => {
+  // The bot crossed 80% at 3k of 3.8k; it has since used 6k (paused, then continued)
+  const live = B({ used_tokens: 6000, budget_tokens: 3800, percent: 158, over: 'tokens', state: 'continued' });
+  const { send } = fake({ 'GET /api/usage/budgets': [200, LIST([live])] });
+  m.budgetStore.reset(send);
+  await m.budgetStore.refresh();
+  const meta = m.parseBudgetNotice(
+    JSON.stringify({ kind: 'bot_budget_warn', kwant_id: 'k1', kwant_name: 'Juno', month: '2026-11', percent: 80, over: null, used_tokens: 3000, budget_tokens: 3800, used_usd: 0, budget_usd: 0, estimated: false, detail: '3k of 3.8k fresh tokens in November' }),
+  );
+  assert.deepEqual(meta.at, { over: null, used_tokens: 3000, budget_tokens: 3800, used_usd: 0, budget_usd: 0, month: '2026-11', estimated: false });
+  const older = m.parseBudgetNotice({ kind: 'bot_budget_warn', kwant_id: 'k1', kwant_name: 'Juno', month: '2026-11', percent: 80, detail: 'about 3k of 3.8k fresh tokens in November' });
+  assert.equal(older.at, null, 'a line from before the counts were in meta');
+  const { host, unmount } = await mount(
+    h('div', null, h(m.BudgetNotice, { messageId: 'w', text: 'Juno has used 80% of its monthly budget.', meta, onRaise: () => {} }), h(m.BudgetNotice, { messageId: 'o', text: 'older', meta: older })),
+  );
+  const [line, old] = host.querySelectorAll('[data-budget-notice]');
+  assert.match(line.textContent, /3k of 3\.8k fresh tokens in November/);
+  assert.doesNotMatch(line.textContent, /6k of/);
+  assert.match(old.textContent, /about 3k of 3\.8k/, 'falls back to the server’s words');
+  m.budgetStore.put(m.parseBudget({ ...live, used_tokens: 9000 }));
+  await settle();
+  assert.match(line.textContent, /3k of 3\.8k/, 'more turns: still the crossing');
+  unmount();
+});
+
+test('0.9.8 #3: the Inbox done row after Continue drops the amber and the meter', async () => {
+  const { send } = fake({
+    'GET /api/usage/budgets': [200, LIST([PAUSED])],
+    'POST /api/kwants/k1/budget/continue': [200, { ...PAUSED, state: 'continued', continued_month: '2026-11' }],
+  });
+  m.budgetStore.reset(send);
+  await m.budgetStore.refresh();
+  const { host, unmount } = await mount(h(m.BudgetNeedsYou, { onRaise: () => {}, send }));
+  let row = host.querySelector('[data-needs-budget-item]');
+  assert.match(row.className, /border-amber-500\/30 bg-amber-950\/20/, 'paused: amber');
+  assert.ok(row.querySelector('[role=meter]'));
+  await click(host.querySelector('[data-budget-continue]'));
+  row = host.querySelector('[data-needs-budget-item]');
+  assert.equal(row.dataset.needsBudgetItem, 'continued');
+  assert.match(row.className, /border-zinc-800 bg-zinc-900\/40/);
+  assert.doesNotMatch(row.className, /amber/);
+  assert.equal(row.querySelector('[role=meter]'), null, 'no meter');
+  assert.match(row.querySelector('.font-mono').className, /text-zinc-500/);
+  assert.doesNotMatch(row.querySelector('.font-mono').className, /amber/);
+  unmount();
+});
+
+test('0.9.8 #4 and #6: the chip words follow the budget; the bar’s second line is balanced', async () => {
+  const s = src('components/BotBudget.tsx');
+  assert.doesNotMatch(s, /text: '% used'/, 'no dead chip value');
+  const { send } = fake({ 'GET /api/usage/budgets': [200, LIST([B({ percent: 86 }), PAUSED, OFF])] });
+  m.budgetStore.reset(send);
+  const { host, unmount } = await mount(h(m.BudgetOverview, { open: true }));
+  await settle();
+  const chips = [...host.querySelectorAll('[data-budget-row] .rounded-full.border')].map((c) => c.textContent);
+  assert.deepEqual(chips, ['86% used', 'Paused', 'No budget']);
+  unmount();
+  const bar = await mount(h(m.BudgetPausedBanner, { budget: m.parseBudget(PAUSED), send }));
+  assert.match(bar.host.querySelector('[data-budget-banner-detail]').className, /\btext-balance\b/);
+  bar.unmount();
+});

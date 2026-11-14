@@ -3,22 +3,25 @@ import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
 import { queuedText } from '../claudeVm';
 import { QueuedBeside } from './QueuedBeside';
+import { WaitingBanner } from './WaitingBanner';
+import { answerPlaceholder, isTeamTurn, onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
 import { onContinuity } from '../continuity';
 import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel } from '../agentConnections';
-import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
+import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
-import { BotHome } from './BotHome';
+import { AccountCard, BotHome } from './BotHome';
+import { accountCardShows } from '../firstScreen';
 import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
-import { composerStacked, keyboardMode, measureText16, phonePlaceholder } from '../composer';
+import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
 import { markNewSeen } from '../whatsNew';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -35,6 +38,8 @@ import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
+import { BrowsedChip } from './BrowsedChip';
+import { pagesOfReply, type ReplyPage } from '../browserPages';
 import { FailoverNote, ReplyMeta } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
@@ -68,11 +73,19 @@ import { ToolFailureLine } from './ToolFailureLine';
 import { parseToolFailureMeta } from '../toolFailures';
 import { ToolNoteLine } from './ToolNoteLine';
 import { ranOnLabel } from '../engines';
-import { replyTokens } from '../modelUsage';
-import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
+import { replyCostWords, replyTokens } from '../modelUsage';
+import { parseRoutingMeta, ranOnAccount } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
-import { routeChipLabel, routeReasonText } from '../routeReason';
+import { routeReasonText, routeWhyText } from '../routeReason';
+import { useInbox } from '../inboxStore';
+import { doneItemsOf, doneOf } from '../replyDone';
+import { APPROVE_TEXT, asksApproval, changePlaceholder } from '../approvalAsk';
+import { DoneCheckLine } from './DoneMarker';
+import { ApproveRow } from './ApproveRow';
+import { CopyGhost } from './CopyGhost';
+import { RoutineRow } from './RoutineRow';
+import { routineOf } from '../routineRow';
 import { BudgetPausedNotice, ExpiredApprovalNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { parseSpendStopped } from '../spendStop';
@@ -90,7 +103,7 @@ import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhea
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
-import { SmartActionsSlot, actionClass } from './results/SmartActions';
+import { SmartActionsSlot } from './results/SmartActions';
 import { WorkingStrip } from './WorkingStrip';
 import { ScrollRow } from './ScrollRow';
 import { liveBubble, waitingOn } from '../workingStrip';
@@ -268,6 +281,16 @@ export interface ChatViewProps {
   vmBotNames?: Record<string, string>;
   /** Show it once: the single bot this chat's browser belongs to (absent in teams and channels). */
   vmShowOnceBot?: { id: string; name: string };
+  /** 0.9.8 browser panel: this chat's browser owner has a turn running (Live / Browsing now). */
+  vmRunning?: boolean;
+  /** 0.9.8: the person opened the panel (a chip): opens it, or marks a panel the bot opened as theirs. */
+  onVmOpenByPerson?: () => void;
+  /** 0.9.8: the person used the panel, so it won't close itself. */
+  onVmTouch?: () => void;
+  /** 0.9.8: control and pending Point picks, which also keep it open. */
+  onVmUsage?: (u: { control: boolean; pointPending: boolean }) => void;
+  /** 0.9.8: the panel is playing its close animation. */
+  vmClosing?: boolean;
   /** Pinned team/channel instructions, shown collapsed above the messages. */
   pinned?: PinnedItem[];
   /** Opens the channel's instructions editor; only for channels. */
@@ -341,6 +364,8 @@ export interface ChatViewProps {
   awaitingAnswer?: boolean;
   /** …and the pause is a browser step (sign-in, CAPTCHA) rather than a question. */
   awaitingBrowser?: boolean;
+  /** The bot whose question the open chat's turn waits on (its id and name), for the waiting banner. */
+  awaitingBot?: { id: string; name: string } | null;
   /** The running reply's steps so far (thinking, tools, waits). */
   liveActivity?: LiveActivity | null;
   /** Draws a bot's browser-step card (message meta kind "human_step"). */
@@ -517,6 +542,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   vmPagePick,
   vmBotNames,
   vmShowOnceBot,
+  vmRunning = false,
+  onVmOpenByPerson,
+  onVmTouch,
+  onVmUsage,
+  vmClosing = false,
   pinned = [],
   onEditInstructions,
   highlightMessageId,
@@ -554,6 +584,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   canRun = null,
   awaitingAnswer,
   awaitingBrowser,
+  awaitingBot,
   liveActivity,
   renderHumanStep,
   contextKey,
@@ -570,6 +601,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // rows while in use. Desktop never changes.
   const phone = useMedia(PHONE_QUERY);
   const touch = useMedia(TOUCH_QUERY);
+
   const [composerFocused, setComposerFocused] = useState(false);
   const kbd = keyboardMode({ phone, touch, focused: composerFocused });
   const [fieldWidth, setFieldWidth] = useState(0);
@@ -653,6 +685,52 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (home?.kind === 'bot' && home.bot) all.push({ id: home.bot.id, name: home.bot.name });
     return all;
   }, [activeKwants, teamMembers, home]);
+
+  // ---------- 0.9.8 browser panel (design browser-panel/design.md A, B) ----------
+  // The trail the panel shows: the reply whose chip was tapped; else the running turn's; else the newest reply that browsed.
+  const [trailFrom, setTrailFrom] = useState<string | null>(null);
+  const liveTurnId = liveActivity?.turnId ?? null;
+  useEffect(() => {
+    // A new turn browses: the panel follows it, not an older chip's reply
+    if (liveTurnId) setTrailFrom(null);
+  }, [liveTurnId]);
+  const liveSpeaker = streamingSpeakerName || title;
+  const livePages = useMemo(() => pagesOfReply(liveActivity?.steps), [liveActivity?.steps]);
+  const savedTrail = useMemo((): { id: string; bot: string; pages: ReplyPage[] } | null => {
+    const from = (m: ChatMessage) => {
+      if (m.sender_role !== 'kwant' || !m.meta) return null;
+      const pages = pagesOfReply(parseActivityMeta(m.meta)?.steps);
+      return pages.length ? { id: m.id, bot: botDisplayName(m.sender_id, knownBots), pages } : null;
+    };
+    if (trailFrom) {
+      const m = messages.find((x) => x.id === trailFrom);
+      const t = m && from(m);
+      if (t) return t;
+    }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const t = from(messages[i]);
+      if (t) return t;
+    }
+    return null;
+  }, [messages, trailFrom, knownBots]);
+  const showLiveTrail = !trailFrom && livePages.length > 0;
+  const paneTrail = showLiveTrail ? livePages : savedTrail?.pages ?? [];
+  const paneBot = showLiveTrail ? liveSpeaker : savedTrail?.bot ?? (home?.kind === 'bot' ? home.bot?.name ?? null : null);
+  // "Finished 10:46 PM": when this chat's turn ended here, else the newest page of the shown trail
+  const [endedAt, setEndedAt] = useState<string | null>(null);
+  const wasRunning = useRef(vmRunning);
+  useEffect(() => {
+    if (wasRunning.current && !vmRunning) setEndedAt(new Date().toISOString());
+    wasRunning.current = vmRunning;
+  }, [vmRunning]);
+  useEffect(() => setEndedAt(null), [teamId]);
+  const paneFinishedAt = trailFrom ? paneTrail[0]?.at ?? null : endedAt ?? paneTrail[0]?.at ?? null;
+  const openBrowserFor = (msgId: string | null) => {
+    playSfx('click');
+    setTrailFrom(msgId);
+    if (onVmOpenByPerson) onVmOpenByPerson();
+    else if (!vmOpen) toggleVm();
+  };
   // Each routed reply's question: the person's latest saved message before it ("Wrong bot?").
   const questionOf = useMemo(() => questionsOfReplies(messages), [messages]);
   const activeTeams = teamsProp || internalTeams;
@@ -789,7 +867,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!card) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     card.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
+    // Keyboard users land on the card: its first choice, else its answer field (the amber ring shows where).
+    const target = card.querySelector<HTMLElement>('button[aria-pressed]') ?? card.querySelector<HTMLElement>('textarea');
+    target?.focus({ preventScroll: true });
   };
+  // Waiting state (UX audit #2): the only open thing is a question, so the chat waits for the person.
+  const askOnly = onlyAskOpen({
+    streaming: isStreaming,
+    awaitingAnswer: !!awaitingAnswer,
+    awaitingBrowser: !!awaitingBrowser,
+    approvalOpen: pendingApprovals.length > 0,
+    queued: !!queued,
+    writing: !!streamingText,
+  });
+  // Team words ("Stop team", the rail) only for a team turn; a single bot asking in a channel gets "Stop".
+  const teamChat = isTeamTurn(home?.kind, !!discussionState?.inProgress);
+  const askRail = askOnly && teamChat ? turnRail(messages, awaitingBot?.id, (id) => botOf(id, knownBots)) : [];
   const showApproval = () => {
     const cards = scrollRef.current?.querySelectorAll<HTMLElement>('[data-approval-card]');
     const card = cards?.[cards.length - 1];
@@ -802,7 +895,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const { byBot: budgetsByBot } = useBudgets();
   const chatBudget = budgetBotId ? budgetsByBot[budgetBotId] : undefined;
   const budgetBanner = chatBudget?.state === 'paused' ? <BudgetPausedBanner budget={chatBudget} onRaise={onRaiseBudget} /> : null;
-  const workingStrip = (
+  // Waiting state: the banner says whose move it is, so no strip and no running clock.
+  const workingStrip = askOnly ? null : (
     <WorkingStrip
       active={isStreaming}
       name={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : streamingSpeakerName || title}
@@ -882,7 +976,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       return;
     }
     if (!messages.some((m) => m.id === highlightMessageId)) return;
-    const thread = groupDiscussionThreads(messages).find(
+    const thread = groupDiscussionThreads(messages, { foldOpen: askOnly }).find(
       (item) => item.kind === 'thread' && item.turns.some((t) => t.id === highlightMessageId),
     );
     if (thread && thread.kind === 'thread' && !openThoughts[`thread:${thread.id}`]) {
@@ -916,14 +1010,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   const startReply = (msg: ChatMessage) => {
     setReplyTo(msg);
+    setChangeFor(null);
     focusComposer();
   };
+  // reply-chrome part 2: Change… starts a reply whose placeholder asks what to change; any other reply drops it.
+  const [changeFor, setChangeFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!replyTo) setChangeFor(null);
+  }, [replyTo]);
+  const [approving, setApproving] = useState<string | null>(null);
   /** The chip's name: the bot by id or name, else this chat's title. */
   const replyBotName = (msg: ChatMessage) => {
     return botDisplayName(msg.sender_id, knownBots);
   };
   const cancelReply = () => {
     setReplyTo(null);
+    setChangeFor(null);
     focusComposer();
   };
   /**
@@ -939,7 +1041,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   useEffect(() => {
     if (!quoteJump) return;
-    const thread = groupDiscussionThreads(messages).find((item) => item.kind === 'thread' && item.turns.some((t) => t.id === quoteJump.id));
+    const thread = groupDiscussionThreads(messages, { foldOpen: askOnly }).find((item) => item.kind === 'thread' && item.turns.some((t) => t.id === quoteJump.id));
     if (thread && thread.kind === 'thread' && !openThoughts[`thread:${thread.id}`]) {
       setOpenThoughts((prev) => ({ ...prev, [`thread:${thread.id}`]: true }));
       return;
@@ -958,6 +1060,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Thumbs on the bot's newest question are a yes or no; once one has answered it, they're feedback again.
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const questionId = questionMessageId(messages, isStreaming);
+  // reply-chrome part 1: Inbox done items (finished, to review) by the reply they point at, for the Done marker.
+  const inboxData = useInbox().data;
+  const doneItems = useMemo(() => doneItemsOf([...(inboxData?.items ?? []), ...(inboxData?.batch_items ?? [])]), [inboxData]);
+  // reply-chrome part 2: the newest message, when it's a bot reply asking for an OK and nothing else is open.
+  const approveId = useMemo(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.sender_role !== 'kwant' || last.id.startsWith('temp-') || isStreaming || awaitingAnswer || pendingApprovals.length > 0) return null;
+    const meta = parseMetaObject(last.meta);
+    if (meta && (meta.blocked || meta.question_id || meta.kind)) return null;
+    return asksApproval(last.text) ? last.id : null;
+  }, [messages, isStreaming, awaitingAnswer, pendingApprovals.length]);
+  const approve = async (msg: ChatMessage) => {
+    if (approving) return;
+    setApproving(msg.id);
+    playSfx('click');
+    stickRef.current = true;
+    try {
+      const sent = await onSendMessage(APPROVE_TEXT, [], { replyTo: msg });
+      // A failed send keeps the row (it is still the newest message) and offers the words in the composer.
+      if (sent === false) setInputVal((now) => now || APPROVE_TEXT);
+    } finally {
+      setApproving(null);
+    }
+  };
   const react = async (msg: ChatMessage, reaction: Reaction | null): Promise<boolean> => {
     const result = await onReact?.(msg, reaction);
     if (result?.answered) setAnswered((prev) => new Set(prev).add(msg.id));
@@ -1111,7 +1237,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         });
       return;
     }
-    if (!canSend || (isStreaming && discussionState?.inProgress)) return;
+    // While the only open thing is a question, a typed message answers it (the server closes the question).
+    if (!canSend || (isStreaming && discussionState?.inProgress && !askOnly)) return;
     playSfx('click');
     stickRef.current = true;
     const replying = replyTo;
@@ -1433,6 +1560,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
       );
     if (isSystemNotice(msg) && !parseAttachments(msg.meta).length)
       return <SystemNotice key={msg.id} messageId={msg.id} text={msg.text} flash={flashId === msg.id} />;
+    // UX audit #5: a routine's run is not the person speaking; it gets its own row, not a "You" bubble
+    const routine = routineOf(msg);
+    if (routine !== null)
+      return (
+        <RoutineRow
+          key={msg.id}
+          messageId={msg.id}
+          name={routine}
+          text={msg.text}
+          body={renderFormattedText(msg.text)}
+          at={msg.created_at}
+          flash={flashId === msg.id}
+        />
+      );
     const isUser = msg.sender_role === 'user';
     const files = msg.meta ? parseAttachments(msg.meta) : [];
     // A bot's share_file note: the file tiles say it all.
@@ -1442,6 +1583,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const ranOn = isUser ? null : ranOnLabel(msg.meta);
     const account = isUser ? null : ranOnAccount(msg.meta);
     const tokens = isUser ? null : replyTokens(msg.tokens_used, msg.meta);
+    const cost = isUser ? null : replyCostWords(msg.meta);
+    const asksOk = msg.id === approveId;
+    // A reply that asks (the Approve row, or the thumbs as yes/no) is never marked done.
+    const done = isUser ? null : doneOf(msg, doneItems, { asks: asksOk || (msg.id === questionId && !answered.has(msg.id)) });
     // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
     const routed = isUser ? null : parseRoutingMeta(msg.meta);
     // Older channel replies still hold a raw [DECISIONS] block: hidden here, its lines shown as chips
@@ -1514,14 +1659,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
               ranOn={ranOn}
               account={account}
               tokens={tokens}
+              cost={cost}
+              done={done}
               failed={!!savedActivity?.steps.some((s) => s.status === 'failed')}
               note={savedFailoverNotice(msg.meta) ?? switchNoteFor.get(msg.id)}
               handoff={savedFailoverHandoff(msg.meta)}
               route={
                 routed
                   ? {
-                      label: routeChipLabel({ basis: routed.basis, fallback: routed.fallback }),
-                      text: routingLine(routed, spaceName ?? 'this space', (id) => activeKwants.find((k) => k.id === id)?.name),
+                      text: routeWhyText({
+                        kwantName: routed.kwant_name,
+                        basis: routed.basis,
+                        reason: routed.reason,
+                        fallback: routed.fallback,
+                        matchedTerms: routed.matched_terms,
+                        handedBackBy: routed.handed_back_by ? activeKwants.find((k) => k.id === routed.handed_back_by)?.name : undefined,
+                      }),
                       fallback: !!routed.fallback,
                       reroute:
                         onSendToOtherBot && questionOf.get(msg.id)
@@ -1638,30 +1791,35 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {!isUser && msg.tool_calls && !savedActivity && <ToolCallsList raw={msg.tool_calls} />}
 
-          {/* Action row: icon chips; the smart-result actions portal in after Copy */}
+          {done && <DoneCheckLine done={done} />}
+
+          {asksOk && (
+            <ApproveRow
+              name={displayName}
+              busy={approving === msg.id}
+              onApprove={() => void approve(msg)}
+              onChange={() => {
+                startReply(msg);
+                setChangeFor(displayName);
+              }}
+            />
+          )}
+
+          {/* Action row (reply-chrome part 3): Reply, the thumbs, then Copy as a quiet icon; smart-result actions portal in after Copy */}
+          {/* 0.9.8: on a phone the browsed chip gets its own 44 px row above the action row (it would wrap) */}
+          {!isUser && !filesOnly && phone && savedActivity && (
+            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0">
+              <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} phone onOpen={() => openBrowserFor(msg.id)} />
+            </div>
+          )}
           {!isUser && !filesOnly && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-zinc-400 text-xs max-w-full min-w-0">
-              <button
-                type="button"
-                onClick={() => handleCopy(text, msg.id)}
-                className={actionClass}
-                title="Copy response"
-              >
-                {copiedId === msg.id ? (
-                  <>
-                    <Check size={14} className="text-emerald-400" aria-hidden="true" />
-                    <span className="text-emerald-400">Copied</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy size={14} aria-hidden="true" />
-                    <span className="sm:hidden">Copy</span>
-                    <span className="hidden sm:inline">Copy markdown</span>
-                  </>
-                )}
-              </button>
+            <div className="mt-2 flex flex-wrap items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0">
+              {!phone && savedActivity && (
+                <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} onOpen={() => openBrowserFor(msg.id)} />
+              )}
               {msg.sender_role === 'kwant' && !workAhead && !msg.id.startsWith('temp-') && (
                 <>
+                  <ReplyButton botName={displayName} active={replyTo?.id === msg.id} onReply={() => startReply(msg)} />
                   {onReact && (
                     <ReactionButtons
                       messageId={msg.id}
@@ -1670,9 +1828,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       onReact={(r) => react(msg, r)}
                     />
                   )}
-                  <ReplyButton botName={displayName} active={replyTo?.id === msg.id} onReply={() => startReply(msg)} />
                 </>
               )}
+              <CopyGhost copied={copiedId === msg.id} tipId={`copy-tip-${msg.id}`} onCopy={() => handleCopy(text, msg.id)} />
               {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
           )}
@@ -1684,6 +1842,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // The empty chat shows the bot home (a bot's own chat, or #general) instead of a bare pane and a row of chips
   const showHome =
     !!home && (home.kind === 'bot' || home.kind === 'general') && !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
+  // first-screen E: nothing can run and Get started (the welcome) isn't on screen. A bot's chat and #general
+  // show it inside the home; an empty team chat shows it on its own.
+  const accountCard = accountCardShows({ canRun, getStartedShowing: !!welcome });
+  const teamAccountCard =
+    accountCard && home?.kind === 'team' && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
   // Who answers what's typed: the chat decides, an @mention overrides
   const target = answerTarget({
     kind: home?.kind ?? 'channel',
@@ -1843,7 +2006,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // obvious (channels and team chats, or a direct chat with an @mention typed).
   const showAnswers = !ideaMode && (!phone || home?.kind !== 'bot' || target.kind === 'mention');
   const showHintText = !(phone && touch);
-  const placeholder = phone
+  const measure16 = (t: string) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : '');
+  const placeholder = changeFor && replyTo ? changePlaceholder(changeFor) : askOnly
+    ? phone
+      ? fitPlaceholder(answerPlaceholder(awaitingBot?.name || streamingSpeakerName || title), 'Your answer…', fieldWidth, measure16)
+      : answerPlaceholder(awaitingBot?.name || streamingSpeakerName || title)
+    : phone
     ? phonePlaceholder(title, fieldWidth, (t) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : ''))
     : spaceName && !narrow
       ? `Message ${title} in ${spaceName}`
@@ -2007,8 +2175,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <PinnedInstructions items={pinned} onEdit={onEditInstructions} />
       </div>
 
+      {/* Waiting for the person: replaces the discussion banner while the only open thing is a question */}
+      {askOnly && (
+        <WaitingBanner
+          lines={[{ kind: 'answer', bot: awaitingBot?.name || streamingSpeakerName || title }]}
+          rail={askRail}
+          stopLabel={waitingStopLabel(teamChat)}
+          onStop={onCancelDiscussion}
+          onShow={() => showWaitingCard('question')}
+        />
+      )}
       {/* Discussion In-Flight Banner */}
-      {discussionState?.inProgress && (
+      {discussionState?.inProgress && !askOnly && (
         <div className="px-3 sm:px-6 pt-3 select-none flex-shrink-0">
           <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-sky-950/40 border border-sky-800/40 rounded-xl mb-3 text-xs">
             <div className="flex items-center gap-2 text-sky-200 min-w-0">
@@ -2067,10 +2245,24 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (
           <div className="flex min-h-full items-center justify-center">
-            <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
+            <BotHome
+              home={home}
+              spaceName={spaceName}
+              team={activeKwants}
+              prompts={suggestions}
+              canRun={canRun}
+              onPick={handlePromptSuggestion}
+              accountCard={accountCard}
+              onOpenAccounts={onOpenAccounts}
+            />
           </div>
         )}
-        {groupDiscussionThreads(arranged.messages).map((item, n, items) => {
+        {teamAccountCard && (
+          <div className="mx-auto flex w-full max-w-3xl px-1">
+            <AccountCard onOpenAccounts={onOpenAccounts} />
+          </div>
+        )}
+        {groupDiscussionThreads(arranged.messages, { foldOpen: askOnly }).map((item, n, items) => {
           if (item.kind === 'message') {
             const trial = trialCards.get(item.message.id);
             const above = items[n - 1];
@@ -2130,7 +2322,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
-        {isStreaming && !deciding && routingState?.phase !== 'deciding' && (
+        {isStreaming && !deciding && routingState?.phase !== 'deciding' && !askOnly && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl">
             <ModernAvatar
               role={
@@ -2172,7 +2364,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && <LiveActivityList live={liveActivity} idBase={`live-${liveActivity.turnId}`} compact={phone} />}
+              {liveActivity && (
+                <LiveActivityList
+                  live={liveActivity}
+                  idBase={`live-${liveActivity.turnId}`}
+                  compact={phone}
+                  lead={
+                    livePages.length > 0 ? (
+                      <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
+                    ) : undefined
+                  }
+                />
+              )}
 
               {streamingThinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
@@ -2549,7 +2752,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
           )}
 
-          {isStreaming && (
+          {isStreaming && !askOnly && (
             <button
               type="button"
               onClick={onCancelDiscussion}
@@ -2585,10 +2788,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               <JarIcon size={phone ? 18 : 17} />
             </button>
-          ) : !(isStreaming && (discussionState?.inProgress || !canSend)) && (
+          ) : (askOnly || !(isStreaming && (discussionState?.inProgress || !canSend))) && (
             <button
               type="submit"
-              aria-label={stillUploading ? 'Send (waiting for uploads)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
+              aria-label={stillUploading ? 'Send (waiting for uploads)' : askOnly ? 'Send (answers the question)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
               title={stillUploading ? 'Waiting for uploads to finish' : undefined}
               disabled={!canSend}
               data-send-ready={canSend ? 'true' : 'false'}
@@ -2671,6 +2874,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
       botNames={vmBotNames}
       showOnceBot={vmShowOnceBot}
       point={pointSink}
+      running={vmRunning}
+      finishedAt={paneFinishedAt}
+      browsingBot={paneBot}
+      trail={paneTrail}
+      onTouch={onVmTouch}
+      onUsage={onVmUsage}
+      closing={vmClosing}
     />
   </div>
       {layerPhase && (

@@ -209,6 +209,8 @@ fn approver(e: &Env) -> mcp_runtime::BrokerApprover {
         conversation: e.general.clone(),
         chat: None,
         always_ask: false,
+        strict_ask: false,
+        started_by: None,
     }
 }
 
@@ -403,6 +405,32 @@ async fn approvals_off_and_smart_allow_still_card_in_sandbox_but_always_allow_co
     // An always-ask turn still cards
     let strict = mcp_runtime::BrokerApprover { always_ask: true, ..approver(&e) };
     assert_eq!(strict.decide(request(&e, "github", "create_issue", json!({}))).await, ApprovalOutcome::Unanswered);
+}
+
+/// Must-hold 2 (#569, 0.9.8): with "Don't ask", a turn kwant started on its own (not strict, like
+/// Loose ends') follows Off for ordinary calls but still asks at the bot's Flight School tier, and
+/// the card says who started the turn.
+#[tokio::test]
+async fn dont_ask_still_asks_under_flight_school_in_a_kwant_started_turn() {
+    let e = setup().await;
+    set_approvals(&e, "off").await;
+    let (_tid, _dir) = claimed_task(&e, "general", true).await;
+    let started = mcp_runtime::BrokerApprover { always_ask: true, started_by: Some("Loose ends".into()), ..approver(&e) };
+    // No tier yet: Off wins in this turn
+    assert_eq!(started.decide(request(&e, "github", "create_issue", json!({}))).await, ApprovalOutcome::Allowed);
+    flight_school(&e, true).await;
+    set_tier(&e, "*", "sandbox").await;
+    assert_eq!(started.decide(request(&e, "github", "create_issue", json!({}))).await, ApprovalOutcome::Unanswered);
+    assert_eq!(started.decide(bash(&e, "touch x")).await, ApprovalOutcome::Unanswered);
+    let (_, rows) = call(&e.app, "GET", "/api/approvals", None, None).await;
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["details"]["tool"] == "create_issue" && r["details"]["tier_reason"].is_string())
+        .expect("the tier card is on record");
+    assert_eq!(row["details"]["started_by"], "Loose ends", "{row}");
+    assert!(row["details"].get("strict_ask").is_none(), "{row}");
 }
 
 #[tokio::test]

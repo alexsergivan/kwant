@@ -31,6 +31,8 @@ pub struct ProfileManager {
     cache: Mutex<HashMap<String, (Instant, ProfileStatus)>>,
     /// The last check of each Custom API account: its status and the models it lists.
     custom: Mutex<HashMap<String, (Instant, crate::drivers::custom::CustomCheck)>>,
+    /// When each account's limits were last read on the person's "Check now".
+    usage_checks: Mutex<HashMap<String, Instant>>,
 }
 
 impl ProfileManager {
@@ -40,7 +42,20 @@ impl ProfileManager {
             logins: LoginManager::default(),
             cache: Mutex::new(HashMap::new()),
             custom: Mutex::new(HashMap::new()),
+            usage_checks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Takes this account's turn to read its limits fresh: `true` at most once per
+    /// [`super::usage::CHECK_EVERY`], since each Claude read spends a little of its limit.
+    pub fn claim_usage_check(&self, id: &str) -> bool {
+        let Ok(mut checks) = self.usage_checks.lock() else { return false };
+        let now = Instant::now();
+        if checks.get(id).is_some_and(|at| now.duration_since(*at) < super::usage::CHECK_EVERY) {
+            return false;
+        }
+        checks.insert(id.to_string(), now);
+        true
     }
 
     /// The config dir a `cli_home` profile runs with.

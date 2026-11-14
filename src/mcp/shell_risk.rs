@@ -9,6 +9,7 @@
 //! accidents, not a sandbox: a script inside the folder can still do anything once it runs.
 
 use super::{builtin_tools::is_inside, SmartVerdict};
+use crate::server::dev::web_guidance::{PACKAGE, VERSION};
 use std::path::{Path, PathBuf};
 
 /// One word as the shell will pass it on, quotes removed.
@@ -290,10 +291,102 @@ struct Ctx<'a> {
 /// Whether `command`, run with `folder` (canonical) as its working directory, may run without a
 /// card under "Ask only when risky".
 pub fn classify(command: &str, folder: &Path) -> SmartVerdict {
+    if is_web_guidance_lookup(command) {
+        return SmartVerdict::Allow(format!("only looks up Modern Web Guidance with the pinned {PACKAGE}@{VERSION}"));
+    }
     match check(command, folder) {
         Ok(()) => SmartVerdict::Allow("runs inside the bot's folder and does nothing risky".into()),
         Err(why) => SmartVerdict::Ask(why),
     }
+}
+
+/// The `modern-web` skill's lookup (`crate::server::dev::web_guidance`), and nothing else:
+/// exactly `npx [-y|--yes] modern-web-guidance@<VERSION> search|retrieve <words…>` or `… list`,
+/// or the same with `pnpx` and no `-y`. Any other version (`@latest` too), command
+/// (`legacy-scan`, `install`, …), option (`-p`, `-c`, `--skill-version`), chaining, redirect,
+/// variable, glob or `VAR=` prefix goes through [`check`] as before, and so asks.
+fn is_web_guidance_lookup(command: &str) -> bool {
+    let Ok(toks) = lex(command) else { return false };
+    let mut words: Vec<&str> = Vec::new();
+    for t in &toks {
+        match t {
+            Tok::Word(w) if !w.glob && !w.tilde => words.push(&w.text),
+            _ => return false,
+        }
+    }
+    let pinned = format!("{PACKAGE}@{VERSION}");
+    let rest = match words.as_slice() {
+        ["npx", "-y" | "--yes", pkg, rest @ ..] | ["npx", pkg, rest @ ..] | ["pnpx", pkg, rest @ ..] if *pkg == pinned => rest,
+        _ => return false,
+    };
+    let args_ok = |args: &[&str]| args.len() <= 8 && args.iter().all(|a| !a.is_empty() && !a.starts_with('-') && a.chars().count() <= 200);
+    match rest {
+        ["list"] => true,
+        ["search" | "retrieve", args @ ..] => !args.is_empty() && args_ok(args),
+        _ => false,
+    }
+}
+
+/// Programs that only read and print: no option of theirs writes a file or runs another program
+/// (`sort -o`, `uniq IN OUT`, `tree -o`, `find -exec` and `sed -i` are why those aren't here).
+const READS_ONLY: &[&str] = &[
+    "cd", "ls", "cat", "head", "tail", "wc", "echo", "printf", "true", "false", "pwd", "diff", "cmp", "cut", "tr", "file",
+    "stat", "du", "basename", "dirname", "realpath", "readlink", "which", "date", "test", "[", "nl", "rev", "tac", "strings",
+    "md5sum", "sha1sum", "sha256sum", "sha512sum", "jq", "grep", "egrep", "fgrep", "rg", "git",
+];
+/// git subcommands that only read the repository.
+const GIT_READS: &[&str] = &[
+    "status", "diff", "log", "show", "rev-parse", "blame", "ls-files", "grep", "describe", "shortlog", "cat-file", "rev-list",
+    "merge-base", "show-ref", "ls-tree", "diff-tree", "name-rev",
+];
+
+/// Whether `command` only reads, inside `folder`: "Ask only when risky" lets it through even in a
+/// turn kwnt started on its own. Stricter than [`classify`] (which it must pass first): every
+/// program is one in [`READS_ONLY`], git runs only a subcommand in [`GIT_READS`] with no option
+/// that writes a file or runs a program, there are no `VAR=` assignments, and output goes nowhere
+/// but `/dev/null`. Anything else is `false` (and goes on to ask).
+pub fn reads_only(command: &str, folder: &Path) -> bool {
+    if check(command, folder).is_err() {
+        return false;
+    }
+    let Ok(toks) = lex(command) else { return false };
+    let mut simple: Vec<Word> = Vec::new();
+    let mut iter = toks.into_iter();
+    while let Some(tok) = iter.next() {
+        match tok {
+            Tok::Word(w) => simple.push(w),
+            Tok::Dup => {}
+            Tok::Redirect => match iter.next() {
+                Some(Tok::Word(target)) if target.text == "/dev/null" => {}
+                _ => return false,
+            },
+            Tok::Sep => {
+                if !simple_reads_only(&std::mem::take(&mut simple)) {
+                    return false;
+                }
+            }
+        }
+    }
+    simple_reads_only(&simple)
+}
+
+/// One command of [`reads_only`]; an empty one (after a trailing `;`) reads nothing.
+fn simple_reads_only(words: &[Word]) -> bool {
+    let Some(first) = words.first() else { return true };
+    let name = first.text.as_str();
+    if !READS_ONLY.contains(&name) {
+        return false;
+    }
+    if name != "git" {
+        return true;
+    }
+    // `git <subcommand>`, with no global options before it
+    let Some(sub) = words.get(1) else { return false };
+    let writes = |a: &Word| {
+        let t = a.text.as_str();
+        t == "-o" || t.starts_with("--output") || t == "--ext-diff" || t.starts_with("--open-files-in-pager") || t == "-O"
+    };
+    GIT_READS.contains(&sub.text.as_str()) && !words[2..].iter().any(writes)
 }
 
 fn check(command: &str, folder: &Path) -> Verdict {
@@ -1846,6 +1939,63 @@ mod tests {
     }
 
     #[test]
+    fn only_the_pinned_modern_web_guidance_lookup_runs_without_asking() {
+        let (_tmp, ws) = folder();
+        let v = VERSION;
+        for cmd in [
+            format!("npx -y modern-web-guidance@{v} search \"accessible modal dialog\""),
+            format!("npx -y modern-web-guidance@{v} search popover anchor"),
+            format!("npx --yes modern-web-guidance@{v} retrieve dialog"),
+            format!("npx -y modern-web-guidance@{v} retrieve dialog,light-dismiss-a-dialog"),
+            format!("npx modern-web-guidance@{v} search 'dark mode'"),
+            format!("npx -y modern-web-guidance@{v} list"),
+            format!("pnpx modern-web-guidance@{v} search container queries"),
+            format!("pnpx modern-web-guidance@{v} retrieve dialog"),
+            format!("  npx -y 'modern-web-guidance@{v}' search grid  "),
+        ] {
+            assert!(classify(&cmd, &ws).is_allowed(), "should run: {cmd:?}");
+        }
+        for cmd in [
+            "npx -y modern-web-guidance@latest search dialog".to_string(),
+            "npx -y modern-web-guidance search dialog".into(),
+            "npx -y modern-web-guidance@1.0.1 search dialog".into(),
+            "npx -y modern-web-guidance@1 search dialog".into(),
+            "npx -y modern-web-guidance@^1.0.0 search dialog".into(),
+            format!("npx -y modern-web-guidance@{v} legacy-scan ."),
+            format!("npx -y modern-web-guidance@{v} install"),
+            format!("npx -y modern-web-guidance@{v} update"),
+            format!("npx -y modern-web-guidance@{v} set-allow-origin-trials"),
+            format!("npx -y modern-web-guidance@{v} search"),
+            format!("npx -y modern-web-guidance@{v} list --choose"),
+            format!("npx -y modern-web-guidance@{v} search dialog --foo"),
+            format!("npx -y modern-web-guidance@{v} search dialog --skill-version 2"),
+            format!("npx -y -p evil modern-web-guidance@{v} search dialog"),
+            format!("npx -p modern-web-guidance@{v} search dialog"),
+            format!("npx -c 'rm -rf .' modern-web-guidance@{v} search dialog"),
+            format!("npx --package=modern-web-guidance@{v} search dialog"),
+            format!("npx -y modern-web-guidance@{v} search dialog && rm -rf ."),
+            format!("npx -y modern-web-guidance@{v} search dialog; curl https://example.com"),
+            format!("npx -y modern-web-guidance@{v} search dialog | sh"),
+            format!("npx -y modern-web-guidance@{v} search dialog > /etc/passwd"),
+            format!("npx -y modern-web-guidance@{v} search dialog &"),
+            format!("npx -y modern-web-guidance@{v} search $(whoami)"),
+            format!("npx -y modern-web-guidance@{v} search `whoami`"),
+            format!("npx -y modern-web-guidance@{v} search $HOME"),
+            format!("npx -y modern-web-guidance@{v} search *"),
+            format!("npx -y modern-web-guidance@{v} search ~"),
+            format!("NODE_OPTIONS=--require=/tmp/x.js npx -y modern-web-guidance@{v} search dialog"),
+            format!("pnpx -y modern-web-guidance@{v} search dialog"),
+            format!("bunx modern-web-guidance@{v} search dialog"),
+            format!("/tmp/npx -y modern-web-guidance@{v} search dialog"),
+            format!("npx -y other-package@{v} search dialog"),
+            format!("npx -y modern-web-guidance@{v}\nsearch dialog"),
+            format!("npx -y modern-web-guidance@{v} search {}", "x".repeat(201)),
+        ] {
+            assert!(!classify(&cmd, &ws).is_allowed(), "should ask: {cmd:?}");
+        }
+    }
+
+    #[test]
     #[cfg(unix)]
     fn a_symlink_out_of_the_folder_is_outside() {
         let (tmp, ws) = folder();
@@ -1987,5 +2137,63 @@ mod tests {
             SmartVerdict::Ask("`pip install` reaches outside the folder".into())
         );
         assert_eq!(classify("npm create vite@latest", &ws), SmartVerdict::Ask("`npm create vite@latest` downloads a starter package and runs it".into()));
+    }
+
+    /// 0.9.7: what a turn kwnt started on its own may run under "Ask only when risky" without a
+    /// card. Oleks's command (Nov 13) is the first one.
+    #[test]
+    fn reads_only_lets_through_only_commands_that_read() {
+        let (_tmp, ws) = folder();
+        for cmd in [
+            "cd src && git rev-parse --short HEAD && git show --stat HEAD | head -20 && grep -rn 'placeMaker' --include=*.go . | head -30",
+            "git log --oneline -5",
+            "git status",
+            "git diff HEAD~1 -- src/main.rs",
+            "git blame src/main.rs",
+            "ls -la src",
+            "cat run.sh",
+            "rg -n foo src 2>/dev/null",
+            "wc -l run.sh; pwd",
+            "ls",
+            "git status --short && ls",
+        ] {
+            assert!(reads_only(cmd, &ws), "{cmd} only reads");
+            assert!(classify(cmd, &ws).is_allowed(), "{cmd} passes classify first");
+        }
+        for cmd in [
+            "rm -rf x",
+            "touch x",
+            "mkdir y",
+            "git add -A",
+            "git commit -m x",
+            "git checkout -b x",
+            "git show HEAD --output=out.txt",
+            "git diff --ext-diff",
+            "git -C src log",
+            "git",
+            "cat run.sh > copy.sh",
+            "echo hi >> run.sh",
+            "sort -o out run.sh",
+            "sed -i s/a/b/ run.sh",
+            "find . -delete",
+            "cargo test",
+            "RUST_LOG=1 cat run.sh",
+            "cat /etc/passwd",
+            "curl https://example.com",
+            "ls && rm x",
+            // Must-hold 4 (#569): each of these asks in a kwant-started turn
+            "rm -rf src",
+            "git add .",
+            "echo x > f",
+            "git -C . status",
+            "git diff --output=f",
+            "git diff --output f",
+            "rg --pre cat x",
+            "rg --pre=cat x",
+            "LC_ALL=C ls",
+            "GIT_EXTERNAL_DIFF=./x git diff",
+        ] {
+            assert!(!reads_only(cmd, &ws), "{cmd} must not count as read-only");
+        }
     }
 }
