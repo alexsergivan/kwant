@@ -411,6 +411,11 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // Dev mode (0.7): the watched repo, its cards, Fix it and Dismiss, release notes and the
         // backup command are the person's; bots never read the desk either (D3)
         ["", "api", "spaces", _, "dev_mode" | "dev", ..] => true,
+        // A space's documents are what its bots quote as fact (10c): only the person adds or
+        // removes them, so a bot can't write the words it then cites; the list, cite and page
+        // reads stay open
+        ["", "api", "spaces", _, "docs"] => *method == Method::POST,
+        ["", "api", "spaces", _, "docs", _] => *method == Method::DELETE,
         ["", "api", "dev", ..] => true,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         // A team's instructions go into every member's prompt (PUT and PATCH both set them), and a
@@ -933,6 +938,12 @@ mod tests {
         let (get, post, put, del) = (Method::GET, Method::POST, Method::PUT, Method::DELETE);
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
         assert!(person_only(&get, "/api/tool-notes"));
+        assert!(person_only(&post, "/api/spaces/s1/docs"));
+        assert!(person_only(&post, "/api/spaces/s1/docs/"));
+        assert!(person_only(&del, "/api/spaces/s1/docs/faq.md"));
+        assert!(!person_only(&get, "/api/spaces/s1/docs"));
+        assert!(!person_only(&post, "/api/spaces/s1/docs/cite"));
+        assert!(!person_only(&get, "/api/spaces/s1/docs/page"));
         assert!(person_only(&post, "/api/tool-notes"));
         assert!(person_only(&Method::PATCH, "/api/tool-notes/n1"));
         assert!(person_only(&del, "/api/tool-notes/n1/"));
