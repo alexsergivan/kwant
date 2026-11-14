@@ -18,6 +18,8 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-099">New in 0.9.9</a></li>
+        <li><a href="#new-098">New in 0.9.8</a></li>
         <li><a href="#new-097">New in 0.9.7</a></li>
         <li><a href="#new-096">New in 0.9.6</a></li>
         <li><a href="#new-095">New in 0.9.5</a></li>
@@ -56,6 +58,96 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-099" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.9</p>
+      <h2>A browser panel that follows your bot, and AI use over 7 or 30 days, by model</h2>
+      <p>The browser panel opens when your bot browses and lists the pages it opened. See your AI use for 7 or 30 days, day by day and by model. Routines open from the sidebar, with a Weekdays chip and schedules in words.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="browser-panel">A browser panel that follows your bot</h3>
+        <p>When a bot opens a page in its browser, the panel opens by itself, with the bot's name, a <strong>Browsing now</strong> or <strong>Finished</strong> line and a Live pill, and closes again shortly after the bot is done, unless you used it. <strong>Pages this reply</strong> lists each page the reply opened, by title, with <strong>Now</strong> on the current one. A chip on the reply, like <strong>Ben opened 2 pages</strong>, reopens it; on a phone it opens as a sheet. <strong>Point</strong> and <strong>Take over</strong> sit under the preview, and <strong>Enlarge</strong> shows the page bigger, view only.</p>
+      </div>
+      <div class="frame">{{shot:v099-browser-panel|Ben is working on "Can you compare our two tents on the shop and check both pages are right?". The chip "Ben is on shop.example.com · 2 pages" sits in the reply's steps. Ben's browser panel opened by itself on the right: "Browsing now", a Live pill on the Summit 3P Tent page, and "Pages this reply · 2" with Summit 3P Tent marked Now.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="usage-history">AI use over 7 or 30 days, by model</h3>
+        <p><strong>AI use</strong> in Settings › All spaces › Usage switches between <strong>7 days</strong> and <strong>30 days</strong>: the total, a bar for each day (a quiet day shows as a gap), and <strong>By model</strong>, each model's share. When no model reported a cost, it counts fresh tokens instead.</p>
+      </div>
+      <div class="frame">{{shot:v099-usage-history|Settings › AI use at 7 days: "$8.36 in the last 7 days", a bar per day from Sun 8 Nov to today with one quiet day, and a hovered bar reading "Yesterday: $1.31". Below are By model (claude-sonnet-5-5 $4.91 59%, claude-opus-5-5 $3.44 41%, Codex · GPT-5.5 "No cost reported") and By day, which shows fresh tokens, cache reads and cost per bot.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="routines-setup">Routines are easier to set up</h3>
+        <p>The sidebar has a <strong>Routines</strong> row. With none yet, one card explains what a routine is. The form gives examples, shows your time zone in one line (<strong>Kyiv time GMT+2</strong>), and a weekly routine has a <strong>Weekdays</strong> chip. Each card shows the first line of its instructions, when it runs next, and its schedule in words, like <strong>Weekdays at 08:30, Kyiv time</strong>.</p>
+      </div>
+      <div class="frame">{{shot:v099-routines-setup|Settings › Routines for Trailhead Outfitters with three cards. Competitor prices is OK, next run Mon, Nov 16, 08:30 AM, "Weekdays at 08:30, Kyiv time · Ben · direct chat". Size chart sync is Failed, running every day at 07:00 with Ann. Shipping recap is switched off and Paused, every Monday at 09:00 with Cody. Each card has Run now, History, Edit and Delete, and Suggested routines sits below.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-099" class="span3"><h3>Smaller changes in 0.9.9</h3><p>Update checks are ready at launch; Settings asks again and links to the latest release. Tool server names are unique regardless of case. Chrome start-up errors lead with the real cause.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-098" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.8</p>
+      <h2>A first screen for anyone, and done items that say what checked them</h2>
+      <p>A fresh install starts with a small team and asks what you want done. A done item says what checked it, and says so when nothing did. Asking a bot to try again on a pre-push card now lets its fixed push go without a second card. Mission checks can wait for outside services without spending bot turns. A chat that only needs your answer says so in one line. A routine's message shows as a routine row, not as your own. In a team discussion, the teammate someone @mentions speaks next.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="first-screen">A first screen anyone can start from</h3>
+        <p>A fresh install starts with a small team, <strong>@helpers</strong>: Assistant leads, with Researcher and Writer. #general opens with <strong>What do you want done?</strong>, your team's faces and three example asks. With no AI account yet, the chat says <strong>Connect an AI account to start</strong>, with a <strong>Connect an account</strong> button. Dev mode and Approvals now live in Settings › This space › General, and the space header shows them in one line. Existing installs keep their bots and teams as they are.</p>
+      </div>
+      <div class="frame">{{video:clip-v098-first-screen|A fresh install's #general reads "What do you want done?", above the faces of Assistant, Researcher and Writer and three example asks. Someone types "Plan my week: a supplier call Monday, the dentist Wednesday" and sends it. Assistant picks it up and answers with a plan table for Monday to Friday.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="done-check">Done items say what checked them</h3>
+        <p>A done item in the Inbox says what checked it, in one box above the answer: <strong>Checked</strong>, <strong>Partly checked</strong>, <strong>Failed</strong> or <strong>Not checked</strong>. <strong>Show what was checked</strong> lists each check with its result and evidence. A criterion marked met without evidence counts as a claim, not a check. When nothing checked a result, the box says so, and a routine's box has <strong>Add a check</strong>.</p>
+      </div>
+      <div class="frame">{{shot:v098-done-check|An Inbox item for Ann's "Update the size chart for the Ridgeline 2P tent". A green "Checked: 2 of 2 checks passed" box lists the size script passing (12 of 12 sizes match the supplier sheet), the page answering HTTP 200, and the criterion met with evidence.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="prepush-grant">Try again on a pre-push card lets the push go</h3>
+        <p>When a pre-push check stops a bot's push and you press <strong>Ask Ben to try again</strong>, Ben's next push of that branch goes without another approval card, once its checks pass: one push, within 2 hours. <strong>Push anyway</strong> works the same way. The card follows the push in one line, up to <strong>Pushed</strong>. Production and payment approvals still ask, and Needs you shows one item per branch.</p>
+      </div>
+      <div class="frame">{{shot:v098-prepush-grant|Ben's chat. Asking Ben to fix and push again counted as the OK ("once the checks pass, its next push of tent-sizes goes without asking you"). The card now reads "Pushed · 22:15 · See the push", and the push line says "your retry was the OK, so it didn't ask again" with a Show checks link.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="waiting-checks">Checks that wait for outside services</h3>
+        <p>A mission check can wait for something that finishes elsewhere, such as a store review or a build farm. A command check that exits <code>75</code>, or an http check that gets its waiting status, keeps the task in review and runs again every 15 minutes, with no bot turns. The task card says <strong>Waiting on ./gate.sh since 09:12 · next look 09:27</strong>, with the last line the script printed. After 72 hours it stops and tells you once in <strong>Needs you</strong>. On the task, press <strong>Wait 24 h more</strong> or verify it by hand.</p>
+      </div>
+      <div class="frame">{{shot:v098-waiting-check|The Mission board Review column. The "Put the spring sale page live" card says "Waiting on ./gate.sh since 21:35 · next look 22:49", followed by the last line the check printed: "Deploy queued: 2 jobs a…".}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="waiting-state">A chat says when it's waiting for you</h3>
+        <p>When the only thing left in a chat is a bot's question, one amber line says <strong>Waiting for you: Ben needs one answer to finish</strong>, with <strong>Answer</strong> to bring the question into view. The working card, the paused box and the red Stop hide; press a choice or just type your answer. The question says how long ago it was asked, and in the sidebar teammates who already replied read <strong>Done · replied here</strong>.</p>
+      </div>
+      <div class="frame">{{shot:v098-waiting-state|Ben's chat with the line "Waiting for you: Ben needs one answer" (with Answer and Stop) above Ben's question "Which banner should go on the spring sale page?" and three choices.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="routine-row">A routine's run shows as a routine</h3>
+        <p>A routine's message in a chat used to look like your own. It now shows as one row with a clock, <strong>Routine · Morning brief</strong>, the time and its instructions on one line. Press it to read them in full. Messages you type still show as You.</p>
+      </div>
+      <div class="frame">{{shot:v098-routine-row|Ann's chat with a compact "Routine · Shipping report · 9:35 PM" row between messages, followed by Ann's report of 38 orders shipped yesterday, 2 of them a day late.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="mention-order" class="span3"><h3>An @mentioned teammate goes next</h3><p>In a team discussion, when the speaker writes <strong>@Cody please get the table sizes first</strong>, Cody speaks next, ahead of the planned order, shown as asked by the speaker. A teammate who was already planned moves up instead of speaking twice.</p></li>
+      <li id="fixes-098" class="span3"><h3>Smaller changes in 0.9.8</h3><p>No Concierge is made before an AI account can answer it. Don't ask also covers work a bot starts on its own. A mission task whose browser stays busy ends once with a fix line, without running again. Small fixes to bot budgets and model badges. Adding a tool from the public directory works without renaming it. File pickers in the live browser view work.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-097" class="fgroup">
   <div class="wrap">

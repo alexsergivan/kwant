@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, CalendarClock, Check, ChevronDown, ChevronRight, Eye, Loader2, RefreshCw, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Eye, Loader2, RefreshCw, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
 import {
   AcceptIntent,
   DISCOVERY_SETTING_EVENT,
@@ -365,6 +365,10 @@ const ScanReport: React.FC<{ result: ScanResult; onClose: () => void }> = ({ res
  * "Suggested routines" on top of the Routines list (Automation Discovery, docs §20): what kwant
  * noticed you ask for on a rhythm, to accept (with edits) or dismiss. Hidden on servers without it.
  */
+/** No offers, accepts or dismissals in 30 days and no scan yet. */
+export const statsAllZero = (l: { stats: { offered_30d: number; accepted_30d: number; dismissed_30d: number }; last_scan_at?: string | null }) =>
+  !l.stats.offered_30d && !l.stats.accepted_30d && !l.stats.dismissed_30d && !l.last_scan_at;
+
 export const SuggestedRoutines: React.FC<{
   kwants: Kwant[];
   channels: Channel[];
@@ -543,14 +547,11 @@ export const SuggestedRoutines: React.FC<{
       )}
 
       {list && blocked.length === 0 && offers.length === 0 && (
-        <div className="text-[11px] text-zinc-500 border border-dashed border-zinc-800 rounded-lg px-3 py-2.5 flex items-start gap-2" data-testid="discovery-empty">
-          <CalendarClock size={14} className="mt-0.5 shrink-0 text-zinc-600" aria-hidden="true" />
-          <p>
-            {list.daily_cap === 0
-              ? 'No suggestions. The daily limit in Settings is 0, so nothing new is suggested; Preview shows what it would suggest.'
-              : `No suggestions right now. The board is checked every hour for tasks you ask for on a regular rhythm, with at most ${list.daily_cap} new ${list.daily_cap === 1 ? 'suggestion' : 'suggestions'} a day.`}
-          </p>
-        </div>
+        <p className="text-[11px] text-zinc-400" data-testid="discovery-empty">
+          {list.daily_cap === 0
+            ? 'No suggestions. The daily limit in Settings is 0, so nothing new is suggested; Preview shows what it would suggest.'
+            : `None right now. When you ask a bot for the same thing on a regular rhythm, a suggestion shows up here (at most ${list.daily_cap} a day).`}
+        </p>
       )}
 
       {offers.length > 0 && (
@@ -561,7 +562,8 @@ export const SuggestedRoutines: React.FC<{
         </ul>
       )}
 
-      {list && (list.setting === 'on' || list.stats.offered_30d > 0) && (
+      {/* Routines setup B3: nothing has happened yet (all zero, never looked), so the line would only add noise. */}
+      {list && (list.setting === 'on' || list.stats.offered_30d > 0) && !statsAllZero(list) && (
         <p className="text-[11px] text-zinc-500" data-testid="discovery-stats">
           {statsLine(list.stats)} {list.last_scan_at ? `Last looked ${formatWhen(list.last_scan_at)}.` : list.setting === 'on' ? 'Hasn’t looked yet.' : ''}
         </p>
