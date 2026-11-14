@@ -315,6 +315,53 @@ async fn a_tool_call_waits_for_the_person_even_with_approvals_off() {
 }
 
 #[tokio::test]
+async fn kwants_tools_refuse_a_customer_turns_call_nobody_allowed() {
+    use kwnt::server::mcp_runtime::EVERY_CALL_REFUSED;
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    env.state.db.set_space_approvals(&SpaceId::default_space(), "off").await.unwrap();
+    let bot = customers_on(&env, tg, 41).await;
+    let all = |env: &Env| {
+        let db = env.state.db.clone();
+        let a = env.a.clone();
+        async move { db.list_approvals(&SpaceId::default_space(), None, Some(&a)).await.unwrap() }
+    };
+
+    // A CLI whose own rules allow kwnt's tools calls one without asking: kwant refuses, nothing runs
+    // Each marker runs once per test run, so each call here has its own query
+    let marker = call_tool_marker("memory_search", json!({"query": "delivery times"}));
+    tg.text(&bot, &ANN, &format!("Please look this up {marker} REPLYTAG:tool41"));
+    let reply = tg.wait_send(&bot, |c| c.text().contains("answer tool41")).await;
+    assert_eq!(reply.chat(), ANN.id);
+    assert!(reply.text().contains(&format!("TOOL[{EVERY_CALL_REFUSED}]")) && reply.text().contains("TOOLERROR"), "refused: {}", reply.text());
+    assert!(all(&env).await.is_empty(), "the call never reached the approver, so it ran nowhere");
+
+    // Asked first and allowed: one card, and the allowed call runs once
+    let marker = call_tool_marker("memory_search", json!({"query": "return policy"}));
+    tg.text(&bot, &BEN, &format!("Please look this up {marker} ASKFIRST REPLYTAG:tool42"));
+    wait_for("the card", || {
+        let db = env.state.db.clone();
+        let a = env.a.clone();
+        async move { !db.list_approvals(&SpaceId::default_space(), Some("pending"), Some(&a)).await.unwrap().is_empty() }
+    })
+    .await;
+    let card = env.state.db.list_approvals(&SpaceId::default_space(), Some("pending"), Some(&env.a)).await.unwrap().remove(0);
+    let mut s = StatusCode::CONFLICT;
+    for _ in 0..100 {
+        s = call(&env.app, "POST", &format!("/api/approvals/{}/resolve", card.id), Some(json!({"decision": "allow_once"}))).await.0;
+        if s != StatusCode::CONFLICT {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(s, StatusCode::OK);
+    let reply = tg.wait_send(&bot, |c| c.text().contains("answer tool42")).await;
+    assert_eq!(reply.chat(), BEN.id);
+    assert!(reply.text().contains("TOOL[") && !reply.text().contains(EVERY_CALL_REFUSED) && !reply.text().contains("TOOLERROR"), "ran: {}", reply.text());
+    assert_eq!(all(&env).await.len(), 1, "one card for one call");
+}
+
+#[tokio::test]
 async fn a_bot_that_cant_answer_hands_the_chat_to_the_person() {
     use base64::Engine;
     let env = setup().await;

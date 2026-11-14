@@ -179,6 +179,9 @@ impl ToolApprover for BrokerApprover {
         let noted = req.clone();
         let (outcome, decision, ticket) = self.classified(req).await;
         self.note(&noted, decision, ticket.as_deref()).await;
+        if outcome.allowed() {
+            grant_every_call_pass(&noted);
+        }
         outcome
     }
 
@@ -234,7 +237,46 @@ fn mark_every_call(turn_id: &str, on: bool) {
         m.insert(turn_id.to_string());
     } else {
         m.remove(turn_id);
+        EVERY_CALL_PASSES.lock().unwrap_or_else(|e| e.into_inner()).remove(turn_id);
     }
+}
+
+/// One-time passes for kwnt's own tools in an [`every_call`] turn: (tool, input) the approver
+/// allowed, by turn. kwnt's tool endpoint runs a call in such a turn only on a matching pass, so
+/// a CLI's own allow rules can't skip the card (see `continuity::self_endpoint`). Cleared with
+/// the turn's mark.
+static EVERY_CALL_PASSES: std::sync::LazyLock<std::sync::Mutex<EveryCallPasses>> = std::sync::LazyLock::new(Default::default);
+
+/// Turn id → the (tool, input) pairs allowed and not yet run.
+type EveryCallPasses = std::collections::HashMap<String, Vec<(String, Value)>>;
+
+/// What kwnt's tool endpoint answers a call in an [`every_call`] turn that the approver never allowed.
+pub const EVERY_CALL_REFUSED: &str = "This step needs the person's OK first.";
+
+/// Records a pass for an allowed call to kwnt's own tools in an [`every_call`] turn.
+fn grant_every_call_pass(req: &ToolApprovalRequest) {
+    if req.server != mcp::SELF_SERVER_NAME || !every_call(&req.turn_id) {
+        return;
+    }
+    let mut m = EVERY_CALL_PASSES.lock().unwrap_or_else(|e| e.into_inner());
+    m.entry(req.turn_id.clone()).or_default().push((req.tool.clone(), req.arguments.clone()));
+}
+
+/// Whether kwnt's own tool `tool` may run with `args` in turn `turn_id`: always outside an
+/// [`every_call`] turn; inside one only on a pass the approver granted, used up here.
+pub fn take_every_call_pass(turn_id: &str, tool: &str, args: &Value) -> bool {
+    if !every_call(turn_id) {
+        return true;
+    }
+    let mut m = EVERY_CALL_PASSES.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(passes) = m.get_mut(turn_id) else {
+        return false;
+    };
+    let Some(i) = passes.iter().position(|(t, a)| t == tool && a == args) else {
+        return false;
+    };
+    passes.swap_remove(i);
+    true
 }
 
 /// One of claude's plain read tools (Read, Glob, Grep).
