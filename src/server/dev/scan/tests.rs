@@ -223,7 +223,7 @@ async fn j_s2_the_value_is_hidden_from_facts_card_findings_and_fix_it_text() {
     let space = crate::db::spaces::SpaceId::new("space-demo");
     let mut texts = vec![facts, card];
     for f in &sec.findings {
-        let t = crate::server::dev::routes::fix_task(&space, "kwant-demo", "card-demo", &f.id, &f.card_json(), None, None);
+        let t = crate::server::dev::routes::fix_task(&space, "kwant-demo", "card-demo", &f.id, &f.card_json(), None, crate::server::dev::recipient::Asked::Author);
         texts.push(format!("{} {}", t.title, t.acceptance));
     }
     for t in &texts {
@@ -809,7 +809,7 @@ async fn f_b_an_injection_package_name_is_data_in_the_card_tile_and_fix_it_text(
     assert_eq!((t.state, t.missing), (State::Hit, 1), "{t:?}");
     assert_eq!(f.len(), 1);
     let space = crate::db::spaces::SpaceId::new("space-demo");
-    let fix = crate::server::dev::routes::fix_task(&space, "kwant-demo", "card-demo", &f[0].id, &f[0].card_json(), None, None);
+    let fix = crate::server::dev::routes::fix_task(&space, "kwant-demo", "card-demo", &f[0].id, &f[0].card_json(), None, crate::server::dev::recipient::Asked::Author);
     assert!(fix.acceptance.contains(PR_DATA_NOTE), "{}", fix.acceptance);
     // Not checked: the name goes to the tile's reason
     let (t2, _) = check_one(Eco::Npm, INJECTION, &regs(&mock.base, now)).await;
