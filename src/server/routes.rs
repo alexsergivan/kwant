@@ -3195,7 +3195,8 @@ async fn run_kwant_turn_inner(
         }
         // 10c: a space with its own documents tells the bot how to quote them with the word-for-word
         // check (the web cite call lives in the browser block, which doesn't know the space)
-        if !opts.no_tools && !opts.fresh_eyes {
+        // (QA F1: chat, routine and hand-off turns only, the allow-list tool notes use)
+        if !opts.no_tools && !opts.fresh_eyes && super::tool_notes::wants(opts.purpose.as_deref()) {
             let space = crate::db::spaces::SpaceId::new(&target_kwant.space_id);
             lessons.push_str(&super::space_docs::prompt_block(state, &space).await);
         }
@@ -7097,9 +7098,12 @@ pub async fn act_sandbox_allowed(
                 }
             }
         }
+        // Shows what a page shows on hover (a tile's ⋮ menu) and says what appeared; clicks nothing
+        ("hover", Some(target)) => ctrl.hover_target(&target).await.map_err(|e| e.to_string()),
         ("click_text" | "click", None) => Err("click needs ref (a number from the clickable list) or text (a label).".to_string()),
+        ("hover", None) => Err("hover needs ref (a number from the clickable list) or text (a label).".to_string()),
         (other, _) => Err(format!(
-            "Unknown action \"{}\". Use click (with ref or text), type (with text), key (with key), scroll (with delta_y) or upload (with files).",
+            "Unknown action \"{}\". Use click (with ref or text), hover (with ref or text), type (with text), key (with key), scroll (with delta_y) or upload (with files).",
             other
         )),
     };
@@ -7120,6 +7124,11 @@ pub async fn act_sandbox_allowed(
     };
     let mut after = ctrl.snapshot().await;
     let mut changed = diff(&after);
+    // A hover mostly shows what was already in the page's text (an opacity-0 button): what it
+    // brought up is the change
+    if payload.action == "hover" && changed.is_none() {
+        changed = result.as_ref().ok().and_then(|r| r.split_once("Appeared: ")).map(|(_, a)| format!("Appeared: {a}"));
+    }
     if changed.is_none() {
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         after = ctrl.snapshot().await;

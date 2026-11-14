@@ -42,7 +42,7 @@ pub fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "mission_plan",
-            "description": "Propose a mission: a goal split into tasks with acceptance criteria and outcome checks. It is a draft until the person approves it on the board; nothing runs before that. Each task is verified only by its checks passing (or a teammate's review / the person), never by its owner saying it is done. Use it only when the person asks for a plan, project or tracked multi-step work, never on your own for an ordinary request or a quick answer.",
+            "description": "Propose a mission: a goal split into tasks with acceptance criteria and outcome checks. It is a draft until the person approves it on the board; nothing runs before that. Each task is verified only by its checks passing (or a teammate's review / the person), never by its owner saying it is done. Use it only when the person asks for a plan, project or tracked multi-step work, never on your own for an ordinary request or a quick answer. Each acceptance line becomes a criterion: c1 is the first line, c2 the second. Cut the person's request into parts that together cover every word of it, in their words; link each part to the criteria that prove it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -64,6 +64,8 @@ pub fn tools() -> Vec<Value> {
                                 "budget_tokens": {"type": "integer"},
                                 "checks": {"type": "array", "items": check_schema()},
                                 "task_class": {"type": "string", "description": "Kind of work, as a short slug (seo-audit, release…); sets how much freedom its bot gets. Leave it out for tasks you'd run yourself."},
+                                "parts": {"type": "array", "maxItems": super::contract::MAX_PARTS, "items": super::contract::part_schema(),
+                                          "description": "The parts of the person's request this task does. Cut the person's request into parts that together cover every word of it, in their words; link each part to the criteria that prove it (c1 = the first acceptance line)."},
                             },
                             "required": ["title", "acceptance"],
                         },
@@ -248,6 +250,11 @@ async fn plan(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Value
         return fail("A mission needs at least one task.");
     }
     let Ok(Some(lead)) = state.db.get_kwant(&scope.kwant_id).await else { return fail("Could not find you.") };
+    // Parts are checked before anything is written, like the rest of the plan
+    let parts = match plan_parts(&tasks, args) {
+        Ok(p) => p,
+        Err(e) => return fail(e),
+    };
     let origin = scope.origin.clone().unwrap_or_default();
     let workspace = scope.workspace.clone().unwrap_or_else(|| {
         crate::tools::bot_workspace(&crate::db::spaces::space_data_dir(&state.config.data_dir, space), &scope.kwant_id)
@@ -264,6 +271,15 @@ async fn plan(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Value
     let goal = args["goal"].as_str().unwrap_or("");
     match super::create_plan(state, space, &lead, title, goal, budget, &tasks, by, place).await {
         Ok((m, rows)) => {
+            // rows follow the plan's task order (a task it couldn't read back would shift them)
+            for (row, c) in rows.iter().zip(&parts).filter(|_| rows.len() == parts.len()) {
+                let Some(c) = c else { continue };
+                let event = json!({"by": "lead", "fields": ["parts"], "criteria": c.criteria.len(), "parts": c.parts.len()});
+                let body = serde_json::to_value(c).unwrap_or_default();
+                if let Err(e) = state.db.put_contract(&row.id, &body, &scope.kwant_id, &event).await {
+                    tracing::warn!(task_id = %row.id, error = %e, "the plan's parts weren't stored");
+                }
+            }
             super::mission_chat_line(
                 state,
                 &m,
@@ -279,6 +295,26 @@ async fn plan(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Value
         }
         Err(e) => fail(e),
     }
+}
+
+/// Each planned task's contract when the plan gives it parts: its acceptance lines as criteria
+/// (as a task with no stored contract reads them) plus the parts, written as the lead. `None` for
+/// a task without parts, so its contract stays unstored as before.
+fn plan_parts(tasks: &[PlanTask], args: &Value) -> Result<Vec<Option<super::contract::Contract>>, String> {
+    use super::contract::{apply, from_acceptance, Contract, Role};
+    tasks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let parts = &args["tasks"][i]["parts"];
+            if parts.is_null() || parts.as_array().is_some_and(|a| a.is_empty()) {
+                return Ok(None);
+            }
+            let key = t.key.clone().unwrap_or_else(|| (i + 1).to_string());
+            let start = Contract { criteria: from_acceptance(&t.acceptance), ..Default::default() };
+            apply(start, &json!({"parts": parts}), Role::Lead, &[]).map(|(c, _)| Some(c)).map_err(|e| format!("task {key}: {e}"))
+        })
+        .collect()
 }
 
 fn brief(t: &Task) -> Value {

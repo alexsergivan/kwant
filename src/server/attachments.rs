@@ -437,7 +437,7 @@ pub struct UploadQuery {
 
 /// Reads and drops the rest of a refused upload in the background (at most 100 MB or 30 s), so
 /// the refusal reaches the browser instead of a reset connection it would report as status 0.
-fn drain(mut stream: axum::body::BodyDataStream) {
+pub(super) fn drain(mut stream: axum::body::BodyDataStream) {
     tokio::spawn(async move {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(DRAIN_SECS), async {
             let mut seen = 0u64;

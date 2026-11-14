@@ -84,6 +84,7 @@ code, pre, kbd { font-family: var(--mono); }
 @media (max-width: 859px) { .reel { display: none; } }
 html.reel-open { overflow: hidden; }
 dialog.reel-dialog { width: min(1280px, 94vw); max-height: 94vh; padding: 0; border: 2px solid var(--line-2); border-radius: 0; background: var(--panel); color: var(--v9); overflow: hidden; }
+dialog.reel-dialog[data-mode="clip"] .reel-frame { aspect-ratio: 16 / 10; }
 dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
 .reel-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 8px 8px 16px; }
 .reel-bar h2 { margin: 0; font: 600 20px var(--display); color: var(--v9); }
@@ -125,12 +126,30 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
 .toolbar [role="tab"]:hover { color: var(--v9); }
 .toolbar [role="tab"][aria-selected="true"] { --px-edge: var(--v4); --px-fill: var(--v3); color: var(--v9); }
 .toolbar [role="tab"] svg { width: 18px; height: 18px; flex: none; image-rendering: pixelated; }
-.window { --u: 4px; --px-edge: var(--frame); --px-fill: #110d27; position: relative; z-index: 2; padding: 0 1px 1px; }
-.win-bar { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border-bottom: 1px solid var(--line); color: var(--dim); font: 400 12.5px var(--mono); }
+.window { --u: 4px; --px-edge: var(--frame); --px-fill: #110d27; position: relative; z-index: 2; padding: 0 1px 49px; }
+/* desktop: the window has no bottom edge; its side borders and fill run on for 48 px under the video into the dither cut */
+.stage .window::before, .stage .window::after { clip-path: polygon(calc(var(--u) * 4) 0, calc(100% - var(--u) * 4) 0, calc(100% - var(--u) * 4) var(--u), calc(100% - var(--u) * 2) var(--u), calc(100% - var(--u) * 2) calc(var(--u) * 2), calc(100% - var(--u)) calc(var(--u) * 2), calc(100% - var(--u)) calc(var(--u) * 4), 100% calc(var(--u) * 4), 100% 100%, 0 100%, 0 calc(var(--u) * 4), var(--u) calc(var(--u) * 4), var(--u) calc(var(--u) * 2), calc(var(--u) * 2) calc(var(--u) * 2), calc(var(--u) * 2) var(--u), calc(var(--u) * 4) var(--u)); }
+.stage .window::after { bottom: 0; }
+.win-bar { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 16px; border-bottom: 1px solid var(--line); color: var(--dim); font: 400 12.5px var(--mono); }
 .win-bar i { width: 8px; height: 8px; background: var(--line-2); }
 .win-bar span { margin-left: 10px; }
 .win-bar .live { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--v8); }
 .win-bar .live::before { content: ""; width: 8px; height: 8px; background: var(--ok); }
+/* Full size: opens the current clip in the reel dialog (hero.js); without JS it is a plain link to the mp4 */
+.win-bar .full { display: inline-flex; align-items: center; min-width: 44px; height: 44px; margin-left: 12px; color: var(--v8); font: 500 12.5px var(--mono); text-decoration: none; cursor: pointer; }
+.win-bar .full:focus-visible { outline-offset: -4px; }
+.full-box { --u: 2px; --px-edge: var(--line-2); --px-fill: transparent; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; }
+.win-bar .full span { margin-left: 0; }
+.win-bar .full .pi { width: 12px; height: 12px; }
+.win-bar .full:hover .full-box { --px-edge: var(--v6); }
+.win-bar .full:hover { color: var(--v9); }
+.char { pointer-events: none; }
+/* tablet: the toolbar overlaps the window bar, so unselected tabs show their icon only (as on phones) and Full size stays clear */
+@media (min-width: 641px) and (max-width: 859px) {
+  .toolbar [role="tab"]:not([aria-selected="true"]) .t-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+}
+.win-screen { cursor: zoom-in; }
+.win-screen .pause { cursor: pointer; }
 .win-screen { position: relative; aspect-ratio: 16 / 10; background: #0f0b24; }
 .win-screen video { width: 100%; height: 100%; object-fit: cover; }
 .pause { position: absolute; right: 12px; bottom: 12px; z-index: 3; --u: 2px; --px-edge: var(--line-2); --px-fill: rgba(13, 10, 31, .85); width: 44px; height: 44px; display: grid; place-items: center; border: 0; background: none; color: var(--v8); cursor: pointer; }
@@ -138,9 +157,9 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
 .pause .ic-play { display: none; }
 .pause[aria-pressed="true"] .ic-play { display: block; }
 .pause[aria-pressed="true"] .ic-pause { display: none; }
-/* the window is cut by the hero's bottom edge through a 48 px ordered-dither strip */
+/* the window rises out of the hero's bottom edge: its whole screen shows, and only the 48 px open frame tail under it runs into the 48 px ordered-dither strip */
 .hero-cut { position: relative; z-index: 5; height: 48px; margin-top: -48px; background: url("../dither-fade.svg?v=4c701a3fef") left top / 16px 48px repeat-x; }
-.stage-clip { height: 560px; overflow: hidden; padding-top: 72px; margin-top: -72px; }
+.stage-clip { overflow: hidden; padding-top: 72px; margin-top: -72px; }
 
 /* Characters: the app's avatar creatures, standing on and peeking over the window edge */
 .char { position: absolute; z-index: 3; width: 64px; image-rendering: pixelated; transition: transform .16s var(--ease); }
@@ -338,7 +357,9 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
   .stage .moment-caption { order: 3; margin: 14px 0 0; }
   .eyebrow { font-size: 11px; letter-spacing: .12em; }
   .eyebrow i { padding: 0 .3em; }
-  .stage-clip { height: auto; }
+  .stage .window { padding-bottom: 1px; }
+  .stage .window::before, .stage .window::after { clip-path: var(--steps); }
+  .stage .window::after { bottom: 1px; }
   .moment-caption { min-height: 52px; font-size: 15px; padding: 0 8px; }
   .toolbar [role="tab"] { padding: 0 11px; }
   .toolbar [role="tab"]:not([aria-selected="true"]) .t-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -347,8 +368,11 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
   .char-designer { left: 8%; top: -45px; }
   .char-qa { right: 30%; top: -45px; }
   .char-lead { right: 6%; top: -28px; }
-  .win-bar { height: 32px; padding: 0 10px; font-size: 11px; }
+  .win-bar { height: 44px; padding: 0 10px; font-size: 11px; }
   .win-bar span { display: none; }
+  .win-bar .full { justify-content: center; width: 44px; margin-right: -4px; }
+  .win-bar .full-box { display: inline-flex; width: 36px; height: 36px; padding: 0; }
+  .win-bar .full .pi { width: 14px; height: 14px; }
   .day { padding: 80px 0 88px; }
   .log li { grid-template-columns: 52px 32px 1fr; gap: 0 10px; padding-left: 14px; }
   .log .av { width: 32px; height: 32px; }
@@ -963,6 +987,6 @@ main:has(.jump-bar) .page-head h1 { max-width: 13.5em; text-wrap: wrap; }
 @media (max-width: 640px) { main:has(.jump-bar) .page-head h1 { max-width: 7em; } }
 /* 3b. Docs menu: .docs-group a:hover now sits inside @media (hover: hover), so a tapped item on a phone keeps no bar */
 
-/* The home page's below-the-fold images wait in data-src for site.js; without JS, hide the empty placeholder and let
-   the <noscript> copy show instead. */
-@media (scripting: none) { img[data-src] { display: none; } noscript { display: contents; } }
+/* The home page's below-the-fold images wait in data-src, and demo video posters in data-poster, for site.js; without
+   JS, hide the empty placeholder or poster-less video and let the <noscript> copy show instead. */
+@media (scripting: none) { img[data-src], video[data-poster] { display: none; } noscript { display: contents; } }
