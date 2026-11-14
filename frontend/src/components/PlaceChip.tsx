@@ -10,6 +10,7 @@ import {
   islandUrl,
   middleCut,
   onceEvery,
+  perchModeLine,
   perchSettings,
   placeOf,
   placesUrl,
@@ -82,6 +83,8 @@ export const PlaceChipRow: React.FC<ChipProps> = ({ phone = false, dot = null, d
   }, [isServer]);
   if (!shown || !place) return null;
   const name = place.kind === 'server' ? middleCut(place.full, max) : place.name;
+  // Rust sends the count to This Mac's window only; a server-looking chip never shows or reads one regardless.
+  const waiting = place.kind === 'local' ? elsewhere : 0;
   const click = () => {
     if (!gate()) return;
     const r = ref.current?.getBoundingClientRect();
@@ -97,7 +100,7 @@ export const PlaceChipRow: React.FC<ChipProps> = ({ phone = false, dot = null, d
         type="button"
         onClick={click}
         className="kw-place-chip"
-        aria-label={chipAriaLabel(place.full, elsewhere)}
+        aria-label={chipAriaLabel(place.full, waiting)}
         aria-haspopup="dialog"
         aria-expanded={open || demo === 'open'}
         title={place.full !== name ? place.full : undefined}
@@ -107,9 +110,9 @@ export const PlaceChipRow: React.FC<ChipProps> = ({ phone = false, dot = null, d
       >
         <Glyph kind={place.kind} />
         <span ref={nameRef} className="kw-place-name">{name}</span>
-        {elsewhere > 0 ? (
+        {waiting > 0 ? (
           <span className="kw-place-count" aria-hidden="true" data-place-elsewhere>
-            {elsewhereText(elsewhere)}
+            {elsewhereText(waiting)}
           </span>
         ) : dot ? (
           <span className="kw-place-dot" data-dot={dot} aria-hidden="true" />
@@ -141,7 +144,8 @@ export const PerchSettingsCard: React.FC<{ initial?: PerchSettings | null }> = (
     setS({ ...s, mode, shortcut });
     window.location.assign(url);
   };
-  const modeLine = PERCH_COPY.modes.find((m) => m.value === s.mode)?.line;
+  // On Wayland the note below replaces the mode line, so it is neither shown nor read out.
+  const modeLine = off ? null : perchModeLine(s.mode);
   return (
     <section className="kw-perch" aria-labelledby="perch-title" data-perch-settings data-unavailable={off ? '' : undefined}>
       <div className="kw-perch-title">
@@ -151,7 +155,7 @@ export const PerchSettingsCard: React.FC<{ initial?: PerchSettings | null }> = (
           <p className="kw-perch-about">{PERCH_COPY.about}</p>
         </div>
       </div>
-      <div role="radiogroup" aria-labelledby="perch-title" aria-describedby="perch-mode-line" className="kw-perch-seg">
+      <div role="radiogroup" aria-labelledby="perch-title" aria-describedby={modeLine ? 'perch-mode-line' : undefined} className="kw-perch-seg">
         {PERCH_COPY.modes.map((m) => (
           <button
             key={m.value}
@@ -166,7 +170,7 @@ export const PerchSettingsCard: React.FC<{ initial?: PerchSettings | null }> = (
           </button>
         ))}
       </div>
-      <p id="perch-mode-line" className="kw-perch-line">{modeLine}</p>
+      {modeLine && <p id="perch-mode-line" className="kw-perch-line">{modeLine}</p>}
       <div className="kw-perch-short" data-off={off || s.mode === 'off' ? '' : undefined}>
         <label htmlFor="perch-shortcut">{PERCH_COPY.shortcutLabel}</label>
         <select

@@ -22,8 +22,15 @@ type Win = {
 
 const win = (): unknown => (typeof window !== 'undefined' ? window : undefined);
 
-/** The in-process server of the desktop app on this computer (apps/mac LOCAL_PORT). */
-export const LOCAL_HOSTS: readonly string[] = ['127.0.0.1:8799', 'localhost:8799'];
+/** Hostnames of the desktop app's in-process server on this computer. Its port is 8799 unless startup.rs had to
+ *  move it (choose_port), so any non-zero port counts: the same rule as Rust's `switcher::is_local_page`. */
+export const LOCAL_HOSTNAMES: readonly string[] = ['127.0.0.1', 'localhost'];
+
+/** Whether `host` ("name:port") is this computer's kwant: a loopback name with an explicit, non-zero port. */
+export function isLocalHost(host: string): boolean {
+  const m = /^([^:]+):(\d+)$/.exec(host.toLowerCase());
+  return !!m && LOCAL_HOSTNAMES.includes(m[1]) && Number(m[2]) > 0 && Number(m[2]) <= 65535;
+}
 
 /** Hosts longer than this are cut in the middle (design.md 9.1). */
 export const HOST_MAX = 28;
@@ -43,7 +50,7 @@ export type PlaceKind = 'local' | 'server';
 export function placeOf(w: unknown = win()): { kind: PlaceKind; name: string; full: string } {
   const loc = (w as Win | undefined)?.location;
   const host = (loc?.host || loc?.hostname || '').toLowerCase();
-  if (LOCAL_HOSTS.includes(host)) {
+  if (isLocalHost(host)) {
     const name = (w as Win).__KWANT_APP__ === 'mac' ? 'This Mac' : 'This computer';
     return { kind: 'local', name, full: name };
   }
@@ -132,9 +139,17 @@ export const PERCH_COPY = {
     { value: 'always', label: 'Always', line: 'Stays at the top of the screen, even when nothing is going on.' },
     { value: 'off', label: 'Off', line: 'No perch. You get the nudge pill, the menu bar mark and the app badge, as before.' },
   ] as { value: PerchMode; label: string; line: string }[],
+  /** Linux and Windows have a tray mark, not a menu bar mark or a Dock badge. */
+  offLineElsewhere: 'No perch. You get the nudge pill and the tray mark, as before.',
   shortcutLabel: 'Shortcut to open it',
   wayland: 'The perch isn’t available on Wayland yet. You still get the tray mark and a notification when a bot needs you.',
 } as const;
+
+/** The line under the mode buttons, in this OS's words. */
+export function perchModeLine(mode: PerchMode, w: unknown = win()): string {
+  if (mode === 'off' && (w as Win | undefined)?.__KWANT_APP__ !== 'mac') return PERCH_COPY.offLineElsewhere;
+  return PERCH_COPY.modes.find((m) => m.value === mode)?.line ?? '';
+}
 
 /** The shortcut choices in this OS's words. */
 export function shortcutOptions(w: unknown = win()): { value: PerchShortcut; label: string }[] {

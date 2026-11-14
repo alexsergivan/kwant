@@ -13,10 +13,13 @@
   --pc-amber-ink: #1b1033;
   --pc-amber-rim: transparent;
   --pc-focus: #8270f5;
+  --pc-line: rgb(39 39 42 / .6);
+  --pc-dot-start: #fcd34d;
+  --pc-dot-fail: #fda4af;
 }
 [data-theme="light"] .kw-place {
   --pc-row: #ffffff;
-  --pc-bg: #f5f3ff;
+  --pc-bg: #ece9ff;
   --pc-ring: rgb(29 24 64 / .14);
   --pc-hover: #e2ddff;
   --pc-text: #1d1840;
@@ -24,10 +27,14 @@
   --pc-glyph: #5845bd;
   --pc-chev: #5a5383;
   --pc-amber-rim: #1b1033;
+  --pc-focus: #6c58e0;
+  --pc-line: rgb(29 24 64 / .14);
+  --pc-dot-start: #8f5600;
+  --pc-dot-fail: #be123c;
 }
 .kw-place-row {
   display: flex; align-items: center; height: 44px; padding: 0 8px; flex: none;
-  background: var(--pc-row); border-bottom: 1px solid rgb(39 39 42 / .6);
+  background: var(--pc-row); border-bottom: 1px solid var(--pc-line);
 }
 .kw-place-row[data-phone] { height: 52px; padding: 0 12px; }
 .kw-place-chip {
@@ -53,8 +60,8 @@
   text-align: center; font-variant-numeric: tabular-nums;
 }
 .kw-place-dot { flex: none; width: 6px; height: 6px; border-radius: 1px; }
-.kw-place-dot[data-dot="starting"] { background: #fcd34d; }
-.kw-place-dot[data-dot="failed"] { background: #fda4af; }
+.kw-place-dot[data-dot="starting"] { background: var(--pc-dot-start); }
+.kw-place-dot[data-dot="failed"] { background: var(--pc-dot-fail); }
 .kw-place-chev { flex: none; color: var(--pc-chev); }
 @media (prefers-reduced-motion: reduce) { .kw-place-chip { transition: none; } }
 
@@ -62,10 +69,12 @@
 .kw-perch {
   --pp-card: rgb(9 9 11 / .6); --pp-border: #27272a; --pp-t1: #f4f4f5; --pp-t2: #a1a1aa; --pp-t3: #71717a;
   --pp-seg: #09090b; --pp-on: #6c58e0; --pp-on-text: #ffffff; --pp-mark: #ffb020; --pp-note: rgb(24 24 27 / .8);
+  --pp-icon: #b8adff; --pp-focus: #8270f5;
 }
 [data-theme="light"] .kw-perch {
   --pp-card: #ffffff; --pp-border: rgb(29 24 64 / .14); --pp-t1: #1d1840; --pp-t2: #5a5383; --pp-t3: #6b6494;
   --pp-seg: #f5f3ff; --pp-mark: #8f5600; --pp-note: #f5f3ff;
+  --pp-icon: #5845bd; --pp-focus: #6c58e0;
 }
 .kw-perch { background: var(--pp-card); border: 1px solid var(--pp-border); border-radius: 12px; padding: 16px; }
 .kw-perch-title { display: flex; gap: 8px; align-items: flex-start; }
@@ -74,15 +83,15 @@
 .kw-perch-name { font-size: 12px; font-weight: 500; color: var(--pp-t1); line-height: 16px; }
 .kw-perch-about { font-size: 11px; line-height: 16px; color: var(--pp-t2); margin-top: 2px; }
 .kw-perch-seg {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 12px; padding: 3px;
+  display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 4px; margin-top: 12px; padding: 3px;
   background: var(--pp-seg); border: 1px solid var(--pp-border); border-radius: 10px;
 }
 .kw-perch-seg button {
   min-height: 32px; padding: 4px 8px; border-radius: 7px; border: 0; background: transparent; cursor: pointer;
-  color: var(--pp-t1); font-size: 12px; line-height: 14px;
+  color: var(--pp-t1); font-size: 12px; line-height: 14px; white-space: nowrap;
 }
-.kw-perch-seg button[aria-checked="true"] { background: var(--pp-on); color: var(--pp-on-text); font-weight: 500; }
-.kw-perch-seg button:focus-visible { outline: 2px solid #8270f5; outline-offset: 1px; }
+.kw-perch-seg button[aria-checked="true"] { background: var(--pp-on); color: var(--pp-on-text); }
+.kw-perch-seg button:focus-visible { outline: 2px solid var(--pp-focus); outline-offset: 1px; }
 .kw-perch-seg button:disabled { cursor: not-allowed; opacity: .5; }
 .kw-perch-line { margin-top: 8px; font-size: 11px; line-height: 16px; color: var(--pp-t2); }
 .kw-perch-short {
@@ -94,11 +103,11 @@
   min-height: 32px; min-width: 112px; padding: 0 8px; border-radius: 8px; font-size: 12px;
   background: var(--pp-seg); color: var(--pp-t1); border: 1px solid var(--pp-border);
 }
-.kw-perch-short select:focus-visible { outline: 2px solid #8270f5; outline-offset: 1px; }
+.kw-perch-short select:focus-visible { outline: 2px solid var(--pp-focus); outline-offset: 1px; }
 .kw-perch-short[data-off] label, .kw-perch-short select:disabled { color: var(--pp-t3); }
 .kw-perch-note {
   display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; padding: 10px 12px; border-radius: 8px;
   background: var(--pp-note); border: 1px solid var(--pp-border); font-size: 11px; line-height: 16px; color: var(--pp-t1);
 }
-.kw-perch-note svg { flex: none; color: #b8adff; margin-top: 1px; }
+.kw-perch-note svg { flex: none; color: var(--pp-icon); margin-top: 1px; }
 @media (max-width: 480px) { .kw-perch-seg { grid-template-columns: 1fr; } .kw-perch-seg button { min-height: 40px; } }

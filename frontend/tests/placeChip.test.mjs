@@ -117,8 +117,25 @@ test('This Mac on a Mac, This computer on Linux; localhost counts as this comput
   assert.equal(m.placeOf({ __KWANT_APP__: 'mac', location: { host: '127.0.0.1:8799' } }).name, 'This Mac');
   assert.equal(m.placeOf({ __KWANT_APP__: 'linux', location: { host: '127.0.0.1:8799' } }).name, 'This computer');
   assert.equal(m.placeOf({ __KWANT_APP__: 'mac', location: { host: 'localhost:8799' } }).kind, 'local');
-  // Another port on this computer is not This Mac's own server.
-  assert.equal(m.placeOf({ __KWANT_APP__: 'mac', location: { host: '127.0.0.1:8800' } }).kind, 'server');
+  // startup.rs can move kwant off 8799 when that port is taken: any non-zero loopback port is still This Mac
+  // (Rust's switcher::is_local_page), so it never gets the server glyph or the amber count's wrong home.
+  assert.equal(m.placeOf({ __KWANT_APP__: 'mac', location: { host: '127.0.0.1:53412' } }).name, 'This Mac');
+  assert.equal(m.placeOf({ __KWANT_APP__: 'linux', location: { host: 'LOCALHOST:8800' } }).kind, 'local');
+  // Port 0, no port and a bad port are not this computer's kwant.
+  for (const host of ['127.0.0.1:0', '127.0.0.1', 'localhost', '127.0.0.1:99999', '127.0.0.2:8799', 'localhost.example.com:8799'])
+    assert.equal(m.placeOf({ __KWANT_APP__: 'mac', location: { host } }).kind, 'server', host);
+});
+
+test('a server window never shows the amber count, even when the global is set', () => {
+  inWindow({ host: 'kwant.jumpin.games', marks: { __KWANT_APP__: 'mac', __KWANT_ELSEWHERE__: 3 } }, () => {
+    const html = m.chip({});
+    assert.match(html, /data-place-chip="server"/);
+    assert.doesNotMatch(html, /data-place-elsewhere/);
+    assert.doesNotMatch(html, /waiting in other places/);
+  });
+  inWindow({ host: '127.0.0.1:53412', marks: { __KWANT_APP__: 'mac', __KWANT_ELSEWHERE__: 3 } }, () => {
+    assert.match(m.chip({}), /data-place-elsewhere="true">3</);
+  });
 });
 
 test('the picker URL is whole, non-negative window pixels, and clicks pass at most once a second', () => {
@@ -165,6 +182,21 @@ test('Wayland: the section is disabled and says the perch is not available there
     assert.match(html, /data-perch-wayland/);
     assert.match(html, /isn’t available on Wayland yet/);
     assert.equal((html.match(/role="radio"[^>]*disabled/g) || []).length, 3);
+    // The note replaces the mode line: no repeated text, nothing for aria-describedby to point at.
+    assert.doesNotMatch(html, /perch-mode-line/);
+    assert.doesNotMatch(html, /No perch\./);
+  });
+});
+
+test('the Off line names the tray mark off a Mac, and the menu bar mark and app badge on a Mac', () => {
+  inWindow({ marks: { __KWANT_APP__: 'linux', __KWANT_ISLAND__: { mode: 'off', shortcut: 'k', available: true } } }, () => {
+    const html = m.perch({});
+    assert.match(html, /No perch\. You get the nudge pill and the tray mark, as before\./);
+    assert.doesNotMatch(html, /menu bar|app badge/);
+    assert.match(html, /aria-describedby="perch-mode-line"/);
+  });
+  inWindow({ marks: { __KWANT_APP__: 'mac', __KWANT_ISLAND__: { mode: 'off', shortcut: 'k', available: true } } }, () => {
+    assert.match(m.perch({}), /No perch\. You get the nudge pill, the menu bar mark and the app badge, as before\./);
   });
 });
 
