@@ -22,6 +22,7 @@ pub mod flight_school;
 pub mod foundry;
 pub mod graph;
 pub mod lessons;
+pub mod receipts;
 pub mod listener;
 pub mod performance;
 pub mod routes;

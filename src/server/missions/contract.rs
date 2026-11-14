@@ -15,6 +15,8 @@ pub const MAX_ITEMS: usize = 20;
 pub const MAX_FLAGS: usize = 8;
 pub const MAX_TEXT: usize = 300;
 pub const MAX_FLAG_CHARS: usize = 40;
+/// Parts of the person's request on one contract.
+pub const MAX_PARTS: usize = 12;
 /// Criteria derived from the acceptance, one per line.
 pub const MAX_FROM_ACCEPTANCE: usize = 8;
 pub const TOOL: &str = "task_contract";
@@ -47,6 +49,18 @@ pub struct Issue {
     pub by: String,
 }
 
+/// One part of the person's request, in their own words, and the criteria that prove it
+/// (request-parts, roadmap Next 12a). The parts together cover every word of the request; a part
+/// with no criterion linked has no check.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Part {
+    pub id: String,
+    pub text: String,
+    /// Ids of this contract's criteria.
+    #[serde(default)]
+    pub criteria: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Contract {
     #[serde(default)]
@@ -57,6 +71,10 @@ pub struct Contract {
     pub open_issues: Vec<Issue>,
     #[serde(default)]
     pub risk_flags: Vec<String>,
+    /// Written by the lead or the person; stored before this field, a contract has none, and each
+    /// criterion reads as its own part.
+    #[serde(default)]
+    pub parts: Vec<Part>,
 }
 
 /// Who writes: the person, the lead (who handed it out or leads its mission), or the owner.
@@ -174,8 +192,23 @@ pub fn apply_in_round(mut c: Contract, body: &Value, role: Role, evidence_on_tas
         }
         fields.push("open_issues");
     }
+    // A removed criterion is no longer linked to any part
+    let ids: Vec<String> = c.criteria.iter().map(|k| k.id.clone()).collect();
+    for p in &mut c.parts {
+        p.criteria.retain(|id| ids.contains(id));
+    }
+    if !body["parts"].is_null() {
+        let items = body["parts"].as_array().ok_or("parts must be a list")?;
+        for it in items {
+            part(&mut c, it, role)?;
+        }
+        if c.parts.len() > MAX_PARTS {
+            return Err(format!("at most {MAX_PARTS} parts"));
+        }
+        fields.push("parts");
+    }
     if fields.is_empty() {
-        return Err("Nothing to change: give must_not_change, criteria, open_issues or risk_flags.".into());
+        return Err("Nothing to change: give must_not_change, criteria, open_issues, risk_flags or parts.".into());
     }
     Ok((c, fields))
 }
@@ -225,6 +258,72 @@ fn criterion(c: &mut Contract, it: &Value, role: Role, evidence_on_task: &[Strin
             let used: Vec<&str> = c.criteria.iter().map(|x| x.id.as_str()).collect();
             let id = next_id('c', &used);
             c.criteria.push(Criterion { id, text, status: status.unwrap_or("not_checked").into(), evidence: evidence.unwrap_or_default(), by: role.as_str().into(), round_added: round.max(1) });
+        }
+    }
+    Ok(())
+}
+
+/// A part write. The lead or the person adds, rewords, relinks or removes a part; the owner can
+/// only link more criteria to an existing part (never unlink, reword, add or remove one).
+fn part(c: &mut Contract, it: &Value, role: Role) -> Result<(), String> {
+    let id = it["id"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let text = it["text"].as_str().map(clip).filter(|s| !s.is_empty());
+    let remove = it["remove"].as_bool() == Some(true);
+    let links: Option<Vec<String>> = match it.get("criteria").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => {
+            let arr = v.as_array().ok_or("a part's criteria must be a list of criterion ids")?;
+            let mut out: Vec<String> = Vec::new();
+            for x in arr {
+                let k = x.as_str().ok_or("a part's criteria must be a list of criterion ids")?.trim();
+                if k.is_empty() || out.iter().any(|o| o == k) {
+                    continue;
+                }
+                if !c.criteria.iter().any(|cr| cr.id == k) {
+                    return Err(format!("No criterion {k} to link to a part."));
+                }
+                out.push(k.to_string());
+            }
+            Some(out)
+        }
+    };
+    let owner = role == Role::Owner;
+    match id.and_then(|id| c.parts.iter().position(|p| p.id == id)) {
+        Some(i) => {
+            if remove {
+                if owner {
+                    return Err(format!("You can't remove part {}; only the lead or the person can.", c.parts[i].id));
+                }
+                c.parts.remove(i);
+                return Ok(());
+            }
+            let cur = &mut c.parts[i];
+            if let Some(t) = text.filter(|t| *t != cur.text) {
+                if owner {
+                    return Err(format!("You can't reword part {}; only the lead or the person can.", cur.id));
+                }
+                cur.text = t;
+            }
+            if let Some(links) = links {
+                if owner {
+                    if let Some(gone) = cur.criteria.iter().find(|k| !links.contains(k)) {
+                        return Err(format!("You can't unlink criterion {gone} from part {}; only the lead or the person can.", cur.id));
+                    }
+                }
+                cur.criteria = links;
+            }
+        }
+        None => {
+            if owner {
+                return Err("Only the lead or the person can add a part of the request; you can link criteria to an existing part.".into());
+            }
+            if let Some(id) = id.filter(|_| text.is_none()) {
+                return Err(format!("No part {id}; give text to add a new one."));
+            }
+            let Some(text) = text else { return Err("A new part needs text: the person's own words for it.".into()) };
+            let used: Vec<&str> = c.parts.iter().map(|p| p.id.as_str()).collect();
+            let id = next_id('p', &used);
+            c.parts.push(Part { id, text, criteria: links.unwrap_or_default() });
         }
     }
     Ok(())
@@ -301,6 +400,7 @@ pub fn view(c: &Contract, evidence_on_task: &[String], updated_by: &str, updated
         "criteria": criteria,
         "open_issues": c.open_issues,
         "risk_flags": c.risk_flags,
+        "parts": c.parts,
         "complete": complete,
         "missing": missing,
         "updated_by": updated_by,
@@ -451,10 +551,23 @@ pub async fn add_send_back(state: &AppState, task: &Task, reason: &str) {
     }
 }
 
+/// What `parts` asks for, in `task_contract` and `mission_plan`.
+pub const PARTS_HELP: &str = "Cut the person's request into parts that together cover every word of it, in their words; link each part to the criteria that prove it.";
+
+/// One `parts` entry, for `task_contract` and `mission_plan`.
+pub fn part_schema() -> Value {
+    json!({"type": "object", "properties": {
+        "id": {"type": "string", "description": "An existing part's id (p1, p2…); leave out to add one."},
+        "text": {"type": "string", "description": "The person's own words for this part, e.g. \"send it to Ana\"."},
+        "criteria": {"type": "array", "items": {"type": "string"}, "description": "Ids of the criteria that prove this part (c1, c2…)."},
+        "remove": {"type": "boolean"}
+    }})
+}
+
 pub fn tool() -> Value {
     json!({
         "name": TOOL,
-        "description": "Write a task's contract: what must not change, its criteria (each met / not_met / not_checked, with evidence ids attached to the task), open issues or assumptions, and risk flags. The task's owner can add items and mark criteria with evidence, but can't remove or reword what the lead wrote; the lead of the hand-off or mission can set anything. A criterion marked met without evidence counts as a claim, not as met.",
+        "description": "Write a task's contract: what must not change, its criteria (each met / not_met / not_checked, with evidence ids attached to the task), open issues or assumptions, and risk flags. The task's owner can add items and mark criteria with evidence, but can't remove or reword what the lead wrote; the lead of the hand-off or mission can set anything. A criterion marked met without evidence counts as a claim, not as met. Parts: cut the person's request into parts that together cover every word of it, in their words; link each part to the criteria that prove it. Only the lead or the person writes parts; the owner can link more criteria to one. A part with no criterion linked shows the person it has no check.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -470,7 +583,8 @@ pub fn tool() -> Value {
                 "open_issues": {"type": "array", "items": {"type": "object", "properties": {
                     "id": {"type": "string"}, "kind": {"type": "string", "enum": ISSUE_KINDS}, "text": {"type": "string"}, "remove": {"type": "boolean"}
                 }}},
-                "risk_flags": {"type": "array", "items": {"type": "string"}, "description": "The whole list: short tags like migration, auth, payments."}
+                "risk_flags": {"type": "array", "items": {"type": "string"}, "description": "The whole list: short tags like migration, auth, payments."},
+                "parts": {"type": "array", "maxItems": MAX_PARTS, "description": PARTS_HELP, "items": part_schema()}
             },
             "required": ["task_id"]
         }
@@ -620,5 +734,59 @@ mod tests {
             json!([{"entry": "src/db/missions.rs", "status": "met"}, {"entry": "docs/", "status": "not_met"}, {"entry": "the login flow", "status": "not_checked"}])
         );
         assert!(scope_status(&mnc, None).as_array().unwrap().iter().all(|e| e["status"] == "not_checked"));
+    }
+
+    // ---- request-parts ----
+
+    fn with_parts() -> Contract {
+        let body = json!({"criteria": [{"text": "the PDF is in the folder"}, {"text": "Ana has the email"}], "parts": [{"text": "make the PDF", "criteria": ["c1"]}, {"text": "send it to Ana"}]});
+        apply(Contract::default(), &body, Role::Lead, &ev()).unwrap().0
+    }
+
+    #[test]
+    fn parts_round_trip_and_an_old_body_has_none() {
+        let c = with_parts();
+        assert_eq!(c.parts, [Part { id: "p1".into(), text: "make the PDF".into(), criteria: vec!["c1".into()] }, Part { id: "p2".into(), text: "send it to Ana".into(), criteria: vec![] }]);
+        let back: Contract = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
+        let old: Contract = serde_json::from_str(r#"{"must_not_change": [], "criteria": [{"id": "c1", "text": "t", "status": "met", "by": "lead"}], "open_issues": [], "risk_flags": []}"#).unwrap();
+        assert!(old.parts.is_empty());
+        assert_eq!(view(&c, &ev(), "lead", chrono::Utc::now())["parts"][1]["text"], "send it to Ana");
+    }
+
+    #[test]
+    fn the_owner_can_link_criteria_to_a_part_but_not_change_parts() {
+        let c = with_parts();
+        let refuse = |body: Value, want: &str| {
+            let e = apply(c.clone(), &body, Role::Owner, &ev()).unwrap_err();
+            assert!(e.contains(want), "{e}");
+        };
+        refuse(json!({"parts": [{"id": "p2", "remove": true}]}), "can't remove part p2");
+        refuse(json!({"parts": [{"id": "p2", "text": "send it"}]}), "can't reword part p2");
+        refuse(json!({"parts": [{"text": "and tell Bob"}]}), "Only the lead or the person");
+        refuse(json!({"parts": [{"id": "p1", "criteria": []}]}), "can't unlink criterion c1");
+        // It may add its own criterion and link it
+        let (c2, fields) = apply(c.clone(), &json!({"criteria": [{"text": "sent, message id in evidence"}], "parts": [{"id": "p2", "criteria": ["c3"]}]}), Role::Owner, &ev()).unwrap();
+        assert_eq!(fields, ["criteria", "parts"]);
+        assert_eq!(c2.parts[1].criteria, ["c3"]);
+        // The person and the lead may do anything
+        let (c3, _) = apply(c, &json!({"parts": [{"id": "p1", "text": "make the PDF, A4", "criteria": []}, {"id": "p2", "remove": true}]}), Role::Person, &ev()).unwrap();
+        assert_eq!(c3.parts, [Part { id: "p1".into(), text: "make the PDF, A4".into(), criteria: vec![] }]);
+    }
+
+    #[test]
+    fn parts_link_only_existing_criteria_and_lose_removed_ones() {
+        let c = with_parts();
+        assert!(apply(c.clone(), &json!({"parts": [{"id": "p2", "criteria": ["c9"]}]}), Role::Lead, &ev()).unwrap_err().contains("c9"));
+        assert!(apply(c.clone(), &json!({"parts": [{"criteria": ["c1"]}]}), Role::Lead, &ev()).unwrap_err().contains("needs text"));
+        assert!(apply(c.clone(), &json!({"parts": "send it"}), Role::Lead, &ev()).is_err());
+        let many: Vec<Value> = (0..MAX_PARTS).map(|i| json!({"text": format!("part {i}")})).collect();
+        assert!(apply(c.clone(), &json!({"parts": many}), Role::Lead, &ev()).unwrap_err().contains("at most"));
+        let (c, _) = apply(c, &json!({"criteria": [{"id": "c1", "remove": true}]}), Role::Lead, &ev()).unwrap();
+        assert!(c.parts[0].criteria.is_empty(), "a removed criterion is unlinked");
+        // Parts in a plan: c1 is the first acceptance line
+        let start = Contract { criteria: from_acceptance("PDF in the folder\nAna has it"), ..Default::default() };
+        let (c, _) = apply(start, &json!({"parts": [{"text": "make the PDF", "criteria": ["c1"]}, {"text": "send it to Ana", "criteria": ["c2"]}]}), Role::Lead, &[]).unwrap();
+        assert_eq!(c.parts[1].criteria, ["c2"]);
     }
 }
