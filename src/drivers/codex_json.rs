@@ -42,6 +42,14 @@ fn as_tool(item: &Value) -> Option<(String, Value)> {
     })
 }
 
+/// The text an `mcp_tool_call` item's tool answered with (its `result.content` text parts).
+fn mcp_result_text(item: &Value) -> String {
+    match item["result"]["content"].as_array() {
+        Some(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        None => String::new(),
+    }
+}
+
 /// How a finished item went: `ok`, or `error` with why.
 fn outcome(item: &Value) -> Value {
     let status = item["status"].as_str().unwrap_or_default();
@@ -116,9 +124,14 @@ impl CodexStream {
                             self.had_effects |= item["type"] != "todo_list";
                             // a file change is often only reported once it's done
                             if !self.running.remove(&id) {
-                                events.push(RuntimeEvent::ToolCallPending { id: id.clone(), name, args });
+                                events.push(RuntimeEvent::ToolCallPending { id: id.clone(), name: name.clone(), args });
                             }
-                            events.push(RuntimeEvent::ToolCallCompleted { id, result: outcome(item) });
+                            let result = if super::activity::opens_page(&name) {
+                                super::activity::with_page_title(outcome(item), &name, &mcp_result_text(item))
+                            } else {
+                                outcome(item)
+                            };
+                            events.push(RuntimeEvent::ToolCallCompleted { id, result });
                         }
                     }
                 }
@@ -170,6 +183,27 @@ mod tests {
     const WORKING: &str = include_str!("fixtures/codex_exec_json.jsonl");
     /// codex with no sign-in: retries, a fallback notice, then the error that ends the turn.
     const SIGNED_OUT: &str = include_str!("fixtures/codex_exec_json_401.jsonl");
+
+    /// 0.9.8 browser panel: kwnt's `browser_open` run through codex carries the page title on.
+    #[test]
+    fn codex_json_passes_the_opened_pages_title_on() {
+        let page = json!({"url": "http://roastco.example.com/", "title": "RoastCo · Shop"}).to_string();
+        let item = |id: &str, tool: &str| {
+            json!({"type":"item.completed","item":{"id":id,"type":"mcp_tool_call","server":"kwnt_tools","tool":tool,"arguments":{"url":"http://roastco.example.com/"},
+                "result":{"content":[{"type":"text","text":page}],"structured_content":null},"error":null,"status":"completed"}})
+            .to_string()
+        };
+        let mut s = CodexStream::default();
+        let titles: Vec<Option<String>> = [item("a", "browser_open"), item("b", "browser_page")]
+            .iter()
+            .flat_map(|l| s.line(l))
+            .filter_map(|e| match e {
+                RuntimeEvent::ToolCallCompleted { result, .. } => Some(result["title"].as_str().map(str::to_string)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(titles, [Some("RoastCo · Shop".to_string()), None]);
+    }
 
     #[test]
     fn codex_json_reports_reasoning_and_each_tool_run() {

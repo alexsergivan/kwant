@@ -109,6 +109,10 @@ export interface DirectoryEntry {
   command?: string | null;
   inputs: Array<{ name: string; description?: string; required?: boolean; secret?: boolean }>;
   already_added?: boolean;
+  /** Optional (one-app-search, server side): made by the app's maker. The frontend has the same rule when it's missing. */
+  by_maker?: boolean;
+  /** Optional (one-app-search, server side): how you sign in. */
+  sign_in?: 'account' | 'key' | 'none' | 'unknown';
 }
 
 export interface VaultSummary {
@@ -220,7 +224,7 @@ async function searchDirectory(q: string, signal?: AbortSignal): Promise<{ entri
   const answer = (await res.json().catch(() => null)) as { entries?: unknown; unavailable?: unknown } | null;
   if (!res.ok || !answer) return { entries: [], unavailable: true };
   const entries = Array.isArray(answer.entries) ? (answer.entries as DirectoryEntry[]).filter((e) => e && typeof e.registry_name === 'string') : [];
-  return { entries: entries.slice(0, 12), unavailable: answer.unavailable === true };
+  return { entries: entries.slice(0, 20), unavailable: answer.unavailable === true };
 }
 
 const enc = encodeURIComponent;

@@ -54,7 +54,7 @@ make run   <span class="c"># builds the web app, then runs `cargo run -- serve`<
       <li><strong>API key:</strong> paste an Anthropic, OpenAI or xAI key. Keys are write-only: the app never shows them again.</li>
     </ul>
   </li>
-  <li><strong>Pick a team:</strong> each ready-made team has a lead, helpers and skills for one job. Or choose <strong>Keep the starter bots</strong>: Architect, TechLead and DevOps, in #general. Or choose <strong>Bring your bots</strong> (new in 0.7.7): it opens the importer, so you can bring bots from Grok Bot, ChatGPT, Claude or a file and check a preview first. A finished import completes this step. You can add more teams later.</li>
+  <li><strong>Pick a team:</strong> each ready-made team has a lead, helpers and skills for one job. Or choose <strong>Start with @helpers</strong>: Assistant, Researcher and Writer, for everyday asks. Or choose <strong>Bring your bots</strong> (new in 0.7.7): it opens the importer, so you can bring bots from Grok Bot, ChatGPT, Claude or a file and check a preview first. A finished import completes this step. You can add more teams later.</li>
 </ol>
 <figure>
   <div class="phone">{{shot:phone-v076-get-started|The Get started card on a phone, under Welcome to kwant bots, with its three steps one under the other: Choose your AI with tiles for Claude, ChatGPT, Grok and an API key, then Sign in and Pick a team.|300px}}</div>
@@ -76,16 +76,16 @@ make run   <span class="c"># builds the web app, then runs `cargo run -- serve`<
 <p>The short-code sign-in for ChatGPT and Grok is in the Get started card. <strong>Settings → This space → Accounts</strong> still asks you to sign the <code>codex</code> or <code>grok</code> CLI in on this machine (<code>codex login</code>, <code>grok login</code>), and that's also where you add API keys. You can add several accounts per engine, such as a work and a personal one. See <a href="accounts.html">Accounts &amp; profiles</a>.</p>
 
 <h2 id="first-question">3. Ask your first question</h2>
-<p>A fresh install's Default space starts with three bots in <strong>#general</strong>, on the <code>@core-engineering</code> team:</p>
+<p>A fresh install's Default space starts with three bots in <strong>#general</strong>, on the <code>@helpers</code> team, led by Assistant:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Bot</th><th>Title</th><th>Good at</th></tr></thead>
   <tbody>
-    <tr><td><strong>Architect</strong></td><td>Systems Architect</td><td>Architecture, software design, multi-file engineering</td></tr>
-    <tr><td><strong>TechLead</strong></td><td>Staff Engineer &amp; Prototyper</td><td>Fast reasoning, prototyping, clear explanations</td></tr>
-    <tr><td><strong>DevOps</strong></td><td>Systems &amp; Security Engineer</td><td>Shell, servers, containers, security</td></tr>
+    <tr><td><strong>Assistant</strong></td><td>Personal Assistant</td><td>Plans what to do and hands out the work: planning a week, turning an idea into steps, to-do lists</td></tr>
+    <tr><td><strong>Researcher</strong></td><td>Research Analyst</td><td>Looks things up and checks the facts: comparing options, competitor research</td></tr>
+    <tr><td><strong>Writer</strong></td><td>Writer &amp; Editor</td><td>Drafts emails, posts and documents</td></tr>
   </tbody>
 </table></div>
-<p>Type a question in #general. kwant picks the bot that fits best and shows why. Mention a bot by name (<code>@Architect</code>) to ask it directly, or ask in the team's chat (<code>@core-engineering</code>): when a question needs several views, the lead runs a short discussion and posts one summary.</p>
+<p>Type a question in #general. kwant picks the bot that fits best and shows why. Mention a bot by name (<code>@Researcher</code>) to ask it directly, or ask in the team's chat (<code>@helpers</code>): when a question needs several views, the lead runs a short discussion and posts one summary.</p>
 <figure>
   <div class="frame">{{shot:desktop-reasoning|The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>kwant shows which bot it picked and why. Screens on this site come from a sample space.</figcaption>

@@ -233,6 +233,8 @@ struct Shared {
     stopping: Mutex<Option<std::thread::JoinHandle<()>>>,
     /// This app started kwant here at some point (it then offers its own updates).
     started_kwant: AtomicBool,
+    /// This app's own update checks have started (`start_updates`, once per app run).
+    updates: AtomicBool,
     reach: Mutex<HashMap<String, Reach>>,
     /// Servers the menu's last poll couldn't reach (the row says Can't reach it).
     unreachable: Mutex<std::collections::HashSet<String>>,
@@ -252,6 +254,7 @@ impl Shared {
             starting: Mutex::new(()),
             stopping: Mutex::new(None),
             started_kwant: AtomicBool::new(false),
+            updates: AtomicBool::new(false),
             reach: Mutex::new(HashMap::new()),
             unreachable: Mutex::new(Default::default()),
             last_focused: Mutex::new(None),
@@ -512,10 +515,29 @@ fn ensure_local<R: Runtime>(app: &AppHandle<R>) -> Option<u16> {
     let local = start_local(&shared.config);
     if local.server.is_some() {
         shared.started_kwant.store(true, Ordering::Relaxed);
+        // Before the port goes out: the window's first GET /api/app/update must find the
+        // updater. Without it the server says `supported: false` (start_server marked it a
+        // desktop app) and the web app showed "Update checks are turned off here" for the
+        // whole session.
+        start_updates(app);
     }
     let port = local.port;
     *shared.local.lock().unwrap() = local;
     port
+}
+
+/// Starts this app's own update checks (`update::start`), once per app run: when it starts
+/// kwant here (`ensure_local`, before the window gets the port) or, from the menu's poll, when
+/// it shows a server. Off on Windows (no signed Windows release in the beta) and in the demo.
+fn start_updates<R: Runtime>(app: &AppHandle<R>) {
+    if claim_updates(&app.state::<Shared>()) {
+        update::start(app);
+    }
+}
+
+/// True for the first caller only, and never on Windows or in the demo.
+fn claim_updates(shared: &Shared) -> bool {
+    !cfg!(windows) && DEMO.get().is_none() && !shared.updates.swap(true, Ordering::SeqCst)
 }
 
 /// Stops the kwant this app started before the app exits. An attached kwant keeps running.
@@ -1250,7 +1272,6 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
         let mut nudger = platform::Nudger::start(&app, tray.clone());
         let mut tracker = nudge::Tracker::default();
         let mut demo_step = 0;
-        let mut updates = false;
         let mut polls: HashMap<String, RemotePoll> = HashMap::new();
         let mut status: HashMap<String, menu::Status> = HashMap::new();
         // what each place said last, so a missed poll doesn't make its items new again
@@ -1351,11 +1372,10 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
                 window_menu = Some(keys.clone());
             }
             // The app's own update: when it runs kwant here or shows a server (an attached
-            // kwant updates itself)
-            // In-app updates are off on Windows in the beta (no signed Windows release yet)
-            if !updates && !cfg!(windows) && demo.is_none() && (shared.started_kwant.load(Ordering::Relaxed) || !places.servers.is_empty()) {
-                updates = true;
-                update::start(&app);
+            // kwant updates itself). A kwant this app started has it from ensure_local already;
+            // start_updates runs it once and keeps the Windows and demo guards.
+            if shared.started_kwant.load(Ordering::Relaxed) || !places.servers.is_empty() {
+                start_updates(&app);
             }
             // the demo moves on a timeline CI screenshots, so it looks every second
             let _ = wake_rx.recv_timeout(Duration::from_secs(if demo.is_some() { 1 } else { 5 }));
@@ -1654,6 +1674,42 @@ mod tests {
 
     fn args() -> serde_json::Value {
         serde_json::json!({ "address": "https://kwant.example.com", "origin": "https://kwant.example.com", "on": false })
+    }
+
+    fn shared(name: &str) -> Shared {
+        let data_dir = std::env::temp_dir().join(format!("kwant-updates-{name}-{}", std::process::id()));
+        let config = kwnt::Config { data_dir: data_dir.clone(), ..Default::default() };
+        Shared::new(data_dir, config, Places::default())
+    }
+
+    /// ensure_local and the menu's poll both ask; only the first starts the update checks (a
+    /// second start would register a second updater and run two hourly checks).
+    #[test]
+    fn the_app_s_own_updates_start_once() {
+        let shared = shared("once");
+        assert_eq!(claim_updates(&shared), !cfg!(windows), "the first ask starts them (never on Windows)");
+        assert!(!claim_updates(&shared), "the poll's ask after ensure_local's starts nothing");
+        assert!(!claim_updates(&shared));
+    }
+
+    /// The window's ensure_local thread and the menu's poll can ask at the same moment.
+    #[test]
+    fn racing_asks_start_the_updates_once() {
+        let shared = std::sync::Arc::new(shared("race"));
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let started: usize = (0..8)
+            .map(|_| {
+                let (shared, gate) = (shared.clone(), gate.clone());
+                std::thread::spawn(move || {
+                    gate.wait();
+                    claim_updates(&shared)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap() as usize)
+            .sum();
+        assert_eq!(started, if cfg!(windows) { 0 } else { 1 });
     }
 
     #[test]
