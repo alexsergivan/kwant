@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare, CalendarClock } from 'lucide-react';
 import { ModernAvatar, useModelBadge } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -162,6 +162,8 @@ export interface SidebarProps {
   missionBoard?: boolean;
   missionsActive?: boolean;
   onOpenMissions?: () => void;
+  /** Routines setup A (0.9.9): opens Space settings › Routines. Without it the row isn't drawn. */
+  onOpenRoutines?: () => void;
   /** Dev mode (0.7): the Dev desk row's page is open, and how to open it. */
   devDeskActive?: boolean;
   onOpenDevDesk?: () => void;
@@ -396,6 +398,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenMoved,
   onHideMoved,
   onOpenMissions,
+  onOpenRoutines,
   ideaJarCount = 0,
   ideaJarActive = false,
   onOpenIdeaJar,
@@ -1007,6 +1010,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button type="button" onClick={onOpenMissions} aria-current={missionsActive ? 'page' : undefined} className={navRow(missionsActive)}>
             <KanbanSquare size={15} className={missionsActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
             <span className="truncate flex-1">Mission board</span>
+          </button>
+          )}
+          {/* Routines setup A: no count or badge; Settings covers the sidebar while open, so never aria-current. */}
+          {onOpenRoutines && (
+          <button type="button" onClick={onOpenRoutines} className={navRow(false)} data-routines-row>
+            <CalendarClock size={15} className="text-zinc-500" aria-hidden="true" />
+            <span className="truncate flex-1">Routines</span>
           </button>
           )}
           {onOpenIdeaJar && onDropIdea && !phone && (

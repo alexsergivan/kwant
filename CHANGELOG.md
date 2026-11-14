@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.9] - 2026-11-13
+
+kwant 0.9.9: a browser panel that follows your bot, AI use over 7 or 30 days, by model and routines that are easier to set up.
+
+### Added
+- **A browser panel that follows your bot.** When a bot opens a page in its browser, the panel opens by itself in a wide window, with the bot's name ("Ben's browser"), a Browsing now or Finished line and a Live pill, and closes again shortly after the bot is done, unless you used it. **Pages this reply** lists every page the reply opened, by title, newest first, with ● Now on the current one. Each reply that browsed gets a chip ("Ben opened 2 pages") that reopens the panel; on a phone the chip opens it as a sheet. **Point** and **Take over** sit under the preview, and **Enlarge** shows the page bigger, view only. Browser steps now carry the page's title (`page_title`, redacted, up to 160 characters) for Claude, Codex and API bots. (#588, #589)
+- **AI use over 7 or 30 days.** **AI use** in Settings › All spaces › Usage switches between 7 days and 30 days. It shows the total ("$4.20 in the last 7 days"), a bar for each day, with a gap on a day without use (arrow keys move between days and read out each one), and **By model**, each model's share; a model that reported no cost says so. When nothing reported a cost, it counts fresh tokens instead. `GET /api/usage/daily` adds `models`. (#592)
+
+### Changed
+- **Routines are easier to set up.** The sidebar has a **Routines** row that opens Settings › This space › Routines. With no routines yet, one card says what a routine is, with **New routine**. The form gives examples ("Competitor prices"), shows your time zone in one quiet line ("Kyiv time GMT+2", with **Change**), picks today for a new weekly routine and has a **Weekdays** chip for Monday to Friday. Each card shows the first line of its instructions, when it runs next or that it's paused, and its schedule in words, like "Weekdays at 08:30, Kyiv time". On a phone the card buttons are 44 px. (#591)
+
+### Fixed
+- Settings no longer gets stuck on "Update checks are turned off here.": the Mac and Linux apps' update check is ready before the window first asks, and if checks still answer off, the version card asks again on its own and offers **Check again** and **Get the latest version**, a link to the latest release. (#596, #597)
+- Adding or renaming a tool server to a name that differs from another one only in case, like Stripe next to stripe, is now refused with the same "already exists" error as an exact match, instead of keeping two. (#590)
+- When kwant's Chrome closes right after starting, the message now leads with the line that names the error, like "Missing X server or $DISPLAY", instead of the last line, which was often D-Bus noise. (#595)
+
 ## [Mac 0.9.8] - 2026-11-13
 
 kwant 0.9.8: a first screen anyone can start from, done items that say what checked them, a pre-push retry that lets the fixed push go, mission checks that wait for outside services, a chat that says when it only waits for your answer, routine runs that show as routines and @mentioned teammates who speak next.
