@@ -7,7 +7,7 @@
 export type InboxTab = 'new' | 'loose';
 
 /** Settings › This space tabs. Kept here, not in the component, so routing stays pure. */
-export const SPACE_SETTINGS_TABS = ['general', 'apps', 'bots', 'teams', 'skills', 'routines', 'import'] as const;
+export const SPACE_SETTINGS_TABS = ['general', 'apps', 'bots', 'teams', 'docs', 'skills', 'routines', 'import'] as const;
 export type SpaceSettingsTab = (typeof SPACE_SETTINGS_TABS)[number];
 
 export type SettingsScope = 'space' | 'app';
