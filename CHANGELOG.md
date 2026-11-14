@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.10] - 2026-11-14
+
+kwant 0.9.10: usage bars for each AI account, a Done mark and an Approve button on replies and one search for every app.
+
+### Added
+- **See how much of each AI account is left.** On Apps & accounts, each Claude or Codex sign-in shows two thin bars, like "5-hour · 93% left · resets 22:29" and "Weekly · 44% left · resets Wed 00:59"; a bar turns amber below 20% left. Claude's numbers come in with every turn. **Check now** reads them when you ask, at most once a minute and never by itself: for Claude one tiny reply on the cheapest model, for Codex its own limits read. A failed check says why, like "Codex is signed out". The model badge on a bot's avatar shows the same line, with an amber dot when its account runs low. API-key accounts show no bars. (#599, #604)
+- Bots can read and quote a space's own documents: put Markdown, text or PDF files (up to 2 MB each, 200 files) in `docs/` in the space's data folder (`<data dir>/docs` for Default). A quote is checked word for word, like a web quote, and points to the file and the PDF page. New `GET /api/spaces/:id/docs` and `POST /api/spaces/:id/docs/cite`. (#601)
+- Dev mode can give bots Google Chrome's Modern Web Guidance. When Dev mode finds web code in a team's folder, kwant offers a built-in `modern-web` skill once, as Proposed for every bot in the space; nothing changes until you approve it in Skills. The skill looks guidance up with a pinned `npx -y modern-web-guidance@1.0.0 search|retrieve|list`, which runs without an approval card under "Ask only when risky"; any other version, flag or chained command still asks, and turns kwant starts on its own still ask. Needs Node and the network the first time. (#605)
+
+### Changed
+- **Replies say when a job is done.** A job's final reply gets a **Done** mark after the bot's name, or what checked it: **Checked**, **Partly checked**, **Check failed** or **Not checked**. When a reply asks for your OK, an **Approve** / **Change…** row sits under it ("Ben is waiting for your OK"); Approve sends "Approved, go ahead.". The name line is now name, mark, time and **Details**, and Details says in words why that bot answered. Copy is a quiet icon, and the engine chip shows only when a bot switched AI mid-reply. (#602)
+- **Find any app in one list.** On Apps & accounts, the Another app search shows Composio apps, built-in tools and tool servers from the public directory in one list, one row per app. Each row says where it comes from and how it signs in, like "Sign in with your Notion account" or "Runs on this computer · needs Node.js"; other ways to add the same app fold under the row. One status line says when a source can't be reached. (#606)
+- Bots' memory search now finds notes by meaning as well as by words, with the space's own embeddings: its OpenAI API-key account or the host's OpenAI key (text-embedding-3-small), or a local Ollama with an embedding model. Without one of those it is the same keyword search as before, with no extra calls. (#603)
+
+## [Mac 0.9.9] - 2026-11-13
+
+kwant 0.9.9: a browser panel that follows your bot, AI use over 7 or 30 days, by model and routines that are easier to set up.
+
+### Added
+- **A browser panel that follows your bot.** When a bot opens a page in its browser, the panel opens by itself in a wide window, with the bot's name ("Ben's browser"), a Browsing now or Finished line and a Live pill, and closes again shortly after the bot is done, unless you used it. **Pages this reply** lists every page the reply opened, by title, newest first, with ● Now on the current one. Each reply that browsed gets a chip ("Ben opened 2 pages") that reopens the panel; on a phone the chip opens it as a sheet. **Point** and **Take over** sit under the preview, and **Enlarge** shows the page bigger, view only. Browser steps now carry the page's title (`page_title`, redacted, up to 160 characters) for Claude, Codex and API bots. (#588, #589)
+- **AI use over 7 or 30 days.** **AI use** in Settings › All spaces › Usage switches between 7 days and 30 days. It shows the total ("$4.20 in the last 7 days"), a bar for each day, with a gap on a day without use (arrow keys move between days and read out each one), and **By model**, each model's share; a model that reported no cost says so. When nothing reported a cost, it counts fresh tokens instead. `GET /api/usage/daily` adds `models`. (#592)
+
+### Changed
+- **Routines are easier to set up.** The sidebar has a **Routines** row that opens Settings › This space › Routines. With no routines yet, one card says what a routine is, with **New routine**. The form gives examples ("Competitor prices"), shows your time zone in one quiet line ("Kyiv time GMT+2", with **Change**), picks today for a new weekly routine and has a **Weekdays** chip for Monday to Friday. Each card shows the first line of its instructions, when it runs next or that it's paused, and its schedule in words, like "Weekdays at 08:30, Kyiv time". On a phone the card buttons are 44 px. (#591)
+
+### Fixed
+- Settings no longer gets stuck on "Update checks are turned off here.": the Mac and Linux apps' update check is ready before the window first asks, and if checks still answer off, the version card asks again on its own and offers **Check again** and **Get the latest version**, a link to the latest release. (#596, #597)
+- Adding or renaming a tool server to a name that differs from another one only in case, like Stripe next to stripe, is now refused with the same "already exists" error as an exact match, instead of keeping two. (#590)
+- When kwant's Chrome closes right after starting, the message now leads with the line that names the error, like "Missing X server or $DISPLAY", instead of the last line, which was often D-Bus noise. (#595)
+
 ## [Mac 0.9.8] - 2026-11-13
 
 kwant 0.9.8: a first screen anyone can start from, done items that say what checked them, a pre-push retry that lets the fixed push go, mission checks that wait for outside services, a chat that says when it only waits for your answer, routine runs that show as routines and @mentioned teammates who speak next.

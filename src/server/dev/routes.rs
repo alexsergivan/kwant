@@ -552,6 +552,10 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
         if !was_on || shape(&after) != shape(&rows_before) {
             poller::poll_soon(&state, sp);
         }
+        // Offered once per space when a team's folder has web code (web_guidance.rs)
+        if !was_on {
+            super::web_guidance::offer_soon(&state, &space);
+        }
     }
     let mut v = match mode_json(&state, &space).await {
         Ok(v) => v,
