@@ -1,6 +1,11 @@
 """Scoring of the long-task suite (scripts/eval_long_tasks.py): finished transcripts -> one outcome."""
 
 import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import eval_long_tasks as lt
@@ -114,6 +119,136 @@ class LastWordTest(unittest.TestCase):
             {"kind": "tool", "tool": "Write", "status": "error", "title": "Write a.txt"}]}})]
         steps = lt.tool_steps(msgs)
         self.assertEqual([s["tool"] for s in steps], ["Bash", "Write"])
+
+
+class HarderTasksTest(unittest.TestCase):
+    """Tasks 11-13 (round 2): as seeded each check fails, a right fix passes, and the shortcuts a bot
+    might take (a patch in the wrong place, a guessed receipt, the provided script as is) still fail."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lts-test-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def seed(self, setup):
+        setup(self.tmp)
+        hashes = {os.path.relpath(os.path.join(dp, f), self.tmp): lt.sha(os.path.join(dp, f))
+                  for dp, _, fs in os.walk(self.tmp) for f in fs}
+        return {"seed_hashes": hashes, "steps": [], "reply": ""}
+
+    def edit(self, rel, old, new):
+        p = os.path.join(self.tmp, rel)
+        s = open(p).read()
+        self.assertIn(old, s)
+        with open(p, "w") as f:
+            f.write(s.replace(old, new))
+
+    def test_11_fails_as_seeded_with_two_report_failures(self):
+        ctx = self.seed(lt.t11_setup)
+        passed, facts = lt.t11_check(self.tmp, ctx)
+        self.assertFalse(passed)
+        self.assertIn("Ran 8 tests", facts["output"])
+        self.assertIn("failures=2", facts["output"])
+        self.assertFalse(facts["fx_fixed_at_cause"])
+
+    def test_11_passes_when_both_causes_are_fixed(self):
+        ctx = self.seed(lt.t11_setup)
+        self.edit("books/fx.py", "(amount * rate)", "(amount / rate)")
+        # one fix is not enough: the payee with a trailing space still splits in two
+        self.assertFalse(lt.t11_check(self.tmp, ctx)[0])
+        self.edit("books/parse.py", '"payee": row["payee"]', '"payee": row["payee"].strip()')
+        passed, facts = lt.t11_check(self.tmp, ctx)
+        self.assertTrue(passed, facts)
+
+    def test_11_a_patch_in_the_ledger_or_an_edited_fixture_does_not_count(self):
+        ctx = self.seed(lt.t11_setup)
+        self.edit("books/parse.py", '"payee": row["payee"]', '"payee": row["payee"].strip()')
+        # the tests pass, but the conversion is still wrong where it lives
+        self.edit("books/ledger.py", 'to_eur(r["amount"], r["currency"], rates)', 'to_eur(r["amount"], r["currency"], {k: 1 / v for k, v in rates.items()})')
+        passed, facts = lt.t11_check(self.tmp, ctx)
+        self.assertEqual(facts["tests_exit"], 0)
+        self.assertFalse(passed)
+        self.assertFalse(facts["fx_fixed_at_cause"])
+        ctx = self.seed(lt.t11_setup)
+        self.edit("books/rates.csv", "USD,1.25", "USD,0.80")
+        self.assertFalse(lt.t11_check(self.tmp, ctx)[1]["unchanged"]["books/rates.csv"])
+
+    def write_expenses(self, want, total, extra_rows="", report=None):
+        rows = sorted(want.items(), key=lambda kv: (kv[1][0], kv[0]))
+        with open(os.path.join(self.tmp, "expenses.csv"), "w") as f:
+            f.write("file,date,amount_eur\n" + "".join(f"{k},{d},{v}\n" for k, (d, v) in rows) + extra_rows)
+        with open(os.path.join(self.tmp, "report.md"), "w") as f:
+            f.write(report if report is not None else f"Grand total: €{total:,.2f}\n\nSkipped: receipt_11.txt has no total.\n")
+
+    def test_12_receipts_are_twenty_and_each_layout_shows_its_amount(self):
+        ctx = self.seed(lt.t12_setup)
+        names = sorted(os.listdir(os.path.join(self.tmp, "receipts")))
+        self.assertEqual(len(names), 20)
+        self.assertIn(lt.RECEIPT_BAD, names)
+        want, total = lt.receipts_want()
+        self.assertEqual(len(want), 19)
+        self.assertLess(total, 1000)  # the report check reads the total without thousands separators
+        self.assertEqual(str(lt.receipt_eur("8.20", "USD")), "6.56")
+        self.assertEqual(str(lt.receipt_eur("245.00", "SEK")), "21.30")
+        self.assertIn("SUMME EUR 6,99", open(os.path.join(self.tmp, "receipts", "receipt_09.txt")).read())
+        self.assertIn('"minor_units": 935', open(os.path.join(self.tmp, "receipts", "receipt_05.json")).read())
+        self.assertIn("Total: 12.50 EUR", open(os.path.join(self.tmp, "receipts", "receipt_01.txt")).read())
+        self.assertFalse(lt.t12_check(self.tmp, ctx)[0])
+
+    def test_12_passes_with_every_good_receipt_and_the_bad_one_named(self):
+        ctx = self.seed(lt.t12_setup)
+        want, total = lt.receipts_want()
+        self.write_expenses(want, total)
+        passed, facts = lt.t12_check(self.tmp, ctx)
+        self.assertTrue(passed, facts)
+
+    def test_12_a_guessed_bad_receipt_or_a_subtotal_fails(self):
+        ctx = self.seed(lt.t12_setup)
+        want, total = lt.receipts_want()
+        self.write_expenses(want, total, extra_rows="receipt_11.txt,2026-03-13,18.20\n")
+        passed, facts = lt.t12_check(self.tmp, ctx)
+        self.assertFalse(passed)
+        self.assertTrue(facts["bad_receipt_guessed"])
+        wrong = dict(want, **{"receipt_01.txt": ("2026-03-02", want["receipt_01.txt"][1] - 1)})
+        self.write_expenses(wrong, total)
+        self.assertEqual(lt.t12_check(self.tmp, ctx)[1]["wrong_or_missing"], ["receipt_01.txt"])
+        self.write_expenses(want, total, report=f"Grand total: €{total:.2f}\n")
+        self.assertFalse(lt.t12_check(self.tmp, ctx)[1]["bad_receipt_named"])
+
+    def run_in(self, script):
+        return subprocess.run([sys.executable, script], cwd=self.tmp, capture_output=True, text=True, timeout=60)
+
+    def test_13_the_provided_script_gives_wrong_totals_and_check_totals_says_so(self):
+        ctx = self.seed(lt.t13_setup)
+        self.assertNotEqual(self.run_in("check_totals.py").returncode, 0)  # stale as seeded
+        self.assertEqual(self.run_in("update_summary.py").returncode, 0)
+        passed, facts = lt.t13_check(self.tmp, ctx)
+        self.assertFalse(passed)  # the 1st of the next month is counted in both months
+        self.assertEqual(set(m for m, ok in facts["totals_right"].items() if not ok), {"2026-01", "2026-02", "2026-03", "2026-04"})
+        check = self.run_in("check_totals.py")
+        self.assertEqual(check.returncode, 1)
+        self.assertIn("MISMATCH 2026-01", check.stdout)
+
+    def test_13_passes_once_the_off_by_one_is_fixed(self):
+        ctx = self.seed(lt.t13_setup)
+        self.edit("update_summary.py", "start <= d <= end", "start <= d < end")
+        self.run_in("update_summary.py")
+        self.assertEqual(self.run_in("check_totals.py").returncode, 0)
+        passed, facts = lt.t13_check(self.tmp, ctx)
+        self.assertTrue(passed, facts)
+
+    def test_13_an_edited_check_does_not_count(self):
+        ctx = self.seed(lt.t13_setup)
+        self.edit("check_totals.py", "sys.exit(1 if bad else 0)", "sys.exit(0)")
+        self.edit("update_summary.py", "start <= d <= end", "start <= d < end")
+        self.run_in("update_summary.py")
+        passed, facts = lt.t13_check(self.tmp, ctx)
+        self.assertFalse(passed)
+        self.assertFalse(facts["unchanged"]["check_totals.py"])
+
+    def test_the_new_tasks_are_listed_and_expect_done(self):
+        nums = [t[0] for t in lt.TASKS]
+        self.assertEqual(nums, [str(n) for n in range(1, 14)])
+        self.assertEqual({t[0]: t[2] for t in lt.TASKS[10:]}, {"11": "done", "12": "done", "13": "done"})
 
 
 if __name__ == "__main__":
