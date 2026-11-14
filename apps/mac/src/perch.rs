@@ -1089,6 +1089,35 @@ pub struct GlanceCache {
     pub skipped: u32,
 }
 
+/// Which items have a call in flight or just finished one. An item is busy from the moment its
+/// call starts until `every` after that call **ends**, so a slow failure (Windows retries a
+/// refused connect for ~2 s) can't be followed by a second send of the same item.
+#[derive(Debug, Default)]
+pub struct Busy {
+    /// `None` while the call is in flight, `Some(when it ended)` after.
+    items: HashMap<String, Option<Instant>>,
+}
+
+impl Busy {
+    /// Starts a call for `key` unless it is in flight or ended less than `every` ago.
+    pub fn start(&mut self, key: &str, now: Instant, every: Duration) -> bool {
+        self.items.retain(|_, ended| match ended {
+            Some(t) => now.saturating_duration_since(*t) < every,
+            None => true,
+        });
+        if self.items.contains_key(key) {
+            return false;
+        }
+        self.items.insert(key.to_string(), None);
+        true
+    }
+
+    /// The call for `key` ended (either way): it stays busy for `every` from `now`.
+    pub fn end(&mut self, key: &str, now: Instant) {
+        self.items.insert(key.to_string(), Some(now));
+    }
+}
+
 /// The longest backoff: a place that keeps answering 304 is asked every 3rd round (15 s).
 pub const BACKOFF_MAX: u32 = 3;
 /// 304s in a row before each step of the backoff.
@@ -1187,6 +1216,28 @@ mod tests {
         // a 304 to no ETag of ours isn't trusted
         c.take(A::NotModified, None);
         assert!(c.off);
+    }
+
+    #[test]
+    fn an_item_stays_busy_until_a_second_after_its_call_ends() {
+        let every = Duration::from_secs(1);
+        let t0 = Instant::now();
+        let mut busy = Busy::default();
+        assert!(busy.start("0#apr", t0, every));
+        // a slow call: still in flight 2.5 s later, so nothing else for that item
+        assert!(!busy.start("0#apr", t0 + Duration::from_millis(2500), every), "in flight");
+        assert!(busy.start("0#q1", t0 + Duration::from_millis(10), every), "another item is its own");
+        busy.end("0#apr", t0 + Duration::from_secs(3));
+        assert!(!busy.start("0#apr", t0 + Duration::from_millis(3100), every), "just ended");
+        assert!(!busy.start("0#apr", t0 + Duration::from_millis(3999), every), "still within a second of its end");
+        assert!(busy.start("0#apr", t0 + Duration::from_secs(4), every), "a second after it ended");
+        // q1 never ended: it is still in flight however long it takes
+        assert!(!busy.start("0#q1", t0 + Duration::from_secs(60), every));
+        // ended items are forgotten, so the map can't grow without end
+        busy.end("0#q1", t0 + Duration::from_secs(60));
+        busy.end("0#apr", t0 + Duration::from_secs(60));
+        assert!(busy.start("1#x", t0 + Duration::from_secs(62), every));
+        assert_eq!(busy.items.len(), 1);
     }
 
     #[test]

@@ -26,7 +26,8 @@ use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, Url, Webv
 
 /// Two shortcut presses this close are one (a key held down repeats).
 const TOGGLE_DEBOUNCE: Duration = Duration::from_millis(300);
-/// The same item can't be sent twice within this (a double click).
+/// The same item can't be sent again until this long after its last call ended (a double click,
+/// or a retry right after a slow failure).
 const SAME_ITEM_EVERY: Duration = Duration::from_secs(1);
 /// At most this many of the perch's calls in flight at once.
 const MAX_IN_FLIGHT: usize = 4;
@@ -55,7 +56,7 @@ pub struct PerchState {
     asked: VecDeque<(String, usize, String)>,
     /// Calls in flight, and when each item was last sent.
     in_flight: usize,
-    sent: switcher::RateLimit,
+    sent: perch::Busy,
     /// When the person last acted on it (no polling backoff for a while after).
     last_call: Option<Instant>,
 }
@@ -83,7 +84,7 @@ impl PerchState {
             last_sent: None,
             asked: VecDeque::new(),
             in_flight: 0,
-            sent: switcher::RateLimit::default(),
+            sent: perch::Busy::default(),
             last_call: None,
         }
     }
@@ -329,7 +330,7 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
 /// The shape the page draws before the window is placed: a notch on a Mac (the real one is
 /// measured when it is placed), a tab elsewhere.
 fn shape_guess() -> Shape {
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", not(test)))]
     if let Some(s) = mac::last_shape() {
         return s;
     }
@@ -372,7 +373,8 @@ fn window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
         .build();
     match built {
         Ok(w) => {
-            #[cfg(target_os = "macos")]
+            // never on a test's mock window: its ns_window isn't a real NSWindow
+            #[cfg(all(target_os = "macos", not(test)))]
             mac::float_above(&w);
             Some(w)
         }
@@ -527,13 +529,13 @@ fn call<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) -> Outcome {
         match perch::call_for(&st.snap, ask) {
             Ok(call) => {
                 let key = format!("{}#{}", call.p, call.id);
-                if st.in_flight >= MAX_IN_FLIGHT || !st.sent.allow(&key, Instant::now(), SAME_ITEM_EVERY) {
+                if st.in_flight >= MAX_IN_FLIGHT || !st.sent.start(&key, Instant::now(), SAME_ITEM_EVERY) {
                     Err((call.op, call.id, "busy"))
                 } else {
                     st.in_flight += 1;
                     st.last_call = Some(Instant::now());
-                    let key = st.snap.places.get(call.p).map(|v| v.key.clone());
-                    Ok((call, key))
+                    let place = st.snap.places.get(call.p).map(|v| v.key.clone());
+                    Ok((call, place, key))
                 }
             }
             Err(refused) => {
@@ -542,7 +544,7 @@ fn call<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) -> Outcome {
             }
         }
     };
-    let (call, key) = match checked {
+    let (call, key, busy_key) = match checked {
         Ok(c) => c,
         Err((op, id, code)) => {
             tracing::info!(op, code, "the perch's ask was refused");
@@ -574,6 +576,9 @@ fn call<R: Runtime>(app: &AppHandle<R>, ask: &PerchAsk) -> Outcome {
         let shared = app.state::<Shared>();
         let mut st = shared.perch.lock().unwrap();
         st.in_flight = st.in_flight.saturating_sub(1);
+        // busy for a second from now, the call's end, not its start
+        st.sent.end(&busy_key, Instant::now());
+        st.last_call = Some(Instant::now());
     }
     done(app, call.op, &call.id, ok, code);
     // the next poll shows it answered (or gone)
@@ -661,7 +666,7 @@ struct Screen {
 }
 
 fn screen<R: Runtime>(app: &AppHandle<R>, perch_window: &WebviewWindow<R>) -> Option<Screen> {
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", not(test)))]
     if let Some(s) = mac::screen(app, perch_window) {
         return Some(s);
     }
@@ -683,8 +688,9 @@ fn screen<R: Runtime>(app: &AppHandle<R>, perch_window: &WebviewWindow<R>) -> Op
     })
 }
 
-/// AppKit: the notch, the status-bar level, every Space.
-#[cfg(target_os = "macos")]
+/// AppKit: the notch, the status-bar level, every Space. Left out of test builds: the mock
+/// runtime's windows aren't NSWindows, and touching one segfaults the test binary.
+#[cfg(all(target_os = "macos", not(test)))]
 mod mac {
     use super::Screen;
     use crate::perch::{self, NotchMetrics, Shape};
