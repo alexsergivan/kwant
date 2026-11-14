@@ -1,0 +1,46 @@
+{
+  "version": "0.9.9",
+  "date": "2026-11-13",
+  "highlights": [
+    {
+      "id": "browser-panel",
+      "title": "Watch your bot's browser as it works",
+      "text": "In a wide window, a bot's browser panel opens by itself while it browses and closes when it's done. A chip on the reply, like \"Ben opened 2 pages\", brings it back.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "browser-pages",
+      "title": "See every page a reply opened",
+      "text": "\"Pages this reply\" lists the pages a bot opened, by title and newest first, with \"Now\" on the one it's on.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "usage-history",
+      "title": "AI use over 7 or 30 days",
+      "text": "Settings › All spaces › Usage shows your AI use for the last 7 or 30 days: the total, a bar for each day and each model's share.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "routines-setup",
+      "title": "Routines are easier to set up",
+      "text": "Open Routines from the sidebar. \"Weekdays\" picks Monday to Friday in one tap, your time zone shows by name, like \"Kyiv time\", and each card says when it runs next.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "update-off-race",
+      "title": "Update checks no longer get stuck",
+      "text": "Settings no longer stays on \"Update checks are turned off here.\" It asks again on its own, and \"Check again\" asks right away.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Settings no longer gets stuck on \"Update checks are turned off here\": it asks again on its own and offers Check again.",
+    "A tool server can't take a name that differs from another one only in case, like Stripe next to stripe.",
+    "When kwant's Chrome closes right after starting, the message leads with the real error, not D-Bus noise."
+  ]
+}
