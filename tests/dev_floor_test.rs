@@ -43,11 +43,17 @@ fn request(env: &Env, command: &str) -> ToolApprovalRequest {
     }
 }
 
+/// The card stores the command JSON-escaped, so look for it the way it is stored.
+fn stored(command: &str) -> String {
+    let s = serde_json::to_string(command).unwrap();
+    s[1..s.len() - 1].to_string()
+}
+
 /// Runs one call nobody answers and returns its waiting card.
 async fn unanswered(env: &Env, command: &str) -> (String, Value) {
     assert_eq!(approver(env).decide(request(env, command)).await, ApprovalOutcome::Unanswered);
     let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("waiting"), Some(&env.a)).await.unwrap();
-    let row = rows.into_iter().find(|r| r.parameters.contains(command)).expect("a waiting card");
+    let row = rows.into_iter().find(|r| r.parameters.contains(&stored(command))).expect("a waiting card");
     let details: Value = serde_json::from_str(&row.parameters).unwrap();
     (row.id, details)
 }
@@ -188,7 +194,7 @@ async fn the_floor_still_asks_with_approvals_off_in_a_kwant_started_turn() {
     for command in ["git push origin main", "sqlite3 demo.db 'DROP TABLE demo_auto'"] {
         assert_eq!(started.decide(request(&env, command)).await, ApprovalOutcome::Unanswered, "{command}");
         let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("waiting"), Some(&env.a)).await.unwrap();
-        let row = rows.into_iter().find(|r| r.parameters.contains(command)).expect("a waiting card");
+        let row = rows.into_iter().find(|r| r.parameters.contains(&stored(command))).expect("a waiting card");
         let details: Value = serde_json::from_str(&row.parameters).unwrap();
         assert!(details["prod_floor"].is_object(), "{command}: {details}");
         assert_eq!(details["started_by"], "Loose ends");
