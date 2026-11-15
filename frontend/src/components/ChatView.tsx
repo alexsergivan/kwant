@@ -1847,13 +1847,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Action row (reply-chrome part 3): Reply, the thumbs, then Copy as a quiet icon; smart-result actions portal in after Copy */}
           {/* 0.9.8: on a phone the browsed chip gets its own 44 px row above the action row (it would wrap) */}
-          {!isUser && !filesOnly && phone && savedActivity && (
-            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0">
+          {/* 19f: only when the reply opened pages; BrowsedChip draws nothing otherwise, and the 44 px row was an empty gap */}
+          {!isUser && !filesOnly && phone && savedActivity && pagesOfReply(savedActivity.steps).length > 0 && (
+            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0" data-phone-browsed-row="">
               <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} phone onOpen={() => openBrowserFor(msg.id)} />
             </div>
           )}
           {!isUser && !filesOnly && (
-            <div className="mt-2 flex flex-wrap items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0">
+            <>
+            {/* 19f: on a phone the ghost icons keep one row (no wrap) and the smart-result actions get their own row below */}
+            <div
+              className={`mt-2 flex ${phone ? 'flex-nowrap' : 'flex-wrap'} items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0`}
+              data-reply-actions={phone ? 'phone' : 'desktop'}
+            >
               {!phone && savedActivity && (
                 <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} onOpen={() => openBrowserFor(msg.id)} />
               )}
@@ -1871,8 +1877,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </>
               )}
               <CopyGhost copied={copiedId === msg.id} tipId={`copy-tip-${msg.id}`} onCopy={() => handleCopy(text, msg.id)} />
-              {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
+              {!phone && msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
+            {phone && msg.results != null && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-zinc-400 text-xs max-w-full min-w-0 empty:hidden" data-smart-row="">
+                <SmartActionsSlot messageId={msg.id} />
+              </div>
+            )}
+            </>
           )}
         </div>
       </div>
