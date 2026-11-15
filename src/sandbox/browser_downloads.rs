@@ -68,10 +68,12 @@ pub const CONTAINER_DOWNLOAD_DIR: &str = "/tmp/kwnt-dl";
 /// The container's `/tmp` is a 512 MB tmpfs that Chrome's own profile shares: a download is
 /// stopped once it's past this, so it can't fill the browser's disk.
 const CONTAINER_MAX_DOWNLOAD_BYTES: u64 = 400 * 1024 * 1024;
+/// No chat way out here (22k): the chat takes at most 100 MB, and so does an upload into this
+/// browser, so asking the person for the file would only fail at their end.
 const CONTAINER_TOO_BIG: &str = "it's over 400 MB, the most this bot's browser can hold. Copy the file's link instead, \
-switch this bot to Local computer, or ask the person to drop the file into this chat and upload it with browser_upload.";
+or switch this bot to Local computer. It's too big to come through the chat as well.";
 
-/// How both notes above end (22k): the person hands over the file, never the page's upload.
+/// How [`REMOTE_DOWNLOAD_REFUSAL`] ends (22k): the person hands over the file, never the page's upload.
 #[cfg(test)]
 const CHAT_WAY_OUT: &str = "or ask the person to drop the file into this chat and upload it with browser_upload.";
 /// The longest one `docker exec` may take: copying a finished download out of the container, or
@@ -1191,18 +1193,29 @@ mod tests {
         assert!(REMOTE_DOWNLOAD_REFUSAL.contains("Local computer"));
     }
 
-    /// 22k: a refused or over-cap download tells the bot to get the file from the person through
-    /// the chat, after the link and Local computer ways that were there before.
+    // Why the over-400 MB note rules the chat out: neither the chat nor an upload into this browser
+    // takes a file that big.
+    const _: () = assert!(
+        crate::server::attachments::MAX_VIDEO_BYTES < CONTAINER_MAX_DOWNLOAD_BYTES
+            && crate::server::attachments::MAX_ATTACHMENT_BYTES < CONTAINER_MAX_DOWNLOAD_BYTES
+            && REMOTE_UPLOAD_CAP_BYTES < CONTAINER_MAX_DOWNLOAD_BYTES
+    );
+
+    /// 22k: a refused download tells the bot to get the file from the person through the chat,
+    /// after the link and Local computer ways that were there before. An over-400 MB one says the
+    /// chat can't take it either: the chat and an upload into this browser both stop at 100 MB.
     #[test]
-    fn a_refused_or_too_big_download_ends_with_the_chat_way_out() {
+    fn a_refused_download_ends_with_the_chat_way_out_and_a_too_big_one_rules_it_out() {
         for note in [REMOTE_DOWNLOAD_REFUSAL, CONTAINER_TOO_BIG] {
-            assert!(note.ends_with(CHAT_WAY_OUT), "{note}");
             assert!(note.contains("switch this bot to Local computer"), "{note}");
             assert!(note.contains("Copy the file's link"), "{note}");
             assert!(!note.contains("can't attach"), "{note}");
         }
-        assert!(DownloadHome::Container("c".into()).too_big().ends_with(CHAT_WAY_OUT));
-        assert!(!DownloadHome::Local.too_big().contains("this chat"), "a local browser keeps its downloads");
+        assert!(REMOTE_DOWNLOAD_REFUSAL.ends_with(CHAT_WAY_OUT), "{REMOTE_DOWNLOAD_REFUSAL}");
+        let too_big = DownloadHome::Container("c".into()).too_big();
+        assert!(too_big.ends_with("It's too big to come through the chat as well."), "{too_big}");
+        assert!(!too_big.contains("browser_upload"), "{too_big}");
+        assert!(!DownloadHome::Local.too_big().contains("chat"), "a local browser keeps its downloads");
     }
 
     // The guid becomes a file name inside the container and in staging: only Chrome's own
