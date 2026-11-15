@@ -507,17 +507,23 @@ test('failed hand-off with task_id: Retry, and it retries the board task', async
   unmount();
 });
 
-test('failed hand-off without task_id: no action button, only Done, and the hint says ask again in the thread', () => {
+test('failed hand-off without task_id: no action button, only Done, and the hint says ask again here', () => {
   const h = handOff({ action: null, dismissable: true });
   assert.equal(m.askAction(h), null);
   const { host, unmount } = mount({ asks: [h] });
   assert.equal(host.querySelector('[data-strip-action]'), null);
   assert.ok(host.querySelector('[data-strip-dismiss]'), 'Done, clear it');
-  assert.equal(host.querySelector('[data-strip-hint]').textContent, 'There’s no button for this one. Ask Builder again in this thread, or clear it once it’s handled.');
+  assert.equal(host.querySelector('[data-strip-hint]').textContent, 'There’s no button for this one. Ask Builder again here, or clear it once it’s handled.');
   assert.equal(m.askKind(h, null), 'Failed');
   unmount();
   // the bot's later reply closes it live (waiting_updated, reason later_reply)
   assert.deepEqual(m.dropClosed([h], m.closedId({ item: { id: 'd1', kind: 'delegation', status: 'closed', reason: 'later_reply' } })), []);
+});
+
+test('failed routine run without task_id: the hint points at Run now in Routines, not at asking the bot again', () => {
+  const r = item('routine_run', { id: 'r1', status: 'error', kwant_name: 'Quant' });
+  assert.equal(m.askAction(r), null);
+  assert.equal(m.askHint(r, null, 'Quant'), 'There’s no button for this one. Press Run now on it in Routines, or clear it once it’s handled.');
 });
 
 test('older server: a hand-off row with no task_id never gets an inferred Retry', () => {

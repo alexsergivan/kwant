@@ -91,8 +91,10 @@ export function askKind(item: Pick<AwayItem, 'kind' | 'status'>, action: AskActi
 export function askHint(item: Pick<AwayItem, 'kind' | 'status'>, action: AskAction | null, bot: string, clearable = true): string {
   // No button and nothing to clear it with: it clears on its own once handled (Mira's fix 4).
   if (!action && !clearable) return `Write to ${bot} in the chat. This clears once it’s handled.`;
-  // design.md §2 "no action", for a hand-off: its thread is where the bot is asked again.
-  if (!action && isHandOff(item) && failed(item)) return `There’s no button for this one. Ask ${bot} again in this thread, or clear it once it’s handled.`;
+  // design.md §2 "no action", for a hand-off: the bot is asked again where the strip shows (its thread, else its chat).
+  // A failed routine run never lives in a thread, and asking the bot again doesn't re-run it (Mira, round 2).
+  if (!action && item.kind === 'routine_run' && failed(item)) return 'There’s no button for this one. Press Run now on it in Routines, or clear it once it’s handled.';
+  if (!action && isHandOff(item) && failed(item)) return `There’s no button for this one. Ask ${bot} again here, or clear it once it’s handled.`;
   switch (action) {
     case 'retry':
       return failed(item) ? 'Retry runs it again from the start.' : `Retry sends your last message to ${bot} again.`;
