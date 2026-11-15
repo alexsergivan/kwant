@@ -385,6 +385,7 @@ mod tests {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         };
         let tag = TurnTag { turn_id: "turn-view-test".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
         let turn = TurnActivity::start(broadcast::channel(16).0, tag);
@@ -411,6 +412,7 @@ mod tests {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         };
         let token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
         let (tx, mut rx) = broadcast::channel(16);

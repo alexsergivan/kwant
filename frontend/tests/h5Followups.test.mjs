@@ -85,7 +85,7 @@ test('N2: gave up reads "stopped after 2 tries"; needs-you still beats stuck; st
   const needs = m.needsYouRows([item('question', 'lin', { timestamp: at(1) })], {}, all);
   const att = m.attentionRows({ kwants, needs, failed: [], finished: [], busy: {}, status: {}, h4, now: NOW });
   assert.deepEqual(order(att).slice(0, 3), ['1:Lin', '2:Rigel', '2:Vega']);
-  assert.equal(att.find((r) => r.kwant.id === 'veg').line, 'Stuck: stopped after 2 tries · 11:55');
+  assert.equal(att.find((r) => r.kwant.id === 'veg').line, 'Stuck: stopped after 2 tries · 11:55 AM');
   assert.equal(att.find((r) => r.kwant.id === 'rig').line, 'Stuck: the AI stopped answering');
 });
 
@@ -124,11 +124,11 @@ test('N3: a held reply becomes a held line; only gave-up offers Try again', () =
 
   const gaveUp = m.heldLine(hs, st('jun', 'stuck', { reason_code: 'stalled_gave_up', stuck: { gave_up_at: '2026-11-10T11:50:00Z', tries: 2 } }));
   assert.equal(gaveUp.tryAgain, true);
-  assert.equal(gaveUp.text, 'Waiting for Juno: Juno stopped after 2 tries at 11:50. Your message is kept and goes through when Juno runs again.');
+  assert.equal(gaveUp.text, 'Waiting for Juno: Juno stopped after 2 tries at 11:50 AM. Your message is kept and goes through when Juno runs again.');
 
   const q = m.heldLine(m.heldFromReply(reply('waits_on_you', { question: { asked_at: '2026-11-10T14:08:00Z' } }), 't2'));
   assert.equal(q.tryAgain, false);
-  assert.equal(q.text, 'Queued for Juno: Juno is waiting for your answer to its question (14:08). It goes through when you answer.');
+  assert.equal(q.text, 'Queued for Juno: Juno is waiting for your answer to its question (2:08 PM). It goes through when you answer.');
   assert.equal(m.heldLine(m.heldFromReply(reply('paused'), 't3')).tryAgain, false);
 });
 

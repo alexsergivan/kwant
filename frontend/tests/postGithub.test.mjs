@@ -187,13 +187,13 @@ test('posting: spinner, button disabled and busy, a second press sends nothing; 
   await settle();
   f = footer(host);
   assert.equal(f.dataset.postState, 'posted');
-  assert.match(flat(f), /^Posted 19:58 as @oleks-i · 3 inline comments\s*View on GitHub/);
+  assert.match(flat(f), /^Posted 7:58 PM as @oleks-i · 3 inline comments\s*View on GitHub/);
   assert.equal(f.querySelector('.dv-led').dataset.s, 'ok', 'ok LED');
   const a = f.querySelector('a[href="https://github.com/o/r/pull/294#pullrequestreview-1"]');
   assert.ok(a, 'View on GitHub links to the review');
   assert.equal(a.getAttribute('target'), '_blank');
   assert.equal(!!button(f, 'Post to GitHub'), false, 'no button once posted');
-  assert.equal(f.querySelector('[role="status"]').textContent, 'Posted 19:58 as @oleks-i · 3 inline comments');
+  assert.equal(f.querySelector('[role="status"]').textContent, 'Posted 7:58 PM as @oleks-i · 3 inline comments');
 });
 
 test('posted from the server (SSE refetch): the card prop alone switches the footer', async () => {
@@ -212,7 +212,7 @@ test('posted from the server (SSE refetch): the card prop alone switches the foo
 
 test('posted without a url: "Posted 19:58" and no link', () => {
   const out = html(m.ReviewCard, { card: { ...base(), posted: { ...POSTED, url: null } }, onFinding: async () => base(), onPost: async () => base(), now: NOW });
-  assert.match(out, /Posted 19:58/);
+  assert.match(out, /Posted 7:58 PM/);
   assert.doesNotMatch(out, /View on GitHub/);
 });
 
@@ -381,7 +381,7 @@ test('F7: forge null shows neither the Post button nor the Open link, in every s
 
 test('forge null but already posted: still says Posted, with the forge from posted', () => {
   const out = html(m.ReviewCard, { card: { ...base(), posted: POSTED }, onFinding: async () => base(), now: NOW });
-  assert.match(out, /Posted 19:58/);
+  assert.match(out, /Posted 7:58 PM/);
   assert.match(out, /View on GitHub/);
 });
 

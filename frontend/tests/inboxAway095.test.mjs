@@ -69,14 +69,14 @@ test('sections: Needs you holds waiting and failed, Done holds to review and fin
 
 test('meta line: what ran, when, and why; without the run it leaves the why out', () => {
   const it = fx.AWAY_ROUTINE_REVIEW;
-  assert.equal(a.metaLine(it, fx.AWAY_ROUTINE, fx.AWAY_RUN), 'Ben · routine, every Mon 09:00 · ran 22:51 because you pressed Run now');
-  assert.equal(a.metaLine(it, fx.AWAY_ROUTINE, { ...fx.AWAY_RUN, trigger: 'schedule' }), 'Ben · routine, every Mon 09:00 · ran 22:51 on schedule');
-  assert.equal(a.metaLine({ ...it, source: undefined }, null, null), 'Ben · routine · ran 22:51');
+  assert.equal(a.metaLine(it, fx.AWAY_ROUTINE, fx.AWAY_RUN), 'Ben · routine, every Mon 9:00 AM · ran 10:51 PM because you pressed Run now');
+  assert.equal(a.metaLine(it, fx.AWAY_ROUTINE, { ...fx.AWAY_RUN, trigger: 'schedule' }), 'Ben · routine, every Mon 9:00 AM · ran 10:51 PM on schedule');
+  assert.equal(a.metaLine({ ...it, source: undefined }, null, null), 'Ben · routine · ran 10:51 PM');
   // Part B's source.trigger, when the run isn't loaded; an app event says so (Needs B 5).
-  assert.equal(a.metaLine(it, null, null), 'Ben · routine · ran 22:51 because you pressed Run now');
-  assert.equal(a.metaLine({ ...it, source: { ...it.source, trigger: 'event' } }, null, null), 'Ben · routine · ran 22:51 on an app event');
-  assert.equal(a.metaLine(it, fx.AWAY_ROUTINE, { ...fx.AWAY_RUN, trigger: 'event' }), 'Ben · routine, every Mon 09:00 · ran 22:51 on an app event');
-  assert.equal(a.scheduleShort({ type: 'daily', time: '08:30', tz: 'UTC' }), 'every day 08:30');
+  assert.equal(a.metaLine(it, null, null), 'Ben · routine · ran 10:51 PM because you pressed Run now');
+  assert.equal(a.metaLine({ ...it, source: { ...it.source, trigger: 'event' } }, null, null), 'Ben · routine · ran 10:51 PM on an app event');
+  assert.equal(a.metaLine(it, fx.AWAY_ROUTINE, { ...fx.AWAY_RUN, trigger: 'event' }), 'Ben · routine, every Mon 9:00 AM · ran 10:51 PM on an app event');
+  assert.equal(a.scheduleShort({ type: 'daily', time: '08:30', tz: 'UTC' }), 'every day 8:30 AM');
   assert.equal(a.scheduleShort({ type: 'interval', every_minutes: 120 }), 'every 2 h');
   assert.equal(a.scheduleShort(null), '');
 });
@@ -84,10 +84,10 @@ test('meta line: what ran, when, and why; without the run it leaves the why out'
 test('trail: tool steps at their own time, thinking left out, then where the answer was written', () => {
   const rows = a.trailFrom(fx.AWAY_MESSAGE, '@Spring launch');
   assert.deepEqual(rows.map((r) => `${r.at} ${r.what}${r.detail ? ' · ' + r.detail : ''}`), [
-    '22:51:02 Opened beanline.example.com · found House Blend 1 kg $24.00, 15% off until Mar 31',
-    '22:51:05 Opened roastco.example.com · found 1 kg $27.00, free shipping over $40',
-    '22:51:09 Compared with last Monday’s run · nothing changed',
-    '22:51:10 Wrote the answer in @Spring launch',
+    '10:51:02 PM Opened beanline.example.com · found House Blend 1 kg $24.00, 15% off until Mar 31',
+    '10:51:05 PM Opened roastco.example.com · found 1 kg $27.00, free shipping over $40',
+    '10:51:09 PM Compared with last Monday’s run · nothing changed',
+    '10:51:10 PM Wrote the answer in @Spring launch',
   ]);
   assert.deepEqual(a.trailFrom({ ...fx.AWAY_MESSAGE, meta: null }, 'x'), [], 'no saved steps: no made-up trail');
   assert.deepEqual(a.trailFrom(null, 'x'), []);
@@ -161,7 +161,7 @@ test('pane order: meta, chips, answer with Open in chat, What Ben did, Why, then
   for (let i = 1; i < els.length; i++) {
     assert.ok(els[i - 1].compareDocumentPosition(els[i]) & Node.DOCUMENT_POSITION_FOLLOWING, `${order[i - 1]} comes before ${order[i]}`);
   }
-  assert.equal(q('[data-done-meta]').textContent, 'Ben · routine, every Mon 09:00 · ran 22:51 because you pressed Run now');
+  assert.equal(q('[data-done-meta]').textContent, 'Ben · routine, every Mon 9:00 AM · ran 10:51 PM because you pressed Run now');
   assert.match(q('[data-chip="read-only"]').textContent, /Read only · changed nothing/);
   assert.match(q('[data-chip="no-checks"]').textContent, /No checks set · Add one/);
   // F2: a neutral chip, not amber; F1: the inline links stay compact and keep the 44 px tap area.
@@ -216,7 +216,7 @@ test('a team job opens in the pane: led-by meta, the lead’s answer, the team�
   const opened = [];
   const { q, qa, root } = await mountInbox({ onOpenMessage: (t) => opened.push(t) });
   await click(q('[data-option="tj-spring"]'));
-  assert.equal(q('[data-done-meta]').textContent, 'Ann led Ben and Cody · finished 22:45');
+  assert.equal(q('[data-done-meta]').textContent, 'Ann led Ben and Cody · finished 10:45 PM');
   assert.equal(q('[data-done-answer] h3').textContent, 'Ann’s answer');
   assert.match(q('[data-answer-text]').textContent, /^Done: Ben checked 2 shops/, 'the served excerpt, as text');
   assert.equal(q('[data-done-trail] h3').textContent, 'What the team did');
@@ -251,7 +251,7 @@ test('F7: a finished hand-off with no review and no part B fields: summary answe
   const chats = [];
   const { q, root } = await mountInbox({ onOpen: (i) => chats.push(i.id) }, data);
   await click(q('[data-option="d-spring"]'));
-  assert.equal(q('[data-done-meta]').textContent, 'Cody · finished 22:45');
+  assert.equal(q('[data-done-meta]').textContent, 'Cody · finished 10:45 PM');
   assert.match(q('[data-answer-text]').textContent, /Drafted the sale email/);
   assert.equal(q('[data-done-trail]'), null, 'no trail for a job the API has no steps for');
   assert.equal(q('[data-redo]').textContent.trim(), 'Ask Cody to redo in chat');
@@ -280,7 +280,7 @@ test('the pane loads routine, run and message itself through the done api', asyn
   await click(q('[data-option="r-prices"]'));
   await settle(20);
   assert.deepEqual(calls, ['routines', 'runs:rt-prices', 'message:m-prices']);
-  assert.equal(q('[data-done-meta]').textContent, 'Ben · routine, every Mon 09:00 · ran 22:51 because you pressed Run now');
+  assert.equal(q('[data-done-meta]').textContent, 'Ben · routine, every Mon 9:00 AM · ran 10:51 PM because you pressed Run now');
   assert.equal(q('[data-chip="read-only"]') !== null, true);
   root.unmount();
 });

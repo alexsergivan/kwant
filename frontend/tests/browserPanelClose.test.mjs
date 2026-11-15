@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
+import { loadBundled } from './bundle.mjs';
 
 // 0.9.8 browser panel (design browser-panel/design.md D): the panel closes itself only when a bot opened it.
 const load = async (path) => {
@@ -9,7 +10,7 @@ const load = async (path) => {
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 };
-const { shouldAutoClose, shouldAutoOpen, paneStatus, AUTO_CLOSE_DELAY_MS } = await load('../src/browserPanel.ts');
+const { shouldAutoClose, shouldAutoOpen, paneStatus, AUTO_CLOSE_DELAY_MS } = await loadBundled("export * from './src/browserPanel.ts';") // imports clock.ts, so it's bundled;
 
 const ended = { by: 'bot', touched: false, control: false, humanStep: false, pointPending: false, running: false };
 
