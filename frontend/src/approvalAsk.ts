@@ -45,3 +45,13 @@ export const APPROVE_TEXT = 'Approved, go ahead.';
 export const changePlaceholder = (name: string): string => `What should ${name} change?`;
 /** The row's caption and group name. */
 export const waitingCaption = (name: string): string => `${name} is waiting for your OK`;
+
+/**
+ * 18e: after Approve settles, put focus back in the composer on desktop when the person's focus was lost with the
+ * row (it unmounts when the reply lands, leaving focus on <body>) or still sits in the row (a failed send).
+ * Never on a phone (it would open the keyboard) and never when they already moved focus somewhere else.
+ */
+export function refocusAfterApprove(o: { phone: boolean; focusLost: boolean; inRow: boolean }): boolean {
+  if (o.phone) return false;
+  return o.focusLost || o.inRow;
+}
