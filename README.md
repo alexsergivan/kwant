@@ -151,7 +151,7 @@ Download `kwant_X.Y.Z_windows_x64_beta_setup.exe` from the [latest release](http
 
 kwant has a phone app with no app store: you install it from the phone's browser, and it opens full screen from its own Home Screen icon. You need a kwant server your phone can reach over **https** (a [VPS or Docker](#self-hosting-on-a-vps) behind an HTTPS reverse proxy). The desktop apps run kwant at `127.0.0.1`, which a phone can't reach.
 
-1. **Open kwant on the phone.** On a signed-in computer, open **Settings → All spaces → Signed-in devices → Add a phone or browser** and scan the QR code with the phone's camera. It opens your kwant and signs the phone in once. Or type your server's address on the phone and approve the code it shows from a signed-in device.
+1. **Open kwant on the phone.** On a computer signed in to your kwant at its https address, open **Settings → All spaces → Signed-in devices → Add a phone or browser** and scan the QR code with the phone's camera. It opens your kwant and signs the phone in once. Or open your server's address on the phone, tap **Sign in from another device**, and approve the code it shows from a signed-in device.
 2. **Add it to the Home Screen.** iPhone and iPad: in Safari, tap **Share → Add to Home Screen**. Android: in Chrome, tap **⋮ → Add to Home screen** (or **Install app**).
 3. **Open "kwant bots" from the Home Screen** and turn on **Settings → All spaces → Notifications → Notify me on this device**, so approvals and questions reach you with the app closed.
 
