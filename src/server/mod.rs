@@ -26,6 +26,7 @@ pub mod bot_budget;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
+pub mod continue_chat;
 pub mod keep_going;
 pub mod parked;
 pub mod attachments;
@@ -42,6 +43,7 @@ pub mod skills;
 pub mod spaces;
 pub mod asks;
 pub mod away;
+pub mod glance;
 pub mod computer;
 pub mod mcp_directory;
 pub mod mcp_suggest;
@@ -518,6 +520,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/questions/:id/answer", post(questions::answer))
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
         .route("/api/messages/:id/reaction", put(reactions::put_reaction))
+        .route("/api/messages/:id/continue", post(continue_chat::continue_chat))
         .route("/api/work-ahead/run", post(work_ahead::run_now))
         .route("/api/ideas", get(idea_jar::list).post(idea_jar::create))
         .route("/api/ideas/:id", get(idea_jar::get).patch(idea_jar::edit).delete(idea_jar::delete))
@@ -621,6 +624,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tool-notes/:id", axum::routing::patch(tool_notes::edit).delete(tool_notes::delete))
         .route("/api/away/seen", post(away::seen))
         .route("/api/inbox", get(inbox::get))
+        // The desktop island (0.9.13): what needs you, works and just finished, in every space
+        .route("/api/glance", get(glance::get))
+        .route("/api/glance/ask", post(glance::ask))
         .route("/api/events", get(sse::sse_handler))
         .merge(show_once::routes::router())
         .fallback(crate::embedded::static_handler)

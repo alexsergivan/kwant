@@ -2051,6 +2051,10 @@ pub(super) struct TurnOpts {
     pub(super) quiet_finish: bool,
     /// Shown as the turn's `purpose` in `GET /api/turns` (`turns[]`).
     pub(super) purpose: Option<String>,
+    /// An audit turn's who and why, shown with the turn (`audit` in `GET /api/turns` and its
+    /// `turn_started` event).
+    /// Boxed: turn futures are large and a debug-build test thread overflowed its stack with it inline.
+    pub(super) audit: Option<Box<super::turns::AuditTurn>>,
     /// The model tier this turn runs on whatever Laya's effort says (see [`crate::router::with_tier`]).
     pub(super) tier: Option<crate::drivers::engines::Tier>,
     /// A Skill Foundry replay (a dry run, see [`super::mcp_runtime::RehearseApprover`]): runs only
@@ -2467,6 +2471,7 @@ pub(super) async fn turn_once(
         state: "running".into(),
         since: chrono::Utc::now(),
         purpose: opts.purpose.clone(),
+        audit: opts.audit.clone(),
     });
     // Kept until the turn ends, so a restart mid-reply is said in the chat (see interrupt_running_turns)
     let running = crate::db::continuity::RunningTurn {
@@ -2492,6 +2497,7 @@ pub(super) async fn turn_once(
         context_id: Some(tag.context_id.clone()),
         turn_id: Some(tag.turn_id.clone()),
         thread_id: tag.thread_id.clone(),
+        audit: opts.audit.as_ref().and_then(|a| serde_json::to_value(a).ok()).map(Box::new),
     });
     if scope.cancel_token.is_cancelled() {
         return Err("stopped by the user".into());
@@ -3623,6 +3629,7 @@ async fn run_kwant_turn_inner(
                                     context_id: Some(tag.context_id.clone()),
                                     turn_id: Some(tag.turn_id.clone()),
                                     thread_id: tag.thread_id.clone(),
+                                    audit: state.turns.audit_of(&tag.turn_id).map(Box::new),
                                 });
                             }
                             // Lets a task handed in during the turn pay for it then (see `super::missions::spend_at_hand_in`)
