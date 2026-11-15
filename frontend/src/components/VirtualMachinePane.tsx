@@ -40,7 +40,7 @@ import { BrowserPageStrip } from './BrowserPageStrip';
 
 const PHONE_QUERY = '(max-width: 639px)';
 /** 17b: the footer's pointing slot. It shrinks and truncates instead of spilling over the buttons, on one line. */
-export const POINT_FOOTER_SLOT = 'min-w-0 flex-[0_1_auto] truncate whitespace-nowrap text-center';
+export const POINT_FOOTER_SLOT = 'min-w-0 flex-[0_1_auto] truncate whitespace-nowrap text-center tabular-nums';
 
 /** While the bot finishes a step, taking over is retried this often, for this long (no backend change). */
 export const TAKEOVER_RETRY_MS = 1000;
