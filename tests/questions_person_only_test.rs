@@ -126,3 +126,66 @@ async fn a_bot_cannot_answer_a_question_and_the_person_can() {
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(status(&state, &own).await, "answered");
 }
+
+/// A second bot in the default space.
+async fn other_bot(state: &AppState) -> kwnt::db::models::Kwant {
+    let ben = NewKwant {
+        name: "Ben".into(),
+        title: "Helper".into(),
+        persona_prompt: "Helps.".into(),
+        soul: String::new(),
+        avatar_sprite: "ben".into(),
+        driver_type: "api".into(),
+        preferred_model: "auto".into(),
+    };
+    state.db.create_kwant(&SpaceId::default_space(), &ben).await.unwrap()
+}
+
+/// `POST /api/questions/:id/cancel` from a bot that didn't ask: 403 `not_the_asker`, from this
+/// machine too, and the question stays open; so does a bearer that is no live turn's. The person
+/// still dismisses it (#653, 0.9.14).
+#[tokio::test]
+async fn a_different_bot_cannot_dismiss_a_question() {
+    let (app, state, _tmp) = setup().await;
+    let asker = state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].clone();
+    let other = other_bot(&state).await;
+    let q = ask(&state, &asker, "Ship it tonight?").await;
+    let uri = format!("/api/questions/{q}/cancel");
+
+    let other_token = turn_token(&state, &other).await;
+    for (bearer, what) in [(other_token.as_str(), "another bot's turn token"), ("not-a-live-turn-token", "a made-up bearer")] {
+        let (s, v) = post(&app, &uri, json!({}), Some(bearer), false).await;
+        assert_eq!((s, v["code"].as_str()), (StatusCode::FORBIDDEN, Some("not_the_asker")), "{what}: {v}");
+        assert_eq!(status(&state, &q).await, "open", "{what}");
+    }
+
+    // The person on this machine, and from another one with their token
+    let (s, v) = post(&app, &uri, json!({}), None, false).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(status(&state, &q).await, "cancelled");
+    let q2 = ask(&state, &asker, "Use the blue one?").await;
+    let (s, v) = post(&app, &format!("/api/questions/{q2}/cancel"), json!({}), Some(TOKEN), true).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(status(&state, &q2).await, "cancelled");
+}
+
+/// The bot that asked may take its own question back with its live turn token: 200, cancelled.
+#[tokio::test]
+async fn the_asking_bot_can_dismiss_its_own_question() {
+    let (app, state, _tmp) = setup().await;
+    let asker = state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].clone();
+    let other = other_bot(&state).await;
+    let mine = ask(&state, &asker, "Ship it tonight?").await;
+    let theirs = ask(&state, &other, "Use the blue one?").await;
+
+    let token = turn_token(&state, &asker).await;
+    let (s, v) = post(&app, &format!("/api/questions/{mine}/cancel"), json!({}), Some(&token), false).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "cancelled", "{v}");
+    assert_eq!(status(&state, &mine).await, "cancelled");
+
+    // The same token on the other bot's question: 403, still open
+    let (s, v) = post(&app, &format!("/api/questions/{theirs}/cancel"), json!({}), Some(&token), false).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::FORBIDDEN, Some("not_the_asker")), "{v}");
+    assert_eq!(status(&state, &theirs).await, "open");
+}
