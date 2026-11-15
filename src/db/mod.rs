@@ -702,6 +702,12 @@ impl Database {
         Ok(row)
     }
 
+    /// Rewrites a card's details (its JSON `parameters`), e.g. to record how it was answered.
+    pub async fn update_approval_parameters(&self, id: &str, parameters: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE approvals SET parameters = ? WHERE id = ?").bind(parameters).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn update_approval_status(&self, id: &str, status: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE approvals SET status = ? WHERE id = ?")
             .bind(status)

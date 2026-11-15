@@ -5065,6 +5065,10 @@ fn with_held(reply: &mut serde_json::Value, held: Option<serde_json::Value>) {
 #[derive(Debug, Deserialize)]
 pub struct ResolveApprovalPayload {
     pub decision: String, // "allow_once", "always_allow", "deny"
+    /// The person's "Allow without a backup" on a production-floor card whose migration is only
+    /// kwant's guess (22f). Refused on any other card that needs a backup.
+    #[serde(default)]
+    pub without_backup: bool,
 }
 
 pub async fn resolve_approval(
@@ -5077,7 +5081,7 @@ pub async fn resolve_approval(
         "always_allow" => ApprovalDecision::AlwaysAllowSession,
         _ => ApprovalDecision::Deny,
     };
-    let (status, body) = resolve_approval_inner(&state, &ticket_id, decision, None).await;
+    let (status, body) = resolve_approval_inner(&state, &ticket_id, decision, None, payload.without_backup).await;
     Ok((status, Json(body)).into_response())
 }
 
@@ -5101,11 +5105,15 @@ pub async fn retry_expired_approval(State(state): State<AppState>, Path(ticket_i
 /// Answers an approval card: the app's route, and Telegram's Allow once (`via: "telegram"`, which
 /// is recorded as the card's `answered_via`). Same checks either way: the production floor, and
 /// only a card still waiting (or one kwant kept over a restart) can be answered.
+///
+/// `without_backup` is the person's "Allow without a backup" (22f): only the app's route, which is
+/// person-only, ever passes `true`; see [`super::dev::floor::allow_check`] for which cards take it.
 pub(crate) async fn resolve_approval_inner(
     state: &AppState,
     ticket_id: &str,
     decision: ApprovalDecision,
     via: Option<&str>,
+    without_backup: bool,
 ) -> (StatusCode, serde_json::Value) {
     let status_str = match decision {
         ApprovalDecision::AllowOnce => "allowed_once",
@@ -5115,6 +5123,8 @@ pub(crate) async fn resolve_approval_inner(
 
     // The production floor (plan §3.5): Allow on a step that needs a backup is refused here,
     // not only greyed out on the card, until the space has an ok backup at most 10 minutes old
+    // (or the person allows a guessed migration without one, 22f)
+    let mut skipped_backup: Option<serde_json::Value> = None;
     if decision != ApprovalDecision::Deny {
         let details = state
             .db
@@ -5124,11 +5134,15 @@ pub(crate) async fn resolve_approval_inner(
             .flatten()
             .and_then(|a| serde_json::from_str::<serde_json::Value>(&a.parameters).ok());
         if let Some(details) = details {
-            if let Some(mut refusal) = super::dev::floor::allow_refusal(&state.db, &details).await {
-                refusal["ticket_id"] = json!(ticket_id);
-                refusal["resolved"] = json!(false);
-                refusal["status"] = json!("needs_backup");
-                return (StatusCode::CONFLICT, refusal);
+            match super::dev::floor::allow_check(&state.db, &details, without_backup).await {
+                Err(mut refusal) => {
+                    refusal["ticket_id"] = json!(ticket_id);
+                    refusal["resolved"] = json!(false);
+                    refusal["status"] = json!("needs_backup");
+                    return (StatusCode::CONFLICT, refusal);
+                }
+                Ok(true) => skipped_backup = Some(details),
+                Ok(false) => {}
             }
         }
     }
@@ -5147,6 +5161,10 @@ pub(crate) async fn resolve_approval_inner(
         super::missions::listener::refresh_needs_you(state).await;
         return match reply {
             Some(mut reply) => {
+                if let Some(details) = &skipped_backup {
+                    super::dev::floor::record_without_backup(&state.db, ticket_id, details, via).await;
+                    reply["without_backup"] = json!(true);
+                }
                 super::telegram::bridge::approval_answered(state, ticket_id, via).await;
                 reply["ticket_id"] = json!(ticket_id);
                 reply["resolved"] = json!(true);
@@ -5168,6 +5186,9 @@ pub(crate) async fn resolve_approval_inner(
     if let Some(via) = via {
         let _ = state.db.set_answered_via("approvals", ticket_id, via).await;
     }
+    if let Some(details) = &skipped_backup {
+        super::dev::floor::record_without_backup(&state.db, ticket_id, details, via).await;
+    }
     // The card is answered: a task that waited on it is working again (Mission Control)
     super::missions::listener::refresh_needs_you(state).await;
     // Telegram edits its copy of the card ("✓ Answered in kwant")
@@ -5178,11 +5199,17 @@ pub(crate) async fn resolve_approval_inner(
 
     (
         StatusCode::OK,
-        json!({
-            "ticket_id": ticket_id,
-            "resolved": resolved,
-            "status": status_str
-        }),
+        {
+            let mut body = json!({
+                "ticket_id": ticket_id,
+                "resolved": resolved,
+                "status": status_str
+            });
+            if skipped_backup.is_some() {
+                body["without_backup"] = json!(true);
+            }
+            body
+        },
     )
 }
 

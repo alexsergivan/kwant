@@ -327,7 +327,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/dev/landed/seen", post(dev::routes::seen))
         .route("/api/spaces/:id/dev/reviews", get(dev::routes::reviews))
         .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
-        .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
+        .route("/api/spaces/:id/dev/backup", get(dev::routes::backup_state).post(dev::routes::take_backup))
         .route("/api/spaces/:id/dev/worktrees", get(dev::worktrees::list).post(dev::worktrees::create_route))
         .route("/api/dev/worktrees/:id", delete(dev::worktrees::remove_route))
         .route("/api/dev/worktrees/:id/done", post(dev::worktrees::done_route))

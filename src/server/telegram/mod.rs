@@ -90,6 +90,12 @@ pub fn approvable(details: &Value) -> bool {
 pub fn link_only_reason(details: &Value) -> Option<&'static str> {
     let set = |k: &str| details.get(k).is_some_and(|v| !v.is_null());
     if set("prod_floor") {
+        // A deploy kwant only guesses changes the database can be allowed without a backup, in
+        // the app only (22f)
+        let f = &details["prod_floor"];
+        if f["needs_backup"] == true && crate::server::dev::floor::may_skip_backup(f) {
+            return Some("This is a production deploy: it needs a fresh backup, or you can allow it without one.");
+        }
         return Some("This is a production connection.");
     }
     if set("payment_reason") {
@@ -186,6 +192,17 @@ pub mod copy {
     pub const OPEN_IN_KWANT: &str = "Open in kwant";
     pub const ALLOW_ONCE: &str = "Allow once";
     pub const NEEDS_BACKUP: &str = "This step needs a fresh backup first. Approve it in kwant.";
+    /// A deploy kwant only guesses changes the database (22f): the app can allow it without one.
+    pub const NEEDS_BACKUP_OR_SKIP: &str = "This step needs a fresh backup first, or you can allow it without a backup in kwant.";
+
+    /// The refusal text for a `needs_backup` answer from `resolve_approval_inner`.
+    pub fn needs_backup(refusal: &serde_json::Value) -> &'static str {
+        if refusal["can_allow_without_backup"] == true {
+            NEEDS_BACKUP_OR_SKIP
+        } else {
+            NEEDS_BACKUP
+        }
+    }
     pub const NOT_SENT: &str = "kwant couldn't take that message. Try again, or open kwant.";
     pub const SIGN_INS_IN_KWANT: &str = "Sign-ins happen in kwant, never here.";
     /// The spending stop held a turn while the person writes from Telegram: their message is

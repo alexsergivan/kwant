@@ -1358,6 +1358,17 @@ pub async fn release_notes(State(state): State<AppState>, headers: HeaderMap, Pa
     (StatusCode::ACCEPTED, Json(card_json(&row))).into_response()
 }
 
+/// `GET /api/spaces/:id/dev/backup`: the space's backup state now, the same object as a floor
+/// card's `prod_floor.backup` (22f), so an open card can refresh after the person sets a backup
+/// command or takes a backup elsewhere. Person-only, like every Dev mode route.
+pub async fn backup_state(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+    let space = match guard(&state, &headers, &id).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    Json(super::floor::backup_state(&state.db, space.as_str()).await).into_response()
+}
+
 pub async fn take_backup(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,

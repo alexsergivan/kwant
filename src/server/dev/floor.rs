@@ -227,25 +227,90 @@ pub async fn for_shell(db: &Database, kwant_id: &str, command: &str, cwd: &Path)
     Some((floor, p))
 }
 
+/// Whether this card's step may be allowed without a backup when the person says so (22f): only
+/// a migration deploy that counts as one because kwant can't tell (`migration: "guess"`). Never a
+/// destructive step and never a known migration: those always need a fresh backup.
+pub fn may_skip_backup(floor: &Value) -> bool {
+    floor["kind"] == "deploy_migration" && floor["migration"] == "guess"
+}
+
 /// Why **Allow** is refused on this card now, or `None`: the card carries a `prod_floor` that
 /// needs a backup, and the space has no `ok` backup at most 10 minutes old. Checked when the
 /// person answers, not when the card was made, so a backup taken in between counts and one that
 /// went old doesn't.
-pub async fn allow_refusal(db: &Database, details: &Value) -> Option<Value> {
-    let f = details.get("prod_floor")?;
+///
+/// `without_backup` is the person's "Allow without a backup": it lets the step through only when
+/// [`may_skip_backup`] says so; on any other card it is refused like a plain Allow, with
+/// `code: "backup_required"`. Every refusal says `can_allow_without_backup`, so the card (and
+/// Telegram's text) can offer that way forward. Only the app's own route passes `true`: it is
+/// person-only (`auth::person_only`), and Telegram never does.
+pub async fn allow_refusal(db: &Database, details: &Value, without_backup: bool) -> Option<Value> {
+    allow_check(db, details, without_backup).await.err()
+}
+
+/// [`allow_refusal`] as one check: `Ok(true)` when Allow goes through **because** of
+/// `without_backup` (no fresh backup, so it is recorded as such), `Ok(false)` when it goes through
+/// anyway, `Err(refusal)` when it is refused.
+pub async fn allow_check(db: &Database, details: &Value, without_backup: bool) -> Result<bool, Value> {
+    let Some(f) = details.get("prod_floor") else { return Ok(false) };
     if f["needs_backup"] != true {
-        return None;
+        return Ok(false);
     }
-    let space_id = f["space_id"].as_str()?;
+    let Some(space_id) = f["space_id"].as_str() else { return Ok(false) };
     let (_, ok) = db.latest_dev_backups(space_id).await.unwrap_or((None, None));
     if super::backup::is_fresh(ok.as_ref(), super::now()) {
-        return None;
+        return Ok(false);
+    }
+    let skippable = may_skip_backup(f);
+    if without_backup && skippable {
+        return Ok(true);
     }
     let backup = super::backup::state_of(db, space_id, false).await;
-    Some(json!({
-        "error": "Back up first: this step needs a backup from the last 10 minutes",
+    let (code, error) = if without_backup {
+        ("backup_required", "This step can't be allowed without a backup: it changes data for sure. Back up first.")
+    } else {
+        ("needs_backup", "Back up first: this step needs a backup from the last 10 minutes")
+    };
+    Err(json!({
+        "error": error,
+        "code": code,
         "backup": backup,
+        "can_allow_without_backup": skippable,
     }))
+}
+
+/// The audit line on the card's own record: `prod_floor.allowed_without_backup`.
+pub const WITHOUT_BACKUP_LINE: &str = "Allowed without a backup by you";
+
+/// Records on the approval itself that the person allowed it without a backup, where every
+/// answer is kept (`approvals.parameters`), and in the server log.
+pub async fn record_without_backup(db: &Database, ticket_id: &str, details: &Value, via: Option<&str>) {
+    let mut d = details.clone();
+    d["prod_floor"]["allowed_without_backup"] = json!({
+        "by": "person",
+        "via": via.unwrap_or("app"),
+        "at": super::now(),
+        "line": WITHOUT_BACKUP_LINE,
+    });
+    if let Err(e) = db.update_approval_parameters(ticket_id, &d.to_string()).await {
+        tracing::warn!(ticket = %ticket_id, error = %e, "floor: couldn't record Allow without a backup");
+    }
+    tracing::warn!(
+        ticket = %ticket_id,
+        space = %details["prod_floor"]["space_id"].as_str().unwrap_or(""),
+        kwant = %details["kwant_id"].as_str().unwrap_or(""),
+        "floor: {WITHOUT_BACKUP_LINE} (kwant couldn't tell whether the deploy changes the database)"
+    );
+}
+
+/// The card's `backup` object for a space now, as `payload` builds it: `no_data` follows the
+/// space's deploy hint the same way [`ctx_for_kwant`] reads it.
+pub async fn backup_state(db: &Database, space_id: &str) -> Value {
+    let mode = db.dev_mode(space_id).await.ok().flatten();
+    let repos = db.dev_repos(space_id).await.unwrap_or_default();
+    let deploy_hint = repos.iter().find_map(|r| r.deploy_hint.clone()).or(mode.and_then(|m| m.deploy_hint));
+    let ctx = DevCtx { deploy_hint, ..DevCtx::default() };
+    super::backup::state_of(db, space_id, ctx.no_data()).await
 }
 
 #[cfg(test)]
@@ -598,24 +663,75 @@ mod tests {
         let db = Database::init(tmp.path()).await.unwrap();
         let card = json!({"prod_floor": {"kind": "migration", "needs_backup": true, "space_id": "s1"}});
         // No backup at all, and then no backup command either
-        let r = allow_refusal(&db, &card).await.expect("refused with no backup");
+        let r = allow_refusal(&db, &card, false).await.expect("refused with no backup");
         assert!(r["error"].as_str().unwrap().starts_with("Back up first"));
         assert_eq!(r["backup"]["state"], "no_command");
         db.put_dev_mode("s1", true, "demo-org/demo-app", "main", None, Some("pg_dump demo > /tmp/demo.sql")).await.unwrap();
-        assert_eq!(allow_refusal(&db, &card).await.unwrap()["backup"]["state"], "none");
+        assert_eq!(allow_refusal(&db, &card, false).await.unwrap()["backup"]["state"], "none");
         // Only a failed one, and an ok one 11 minutes old
         db.insert_dev_backup(&backup("s1", false, 5)).await.unwrap();
         db.insert_dev_backup(&backup("s1", true, 660)).await.unwrap();
-        assert!(allow_refusal(&db, &card).await.is_some(), "a failed or old backup doesn't count");
+        assert!(allow_refusal(&db, &card, false).await.is_some(), "a failed or old backup doesn't count");
         // Another space's fresh backup doesn't count either
         db.insert_dev_backup(&backup("s2", true, 5)).await.unwrap();
-        assert!(allow_refusal(&db, &card).await.is_some());
+        assert!(allow_refusal(&db, &card, false).await.is_some());
         // A fresh ok one in this space does
         db.insert_dev_backup(&backup("s1", true, 30)).await.unwrap();
-        assert!(allow_refusal(&db, &card).await.is_none());
+        assert!(allow_refusal(&db, &card, false).await.is_none());
         // A step that needs no backup, or a card that isn't the floor's, is never refused here
-        assert!(allow_refusal(&db, &json!({"prod_floor": {"needs_backup": false, "space_id": "s3"}})).await.is_none());
-        assert!(allow_refusal(&db, &json!({"source": "mcp"})).await.is_none());
+        assert!(allow_refusal(&db, &json!({"prod_floor": {"needs_backup": false, "space_id": "s3"}}), false).await.is_none());
+        assert!(allow_refusal(&db, &json!({"source": "mcp"}), false).await.is_none());
+    }
+
+    /// 22f: `without_backup` lets only a guessed migration deploy through; a destructive step or a
+    /// known migration still needs a fresh backup, and every refusal says whether the way exists.
+    #[tokio::test]
+    async fn without_backup_lets_only_a_guessed_migration_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let card = |kind: &str, migration: Option<&str>| {
+            let mut f = json!({"kind": kind, "needs_backup": true, "space_id": "s1"});
+            if let Some(m) = migration {
+                f["migration"] = json!(m);
+            }
+            json!({"prod_floor": f})
+        };
+        let guess = card("deploy_migration", Some("guess"));
+        // Without the flag it is refused like before, and says the way exists
+        let r = allow_check(&db, &guess, false).await.unwrap_err();
+        assert_eq!((r["code"].as_str(), r["can_allow_without_backup"].as_bool()), (Some("needs_backup"), Some(true)));
+        assert_eq!(r["backup"]["state"], "no_command");
+        // With it: through, and it counts as allowed without a backup
+        assert_eq!(allow_check(&db, &guess, true).await, Ok(true));
+        assert!(allow_refusal(&db, &guess, true).await.is_none());
+        // Never for a destructive step or a known migration, nor a card from before 22f (no field)
+        for c in [card("destructive", None), card("destructive", Some("guess")), card("deploy_migration", Some("yes")), card("deploy_migration", None)] {
+            let r = allow_check(&db, &c, true).await.unwrap_err();
+            assert_eq!(r["code"], "backup_required", "{c}");
+            assert_eq!(r["can_allow_without_backup"], false, "{c}");
+            assert!(r["error"].as_str().unwrap().contains("can't be allowed without a backup"), "{r}");
+            assert_eq!(allow_check(&db, &c, false).await.unwrap_err()["code"], "needs_backup");
+        }
+        // A fresh backup: everything goes through, and nothing counts as skipped
+        db.insert_dev_backup(&backup("s1", true, 30)).await.unwrap();
+        assert_eq!(allow_check(&db, &guess, true).await, Ok(false));
+        assert_eq!(allow_check(&db, &card("destructive", None), true).await, Ok(false));
+    }
+
+    #[tokio::test]
+    async fn the_backup_state_follows_the_command_and_the_space() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        assert_eq!(backup_state(&db, "s1").await["state"], "no_command");
+        db.put_dev_mode("s1", true, "demo-org/demo-app", "main", None, Some("pg_dump demo > /tmp/demo.sql")).await.unwrap();
+        assert_eq!(backup_state(&db, "s1").await["state"], "none");
+        db.insert_dev_backup(&backup("s1", true, 30)).await.unwrap();
+        let v = backup_state(&db, "s1").await;
+        assert_eq!(v["state"], "fresh");
+        assert_eq!(v["path"], "/tmp/demo.sql");
+        // A Pages site keeps no data
+        db.put_dev_mode("s2", true, "demo-org/demo-site", "main", Some("cloudflare_pages"), None).await.unwrap();
+        assert_eq!(backup_state(&db, "s2").await["state"], "no_data");
     }
 
     #[tokio::test]
