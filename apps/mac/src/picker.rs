@@ -43,8 +43,17 @@ pub fn on_app_url<R: Runtime>(app: &AppHandle<R>, label: &str, url: &Url) -> Opt
         tracing::info!("ignored a kwant-app address the app doesn't know");
         return None;
     };
-    if !app.state::<Shared>().asks.lock().unwrap().allow(label, Instant::now(), switcher::ASK_EVERY) {
-        tracing::debug!(window = label, "ignored a second picker ask within a second");
+    let key = match &ask {
+        // Perch settings: only This Mac's window, on its own budget (its page is checked next)
+        AppAsk::Island { .. } if label != MAIN => {
+            tracing::info!(window = label, "ignored Perch settings from a window that isn't This Mac's");
+            return None;
+        }
+        AppAsk::Island { .. } => switcher::island_key(label),
+        AppAsk::Places { .. } => label.to_string(),
+    };
+    if !app.state::<Shared>().asks.lock().unwrap().allow(&key, Instant::now(), switcher::ASK_EVERY) {
+        tracing::debug!(window = label, "ignored a second ask within a second");
         return None;
     }
     match &ask {
@@ -53,8 +62,28 @@ pub fn on_app_url<R: Runtime>(app: &AppHandle<R>, label: &str, url: &Url) -> Opt
             // never build or show a window inside the webview's own callback
             std::thread::spawn(move || open(&app, Some(label), at));
         }
+        AppAsk::Island { mode, shortcut } => {
+            let (app, mode, shortcut) = (app.clone(), *mode, *shortcut);
+            std::thread::spawn(move || island(&app, mode, shortcut));
+        }
     }
     Some(ask)
+}
+
+/// Perch settings from `main`: kept only while `main` shows This Mac's own page (a server's
+/// page loaded there can't change them).
+pub fn island<R: Runtime>(app: &AppHandle<R>, mode: switcher::PerchMode, shortcut: switcher::PerchShortcut) -> bool {
+    let port = app.state::<Shared>().local.lock().unwrap().port;
+    let local = app
+        .get_webview_window(MAIN)
+        .and_then(|w| w.url().ok())
+        .is_some_and(|url| switcher::is_local_page(url.as_str(), port));
+    if !switcher::island_allowed(MAIN, local) {
+        tracing::info!("ignored Perch settings from a page that isn't This Mac's");
+        return false;
+    }
+    crate::perch_window::set_prefs(app, mode, shortcut);
+    true
 }
 
 /// The window the person is in: the one that had the keyboard last, while it shows.
@@ -366,6 +395,10 @@ pub fn page_loaded<R: Runtime>(window: &WebviewWindow<R>, url: &Url, event: Page
         return;
     }
     if let Some(js) = elsewhere_for(window.app_handle(), window.label(), url) {
+        let _ = window.eval(js.as_str());
+    }
+    // This Mac's Settings page reads the Perch settings (nothing for any other window or page)
+    if let Some(js) = crate::perch_window::island_for(window.app_handle(), window.label(), url) {
         let _ = window.eval(js.as_str());
     }
 }
