@@ -27,6 +27,7 @@ import { IdeaJarRow } from './IdeaJarRow';
 import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
 import { BudgetMeter, useBudgets } from './BotBudget';
 import { PAUSED_ROW_LINE } from '../botBudget';
+import { PlaceChipRow } from './PlaceChip';
 
 /** A bot's name in its row; the tooltip says what it runs on in the same words as its avatar's model badge. */
 const BotName: React.FC<{ kwant: Kwant; className: string }> = ({ kwant: k, className }) => {
@@ -853,6 +854,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       data-kw-sidebar
       className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-hairline'} bg-surface-side flex flex-col select-none flex-shrink-0`}
     >
+      {/* Which place this window is (This Mac or a server) and the way to the place picker; desktop app only. */}
+      <PlaceChipRow phone={phone} />
       {/* The open space. Desktop switches spaces on the rail, so this is its name and settings;
           phones have no rail, so here it is their one switcher. */}
       <div className="relative p-2 border-b border-zinc-800/60">
