@@ -33,7 +33,7 @@ use tower::ServiceExt;
 /// where things stand.". A line "HOLD:<file> <reply>" waits for the file, then replies; a line
 /// "FAILED:<reply>" runs a Bash step that fails first, then replies; "TFAILED:<reply>" runs a
 /// `run_terminal_command` step that fails ("Error: no terminal session is open"), then replies
-/// (22j, Quant's step). A follow-through continuation ("…failed or was refused, and your reply
+/// (22j, Quant's step); "TOK:<reply>" runs that step and it works, then replies. A follow-through continuation ("…failed or was refused, and your reply
 /// ends with a plan…") reads queue `<dir>/ft`. Every prompt is saved as `<dir>/prompts/<kind>-…`.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
@@ -75,6 +75,11 @@ case "$out" in
     out=${out#TFAILED:}
     printf '{"type":"assistant","message":{"id":"msg_t","content":[{"type":"tool_use","id":"toolu_t","name":"run_terminal_command","input":{"command":"journalctl -u maker --since 17:18"}}]}}\n'
     printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_t","is_error":true,"content":"Error: no terminal session is open."}]}}\n'
+    ;;
+  TOK:*)
+    out=${out#TOK:}
+    printf '{"type":"assistant","message":{"id":"msg_o","content":[{"type":"tool_use","id":"toolu_o","name":"run_terminal_command","input":{"command":"journalctl -u maker --since 17:18"}}]}}\n'
+    printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_o","is_error":false,"content":"maker started, maker_first=true"}]}}\n'
     ;;
   HOLD:*)
     f=${out#HOLD:}; f=${f%% *}; out=${out#HOLD:* }
@@ -537,6 +542,92 @@ async fn the_keep_going_card_after_a_failed_step_says_what_failed() {
     let lead = env.lead_name.clone();
     assert_eq!(open[0].question, format!("{lead} is stuck: `journalctl -u maker --since 17:18` failed (Error: no terminal session is open). Keep going?"));
     assert_eq!(card_meta(&env, &open[0]).await[keep_going::CARD_KEY], true);
+}
+
+/// 22j round 2: Oleks pressed Keep going and the same loop started again. The first turn after
+/// "Keep going" fails the same step and opens like the reply before the card: it ends Blocked at
+/// once, with no further keep-going turn.
+#[tokio::test]
+async fn keep_going_then_the_same_reply_after_the_same_failed_step_ends_blocked() {
+    let env = setup().await;
+    env.queue("res", &["TFAILED:The merge checks found nothing yet."]);
+    env.queue(
+        "kg",
+        &[
+            "TFAILED:Tried the deploy log next, also empty.",
+            "TFAILED:Looked at the release notes, no mention.",
+            "TFAILED:Looked at the release notes again, no mention.",
+            "SHOULD NOT RUN",
+        ],
+    );
+    person_asks(&env, "Is the maker-first fix merged and live?").await;
+    hand_off(&env, "Check the maker logs", true).await;
+    wait_for("the card", || async { !open_questions(&env).await.is_empty() }).await;
+    settled(&env).await;
+    let card = open_questions(&env).await.remove(0);
+    assert_eq!(card_meta(&env, &card).await[keep_going::CARD_KEY], true, "the Keep going? card first");
+    assert_eq!(env.prompts("kg").len(), 2);
+
+    answer(&env, &card.id, keep_going::KEEP_GOING).await;
+    wait_for("the Blocked card", || async { open_questions(&env).await.iter().any(|q| q.question.starts_with("Blocked: ")) }).await;
+    settled(&env).await;
+
+    let kg = env.prompts("kg");
+    assert_eq!(kg.len(), 3, "one turn after Keep going, then blocked");
+    assert!(kg.iter().any(|p| p.contains("Your last step (run_terminal_command: Running `journalctl -u maker --since 17:18`) failed")), "{kg:?}");
+    let lead = env.lead_name.clone();
+    let text = format!("{lead} couldn't run `journalctl -u maker --since 17:18`: Error: no terminal session is open.");
+    let msgs = messages(&env).await;
+    let last = *lead_replies(&env, &msgs).iter().rev().find(|m| meta_of(m).get("kind").is_none()).unwrap();
+    assert!(last.text.starts_with("Looked at the release notes again"), "{}", last.text);
+    assert_eq!(meta_of(last)[keep_going::TURN_KEY], 1, "the first turn of the fresh allowance");
+    assert_eq!(meta_of(last)[keep_going::BLOCKED_KEY], json!({"text": text, "from": "repeat"}));
+    let open = open_questions(&env).await;
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0].question, format!("Blocked: {text}"));
+    assert_eq!(card_meta(&env, &open[0]).await[keep_going::ASK_KEY], true);
+    let cards = env.state.db.list_questions(None, Some(&env.channel), None).await.unwrap();
+    assert_eq!(cards.len(), 2, "the answered Keep going? card and the Blocked card: {cards:?}");
+}
+
+/// 22j round 2: after "Keep going" the step works. The reply may open like the one before the
+/// card, but it isn't blocked: the chain goes on.
+#[tokio::test]
+async fn keep_going_then_the_step_works_is_never_blocked() {
+    let env = setup().await;
+    env.queue("res", &["TFAILED:The merge checks found nothing yet."]);
+    env.queue(
+        "kg",
+        &[
+            "TFAILED:Tried the deploy log next, also empty.",
+            "TFAILED:Looked at the release notes, no mention.",
+            "TOK:Looked at the release notes again, no mention.",
+            "Found the startup line.\\nDone: maker_first is on since the 17:18 restart.",
+        ],
+    );
+    person_asks(&env, "Is the maker-first fix merged and live?").await;
+    hand_off(&env, "Check the maker logs", true).await;
+    wait_for("the card", || async { !open_questions(&env).await.is_empty() }).await;
+    settled(&env).await;
+    let card = open_questions(&env).await.remove(0);
+    assert_eq!(card_meta(&env, &card).await[keep_going::CARD_KEY], true);
+
+    answer(&env, &card.id, keep_going::KEEP_GOING).await;
+    wait_for("both turns after Keep going", || async { env.prompts("kg").len() == 4 }).await;
+    settled(&env).await;
+
+    let kg = env.prompts("kg");
+    assert_eq!(kg.len(), 4, "the turn whose step worked goes on to another");
+    assert_eq!(kg.iter().filter(|p| p.contains("Your last step (")).count(), 3, "the turn after the step worked hears no failure: {kg:?}");
+    assert!(!kg[3].contains("Your last step ("), "{}", kg[3]);
+    let cards = env.state.db.list_questions(None, Some(&env.channel), None).await.unwrap();
+    assert!(cards.iter().all(|q| !q.question.starts_with("Blocked: ")), "{cards:?}");
+    assert!(open_questions(&env).await.is_empty());
+    let msgs = messages(&env).await;
+    let replies = lead_replies(&env, &msgs);
+    assert!(replies.iter().all(|m| meta_of(m).get(keep_going::BLOCKED_KEY).is_none()), "nothing blocked");
+    let last = *replies.iter().rev().find(|m| meta_of(m).get("kind").is_none()).unwrap();
+    assert_eq!(meta_of(last)[keep_going::DONE_KEY]["text"], "maker_first is on since the 17:18 restart.");
 }
 
 /// Two keep-going turns that still hand nothing on: one "Keep going?" card, never a second.

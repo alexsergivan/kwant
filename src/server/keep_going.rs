@@ -347,9 +347,10 @@ pub(super) async fn after_lead_turn(scope: &TurnScope, lead: &Kwant, mut snap: S
         }
         let msgs = state.db.list_messages(&snap.context, 100).await.unwrap_or_default();
         let tail = request_tail(&msgs);
-        // 22j: this turn's step failed again and its reply repeats an earlier one of the request:
-        // another turn would only say it a third time, so it is Blocked on that step
-        if let Some(step) = repeats_after_failure(tail, &snap, lead, &reply) {
+        // 22j: this turn's step failed again and its reply repeats an earlier one (also one from
+        // before a card the person answered): another turn would only say it again, so it is
+        // Blocked on that step
+        if let Some(step) = repeats_after_failure(&msgs, &snap, lead, &reply) {
             return blocked_on(scope, lead, &snap, &msgs, &step).await;
         }
         let used = tail.iter().filter(|m| meta_of(m).get(TURN_KEY).is_some()).count();
@@ -379,12 +380,34 @@ pub(super) async fn after_lead_turn(scope: &TurnScope, lead: &Kwant, mut snap: S
 }
 
 /// 22j: the failed step when this turn's last tool step (its newest reply since `snap` that ran a
-/// tool) failed, and its reply opens like an earlier reply of the lead's in this request.
-fn repeats_after_failure(tail: &[Message], snap: &Snapshot, lead: &Kwant, reply: &str) -> Option<FailedStep> {
-    let (earlier, new): (Vec<&Message>, Vec<&Message>) = tail.iter().filter(|m| is_lead(m, lead)).partition(|m| snap.messages.contains(&m.id));
-    let new: Vec<Message> = new.into_iter().cloned().collect();
+/// tool) failed, and its reply opens like an earlier reply of the lead's ([`replies_before`]). A
+/// turn whose step worked is never blocked, however it opens.
+fn repeats_after_failure(msgs: &[Message], snap: &Snapshot, lead: &Kwant, reply: &str) -> Option<FailedStep> {
+    let new: Vec<Message> = msgs.iter().filter(|m| !snap.messages.contains(&m.id) && is_lead(m, lead)).cloned().collect();
     let step = last_failed_step(&new, lead)?;
-    earlier.iter().any(|m| same_opening(&m.text, reply)).then_some(step)
+    replies_before(msgs, snap, lead).iter().any(|m| same_opening(&m.text, reply)).then_some(step)
+}
+
+/// 22j: the lead's replies before this turn (in `snap`), newest first, with the same look-back as
+/// [`last_failed_step`]: past the person's answers to kwant's cards ("Keep going", an answer to a
+/// Blocked card), so the first turn after that answer is compared with the reply before the card
+/// (round 2), but not past a message of their own. kwant's cards (`meta.kind`) aren't replies.
+/// Not [`request_tail`], which starts after any person message: the allowance and the one card
+/// per request count from there.
+fn replies_before<'a>(msgs: &'a [Message], snap: &Snapshot, lead: &Kwant) -> Vec<&'a Message> {
+    let mut out = Vec::new();
+    for m in msgs.iter().rev().filter(|m| snap.messages.contains(&m.id)) {
+        if crate::drivers::from_person(m) {
+            if meta_of(m)["kind"] == "question_answer" {
+                continue;
+            }
+            break;
+        }
+        if is_lead(m, lead) && meta_of(m).get("kind").is_none() {
+            out.push(m);
+        }
+    }
+    out
 }
 
 /// 22j: the chain is Blocked on `step`: kwant's own text goes on the lead's newest reply (as
