@@ -664,7 +664,7 @@ fn floor_refused() -> Vec<(&'static str, Value, &'static str)> {
         ("strict_ask", flagged("strict_ask", json!(true)), "This pushes code."),
         ("smart_reason", flagged("smart_reason", json!("Deletes records")), "kwant flagged this step as risky."),
         // 20d: still refused once names match as whole words
-        ("COMPOSIO_MULTI_EXECUTE_TOOL", mcp("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", json!({})), "This runs a command."),
+        ("run_query", mcp("db", "run_query", json!({"limit": 10})), "This runs a command."),
         ("evaluate_js", mcp("browser", "evaluate_js", json!({"expression": "1"})), "This runs a command."),
         ("push_files", mcp("github", "push_files", json!({"owner": "o", "repo": "r", "branch": "main"})), "This pushes code."),
         ("GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", mcp("composio", "GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", json!({"pull_number": 12})), "This pushes code."),

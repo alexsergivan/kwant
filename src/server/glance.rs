@@ -1011,11 +1011,15 @@ mod tests {
         ]
     }
 
+    /// The older Telegram floor's line for a wrapper (`link_only_reason`), which the island shows
+    /// first: any tool name with MULTI_EXECUTE, WORKBENCH, BASH or SHELL in it.
+    const OTHER: &str = "This step runs other actions inside it.";
+
     /// 20d: what must still refuse after the switch to whole words, with its reason on each surface
-    /// (island, Telegram).
+    /// (island, Telegram's `ships_or_runs`).
     fn still_refused_rows() -> Vec<(&'static str, Value, &'static str, &'static str)> {
         vec![
-            ("COMPOSIO_MULTI_EXECUTE_TOOL", mcp("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", json!({})), RUNS, RUNS),
+            ("COMPOSIO_MULTI_EXECUTE_TOOL", mcp("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", json!({})), OTHER, RUNS),
             ("run_command", mcp("devtools", "run_command", json!({})), RUNS, RUNS),
             ("execute_sql", mcp("db", "execute_sql", json!({})), RUNS, RUNS),
             ("evaluate_js", mcp("browser", "evaluate_js", json!({})), RUNS, RUNS),
@@ -1025,18 +1029,18 @@ mod tests {
             ("GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", mcp("composio", "GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", json!({})), PUSHES, PUSHES),
             // A read verb doesn't lift a run name
             ("run_query", mcp("db", "run_query", json!({})), RUNS, RUNS),
-            ("get_shell", mcp("x", "get_shell", json!({})), RUNS, RUNS),
+            ("get_shell", mcp("x", "get_shell", json!({})), OTHER, RUNS),
             ("list_commands", mcp("x", "list_commands", json!({})), RUNS, RUNS),
             // Prefixes of whole words, camelCase humps, server names
             ("runner server", mcp("runner", "start", json!({})), RUNS, RUNS),
-            ("shellExec", mcp("x", "shellExec", json!({})), RUNS, RUNS),
+            ("shellExec", mcp("x", "shellExec", json!({})), OTHER, RUNS),
             ("commands / scripts", mcp("x", "save_scripts", json!({})), RUNS, RUNS),
             ("executeSql", mcp("x", "executeSql", json!({})), RUNS, RUNS),
             ("my-ssh server", mcp("my-ssh", "connect", json!({})), RUNS, RUNS),
             // One-word names the old part match caught and a prefix alone would miss
             ("mysql server", mcp("mysql", "query", json!({})), RUNS, RUNS),
             ("POSTGRESQL server", mcp("POSTGRESQL", "query", json!({})), RUNS, RUNS),
-            ("powershell", mcp("win", "powershell", json!({})), RUNS, RUNS),
+            ("powershell", mcp("win", "powershell", json!({})), OTHER, RUNS),
             ("javascript", mcp("x", "javascript", json!({})), RUNS, RUNS),
             ("vscode server", mcp("vscode", "open_file", json!({})), RUNS, RUNS),
             ("rerun_job", mcp("ci", "rerun_job", json!({})), RUNS, RUNS),
