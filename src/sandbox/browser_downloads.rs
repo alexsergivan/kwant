@@ -607,6 +607,20 @@ async fn call_raw(ws: &mut WsStream, msg_id: &AtomicU64, method: &str, params: V
     .map_err(|_| BrowserError::Timeout)?
 }
 
+/// Sends a request from inside event handling without waiting for its reply. Waiting there (as
+/// [`call_raw`] does) drops every other message in the meantime: Chrome sends a cancelled
+/// download's `canceled` progress event before its `cancelDownload` reply, so the download stayed
+/// "in progress" for good, and a reply a [`job_call`] was waiting for could be lost the same way.
+/// The reply has no `method`, so [`on_message`] passes over it; a refusal (the download already
+/// finished) needs nothing either, since its `completed` event comes through the usual way.
+async fn send_only(ws: &mut WsStream, msg_id: &AtomicU64, method: &str, params: Value) {
+    let id = msg_id.fetch_add(1, Ordering::SeqCst);
+    let request = json!({"id": id, "method": method, "params": params});
+    if let Err(e) = ws.send(Message::Text(request.to_string())).await {
+        tracing::warn!("browser downloads: couldn't send {method}: {e}");
+    }
+}
+
 /// Sends one request on behalf of a caller awaiting its own result, meanwhile dispatching any
 /// unsolicited events (downloads, choosers) that arrive while waiting, instead of dropping them.
 async fn job_call(
@@ -711,7 +725,7 @@ async fn handle_event(
                 replaced
             };
             if let (DownloadHome::Container(container), Some(prev)) = (home, replaced) {
-                let _ = call_raw(ws, msg_id, "Browser.cancelDownload", cancel_params(&prev, landing.browser_context_id)).await;
+                send_only(ws, msg_id, "Browser.cancelDownload", cancel_params(&prev, landing.browser_context_id)).await;
                 tokio::spawn(remove_from_container(container.clone(), prev));
             }
         }
@@ -779,7 +793,7 @@ async fn handle_event(
                 }
             }
             if over_cap {
-                let _ = call_raw(ws, msg_id, "Browser.cancelDownload", cancel_params(&guid, landing.browser_context_id)).await;
+                send_only(ws, msg_id, "Browser.cancelDownload", cancel_params(&guid, landing.browser_context_id)).await;
             }
             match (home, finish) {
                 (DownloadHome::Container(container), Some((name, _))) => {
@@ -1214,10 +1228,52 @@ mod tests {
         });
         let mut ws = connect_cdp(&format!("ws://{addr}")).await.unwrap();
         handle_event(&mut ws, &AtomicU64::new(1), method, params, shared, landing).await;
-        drop(ws);
-        server.abort();
+        // a cancel is sent without waiting for its reply: let the stand-in read it before closing
+        let _ = ws.close(None).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
         let sent = seen.lock().unwrap().clone();
         sent
+    }
+
+    // Chrome's own order (seen in the real-Chromium run): the `canceled` event comes before the
+    // `cancelDownload` reply. Both reach a pending job's loop, the download ends as too big, and
+    // the job still gets its own reply.
+    #[tokio::test]
+    async fn a_cancel_mid_job_keeps_chromes_canceled_event_and_the_jobs_reply() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Container("kwnt-browser-unit-test-none".into());
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let big = 450u64 * 1024 * 1024;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut job_id = Value::Null;
+            while let Some(Ok(Message::Text(txt))) = ws.next().await {
+                let v: Value = serde_json::from_str(&txt).unwrap();
+                let event = |method: &str, params: Value| Message::Text(json!({"method": method, "params": params}).to_string());
+                match v["method"].as_str() {
+                    Some("Browser.cancelDownload") => {
+                        ws.send(event("Browser.downloadProgress", json!({"guid": "g9", "state": "canceled", "receivedBytes": 4096, "totalBytes": big}))).await.unwrap();
+                        ws.send(Message::Text(json!({"id": v["id"], "result": {}}).to_string())).await.unwrap();
+                        ws.send(Message::Text(json!({"id": job_id, "result": {"done": true}}).to_string())).await.unwrap();
+                    }
+                    _ => {
+                        job_id = v["id"].clone();
+                        ws.send(event("Browser.downloadWillBegin", json!({"guid": "g9", "frameId": "F1", "suggestedFilename": "big.mp4"}))).await.unwrap();
+                        ws.send(event("Browser.downloadProgress", json!({"guid": "g9", "state": "inProgress", "receivedBytes": 0, "totalBytes": big}))).await.unwrap();
+                    }
+                }
+            }
+        });
+        let mut ws = connect_cdp(&format!("ws://{addr}")).await.unwrap();
+        let result = job_call(&mut ws, &AtomicU64::new(1), &shared, &landing, "Runtime.evaluate", json!({})).await;
+        assert_eq!(result.unwrap(), json!({"done": true}), "the job's own reply is not lost");
+        let entry = shared.lock().unwrap().download.clone().unwrap();
+        assert!(matches!(&entry.status, DlStatus::Cancelled(why) if why.contains("over 400 MB")), "{:?}", entry.status);
+        server.abort();
     }
 
     #[tokio::test]
