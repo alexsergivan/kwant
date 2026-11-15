@@ -438,6 +438,7 @@ async fn an_mcp_session_token_is_refused() {
         max_tool_iterations: 8,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     };
     state.mcp_sessions.lock().await.insert("mcp-turn".into(), PermissionSession::new("k1".into(), "Ada".into(), "t1".into(), ctx, None));
     let mut req = audio_post(DEF, "", "audio/webm", vec![1; 10]);
