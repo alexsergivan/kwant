@@ -17,7 +17,7 @@ pub const LAST_SEEN_KEY: &str = "away_last_seen";
 #[derive(Debug)]
 pub enum Dismissed {
     /// Closed now. `kind` is "waiting", "delegation" or "routine_run"; `waiting` the closed row.
-    Closed { kind: String, kwant_id: Option<String>, waiting: Option<super::waiting::WaitingItem> },
+    Closed { kind: String, kwant_id: Option<String>, waiting: Option<Box<super::waiting::WaitingItem>> },
     /// It had already left Needs attention (a second Dismiss, or it closed by itself first).
     AlreadyClosed { kind: String },
     NotFound,
@@ -329,7 +329,7 @@ impl Database {
                 return Ok(Dismissed::AlreadyClosed { kind: "waiting".into() });
             };
             self.close_attention("waiting", id, Some(&closed.kwant_id), CLOSED_DISMISSED).await?;
-            return Ok(Dismissed::Closed { kind: "waiting".into(), kwant_id: Some(closed.kwant_id.clone()), waiting: Some(closed) });
+            return Ok(Dismissed::Closed { kind: "waiting".into(), kwant_id: Some(closed.kwant_id.clone()), waiting: Some(Box::new(closed)) });
         }
         if kind.is_none() {
             for k in ["delegation", "routine_run"] {

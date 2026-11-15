@@ -372,7 +372,7 @@ pub async fn dismiss(State(state): State<AppState>, headers: HeaderMap, Path(id)
         Ok(Dismissed::Closed { kind, kwant_id, waiting }) => {
             tracing::info!(target: "audit", item_id = %id, kind = %kind, kwant_id = kwant_id.as_deref().unwrap_or(""), "the person dismissed a Needs-attention item");
             match &waiting {
-                Some(w) => closed(&state, std::slice::from_ref(w), REASON_DISMISSED),
+                Some(w) => closed(&state, std::slice::from_ref(w.as_ref()), REASON_DISMISSED),
                 None => closed_failed(&state, kwant_id.as_deref().unwrap_or(""), (None, None, None), &[(kind.clone(), id.clone())], REASON_DISMISSED),
             }
             Json(json!({"id": id, "kind": kind, "status": "closed", "already_closed": false})).into_response()
