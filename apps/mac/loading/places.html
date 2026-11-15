@@ -176,12 +176,12 @@ html, body { margin: 0; background: transparent; overflow: hidden; user-select: 
       } else {
         right = el('span');
       }
-      // F10: the label replaces the row's whole name, so it carries the status, count and ✓ too.
-      // The status is often the count already ("2 waiting"): then it is said once.
-      if (r.kind === 'server') {
-        var sub = String(r.sub || ''), count = n > 0 ? n + ' waiting' : '';
-        row.setAttribute('aria-label', [name, sub, count === sub ? '' : count, r.cur ? 'You are here' : ''].filter(Boolean).join(', '));
-      }
+      // F10, and Rigel's fix 3 for This Mac rows: every row's label replaces its whole name, so it
+      // carries the status, count and ✓ too, and never the keycap digit. The status is often the
+      // count already ("2 waiting"): then it is said once. "You are here" is said even when the
+      // count takes the ✓'s place.
+      var sub = String(r.sub || ''), count = n > 0 ? n + ' waiting' : '';
+      row.setAttribute('aria-label', [name, sub, count === sub ? '' : count, r.cur ? 'You are here' : ''].filter(Boolean).join(', '));
       if (r.cur) current = i;
       row.append(tile, tx, right, el('kbd', '', i < 9 ? i + 1 : ''));
       var go = function (side) { send('switch?i=' + i + '&side=' + (side ? 1 : 0)); };
