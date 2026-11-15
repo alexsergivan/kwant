@@ -104,6 +104,27 @@ impl Database {
             .await?)
     }
 
+    /// Bots in spaces that aren't archived as `(id, name, space_id)`: those the person wrote to or
+    /// heard from in a direct chat most recently first, then the rest by name (the island's quick
+    /// ask, `GET /api/glance`). Reads `messages_by_direct`.
+    pub async fn ask_targets(&self, limit: i64) -> Result<Vec<(String, String, String)>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT id, name, space_id FROM ( \
+               SELECT k.id, k.name, k.space_id, \
+                      (SELECT MAX(m.created_at) FROM messages m WHERE m.direct_kwant_id = k.id) AS last_at \
+               FROM kwants k JOIN spaces s ON s.id = k.space_id WHERE s.archived_at IS NULL) \
+             ORDER BY last_at IS NULL, last_at DESC, name, id LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Every bot's saved avatar sprite, by bot id (the glance puts the face on each item).
+    pub async fn avatar_sprites(&self) -> Result<Vec<(String, String)>, DbError> {
+        Ok(sqlx::query_as("SELECT id, avatar_sprite FROM kwants").fetch_all(&self.pool).await?)
+    }
+
     pub async fn away_count_open_questions(&self, space: &SpaceId) -> Result<i64, DbError> {
         Ok(sqlx::query_scalar(&format!("SELECT COUNT(*) FROM ({OPEN_QUESTIONS})"))
             .bind(Utc::now())
