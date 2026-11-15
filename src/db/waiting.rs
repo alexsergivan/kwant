@@ -429,7 +429,7 @@ mod tests {
         // Never reminded
         assert!(db.take_due_waiting(Utc::now() + Duration::days(30)).await.unwrap().is_empty());
         // A stop elsewhere is untouched; a later reply of the bot there closes only that chat's
-        db.add_stopped("k", Some("c1"), None, None, None, "In the channel", None).await.unwrap().0;
+        db.add_stopped("k", Some("c1"), None, None, None, "In the channel", None).await.unwrap();
         assert_eq!(db.close_stopped("k", None, Some("k"), None).await.unwrap().len(), 1);
         assert_eq!(db.list_waiting(None).await.unwrap().len(), 1);
         // Plain closes don't take a stopped item with them, a write does
@@ -444,7 +444,7 @@ mod tests {
         let db = Database::init(tmp.path()).await.unwrap();
         let cont = db.add_stopped("k", Some("c1"), None, None, Some("notice1"), "Paused", Some(r#"{"type":"continue"}"#)).await.unwrap().0;
         assert_eq!(cont.retry.as_deref(), Some(r#"{"type":"continue"}"#));
-        db.add_stopped("k", Some("c2"), None, None, Some("notice2"), "Expired", Some(r#"{"type":"approval","approval_id":"ap1"}"#)).await.unwrap().0;
+        db.add_stopped("k", Some("c2"), None, None, Some("notice2"), "Expired", Some(r#"{"type":"approval","approval_id":"ap1"}"#)).await.unwrap();
         assert_eq!(db.close_waiting_for_message("notice1").await.unwrap().len(), 1);
         assert_eq!(db.close_waiting_for_message("notice1").await.unwrap().len(), 0);
         assert_eq!(db.close_stopped_for_approval("ap2").await.unwrap().len(), 0);
