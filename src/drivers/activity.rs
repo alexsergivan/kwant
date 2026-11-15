@@ -728,14 +728,26 @@ fn command_line(args: &Value) -> Option<String> {
 }
 
 /// Whether `name` is a tool that runs a shell command (`Bash`, codex's `exec_command`,
-/// `mcp__x__run_shell_command`), ignoring an `mcp__server__` prefix and case. The one list of
+/// `mcp__x__run_shell_command`, an agent's `run_terminal_command`), ignoring an `mcp__server__`
+/// prefix and case. The one list of
 /// shell tools: [`summarize`] titles them "Running `…`", and the desktop island names only their
 /// program (server/activity.rs).
 pub fn is_shell_tool(name: &str) -> bool {
     let tool = name.strip_prefix("mcp__").and_then(|r| r.split_once("__")).map_or(name, |(_, t)| t);
     matches!(
         tool.to_ascii_lowercase().as_str(),
-        "bash" | "shell" | "exec" | "exec_command" | "command_execution" | "run_terminal_cmd" | "run_shell_command" | "local_shell"
+        "bash"
+            | "shell"
+            | "exec"
+            | "exec_command"
+            | "command_execution"
+            | "run_terminal_cmd"
+            | "run_shell_command"
+            | "local_shell"
+            // 22j: Quant's failed step (2026-11-15), and the other common names for it
+            | "run_terminal_command"
+            | "execute_command"
+            | "run_command"
     )
 }
 
@@ -973,6 +985,18 @@ mod tests {
         let s = log.observe(&pending("1", "Bash", json!({"command": long})));
         assert!(s[0].title.chars().count() <= MAX_TITLE);
         assert!(s[0].detail.as_ref().unwrap().chars().count() <= MAX_DETAIL);
+    }
+
+    #[test]
+    fn terminal_tools_are_shell_tools() {
+        for name in ["run_terminal_command", "mcp__desktop__run_terminal_command", "execute_command", "Run_Command", "Bash", "run_terminal_cmd"] {
+            assert!(is_shell_tool(name), "{name}");
+        }
+        for name in ["Read", "run_tests", "mcp__x__run_query", "command"] {
+            assert!(!is_shell_tool(name), "{name}");
+        }
+        let cmd = json!({"command": "journalctl -u maker --since 17:18"});
+        assert_eq!(summarize("run_terminal_command", &cmd).0, "Running `journalctl -u maker --since 17:18`");
     }
 
     #[test]
