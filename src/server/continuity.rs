@@ -1174,6 +1174,13 @@ pub async fn self_endpoint(
             if super::fresh_eyes::refuses(scope.turn_id.as_deref(), name) {
                 return tool_text(id, super::fresh_eyes::REFUSED_TEXT, true);
             }
+            // A customer's turn: only a call the approver allowed runs, whatever the CLI's own rules say
+            if let Some(turn) = scope.turn_id.as_deref() {
+                if !super::mcp_runtime::take_every_call_pass(turn, name, args) {
+                    tracing::warn!(kwant = %scope.kwant_id, tool = %name, "refused a customer-turn call nobody allowed");
+                    return tool_text(id, super::mcp_runtime::EVERY_CALL_REFUSED, true);
+                }
+            }
             // P1: a watch turn runs only its allowlist; watch_report runs only in a watch turn
             if let Some(text) = super::missions::watch::refused(&state, &scope, name) {
                 return tool_text(id, text, true);
