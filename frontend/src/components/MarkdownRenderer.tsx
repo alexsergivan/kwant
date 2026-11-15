@@ -160,13 +160,15 @@ function listSource(node: HastNode, children: React.ReactNode): ReplySource {
   };
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
+// Memoized (14b): a finished message parses its markdown again only when its own props change, never
+// because the reply streaming below it moved on.
+export const MarkdownRenderer = React.memo(function MarkdownRenderer({
   content,
   className = '',
   isStreaming = false,
   results,
   messageId,
-}) => {
+}: MarkdownRendererProps) {
   // Never while streaming: the block appears when the final message arrives.
   const smart = !isStreaming && !!messageId && resultBlocks(results).length > 0;
   const slot = smart ? blockAt(results, { kind: 'slot' }) : null;
@@ -387,4 +389,4 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     </div>
     </ReplyText.Provider>
   );
-};
+});
