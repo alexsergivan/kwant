@@ -38,9 +38,9 @@ type Call = (String, String, Option<String>, String, usize);
 
 static CALLS: Mutex<Vec<Call>> = Mutex::new(Vec::new());
 
-/// The stub's call log. A failed assertion elsewhere must not poison it for the other tests.
+/// The stub's log. Tests run in parallel, so a panic in one must not poison it for the rest.
 fn calls() -> std::sync::MutexGuard<'static, Vec<Call>> {
-    CALLS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    CALLS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn calls_with(key: &str) -> Vec<Call> {
@@ -187,12 +187,12 @@ async fn with_no_key_it_is_unavailable_and_says_why() {
     assert_eq!(code, StatusCode::OK);
     assert_eq!(v, json!({"available": false, "source": null, "why": transcribe::WHY_NO_KEY}));
 
-    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![1; 1000])).await;
+    // Other tests call the shared stub at the same time, so a total count races. This
+    // recording's size (1001 bytes) is used by no other test: no stub call may carry it.
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![1; 1001])).await;
     assert_eq!(code, StatusCode::CONFLICT);
     assert_eq!(v, json!({"error": transcribe::WHY_NO_KEY, "code": "no_transcriber", "why": transcribe::WHY_NO_KEY}));
-    // Only this test's calls: the others share the stub and run in parallel. A keyless call
-    // would reach it with an empty key.
-    assert!(calls_with("").is_empty(), "no upstream call without a key");
+    assert!(calls().iter().all(|c| c.4 != 1001), "no upstream call without a key");
 
     let (code, _) = status(&app, "spc_missing").await;
     assert_eq!(code, StatusCode::NOT_FOUND);

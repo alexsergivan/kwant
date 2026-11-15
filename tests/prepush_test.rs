@@ -88,6 +88,31 @@ async fn settled_sha(env: &Env, space: &str, sha: &str) -> kwnt::db::dev_prepush
     panic!("the pre-push card of {sha} never settled");
 }
 
+/// The `dev_prepush` events on `rx` up to and including `(id, status)`, then any others already
+/// queued. `check` saves the card and only then sends its event, so a test that saw the saved row
+/// in [`settled`] waits here (at most 5 s) for the event instead of racing it (CI flake on #620,
+/// Nov 14). On a timeout it returns what it saw, for the caller's assert to show.
+async fn prepush_events_until(rx: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>, id: &str, status: &str) -> Vec<(String, String)> {
+    use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+    let mut seen: Vec<(String, String)> = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !seen.iter().any(|(i, s)| i == id && s == status) {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Ok(RuntimeEvent::DevPrepush { id, status, .. })) => seen.push((id, status)),
+            Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => {}
+            Ok(Err(RecvError::Closed)) | Err(_) => break,
+        }
+    }
+    loop {
+        match rx.try_recv() {
+            Ok(RuntimeEvent::DevPrepush { id, status, .. }) => seen.push((id, status)),
+            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+            Err(_) => break,
+        }
+    }
+    seen
+}
+
 #[tokio::test]
 async fn a_switched_off_test_blocks_the_push_until_the_person_overrides() {
     let env = setup().await;
@@ -126,12 +151,7 @@ async fn a_switched_off_test_blocks_the_push_until_the_person_overrides() {
     assert_eq!(card["fresh_eyes"]["checked"], true, "{card}");
     assert_eq!(card["fresh_eyes"]["saw"], json!(["diff"]));
     assert_eq!(card["fresh_eyes"]["reviewer_kwant_id"], json!(reviewer));
-    let mut seen = Vec::new();
-    while let Ok(e) = rx.try_recv() {
-        if let RuntimeEvent::DevPrepush { id, status, .. } = e {
-            seen.push((id, status));
-        }
-    }
+    let seen = prepush_events_until(&mut rx, &row.id, BLOCKED).await;
     assert_eq!(seen, [(row.id.clone(), "checking".to_string()), (row.id.clone(), "blocked".to_string())]);
 
     // Still blocked: the bot is told why and how to clear it, and no new card is made
