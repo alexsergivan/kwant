@@ -163,7 +163,7 @@
 .perch__place:not(:has(.glyph)) { flex: none; }
 .perch__place[aria-current] { flex: none; }
 .perch__place { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 8px;
-  background: transparent; box-shadow: inset 0 0 0 1px var(--chip-edge); color: var(--t2); font-size: 12px; font-weight: 500; cursor: pointer; }
+  background: transparent; border: 0; font-family: inherit; box-shadow: inset 0 0 0 1px var(--chip-edge); color: var(--t2); font-size: 12px; font-weight: 500; cursor: pointer; }
 .perch__place[aria-current] { background: var(--chip); color: var(--t1); box-shadow: inset 0 0 0 1px var(--violet); }
 .perch__place[data-off] { color: var(--t3); }
 .perch__place > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -207,6 +207,9 @@ html, body { margin: 0; background: transparent; overflow: hidden; cursor: defau
 /* open states get 24 px of transparent margin left, right and below for the shadow (perch.rs MARGIN) */
 #stage { display: inline-block; vertical-align: top; }
 #stage[data-open] { padding: 0 24px 24px; }
+/* at rest and celebrate the window has no margin, so a shadow would be cut into a grey box at its edge:
+   the perch keeps its 1 px edge ring and drops the shadow (design.md §2.2, §11.14) */
+#stage:not([data-open]) .perch { filter: none; }
 #stage[hidden] { display: none; }
 .perch__band { cursor: pointer; }
 .perch__more-line { cursor: pointer; }

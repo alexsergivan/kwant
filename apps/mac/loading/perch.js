@@ -295,12 +295,12 @@
     if (targets.length) body.append(quickAsk(targets));
     var places = D.places || [];
     if (places.length > 1) {
-      var list = el('div', { class: 'perch__places', role: 'list', 'aria-label': 'Places' });
+      var list = el('div', { class: 'perch__places', role: 'group', 'aria-label': 'Places' });
       var show = places.length > 3 ? places.slice(0, 2) : places;
       show.forEach(function (p) {
         var label = p.kind === 'server' ? midcut(p.name, 22) : p.name;
         var tip = p.name + (p.off ? " · Can't reach it" : p.waiting ? ' · ' + p.waiting + ' waiting' : '');
-        var b = el('button', { class: 'perch__place', type: 'button', role: 'listitem', 'aria-current': p.current ? 'true' : false, 'data-off': !!p.off, title: tip, 'aria-label': tip },
+        var b = el('button', { class: 'perch__place', type: 'button', 'aria-current': p.current ? 'true' : false, 'data-off': !!p.off, title: tip, 'aria-label': tip },
           [glyph(p.kind === 'mac' ? 'mac' : 'server'), el('span', { text: label }), p.waiting ? el('span', { class: 'n', text: countLabel(p.waiting) }) : null]);
         b.addEventListener('click', function () { send('place?i=' + Number(p.i)); });
         list.append(b);
