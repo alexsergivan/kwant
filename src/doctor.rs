@@ -158,6 +158,15 @@ pub struct Facts {
     pub loopback_bind: bool,
     pub token: bool,
     pub https_origin: Option<String>,
+    /// `KWNT_BROWSER_PROXY`: unset, unusable (the reason, without the value) or set and probed.
+    pub proxy: ProxyState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProxyState {
+    Unset,
+    Invalid(String),
+    Probed(crate::sandbox::browser_proxy::ProxyFacts),
 }
 
 /// Turns the facts into checks with fixes for `p`.
@@ -237,6 +246,8 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
         .optional_if(true),
     });
 
+    out.extend(proxy_check(&f.proxy));
+
     let mut ready = 0;
     let any_installed = f.clis.iter().any(|(_, bin, _, key)| bin.is_some() || *key);
     for (engine, bin, signed_in, via_key) in &f.clis {
@@ -295,6 +306,43 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
     out
 }
 
+/// The browser proxy check: nothing when none is set; otherwise set, reachable, and leaving from
+/// another address than a direct request. Shows the credential-free URL and addresses only.
+fn proxy_check(state: &ProxyState) -> Option<Check> {
+    const NAME: &str = "Browser proxy";
+    match state {
+        ProxyState::Unset => None,
+        ProxyState::Invalid(why) => Some(Check::new(
+            NAME,
+            Status::Fail,
+            why.clone(),
+            Some("Set KWNT_BROWSER_PROXY=socks5://host:port (or http://host:port), without a user name or password".into()),
+        )),
+        ProxyState::Probed(f) if !f.reachable => Some(Check::new(
+            NAME,
+            Status::Fail,
+            format!("{} does not answer from here", f.url),
+            Some("Start the proxy or relay, and check the host and port. From the Docker compose network the host is usually 172.17.0.1".into()),
+        )),
+        ProxyState::Probed(f) => Some(match (&f.proxied_ip, &f.direct_ip) {
+            (Some(p), Some(d)) if p == d => Check::new(
+                NAME,
+                Status::Warn,
+                format!("{} answers, but sites still see this server's own address ({p})", f.url),
+                Some("The proxy is not leaving through a different connection: check its upstream (WireGuard or router)".into()),
+            ),
+            (Some(p), Some(d)) => Check::new(NAME, Status::Ok, format!("{} answers; sites see {p} (direct: {d})", f.url), None),
+            (Some(p), None) => Check::new(NAME, Status::Ok, format!("{} answers; sites see {p} (direct address unknown)", f.url), None),
+            (None, _) => Check::new(
+                NAME,
+                Status::Warn,
+                format!("{} answers, but a test request through it failed", f.url),
+                Some("The proxy is up but has no working route out; check its upstream".into()),
+            ),
+        }),
+    }
+}
+
 /// Looks at this machine. Network checks time out after a few seconds each.
 pub async fn gather(config: &Config) -> Facts {
     let http = reqwest::Client::builder().timeout(Duration::from_secs(3)).build().unwrap_or_default();
@@ -337,6 +385,11 @@ pub async fn gather(config: &Config) -> Facts {
     let https_origin = std::env::var("KWNT_ALLOWED_ORIGINS")
         .ok()
         .and_then(|v| v.split(',').map(str::trim).find(|o| o.starts_with("https://")).map(String::from));
+    let proxy = match crate::sandbox::browser_proxy::BrowserProxy::from_env() {
+        Ok(None) => ProxyState::Unset,
+        Ok(Some(p)) => ProxyState::Probed(crate::sandbox::browser_proxy::probe(&p).await),
+        Err(why) => ProxyState::Invalid(why),
+    };
     Facts {
         data_dir: config.data_dir.display().to_string(),
         data_dir_writable: writable(&config.data_dir),
@@ -353,6 +406,7 @@ pub async fn gather(config: &Config) -> Facts {
         loopback_bind: Platform::detect() != Platform::Docker && crate::server::auth::is_loopback_bind(&config.host),
         token: crate::server::auth::env_token().is_some() || crate::server::auth::read_existing(&config.data_dir).is_ok(),
         https_origin,
+        proxy,
     }
 }
 
@@ -413,6 +467,7 @@ mod tests {
             loopback_bind: false,
             token: true,
             https_origin: Some("https://kwant.example".into()),
+            proxy: ProxyState::Unset,
         }
     }
 
@@ -512,6 +567,36 @@ mod tests {
         assert_eq!(by_name(&checks(&f, Platform::Linux), "Access").status, Status::Ok);
     }
 
+    fn probed(reachable: bool, proxied: Option<&str>, direct: Option<&str>) -> ProxyState {
+        ProxyState::Probed(crate::sandbox::browser_proxy::ProxyFacts {
+            url: "socks5://172.17.0.1:1080".into(),
+            reachable,
+            proxied_ip: proxied.map(Into::into),
+            direct_ip: direct.map(Into::into),
+        })
+    }
+
+    #[test]
+    fn the_proxy_check_is_absent_without_a_proxy() {
+        assert!(checks(&healthy(), Platform::Docker).iter().all(|c| c.name != "Browser proxy"));
+    }
+
+    #[test]
+    fn the_proxy_check_wants_reachable_and_a_different_exit_address() {
+        let mut f = healthy();
+        let status = |f: &Facts| by_name(&checks(f, Platform::Docker), "Browser proxy").status;
+        f.proxy = probed(true, Some("203.0.113.7"), Some("198.51.100.2"));
+        assert_eq!(status(&f), Status::Ok);
+        f.proxy = probed(true, Some("198.51.100.2"), Some("198.51.100.2"));
+        assert_eq!(status(&f), Status::Warn);
+        f.proxy = probed(true, None, Some("198.51.100.2"));
+        assert_eq!(status(&f), Status::Warn);
+        f.proxy = probed(false, None, None);
+        assert_eq!(status(&f), Status::Fail);
+        f.proxy = ProxyState::Invalid("KWNT_BROWSER_PROXY is not usable: a port is required".into());
+        assert_eq!(status(&f), Status::Fail);
+    }
+
     #[test]
     fn render_summarises() {
         let out = render(&checks(&healthy(), Platform::Docker), Platform::Docker);
@@ -541,6 +626,7 @@ mod tests {
             loopback_bind: true,
             token: false,
             https_origin: None,
+            proxy: ProxyState::Unset,
         };
         for p in [Platform::Linux, Platform::Mac] {
             let cs = checks(&f, p);
