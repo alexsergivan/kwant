@@ -727,9 +727,27 @@ fn command_line(args: &Value) -> Option<String> {
     (!line.is_empty()).then_some(line)
 }
 
+/// Whether `name` is a tool that runs a shell command (`Bash`, codex's `exec_command`,
+/// `mcp__x__run_shell_command`), ignoring an `mcp__server__` prefix and case. The one list of
+/// shell tools: [`summarize`] titles them "Running `…`", and the desktop island names only their
+/// program (server/activity.rs).
+pub fn is_shell_tool(name: &str) -> bool {
+    let tool = name.strip_prefix("mcp__").and_then(|r| r.split_once("__")).map_or(name, |(_, t)| t);
+    matches!(
+        tool.to_ascii_lowercase().as_str(),
+        "bash" | "shell" | "exec" | "exec_command" | "command_execution" | "run_terminal_cmd" | "run_shell_command" | "local_shell"
+    )
+}
+
 /// A short title for a tool call, and the detail to show when the step is opened (the whole
 /// command, address or query). Neither is redacted here.
 pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
+    if is_shell_tool(name) {
+        return match command_line(args) {
+            Some(cmd) => (format!("Running `{}`", cut(&cmd, 80)), Some(cmd)),
+            None => ("Running a command".into(), None),
+        };
+    }
     // `mcp__server__tool`: kwnt's own tools read as built-ins, others name their server
     let (server, tool) = match name.strip_prefix("mcp__").and_then(|r| r.split_once("__")) {
         Some(("kwnt" | "kwant", t)) => (None, t),
@@ -740,11 +758,6 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
     let path = || arg(args, &["file_path", "path", "filePath", "notebook_path", "target_file"]).map(short_path);
     let url = arg(args, &["url", "href", "uri"]);
     match lower.as_str() {
-        "bash" | "shell" | "exec" | "exec_command" | "command_execution" | "run_terminal_cmd" | "run_shell_command"
-        | "local_shell" => match command_line(args) {
-            Some(cmd) => (format!("Running `{}`", cut(&cmd, 80)), Some(cmd)),
-            None => ("Running a command".into(), None),
-        },
         "read" | "read_file" | "view" | "cat" => (path().map_or("Reading a file".into(), |p| format!("Reading {p}")), None),
         "edit" | "multiedit" | "edit_file" | "str_replace" | "str_replace_based_edit_tool" | "apply_patch" | "file_change"
         | "notebookedit" => (path().map_or("Editing files".into(), |p| format!("Editing {p}")), None),

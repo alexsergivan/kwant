@@ -39,6 +39,8 @@ import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
 
 const PHONE_QUERY = '(max-width: 639px)';
+/** 17b: the footer's pointing slot. It shrinks and truncates instead of spilling over the buttons, on one line. */
+export const POINT_FOOTER_SLOT = 'min-w-0 flex-[0_1_auto] truncate whitespace-nowrap text-center';
 
 /** While the bot finishes a step, taking over is retried this often, for this long (no backend change). */
 export const TAKEOVER_RETRY_MS = 1000;
@@ -1163,29 +1165,31 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {/* Footer Status */}
       <div className="h-10 shrink-0 px-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between gap-2 text-xs text-zinc-400">
-        <div className="flex items-center gap-1.5 min-w-0" data-browser-footer>
+        {/* 17b: the status label yields first, so the pointing line and the buttons keep their room */}
+        <div className="flex flex-1 items-center gap-1.5 min-w-3" data-browser-footer>
           {isLocal ? (
-            <Laptop size={12} className={browserReady || isWindow ? 'text-amber-300/80' : 'text-zinc-500'} />
+            <Laptop size={12} className={`shrink-0 ${browserReady || isWindow ? 'text-amber-300/80' : 'text-zinc-500'}`} />
           ) : (
-            <Cpu size={12} className={browserReady ? 'text-emerald-400' : 'text-zinc-500'} />
+            <Cpu size={12} className={`shrink-0 ${browserReady ? 'text-emerald-400' : 'text-zinc-500'}`} />
           )}
           <span className="truncate">{browserFooterLabel(computer.state.settings, browserReady, { botName: whoBrowses, browsing: live })}</span>
         </div>
         {pointOn && point ? (
-          <span data-point-footer="" className="min-w-0 flex-1 px-2 text-center leading-snug text-zinc-300 [overflow-wrap:anywhere]">
-            {/* Wraps only between "Pointing · n picked" and "· Esc to stop" in a narrow pane */}
+          // 17b: one line that never runs under Refresh / Restart browser. "Esc to stop" stays in the title and for
+          // screen readers; the point layer's own top bar shows the keys on screen.
+          <span data-point-footer="" title={footerText(point.picks)} className={`${POINT_FOOTER_SLOT} text-zinc-300`}>
             {(() => {
               const [state, count, keys] = footerText(point.picks).split(' · ');
               return (
                 <>
-                  <span className="whitespace-nowrap">{`${state} · ${count}`}</span>{' '}
-                  <span className="whitespace-nowrap">{`· ${keys}`}</span>
+                  {`${state} · ${count}`}
+                  <span className="sr-only">{` · ${keys}`}</span>
                 </>
               );
             })()}
           </span>
         ) : point && takeover && !isWindow ? (
-          <span data-point-footer="" className="min-w-0 flex-1 px-2 text-center leading-snug text-zinc-400">{POINT_COPY.handBack}</span>
+          <span data-point-footer="" title={POINT_COPY.handBack} className={`${POINT_FOOTER_SLOT} text-zinc-400`}>{POINT_COPY.handBack}</span>
         ) : null}
         <div className="flex items-center gap-3 shrink-0">
           {onRefresh && !narrow && (

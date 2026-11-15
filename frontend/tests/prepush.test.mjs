@@ -2,6 +2,11 @@
 // the Inbox "Needs you" item, the "Checked with fresh eyes" chip (R1–R3) and the semgrep tile.
 // Data is shaped like Juno's card_json (ba2157a5); see src/dev/prepushFixtures.ts.
 process.env.TZ = 'UTC';
+// 18d: a time from another day says its day ("on Nov 10 at 9:40 AM"). These fixtures are read late on their own
+// day, so the copy below stays time only; the clock still ticks. The other-day copy has its own test.
+const realNow = Date.now.bind(Date);
+const fixtureShift = realNow() - Date.parse('2026-11-09T23:00:00Z');
+Date.now = () => realNow() - fixtureShift;
 
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
