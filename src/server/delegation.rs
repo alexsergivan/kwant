@@ -78,7 +78,7 @@ fn emit_delegation(state: &AppState, d: &Delegation) {
     });
 }
 
-fn emit_thread(state: &AppState, t: &Thread) {
+pub(super) fn emit_thread(state: &AppState, t: &Thread) {
     let _ = state.event_sender.send(RuntimeEvent::ThreadUpdated { thread: serde_json::to_value(t).unwrap_or(Value::Null) });
 }
 
@@ -1605,7 +1605,7 @@ pub struct ThreadsQuery {
     pub include_archived: Option<String>,
 }
 
-async fn thread_view(state: &AppState, t: &Thread) -> Value {
+pub(super) async fn thread_view(state: &AppState, t: &Thread) -> Value {
     let mut v = serde_json::to_value(t).unwrap_or(Value::Null);
     let delegation = state.db.delegation_for_thread(&t.id).await.ok().flatten();
     let active: Vec<_> = state.turns.active_turns().into_iter().filter(|a| a.thread_id.as_deref() == Some(&t.id)).collect();
