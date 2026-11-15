@@ -169,6 +169,27 @@ fn waits_of(steps: &[Step]) -> TurnWaits {
     }
 }
 
+/// What a running turn is doing now, for a glance (the desktop island's "Working now"): the
+/// title of its newest step that still runs or waits, and when that step started. Thinking text is
+/// never read (a running thinking step isn't redacted yet), only its kind; titles are the log's own
+/// one-line, redacted summaries ("Reading acme.com"). `None` when the turn has no steps yet.
+pub fn current_step(turn_id: &str) -> Option<(String, String)> {
+    let turn = TurnActivity::find(turn_id)?;
+    turn.with_log(|log| step_now(log.steps()))
+}
+
+fn step_now(steps: &[Step]) -> Option<(String, String)> {
+    let open = |s: &&Step| matches!(s.status, "running" | "waiting");
+    if let Some(s) = steps.iter().rev().filter(open).find(|s| s.kind != "thinking") {
+        return Some((s.title.clone(), s.started_at.clone()));
+    }
+    if let Some(s) = steps.iter().rev().find(open) {
+        return Some(("Thinking".to_string(), s.started_at.clone()));
+    }
+    // Between steps: the last one that ended says where it got to
+    steps.iter().rev().find(|s| s.kind != "thinking").map(|s| (s.title.clone(), s.started_at.clone()))
+}
+
 /// Adds `meta.activity` to a reply's meta.
 pub fn with_activity(meta: Option<Value>, activity: Option<Value>) -> Option<Value> {
     let Some(activity) = activity else { return meta };
@@ -183,6 +204,20 @@ pub fn with_activity(meta: Option<Value>, activity: Option<Value>) -> Option<Val
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn current_step_names_the_running_tool_never_thinking_text() {
+        let (tx, _rx) = broadcast::channel(16);
+        let tag = TurnTag { turn_id: "turn-step-test".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        assert_eq!(current_step("turn-step-test"), None);
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Bash".into(), args: json!({"command": "ls"}) });
+        let (title, started) = current_step("turn-step-test").unwrap();
+        assert!(!title.is_empty() && !started.is_empty(), "{title}");
+        approval_waiting("turn-step-test", "ap", "Bash");
+        assert!(current_step("turn-step-test").unwrap().0.starts_with("Waiting for your approval"));
+        assert_eq!(current_step("no-such-turn"), None);
+    }
 
     #[test]
     fn turn_waits_reads_the_waiting_step_and_the_running_tool() {
@@ -257,6 +292,7 @@ mod tests {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         };
         let tag = TurnTag { turn_id: "turn-view-test".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
         let turn = TurnActivity::start(broadcast::channel(16).0, tag);
@@ -283,6 +319,7 @@ mod tests {
             state: "running".into(),
             since: chrono::Utc::now(),
             purpose: None,
+            audit: None,
         };
         let token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
         let (tx, mut rx) = broadcast::channel(16);
