@@ -47,7 +47,8 @@ test('a different speaker draws a different bot (team discussions follow the cur
 
 test('the scene replaces the grey lines; the first words keep its height and fade in once', () => {
   assert.doesNotMatch(chat, /kws-skel|Waiting for the first words/);
-  assert.match(chat, /<div className="kw-wa-in kw-wa-hold">\s+<MarkdownRenderer content=\{hideStreamingDecisions\(stripDiscussionMarkers\(streamingText\)\)\} isStreaming=\{true\} \/>/);
+  // 15a: the live reply renders through StreamMarkdown (a block at a time), with the same cleaned text.
+  assert.match(chat, /<div className="kw-wa-in kw-wa-hold">\s+<StreamMarkdown content=\{hideStreamingDecisions\(stripDiscussionMarkers\(streamingText\)\)\} \/>/);
   assert.match(css, /\.kw-wa-hold \{ min-height: 62px; \}/);
   assert.match(css, /\.kw-wa \{[^}]*height: 62px;/);
   assert.match(css, /\.kw-wa-scene \{[^}]*flex: none;[^}]*height: 54px;/);
