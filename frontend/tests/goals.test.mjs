@@ -625,6 +625,10 @@ test('D1/D3: Not now calls the route once, silently; the goal then reads Failing
   assert.equal(b.goalDecision(server, [], NOW).kind, 'declined');
   assert.equal(b.declinedText(minsAgo(0), NOW), 'You chose Not now at ' + new Date(NOW).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '. The fix waits; it’s dropped if this recovers.');
   assert.match(b.declinedText(null, NOW), /^Not now\./);
+  // 18d: a Not now from another day says its day, "on Nov 1 at 9:40 AM", never "at Nov 1, 9:40 AM".
+  const day = new Date(NOW - 26 * 3600_000);
+  const want = `on ${day.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at ${day.toLocaleTimeString(undefined, { timeStyle: 'short' }).replace(/\u202f/g, ' ')}`;
+  assert.equal(b.declinedText(day.toISOString(), NOW), `You chose Not now ${want}. The fix waits; it’s dropped if this recovers.`);
 });
 
 test('D1: on a server without the route, Not now only hides it here; any other error undoes the hide and says so', async () => {

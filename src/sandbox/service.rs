@@ -105,6 +105,12 @@ struct ServiceState {
     browser: BrowserController,
     endpoint: String,
     sessions: HashMap<String, SessionTarget>,
+    /// The configured controller behind each live session, reused across calls so its
+    /// `downloads` connection (see `browser_downloads.rs`) stays the one background task the
+    /// whole session's downloads and file choosers are tracked on, instead of a blank one per
+    /// call. Not persisted: a reconnect starts empty and each session gets a fresh controller the
+    /// next time it's used, same as before this cache existed.
+    controllers: HashMap<String, BrowserController>,
 }
 
 impl BrowserService {
@@ -442,7 +448,7 @@ impl BrowserService {
         browser.keep_identity().await;
         let sessions = tokio::fs::read(self.sessions_file()).await.ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-        Ok(ServiceState { browser, endpoint, sessions })
+        Ok(ServiceState { browser, endpoint, sessions, controllers: HashMap::new() })
     }
 
     /// What to tell the person when the browser could not be reached. In local mode that is the
@@ -567,7 +573,7 @@ impl BrowserService {
         self.rested.lock().unwrap_or_else(|e| e.into_inner()).get(key).copied()
     }
 
-    async fn open_session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
+    async fn open_session(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
         let mut lock = self.state.lock().await;
         if lock.is_none() { *lock = Some(self.connect().await?); }
         let mut targets = lock.as_ref().unwrap().browser.send_cdp_command("Target.getTargets", json!({})).await;
@@ -586,6 +592,7 @@ impl BrowserService {
         };
         let existing = state.sessions.get(id).filter(|session| targets["targetInfos"].as_array()
             .is_some_and(|targets| targets.iter().any(|target| target["targetId"] == session.target)));
+        let reused = existing.is_some();
         let local = self.mode() == ComputerMode::Local;
         let alive = |target: &str| targets["targetInfos"].as_array()
             .is_some_and(|targets| targets.iter().any(|t| t["targetId"] == target));
@@ -623,7 +630,20 @@ impl BrowserService {
         };
         state.sessions.insert(id.to_string(), session.clone());
         self.save_sessions(&state.sessions).await?;
-        let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target), false);
+        // Reuse the same session's controller, not a fresh one, so its `downloads` connection (a
+        // dedicated background task; see `configure_downloads` below) stays the one the whole
+        // session's downloads and file choosers are tracked on. A fresh controller here would
+        // get a fresh, empty `downloads`, so every call would start its own blank-state download
+        // center and never see what an earlier call's center already observed.
+        let cached = reused.then(|| state.controllers.get(id).cloned()).flatten();
+        let ctrl = match cached {
+            Some(ctrl) => ctrl,
+            None => {
+                let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target.clone()), false);
+                state.controllers.insert(id.to_string(), ctrl.clone());
+                ctrl
+            }
+        };
         if !local {
             // The VM browser's profile is on tmpfs, so its contexts' cookies go when the
             // container restarts: keep them per team in the data folder (local mode's on-disk
@@ -642,6 +662,11 @@ impl BrowserService {
             ctrl.set_viewport(1280, 800).await?;
         }
         ctrl.refresh_location().await?;
+        // Next to #578's attachments root/chooser-tmp: one folder shared by every session's
+        // download staging, outside any bot's workspace (see `browser_downloads.rs`'s doc).
+        let download_staging = self.root.join("attachments").join("download-tmp");
+        let context_id = (!session.context.is_empty()).then_some(session.context.clone());
+        ctrl.configure_downloads(workspace.to_path_buf(), local, context_id, download_staging).await;
         Ok(ctrl)
     }
 

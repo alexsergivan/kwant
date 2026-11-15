@@ -215,7 +215,7 @@ pub async fn ids_guard(state: &AppState, query: Option<&str>, rows: &[(RowKind, 
 }
 
 fn archived() -> Response {
-    error(StatusCode::CONFLICT, "this space is archived; restore it first")
+    (StatusCode::CONFLICT, Json(json!({ "error": "this space is archived; restore it first", "code": "archived" }))).into_response()
 }
 
 /// One space as the API shows it, with what the space switcher needs.

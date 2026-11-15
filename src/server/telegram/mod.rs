@@ -15,6 +15,7 @@
 
 pub mod api;
 pub mod bridge;
+pub mod customers;
 pub mod pairing;
 pub mod routes;
 pub mod text;
@@ -172,6 +173,31 @@ pub async fn link_only_in(state: &AppState, space: &str, details: &Value) -> Opt
     crate::mcp::prod_floor::production_connection(server, tool, &details["arguments"], &names).map(|_| "This is a production connection.")
 }
 
+/// Why Allow once may not show (or, on a tap, count) in Telegram: [`link_only_in`], else a step
+/// that ships code, runs a command or that kwant flagged as risky ([`glance::ships_or_runs`], 18b).
+/// The send, the tap and the link-only edit all ask this, so they agree. `link_only_in` stays as it
+/// is: the island builds on it.
+///
+/// [`glance::ships_or_runs`]: crate::server::glance::ships_or_runs
+pub async fn allow_refusal(state: &AppState, space: &str, details: &Value) -> Option<&'static str> {
+    if let Some(why) = link_only_in(state, space, details).await {
+        return Some(why);
+    }
+    floor_reason(details)
+}
+
+/// [`glance::ships_or_runs`] in Telegram's words; the line then ends "Approve it in kwant."
+///
+/// [`glance::ships_or_runs`]: crate::server::glance::ships_or_runs
+pub fn floor_reason(details: &Value) -> Option<&'static str> {
+    use crate::server::glance;
+    glance::ships_or_runs(details).map(|why| match why {
+        glance::PUSHES => copy::PUSHES_CODE,
+        glance::RUNS => copy::RUNS_A_COMMAND,
+        other => other,
+    })
+}
+
 /// The text Telegram shows (design G, "Telegram copy"). Product copy is Mira's.
 pub mod copy {
     pub const UNPAIRED: &str = "Unpaired. Pair again from kwant › Connections.";
@@ -181,6 +207,9 @@ pub mod copy {
     pub const TEXT_ONLY: &str = "Only text works here for now. Send files in kwant.";
     pub const NO_GENERAL: &str = "This space has no #general, so your message wasn't sent. Open kwant to add one.";
     pub const APPROVE_IN_KWANT: &str = "Approve it in kwant.";
+    /// Why a step is link-only (18b); the line reads "This pushes code. Approve it in kwant."
+    pub const PUSHES_CODE: &str = "This pushes code.";
+    pub const RUNS_A_COMMAND: &str = "This runs a command.";
     pub const NO_LONGER_WAITING: &str = "No longer waiting";
     pub const OPEN_IN_KWANT: &str = "Open in kwant";
     pub const ALLOW_ONCE: &str = "Allow once";
@@ -649,5 +678,72 @@ mod tests {
         let send = json!({"source": "mcp", "server": "composio", "tool": "GMAIL_SEND_EMAIL"});
         assert_eq!(link_only_reason(&send), None);
         assert!(approvable(&send));
+    }
+
+    /// 18b: the calls Telegram's Allow once refuses on top of `link_only_reason`, with their
+    /// line, and the ordinary ones it keeps (the brief's table).
+    /// A refused row: its name, the details, Telegram's line.
+    type Refused = (&'static str, Value, &'static str);
+
+    fn floor_rows() -> (Vec<Refused>, Vec<(&'static str, Value)>) {
+        let mcp = |server: &str, tool: &str, args: Value| json!({"source": "mcp", "server": server, "tool": tool, "arguments": args});
+        let with = |k: &str, v: Value| {
+            let mut d = mcp("files", "lookup", json!({"q": "x"}));
+            d[k] = v;
+            d
+        };
+        let refused = vec![
+            ("run_command with gh pr merge", mcp("devtools", "run_command", json!({"cmd": "gh  pr merge 12"})), "This runs a command."),
+            ("ssh_exec", mcp("remote", "ssh_exec", json!({"host": "prod", "line": "uptime"})), "This runs a command."),
+            ("a SQL tool by name", mcp("db", "execute_sql", json!({"statement": "DELETE FROM users"})), "This runs a command."),
+            ("a SQL tool by its sql key", mcp("postgres", "query", json!({"sql": "DROP TABLE users"})), "This runs a command."),
+            ("a command key on any tool", mcp("helper", "do_it", json!({"opts": {"Command": "rm -rf ~"}})), "This runs a command."),
+            ("a script key", mcp("helper", "automate", json!({"script": "tell app"})), "This runs a command."),
+            ("an argv key", mcp("helper", "launch", json!({"argv": ["git", "push"]})), "This runs a command."),
+            ("GITHUB_MERGE_A_PULL_REQUEST", mcp("composio", "GITHUB_MERGE_A_PULL_REQUEST", json!({"owner": "o", "repo": "r", "pull_number": 12})), "This pushes code."),
+            ("GITHUB_CREATE_A_RELEASE", mcp("composio", "GITHUB_CREATE_A_RELEASE", json!({"owner": "o", "repo": "r", "tag_name": "v1"})), "This pushes code."),
+            (
+                "a GitHub write mcp_writes sees",
+                mcp("github", "create_or_update_file", json!({"owner": "o", "repo": "r", "path": "a.txt", "content": "x", "message": "m", "branch": "main"})),
+                "This pushes code.",
+            ),
+            ("a prepush grant", with("prepush_grant", json!({"repo": "o/r"})), "This pushes code."),
+            ("a strict ask", with("strict_ask", json!(true)), "This pushes code."),
+            ("a risky step", with("smart_reason", json!("Deletes records")), "kwant flagged this step as risky."),
+            (
+                "a risky file write in the folder",
+                json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "smart_reason": "Overwrites a config"}),
+                "kwant flagged this step as risky.",
+            ),
+        ];
+        let allowed = vec![
+            (
+                "an email that says press release",
+                mcp("composio", "GMAIL_SEND_EMAIL", json!({"recipient_email": "a@example.com", "subject": "Our press release", "body": "The press release is attached; we merge and push it Monday."})),
+            ),
+            ("a Notion search with query", mcp("composio", "NOTION_SEARCH_NOTION_PAGE", json!({"query": "release notes"}))),
+            ("a plain lookup", mcp("files", "lookup", json!({"q": "x"}))),
+            ("an issue", mcp("composio", "GITHUB_CREATE_ISSUE", json!({"owner": "o", "repo": "r", "title": "t"}))),
+            ("a write in the folder", json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "arguments": {"file_path": "a.md", "content": "git push"}})),
+            ("false flags", json!({"source": "mcp", "server": "files", "tool": "lookup", "strict_ask": false, "smart_reason": null, "prepush_grant": null})),
+        ];
+        (refused, allowed)
+    }
+
+    #[test]
+    fn allow_once_never_ships_code_runs_a_command_or_allows_a_risky_step() {
+        let (refused, allowed) = floor_rows();
+        for (name, d, why) in refused {
+            // Not Telegram's older floor: the new one catches it
+            assert_eq!(link_only_reason(&d), None, "{name}: {d}");
+            assert_eq!(floor_reason(&d), Some(why), "{name}: {d}");
+        }
+        for (name, d) in allowed {
+            assert_eq!(link_only_reason(&d), None, "{name}: {d}");
+            assert_eq!(floor_reason(&d), None, "{name}: {d}");
+        }
+        // The older floor's own reasons come first and stay as they were
+        let d = json!({"source": "mcp", "server": "composio", "tool": "COMPOSIO_REMOTE_BASH_TOOL", "arguments": {"command": "ls"}});
+        assert_eq!(link_only_reason(&d), Some("This step runs other actions inside it."));
     }
 }
