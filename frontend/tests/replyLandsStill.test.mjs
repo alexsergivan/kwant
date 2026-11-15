@@ -18,7 +18,8 @@ const m = await loadBundled(`
 `);
 const { React, renderToStaticMarkup, MarkdownRenderer } = m;
 const h = React.createElement;
-const html = (content, props = {}) => renderToStaticMarkup(h(MarkdownRenderer, { content, ...props }));
+// The HTML with the newlines between tags dropped.
+const html = (content, props = {}) => renderToStaticMarkup(h(MarkdownRenderer, { content, ...props })).replace(/>\s+</g, '><');
 const live = (content) => html(content, { isStreaming: true });
 const CURSOR = '<span class="inline-block w-1.5 h-4 ml-0.5 align-middle bg-sky-400 animate-pulse motion-reduce:animate-none rounded-sm" aria-hidden="true"></span>';
 const count = (s, sub) => s.split(sub).length - 1;
