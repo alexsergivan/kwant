@@ -1048,7 +1048,9 @@ pub async fn prepare_turn_with_opts(
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
-    if let (true, Some(scope)) = (self_tools, self_scope) {
+    if let (true, Some(mut scope)) = (self_tools, self_scope) {
+        // 18a: one repeat guard per turn token, fresh even when the caller's scope was cloned before
+        scope.repeats = Default::default();
         state.self_tools.lock().await.insert(token.clone(), scope);
     }
     Some((ctx, token))
@@ -1420,7 +1422,9 @@ async fn gateway_rpc(
                 }
             };
             // The chat's failure line (0.9.5): codex and grok calls are reported here, by their real server
-            if let Some(w) = super::tool_failures::TurnWatch::find(&session.turn_id) {
+            // A call the repeat guard (15c) didn't send isn't new news about the connection
+            let sent = outcome.record.get("repeat_stopped").is_none();
+            if let Some(w) = super::tool_failures::TurnWatch::find(&session.turn_id).filter(|_| sent) {
                 match outcome.status {
                     "ok" => w.call_done(&tool_name, &arguments, None).await,
                     "error" => w.call_done(&tool_name, &arguments, Some(&outcome.text)).await,

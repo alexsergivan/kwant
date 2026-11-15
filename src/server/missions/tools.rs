@@ -42,7 +42,7 @@ pub fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "mission_plan",
-            "description": "Propose a mission: a goal split into tasks with acceptance criteria and outcome checks. It is a draft until the person approves it on the board; nothing runs before that. Each task is verified only by its checks passing (or a teammate's review / the person), never by its owner saying it is done. Use it only when the person asks for a plan, project or tracked multi-step work, never on your own for an ordinary request or a quick answer. Each acceptance line becomes a criterion: c1 is the first line, c2 the second. Cut the person's request into parts that together cover every word of it, in their words; link each part to the criteria that prove it.",
+            "description": "Propose a mission: a goal split into tasks with acceptance criteria and outcome checks. It is a draft until the person approves it on the board; nothing runs before that. Each task is verified only by its checks passing (or a teammate's review / the person), never by its owner saying it is done. Use it only when the person asks for a plan, project or tracked multi-step work, never on your own for an ordinary request or a quick answer. Each acceptance line becomes a criterion: c1 is the first line, c2 the second. Cut the person's request into parts that together cover every word of it, in their words; link each part to the criteria that prove it. A task given parts keeps its criteria: its owner must show evidence for each before the task can pass.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -272,6 +272,9 @@ async fn plan(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Value
     match super::create_plan(state, space, &lead, title, goal, budget, &tasks, by, place).await {
         Ok((m, rows)) => {
             // rows follow the plan's task order (a task it couldn't read back would shift them)
+            if rows.len() != parts.len() && parts.iter().any(Option::is_some) {
+                tracing::warn!(mission_id = %m.id, tasks_read_back = rows.len(), tasks_planned = parts.len(), "the plan's parts weren't stored: its tasks read back don't match the plan");
+            }
             for (row, c) in rows.iter().zip(&parts).filter(|_| rows.len() == parts.len()) {
                 let Some(c) = c else { continue };
                 let event = json!({"by": "lead", "fields": ["parts"], "criteria": c.criteria.len(), "parts": c.parts.len()});
@@ -647,3 +650,51 @@ async fn review(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
     ok(json!({"task_state": after.map(|t| t.state), "check_id": check.id}))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tasks(n: usize) -> Vec<PlanTask> {
+        (0..n).map(|i| serde_json::from_value(json!({"key": format!("t{}", i + 1), "title": format!("Task {}", i + 1), "acceptance": "PDF is in the folder\nAna has the email"})).unwrap()).collect()
+    }
+
+    #[test]
+    fn plan_parts_fail_on_a_bad_link_before_anything_is_written() {
+        // The first task's parts are fine; the second links c9, which its acceptance doesn't have:
+        // the whole plan fails, so `plan` writes nothing for either task
+        let args = json!({"tasks": [
+            {"parts": [{"text": "make the PDF", "criteria": ["c1"]}]},
+            {"parts": [{"text": "send it to Ana", "criteria": ["c9"]}]},
+        ]});
+        let err = plan_parts(&tasks(2), &args).unwrap_err();
+        assert!(err.starts_with("task t2: No criterion c9"), "{err}");
+        // With no key the task's place in the plan names it
+        let mut t = tasks(1);
+        t[0].key = None;
+        let err = plan_parts(&t, &json!({"tasks": [{"parts": [{"text": "x", "criteria": ["c9"]}]}]})).unwrap_err();
+        assert!(err.starts_with("task 1: No criterion c9"), "{err}");
+    }
+
+    #[test]
+    fn a_task_without_parts_gets_no_contract() {
+        let args = json!({"tasks": [{}, {"parts": []}, {"parts": null}]});
+        assert_eq!(plan_parts(&tasks(3), &args).unwrap(), vec![None, None, None]);
+    }
+
+    #[test]
+    fn plan_parts_follow_the_plan_in_keys_and_order() {
+        let args = json!({"tasks": [
+            {"parts": [{"text": "make the PDF", "criteria": ["c1"]}, {"text": "send it to Ana", "criteria": ["c2", "c1"]}]},
+            {},
+            {"parts": [{"text": "by Friday"}]},
+        ]});
+        let out = plan_parts(&tasks(3), &args).unwrap();
+        assert_eq!(out.len(), 3, "one entry per planned task, in order");
+        let a = out[0].as_ref().unwrap();
+        assert_eq!(a.criteria.iter().map(|k| (k.id.as_str(), k.text.as_str())).collect::<Vec<_>>(), [("c1", "PDF is in the folder"), ("c2", "Ana has the email")]);
+        assert_eq!(a.parts.iter().map(|p| (p.id.as_str(), p.text.as_str(), p.criteria.clone())).collect::<Vec<_>>(), [("p1", "make the PDF", vec!["c1".to_string()]), ("p2", "send it to Ana", vec!["c2".to_string(), "c1".to_string()])]);
+        assert!(out[1].is_none());
+        let c = out[2].as_ref().unwrap();
+        assert_eq!((c.parts.len(), c.parts[0].text.as_str(), c.parts[0].criteria.len(), c.criteria.len()), (1, "by Friday", 0, 2));
+    }
+}

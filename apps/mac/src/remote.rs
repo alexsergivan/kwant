@@ -240,18 +240,20 @@ pub enum Answer {
     Failed,
 }
 
+/// Adds the sign-in cookie (marked sensitive, so it never shows in a debug print). `None`: the
+/// token can't be a header value (then the place reads as signed out).
+fn with_cookie(request: reqwest::RequestBuilder, token: Option<&Token>) -> Option<reqwest::RequestBuilder> {
+    let Some(Token(value)) = token else { return Some(request) };
+    let mut header = reqwest::header::HeaderValue::from_str(&format!("{COOKIE}={value}")).ok()?;
+    header.set_sensitive(true);
+    Some(request.header(reqwest::header::COOKIE, header))
+}
+
 /// GET one of kwant's API paths on the server with the sign-in cookie.
 pub async fn get(client: &reqwest::Client, origin: &Origin, token: Option<&Token>, path: &str) -> Answer {
-    let mut request = client.get(origin.page(path));
-    if let Some(Token(value)) = token {
-        match reqwest::header::HeaderValue::from_str(&format!("{COOKIE}={value}")) {
-            Ok(mut header) => {
-                header.set_sensitive(true);
-                request = request.header(reqwest::header::COOKIE, header);
-            }
-            Err(_) => return Answer::SignedOut,
-        }
-    }
+    let Some(request) = with_cookie(client.get(origin.page(path)), token) else {
+        return Answer::SignedOut;
+    };
     let Ok(response) = request.send().await else {
         return Answer::Failed;
     };
@@ -259,6 +261,92 @@ pub async fn get(client: &reqwest::Client, origin: &Origin, token: Option<&Token
         200 => body(response, POLL_LIMIT, origin).await.map(Answer::Ok).unwrap_or(Answer::Failed),
         401 | 403 => Answer::SignedOut,
         _ => Answer::Failed,
+    }
+}
+
+/// The most of a glance the app reads (the server's lists are capped: about 40 KB at most).
+const GLANCE_LIMIT: usize = 256 * 1024;
+/// The most of an answer to the perch's POSTs the app reads.
+const POST_LIMIT: usize = 64 * 1024;
+
+/// What `GET /api/glance` gave (the perch's poll, desktop-island/impl-server.md).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Glance {
+    /// A new glance, with its ETag for the next poll (`W/"g-…"`).
+    Fresh { etag: Option<String>, body: String },
+    /// 304: nothing changed since the ETag sent.
+    NotModified,
+    /// 404: a kwant from before the glance (the perch falls back to what /api/away said).
+    Missing,
+    SignedOut,
+    Failed,
+}
+
+/// An ETag the app sends back: printable ASCII, no comma, at most 64 bytes. Anything else is
+/// dropped, so a server can't make the app send odd header bytes.
+pub fn etag_ok(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_graphic() && b != b',')
+}
+
+/// `GET {origin}/api/glance`, with `If-None-Match` when the last answer had a usable ETag.
+pub async fn get_glance(client: &reqwest::Client, origin: &Origin, token: Option<&Token>, etag: Option<&str>) -> Glance {
+    let Some(mut request) = with_cookie(client.get(origin.page("/api/glance")), token) else {
+        return Glance::SignedOut;
+    };
+    if let Some(tag) = etag.filter(|t| etag_ok(t)) {
+        request = request.header(reqwest::header::IF_NONE_MATCH, tag);
+    }
+    let Ok(response) = request.send().await else {
+        return Glance::Failed;
+    };
+    match response.status().as_u16() {
+        200 => {
+            let etag = response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|v| v.to_str().ok())
+                .filter(|t| etag_ok(t))
+                .map(str::to_string);
+            match body(response, GLANCE_LIMIT, origin).await {
+                Ok(body) => Glance::Fresh { etag, body },
+                Err(_) => Glance::Failed,
+            }
+        }
+        304 => Glance::NotModified,
+        404 => Glance::Missing,
+        401 | 403 => Glance::SignedOut,
+        _ => Glance::Failed,
+    }
+}
+
+/// What one of the perch's POSTs gave.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Posted {
+    /// 2xx, with the body (the Quick ask's answer names the chat's path).
+    Ok(String),
+    /// Another status: 409 already answered or archived, 400, 404.
+    Status(u16),
+    SignedOut,
+    Failed,
+}
+
+/// POST a JSON body to one of kwant's API paths with the sign-in cookie. Never logs the body,
+/// the token or the answer.
+pub async fn post_json(client: &reqwest::Client, origin: &Origin, token: Option<&Token>, path: &str, json: &serde_json::Value) -> Posted {
+    let request = client
+        .post(origin.page(path))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(json.to_string());
+    let Some(request) = with_cookie(request, token) else {
+        return Posted::SignedOut;
+    };
+    let Ok(response) = request.send().await else {
+        return Posted::Failed;
+    };
+    match response.status().as_u16() {
+        200..=299 => body(response, POST_LIMIT, origin).await.map(Posted::Ok).unwrap_or(Posted::Failed),
+        401 | 403 => Posted::SignedOut,
+        code => Posted::Status(code),
     }
 }
 
@@ -458,4 +546,93 @@ mod tests {
         assert!(!sign_out(&client(), &origin(&format!("http://127.0.0.1:{port}")), Some(&t)).await);
     }
 
+    /// A one-shot server that answers with a whole reply and hands back the request it read
+    /// (with its body, up to content-length).
+    async fn one_reply(reply: String) -> (Origin, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let mut got = Vec::new();
+            loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&got).to_ascii_lowercase();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let len = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                        .unwrap_or(0);
+                    if got.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            socket.write_all(reply.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&got).into_owned()
+        });
+        (origin(&format!("http://127.0.0.1:{port}")), seen)
+    }
+
+    fn reply(status: &str, headers: &str, body: &str) -> String {
+        format!("HTTP/1.1 {status}\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n{body}", body.len())
+    }
+
+    #[test]
+    fn only_a_plain_etag_is_sent_back() {
+        assert!(etag_ok("W/\"g-0123456789abcdef01234567\""));
+        for bad in ["", "a b", "a,b", "a\r\nX: y", "a".repeat(65).as_str(), "é"] {
+            assert!(!etag_ok(bad), "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_glance_poll_sends_its_etag_and_reads_the_answer() {
+        let t = Token("kd1.TESTONLY".into());
+        let (o, seen) = one_reply(reply("200 OK", "etag: W/\"g-abc\"\r\n", r#"{"counts":{}}"#)).await;
+        let got = get_glance(&client(), &o, Some(&t), Some("W/\"g-old\"")).await;
+        assert_eq!(got, Glance::Fresh { etag: Some("W/\"g-abc\"".into()), body: r#"{"counts":{}}"#.into() });
+        let request = seen.await.unwrap().to_ascii_lowercase();
+        assert!(request.starts_with("get /api/glance http/1.1\r\n"), "{request}");
+        assert!(request.contains("\r\nif-none-match: w/\"g-old\"\r\n"), "{request}");
+        assert!(request.contains("\r\ncookie: kwnt_token=kd1.testonly\r\n"), "{request}");
+        for (status, want) in [("304 Not Modified", Glance::NotModified), ("404 Not Found", Glance::Missing), ("401 Unauthorized", Glance::SignedOut), ("500 Internal Server Error", Glance::Failed)] {
+            let (o, seen) = one_reply(reply(status, "", "")).await;
+            assert_eq!(get_glance(&client(), &o, None, Some("bad etag\r\nX: 1")).await, want, "{status}");
+            let request = seen.await.unwrap().to_ascii_lowercase();
+            assert!(!request.contains("if-none-match"), "an odd ETag is never sent: {request}");
+            assert!(!request.contains("cookie"), "no token, no cookie: {request}");
+        }
+        // an odd ETag from the server isn't kept
+        let (o, seen) = one_reply(reply("200 OK", "etag: a,b\r\n", "{}")).await;
+        assert_eq!(get_glance(&client(), &o, None, None).await, Glance::Fresh { etag: None, body: "{}".into() });
+        seen.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_perch_posts_json_with_the_cookie_and_reads_the_status() {
+        let t = Token("kd1.TESTONLY".into());
+        let (o, seen) = one_reply(reply("200 OK", "", r#"{"ok":true}"#)).await;
+        let body = serde_json::json!({ "decision": "allow_once" });
+        assert_eq!(post_json(&client(), &o, Some(&t), "/api/approvals/a1/resolve", &body).await, Posted::Ok(r#"{"ok":true}"#.into()));
+        let request = seen.await.unwrap();
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.starts_with("post /api/approvals/a1/resolve http/1.1\r\n"), "{request}");
+        assert!(lower.contains("\r\ncontent-type: application/json\r\n"), "{request}");
+        assert!(lower.contains("\r\ncookie: kwnt_token=kd1.testonly\r\n"), "{request}");
+        assert!(!lower.contains("\r\norigin:"), "{request}");
+        assert!(request.ends_with(r#"{"decision":"allow_once"}"#), "{request}");
+        for (status, want) in [("409 Conflict", Posted::Status(409)), ("404 Not Found", Posted::Status(404)), ("403 Forbidden", Posted::SignedOut)] {
+            let (o, seen) = one_reply(reply(status, "", "")).await;
+            assert_eq!(post_json(&client(), &o, Some(&t), "/api/glance/ask", &body).await, want, "{status}");
+            seen.await.unwrap();
+        }
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert_eq!(post_json(&client(), &origin(&format!("http://127.0.0.1:{port}")), None, "/api/glance/ask", &body).await, Posted::Failed);
+    }
 }

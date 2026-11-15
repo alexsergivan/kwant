@@ -45,6 +45,24 @@ for (const [name, run, want] of TABLE) {
   test(`clock: ${name} in en-US and en-GB`, () => assert.deepEqual(run().map(n), want));
 }
 
+// 18d (clock says day): a time inside an "at" sentence. Today: "at 8:15 PM"; another day: "on Nov 10 at 8:15 PM";
+// another year: "on Nov 10, 2025 at 8:15 PM". No "yesterday". Read at a fixed now on the Monday of AT.
+test('clock: atClock says the day when it is not today, in en-US and en-GB', () => {
+  const NOW = Date.parse('2026-11-16T22:00:00Z');
+  const at = (t, l) => n(m.atClock(t, NOW, l));
+  assert.deepEqual([at(AT, 'en-US'), at(AT, 'en-GB')], ['at 8:15 PM', 'at 20:15']);
+  assert.deepEqual([at(MORNING, 'en-US'), at(MORNING, 'en-GB')], ['at 8:30 AM', 'at 08:30']);
+  const OTHER = '2026-11-10T09:40:00Z';
+  assert.deepEqual([at(OTHER, 'en-US'), at(OTHER, 'en-GB')], ['on Nov 10 at 9:40 AM', 'on 10 Nov at 09:40']);
+  const YESTERDAY = '2026-11-15T23:59:00Z';
+  assert.deepEqual([at(YESTERDAY, 'en-US'), at(YESTERDAY, 'en-GB')], ['on Nov 15 at 11:59 PM', 'on 15 Nov at 23:59']);
+  const LAST_YEAR = '2025-11-10T09:40:00Z';
+  assert.deepEqual([at(LAST_YEAR, 'en-US'), at(LAST_YEAR, 'en-GB')], ['on Nov 10, 2025 at 9:40 AM', 'on 10 Nov 2025 at 09:40']);
+  for (const bad of [null, undefined, '', 'not a time']) assert.equal(m.atClock(bad, NOW, 'en-US'), null);
+  // The same day rule as localClock: the two agree on which times are today.
+  for (const t of [AT, MORNING, OTHER, YESTERDAY, LAST_YEAR]) assert.equal(m.atClock(t, NOW, 'en-US').startsWith('at '), m.localClock(t, NOW, 'en-US') === m.timeText(t, { locale: 'en-US' }));
+});
+
 test('clock: missing or unreadable times give null; wallClock keeps what it cannot read', () => {
   for (const f of [m.timeText, m.dateText, m.weekdayClock, m.dateClock]) {
     assert.equal(f(null), null);
