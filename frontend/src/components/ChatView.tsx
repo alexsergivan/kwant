@@ -2076,6 +2076,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
     requestAnimationFrame(() => checkMention(next, next.length));
   };
 
+  // 18f: once the reply has words the steps fold (desktop: the saved reply's row; phone: the compact row as is) and
+  // move below the bubble, into the landed action row's place, so landing moves nothing above the words.
+  const stepsBelow = !!liveActivity && foldLiveSteps({ writing, steps: liveActivity.steps });
+  const liveStepsList = liveActivity ? (
+    <LiveActivityList
+      live={liveActivity}
+      idBase={`live-${liveActivity.turnId}`}
+      compact={phone}
+      folded={stepsBelow}
+      lead={
+        livePages.length > 0 ? (
+          <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
+        ) : undefined
+      }
+    />
+  ) : null;
+
   return (
     <div
       ref={rootRef}
@@ -2406,19 +2423,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && (
-                <LiveActivityList
-                  live={liveActivity}
-                  idBase={`live-${liveActivity.turnId}`}
-                  compact={phone}
-                  folded={!phone && foldLiveSteps({ writing, steps: liveActivity.steps })}
-                  lead={
-                    livePages.length > 0 ? (
-                      <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
-                    ) : undefined
-                  }
-                />
-              )}
+              {liveActivity && !stepsBelow && liveStepsList}
 
               {thinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
@@ -2459,6 +2464,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 )}
               </div>
               )}
+
+              {/* 18f: once words stream, the steps row sits below the bubble, where the landed action row goes */}
+              {liveActivity && stepsBelow && liveStepsList}
 
               {!queued && <QueuedBeside items={queuedBeside} />}
             </div>

@@ -138,7 +138,7 @@ test('18f: the folded row is the saved row: same button classes, same wrapper, n
   const btn = (h) => h.match(/<button[^>]*class="([^"]+)"/)[1];
   assert.equal(btn(html), ui.STEPS_ROW_BUTTON);
   assert.equal(btn(saved), ui.STEPS_ROW_BUTTON);
-  assert.match(html, /^<section aria-label="What the bot is doing" data-steps-folded="" class="mb-2 max-w-full">/);
+  assert.match(html, /^<section aria-label="What the bot is doing" data-steps-folded="" class="mt-2 max-w-full">/, 'below the bubble, the landed action row\'s gap');
   assert.match(saved, /^<div class="mb-2 max-w-full">/);
   assert.match(html, />Working · 3 steps</);
   assert.doesNotMatch(html, /\d:\d\d/, 'no time while live');
@@ -150,4 +150,7 @@ test('18f: the folded row is the saved row: same button classes, same wrapper, n
   // Folded with one step says "1 step"; not folded is the card as before.
   assert.match(ui.live({ live: { turnId: 't', steps: [steps[0]], thinking: {} }, idBase: 'x', folded: true }), />Working · 1 step</);
   assert.doesNotMatch(ui.live({ live: { turnId: 't', steps, thinking: {} }, idBase: 'x' }), /data-steps-folded/);
+  // Phone: the compact row keeps its look; folded it sits below the bubble with the landed chip row's mt-1.
+  assert.match(ui.live({ live: { turnId: 't', steps, thinking: {} }, idBase: 'x', compact: true, folded: true }), /^<section aria-label="What the bot is doing" data-steps-compact="" class="mt-1 w-full max-w-2xl/);
+  assert.match(ui.live({ live: { turnId: 't', steps, thinking: {} }, idBase: 'x', compact: true }), /^<section aria-label="What the bot is doing" data-steps-compact="" class="mb-2 w-full max-w-2xl/);
 });

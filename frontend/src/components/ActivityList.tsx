@@ -201,8 +201,9 @@ export const STEPS_ROW_LIST = 'mt-1.5 w-full max-w-2xl rounded-xl border border-
  * While the bot works: every step so far, newest last. `compact` (phone, 0.6.13 spec C2) folds it to
  * one 44 px row, "Steps · 2 ▸", that opens to the same list; the engine's note (what it can't show of
  * its thinking) moves behind an ⓘ in that row, since the working strip already says the bot works.
- * `folded` (desktop, once the reply has words, 18f) draws the saved reply's one row instead of the card,
- * so landing only changes its label; opened, it stays open until the reply lands.
+ * `folded` (once the reply has words, 18f) is rendered below the bubble: on desktop it draws the saved reply's
+ * one row instead of the card, and on a phone the compact row keeps its look. Either way it sits where the landed
+ * action row goes, so nothing above the words moves; opened, it stays open until the reply lands.
  */
 export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; compact?: boolean; folded?: boolean; lead?: React.ReactNode }> = ({ live, idBase, compact = false, folded = false, lead }) => {
   const { steps } = live;
@@ -223,7 +224,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
     const listId = `${idBase}-live`;
     const noteId = `${idBase}-note`;
     return (
-      <section aria-label="What the bot is doing" data-steps-compact="" className="mb-2 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden">
+      <section aria-label="What the bot is doing" data-steps-compact="" className={`${folded ? 'mt-1' : 'mb-2'} w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden`}>
         {lead && <div className="flex items-center min-h-[44px] px-2.5 border-b border-zinc-700/40">{lead}</div>}
         <div className="flex items-center">
           <button
@@ -272,7 +273,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
   if (folded) {
     const listId = `${idBase}-live`;
     return (
-      <section aria-label="What the bot is doing" data-steps-folded="" className="mb-2 max-w-full">
+      <section aria-label="What the bot is doing" data-steps-folded="" className="mt-2 max-w-full">
         <div className="flex max-w-full min-w-0 items-center gap-2">
           <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={open ? listId : undefined} className={STEPS_ROW_BUTTON}>
             <ListTree size={13} className="text-sky-400/80" aria-hidden="true" />
