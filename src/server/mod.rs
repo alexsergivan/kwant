@@ -1,5 +1,6 @@
 pub mod discussion;
 pub mod routes;
+pub mod error_shape;
 pub mod delivery_plan;
 pub mod sse;
 pub mod browser_input;
@@ -625,5 +626,7 @@ pub fn create_router(state: AppState) -> Router {
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), spaces::row_guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
+        // Outermost, so the guard's own refusals get a code too (roadmap 14d)
+        .layer(axum::middleware::from_fn(error_shape::layer))
         .with_state(state)
 }
