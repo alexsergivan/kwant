@@ -423,7 +423,7 @@ pub fn view(a: &Attachment) -> Value {
     v
 }
 
-async fn load(state: &AppState, id: &str) -> Option<Attachment> {
+pub async fn load(state: &AppState, id: &str) -> Option<Attachment> {
     uuid::Uuid::parse_str(id).ok()?;
     state.db.get_attachment(id).await.ok().flatten()
 }
@@ -794,7 +794,7 @@ async fn task_origin(state: &AppState, scope: &SelfScope) -> Option<String> {
 
 /// The turn may see files of its own chat, of the chat its delegated task came from, and files
 /// this agent shared anywhere.
-async fn visible(state: &AppState, scope: &SelfScope, id: &str) -> Option<Attachment> {
+pub(crate) async fn visible(state: &AppState, scope: &SelfScope, id: &str) -> Option<Attachment> {
     let a = load(state, id).await?;
     let own_chat = a.context_id.is_some() && a.context_id == context_of(scope);
     let own_file = a.source == "agent" && a.kwant_id.as_deref() == Some(scope.kwant_id.as_str());
@@ -802,7 +802,40 @@ async fn visible(state: &AppState, scope: &SelfScope, id: &str) -> Option<Attach
         return Some(a);
     }
     let origin = task_origin(state, scope).await;
-    (origin.is_some() && a.context_id == origin).then_some(a)
+    if origin.is_some() && a.context_id == origin {
+        return Some(a);
+    }
+    came_along(state, scope, &a).await.then_some(a)
+}
+
+/// The chat this turn's thread was continued from ("Continue in a new chat from here") and the
+/// message it was continued from.
+async fn continued_from(state: &AppState, scope: &SelfScope) -> Option<(String, String)> {
+    let thread = scope.origin.as_ref()?.thread_id.as_deref()?;
+    let t = state.db.get_thread(thread).await.ok()??;
+    Some((t.forked_from_context?, t.forked_from_message_id?))
+}
+
+/// A file of the chat this one was continued from, posted with a message that was copied (at or
+/// before the one it was continued from): it came along by reference.
+async fn came_along(state: &AppState, scope: &SelfScope, a: &Attachment) -> bool {
+    let Some((context, cut)) = continued_from(state, scope).await else {
+        return false;
+    };
+    let Some(message) = a.message_id.as_deref().filter(|_| a.context_id.as_deref() == Some(context.as_str())) else {
+        return false;
+    };
+    state.db.message_at_or_before(message, &cut).await.unwrap_or(false)
+}
+
+/// As [`visible`], for a caller that has a chat id and an owning bot but no full turn to check
+/// against: the browser API's curl path, keyed only on the page (and so the chat and bot) it was
+/// called on. Same rule, minus the "chat a delegated task came from" leg, which needs a turn.
+pub(crate) async fn visible_to(state: &AppState, chat: Option<&str>, owner_kwant: Option<&str>, id: &str) -> Option<Attachment> {
+    let a = load(state, id).await?;
+    let own_chat = chat.is_some() && a.context_id.as_deref() == chat;
+    let own_file = owner_kwant.is_some() && a.source == "agent" && a.kwant_id.as_deref() == owner_kwant;
+    (own_chat || own_file).then_some(a)
 }
 
 pub async fn tool_list(state: &AppState, scope: &SelfScope) -> (String, bool) {
@@ -817,6 +850,18 @@ pub async fn tool_list(state: &AppState, scope: &SelfScope) -> (String, bool) {
         if !theirs.is_empty() {
             lines.push("Files in the chat your task came from:".into());
             lines.extend(theirs.iter().map(line));
+        }
+    }
+    if let Some((context, _)) = continued_from(state, scope).await {
+        let mut theirs = Vec::new();
+        for a in state.db.list_attachments_in(&context, 20).await.unwrap_or_default() {
+            if came_along(state, scope, &a).await {
+                theirs.push(line(&a));
+            }
+        }
+        if !theirs.is_empty() {
+            lines.push("Files from the chat this one continues:".into());
+            lines.extend(theirs);
         }
     }
     if lines.is_empty() {

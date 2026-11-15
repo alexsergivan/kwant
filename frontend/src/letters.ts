@@ -6,6 +6,7 @@
 
 import { LooseCase, LooseEndsError, call, shortDate } from './looseEnds';
 import { MAX_ATTACHMENT_BYTES } from './attachments';
+import { dateClock } from './clock';
 
 export interface LetterField {
   value: string;
@@ -219,7 +220,7 @@ export const reminderLabel = (offset: number): string => (offset === 0 ? 'On the
 
 export const reminderWhen = (iso: string): string => {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return Number.isNaN(d.getTime()) ? iso : (dateClock(d, { year: true }) ?? iso);
 };
 
 /** Text for a refused upload of a letter: busy reads calmly, the rest says what to change. */

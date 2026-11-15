@@ -279,12 +279,14 @@ const ADD_CODES: Record<string, AddProblem> = {
   no_text: 'no_text',
   unreadable: 'unreadable',
   person_only: 'person_only',
+  archived: 'archived',
 };
 
 /**
  * Maps an add's answer (Vega's route) to what the row says. The error's `code` decides, never the status or the
- * words: two 409s and two 422s mean different things, and the words carry the file's own name. Without a code,
- * only a proxy's bare 413 and the archived space's 409 (the one 409 without a code) are told apart.
+ * words: two 409s and two 422s mean different things, and the words carry the file's own name. The archived space's
+ * 409 has the code `archived` since 14d; without a code (an older server, or a proxy), a bare 413 and a 409 are still
+ * told apart.
  */
 export function addResultOf(status: number, code: string, error = ''): Exclude<AddResult, { ok: true }> {
   const kind = ADD_CODES[code];

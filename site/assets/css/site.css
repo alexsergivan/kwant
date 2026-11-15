@@ -460,7 +460,7 @@ dialog.reel-dialog::backdrop { background: rgba(13, 10, 31, 0.86); }
 .new-shots .new-list img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; margin-bottom: 12px; background: #140f26; border-radius: 8px; }
 .new-shots .new-list b, .new-shots .new-list span { padding: 0 4px; }
 .new-note { margin: 0; color: var(--muted); font-size: 14px; }
-.new-strip.more-strip { margin-top: 0; padding: 0; }
+.new-strip.more-strip { margin-top: 0; padding: 72px 0 0; } /* it follows a .band section, so it needs its own room */
 .more-strip .section-foot { flex-basis: 100%; margin-top: 0; }
 .fgroup .runs-list + .grid { margin-top: 28px; }
 .moments { padding-top: 24px; padding-bottom: 56px; }
@@ -519,7 +519,7 @@ img.app, video.app { --bar: 20px;
 .phone-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 56px; align-items: center; }
 .phones { display: flex; gap: 22px; align-items: flex-start; }
 .phone { width: 250px; overflow: hidden; border: 8px solid var(--panel); border-radius: 30px; background: var(--panel); box-shadow: var(--shadow); }
-.phone img { width: 100%; }
+.phone img { width: 100%; height: auto; }
 .phone + .phone { margin-top: 40px; }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .step { padding: 24px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; }
@@ -901,6 +901,7 @@ html:has(.jump-bar) { scroll-padding-top: 156px; }
   .dl[data-os="mac"] .os-mac, .dl[data-os="windows"] .os-windows, .dl[data-os="linux"] .os-linux { display: flex; width: 100%; }
   .tour { padding: 72px 0; }
   .setup { padding: 64px 0; }
+  .new-strip.more-strip { padding-top: 48px; }
   .install { white-space: normal; }
 }
 
@@ -973,8 +974,9 @@ pre { position: relative; margin: 20px 0 0; padding: 18px 20px; overflow-x: auto
 /* 1. Features jump bar: opaque. The 80 px strip above the stuck bar (76 px on phones) is filled by a band behind the
    floating nav, on the features page only. (A .jump-bar::before would also cover the lede while the bar isn't stuck yet.) */
 .jump-bar { background: var(--bg); }
-body:has(.jump-bar) .topbar::before { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: -12px; height: 80px; background: var(--bg); pointer-events: none; }
-@media (max-width: 640px) { body:has(.jump-bar) .topbar::before { height: 76px; } }
+/* A band behind the floating pill, so text scrolling up never shows beside or through it (pages with a jump bar, and every page but home). */
+body:has(.jump-bar) .topbar::before, body:not(.page-home) .topbar::before { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: -12px; height: 80px; background: var(--bg); pointer-events: none; }
+@media (max-width: 640px) { body:has(.jump-bar) .topbar::before, body:not(.page-home) .topbar::before { height: 76px; } }
 /* 2. Outro: 16 px from the quickstart / server row to the OS download; on phones the download is hidden, so 16 px to the note */
 .outro .dl { margin-top: 16px; }
 .outro .dl .cta { margin-top: 0; }

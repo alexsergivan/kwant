@@ -2,6 +2,7 @@
 //! The private CDP endpoint is used only by the server, never by the web client.
 use super::browser::{outage, BrowserController, BrowserError, Outage};
 use super::chrome_download::{self, ChromeSetup};
+use super::browser_proxy::{BrowserProxy, ENV_BYPASS, ENV_PROXY};
 use super::computer::{self, ComputerMode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -11,7 +12,7 @@ use tokio::{process::Command, sync::Mutex, time::{sleep, timeout}};
 /// The VM browser's image. Bump it whenever `docker/browser.Dockerfile` or
 /// `docker/browser-entrypoint.sh` change: kwant builds an image only when its tag is missing, and
 /// replaces a browser container made from another tag, so the bump is what ships the change.
-pub const BROWSER_IMAGE: &str = "kwnt-browser:v3";
+pub const BROWSER_IMAGE: &str = "kwnt-browser:v4";
 const BROWSER_DOCKERFILE: &str = include_str!("../../docker/browser.Dockerfile");
 const BROWSER_ENTRYPOINT: &str = include_str!("../../docker/browser-entrypoint.sh");
 
@@ -105,6 +106,12 @@ struct ServiceState {
     browser: BrowserController,
     endpoint: String,
     sessions: HashMap<String, SessionTarget>,
+    /// The configured controller behind each live session, reused across calls so its
+    /// `downloads` connection (see `browser_downloads.rs`) stays the one background task the
+    /// whole session's downloads and file choosers are tracked on, instead of a blank one per
+    /// call. Not persisted: a reconnect starts empty and each session gets a fresh controller the
+    /// next time it's used, same as before this cache existed.
+    controllers: HashMap<String, BrowserController>,
 }
 
 impl BrowserService {
@@ -302,11 +309,17 @@ impl BrowserService {
     async fn managed_endpoint(&self) -> Result<String, BrowserError> {
         let name = managed_container_name(&self.root);
         let found = Self::docker(&["inspect", "--format",
-            &format!("{{{{.Config.Image}}}}|{{{{index .Config.Labels \"{LABEL_BROWSER}\"}}}}"), &name], 5).await.ok();
+            &format!("{{{{.Config.Image}}}}|{{{{index .Config.Labels \"{LABEL_BROWSER}\"}}}}|{{{{index .Config.Labels \"{LABEL_PROXY}\"}}}}"), &name], 5).await.ok();
+        // The proxy is part of the container (env + label): a changed setting makes a new one.
+        let proxy = match BrowserProxy::from_env() {
+            Ok(p) => p,
+            Err(why) => { tracing::warn!("browser proxy ignored: {why}"); None }
+        };
+        let proxy_label = proxy.as_ref().map(|p| format!("{}|{}", p.url, p.bypass.join(";"))).unwrap_or_default();
         // A container made from an older image keeps that image's browser, and one made before
         // the labels (by an older kwant) restarts on boot and can't be reaped: make a new one.
         // Its profile is on tmpfs, so nothing is lost; cookies are kept in the data folder.
-        let current = found.as_deref() == Some(&format!("{BROWSER_IMAGE}|1"));
+        let current = found.as_deref() == Some(&format!("{BROWSER_IMAGE}|1|{proxy_label}"));
         if found.is_some() && !current {
             Self::docker(&["rm", "-f", &name], 30).await?;
         }
@@ -325,7 +338,7 @@ impl BrowserService {
                     .map_err(|e| BrowserError::Http(e.to_string()))?;
                 Self::docker(&["build", "-t", BROWSER_IMAGE, &build.to_string_lossy()], 600).await?;
             }
-            let args = managed_run_args(&name, &self.root);
+            let args = managed_run_args(&name, &self.root, proxy.as_ref());
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             Self::docker(&args, 30).await?;
         }
@@ -442,7 +455,7 @@ impl BrowserService {
         browser.keep_identity().await;
         let sessions = tokio::fs::read(self.sessions_file()).await.ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-        Ok(ServiceState { browser, endpoint, sessions })
+        Ok(ServiceState { browser, endpoint, sessions, controllers: HashMap::new() })
     }
 
     /// What to tell the person when the browser could not be reached. In local mode that is the
@@ -567,7 +580,7 @@ impl BrowserService {
         self.rested.lock().unwrap_or_else(|e| e.into_inner()).get(key).copied()
     }
 
-    async fn open_session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
+    async fn open_session(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
         let mut lock = self.state.lock().await;
         if lock.is_none() { *lock = Some(self.connect().await?); }
         let mut targets = lock.as_ref().unwrap().browser.send_cdp_command("Target.getTargets", json!({})).await;
@@ -586,6 +599,7 @@ impl BrowserService {
         };
         let existing = state.sessions.get(id).filter(|session| targets["targetInfos"].as_array()
             .is_some_and(|targets| targets.iter().any(|target| target["targetId"] == session.target)));
+        let reused = existing.is_some();
         let local = self.mode() == ComputerMode::Local;
         let alive = |target: &str| targets["targetInfos"].as_array()
             .is_some_and(|targets| targets.iter().any(|t| t["targetId"] == target));
@@ -623,7 +637,20 @@ impl BrowserService {
         };
         state.sessions.insert(id.to_string(), session.clone());
         self.save_sessions(&state.sessions).await?;
-        let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target), false);
+        // Reuse the same session's controller, not a fresh one, so its `downloads` connection (a
+        // dedicated background task; see `configure_downloads` below) stays the one the whole
+        // session's downloads and file choosers are tracked on. A fresh controller here would
+        // get a fresh, empty `downloads`, so every call would start its own blank-state download
+        // center and never see what an earlier call's center already observed.
+        let cached = reused.then(|| state.controllers.get(id).cloned()).flatten();
+        let ctrl = match cached {
+            Some(ctrl) => ctrl,
+            None => {
+                let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target.clone()), false);
+                state.controllers.insert(id.to_string(), ctrl.clone());
+                ctrl
+            }
+        };
         if !local {
             // The VM browser's profile is on tmpfs, so its contexts' cookies go when the
             // container restarts: keep them per team in the data folder (local mode's on-disk
@@ -642,6 +669,11 @@ impl BrowserService {
             ctrl.set_viewport(1280, 800).await?;
         }
         ctrl.refresh_location().await?;
+        // Next to #578's attachments root/chooser-tmp: one folder shared by every session's
+        // download staging, outside any bot's workspace (see `browser_downloads.rs`'s doc).
+        let download_staging = self.root.join("attachments").join("download-tmp");
+        let context_id = (!session.context.is_empty()).then_some(session.context.clone());
+        ctrl.configure_downloads(workspace.to_path_buf(), local, context_id, download_staging).await;
         Ok(ctrl)
     }
 
@@ -770,6 +802,8 @@ impl BrowserService {
 /// Labels on every browser container kwant starts: what it is, and whose data folder it serves.
 pub const LABEL_BROWSER: &str = "kwnt.browser";
 pub const LABEL_ROOT: &str = "kwnt.root";
+/// The proxy the container was made for (credential-free URL and extra bypass), empty without one.
+pub const LABEL_PROXY: &str = "kwnt.browser.proxy";
 /// Touched in the data folder whenever a bot uses the browser; its age is the container's idle time.
 pub const LAST_USE_FILE: &str = "browser-last-used";
 /// A browser container nobody has used for this long is stopped (`KWNT_BROWSER_IDLE_MINUTES`).
@@ -799,15 +833,25 @@ pub fn reap_action(running: bool, root_gone: bool, idle_for: Option<Duration>, l
 /// The `docker run` arguments for the browser container of the kwant whose data folder is
 /// `root`. It never restarts on its own (kwant starts it on demand), and it carries labels so a
 /// later kwant can find it, stop it when idle and remove it once its data folder is gone.
-pub fn managed_run_args(name: &str, root: &Path) -> Vec<String> {
+pub fn managed_run_args(name: &str, root: &Path, proxy: Option<&BrowserProxy>) -> Vec<String> {
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    [
+    let mut args: Vec<String> = [
         "run", "-d", "--name", name, "--restart", "no",
         "--label", &format!("{LABEL_BROWSER}=1"), "--label", &format!("{LABEL_ROOT}={}", root.display()),
         "--init", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--memory=1536m",
         "--cpus=2", "--pids-limit=512", "--read-only", "--tmpfs", "/tmp:rw,nosuid,size=512m",
-        "-p", "127.0.0.1::9222", BROWSER_IMAGE,
-    ].iter().map(|a| a.to_string()).collect()
+        "-p", "127.0.0.1::9222",
+    ].iter().map(|a| a.to_string()).collect();
+    if let Some(p) = proxy {
+        // the URL carries no credentials ([`BrowserProxy::parse`] refuses them)
+        args.extend([
+            "--label".into(), format!("{LABEL_PROXY}={}|{}", p.url, p.bypass.join(";")),
+            "-e".into(), format!("{ENV_PROXY}={}", p.url),
+            "-e".into(), format!("{ENV_BYPASS}={}", p.bypass.join(";")),
+        ]);
+    }
+    args.push(BROWSER_IMAGE.to_string());
+    args
 }
 
 /// The VM browser container of the kwant whose data folder is `root`: one name per installation
@@ -853,10 +897,23 @@ mod reaper_tests {
     }
 
     #[test]
+    fn a_proxy_reaches_the_container_as_env_and_label_and_no_proxy_adds_nothing() {
+        let none = managed_run_args("n", Path::new("."), None);
+        assert!(!none.iter().any(|a| a.contains("PROXY") || a.contains("kwnt.browser.proxy")), "{none:?}");
+        let proxy = BrowserProxy::parse("socks5://172.17.0.1:1080", "example.com").unwrap().unwrap();
+        let args = managed_run_args("n", Path::new("."), Some(&proxy));
+        let pairs: Vec<(&str, &str)> = args.windows(2).map(|w| (w[0].as_str(), w[1].as_str())).collect();
+        assert!(pairs.contains(&("-e", "KWNT_BROWSER_PROXY=socks5://172.17.0.1:1080")), "{args:?}");
+        assert!(pairs.contains(&("-e", "KWNT_BROWSER_PROXY_BYPASS=example.com")), "{args:?}");
+        assert!(pairs.contains(&("--label", "kwnt.browser.proxy=socks5://172.17.0.1:1080|example.com")), "{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some(BROWSER_IMAGE));
+    }
+
+    #[test]
     fn the_container_never_restarts_on_its_own_and_carries_its_labels() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
-        let args = managed_run_args("kwnt-browser-x", tmp.path());
+        let args = managed_run_args("kwnt-browser-x", tmp.path(), None);
         let pairs: Vec<(&str, &str)> = args.windows(2).map(|w| (w[0].as_str(), w[1].as_str())).collect();
         assert!(pairs.contains(&("--restart", "no")), "{args:?}");
         assert!(!args.iter().any(|a| a.contains("unless-stopped") || a.contains("always")), "{args:?}");
@@ -871,7 +928,7 @@ mod reaper_tests {
 
     #[test]
     fn a_relative_data_folder_is_labelled_absolute() {
-        let args = managed_run_args("kwnt-browser-x", Path::new("."));
+        let args = managed_run_args("kwnt-browser-x", Path::new("."), None);
         let label = args.iter().find(|a| a.starts_with("kwnt.root=")).unwrap();
         assert!(Path::new(label.trim_start_matches("kwnt.root=")).is_absolute(), "{label}");
     }
@@ -895,7 +952,7 @@ mod image_tests {
     use super::{BROWSER_DOCKERFILE, BROWSER_ENTRYPOINT, BROWSER_IMAGE};
     use sha2::{Digest, Sha256};
 
-    /// The browser files `kwnt-browser:v3` was built from. A change to them without a new
+    /// The browser files `kwnt-browser:v4` was built from. A change to them without a new
     /// [`BROWSER_IMAGE`] would never reach a computer that already has the old tag.
     #[test]
     fn the_browser_image_tag_moves_with_its_files() {
@@ -905,7 +962,7 @@ mod image_tests {
         let hash: String = files.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             (BROWSER_IMAGE, hash.as_str()),
-            ("kwnt-browser:v3", "8176b39255827329"),
+            ("kwnt-browser:v4", "3de3efce1e8d41e4"),
             "docker/browser files changed: bump BROWSER_IMAGE, then record the new hash here"
         );
     }

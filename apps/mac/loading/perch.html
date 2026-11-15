@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- The perch (design: /home/maus/shared/ship-software-safely/autonomy/desktop-island/design.md; Rust side
+     src/perch.rs and src/perch_window.rs). A bundled page in its own window ("perch") with no command
+     capability. Rust gives it everything with window.eval("kwantPerch.update({...})") and tells it how a
+     call went with kwantPerch.done({op, id, ok, code}). The page answers only by navigating to
+     kwant-island://… (ready, size, allow, deny, answer, open, ask, place, places, focus, collapse), which
+     on_navigation catches and refuses. A thing is named by its place index and its id, never by a name.
+     Every server string goes in with textContent; only our own creature SVG and icons use innerHTML. -->
+<html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+<title>kwant perch</title>
+<link rel="stylesheet" href="perch.css">
+</head><body>
+<div id="stage" hidden></div>
+<script src="creatures.js"></script>
+<script src="perch.js"></script>
+</body></html>

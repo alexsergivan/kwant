@@ -1,6 +1,6 @@
 [package]
 name = "kwant"
-version = "0.9.11"
+version = "0.9.15"
 edition = "2021"
 description = "kwant for Mac: the kwant server and its UI in one app, with a menu-bar icon"
 license = "AGPL-3.0-only"
@@ -27,6 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The native check and poll of a kwant server (already in the tree via kwnt)
 reqwest = "0.12"
 tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
 
 # A second launch focuses the running app (macOS does this itself)
 [target.'cfg(not(target_os = "macos"))'.dependencies]
@@ -34,7 +35,8 @@ tauri-plugin-single-instance = "2"
 
 # Reads System Settings › Accessibility › Reduce motion for the nudge (already in the tree via Tauri)
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace", "NSResponder", "NSWindow", "NSScreen", "NSGraphics"] }
 
 # Desktop notifications for the nudge over D-Bus (already in the tree via the single-instance plugin)
 [target.'cfg(target_os = "linux")'.dependencies]
