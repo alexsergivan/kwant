@@ -225,8 +225,7 @@ export interface ChatViewProps {
   pendingApprovals: PendingApproval[];
   /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
   prepush?: React.ReactNode;
-  /** Approvals answered in Telegram while this chat was open (G4): kept as a resolved row. */
-  /** Settled lines; `refused` marks a customer's call nobody allowed (22d). */
+  /** Approvals answered in Telegram (G4), kept as a resolved row; `refused` marks a customer's call nobody allowed (22d). */
   settledApprovals?: (PendingApproval & { refused?: true })[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
