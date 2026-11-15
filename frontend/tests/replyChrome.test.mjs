@@ -141,6 +141,23 @@ test('asksApproval looks only at the last two sentences', () => {
   assert.equal(m.asksApproval('Once you approve, I send it.\n\n```\nonce you approve\n```\nIt is live now. Nothing else to do.'), false);
 });
 
+test('metaHidesApprove: a failed step\'s Blocked keeps the Approve row; any other Blocked, a question or a card hides it', () => {
+  // Task 9's real ending after a refused step (13a): saved with meta.blocked from "failed_step"
+  const t9 = "The command I tried was `python3 -m unittest`. If you approve it, I'll run it and report the result.";
+  assert.equal(m.asksApproval(t9), true);
+  assert.equal(m.metaHidesApprove({ blocked: { text: t9, from: 'failed_step' } }), false, 'failed_step keeps the chip');
+  assert.equal(m.metaHidesApprove({ blocked: { text: 'no key for the Stripe API' } }), true, 'a plain Blocked: line still hides it');
+  assert.equal(m.metaHidesApprove({ blocked: { text: 'x', from: 'keep_going' } }), true);
+  assert.equal(m.metaHidesApprove({ blocked: { text: t9, from: 'failed_step' }, question_id: 'q1' }), true, 'a question has its own controls');
+  assert.equal(m.metaHidesApprove({ kind: 'card' }), true);
+  assert.equal(m.metaHidesApprove({}), false);
+  assert.equal(m.metaHidesApprove(null), false);
+  // ChatView's approveId reads it, instead of its own blocked/question/kind check
+  const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  assert.match(src, /if \(metaHidesApprove\(meta\)\) return null;/);
+  assert.doesNotMatch(src, /meta\.blocked \|\| meta\.question_id/);
+});
+
 test('ApproveRow: a labelled group, Approve first, Change… second; both call back and lock while busy', async () => {
   const calls = [];
   const { host, unmount } = mount(ui.ApproveRow, { name: 'Ben', onApprove: () => calls.push('approve'), onChange: () => calls.push('change') });
