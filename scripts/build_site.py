@@ -96,7 +96,7 @@ def defer_images(page_html):
 
 
 DOC_GROUPS = [
-    ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run")]),
+    ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run"), ("phone", "On your phone")]),
     ("Using kwant", [
         ("spaces", "Spaces"),
         ("bots-and-teams", "Bots & teams"),
@@ -519,6 +519,7 @@ def footer(root, home_page=False):
       <a href="{root}features.html">Features</a>
       <a href="{root}docs/quickstart.html">Quickstart</a>
       <a href="{root}docs/install.html">Install &amp; run</a>
+      <a href="{root}docs/phone.html">On your phone</a>
       <a href="{root}self-hosted-ai-agents.html">Self-hosted AI agents</a>
 {blog}      <a href="{root}docs/mcp.html">MCP tools</a>
     </nav>
