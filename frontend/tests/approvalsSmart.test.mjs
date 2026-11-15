@@ -38,7 +38,7 @@ test('the space control offers "Ask only when risky" between Ask and Don\'t ask,
   const values = [...html.matchAll(/value="(ask|smart|off)"/g)].map((x) => x[1]);
   assert.deepEqual(values, ['ask', 'smart', 'off']);
   const t = text(html);
-  assert.match(t, /Ask only when risky Everyday work in the bot's own folder runs on its own\. A card asks first before it goes online, installs something new, publishes, or touches anything outside its folder, and whenever it can't tell\./);
+  assert.match(t, /Ask only when risky Everyday work in the bot's own folder runs on its own\. A card asks you before it goes online, installs something new, publishes, touches anything outside its folder, or does anything that isn't clearly safe\./);
   assert.match(t, /It isn't a locked box: a program the bot runs inside its folder can still do anything you can\./, 'the honest limit of "smart" stays said');
   assert.match(t, /Ask before running commands \(default\)/, 'Ask stays the default');
 });
