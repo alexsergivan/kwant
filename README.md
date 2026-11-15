@@ -335,6 +335,7 @@ The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwa
   - [Parallel Universe](docs/parallel-universe.md)
   - [Dev mode](docs/dev-mode.md)
   - [Idea jar](docs/idea-jar.md)
+  - [Dictation](docs/dictation.md): `GET /api/spaces/:id/transcribe` says whether the mic button works in a space; `POST /api/spaces/:id/transcribe` turns a recording into text
 
 ---
 

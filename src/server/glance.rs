@@ -133,8 +133,9 @@ const OUTWARD_NAMES: &[&str] = &[
     "TRANSFER", "SUBMIT", "TWEET", "SHARE", "INVITE", "FORWARD", "UPLOAD", "WIPE", "TERMINATE", "REVOKE", "PURCHASE",
 ];
 
-const PUSHES: &str = "This pushes code, so it needs the full card.";
-const RUNS: &str = "This runs a command, so it needs the full card.";
+pub const PUSHES: &str = "This pushes code, so it needs the full card.";
+pub const RUNS: &str = "This runs a command, so it needs the full card.";
+pub const RISKY: &str = "kwant flagged this step as risky.";
 const OUTWARD: &str = "This acts outside kwant, so it needs the full card.";
 
 /// Every argument key and string value, at any depth, in document order (array items in turn).
@@ -262,23 +263,13 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
             other => other,
         });
     }
-    let set = |k: &str| details.get(k).is_some_and(|v| !v.is_null() && v != false);
-    if set("smart_reason") {
-        return Some("kwant flagged this step as risky.");
-    }
-    if set("prepush_grant") || set("strict_ask") {
-        return Some(PUSHES);
+    if let Some(why) = ships(details) {
+        return Some(why);
     }
     let tool = details["tool"].as_str().unwrap_or_default();
     let server = details["server"].as_str().unwrap_or_default();
     let args = &details["arguments"];
-    if !super::dev::prepush::mcp_writes(tool, args).is_empty() {
-        return Some(PUSHES);
-    }
     let upper = tool.to_ascii_uppercase();
-    if PUSH_WORDS.iter().any(|w| upper.contains(w)) {
-        return Some(PUSHES);
-    }
     // 1. A push-family word wherever it hides: the name, a key, a value, an argv item
     let mut all = vec![tool];
     texts(args, &mut all);
@@ -297,6 +288,57 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     // 4. An HTTP call that changes something, whatever the tool is called
     if writes_by_method(args) {
         return Some(OUTWARD);
+    }
+    None
+}
+
+/// A risky step or the push floor, from the details alone: a step smart approvals flagged
+/// ([`RISKY`]); a prepush grant, a strict ask, a GitHub write [`mcp_writes`] sees, or a
+/// [`PUSH_WORDS`] part in the tool name ([`PUSHES`]). The first layers of [`inline_refusal`], in its
+/// order.
+///
+/// [`mcp_writes`]: super::dev::prepush::mcp_writes
+fn ships(details: &Value) -> Option<&'static str> {
+    let set = |k: &str| details.get(k).is_some_and(|v| !v.is_null() && v != false);
+    if set("smart_reason") {
+        return Some(RISKY);
+    }
+    if set("prepush_grant") || set("strict_ask") {
+        return Some(PUSHES);
+    }
+    let tool = details["tool"].as_str().unwrap_or_default();
+    if !super::dev::prepush::mcp_writes(tool, &details["arguments"]).is_empty() {
+        return Some(PUSHES);
+    }
+    let upper = tool.to_ascii_uppercase();
+    if PUSH_WORDS.iter().any(|w| upper.contains(w)) {
+        return Some(PUSHES);
+    }
+    None
+}
+
+/// Argument keys (any depth, any case) that Telegram's floor reads as free text to run: the
+/// brief's four, plus `sql` (the Postgres server's `query` tool takes `{"sql": …}`). Narrower than
+/// [`is_run_key`] on purpose: `query`, `args` and `code` sit on many search and sign-in tools that
+/// Telegram keeps allowable (18b).
+const TELEGRAM_RUN_KEYS: &[&str] = &["command", "cmd", "argv", "script", "sql"];
+
+/// What Telegram's Allow once adds to its own floor (18b, Rigel's push-floor advisory): a step
+/// that ships code or runs a command, or one kwant flagged as risky. [`ships`], then a tool that
+/// runs free text: a [`RUNS_TEXT_NAMES`] part in the server or tool name, or an argument key that
+/// is exactly one of [`TELEGRAM_RUN_KEYS`] ([`RUNS`]). Whatever it refuses,
+/// [`inline_refusal`] refuses too; the island's other layers (outward names, HTTP verbs, push words
+/// inside values, the broad run keys) stay off Telegram on purpose, so an email that says
+/// "press release" keeps Allow once there.
+pub fn ships_or_runs(details: &Value) -> Option<&'static str> {
+    if let Some(why) = ships(details) {
+        return Some(why);
+    }
+    let tool = details["tool"].as_str().unwrap_or_default();
+    let server = details["server"].as_str().unwrap_or_default();
+    let names = format!("{} {}", server.to_ascii_uppercase(), tool.to_ascii_uppercase());
+    if RUNS_TEXT_NAMES.iter().any(|w| names.contains(w)) || any_key(&details["arguments"], &|k, _| TELEGRAM_RUN_KEYS.iter().any(|r| k.eq_ignore_ascii_case(r))) {
+        return Some(RUNS);
     }
     None
 }
@@ -811,6 +853,34 @@ mod tests {
     fn realistic_steps_may_still_be_allowed_inline() {
         for (name, d) in realistic_rows() {
             assert_eq!(inline_refusal(&d), None, "{name}");
+        }
+    }
+
+    // 18b: Telegram's floor is a subset of the island's, so the island never offers what
+    // Telegram refuses
+    #[test]
+    fn whatever_telegram_s_floor_refuses_the_island_refuses_too() {
+        let mut rows: Vec<Value> = risky_rows().into_iter().map(|(_, d)| d).collect();
+        rows.extend(hardening_rows().into_iter().map(|(_, d, _)| d));
+        rows.extend(realistic_rows().into_iter().map(|(_, d)| d));
+        rows.push(mcp("postgres", "query", json!({"sql": "DROP TABLE users"})));
+        rows.push(mcp("devtools", "run_command", json!({"cmd": "gh  pr merge 12"})));
+        rows.push(mcp("composio", "GITHUB_CREATE_A_RELEASE", json!({"tag_name": "v1"})));
+        let mut refused = 0;
+        for d in &rows {
+            if let Some(why) = ships_or_runs(d) {
+                refused += 1;
+                assert!([PUSHES, RUNS, RISKY].contains(&why), "{why}");
+                assert!(inline_refusal(d).is_some(), "{d}");
+            }
+        }
+        assert!(refused >= 3, "the table has refused rows");
+        // And the ordinary ones it keeps
+        for d in [
+            mcp("composio", "GMAIL_SEND_EMAIL", json!({"recipient_email": "a@b.c", "subject": "Our press release", "body": "The press release is attached."})),
+            mcp("composio", "NOTION_SEARCH_NOTION_PAGE", json!({"query": "release notes"})),
+        ] {
+            assert_eq!(ships_or_runs(&d), None, "{d}");
         }
     }
 
