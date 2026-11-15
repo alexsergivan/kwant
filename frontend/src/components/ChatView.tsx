@@ -81,7 +81,7 @@ import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSugg
 import { routeReasonText, routeWhyText } from '../routeReason';
 import { useInbox } from '../inboxStore';
 import { doneItemsOf, doneOf } from '../replyDone';
-import { APPROVE_TEXT, asksApproval, changePlaceholder } from '../approvalAsk';
+import { APPROVE_TEXT, asksApproval, changePlaceholder, metaHidesApprove } from '../approvalAsk';
 import { DoneCheckLine } from './DoneMarker';
 import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
@@ -1129,7 +1129,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const last = messages[messages.length - 1];
     if (!last || last.sender_role !== 'kwant' || last.id.startsWith('temp-') || isStreaming || awaitingAnswer || pendingApprovals.length > 0) return null;
     const meta = parseMetaObject(last.meta);
-    if (meta && (meta.blocked || meta.question_id || meta.kind)) return null;
+    if (metaHidesApprove(meta)) return null;
     return asksApproval(last.text) ? last.id : null;
   }, [messages, isStreaming, awaitingAnswer, pendingApprovals.length]);
   const approve = async (msg: ChatMessage) => {
