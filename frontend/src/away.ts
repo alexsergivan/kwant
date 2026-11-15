@@ -259,7 +259,8 @@ export const awayApi = {
   get: (since?: string) => call<AwayResponse>('GET', `/api/away${since ? `?since=${enc(since)}` : ''}`).then(normalizeAway),
   seen: () => call<{ last_seen: string }>('POST', '/api/away/seen'),
   answer: (id: string, choice: number) => call<unknown>('POST', `/api/questions/${enc(id)}/answer`, { choice }),
-  resolve: (id: string, decision: ApprovalDecision) => call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, { decision }),
+  resolve: (id: string, decision: ApprovalDecision, withoutBackup = false) =>
+    call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, withoutBackup && decision === 'allow_once' ? { decision, without_backup: true } : { decision }),
   /** Approval records with this stored status, newest first (`answered_via` says where). */
   approvals: (status: string) => call<unknown>('GET', `/api/approvals?status=${enc(status)}`),
   /** 0.9.5: ask again for an approval that expired unanswered (starts a new turn; grants nothing). */

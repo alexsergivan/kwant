@@ -52,7 +52,7 @@ export interface AwayViewProps {
   onBack?: () => void;
   onOpen: (item: AwayItem) => void;
   onAnswer: (item: AwayItem, choice: number) => void;
-  onResolve: (item: AwayItem, decision: ApprovalDecision) => void;
+  onResolve: (item: AwayItem, decision: ApprovalDecision, withoutBackup?: boolean) => void;
   /** Above the lists: what holds every bot (today's spending stop), not one bot's item. */
   top?: React.ReactNode;
 }
@@ -115,7 +115,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
 
         {item.kind === 'approval' && (
           <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
-            <ModernApprovalCard approval={approvalFromAway(item)} disabled={disabled} onResolve={(_, decision) => onResolve(item, decision)} />
+            <ModernApprovalCard approval={approvalFromAway(item)} disabled={disabled} onResolve={(_, decision, opts) => onResolve(item, decision as ApprovalDecision, opts?.withoutBackup)} />
           </div>
         )}
 
@@ -326,10 +326,10 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       top={top}
       onOpen={onOpen}
       onAnswer={(item, choice) => act(item, () => awayApi.answer(item.id, choice))}
-      onResolve={(item, decision) =>
+      onResolve={(item, decision, withoutBackup) =>
         act(item, async () => {
           try {
-            const res = await awayApi.resolve(item.id, decision);
+            const res = await awayApi.resolve(item.id, decision, withoutBackup);
             onApprovalResolved?.(item.id);
             return res;
           } catch (err) {

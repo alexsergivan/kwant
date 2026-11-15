@@ -139,19 +139,28 @@ export interface FloorUi {
   error: string | null;
   /** Epoch ms when Allow appeared in place of Back up first; presses before +500 ms are ignored. */
   armedAt: number | null;
+  /** 22f: the server's backup state as last re-read (on focus, after a backup or a new command), with the
+   * epoch ms it arrived, so its `age_s` ages from then. null: the card's own snapshot still holds. */
+  live: { backup: FloorBackup; at: number } | null;
 }
 
 export type FloorEvent =
   | { type: 'backup_start' }
   | { type: 'backup_done'; result: BackupResult; now: number }
-  | { type: 'backup_error'; error: string };
+  | { type: 'backup_error'; error: string }
+  | { type: 'live'; backup: FloorBackup; now: number };
 
 export const initialFloorUi = (floor: ProdFloor): FloorUi => ({
   phase: floor.backup.state === 'taking' ? 'taking' : floor.backup.state === 'failed' ? 'failed' : 'idle',
   taken: null,
   error: floor.backup.state === 'failed' ? floor.backup.error : null,
   armedAt: null,
+  live: null,
 });
+
+/** A backup state that lets Allow show (fresh from the server, whatever the card did). */
+const freshState = (b: FloorBackup, at: number, now: number) =>
+  (b.state === 'fresh' || b.state === 'old') && b.age_s !== null && b.age_s + Math.max(0, now - at) / 1000 <= FRESH_S;
 
 export function floorReducer(ui: FloorUi, ev: FloorEvent): FloorUi {
   switch (ev.type) {
@@ -161,9 +170,19 @@ export function floorReducer(ui: FloorUi, ev: FloorEvent): FloorUi {
     case 'backup_done':
       if (ui.phase !== 'taking') return ui;
       if (!ev.result.ok) return { ...ui, phase: 'failed', error: ev.result.error ?? 'no reason given', armedAt: null };
-      return { phase: 'done', taken: { bytes: ev.result.bytes, path: ev.result.path, at: ev.now }, error: null, armedAt: ev.now };
+      return { ...ui, phase: 'done', taken: { bytes: ev.result.bytes, path: ev.result.path, at: ev.now }, error: null, armedAt: ev.now };
     case 'backup_error':
       return ui.phase !== 'taking' ? ui : { ...ui, phase: 'failed', error: ev.error, armedAt: null };
+    case 'live': {
+      // A running backup owns the card; its own result comes next.
+      if (ui.phase === 'taking') return { ...ui, live: { backup: ev.backup, at: ev.now } };
+      const was = ui.live ? freshState(ui.live.backup, ui.live.at, ev.now) : false;
+      const is = freshState(ev.backup, ev.now, ev.now);
+      // A fresh backup taken elsewhere counts, even over this card's failed one; an Allow that appears
+      // because of it gets the same 500 ms guard as the one that replaces Back up first.
+      const phase = is && ui.phase === 'failed' ? 'idle' : ui.phase;
+      return { ...ui, phase, error: phase === 'failed' ? ui.error : null, live: { backup: ev.backup, at: ev.now }, armedAt: is && !was ? ev.now : ui.armedAt };
+    }
   }
 }
 
@@ -181,10 +200,13 @@ export interface FloorView {
   text: string;
   /** The file name (mono) after the size, when known. */
   file: string | null;
-  /** The main button: Allow, Back up first (in Allow's place), Try the backup again, or none. */
-  main: 'allow' | 'backup' | 'retry' | 'none';
+  /** The main button: Allow, Back up first (in Allow's place), Try the backup again, Set backup command (22f). */
+  main: 'allow' | 'backup' | 'retry' | 'set_command';
   /** A secondary Back up first beside Allow (plain deploy, old backup). */
   secondaryBackup: boolean;
+  /** 22f: a secondary "Allow without a backup" (behind one confirm): only when kwant guessed the database
+   * change, never for a known one or a destructive command. */
+  skip: boolean;
   /** Every button waits (taking). */
   busy: boolean;
   /** The right-hand note. */
@@ -196,40 +218,53 @@ export interface FloorView {
  * server's `age_s`, so a fresh backup ages on screen and turns old after 10 minutes.
  */
 export function floorView(floor: ProdFloor, ui: FloorUi, now: number, mountedAt: number = now): FloorView {
-  const b: FloorBackup = floor.backup;
+  const view = floorViewOf(floor, ui, now, mountedAt);
+  // Allow without a backup: a person's override of kwant's guess, offered wherever a backup is still missing.
+  const skip = canSkipBackup(floor) && (view.case === 'no_command' || view.case === 'blocked' || view.case === 'failed');
+  return skip ? { ...view, skip, note: 'Or allow it if this deploy doesn’t touch the database.' } : view;
+}
+
+/** True when this floor card may be allowed without a backup (22f): a deploy kwant only guessed changes the
+ * database. The server checks the same rule at answer time. */
+export const canSkipBackup = (floor: ProdFloor) => floor.kind === 'deploy_migration' && floor.migration === 'guess';
+
+function floorViewOf(floor: ProdFloor, ui: FloorUi, now: number, mountedAt: number): FloorView {
+  const b: FloorBackup = ui.live?.backup ?? floor.backup;
+  if (ui.live) mountedAt = ui.live.at;
   const blockedNote = 'Nothing runs without a fresh backup.';
   const plainNote = 'No “always allow” on the production floor.';
   const note = floor.needs_backup ? blockedNote : plainNote;
+  const skip = false;
   const sz = (bytes: number | null) => (size(bytes) ? ` · ${size(bytes)}` : '');
 
   if (ui.phase === 'taking') {
     const pct = typeof b.percent === 'number' && b.state === 'taking' ? ` ${Math.round(b.percent)} %` : '';
-    return { case: 'taking', tone: 'info', lead: '', text: `Taking a backup…${pct}`, file: null, main: floor.needs_backup ? 'backup' : 'allow', secondaryBackup: !floor.needs_backup, busy: true, note };
+    return { case: 'taking', tone: 'info', lead: '', text: `Taking a backup…${pct}`, file: null, main: floor.needs_backup ? 'backup' : 'allow', secondaryBackup: !floor.needs_backup, skip, busy: true, note };
   }
   if (ui.phase === 'failed') {
     const why = (ui.error ?? 'no reason given').replace(/[.\s]+$/, '');
-    return { case: 'failed', tone: 'bad', lead: 'Backup failed:', text: ` ${why}.`, file: null, main: 'retry', secondaryBackup: false, busy: false, note: blockedNote };
+    return { case: 'failed', tone: 'bad', lead: 'Backup failed:', text: ` ${why}.`, file: null, main: 'retry', secondaryBackup: false, skip, busy: false, note: blockedNote };
   }
   if (ui.phase === 'done' && ui.taken) {
     const secs = (now - ui.taken.at) / 1000;
     if (secs <= FRESH_S) {
-      return { case: 'just_taken', tone: 'ok', lead: `Backup taken ${age(secs)} ago`, text: sz(ui.taken.bytes), file: null, main: 'allow', secondaryBackup: false, busy: false, note: plainNote };
+      return { case: 'just_taken', tone: 'ok', lead: `Backup taken ${age(secs)} ago`, text: sz(ui.taken.bytes), file: null, main: 'allow', secondaryBackup: false, skip, busy: false, note: plainNote };
     }
   }
   if (b.state === 'no_data') {
-    return { case: 'no_data', tone: 'neutral', lead: '', text: 'Nothing to back up: this site has no database or uploads.', file: null, main: 'allow', secondaryBackup: false, busy: false, note: plainNote };
+    return { case: 'no_data', tone: 'neutral', lead: '', text: 'Nothing to back up: this site has no database or uploads.', file: null, main: 'allow', secondaryBackup: false, skip, busy: false, note: plainNote };
   }
   if (b.state === 'no_command' && floor.needs_backup) {
-    return { case: 'no_command', tone: 'bad', lead: 'No backup command.', text: ' Set a backup command in Dev mode settings.', file: null, main: 'none', secondaryBackup: false, busy: false, note: blockedNote };
+    return { case: 'no_command', tone: 'bad', lead: 'No backup command.', text: ' Set one here, then back up before this runs.', file: null, main: 'set_command', secondaryBackup: false, skip, busy: false, note: blockedNote };
   }
   const liveAge = b.age_s === null ? null : b.age_s + Math.max(0, now - mountedAt) / 1000;
   const fresh = (b.state === 'fresh' || b.state === 'old') && liveAge !== null && liveAge <= FRESH_S;
   if (fresh && liveAge !== null) {
-    return { case: 'fresh', tone: 'ok', lead: `Backup taken ${age(liveAge)} ago`, text: sz(b.bytes), file: fileName(b.path), main: 'allow', secondaryBackup: false, busy: false, note: plainNote };
+    return { case: 'fresh', tone: 'ok', lead: `Backup taken ${age(liveAge)} ago`, text: sz(b.bytes), file: fileName(b.path), main: 'allow', secondaryBackup: false, skip, busy: false, note: plainNote };
   }
   const never = liveAge === null || b.state === 'none' || b.state === 'no_command';
   if (floor.needs_backup) {
-    return { case: 'blocked', tone: 'bad', lead: never ? 'No backup yet.' : 'No fresh backup.', text: never ? '' : ` The last one is ${age(liveAge!)} old.`, file: null, main: 'backup', secondaryBackup: false, busy: false, note: blockedNote };
+    return { case: 'blocked', tone: 'bad', lead: never ? 'No backup yet.' : 'No fresh backup.', text: never ? '' : ` The last one is ${age(liveAge!)} old.`, file: null, main: 'backup', secondaryBackup: false, skip, busy: false, note: blockedNote };
   }
   return {
     case: 'old_plain',
@@ -240,6 +275,7 @@ export function floorView(floor: ProdFloor, ui: FloorUi, now: number, mountedAt:
     main: 'allow',
     // Without a backup command there is nothing to run, so only Allow and Deny.
     secondaryBackup: b.state !== 'no_command',
+    skip,
     busy: false,
     note: plainNote,
   };
@@ -285,6 +321,7 @@ export function floorSentence(why: string): string {
 }
 
 export function floorSubline(floor: ProdFloor): string {
+  if (floor.kind === 'deploy_migration' && floor.migration === 'guess') return 'kwant can’t tell if this deploy changes the database, so it asks for a backup from the last 10 minutes first.';
   if (floor.kind === 'deploy_migration') return 'This deploy changes the database, so it counts as destructive: it needs a backup from the last 10 minutes first.';
   if (floor.kind === 'destructive') return 'Destructive commands need a backup from the last 10 minutes first.';
   if (floor.kind === 'deploy') return 'Dev mode is on, so deploys always ask you, even with approvals off.';
