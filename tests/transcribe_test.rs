@@ -6,7 +6,7 @@ use axum::{
     body::{to_bytes, Body, Bytes},
     http::{HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use kwnt::{
@@ -17,7 +17,7 @@ use kwnt::{
         spaces::{NewSpace, SpaceId, DEFAULT_SPACE_ID},
         Database,
     },
-    drivers::engines::EngineId,
+    drivers::engines::{EngineId, EngineStatus, ProbeEnv},
     router::LayaRouter,
     mcp::{FixedApprover, McpTurnContext},
     server::{continuity::SelfScope, create_router, mcp_runtime::PermissionSession, memory_recall, transcribe, AppState},
@@ -97,6 +97,11 @@ async fn stub(headers: HeaderMap, body: Bytes) -> Response {
     }
 }
 
+/// The OpenAI API engine check: lists models for any key.
+async fn models() -> Json<Value> {
+    Json(json!({"data": [{"id": "whisper-1"}]}))
+}
+
 /// Starts the stub once, on its own thread and runtime (each test has its own runtime), and
 /// points kwnt at it.
 fn stub_base() -> &'static str {
@@ -108,7 +113,10 @@ fn stub_base() -> &'static str {
             rt.block_on(async move {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 tx.send(format!("http://{}", listener.local_addr().unwrap())).unwrap();
-                let app = Router::new().route("/v1/audio/transcriptions", post(stub)).layer(axum::extract::DefaultBodyLimit::max(64 << 20));
+                let app = Router::new()
+                    .route("/v1/audio/transcriptions", post(stub))
+                    .route("/v1/models", get(models))
+                    .layer(axum::extract::DefaultBodyLimit::max(64 << 20));
                 axum::serve(listener, app).await.unwrap();
             });
         });
@@ -577,6 +585,16 @@ async fn recall_and_dictation_pick_the_same_key() {
         (recall, dictation)
     };
     let s = |k: &str| Some(k.to_string());
+    // The one difference, on purpose (#630): until the OpenAI API engine's check has passed,
+    // recall leaves the host's key alone (a revoked key isn't retried every minute in the
+    // background); dictation, which the person starts, still tries it. A space's own key is
+    // used by both either way.
+    assert_ne!(state.engines.report(EngineId::OpenaiApi).status, EngineStatus::Ready);
+    assert_eq!(keys(state.clone(), host.clone()).await, (None, s("sk-order-host")), "host key before the check");
+    assert_eq!(keys(state.clone(), both.clone()).await, (s("sk-order-space"), s("sk-order-space")), "space key before the check");
+    let env = ProbeEnv { openai_key: s("sk-order-host"), openai_base: stub_base().to_string(), ..ProbeEnv::default() };
+    state.engines.recheck_one(EngineId::OpenaiApi, &env).await;
+    assert_eq!(state.engines.report(EngineId::OpenaiApi).status, EngineStatus::Ready);
     for (space, want) in [(&both, s("sk-order-space")), (&host, s("sk-order-host")), (&off, None), (&off_own, s("sk-order-own"))] {
         assert_eq!(keys(state.clone(), space.clone()).await, (want.clone(), want), "{space}");
     }
