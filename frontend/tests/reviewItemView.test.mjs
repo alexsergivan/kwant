@@ -461,3 +461,21 @@ test('18d: "You allowed / denied / sent it back" say the day when it was not tod
   r = await mount(today, fakeApi().api);
   assert.match(r.q('[data-held]').textContent.replace(/\s+/g, ' '), /You allowed this at \d{1,2}:\d{2}(?:\s?[AP]M)?\. It ran:/);
 });
+
+// 18d round 2 (Mira): the checker line says the day the same way, "Checked by fresh eyes on Codex on Nov 10 at
+// 9:55 AM" another day and "... at 9:55 AM" today; never "at Nov 10, 9:55 AM".
+test('18d: the checker line says the day when the check was not today', () => {
+  const t = new Date(); const at955 = (back) => new Date(t.getFullYear(), t.getMonth(), t.getDate() - back, 9, 55).toISOString();
+  const item = (checked_at) => ({ ...FX.heldAllowed, verdict: { ...FX.heldAllowed.verdict, result: 'pass', checker: { engine: 'Codex' }, checked_at } });
+  const before = m.checkerMeta(item(at955(5)));
+  assert.match(before, /^Checked by fresh eyes on Codex on (?:[A-Z][a-z]{2} \d{1,2}|\d{1,2} [A-Z][a-z]{2})(?:,? \d{4})? at (?:9:55\s?AM|09:55)/);
+  assert.doesNotMatch(before, / at (?:[A-Z][a-z]{2} \d|\d{1,2} [A-Z][a-z]{2}),/, 'never "at Nov 10, 9:55 AM"');
+  if (Intl.DateTimeFormat().resolvedOptions().locale === 'en-US') {
+    const d = new Date(at955(5));
+    const day = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== t.getFullYear() ? { year: 'numeric' } : {}) });
+    assert.ok(before.startsWith(`Checked by fresh eyes on Codex on ${day} at 9:55 AM`), before);
+  }
+  assert.match(m.checkerMeta(item(at955(0))), /^Checked by fresh eyes on Codex at (?:9:55\s?AM|09:55)(?: ·|$)/);
+  assert.equal(m.checkerMeta(item(null)).startsWith('Checked by fresh eyes on Codex'), true);
+  assert.doesNotMatch(m.checkerMeta(item(null)), / at | on Codex on /);
+});
