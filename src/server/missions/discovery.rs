@@ -507,7 +507,7 @@ async fn load(state: &AppState, query: Option<&str>, id: &str) -> Result<Suggest
 }
 
 fn not_offered(s: &SuggestionRow) -> Response {
-    (StatusCode::CONFLICT, Json(json!({ "error": format!("this suggestion was already {}", s.status), "status": s.status, "routine_id": s.routine_id }))).into_response()
+    (StatusCode::CONFLICT, Json(json!({ "error": format!("this suggestion was already {}", s.status), "status": s.status, "code": s.status, "routine_id": s.routine_id }))).into_response()
 }
 
 /// The routine Accept makes from `s` with the person's overrides `b`, built and checked like any

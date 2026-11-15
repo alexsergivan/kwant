@@ -257,7 +257,7 @@ async fn decide(State(state): State<AppState>, RawQuery(q): RawQuery, headers: H
             },
             Ok(Decision::NotProposed(status)) => Err((
                 StatusCode::CONFLICT,
-                Json(json!({ "error": format!("this fact is already {status}"), "status": status })),
+                Json(json!({ "error": format!("this fact is already {status}"), "status": status, "code": status })),
             )
                 .into_response()),
             Ok(Decision::NotFound) => Err(not_found("fact")),
@@ -975,7 +975,8 @@ pub async fn needs_you(state: &AppState, task: &super::Task) -> Vec<Value> {
 // C2: person routes (all person only through the `/api/facts` prefix, `auth::person_only`)
 
 fn conflict_body(error: String, status: Option<&str>) -> Response {
-    (StatusCode::CONFLICT, Json(json!({ "error": error, "status": status }))).into_response()
+    // The code is the state found (the UI reads it), or `conflict` when there is none
+    (StatusCode::CONFLICT, Json(json!({ "error": error, "status": status, "code": status.unwrap_or("conflict") }))).into_response()
 }
 
 async fn on_or_409(state: &AppState) -> Option<Response> {
