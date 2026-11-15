@@ -23,7 +23,7 @@
 //! - kwant's own browser container (`Container`, vm mode with no `KWNT_BROWSER_CDP_URL`) gets
 //!   `allowAndName` at [`CONTAINER_DOWNLOAD_DIR`] on the container's own tmpfs, so Chrome names
 //!   the file by its download guid there. Once it completes, kwant streams it out with
-//!   `docker exec <container> cat` into the staging folder (`docker cp` can't read a tmpfs mount),
+//!   `docker exec <container> head -c` into the staging folder (`docker cp` can't read a tmpfs mount),
 //!   lands it like a local one, and removes the container copy. The tmpfs is 512 MB and Chrome's
 //!   own profile lives there too, so these downloads stop at [`CONTAINER_MAX_DOWNLOAD_BYTES`].
 //! - A browser on another computer (`Elsewhere`, `KWNT_BROWSER_CDP_URL`) has no filesystem and
@@ -943,13 +943,9 @@ async fn copy_out_of_container(container: &str, staging: &Path, guid: &str) -> R
     // `head -c`, not `cat`: whatever sits at that path (a symlink to /dev/zero, say), at most one
     // byte past the cap ever reaches this disk, and the size check below then refuses it.
     let limit = (CONTAINER_MAX_DOWNLOAD_BYTES + 1).to_string();
-    let run = tokio::process::Command::new("docker")
-        .args(["exec", "-u", CONTAINER_USER, container, "head", "-c", &limit, "--", &source])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::from(file))
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .output();
+    let mut command = tokio::process::Command::new("docker");
+    command.args(["exec", "-u", CONTAINER_USER, container, "head", "-c", &limit, "--", &source]);
+    let run = run_into_file(command, file);
     let outcome = match tokio::time::timeout(CONTAINER_COPY_WAIT, run).await {
         Ok(Ok(out)) if out.status.success() => match tokio::fs::metadata(&staged).await {
             Ok(meta) if meta.len() > CONTAINER_MAX_DOWNLOAD_BYTES => Err(CONTAINER_TOO_BIG.to_string()),
@@ -967,6 +963,21 @@ async fn copy_out_of_container(container: &str, staging: &Path, guid: &str) -> R
             Err(why)
         }
     }
+}
+
+/// Runs `command` with its stdout written straight into `file` and its stderr captured.
+/// `Command::output()` can't be used here: tokio's replaces any stdout set beforehand with a
+/// pipe, so the file stayed empty and the whole download sat in memory instead. The child is
+/// killed if this future is dropped (the copy-out's time limit).
+async fn run_into_file(mut command: tokio::process::Command, file: std::fs::File) -> std::io::Result<std::process::Output> {
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(file))
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?
+        .wait_with_output()
+        .await
 }
 
 /// A download finished inside kwant's browser container: copy it out into staging, land it in
@@ -1061,6 +1072,39 @@ fn human_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The copy-out streams the container file to disk: stdout goes into the staged file, not a
+    // pipe (73f24f58 used `output()`, which landed an empty file in the real-Chromium run).
+    #[tokio::test]
+    async fn the_copy_out_writes_its_bytes_into_the_staged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let bytes: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&source, &bytes).unwrap();
+        let staged = dir.path().join("staged");
+        let file = std::fs::File::create(&staged).unwrap();
+        let mut command = tokio::process::Command::new("head");
+        command.args(["-c", "300001", "--"]).arg(&source);
+        let out = run_into_file(command, file).await.unwrap();
+        assert!(out.status.success());
+        assert!(out.stdout.is_empty(), "nothing is held in memory");
+        assert_eq!(std::fs::read(&staged).unwrap(), bytes);
+
+        // past the limit, `head -c` stops one byte over, which the size check then refuses
+        let file = std::fs::File::create(&staged).unwrap();
+        let mut command = tokio::process::Command::new("head");
+        command.args(["-c", "1000", "--"]).arg(&source);
+        run_into_file(command, file).await.unwrap();
+        assert_eq!(std::fs::metadata(&staged).unwrap().len(), 1000);
+
+        // a missing file is a failure with its reason on stderr
+        let file = std::fs::File::create(&staged).unwrap();
+        let mut command = tokio::process::Command::new("head");
+        command.args(["-c", "10", "--"]).arg(dir.path().join("missing"));
+        let out = run_into_file(command, file).await.unwrap();
+        assert!(!out.status.success());
+        assert!(!out.stderr.is_empty());
+    }
 
     // Fix #4: local sessions (a filesystem in common with this server) get downloads kept at the
     // shared staging path; a browser on another computer gets them refused up front, since
