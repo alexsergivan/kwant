@@ -31,6 +31,8 @@ export interface ActiveTurn {
   since?: string;
   /** "decide": a consult or decide turn of the decide-first gate. */
   purpose?: string;
+  /** 14a: an audit's hidden turn, with whose work it double-checks and why. */
+  audit?: import('./auditor').AuditTurn;
   /** A running turn's steps so far (like `meta.activity`), so a page opened mid-turn can show them. */
   activity?: unknown;
 }
@@ -184,6 +186,7 @@ export function applyTurnEvent(turns: TurnMap, ev: { type?: string; data?: any }
           state: 'running',
           seq: prev?.seq ?? ++seqCounter,
           since: prev?.since ?? new Date().toISOString(),
+          ...((d.audit ?? prev?.audit) ? { audit: d.audit ?? prev?.audit } : {}),
         },
       };
     }

@@ -300,11 +300,12 @@ pub fn promise_line(reply: &str) -> Option<String> {
 /// "tell me to run it". Matched as whole words, and not in a sentence that opens with the bot's own
 /// plan ("I'll share…").
 const ASKS_PERSON: &[&str] = &["send me", "paste", "share", "upload", "allow", "approve", "sign in", "log in", "connect", "tell me"];
-/// Offers, not waits: a reply that only offers ("Let me know if…", "If you'd like, I can…") goes on
-/// without the person, so these words are taken out before looking for a wait.
+/// Offers, not waits: a reply that only offers ("Let me know if…", "If you'd like, I can…", "Tell me if
+/// you want…", "Whenever you're ready, tell me…") goes on without the person, so a sentence with one of
+/// these is left out before looking for a wait (see [`asks_in`]).
 const OFFERS: &[&str] = &[
     "let me know", "i'll be here", "if you want", "if you'd like", "if you would like", "if you like", "if you prefer",
-    "if you need anything",
+    "if you need anything", "tell me if", "tell me whether", "whenever you're ready", "when you're ready",
 ];
 /// How much of the ending [`waits_on_person`] keeps.
 const WAIT_CHARS: usize = 300;
@@ -320,19 +321,23 @@ pub fn waits_on_person(reply: &str) -> Option<String> {
     }
     let para = reply.split("\n\n").map(str::trim).filter(|p| !p.is_empty()).last()?;
     let bare = para.lines().map(strip_markdown).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ").replace(['’', '‘'], "'");
-    let mut lower = bare.to_ascii_lowercase();
+    let lower = bare.to_ascii_lowercase();
     if lower.trim_end_matches(['*', '_', '`', ')', ' ']).ends_with('?') {
         return None;
     }
-    for offer in OFFERS {
-        lower = lower.replace(offer, "");
-    }
-    let waits = sentence_spans(&lower).into_iter().any(|(at, end)| {
-        let s = lower[at..end].trim_start();
+    let waits = sentence_spans(&lower).into_iter().flat_map(|(at, end)| asks_in(&lower[at..end])).any(|s| {
         let planned = PROMISE_OPENERS.iter().any(|o| strip_leads(s).starts_with(o));
         NOT_A_PROMISE.iter().any(|w| s.contains(w)) || (!planned && ASKS_PERSON.iter().any(|w| has_words(s, w)))
     });
     waits.then(|| cut_at_word(&bare, WAIT_CHARS))
+}
+
+/// The parts of one lowercased `sentence` that may wait on the person: its ", or " alternatives,
+/// without the ones that hold an offer ([`OFFERS`]). The whole part goes, not just the offer's words,
+/// so "Let me know once you've merged it" doesn't leave "once you…" behind. An alternative after ", or"
+/// is its own ask: "Tell me if you want me to run it, or paste the output" still asks for the output.
+fn asks_in(sentence: &str) -> impl Iterator<Item = &str> {
+    sentence.split(", or ").map(str::trim_start).filter(|part| !OFFERS.iter().any(|o| has_words(part, o)))
 }
 
 /// What went wrong before a turn's own tool steps (13a), for [`failed_step_blocked`].
@@ -1179,9 +1184,15 @@ mod tests {
             // Task 9 endings of the PR build after a declined card (decided replies, diag runs 2 and 3)
             "The real result is still unconfirmed. If you want it, run `cd work && python3 -m unittest`, or tell me to run it and I'll do so.",
             "If you approve the command, I'll run it and confirm. You can also run `python3 -m unittest` in that folder and paste me the output.",
+            // An offer next to a real ask: the ask after ", or" still waits (T9_PR_HELD's ending)
+            "Tell me if you want me to run it, or paste the output and I'll check it against the table.",
+            // Waits and asks that keep counting next to the offers below
+            "I will try again once you approve the next card.",
+            "Tell me to run it and I'll report the counts.",
         ] {
             assert!(waits_on_person(ask).is_some(), "{ask}");
         }
+        assert!(waits_on_person(T9_PR_HELD).is_some());
         // A promise ("I'll share…" is the bot's own plan), a Done: or Blocked: line, a question,
         // an offer, or a word that only contains an ask ("connection", "shared", "allowed")
         for not in [
@@ -1192,6 +1203,14 @@ mod tests {
             "I can't reach the site. Should I try the mirror instead?",
             "Here's the summary.\n\nLet me know if you want changes.",
             "If you'd like, I can also add a chart.",
+            // Offers with another opener (Rigel's S1/S2): the whole sentence goes, not just "let me know"
+            "The draft is in the folder.\n\nLet me know when you've had a chance to review it.",
+            "The draft is in the folder.\n\nLet me know once you've had a chance to review it.",
+            "The notes are drafted.\n\nLet me know once you've merged it and I'll update the notes.",
+            "The build is ready.\n\nWhenever you're ready, tell me and I'll deploy.",
+            "The download failed.\n\nTell me if you want me to try a different mirror.",
+            "The download failed.\n\nTell me whether you want me to try a different mirror.",
+            "When you're ready, tell me and I'll ship it.",
             "The connection failed, so I used the cached copy. The report is shared in the folder and the tests are allowed to run.",
             "",
         ] {

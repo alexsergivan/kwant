@@ -207,6 +207,7 @@ async fn a_running_turn_clearing_or_changing_a_reaction_starts_no_second_turn() 
         state: "running".into(),
         since: chrono::Utc::now(),
         purpose: None,
+        audit: None,
     });
     assert_eq!(react(&env, &q.id, json!("up")).await.1["answered"], false);
     env.state.turns.end_turn("t-busy");

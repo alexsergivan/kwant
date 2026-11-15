@@ -91,6 +91,7 @@ import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
 import { recentWork, teamMembersLeadFirst, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
+import { auditShortLine, auditTurnLine } from './auditor';
 import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api, heldFromReply, heldLine, heldMessages, stillHeld } from './h4Status';
 import { HeldLine } from './components/HeldLine';
 import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
@@ -3612,7 +3613,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           else openTarget({ channel_id: t.context_id, kwant_id: null });
         }}
         className="inline-flex items-center gap-1.5 min-w-0 max-w-[16rem] sm:max-w-xs px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-[11px] text-sky-200 hover:bg-sky-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-        title={elsewhere.map((t) => describeContext(t.context_id, t.kwant_id)).join(', ')}
+        title={elsewhere.map((t) => (t.audit ? auditTurnLine(t.audit, kwantNames, { subject: false }) : describeContext(t.context_id, t.kwant_id))).join(', ')}
       >
         {awaitingTurns.has(elsewhere[0].turn_id) ? (
           <HelpCircle size={10} className="shrink-0 text-amber-300" aria-hidden="true" />
@@ -3620,8 +3621,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           <Loader2 size={10} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
         )}
         <span className="truncate">
+          {elsewhere[0].audit && elsewhere[0].state === 'running' && !browserTurns.has(elsewhere[0].turn_id) && !awaitingTurns.has(elsewhere[0].turn_id) ? auditShortLine(elsewhere[0].audit, kwantNames) : <>
           {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : browserTurns.has(elsewhere[0].turn_id) ? 'Needs you in the browser in ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
           {describeContext(elsewhere[0].context_id, elsewhere[0].kwant_id)}
+          </>}
         </span>
         {elsewhere.length > 1 && <span className="shrink-0 text-sky-300/80">+{elsewhere.length - 1} more</span>}
       </button>
@@ -3760,7 +3763,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const vmSwitcher = switcherEntries.length >= 2 ? { entries: switcherEntries, current: activeSandboxId, onPick: watchOwner } : null;
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
-  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
+  const busyTitles: Record<string, string> = {};
+  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext, names: kwantNames, titles: busyTitles });
   // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
   const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
@@ -4082,6 +4086,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      busyTitles={busyTitles}
       doneKwants={doneKwants}
       browsingOwners={globes.owners}
       browsingBots={globes.bots}
