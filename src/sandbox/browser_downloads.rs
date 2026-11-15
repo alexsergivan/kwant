@@ -18,10 +18,18 @@
 //! `downloads/`. Reconnecting to follow a popup polls `get_ws_url()` every few seconds rather than
 //! reacting the instant a popup opens, so capture on a brand new popup can lag by that long.
 //!
-//! Remote Chrome (`KWNT_BROWSER_CDP_URL`) has no filesystem in common with this server, so a
-//! staging path means nothing there: `local` sessions get `allowAndName` at the shared staging
-//! path; every other session gets `deny` with `eventsEnabled: true`, and a download attempt is
-//! reported back as failed rather than tracked.
+//! Where Chrome keeps the bytes depends on where it runs ([`DownloadHome`]):
+//! - Chrome on this computer (`Local`) gets `allowAndName` at the shared staging path.
+//! - kwant's own browser container (`Container`, vm mode with no `KWNT_BROWSER_CDP_URL`) gets
+//!   `allowAndName` at [`CONTAINER_DOWNLOAD_DIR`] on the container's own tmpfs, so Chrome names
+//!   the file by its download guid there. Once it completes, kwant streams it out with
+//!   `docker exec <container> cat` into the staging folder (`docker cp` can't read a tmpfs mount),
+//!   lands it like a local one, and removes the container copy. The tmpfs is 512 MB and Chrome's
+//!   own profile lives there too, so these downloads stop at [`CONTAINER_MAX_DOWNLOAD_BYTES`].
+//! - A browser on another computer (`Elsewhere`, `KWNT_BROWSER_CDP_URL`) has no filesystem and
+//!   no Docker in common with this server: it gets `deny` with `eventsEnabled: true`, and a
+//!   download attempt is reported back as failed rather than tracked. kwant never fetches the
+//!   URL itself instead (it could reach this server's own ports).
 
 use super::browser::{connect_cdp, BrowserController, BrowserError, WsStream};
 use super::safe_fs;
@@ -49,14 +57,60 @@ const JOB_WAIT: Duration = Duration::from_secs(20);
 /// A staged download left in the shared incoming folder this long without being landed (no
 /// center's frame tree ever claimed it, or a crash interrupted the move) is swept as an orphan.
 const INCOMING_ORPHAN_AGE: Duration = Duration::from_secs(3600);
-/// Remote Chrome has no filesystem in common with this server, so a download can't be kept.
-const REMOTE_DOWNLOAD_REFUSAL: &str = "Downloads need the browser on this computer for now.";
+/// A browser on another computer has no filesystem in common with this server, so a download
+/// can't be kept: say so in words the bot and the person can act on.
+const REMOTE_DOWNLOAD_REFUSAL: &str = "This browser runs on another computer, so kwant can't keep its downloads. \
+Copy the file's link instead, or switch this bot to Local computer.";
+/// Where Chrome in kwant's browser container writes downloads: on the container's own tmpfs,
+/// each file named by its download guid (`allowAndName`), never by anything the page chose.
+pub const CONTAINER_DOWNLOAD_DIR: &str = "/tmp/kwnt-dl";
+/// The container's `/tmp` is a 512 MB tmpfs that Chrome's own profile shares: a download is
+/// stopped once it's past this, so it can't fill the browser's disk.
+const CONTAINER_MAX_DOWNLOAD_BYTES: u64 = 400 * 1024 * 1024;
+const CONTAINER_TOO_BIG: &str =
+    "it's over 400 MB, the most this bot's browser can hold. Copy the file's link instead, or switch this bot to Local computer.";
+/// The longest one `docker exec` may take: copying a finished download out of the container, or
+/// a small chore (making the folder, removing a file).
+const CONTAINER_COPY_WAIT: Duration = Duration::from_secs(300);
+const CONTAINER_CHORE_WAIT: Duration = Duration::from_secs(15);
+
+/// Where a session's Chrome keeps a download, and so how it reaches the bot's `downloads/`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DownloadHome {
+    /// Chrome on this computer: it writes straight into the shared staging folder.
+    Local,
+    /// kwant's own browser container, by name: Chrome writes into [`CONTAINER_DOWNLOAD_DIR`] on
+    /// the container's tmpfs, and kwant copies the finished file out with Docker.
+    Container(String),
+    /// A browser kwant was pointed at on another computer (`KWNT_BROWSER_CDP_URL`): no shared
+    /// disk, no Docker, so downloads are refused.
+    Elsewhere,
+}
+
+impl DownloadHome {
+    /// The largest download this home can take.
+    fn cap(&self) -> u64 {
+        match self {
+            Self::Container(_) => CONTAINER_MAX_DOWNLOAD_BYTES,
+            _ => MAX_DOWNLOAD_BYTES,
+        }
+    }
+
+    /// Why a download over [`Self::cap`] was stopped, in the bot's own words.
+    fn too_big(&self) -> &'static str {
+        match self {
+            Self::Container(_) => CONTAINER_TOO_BIG,
+            _ => "it passed 1 GB.",
+        }
+    }
+}
 
 #[derive(Clone)]
 enum DlStatus {
     InProgress,
     Done(String),
-    Cancelled,
+    /// Stopped before it finished, with why.
+    Cancelled(String),
     Failed(String),
 }
 
@@ -68,6 +122,9 @@ struct DownloadEntry {
     received: u64,
     status: DlStatus,
     reported_terminal: bool,
+    /// kwant asked Chrome to cancel it for passing the cap, so the `canceled` that follows says
+    /// so (and the cancel isn't sent again on every later progress event).
+    too_big: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -130,7 +187,7 @@ pub struct DownloadCenter {
 }
 
 impl DownloadCenter {
-    /// `local`: whether this Chrome shares a filesystem with this server (see the module doc).
+    /// `home`: where this Chrome keeps a download (see the module doc).
     /// `browser_context_id`: the session's own context, for a non-default context (VM / job
     /// pages); `None` for a local page, which shares the kwant profile's default context.
     /// `staging_root`: one folder shared by every session, outside any bot's workspace.
@@ -140,12 +197,12 @@ impl DownloadCenter {
     /// part of whatever request just opened this session, never something a later, unrelated
     /// request races against and appears to have caused. A browser slow or unreachable past that
     /// wait just keeps retrying in the background, same as before this wait existed.
-    pub async fn start(ctrl: BrowserController, workspace: PathBuf, local: bool, browser_context_id: Option<String>, staging_root: PathBuf) -> Self {
+    pub async fn start(ctrl: BrowserController, workspace: PathBuf, home: DownloadHome, browser_context_id: Option<String>, staging_root: PathBuf) -> Self {
         let shared = Arc::new(StdMutex::new(Shared::default()));
         let (tx, rx) = mpsc::channel(8);
         let (ready_tx, ready_rx) = oneshot::channel();
         let center = Self { shared: shared.clone(), jobs: tx };
-        let session = Session { workspace, local, browser_context_id, staging_root };
+        let session = Session { workspace, home, browser_context_id, staging_root };
         tokio::spawn(run(ctrl, session, shared, rx, ready_tx));
         let _ = tokio::time::timeout(Duration::from_secs(2), ready_rx).await;
         center
@@ -175,8 +232,8 @@ impl DownloadCenter {
                 );
                 json!({"status": "done", "name": entry.name, "path": rel, "note": note})
             }
-            DlStatus::Cancelled => {
-                let note = format!("The download of {} was stopped: it passed 1 GB.", entry.name);
+            DlStatus::Cancelled(why) => {
+                let note = format!("The download of {} was stopped: {why}", entry.name);
                 json!({"status": "cancelled", "name": entry.name, "note": note})
             }
             DlStatus::Failed(why) => {
@@ -361,9 +418,17 @@ impl DownloadCenter {
 /// clippy's argument-count lint.
 struct Session {
     workspace: PathBuf,
-    local: bool,
+    home: DownloadHome,
     browser_context_id: Option<String>,
     staging_root: PathBuf,
+}
+
+/// What `handle_event` needs to land a finished download: borrowed from [`Session`].
+struct Landing<'a> {
+    workspace: &'a Path,
+    home: &'a DownloadHome,
+    staging_root: &'a Path,
+    browser_context_id: Option<&'a str>,
 }
 
 async fn run(
@@ -373,7 +438,13 @@ async fn run(
     mut jobs: mpsc::Receiver<Job>,
     ready: oneshot::Sender<()>,
 ) {
-    let Session { workspace, local, browser_context_id, staging_root } = session;
+    let Session { workspace, home, browser_context_id, staging_root } = session;
+    let landing = Landing {
+        workspace: &workspace,
+        home: &home,
+        staging_root: &staging_root,
+        browser_context_id: browser_context_id.as_deref(),
+    };
     let mut ready = Some(ready);
     let _ = tokio::fs::create_dir_all(&staging_root).await;
     loop {
@@ -393,7 +464,10 @@ async fn run(
             }
         };
         let msg_id = AtomicU64::new(1);
-        if setup(&mut ws, &msg_id, &shared, &staging_root, local, browser_context_id.as_deref()).await.is_err() {
+        if let DownloadHome::Container(name) = &home {
+            prepare_container_dir(name).await;
+        }
+        if setup(&mut ws, &msg_id, &shared, &staging_root, &home, browser_context_id.as_deref()).await.is_err() {
             tokio::time::sleep(RETRY_WAIT).await;
             continue;
         }
@@ -407,13 +481,13 @@ async fn run(
                 biased;
                 job = jobs.recv() => {
                     let Some(job) = job else { return };
-                    let result = job_call(&mut ws, &msg_id, &shared, &workspace, local, &job.method, job.params).await;
+                    let result = job_call(&mut ws, &msg_id, &shared, &landing, &job.method, job.params).await;
                     let failed = result.is_err();
                     let _ = job.reply.send(result);
                     if failed { break; }
                 }
                 msg = ws.next() => {
-                    if on_message(msg, &mut ws, &msg_id, &shared, &workspace, local).await.is_err() { break; }
+                    if on_message(msg, &mut ws, &msg_id, &shared, &landing).await.is_err() { break; }
                 }
                 _ = follow.tick() => {
                     if let Ok(fresh) = ctrl.get_ws_url().await {
@@ -425,9 +499,9 @@ async fn run(
     }
 }
 
-/// `incoming`: the shared staging folder (outside any workspace) every session points
+/// `incoming`: the shared staging folder (outside any workspace) every local session points
 /// `Browser.setDownloadBehavior` at, so the global setting can't single out one bot's folder.
-/// `local`: allow downloads there; otherwise deny them but keep hearing about attempts. Also
+/// `home`: see [`download_behavior_params`]. Also
 /// seeds `shared.frames` from this page's own frame tree, for `handle_event` to claim a download
 /// only once it sees a `frameId` that's actually this page's.
 async fn setup(
@@ -435,11 +509,11 @@ async fn setup(
     msg_id: &AtomicU64,
     shared: &Arc<StdMutex<Shared>>,
     incoming: &Path,
-    local: bool,
+    home: &DownloadHome,
     browser_context_id: Option<&str>,
 ) -> Result<(), BrowserError> {
     call_raw(ws, msg_id, "Page.enable", json!({})).await?;
-    let behavior = download_behavior_params(local, incoming, browser_context_id);
+    let behavior = download_behavior_params(home, incoming, browser_context_id);
     call_raw(ws, msg_id, "Browser.setDownloadBehavior", behavior).await?;
     call_raw(ws, msg_id, "Page.setInterceptFileChooserDialog", json!({"enabled": true})).await?;
     if let Ok(tree) = call_raw(ws, msg_id, "Page.getFrameTree", json!({})).await {
@@ -450,22 +524,39 @@ async fn setup(
     Ok(())
 }
 
-/// Builds `Browser.setDownloadBehavior`'s params for the Fix #4 mode switch: a `local` session
-/// (one with a filesystem in common with this server) gets `allowAndName` at the shared staging
-/// path; every other session (remote Chrome, with none) gets `deny`, kept to `eventsEnabled` so a
-/// download attempt is still reported rather than silently vanishing.
-fn download_behavior_params(local: bool, incoming: &Path, browser_context_id: Option<&str>) -> Value {
+/// Builds `Browser.setDownloadBehavior`'s params for where this Chrome runs: on this computer it
+/// gets `allowAndName` at the shared staging path; in kwant's browser container, `allowAndName`
+/// at [`CONTAINER_DOWNLOAD_DIR`] on the container's own tmpfs (the staging path means nothing
+/// inside it); on another computer, `deny`, kept to `eventsEnabled` so a download attempt is
+/// still reported rather than silently vanishing.
+fn download_behavior_params(home: &DownloadHome, incoming: &Path, browser_context_id: Option<&str>) -> Value {
+    let download_path = match home {
+        DownloadHome::Local => Some(incoming.to_string_lossy().to_string()),
+        DownloadHome::Container(_) => Some(CONTAINER_DOWNLOAD_DIR.to_string()),
+        DownloadHome::Elsewhere => None,
+    };
     let mut behavior = json!({
-        "behavior": if local { "allowAndName" } else { "deny" },
+        "behavior": if download_path.is_some() { "allowAndName" } else { "deny" },
         "eventsEnabled": true,
     });
-    if local {
-        behavior["downloadPath"] = json!(incoming.to_string_lossy());
+    if let Some(path) = download_path {
+        behavior["downloadPath"] = json!(path);
     }
     if let Some(ctx) = browser_context_id {
         behavior["browserContextId"] = json!(ctx);
     }
     behavior
+}
+
+/// `Browser.cancelDownload`'s params. Chrome looks the guid up in one browser context only, so a
+/// session in its own context (vm mode) must name it: without it real Chrome answers "No download
+/// item found for the given GUID" and the download runs on.
+fn cancel_params(guid: &str, browser_context_id: Option<&str>) -> Value {
+    let mut params = json!({"guid": guid});
+    if let Some(ctx) = browser_context_id {
+        params["browserContextId"] = json!(ctx);
+    }
+    params
 }
 
 /// Recurses through a `Page.getFrameTree` result (`{frame: {id}, childFrames: [...]}`), collecting
@@ -517,8 +608,7 @@ async fn job_call(
     ws: &mut WsStream,
     msg_id: &AtomicU64,
     shared: &Arc<StdMutex<Shared>>,
-    workspace: &Path,
-    local: bool,
+    landing: &Landing<'_>,
     method: &str,
     params: Value,
 ) -> Result<Value, BrowserError> {
@@ -537,7 +627,7 @@ async fn job_call(
                 }
             }
         }
-        on_message(msg, ws, msg_id, shared, workspace, local).await?;
+        on_message(msg, ws, msg_id, shared, landing).await?;
     }
 }
 
@@ -546,15 +636,14 @@ async fn on_message(
     ws: &mut WsStream,
     msg_id: &AtomicU64,
     shared: &Arc<StdMutex<Shared>>,
-    workspace: &Path,
-    local: bool,
+    landing: &Landing<'_>,
 ) -> Result<(), BrowserError> {
     match msg {
         Some(Ok(Message::Text(txt))) => {
             let Ok(v) = serde_json::from_str::<Value>(&txt) else { return Ok(()) };
             if let Some(method) = v.get("method").and_then(Value::as_str) {
                 let params = v.get("params").cloned().unwrap_or(Value::Null);
-                handle_event(ws, msg_id, method, params, shared, workspace, local).await;
+                handle_event(ws, msg_id, method, params, shared, landing).await;
             }
             Ok(())
         }
@@ -570,9 +659,9 @@ async fn handle_event(
     method: &str,
     params: Value,
     shared: &Arc<StdMutex<Shared>>,
-    workspace: &Path,
-    local: bool,
+    landing: &Landing<'_>,
 ) {
+    let home = landing.home;
     match method {
         "Browser.downloadWillBegin" => {
             let Some(guid) = params["guid"].as_str().map(str::to_string) else { return };
@@ -584,23 +673,28 @@ async fn handle_event(
             if !s.frames.contains(frame_id) {
                 return;
             }
+            let status = match home {
+                DownloadHome::Elsewhere => DlStatus::Failed(REMOTE_DOWNLOAD_REFUSAL.into()),
+                // the guid names the file inside the container: never let it be a path
+                DownloadHome::Container(_) if !plain_guid(&guid) => {
+                    DlStatus::Failed("the browser gave the download a name kwant can't use.".into())
+                }
+                _ => DlStatus::InProgress,
+            };
             s.download = Some(DownloadEntry {
                 guid,
                 name,
                 total: None,
                 received: 0,
-                status: if local {
-                    DlStatus::InProgress
-                } else {
-                    DlStatus::Failed(REMOTE_DOWNLOAD_REFUSAL.into())
-                },
+                status,
                 reported_terminal: false,
+                too_big: None,
             });
         }
         "Browser.downloadProgress" => {
-            // Remote mode already answered `downloadWillBegin` as failed and never allowed the
-            // download to start: nothing here is this center's to track.
-            if !local {
+            // A browser on another computer already answered `downloadWillBegin` as failed and
+            // never allowed the download to start: nothing here is this center's to track.
+            if *home == DownloadHome::Elsewhere {
                 return;
             }
             let Some(guid) = params["guid"].as_str().map(str::to_string) else { return };
@@ -608,8 +702,10 @@ async fn handle_event(
             let received = params["receivedBytes"].as_u64().unwrap_or(0);
             let total = params["totalBytes"].as_u64().filter(|t| *t > 0);
             let file_path = params["filePath"].as_str().map(str::to_string);
+            let cap = home.cap();
             let mut finish = None;
             let mut over_cap = false;
+            let mut clear_container = false;
             {
                 let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
                 // `downloadProgress` carries no `frameId`, so unlike `downloadWillBegin` there's
@@ -618,25 +714,59 @@ async fn handle_event(
                 // the setting turns out to be browser-wide), only ever update a guid this center
                 // already claimed via a frame-checked `downloadWillBegin`; anything else is ignored.
                 let Some(entry) = s.download.as_mut().filter(|e| e.guid == guid) else { return };
-                if let Some(t) = total {
-                    entry.total = Some(t);
-                }
-                entry.received = received;
-                match state.as_str() {
-                    "completed" => match file_path {
-                        Some(path) => finish = Some((entry.name.clone(), path)),
-                        None => entry.status = DlStatus::Failed("Chrome didn't say where the file landed.".into()),
-                    },
-                    "canceled" => entry.status = DlStatus::Cancelled,
-                    _ if received > MAX_DOWNLOAD_BYTES => over_cap = true,
-                    _ => {}
+                if !matches!(entry.status, DlStatus::InProgress) {
+                    // refused at the start (an unusable guid): stop it, and leave nothing behind
+                    over_cap = state == "inProgress" && matches!(entry.status, DlStatus::Failed(_)) && entry.too_big.is_none();
+                    if over_cap {
+                        entry.too_big = Some("the browser gave the download a name kwant can't use.");
+                    }
+                    clear_container = matches!(state.as_str(), "completed" | "canceled");
+                } else {
+                    if let Some(t) = total {
+                        entry.total = Some(t);
+                    }
+                    entry.received = received;
+                    match state.as_str() {
+                        "completed" => match (home, file_path) {
+                            // the container's file is the guid kwant checked, whatever path Chrome reports
+                            (DownloadHome::Container(_), _) => finish = Some((entry.name.clone(), String::new())),
+                            (_, Some(path)) => finish = Some((entry.name.clone(), path)),
+                            (_, None) => entry.status = DlStatus::Failed("Chrome didn't say where the file landed.".into()),
+                        },
+                        "canceled" => {
+                            entry.status = DlStatus::Cancelled(entry.too_big.unwrap_or("the browser stopped it.").to_string());
+                            clear_container = true;
+                        }
+                        // a size the server announced up front is enough to stop it before it fills anything
+                        _ if entry.too_big.is_none() && (received > cap || total.is_some_and(|t| t > cap)) => {
+                            entry.too_big = Some(home.too_big());
+                            over_cap = true;
+                        }
+                        _ => {}
+                    }
                 }
             }
             if over_cap {
-                let _ = call_raw(ws, msg_id, "Browser.cancelDownload", json!({"guid": guid})).await;
+                let _ = call_raw(ws, msg_id, "Browser.cancelDownload", cancel_params(&guid, landing.browser_context_id)).await;
             }
-            if let Some((name, path)) = finish {
-                tokio::spawn(land_download(workspace.to_path_buf(), shared.clone(), guid, name, path));
+            match (home, finish) {
+                (DownloadHome::Container(container), Some((name, _))) => {
+                    tokio::spawn(land_from_container(
+                        container.clone(),
+                        landing.workspace.to_path_buf(),
+                        landing.staging_root.to_path_buf(),
+                        shared.clone(),
+                        guid,
+                        name,
+                    ));
+                }
+                (_, Some((name, path))) => {
+                    tokio::spawn(land_download(landing.workspace.to_path_buf(), shared.clone(), guid, name, path));
+                }
+                (DownloadHome::Container(container), None) if clear_container && plain_guid(&guid) => {
+                    tokio::spawn(remove_from_container(container.clone(), guid));
+                }
+                _ => {}
             }
         }
         "Page.fileChooserOpened" => {
@@ -689,34 +819,149 @@ async fn describe_accept(ws: &mut WsStream, msg_id: &AtomicU64, backend_node_id:
 /// side via `allowAndName`, so this is the one place a name actually has to be chosen).
 async fn land_download(workspace: PathBuf, shared: Arc<StdMutex<Shared>>, guid: String, name: String, staged_path: String) {
     let landing_guid = guid.clone();
-    let result = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
-        std::fs::create_dir_all(&workspace)?;
-        let root = safe_fs::Dir::open_strict(&workspace)?;
-        let dir = root.make_dirs(Path::new("downloads"))?;
-        let mut src = std::fs::File::open(&staged_path)?;
-        let existing: HashSet<String> = dir
-            .list()?
-            .into_iter()
-            .filter(|e| matches!(e.kind, safe_fs::Kind::File))
-            .map(|e| e.name.to_string_lossy().to_string())
-            .collect();
-        let final_name = collision_safe_name(&existing, &name);
-        dir.replace_file(OsStr::new(&final_name), &format!(".landing-{landing_guid}"), &mut src, 0o600)?;
-        drop(src);
-        let _ = std::fs::remove_file(&staged_path);
-        Ok(final_name)
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || land_staged(&workspace, &landing_guid, &name, Path::new(&staged_path)))
+        .await
+        .unwrap_or_else(|_| Err(std::io::Error::other("something went wrong landing the download")));
+    finish_landing(&shared, &guid, result);
+}
+
+/// The blocking part of landing: `staged` (a file in the staging folder) becomes
+/// `downloads/<name>` in `workspace`, through [`safe_fs`], and the staged copy is removed.
+fn land_staged(workspace: &Path, guid: &str, name: &str, staged: &Path) -> std::io::Result<String> {
+    std::fs::create_dir_all(workspace)?;
+    let root = safe_fs::Dir::open_strict(workspace)?;
+    let dir = root.make_dirs(Path::new("downloads"))?;
+    let mut src = std::fs::File::open(staged)?;
+    let existing: HashSet<String> = dir
+        .list()?
+        .into_iter()
+        .filter(|e| matches!(e.kind, safe_fs::Kind::File))
+        .map(|e| e.name.to_string_lossy().to_string())
+        .collect();
+    let final_name = collision_safe_name(&existing, name);
+    dir.replace_file(OsStr::new(&final_name), &format!(".landing-{guid}"), &mut src, 0o600)?;
+    drop(src);
+    let _ = std::fs::remove_file(staged);
+    Ok(final_name)
+}
+
+fn finish_landing(shared: &Arc<StdMutex<Shared>>, guid: &str, result: std::io::Result<String>) {
     let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = &mut s.download {
         if entry.guid == guid {
             entry.status = match result {
-                Ok(Ok(final_name)) => DlStatus::Done(format!("downloads/{final_name}")),
-                Ok(Err(e)) => DlStatus::Failed(e.to_string()),
-                Err(_) => DlStatus::Failed("something went wrong landing the download".into()),
+                Ok(final_name) => DlStatus::Done(format!("downloads/{final_name}")),
+                Err(e) => DlStatus::Failed(e.to_string()),
             };
         }
     }
+}
+
+/// Chrome names a download by a guid it makes up (a UUID); that guid is then a file name inside
+/// the container and in staging, so anything else (a separator, `..`, an empty string) is refused.
+fn plain_guid(guid: &str) -> bool {
+    !guid.is_empty() && guid.len() <= 64 && guid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// The download's file inside the container, and the partial file Chrome may keep beside it.
+fn container_paths(guid: &str) -> [String; 2] {
+    [format!("{CONTAINER_DOWNLOAD_DIR}/{guid}"), format!("{CONTAINER_DOWNLOAD_DIR}/{guid}.crdownload")]
+}
+
+/// One small `docker` chore (making the folder, removing a file) through the browser service's
+/// own Docker helper, with a time limit.
+async fn docker_chore(args: &[&str]) -> Result<(), String> {
+    super::service::BrowserService::docker(args, CONTAINER_CHORE_WAIT.as_secs()).await.map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Makes sure the container has its download folder (its tmpfs starts empty after every
+/// restart), and sweeps anything an interrupted landing left there for an hour.
+async fn prepare_container_dir(container: &str) {
+    if let Err(e) = docker_chore(&["exec", container, "mkdir", "-p", CONTAINER_DOWNLOAD_DIR]).await {
+        tracing::warn!("browser downloads: couldn't make {CONTAINER_DOWNLOAD_DIR} in {container}: {e}");
+        return;
+    }
+    let _ = docker_chore(&["exec", container, "find", CONTAINER_DOWNLOAD_DIR, "-mindepth", "1", "-mmin", "+60", "-delete"]).await;
+}
+
+/// Removes a download's file (and any partial file) from the container's tmpfs.
+async fn remove_from_container(container: String, guid: String) {
+    let [file, partial] = container_paths(&guid);
+    if let Err(e) = docker_chore(&["exec", &container, "rm", "-f", "--", &file, &partial]).await {
+        tracing::warn!("browser downloads: couldn't remove {file} from {container}: {e}");
+    }
+}
+
+/// Copies `guid`'s finished file out of the container into `staging/<guid>`, streaming it
+/// straight to disk (`docker cp` can't read a tmpfs mount), and refuses one past the cap.
+async fn copy_out_of_container(container: &str, staging: &Path, guid: &str) -> Result<PathBuf, String> {
+    tokio::fs::create_dir_all(staging).await.map_err(|e| e.to_string())?;
+    let staged = staging.join(guid);
+    let _ = tokio::fs::remove_file(&staged).await;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&staged).map_err(|e| e.to_string())?;
+    let [source, _] = container_paths(guid);
+    let run = tokio::process::Command::new("docker")
+        .args(["exec", container, "cat", "--", &source])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(file))
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .output();
+    let outcome = match tokio::time::timeout(CONTAINER_COPY_WAIT, run).await {
+        Ok(Ok(out)) if out.status.success() => match tokio::fs::metadata(&staged).await {
+            Ok(meta) if meta.len() > CONTAINER_MAX_DOWNLOAD_BYTES => Err(CONTAINER_TOO_BIG.to_string()),
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        },
+        Ok(Ok(out)) => Err(format!("couldn't copy it out of the browser: {}", String::from_utf8_lossy(&out.stderr).trim())),
+        Ok(Err(e)) => Err(format!("couldn't copy it out of the browser: {e}")),
+        Err(_) => Err("copying it out of the browser took too long.".into()),
+    };
+    match outcome {
+        Ok(()) => Ok(staged),
+        Err(why) => {
+            let _ = tokio::fs::remove_file(&staged).await;
+            Err(why)
+        }
+    }
+}
+
+/// A download finished inside kwant's browser container: copy it out into staging, land it in
+/// the bot's `downloads/` the same way as a local one, and leave nothing behind in the container
+/// or in staging whatever happens.
+async fn land_from_container(
+    container: String,
+    workspace: PathBuf,
+    staging: PathBuf,
+    shared: Arc<StdMutex<Shared>>,
+    guid: String,
+    name: String,
+) {
+    let copied = copy_out_of_container(&container, &staging, &guid).await;
+    remove_from_container(container, guid.clone()).await;
+    let result = match copied {
+        Ok(staged) => {
+            let landing_guid = guid.clone();
+            let landed = tokio::task::spawn_blocking(move || {
+                let landed = land_staged(&workspace, &landing_guid, &name, &staged);
+                if landed.is_err() {
+                    let _ = std::fs::remove_file(&staged);
+                }
+                landed
+            })
+            .await;
+            landed.unwrap_or_else(|_| Err(std::io::Error::other("something went wrong landing the download")))
+        }
+        Err(why) => Err(std::io::Error::other(why)),
+    };
+    finish_landing(&shared, &guid, result);
 }
 
 /// Deletes any file left in the shared incoming folder older than `INCOMING_ORPHAN_AGE`: a
@@ -782,33 +1027,177 @@ mod tests {
     use super::*;
 
     // Fix #4: local sessions (a filesystem in common with this server) get downloads kept at the
-    // shared staging path; every other session (remote Chrome) gets them refused up front, since
+    // shared staging path; a browser on another computer gets them refused up front, since
     // there's nowhere in common to land the bytes.
     #[test]
     fn local_sessions_allow_and_name_at_the_staging_path() {
         let incoming = Path::new("/tmp/kwnt-download-tmp");
-        let params = download_behavior_params(true, incoming, None);
+        let params = download_behavior_params(&DownloadHome::Local, incoming, None);
         assert_eq!(params["behavior"], "allowAndName");
         assert_eq!(params["eventsEnabled"], true);
         assert_eq!(params["downloadPath"], "/tmp/kwnt-download-tmp");
         assert!(params.get("browserContextId").is_none());
     }
 
+    // 20g: kwant's own browser container keeps the download on its own tmpfs, never at a host
+    // path (which means nothing inside the container).
     #[test]
-    fn remote_sessions_deny_but_keep_hearing_about_attempts() {
+    fn the_managed_container_allows_and_names_on_its_own_tmpfs() {
+        let incoming = Path::new("/home/kwnt/attachments/download-tmp");
+        let params = download_behavior_params(&DownloadHome::Container("kwnt-browser-x".into()), incoming, Some("ctx-9"));
+        assert_eq!(params["behavior"], "allowAndName");
+        assert_eq!(params["eventsEnabled"], true);
+        assert_eq!(params["downloadPath"], CONTAINER_DOWNLOAD_DIR);
+        assert_eq!(params["browserContextId"], "ctx-9");
+        assert!(CONTAINER_DOWNLOAD_DIR.starts_with("/tmp/"), "only /tmp is writable in the read-only container");
+    }
+
+    #[test]
+    fn a_browser_on_another_computer_denies_but_keeps_hearing_about_attempts() {
         let incoming = Path::new("/tmp/kwnt-download-tmp");
-        let params = download_behavior_params(false, incoming, None);
+        let params = download_behavior_params(&DownloadHome::Elsewhere, incoming, None);
         assert_eq!(params["behavior"], "deny");
         assert_eq!(params["eventsEnabled"], true);
         assert!(params.get("downloadPath").is_none(), "a remote session has no filesystem in common with this server");
     }
 
     #[test]
-    fn a_non_default_browser_context_is_passed_through_either_way() {
+    fn a_non_default_browser_context_is_passed_through_every_way() {
         let incoming = Path::new("/tmp/kwnt-download-tmp");
-        let local = download_behavior_params(true, incoming, Some("ctx-123"));
-        assert_eq!(local["browserContextId"], "ctx-123");
-        let remote = download_behavior_params(false, incoming, Some("ctx-123"));
-        assert_eq!(remote["browserContextId"], "ctx-123");
+        for home in [DownloadHome::Local, DownloadHome::Container("c".into()), DownloadHome::Elsewhere] {
+            assert_eq!(download_behavior_params(&home, incoming, Some("ctx-123"))["browserContextId"], "ctx-123", "{home:?}");
+        }
+    }
+
+    #[test]
+    fn a_cancel_names_the_sessions_own_browser_context() {
+        assert_eq!(cancel_params("g", Some("ctx-1")), json!({"guid": "g", "browserContextId": "ctx-1"}));
+        assert_eq!(cancel_params("g", None), json!({"guid": "g"}));
+    }
+
+    #[test]
+    fn the_container_cap_leaves_room_on_its_512_mb_tmpfs() {
+        let home = DownloadHome::Container("c".into());
+        assert!(home.cap() <= 400 * 1024 * 1024);
+        assert_eq!(DownloadHome::Local.cap(), MAX_DOWNLOAD_BYTES);
+        assert!(home.too_big().contains("400 MB"), "{}", home.too_big());
+        assert!(DownloadHome::Local.too_big().contains("1 GB"));
+    }
+
+    #[test]
+    fn the_refusal_for_another_computer_says_what_to_do_instead() {
+        assert!(!REMOTE_DOWNLOAD_REFUSAL.contains("for now"));
+        assert!(REMOTE_DOWNLOAD_REFUSAL.contains("another computer"));
+        assert!(REMOTE_DOWNLOAD_REFUSAL.contains("Copy the file's link"));
+        assert!(REMOTE_DOWNLOAD_REFUSAL.contains("Local computer"));
+    }
+
+    // The guid becomes a file name inside the container and in staging: only Chrome's own
+    // UUID shape is accepted, never a path.
+    #[test]
+    fn only_a_plain_guid_names_a_file() {
+        assert!(plain_guid("0b9d3c2e-6a1f-4c7e-9a52-3f1e2d4c5b6a"));
+        let long = "a".repeat(65);
+        for bad in ["", "../etc/passwd", "a/b", "..", "x y", "a\\b", long.as_str()] {
+            assert!(!plain_guid(bad), "{bad:?}");
+        }
+        let [file, partial] = container_paths("abc-1");
+        assert_eq!(file, "/tmp/kwnt-dl/abc-1");
+        assert_eq!(partial, "/tmp/kwnt-dl/abc-1.crdownload");
+    }
+
+    fn container_landing<'a>(home: &'a DownloadHome, dir: &'a Path) -> Landing<'a> {
+        Landing { workspace: dir, home, staging_root: dir, browser_context_id: Some("ctx-1") }
+    }
+
+    fn claimed() -> Arc<StdMutex<Shared>> {
+        let shared = Arc::new(StdMutex::new(Shared::default()));
+        shared.lock().unwrap().frames.insert("F1".into());
+        shared
+    }
+
+    /// Feeds one event through `handle_event` against a stand-in browser that answers every
+    /// request with an empty result; returns the requests it was sent (a cancel, say).
+    async fn feed(shared: &Arc<StdMutex<Shared>>, landing: &Landing<'_>, method: &str, params: Value) -> Vec<Value> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let log = seen.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(Message::Text(txt))) = ws.next().await {
+                let v: Value = serde_json::from_str(&txt).unwrap();
+                log.lock().unwrap().push(v.clone());
+                let _ = ws.send(Message::Text(json!({"id": v["id"], "result": {}}).to_string())).await;
+            }
+        });
+        let mut ws = connect_cdp(&format!("ws://{addr}")).await.unwrap();
+        handle_event(&mut ws, &AtomicU64::new(1), method, params, shared, landing).await;
+        drop(ws);
+        server.abort();
+        let sent = seen.lock().unwrap().clone();
+        sent
+    }
+
+    #[tokio::test]
+    async fn another_computers_browser_refuses_with_the_clearer_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Elsewhere;
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g1", "frameId": "F1", "suggestedFilename": "clip.mp4"})).await;
+        let center = DownloadCenter { shared: shared.clone(), jobs: mpsc::channel(1).0 };
+        let report = center.report().unwrap();
+        assert_eq!(report["status"], "failed");
+        assert!(report["note"].as_str().unwrap().contains("runs on another computer"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn a_container_download_announced_past_the_cap_is_stopped_as_too_big() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Container("kwnt-browser-unit-test-none".into());
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g2", "frameId": "F1", "suggestedFilename": "big.mp4"})).await;
+        let sent = feed(&shared, &landing, "Browser.downloadProgress", json!({"guid": "g2", "state": "inProgress", "receivedBytes": 1024, "totalBytes": 450 * 1024 * 1024})).await;
+        assert!(shared.lock().unwrap().download.as_ref().unwrap().too_big.is_some(), "cancel was asked for on the announced size");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["method"], "Browser.cancelDownload");
+        assert_eq!(sent[0]["params"], json!({"guid": "g2", "browserContextId": "ctx-1"}));
+        // a later progress event doesn't ask again
+        let sent = feed(&shared, &landing, "Browser.downloadProgress", json!({"guid": "g2", "state": "inProgress", "receivedBytes": 4096, "totalBytes": 450 * 1024 * 1024})).await;
+        assert!(sent.is_empty(), "{sent:?}");
+        feed(&shared, &landing, "Browser.downloadProgress", json!({"guid": "g2", "state": "canceled", "receivedBytes": 2048, "totalBytes": 450 * 1024 * 1024})).await;
+        let center = DownloadCenter { shared: shared.clone(), jobs: mpsc::channel(1).0 };
+        let report = center.report().unwrap();
+        assert_eq!(report["status"], "cancelled");
+        assert!(report["note"].as_str().unwrap().contains("over 400 MB"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn a_container_download_from_another_bots_frame_is_never_claimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Container("kwnt-browser-unit-test-none".into());
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g3", "frameId": "OTHER", "suggestedFilename": "x.txt"})).await;
+        feed(&shared, &landing, "Browser.downloadProgress", json!({"guid": "g3", "state": "completed", "receivedBytes": 3, "totalBytes": 3})).await;
+        assert!(shared.lock().unwrap().download.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_container_download_with_an_unusable_guid_fails_and_is_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Container("kwnt-browser-unit-test-none".into());
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "../x", "frameId": "F1", "suggestedFilename": "x.txt"})).await;
+        let sent = feed(&shared, &landing, "Browser.downloadProgress", json!({"guid": "../x", "state": "inProgress", "receivedBytes": 3})).await;
+        assert_eq!(sent.first().map(|v| v["method"].clone()), Some(json!("Browser.cancelDownload")));
+        let s = shared.lock().unwrap();
+        let entry = s.download.as_ref().unwrap();
+        assert!(matches!(entry.status, DlStatus::Failed(_)));
+        assert!(entry.too_big.is_some(), "the download was cancelled");
     }
 }
