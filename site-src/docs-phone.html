@@ -1,0 +1,50 @@
+title: kwant on your phone: install the app from your browser
+description: kwant has a phone app with no app store. Open your kwant server in Safari or Chrome, add it to the Home Screen, and get your bots, approvals and notifications on your iPhone or Android phone.
+card_title: On your phone
+path: docs/phone.html
+nav: phone
+card: No app store. Open your kwant in the phone's browser and add it to the Home Screen.
+card_art: avatar:user
+---
+<p class="kicker">Docs</p>
+<h1>kwant on your phone</h1>
+<p class="intro">kwant has a phone app, and you don't need an app store for it. Open your kwant in Safari or Chrome on the phone, add it to the Home Screen, and it opens full screen with its own icon, like any other app. You can read what your team did, answer questions and approve actions, and get a notification when a bot needs you.</p>
+
+<h2 id="need">What you need</h2>
+<p>A kwant server your phone can reach over <strong>https</strong>: kwant on a VPS or with Docker, behind an <a href="install.html#proxy">HTTPS reverse proxy</a>. Phones only install apps from https addresses.</p>
+<p class="note">The Mac, Linux and Windows apps run kwant at <code>127.0.0.1</code>, an address only that computer can open, so a phone can't reach them. For kwant on your phone, <a href="install.html#vps">run it on a server</a> (the desktop app can open that server too, <a href="install.html#side-by-side">side by side</a> with This Mac). With no server, you can still <a href="telegram.html">get your bots on Telegram</a>.</p>
+
+<h2 id="install">Install it in three steps</h2>
+<ol>
+  <li><strong>Open kwant on the phone.</strong> On a computer where you're signed in, open your kwant at its https address (not through a tunnel at <code>127.0.0.1</code>, which the QR code would point to), then open <strong>Settings → All spaces → Signed-in devices → Add a phone or browser</strong> and scan the QR code with the phone's camera. It opens your kwant and signs the phone in once. Or open your server's address on the phone, tap <strong>Sign in from another device</strong>, and approve the code it shows from a device that's already signed in.</li>
+  <li><strong>Add it to the Home Screen.</strong>
+    <ul>
+      <li><strong>iPhone and iPad:</strong> open it in <strong>Safari</strong>, tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li>
+      <li><strong>Android:</strong> in <strong>Chrome</strong>, tap <strong>⋮</strong>, then <strong>Add to Home screen</strong> (or <strong>Install app</strong>), then <strong>Install</strong>.</li>
+    </ul>
+    On an iPhone, kwant also shows these steps once in Safari, and on Android Chrome it can offer an <strong>Install</strong> button.</li>
+  <li><strong>Open "kwant bots" from the Home Screen</strong> and turn on <strong>Settings → All spaces → Notifications → Notify me on this device</strong>. Now an approval, a question or a step only you can do reaches you even with the app closed. On an iPhone, notifications only work in the app on the Home Screen, not in a Safari tab.</li>
+</ol>
+
+<div class="phones">
+  <div class="phone">{{shot:phone-team-chat|The Product team summary on a phone screen.|240px}}</div>
+  <div class="phone">{{shot:phone-approval|The approval card for a GitHub pull request on a phone screen.|240px}}</div>
+</div>
+
+<h2 id="updates">Updates</h2>
+<p>The app loads from your server, so there's nothing to update on the phone: when you update kwant on the server, the phone has the new version the next time it opens.</p>
+
+<h2 id="what">What it does on a phone</h2>
+<ul>
+  <li><strong>Chats</strong> list who needs you first, one tab at a time, full width.</li>
+  <li><strong>Approvals and questions</strong> come as cards you answer with a tap.</li>
+  <li><strong>Notifications</strong> open the right chat, and name the space when you have more than one.</li>
+  <li><strong>Signed-in devices</strong> in settings lists the phone, so you can sign it out from any other device.</li>
+</ul>
+
+<h2 id="trouble">If it doesn't install</h2>
+<ul>
+  <li><strong>No Add to Home Screen, or no notifications:</strong> the address must start with <code>https://</code>. A plain <code>http://</code> address or a network address like <code>192.168.1.20:8799</code> opens, but the phone won't install it.</li>
+  <li><strong>On an iPhone, the option is missing:</strong> use Safari. Some other browsers on iOS, and apps that open links inside themselves, can't add to the Home Screen.</li>
+  <li><strong>The QR code expired:</strong> each one works once, for 15 minutes. Make a new one.</li>
+</ul>

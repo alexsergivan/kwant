@@ -656,6 +656,8 @@ fn start_turn(state: &AppState, bot: &Kwant, thread_id: &str, item_id: &str, pro
 }
 
 /// The author bot's Fix-it chat for this PR.
+// One short-lived value per press; boxing the thread buys nothing (Thread grew with continue-chat's fork columns)
+#[allow(clippy::large_enum_variant)]
 enum Chat {
     Open(Thread),
     /// The person archived it: nothing more goes to this bot for this PR.

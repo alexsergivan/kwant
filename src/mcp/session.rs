@@ -87,6 +87,8 @@ pub struct McpToolSession {
     clients: Vec<(String, McpClient)>,
     tools: Vec<OfferedTool>,
     secrets: Vec<String>,
+    /// 15c: this turn's identical failing calls (one session per turn).
+    repeats: super::repeat_guard::RepeatGuard,
 }
 
 /// The outcome of one call, already redacted; `text` goes back to the model.
@@ -102,7 +104,7 @@ impl McpToolSession {
     /// (redacted) errors are returned so the user can be told.
     pub async fn open(ctx: &McpTurnContext, cwd: Option<&Path>) -> (Self, Vec<String>) {
         let secrets = ctx.secret_values();
-        let mut session = Self { ctx: ctx.clone(), clients: Vec::new(), tools: Vec::new(), secrets };
+        let mut session = Self { ctx: ctx.clone(), clients: Vec::new(), tools: Vec::new(), secrets, repeats: Default::default() };
         let mut problems = Vec::new();
         let connections = ctx.servers.iter().map(|s| async move {
             let client = McpClient::connect(s, cwd).await?;
@@ -231,6 +233,24 @@ impl McpToolSession {
                 Err(_) => Value::String(raw_arguments.to_string()),
             }
         };
+        // 15c: the same call that already failed 3 times the same way isn't sent (no card either)
+        let repeat_key = super::repeat_guard::RepeatGuard::key(name, &arguments);
+        if let Some(stopped) = self.repeats.check(&repeat_key) {
+            let (server, tool) = super::split_tool_name(name).unwrap_or(("", name));
+            let record = json!({
+                "id": call_id,
+                "name": name,
+                "server": server,
+                "tool": tool,
+                "arguments": arguments,
+                "status": "error",
+                "duration_ms": start.elapsed().as_millis() as u64,
+                "result": truncate_text(&stopped.text, RECORD_RESULT_MAX_CHARS),
+                "repeat_stopped": stopped.count,
+            });
+            self.ctx.record(record.clone());
+            return CallOutcome { text: stopped.text, status: "error", record };
+        }
         let offered = self.tools.iter().find(|t| t.name == name);
         let (status, text) = match offered {
             None => ("error", format!("Unknown tool {name}.")),
@@ -274,6 +294,7 @@ impl McpToolSession {
             }
         };
         let text = redact(&text, &self.secrets);
+        self.repeats.after(&repeat_key, status, &text);
         let (server, tool) = super::split_tool_name(name).unwrap_or(("", name));
         let mut record = json!({
             "id": call_id,

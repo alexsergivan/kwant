@@ -4,6 +4,9 @@
 //!
 //! - `CALLTOOL:<tool>:<base64 json args>` in the prompt: call that tool and reply with its text
 //!   (the last marker counts, and each marker runs once: later turns see it again in history).
+//!   It calls kwnt's own tools straight away; with `ASKFIRST` in the prompt too it first asks
+//!   kwnt's permission prompt (`--permission-prompt-tool`), as claude does, and on a deny replies
+//!   `TOOLDENIED` without calling.
 //! - `REPLYTAG:<tag>`: reply "answer <tag>" (after any tool call).
 //! - `REPLYTEXT:<base64 text>`: reply exactly that text (say, a markdown table), and nothing else.
 //! - `REPLYSEQ:<tag>`: reply the test's planned answers in turn: the files `seq-<tag>-1`, `seq-<tag>-2`, …
@@ -16,8 +19,9 @@
 //!   slow reply, or a stall when it waits past the stall limit).
 //! - `FAILTURN`: die with no output. `APIERROR:<tag>` / `APIERRORPLAIN:<tag>`: end with "API Error:
 //!   500 test stub" as claude's error result / as plain text, once per tag.
-//! - `FAILSTEP:<tag>` / `BLOCKSTEP:<tag>` in the current request (not the history): run a Bash
-//!   tool step that fails, then end on a plan ("I'll retry the render…") / on a `Blocked:` line.
+//! - `FAILSTEP:<tag>` / `BLOCKSTEP:<tag>` / `WAITSTEP:<tag>` in the current request (not the
+//!   history): run a Bash tool step that fails, then end on a plan ("I'll retry the render…") / on a
+//!   `Blocked:` line / waiting on the person in prose ("If you approve the command, …").
 //! - `STREAMLINES:<base64 text>`: print that text (claude `stream-json` lines: an init line, tool
 //!   calls and their results) before the reply; once per marker.
 //!
@@ -97,10 +101,10 @@ if cap:
         text = "partial " + cap[-1] + note
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": text}))
     sys.exit(0)
-# FAILSTEP:<tag> / BLOCKSTEP:<tag> in the current request: a Bash step that fails, then a reply
-# that ends on a plan / on a Blocked: line
+# FAILSTEP:<tag> / BLOCKSTEP:<tag> / WAITSTEP:<tag> in the current request: a Bash step that fails,
+# then a reply that ends on a plan / on a Blocked: line / waiting on the person in prose
 req = prompt.rsplit("Current User Request:\n", 1)[-1]
-fs = re.findall(r"(FAIL|BLOCK)STEP:([A-Za-z0-9_]+)", req)
+fs = re.findall(r"(FAIL|BLOCK|WAIT)STEP:([A-Za-z0-9_]+)", req)
 if fs:
     kind, tag = fs[-1]
     tid = "toolu_" + tag
@@ -108,8 +112,9 @@ if fs:
         {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "render.sh", "description": "render the intro"}}]}}))
     print(json.dumps({"type": "user", "message": {"content": [
         {"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": "Permission to use Bash has been denied."}]}}))
-    end = ("I'll retry the render with a smaller size next." if kind == "FAIL"
-        else "Blocked: terminal commands are off for this bot. Allow Terminal for this team, then say continue.")
+    end = {"FAIL": "I'll retry the render with a smaller size next.",
+        "BLOCK": "Blocked: terminal commands are off for this bot. Allow Terminal for this team, then say continue.",
+        "WAIT": "If you approve the command, I'll run the render right away."}[kind]
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 2,
         "result": "The render command was refused (" + tag + ").\n\n" + end}))
     sys.exit(0)
@@ -139,6 +144,27 @@ if rt:
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 1,
         "result": base64.b64decode(rt[-1]).decode()}))
     sys.exit(0)
+# TRYTOOLS:<base64 JSON list>: allow rules in the CLI's own settings ("Bash", "mcp__mail"); like
+# claude, a tool its rules allow runs with no permission prompt whenever this launch offers it.
+# Replies RAN[rule] or NOTOOL[rule] for each, then the launch's TOOLS[..], STRICT[..], SERVERS[..]
+tt = re.findall(r"TRYTOOLS:([A-Za-z0-9+/=]+)", prompt)
+if tt:
+    tools = args[args.index("--tools") + 1] if "--tools" in args else None
+    strict = "--strict-mcp-config" in args
+    servers = sorted(json.load(open(args[args.index("--mcp-config") + 1]))["mcpServers"]) if "--mcp-config" in args else []
+    out = []
+    for rule in json.loads(base64.b64decode(tt[-1])):
+        if rule.startswith("mcp__"):
+            # without --strict-mcp-config the user's own servers load too
+            offered = rule.split("__")[1] in servers or not strict
+        else:
+            offered = tools is None or rule in tools.split(",")
+        out.append(("RAN[%s]" if offered else "NOTOOL[%s]") % rule)
+    out += ["TOOLS[%s]" % ("default" if tools is None else tools), "STRICT[%s]" % strict, "SERVERS[%s]" % ",".join(servers)]
+    t = re.findall(r"REPLYTAG:([A-Za-z0-9_]+)", prompt)
+    out.append("answer " + (t[-1] if t else "none"))
+    print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": " ".join(out)}))
+    sys.exit(0)
 reply = []
 m = ([None] + list(re.finditer(r"CALLTOOL:([a-z_]+):([A-Za-z0-9+/=]+)", prompt)))[-1]
 done = None
@@ -151,8 +177,23 @@ if m and "--mcp-config" in args:
     open(done, "w").close()
     cfg = json.load(open(args[args.index("--mcp-config") + 1]))
     srv = cfg["mcpServers"]["kwnt_tools"]
+    call_args = json.loads(base64.b64decode(m.group(2)))
+    # ASKFIRST: ask kwnt's permission prompt first, as claude does before an MCP tool call
+    if "ASKFIRST" in prompt and "--permission-prompt-tool" in args:
+        perm = cfg["mcpServers"]["kwnt"]
+        ask = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
+            "arguments": {"tool_name": "mcp__kwnt_tools__" + m.group(1), "input": call_args, "tool_use_id": "toolu_askfirst"}}}).encode()
+        preq = urllib.request.Request(perm["url"], data=ask, method="POST",
+            headers={"content-type": "application/json", **perm.get("headers", {})})
+        verdict = json.loads(json.load(urllib.request.urlopen(preq, timeout=600))["result"]["content"][0]["text"])
+        if verdict.get("behavior") == "allow":
+            call_args = verdict.get("updatedInput", call_args)
+        else:
+            reply.append("TOOLDENIED")
+            m = None
+if m and "--mcp-config" in args:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": m.group(1), "arguments": json.loads(base64.b64decode(m.group(2)))}}).encode()
+        "params": {"name": m.group(1), "arguments": call_args}}).encode()
     req = urllib.request.Request(srv["url"], data=body, method="POST",
         headers={"content-type": "application/json", **srv.get("headers", {})})
     try:

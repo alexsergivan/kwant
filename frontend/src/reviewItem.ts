@@ -7,6 +7,7 @@ import type { CriterionStatus, InboxItem, ReviewItem, VerdictResult } from './ap
 import { VERDICT_WORD } from './api/inbox';
 import type { RestorePreview, RestoreResult } from './missions';
 import { TIER_LABELS } from './flightSchool';
+import { atClock, localClock } from './clock';
 
 /** What the item view hands back when an action is done (Pixel's pane removes the item, opens the next). */
 export interface ReviewDone {
@@ -43,12 +44,10 @@ export function validReviewItem(i: InboxItem | null | undefined): i is ReviewIte
   return isArr(i.criteria) && isArr(i.couldnt_verify) && isArr(i.held_actions) && !!i.risk;
 }
 
-/** "14:41" in the person's own clock, or null for a missing or bad time. */
-export function clock(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+/** "2:41 PM" / "14:41" today, "Nov 11, 2:41 PM" another day, on the person's own clock; null for a missing or
+ *  bad time. A review that started yesterday must not say "since 9:05 AM". */
+export function clock(iso: string | null | undefined, locale?: string, now: number = Date.now()): string | null {
+  return localClock(iso ?? null, now, locale);
 }
 
 /** "Needs you · medium confidence"'s second half, or null (no verdict, or no confidence). */
@@ -64,10 +63,10 @@ export function confidenceText(v: ReviewItem['verdict']): string | null {
 export function checkerMeta(i: Pick<ReviewItem, 'verdict' | 'risk'>): string | null {
   const v = i.verdict;
   if (!v.checker || v.result === 'none') return null;
-  const at = clock(v.checked_at);
+  const at = atClock(v.checked_at ?? null);
   const parts: string[] = [];
   if (v.checker.tier_note === 'different_tier') parts.push(`Checked on a different tier of ${v.checker.engine} (no other engine set up)`);
-  else parts.push(`Checked by fresh eyes on ${v.checker.engine}${at ? ` at ${at}` : ''}`);
+  else parts.push(`Checked by fresh eyes on ${v.checker.engine}${at ? ` ${at}` : ''}`);
   if (isNum(v.steps_run) && isNum(v.steps_total) && v.steps_total > 0) {
     if (v.steps_run === v.steps_total) parts.push(i.risk.level === 'high' ? `all ${v.steps_total} steps, because it’s high risk` : `all ${v.steps_total} steps`);
     else parts.push(`${v.steps_run} of ${v.steps_total} steps`);
