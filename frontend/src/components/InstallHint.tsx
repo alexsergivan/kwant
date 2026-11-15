@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { Download, Share, SquarePlus, X } from 'lucide-react';
-import { INSTALL_HINT_DISMISSED_KEY, installHintKind, isIos, isStandalone, runInstallPrompt } from '../pwa';
+import { INSTALL_HINT_DISMISSED_KEY, installHintKind, isIos, isPhoneCardOnScreen, isStandalone, runInstallPrompt, subscribePhoneCard } from '../pwa';
 import { useInstall } from '../useInstall';
 
 const PHONE_QUERY = '(max-width: 767px)';
@@ -19,6 +19,7 @@ export const InstallHint: React.FC = () => {
   const { prompt, installed } = useInstall();
   const [dismissed, setDismissed] = useState(readDismissed);
   const [phone, setPhone] = useState(() => !!window.matchMedia?.(PHONE_QUERY).matches);
+  const phoneCardOnScreen = useSyncExternalStore(subscribePhoneCard, isPhoneCardOnScreen, () => false);
 
   useEffect(() => {
     const mq = window.matchMedia?.(PHONE_QUERY);
@@ -36,6 +37,7 @@ export const InstallHint: React.FC = () => {
     secure: window.isSecureContext,
     ios: isIos(navigator),
     canPrompt: !!prompt,
+    phoneCardOnScreen,
   });
   if (!kind) return null;
 

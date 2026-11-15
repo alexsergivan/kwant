@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Copy, Download, EllipsisVertical, ExternalLink, Share, Smartphone, SquarePlus } from 'lucide-react';
 import {
   HTTPS_GUIDE_URL,
@@ -10,6 +10,7 @@ import {
   isIos,
   isStandalone,
   phoneAppKind,
+  phoneCardShown,
   runInstallPrompt,
 } from '../pwa';
 import { useInstall } from '../useInstall';
@@ -325,6 +326,8 @@ export const PhoneAppCard: React.FC<{ phone?: boolean }> = ({ phone: narrow = fa
   const { prompt, installed } = useInstall();
   const desktopInstall = useDesktopInstallKind();
   const [copied, setCopied] = useState<'yes' | 'failed' | null>(null);
+  // While this card is up, the floating InstallHint steps aside: the card already has its steps.
+  useEffect(() => phoneCardShown(), []);
   if (typeof window === 'undefined') return null;
 
   const { hostname, protocol, host, origin } = window.location;

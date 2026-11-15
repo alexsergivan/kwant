@@ -181,3 +181,17 @@ test('the phone variant: Show QR code as the primary button, and the next step o
   assert.match(m.addDevice(showing, 'phone'), /id="add-device-link-phone"/);
   assert.match(m.addDevice(showing, 'settings'), /id="add-device-link-settings"/, 'two AddDevice on one page get their own ids');
 });
+
+test('loopback edge hosts: localhost. and IPv4-mapped loopback, as URL spells them', () => {
+  for (const u of ['http://localhost./', 'http://LOCALHOST.:9465/', 'http://kwant.localhost./', 'http://[::ffff:127.0.0.1]/', 'http://[::ffff:127.1.2.3]:9465/']) {
+    const { hostname, protocol } = new URL(u);
+    assert.ok(m.isLoopbackHost(hostname), `${u} → ${hostname}`);
+    assert.equal(kind(hostname, protocol), 'loopback', u);
+  }
+  assert.equal(new URL('http://[::ffff:127.0.0.1]/').hostname, '[::ffff:7f00:1]', 'URL normalises the mapped form to hex');
+  for (const h of ['::ffff:127.0.0.1', '[::ffff:7f00:1]']) assert.ok(m.isLoopbackHost(h), h);
+  for (const u of ['http://[::ffff:192.168.1.20]/', 'http://[::ffff:10.0.0.2]/', 'https://kwant.example./']) {
+    const { hostname } = new URL(u);
+    assert.ok(!m.isLoopbackHost(hostname), `${u} → ${hostname}`);
+  }
+});

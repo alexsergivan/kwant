@@ -465,7 +465,7 @@ export const AddDeviceView: React.FC<{
     return (
       <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4" role="status" aria-live="polite">
         <p className="flex items-center gap-2 text-xs font-medium text-emerald-200">
-          <Check size={14} aria-hidden="true" /> Signed in ✓
+          <Check size={14} aria-hidden="true" /> Signed in
         </p>
         <p className="text-[11px] text-zinc-400 leading-relaxed">
           {state.browser || 'A new browser'} signed in with the code. It’s used up now. If that wasn’t you, sign it out below.
@@ -548,7 +548,7 @@ export const AddDeviceView: React.FC<{
 };
 
 /** "Add a phone or browser": mints a one-time link, shows it as a QR code with a countdown, hides it
- *  when it expires or the page is left, and says "Signed in ✓" once a new browser used it. */
+ *  when it expires or the page is left, and says "Signed in" (with a tick icon) once a new browser used it. */
 export const AddDevice: React.FC<{ onSignedIn: () => void; variant?: AddDeviceVariant }> = ({ onSignedIn, variant = 'settings' }) => {
   const [state, setState] = useState<AddState>({ kind: 'idle' });
   const [now, setNow] = useState(() => Date.now());
