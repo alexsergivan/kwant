@@ -237,7 +237,8 @@ test('hidden under 24 px, and on reply avatars in the chat', () => {
   draw({ size: 32, kwantId: undefined });
   assert.equal(badge(), null, 'no bot, no badge');
   const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
-  assert.match(chat, /size=\{20\} kwantId=\{replyKwantId\} modelBadge=\{false\}/);
+  assert.match(chat, /const REPLY_AVATAR_PHONE = 20;/);
+  assert.match(chat, /size=\{REPLY_AVATAR_PHONE\} kwantId=\{replyKwantId\} modelBadge=\{false\}/);
   // Every reply avatar with a bot id (the 36 px one beside each message too) opts out: the ran-on line names the model.
   const replyAvatars = chat.match(/kwantId=\{replyKwantId\}[^/>]*/g) ?? [];
   assert.ok(replyAvatars.length >= 2);
