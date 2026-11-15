@@ -231,7 +231,7 @@ async fn patch(env: &Env, id: &str, body: Value) -> (StatusCode, Value) {
 #[tokio::test]
 async fn an_edit_into_an_open_duplicate_is_409_and_changes_nothing() {
     let env = setup().await;
-    let conflict = |existing: &str| json!({"error": "There's already an open note for this tool of that kind.", "existing_id": existing});
+    let conflict = |existing: &str| json!({"error": "There's already an open note for this tool of that kind.", "code": "conflict", "existing_id": existing});
 
     // D2: a tip, fixed; the same tip again; reopening the first
     let first = add(&env, "bash", "tip", "Quote paths").await;
