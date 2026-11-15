@@ -1,6 +1,8 @@
 // One status per bot for the dot on its avatar: what it's doing right now, from its turns and whether
 // anything can run. A bot with a running turn is never "Available", the open chat included.
 
+import { AuditTurn, auditShortLine, auditTurnLine } from './auditor';
+
 export type BotStatus = 'needs_you' | 'working' | 'queued' | 'cant_run' | 'available';
 
 export interface StatusTurn {
@@ -8,6 +10,8 @@ export interface StatusTurn {
   kwant_id: string;
   state: 'queued' | 'running';
   context_id?: string;
+  /** 14a: an audit's hidden turn. */
+  audit?: AuditTurn;
 }
 
 export interface StatusInputs {
@@ -68,17 +72,27 @@ export const STATUS_DOT: Record<BotStatus, string> = {
  * The line under each busy bot's name. Running beats queued so it agrees with the dot; other chats
  * come before the open one, which reads "here" instead of naming itself.
  */
-export function busyLines({ turns, openCtx, awaiting, browser, describe }: {
+export function busyLines({ turns, openCtx, awaiting, browser, describe, names, titles }: {
   turns: Iterable<StatusTurn>;
   openCtx: string;
   awaiting?: ReadonlySet<string>;
   browser?: ReadonlySet<string>;
   describe: (contextId: string, kwantId: string) => string;
+  /** Bot names, for an audit turn's line (14a). */
+  names?: Record<string, string>;
+  /** Filled with the full who-and-why line for each bot whose line is an audit's, for its tooltip (14a). */
+  titles?: Record<string, string>;
 }): Record<string, string> {
   const out: Record<string, string> = {};
   const later = (t: StatusTurn) => (t.state === 'queued' ? 2 : 0) + (t.context_id === openCtx ? 1 : 0);
   for (const t of [...turns].sort((x, y) => later(x) - later(y))) {
     if (!t?.kwant_id || out[t.kwant_id]) continue;
+    // 14a: an audit's turn says whose work it double-checks and why, not "Working here".
+    if (t.audit && t.state === 'running' && !browser?.has(t.turn_id) && !awaiting?.has(t.turn_id)) {
+      out[t.kwant_id] = auditShortLine(t.audit, names ?? {});
+      if (titles) titles[t.kwant_id] = auditTurnLine(t.audit, names ?? {}, { subject: false });
+      continue;
+    }
     const what = t.state === 'queued' ? 'Waiting to work' : browser?.has(t.turn_id) ? 'Needs you in the browser' : awaiting?.has(t.turn_id) ? 'Asked you a question' : 'Working';
     out[t.kwant_id] =
       t.context_id === openCtx ? `${what} here` : `${what} ${t.state === 'queued' || what === 'Working' ? 'on' : 'in'} ${describe(t.context_id ?? '', t.kwant_id)}`;

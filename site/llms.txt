@@ -11,7 +11,8 @@ Key facts:
 - kwant has no token (no coin, no crypto). The official X account is @kwantbot (https://x.com/kwantbot).
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
-- Windows app (beta, 64-bit): https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.12/kwant_0.9.12_windows_x64_beta_setup.exe (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
+- Windows app (beta, 64-bit): https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.14/kwant_0.9.14_windows_x64_beta_setup.exe (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
+- Phone app (iPhone and Android, no app store): open your kwant server's https address in Safari or Chrome and add it to the Home Screen; it gets notifications when a bot needs you. https://kwant.si/docs/phone
 - Run Claude inside the VM (Linux, off by default): each bot's Claude replies run in a container with no network, and the real key stays outside. https://kwant.si/docs/agents-in-vm
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers. The kwant.si website sets no cookies and counts page views with
@@ -44,6 +45,7 @@ Key facts:
 ## Docs
 - [Quickstart: run a team of AI agents locally](https://kwant.si/docs/quickstart): Download the kwant app for Mac or Linux, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.
 - [Install kwnt: self-host AI agents on a VPS or Docker](https://kwant.si/docs/install): Build the kwnt binary and run your AI bots on your laptop, on a VPS with systemd, or with Docker Compose behind an HTTPS reverse proxy.
+- [kwant on your phone: install the app from your browser](https://kwant.si/docs/phone): kwant has a phone app with no app store. Open your kwant server in Safari or Chrome, add it to the Home Screen, and get your bots, approvals and notifications on your iPhone or Android phone.
 - [Spaces: separate AI agents for work and home](https://kwant.si/docs/spaces): Keep work, side projects and home apart. Each space has its own bots, teams, channels, routines, skills, tool servers, accounts and approval rules.
 - [AI agent teams: bots, leads & handoffs](https://kwant.si/docs/bots-and-teams): Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.
 - [Multiple Claude, Codex & Grok accounts](https://kwant.si/docs/accounts): Add several logins or API keys per engine, plus OpenAI- or Anthropic-compatible servers, in one order to use, with automatic failover across engines when one runs out of usage.

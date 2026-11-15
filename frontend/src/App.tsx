@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
@@ -87,9 +88,10 @@ import { setBadgeBots, setBadgeEngines, setBadgeProfiles } from './modelBadgeDat
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
-import { recentWork, type ChatHome } from './botHome';
+import { recentWork, teamMembersLeadFirst, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
+import { auditShortLine, auditTurnLine } from './auditor';
 import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api, heldFromReply, heldLine, heldMessages, stillHeld } from './h4Status';
 import { HeldLine } from './components/HeldLine';
 import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
@@ -120,6 +122,7 @@ import {
   turnsIn,
   upsertThread,
 } from './threads';
+import { createStreamText, NO_STREAM } from './streamText';
 import { Profile, profilesApi } from './profiles';
 import { FailoverEvent, createOutageLog, failoverNotice, outageKey } from './failover';
 import type { SwitchNote } from './failoverNotes';
@@ -155,7 +158,8 @@ import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
-import { personFetch } from './auth';
+import { PersonCancelledError, personFetch } from './auth';
+import { ContinueError, continueChatApi, continueErrorLine, continuedLine, forkOf } from './continueChat';
 import { OPEN_ADD_TOOL_EVENT, type OpenAddTool } from './mcp';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
@@ -284,8 +288,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openCtxRef = useRef(openCtx);
   openCtxRef.current = openCtx;
   // What the open chat is streaming; other chats' streams are kept in streamsRef until opened.
-  const [streamingText, setStreamingText] = useState('');
-  const [streamingThinking, setStreamingThinking] = useState('');
+  // The open chat's streaming reply (14b): a store only the live reply subscribes to, not App state, so a
+  // token never re-renders the app or the finished messages. Updates land once per frame, with one blip.
+  const streamStore = useMemo(
+    () => createStreamText({}, { onFrame: (prev, next) => next.text !== prev.text && playSfx('blip') }),
+    [],
+  );
   const streamsRef = useRef<Record<string, { text: string; thinking: string }>>({});
   // Running turns' live steps by turn id (with the chat they belong to), until the saved reply shows.
   const [activity, setActivity] = useState<Record<string, LiveActivity & { ctx: string }>>({});
@@ -467,6 +475,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(null);
     setSettingsFocusRow(null);
     setSettingsClosedCount((n) => n + 1);
+    // A key may have been added or removed: the dictation mic asks again.
+    refreshDictation();
     // Accounts may have changed: the getting-started list counts the ready ones.
     onSpacesChanged();
   };
@@ -867,8 +877,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       delete liveKwantRef.current[ctx];
     }
     if (ctx === openCtxRef.current) {
-      setStreamingText('');
-      setStreamingThinking('');
+      streamStore.show({ text: '', thinking: '' });
     }
     if (!ctx || !(ctx in liveRef.current)) return;
     const next = { ...liveRef.current };
@@ -1147,8 +1156,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setHistoryWindow((w) => (w && w.ctx !== openCtx ? null : w));
     if (!openCtx) return;
     const b = streamsRef.current[openCtx];
-    setStreamingText(b?.text ?? '');
-    setStreamingThinking(b?.thinking ?? '');
+    streamStore.show({ text: b?.text ?? '', thinking: b?.thinking ?? '' });
     setMessages(messagesCacheRef.current[openCtx] || []);
     setMessagesError(null);
     refreshContext(openCtx).then(() => {
@@ -1225,8 +1233,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       if (turnsIn(turnsRef.current, ctx).length > 0) {
         streamsRef.current[ctx] = { text: '', thinking: '' };
         if (ctx === openCtxRef.current) {
-          setStreamingText('');
-          setStreamingThinking('');
+          streamStore.show({ text: '', thinking: '' });
         }
         return;
       }
@@ -1369,8 +1376,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (d.state === 'deciding') {
               if (streamsRef.current[ctx]) streamsRef.current[ctx] = { text: '', thinking: '' };
               if (ctx === openCtxRef.current) {
-                setStreamingText('');
-                setStreamingThinking('');
+                streamStore.show({ text: '', thinking: '' });
               }
             } else {
               refreshContext(ctx);
@@ -1547,12 +1553,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (event.type === 'TextDelta') buf.text += event.data;
             else buf.thinking = event.data;
             if (!(ctx in liveRef.current)) markLiveKwant(ctx, event.kwant_id);
-            if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) {
-              if (event.type === 'TextDelta') {
-                setStreamingText(buf.text);
-                playSfx('blip');
-              } else setStreamingThinking(buf.thinking);
-            }
+            // At most one update per frame (14b); the blip goes with it (streamStore's onFrame).
+            if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) streamStore.schedule(() => ({ ...buf }));
             break;
           }
           case 'activity':
@@ -1688,8 +1690,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               refreshContext(targetId).then(() => {
                 streamsRef.current[targetId] = { text: '', thinking: '' };
                 if (openCtxRef.current === targetId) {
-                  setStreamingText('');
-                  setStreamingThinking('');
+                  streamStore.show({ text: '', thinking: '' });
                 }
               });
               markLive(targetId, spkName);
@@ -1710,6 +1711,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'TurnComplete': {
             const ctx = streamTarget(event, streamingContextIdRef.current);
+            // The last tokens show now, not a frame later (14b): the stream stays up until the saved reply lands.
+            if (ctx === openCtxRef.current) streamStore.flush();
             if (ctx === openCtxRef.current) {
               playSfx('coin');
               // Live events only (the stream has no replay; history loads via refreshContext).
@@ -1812,6 +1815,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'Error': {
             const ctx = streamTarget(event, streamingContextIdRef.current);
+            if (ctx === openCtxRef.current) streamStore.flush();
             if (ctx && ctx === streamingContextIdRef.current) {
               discussionInProgressRef.current = false;
               setDiscussionState({ inProgress: false });
@@ -1836,6 +1840,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   /** Stop in the composer: the open thread's turn, the direct chat's, or the channel's. */
   const handleCancelDiscussion = async () => {
     const ctx = openCtxRef.current;
+    // What already streamed shows at once (14b), so Stop never leaves the last words a frame behind.
+    streamStore.flush();
     const threadId = openThreadId;
     try {
       if (threadId) {
@@ -1926,8 +1932,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       streamingContextIdRef.current = targetId;
       if (!(targetId in liveRef.current)) {
         streamsRef.current[targetId] = { text: '', thinking: '' };
-        setStreamingText('');
-        setStreamingThinking('');
+        streamStore.show({ text: '', thinking: '' });
       }
       markLive(targetId, speakerName);
     }
@@ -2252,8 +2257,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           if (!(ctx in liveRef.current)) {
             streamsRef.current[ctx] = { text: '', thinking: '' };
             if (ctx === openCtxRef.current) {
-              setStreamingText('');
-              setStreamingThinking('');
+              streamStore.show({ text: '', thinking: '' });
             }
           }
           markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot'));
@@ -2429,6 +2433,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       if (selectedIdRef.current === kwantId) setOpenThreadId(t.id);
     } catch (err) {
       return `Couldn't start a conversation: ${errText(err)}`;
+    }
+  };
+
+  // Continue in a new chat from here (continueChat.ts). A 403 means this session is a bot's: the item hides.
+  const [botSession, setBotSession] = useState(false);
+  const [focusComposerKey, setFocusComposerKey] = useState(0);
+  const handleContinueFrom = async (msg: ChatMessage): Promise<string | void> => {
+    const kwantId = selectedIdRef.current;
+    try {
+      const t = await continueChatApi.fromMessage<Thread>(msg.id, personFetch);
+      knownThreadsRef.current.add(t.id);
+      setThreadsByKwant((prev) => ({ ...prev, [t.kwant_id]: upsertThread(prev[t.kwant_id], t) }));
+      if (selectedIdRef.current !== kwantId || isChannelRef.current) return;
+      setOpenThreadId(t.id);
+      setFocusComposerKey((n) => n + 1);
+      playSfx('click');
+    } catch (err) {
+      if (err instanceof PersonCancelledError) return err.message;
+      if (err instanceof ContinueError && err.status === 403) setBotSession(true);
+      return continueErrorLine(err);
     }
   };
 
@@ -3537,6 +3561,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
   // The open chat's running turn's live steps (the newest, when several reply at once).
   const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
+  // 16b: the open chat's running turn double-checks another bot's work (the challenger's own chat).
+  const auditHere = isCurrentContextStreaming ? Object.values(turns).find((t) => t.context_id === openCtx && t.state === 'running' && t.audit)?.audit ?? null : null;
+  const liveAudit = useMemo(
+    () =>
+      auditHere
+        ? {
+            line: auditTurnLine(auditHere, kwantNames),
+            // The phone strip is narrow: the Live now chip's words, the full line stays as its title.
+            short: auditShortLine(auditHere, kwantNames),
+            onOpenTask: missionBoard && auditHere.task_id
+              ? () => {
+                  setPendingTaskId(auditHere.task_id);
+                  showPage('board');
+                }
+              : undefined,
+          }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [auditHere?.audit_id, auditHere?.stage, auditHere?.task_title, kwantNames, missionBoard],
+  );
   const needsYouByKwant = openStepsByKwant(humanSteps);
   const chatQueue = queuedInChat(turns, openCtx);
   const asQueued = (t: TrackedTurn): QueuedState => ({
@@ -3553,6 +3597,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The bot's conversations, the open thread's controls, and "working on…" elsewhere.
   const agentThreads = currentKwant ? threadsByKwant[currentKwant.id] : undefined;
   const shownThread = openThreadId ? agentThreads?.find((t) => t.id === openThreadId) ?? null : null;
+  // Continue in a new chat: only in a chat with one bot (its main chat or a `chat` thread we know), never a team's.
+  const canContinueHere = !!currentKwant && !currentTeam && !botSession && (!openThreadId || shownThread?.kind === 'chat');
+  const fork = forkOf(shownThread);
+  const continuedFrom =
+    fork && currentKwant
+      ? {
+          text: continuedLine(
+            fork.context === currentKwant.id ? currentKwant.name : agentThreads?.find((t) => t.id === fork.context)?.title ?? 'an earlier chat',
+            fork.copied,
+            fork.truncated,
+            fork.context === currentKwant.id,
+          ),
+          onOpen: () => {
+            if (fork.context === currentKwant.id) setOpenThreadId(null);
+            else openThreadChecked(currentKwant.id, fork.context);
+            setHighlightMessageId(fork.messageId);
+            playSfx('click');
+          },
+        }
+      : null;
   const elsewhere = currentKwant ? backgroundTurns(turns, currentKwant.id).filter((t) => t.context_id !== openCtx) : [];
   const describeContext = (ctx: string, kwantId: string): string =>
     threadsByKwant[kwantId]?.find((t) => t.id === ctx)?.title ??
@@ -3568,7 +3632,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           else openTarget({ channel_id: t.context_id, kwant_id: null });
         }}
         className="inline-flex items-center gap-1.5 min-w-0 max-w-[16rem] sm:max-w-xs px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-[11px] text-sky-200 hover:bg-sky-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-        title={elsewhere.map((t) => describeContext(t.context_id, t.kwant_id)).join(', ')}
+        title={elsewhere.map((t) => (t.audit ? auditTurnLine(t.audit, kwantNames, { subject: false }) : describeContext(t.context_id, t.kwant_id))).join(', ')}
       >
         {awaitingTurns.has(elsewhere[0].turn_id) ? (
           <HelpCircle size={10} className="shrink-0 text-amber-300" aria-hidden="true" />
@@ -3576,8 +3640,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           <Loader2 size={10} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
         )}
         <span className="truncate">
+          {elsewhere[0].audit && elsewhere[0].state === 'running' && !browserTurns.has(elsewhere[0].turn_id) && !awaitingTurns.has(elsewhere[0].turn_id) ? auditShortLine(elsewhere[0].audit, kwantNames) : <>
           {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : browserTurns.has(elsewhere[0].turn_id) ? 'Needs you in the browser in ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
           {describeContext(elsewhere[0].context_id, elsewhere[0].kwant_id)}
+          </>}
         </span>
         {elsewhere.length > 1 && <span className="shrink-0 text-sky-300/80">+{elsewhere.length - 1} more</span>}
       </button>
@@ -3716,7 +3782,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const vmSwitcher = switcherEntries.length >= 2 ? { entries: switcherEntries, current: activeSandboxId, onPick: watchOwner } : null;
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
-  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
+  const busyTitles: Record<string, string> = {};
+  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext, names: kwantNames, titles: busyTitles });
   // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
   const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
@@ -3786,7 +3853,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
   useEffect(() => setBadgeProfiles(profiles), [profiles]);
 
-  // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
+  // What the empty chat shows: a bot's home, #general's, a team's home, or nothing special for another channel.
   const chatHome: ChatHome = currentKwant
     ? {
         kind: 'bot',
@@ -3794,7 +3861,20 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         recent: recentWork(threadsByKwant[currentKwant.id]),
         onOpenRecent: (id: string) => openThread(currentKwant.id, id),
       }
-    : { kind: isGeneral ? 'general' : currentTeam ? 'team' : 'channel' };
+    : currentTeam && !isGeneral
+      ? {
+          kind: 'team',
+          team: {
+            name: currentTeam.name,
+            purpose: currentTeam.description,
+            lead: kwants.find((k) => k.id === currentTeam.lead_kwant_id)?.name,
+            members: teamMembersLeadFirst(
+              [...kwants.filter((k) => k.id === currentTeam.lead_kwant_id), ...currentTeamMembers],
+              currentTeam.lead_kwant_id,
+            ),
+          },
+        }
+      : { kind: isGeneral ? 'general' : 'channel' };
 
   // Delete is off while the bot runs anywhere, the open chat included.
   const workingKwants = new Set(Object.values(turns).map((t) => t.kwant_id));
@@ -4025,6 +4105,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      busyTitles={busyTitles}
       doneKwants={doneKwants}
       browsingOwners={globes.owners}
       browsingBots={globes.bots}
@@ -4209,6 +4290,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={inboxCount} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
+          spaceId={space.id}
+          onToast={pushToast}
           heldNotes={heldNotes}
           dropOff={!!spaceSettingsTab}
           title={chatTitle}
@@ -4218,8 +4301,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           messages={viewingHistory ? historyWindow.messages : messages}
           viewingHistory={viewingHistory}
           onJumpToLatest={() => setHistoryWindow(null)}
-          streamingText={isCurrentContextStreaming ? streamingText : ''}
-          streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
+          stream={isCurrentContextStreaming ? streamStore : NO_STREAM}
           pendingApprovals={approvalsHere}
           prepush={
             devOn && currentKwant && !viewingHistory ? (
@@ -4314,6 +4396,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 }
               : undefined
           }
+          onContinueFrom={canContinueHere ? handleContinueFrom : undefined}
+          threadKind={shownThread?.kind ?? null}
+          continuedFrom={continuedFrom}
+          focusComposerKey={focusComposerKey}
           highlightMessageId={highlightMessageId}
           onHighlightDone={() => setHighlightMessageId(null)}
           subHeader={subHeader}
@@ -4385,6 +4471,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           awaitingBrowser={awaitingBrowserHere}
           awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
+          liveAudit={liveAudit}
           renderHumanStep={renderHumanStep}
           contextKey={openCtx}
           deciding={decidingHere ? { botName: kwantName(decidingHere.kwantId) ?? chatTitle, consulted: decidingHere.consulted } : null}

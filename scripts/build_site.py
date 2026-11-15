@@ -96,7 +96,7 @@ def defer_images(page_html):
 
 
 DOC_GROUPS = [
-    ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run")]),
+    ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run"), ("phone", "On your phone")]),
     ("Using kwant", [
         ("spaces", "Spaces"),
         ("bots-and-teams", "Bots & teams"),
@@ -286,7 +286,8 @@ CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-hum
             "v096-real-chrome-signin-card",
             "v097-working-avatar-card",
             "v098-done-check-card",
-            "v099-update-off-race-card"}
+            "v099-update-off-race-card",
+            "v0913-browser-upload-card"}
 
 
 def shot(root, name, alt, sizes):
@@ -518,6 +519,7 @@ def footer(root, home_page=False):
       <a href="{root}features.html">Features</a>
       <a href="{root}docs/quickstart.html">Quickstart</a>
       <a href="{root}docs/install.html">Install &amp; run</a>
+      <a href="{root}docs/phone.html">On your phone</a>
       <a href="{root}self-hosted-ai-agents.html">Self-hosted AI agents</a>
 {blog}      <a href="{root}docs/mcp.html">MCP tools</a>
     </nav>
@@ -1199,6 +1201,7 @@ Key facts:
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
 - Windows app (beta, 64-bit): {{windows_exe}} (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
+- Phone app (iPhone and Android, no app store): open your kwant server's https address in Safari or Chrome and add it to the Home Screen; it gets notifications when a bot needs you. https://kwant.si/docs/phone
 - Run Claude inside the VM (Linux, off by default): each bot's Claude replies run in a container with no network, and the real key stays outside. https://kwant.si/docs/agents-in-vm
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers. The kwant.si website sets no cookies and counts page views with

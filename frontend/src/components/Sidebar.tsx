@@ -27,6 +27,7 @@ import { IdeaJarRow } from './IdeaJarRow';
 import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
 import { BudgetMeter, useBudgets } from './BotBudget';
 import { PAUSED_ROW_LINE } from '../botBudget';
+import { PlaceChipRow } from './PlaceChip';
 
 /** A bot's name in its row; the tooltip says what it runs on in the same words as its avatar's model badge. */
 const BotName: React.FC<{ kwant: Kwant; className: string }> = ({ kwant: k, className }) => {
@@ -115,6 +116,8 @@ export interface SidebarProps {
   selectedTeamId?: string | null;
   /** What busy bots are doing ("Working on …", "Working here"), shown under their name. */
   busyKwants?: Record<string, string>;
+  /** The full line behind a short busy line (an audit's who and why, 14a), for its tooltip. */
+  busyTitles?: Record<string, string>;
   /** Teammates who already replied in a team turn now waiting on the person: "Done · replied in @team". */
   doneKwants?: Record<string, string>;
   /** Busy bots' status for the avatar dot; bots not listed are Available (or Can't run). */
@@ -365,6 +368,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isChannel,
   selectedTeamId,
   busyKwants = {},
+  busyTitles,
   doneKwants = {},
   botStatus = {},
   needsYou = {},
@@ -692,7 +696,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${
                 warn || asked ? 'text-warn' : attLine ? attTone : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'
               }`}
-              title={busyLine}
+              title={busyLine === busyKwants[k.id] ? busyTitles?.[k.id] ?? busyLine : busyLine}
               data-bot-busy
             >
               <span
@@ -919,6 +923,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       data-kw-sidebar
       className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-hairline'} bg-surface-side flex flex-col select-none flex-shrink-0`}
     >
+      {/* Which place this window is (This Mac or a server) and the way to the place picker; desktop app only. */}
+      <PlaceChipRow phone={phone} />
       {/* The open space. Desktop switches spaces on the rail, so this is its name and settings;
           phones have no rail, so here it is their one switcher. */}
       <div className="relative p-2 border-b border-zinc-800/60">
