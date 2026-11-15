@@ -835,8 +835,10 @@ fn state_of(items: &[CheckItem]) -> &'static str {
 }
 
 /// The card's one line: the state, then a short phrase per source (checks, criteria, delivery).
-/// With the request's parts written (`parts_lead`), they lead instead of the criteria.
-fn checked_line(state: &str, items: &[CheckItem], parts_lead: Option<String>) -> String {
+/// With the request's parts written (`parts_lead`), they lead instead of the criteria, and only
+/// the criteria no written part links to (`unlinked`) get a phrase, so the line never reads
+/// "Failed" or "Partly checked" without the reason.
+fn checked_line(state: &str, items: &[CheckItem], parts_lead: Option<String>, unlinked: &[CheckItem]) -> String {
     if items.is_empty() && parts_lead.is_none() {
         return "Not checked: nothing verified this result.".into();
     }
@@ -867,7 +869,7 @@ fn checked_line(state: &str, items: &[CheckItem], parts_lead: Option<String>) ->
     let criteria: Vec<&CheckItem> = items.iter().filter(|i| i.from == Fed::Criterion).collect();
     let (met, not_met, claims) = (count(&criteria, "passed"), count(&criteria, "failed"), criteria.iter().filter(|i| i.claim).count());
     match criteria.len() {
-        _ if parts_lead.is_some() => {}
+        _ if parts_lead.is_some() => parts.extend(unlinked_phrase(unlinked)),
         0 => {}
         1 if not_met == 1 => parts.push("the criterion is not met".into()),
         1 if met == 1 => parts.push("the criterion has evidence".into()),
@@ -897,6 +899,24 @@ fn checked_line(state: &str, items: &[CheckItem], parts_lead: Option<String>) ->
     cut(&format!("{prefix}: {body}."), CHECK_LINE_CHARS)
 }
 
+/// The phrase for criteria no written part links to, failed first, at most one: "1 criterion not
+/// met", "2 criteria not checked", "1 criterion is a claim with no evidence" (only when every
+/// unchecked one is a claim). Passed ones need no phrase: they contradict nothing.
+fn unlinked_phrase(unlinked: &[CheckItem]) -> Option<String> {
+    let count = |r: &str| unlinked.iter().filter(|i| i.result == r).count();
+    let (not_met, unchecked, claims) = (count("failed"), count("not_checked"), unlinked.iter().filter(|i| i.claim).count());
+    let n = |k: usize| if k == 1 { "1 criterion".to_string() } else { format!("{k} criteria") };
+    if not_met > 0 {
+        Some(format!("{} not met", n(not_met)))
+    } else if unchecked > 0 && claims == unchecked {
+        Some(if claims == 1 { "1 criterion is a claim with no evidence".into() } else { format!("{claims} criteria are claims with no evidence") })
+    } else if unchecked > 0 {
+        Some(format!("{} not checked", n(unchecked)))
+    } else {
+        None
+    }
+}
+
 /// One part of the request on the card (request-parts).
 #[derive(Debug, Clone)]
 struct PartRow {
@@ -909,12 +929,13 @@ struct PartRow {
 /// part passed only when every criterion linked to it passed by [`criterion_items`]' rules (so a
 /// claim never counts); one criterion not met fails it; no linked criterion leaves it
 /// `not_checked`. With no parts written each criterion is its own part, as before parts existed.
-fn part_rows(t: &TaskChecks) -> (Vec<PartRow>, bool) {
+/// The third value is the criteria no written part links to (none when no parts are written).
+fn part_rows(t: &TaskChecks) -> (Vec<PartRow>, bool, Vec<CheckItem>) {
     let rows: Vec<(&str, CheckItem)> = t.criteria.iter().map(|k| k.id.as_str()).zip(criterion_items(t)).collect();
     let crit = |id: &str, i: &CheckItem| json!({"id": id, "text": i.what, "result": i.result});
     if t.parts.is_empty() {
         let parts = rows.iter().map(|(id, i)| PartRow { text: i.what.clone(), result: i.result, criteria: vec![crit(id, i)] }).collect();
-        return (parts, false);
+        return (parts, false, Vec::new());
     }
     let parts = t
         .parts
@@ -931,7 +952,8 @@ fn part_rows(t: &TaskChecks) -> (Vec<PartRow>, bool) {
             PartRow { text: masked_line(&p.text, CHECK_WHAT_CHARS), result, criteria: linked.iter().map(|(id, i)| crit(id, i)).collect() }
         })
         .collect();
-    (parts, true)
+    let unlinked = rows.iter().filter(|(id, _)| !t.parts.iter().any(|p| p.criteria.iter().any(|c| c == id))).map(|(_, i)| i.clone()).collect();
+    (parts, true, unlinked)
 }
 
 /// The line's lead when parts are written: "3 of 4 parts checked; "send it to Ana": no check",
@@ -963,20 +985,21 @@ fn parts_phrase(parts: &[PartRow]) -> Option<String> {
 /// check keeps the state from `checked`; written parts lead the line.
 pub fn checked(tasks: &[TaskChecks], result_meta: Option<&Value>) -> Value {
     let mut items: Vec<CheckItem> = Vec::new();
-    let (mut parts, mut written) = (Vec::new(), false);
+    let (mut parts, mut written, mut unlinked) = (Vec::new(), false, Vec::new());
     for t in tasks {
         items.extend(check_items(t));
         items.extend(criterion_items(t));
-        let (p, w) = part_rows(t);
+        let (p, w, u) = part_rows(t);
         parts.extend(p);
         written |= w;
+        unlinked.extend(u);
     }
     items.extend(result_meta.and_then(delivery_item));
     let mut state = state_of(&items);
     if state == "checked" && parts.iter().any(|p| p.result != "passed") {
         state = "partly";
     }
-    let line = checked_line(state, &items, if written { parts_phrase(&parts) } else { None });
+    let line = checked_line(state, &items, if written { parts_phrase(&parts) } else { None }, &unlinked);
     // Failed first, the rest in source order (a stable sort)
     let mut shown = items;
     shown.sort_by_key(|i| i.result != "failed");
@@ -1411,6 +1434,74 @@ mod tests {
         // One written part: it is named, not counted
         let t = TaskChecks { criteria: vec![criterion("c1", "PDF is in the folder", "met", &["ev1"])], parts: vec![part("p1", "make the PDF and send it to Ana", &[])], evidence: vec![evidence("ev1", "report.pdf", None)], ..Default::default() };
         assert_eq!(checked(&[t], None)["line"], "Partly checked: \"make the PDF and send it to Ana\": no check.");
+    }
+
+    /// Two parts that each pass on their own criterion, plus `extra` criteria no part links to.
+    fn two_passed_parts_and(extra: Vec<Criterion>) -> Value {
+        let mut criteria = vec![criterion("c1", "PDF is in the folder", "met", &["ev1"]), criterion("c2", "Ana has the email", "met", &["ev1"])];
+        criteria.extend(extra);
+        let t = TaskChecks {
+            criteria,
+            parts: vec![part("p1", "make the PDF", &["c1"]), part("p2", "send it to Ana", &["c2"])],
+            evidence: vec![evidence("ev1", "report.pdf", None)],
+            ..Default::default()
+        };
+        checked(&[t], None)
+    }
+
+    #[test]
+    fn a_criterion_no_part_links_to_and_not_met_gives_the_failed_line_its_reason() {
+        let v = two_passed_parts_and(vec![criterion("c3", "Under 2 MB", "not_met", &[])]);
+        assert_eq!(part_results(&v), ["passed", "passed"]);
+        assert_eq!((v["state"].as_str(), v["line"].as_str()), (Some("failed"), Some("Failed: 2 of 2 parts checked; 1 criterion not met.")));
+        // Failed first, at most one phrase, counted only over the unlinked ones
+        let v = two_passed_parts_and(vec![criterion("c3", "Under 2 MB", "not_met", &[]), criterion("c4", "By Friday", "not_met", &[]), criterion("c5", "In Slovene", "", &[])]);
+        assert_eq!(v["line"], "Failed: 2 of 2 parts checked; 2 criteria not met.");
+    }
+
+    #[test]
+    fn a_criterion_no_part_links_to_and_not_checked_gives_the_partly_line_its_reason() {
+        let v = two_passed_parts_and(vec![criterion("c3", "Under 2 MB", "", &[])]);
+        assert_eq!((v["state"].as_str(), v["line"].as_str()), (Some("partly"), Some("Partly checked: 2 of 2 parts checked; 1 criterion not checked.")));
+        let v = two_passed_parts_and(vec![criterion("c3", "Under 2 MB", "", &[]), criterion("c4", "By Friday", "met", &[])]);
+        assert_eq!(v["line"], "Partly checked: 2 of 2 parts checked; 2 criteria not checked.");
+        // Only claims: the line says so
+        let v = two_passed_parts_and(vec![criterion("c3", "Under 2 MB", "met", &[])]);
+        assert_eq!(v["line"], "Partly checked: 2 of 2 parts checked; 1 criterion is a claim with no evidence.");
+        let v = two_passed_parts_and(vec![criterion("c3", "Under 2 MB", "met", &[]), criterion("c4", "By Friday", "met", &["gone"])]);
+        assert_eq!(v["line"], "Partly checked: 2 of 2 parts checked; 2 criteria are claims with no evidence.");
+        // An unlinked criterion that passed contradicts nothing: no phrase, and the card reads checked
+        let v = two_passed_parts_and(vec![criterion("c3", "Under 2 MB", "met", &["ev1"])]);
+        assert_eq!((v["state"].as_str(), v["line"].as_str()), (Some("checked"), Some("Checked: 2 of 2 parts checked.")));
+    }
+
+    #[test]
+    fn a_criterion_linked_to_a_part_never_shows_in_the_unlinked_phrase() {
+        // c3 is not met but linked to p1: the part names it, no extra phrase
+        let t = TaskChecks {
+            criteria: vec![criterion("c1", "PDF is in the folder", "met", &["ev1"]), criterion("c2", "Ana has the email", "met", &["ev1"]), criterion("c3", "Under 2 MB", "not_met", &[])],
+            parts: vec![part("p1", "make the PDF", &["c1", "c3"]), part("p2", "send it to Ana", &["c2"])],
+            evidence: vec![evidence("ev1", "report.pdf", None)],
+            ..Default::default()
+        };
+        assert_eq!(checked(std::slice::from_ref(&t), None)["line"], "Failed: 1 of 2 parts checked; \"make the PDF\": not met.");
+        // An unlinked one not checked beside it gets its own phrase; the linked failure isn't counted again
+        let mut t2 = t;
+        t2.criteria.push(criterion("c4", "By Friday", "", &[]));
+        assert_eq!(checked(&[t2], None)["line"], "Failed: 1 of 2 parts checked; \"make the PDF\": not met; 1 criterion not checked.");
+        // A second task with no parts written: its criteria are its parts, never "unlinked"
+        let plain = TaskChecks { criteria: vec![criterion("d1", "Tests pass", "", &[])], ..Default::default() };
+        let v = checked(&[two_task(), plain], None);
+        assert_eq!(v["line"], "Partly checked: 2 of 3 parts checked; \"Tests pass\": no check.");
+    }
+
+    fn two_task() -> TaskChecks {
+        TaskChecks {
+            criteria: vec![criterion("c1", "PDF is in the folder", "met", &["ev1"]), criterion("c2", "Ana has the email", "met", &["ev1"])],
+            parts: vec![part("p1", "make the PDF", &["c1"]), part("p2", "send it to Ana", &["c2"])],
+            evidence: vec![evidence("ev1", "report.pdf", None)],
+            ..Default::default()
+        }
     }
 
     #[test]

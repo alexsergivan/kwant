@@ -301,12 +301,41 @@ pub fn promise_line(reply: &str) -> Option<String> {
 /// plan ("I'll share…").
 const ASKS_PERSON: &[&str] = &["send me", "paste", "share", "upload", "allow", "approve", "sign in", "log in", "connect", "tell me"];
 /// Offers, not waits: a reply that only offers ("Let me know if…", "If you'd like, I can…", "Tell me if
-/// you want…", "Whenever you're ready, tell me…") goes on without the person, so a sentence with one of
-/// these is left out before looking for a wait (see [`asks_in`]).
+/// you want…") goes on without the person, so a part of a sentence with one of these is left out before
+/// looking for a wait (see [`asks_in`]). "Tell me if/whether" only offers with "you" after it: "Tell me
+/// whether to retry or skip" asks for a decision (16c).
 const OFFERS: &[&str] = &[
     "let me know", "i'll be here", "if you want", "if you'd like", "if you would like", "if you like", "if you prefer",
-    "if you need anything", "tell me if", "tell me whether", "whenever you're ready", "when you're ready",
+    "if you need anything", "tell me if you", "tell me whether you",
 ];
+/// Asks for a decision, not offers (17e): "Let me know whether to retry or skip", "Let me know which
+/// file to use". A part with one of these isn't an offer even with an [`OFFERS`] word in it. Next to
+/// "when you're ready" it is a go-ahead like a bare "tell me" ("Open it when you're ready and tell me
+/// what to change"), so it doesn't ask there. "Let me know whether you…", "Let me know if you want…" and
+/// "Let me know how it goes" stay offers, and so does "let me know what you think" (see [`courtesy`]).
+const ASKS_DECISION: &[&str] = &["let me know whether to", "let me know which", "let me know what", "tell me which", "tell me what"];
+/// How a part opens when it asks the person for something (17e): an [`ASKS_PERSON`] or
+/// [`ASKS_DECISION`] phrase, or one of these. Used for a part that comes before an offer in the same
+/// sentence, where an ask word anywhere is too weak: "The upload failed, and I can retry if you'd like"
+/// reports a failure.
+const ASK_OPENERS: &[&str] = &["please", "i need you to", "you need to", "you'll need to", "can you", "could you"];
+/// Words that, right after an opener, make it a name or a report, not an imperative (17e): "Sign in
+/// failed with a 401", "Upload is done", "Share link is ready", "Please note…".
+const NOT_AFTER_OPENER: &[&str] = &[
+    "failed", "fails", "failing", "didn't", "did", "doesn't", "does", "isn't", "is", "was", "wasn't", "won't", "can't", "couldn't",
+    "timed", "returned", "worked", "works", "succeeded", "errored", "broke", "stopped", "hung", "needs", "has", "had", "went", "kept",
+    "keeps", "step", "steps", "button", "link", "page", "flow", "window", "dialog", "note", "see", "find",
+];
+/// The timing of an ask, not an offer (16c): "When you're ready, send me the key" still asks for the
+/// key. Left out of a part before looking for a wait, and a bare "tell me" next to it is a go-ahead,
+/// not an ask ("Whenever you're ready, tell me and I'll deploy").
+const WHEN_READY: &[&str] = &["whenever you're ready", "when you're ready"];
+/// Where a sentence splits into parts that ask or offer on their own (16c): "Paste the output, and let
+/// me know if it fails" asks for the output. `sentence_spans` already splits on "; ".
+const PART_BREAKS: &[&str] = &[", or ", ", and ", ", then "];
+/// How a trailing alternative of an offer opens (16c): "Let me know when you're done, or if you hit any
+/// issues" only offers.
+const OFFER_TAILS: &[&str] = &["if you", "when you", "or if you", "or when you"];
 /// How much of the ending [`waits_on_person`] keeps.
 const WAIT_CHARS: usize = 300;
 
@@ -325,19 +354,100 @@ pub fn waits_on_person(reply: &str) -> Option<String> {
     if lower.trim_end_matches(['*', '_', '`', ')', ' ']).ends_with('?') {
         return None;
     }
-    let waits = sentence_spans(&lower).into_iter().flat_map(|(at, end)| asks_in(&lower[at..end])).any(|s| {
-        let planned = PROMISE_OPENERS.iter().any(|o| strip_leads(s).starts_with(o));
-        NOT_A_PROMISE.iter().any(|w| s.contains(w)) || (!planned && ASKS_PERSON.iter().any(|w| has_words(s, w)))
-    });
+    let waits = sentence_spans(&lower).into_iter().flat_map(|(at, end)| asks_in(&lower[at..end])).any(|(part, before)| part_waits(part, before));
     waits.then(|| cut_at_word(&bare, WAIT_CHARS))
 }
 
-/// The parts of one lowercased `sentence` that may wait on the person: its ", or " alternatives,
-/// without the ones that hold an offer ([`OFFERS`]). The whole part goes, not just the offer's words,
-/// so "Let me know once you've merged it" doesn't leave "once you…" behind. An alternative after ", or"
-/// is its own ask: "Tell me if you want me to run it, or paste the output" still asks for the output.
-fn asks_in(sentence: &str) -> impl Iterator<Item = &str> {
-    sentence.split(", or ").map(str::trim_start).filter(|part| !OFFERS.iter().any(|o| has_words(part, o)))
+/// Whether one part from [`asks_in`] waits on the person: it holds a [`NOT_A_PROMISE`] word, or it
+/// asks ([`ASKS_PERSON`], [`ASKS_DECISION`]) and doesn't open with the bot's own plan. A "when you're
+/// ready" in it is the ask's timing: it is left out first, and then a bare "tell me" is a go-ahead, not
+/// an ask. A part `before_offer` (it comes before an offer in the same sentence) asks only when it opens
+/// like an ask ([`opens_with_ask`]), not with an ask word anywhere in it (17e).
+fn part_waits(part: &str, before_offer: bool) -> bool {
+    let ready = WHEN_READY.iter().any(|r| part.contains(r));
+    let mut s = part.to_string();
+    for r in WHEN_READY {
+        s = s.replace(r, " ");
+    }
+    let s = s.trim_start_matches([' ', ',']);
+    let planned = PROMISE_OPENERS.iter().any(|o| strip_leads(s).starts_with(o));
+    let asks = if before_offer {
+        opens_with_ask(s, ready)
+    } else {
+        (!planned && ASKS_PERSON.iter().filter(|w| !(ready && **w == "tell me")).any(|w| has_words(s, w)))
+            || (!ready && ASKS_DECISION.iter().any(|d| has_words(s, d) && !courtesy(s)))
+    };
+    NOT_A_PROMISE.iter().any(|w| s.contains(w)) || asks
+}
+
+/// Whether `part` opens like an ask (17e): it, or a clause in it after ", " (leads such as "so" and
+/// "then" aside), starts with an [`ASKS_PERSON`], [`ASKS_DECISION`] or [`ASK_OPENERS`] phrase that
+/// isn't followed by a [`NOT_AFTER_OPENER`] word. "Please paste the log", "If you can, paste the log",
+/// "It failed, so please tell me which mirror to use" open like asks; "The upload failed", "I couldn't
+/// connect to the server", "Sign in failed with a 401" and "There is nothing to approve" don't. After
+/// "when you're ready" (`ready`), a "tell me…" opener is a go-ahead, as in [`part_waits`].
+fn opens_with_ask(part: &str, ready: bool) -> bool {
+    part.split(", ").any(|clause| {
+        let c = strip_leads(clause.trim_start());
+        ASKS_PERSON.iter().chain(ASKS_DECISION).chain(ASK_OPENERS).filter(|o| !(ready && o.starts_with("tell me"))).any(|o| {
+            let Some(rest) = c.strip_prefix(o) else { return false };
+            if rest.starts_with(|ch: char| ch.is_ascii_alphanumeric()) {
+                return false;
+            }
+            let next = rest.trim_start_matches([' ', ',']).split([' ', ',', '.', ';']).next().unwrap_or("");
+            !NOT_AFTER_OPENER.contains(&next) && !(ASKS_DECISION.contains(o) && courtesy(c))
+        })
+    })
+}
+
+/// "Let me know what you think" and "tell me what you think": feedback the bot doesn't wait on, not a
+/// decision (17e).
+fn courtesy(part: &str) -> bool {
+    part.contains("what you think")
+}
+
+/// The parts of one lowercased `sentence` that may wait on the person: the pieces between its
+/// [`PART_BREAKS`] (", or ", ", and ", ", then "), without the ones that hold an offer ([`OFFERS`]),
+/// each with whether it comes before an offer in the sentence (17e, see [`part_waits`]). A part with
+/// an [`ASKS_DECISION`] phrase isn't an offer: "Let me know whether to retry or skip" asks (17e).
+/// The whole part goes, not just the offer's words, so "Let me know once you've merged it" doesn't
+/// leave "once you…" behind. A part after a break is its own ask: "Tell me if you want me to run it,
+/// or paste the output" still asks for the output, and so does "Paste the output, and let me know if
+/// it fails" (16c). A part right after an offer that opens with "if you" or "when you" ([`OFFER_TAILS`])
+/// and asks for nothing ([`ASKS_PERSON`]) is the offer's tail and goes with it: "Let me know when
+/// you're done, or if you hit any issues."
+fn asks_in(sentence: &str) -> Vec<(&str, bool)> {
+    let mut parts = Vec::new();
+    let mut after_offer = false;
+    for part in split_parts(sentence) {
+        let part = part.trim_start();
+        let decides = ASKS_DECISION.iter().any(|d| has_words(part, d)) && !courtesy(part);
+        let offer = !decides && OFFERS.iter().any(|o| has_words(part, o));
+        let tail = after_offer
+            && OFFER_TAILS.iter().any(|t| part.starts_with(t))
+            && !ASKS_PERSON.iter().any(|w| has_words(part, w));
+        after_offer = offer || tail;
+        parts.push((part, after_offer));
+    }
+    let last_offer = parts.iter().rposition(|(_, dropped)| *dropped);
+    parts
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (_, dropped))| !dropped)
+        .map(|(i, (part, _))| (part, last_offer.is_some_and(|l| i < l)))
+        .collect()
+}
+
+/// `sentence` split at each of [`PART_BREAKS`], in order.
+fn split_parts(sentence: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = sentence;
+    while let Some((at, len)) = PART_BREAKS.iter().filter_map(|b| rest.find(b).map(|at| (at, b.len()))).min() {
+        out.push(&rest[..at]);
+        rest = &rest[at + len..];
+    }
+    out.push(rest);
+    out
 }
 
 /// What went wrong before a turn's own tool steps (13a), for [`failed_step_blocked`].
@@ -1216,6 +1326,100 @@ mod tests {
         ] {
             assert_eq!(waits_on_person(not), None, "{not}");
         }
+    }
+
+    /// Rigel's F1–F3 from the QA of #639 (autonomy/failed-step-offers/qa.md), and #639's own offers.
+    #[test]
+    fn an_ask_next_to_an_offer_still_waits_and_an_offers_tail_does_not() {
+        let table: &[(&str, bool)] = &[
+            // F1: an ask that shares a sentence with an offer, or with "when you're ready", still waits
+            ("Paste the output, and let me know if it fails.", true),
+            ("Please sign in, and tell me if you want me to retry.", true),
+            ("Connect your account, then tell me if it worked.", true),
+            ("Whenever you're ready, please paste the output.", true),
+            ("When you're ready, send me the key.", true),
+            ("Approve the card when you're ready and I'll run it.", true),
+            // F2: "tell me if/whether" without "you" asks for a decision or a fact
+            ("Tell me whether to retry or skip.", true),
+            ("Tell me if the key is expired.", true),
+            // An alternative after an offer that asks for something still waits
+            ("Tell me if you want me to run it, or paste the output and I'll check it against the table.", true),
+            ("Let me know if it works, or if you can, paste the log.", true),
+            // F3: an offer's trailing alternative only offers
+            ("Let me know when you're done, or if you hit any issues.", false),
+            ("Let me know if you want me to retry, or if you'd rather skip it.", false),
+            ("Tell me if you want me to try a different mirror, or if you'd rather wait.", false),
+            // #639's offers still give none
+            ("Let me know when you've had a chance to review it.", false),
+            ("Let me know once you've merged it and I'll update the notes.", false),
+            ("Whenever you're ready, tell me and I'll deploy.", false),
+            ("When you're ready, tell me and I'll ship it.", false),
+            ("Open it when you're ready and tell me what to change.", false),
+            ("Tell me if you want me to try a different mirror.", false),
+            ("Tell me whether you want me to try a different mirror.", false),
+            ("If you'd like, I can also add a chart.", false),
+            ("I'll deploy it whenever you're ready.", false),
+        ];
+        for (sentence, waits) in table {
+            let reply = format!("The download failed.\n\n{sentence}");
+            assert_eq!(waits_on_person(&reply).is_some(), *waits, "{sentence}");
+        }
+    }
+
+    /// Rigel's G and F4 from the QA of #658 (autonomy/blocked-asks-with-offers/qa.md), 17e.
+    #[test]
+    fn a_failure_report_before_an_offer_is_not_an_ask_and_a_decision_is() {
+        let table: &[(&str, bool)] = &[
+            // G: a part before an offer that reports a failure or names a thing doesn't ask (G1-G5, G7-G9, C4, C5)
+            ("The upload failed, and I can retry if you'd like.", false),
+            ("The upload failed because the file is too large, and let me know if you want me to compress it.", false),
+            ("I couldn't connect to the server, and I can try again if you'd like.", false),
+            ("Sign in failed with a 401, and let me know if you want me to retry.", false),
+            ("I couldn't paste it into the doc, and I can try the clipboard route if you'd like.", false),
+            ("There is nothing to approve, and let me know if you'd like anything else.", false),
+            ("Here is the share link, and let me know if you'd like a shorter one.", false),
+            ("The log in the file is empty, and let me know if you want me to rerun it.", false),
+            ("I couldn't connect to the API, and let me know if you want me to retry.", false),
+            ("I couldn't share the file, and let me know if you want me to try again.", false),
+            ("Upload failed, then let me know if you want a retry.", false),
+            ("Please note the upload failed, and let me know if you want a retry.", false),
+            // ...but one that opens like an ask, at its start or after a comma, still asks
+            ("Please paste the log, and let me know if you want a retry.", true),
+            ("If you can, paste the log, and let me know if you want a retry.", true),
+            ("It failed, so please tell me which mirror to use, or tell me if you'd rather skip it.", true),
+            ("I need you to approve the command, and let me know when it's done.", true),
+            ("Sign in to the browser panel, and let me know if it fails.", true),
+            ("Share the new link and I'll download it, and let me know if you'd rather skip.", true),
+            ("When you're ready, send me the key, and let me know if it fails.", true),
+            ("Tell me which one to retry, or let me know if you want to skip both.", true),
+            // F4: a decision is an ask, not an offer
+            ("Let me know whether to retry or skip.", true),
+            ("Let me know whether to retry or skip it.", true),
+            ("Let me know which file to use.", true),
+            ("Let me know what to do with the old copy.", true),
+            ("Let me know whether to retry, or if you'd rather skip it.", true),
+            ("Tell me which mirror to use.", true),
+            // ...and these stay offers
+            ("Let me know how it goes.", false),
+            ("Let me know if you want me to retry or skip it.", false),
+            ("Let me know whether you'd like a retry.", false),
+            ("Let me know what you think.", false),
+            ("Open it when you're ready and tell me what to change.", false),
+        ];
+        for (sentence, waits) in table {
+            let reply = format!("The download failed.\n\n{sentence}");
+            assert_eq!(waits_on_person(&reply).is_some(), *waits, "{sentence}");
+        }
+    }
+
+    #[test]
+    fn parts_split_at_or_and_then() {
+        assert_eq!(split_parts("paste it, and let me know, then go, or wait"), ["paste it", "let me know", "go", "wait"]);
+        assert_eq!(split_parts("bread and butter, salt"), ["bread and butter, salt"]);
+        assert_eq!(asks_in("let me know if it fails, or if you can't, and send me the log"), [("send me the log", false)]);
+        // A part before an offer is marked, one after it isn't (17e)
+        assert_eq!(asks_in("the upload failed, and i can retry if you'd like, or paste the log"), [("the upload failed", true), ("paste the log", false)]);
+        assert_eq!(asks_in("let me know whether to retry, or if you'd rather skip it"), [("let me know whether to retry", false), ("if you'd rather skip it", false)]);
     }
 
     #[test]
