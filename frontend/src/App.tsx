@@ -2067,8 +2067,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           haptic('warning');
           const b = body as { code?: unknown; error?: unknown };
           // 22f: `without_backup` refused (a destructive step, a known database change, or a card from before 22f).
-          if (b.code === 'backup_required' && typeof b.error === 'string' && b.error) pushToast('Back up first', b.error);
-          else pushToast('Back up first', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
+          if (b.code === 'backup_required' && typeof b.error === 'string' && b.error) pushToast('Needs a fresh backup', b.error);
+          else pushToast('Needs a fresh backup', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
           return;
         }
       }

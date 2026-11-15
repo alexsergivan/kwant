@@ -248,7 +248,7 @@ function floorViewOf(floor: ProdFloor, ui: FloorUi, now: number, mountedAt: numb
   if (ui.phase === 'done' && ui.taken) {
     const secs = (now - ui.taken.at) / 1000;
     if (secs <= FRESH_S) {
-      return { case: 'just_taken', tone: 'ok', lead: `Backup taken ${age(secs)} ago`, text: sz(ui.taken.bytes), file: null, main: 'allow', secondaryBackup: false, skip, busy: false, note: plainNote };
+      return { case: 'just_taken', tone: 'ok', lead: secs < 5 ? 'Backup taken just now' : `Backup taken ${age(secs)} ago`, text: sz(ui.taken.bytes), file: null, main: 'allow', secondaryBackup: false, skip, busy: false, note: plainNote };
     }
   }
   if (b.state === 'no_data') {
@@ -260,7 +260,7 @@ function floorViewOf(floor: ProdFloor, ui: FloorUi, now: number, mountedAt: numb
   const liveAge = b.age_s === null ? null : b.age_s + Math.max(0, now - mountedAt) / 1000;
   const fresh = (b.state === 'fresh' || b.state === 'old') && liveAge !== null && liveAge <= FRESH_S;
   if (fresh && liveAge !== null) {
-    return { case: 'fresh', tone: 'ok', lead: `Backup taken ${age(liveAge)} ago`, text: sz(b.bytes), file: fileName(b.path), main: 'allow', secondaryBackup: false, skip, busy: false, note: plainNote };
+    return { case: 'fresh', tone: 'ok', lead: liveAge < 5 ? 'Backup taken just now' : `Backup taken ${age(liveAge)} ago`, text: sz(b.bytes), file: fileName(b.path), main: 'allow', secondaryBackup: false, skip, busy: false, note: plainNote };
   }
   const never = liveAge === null || b.state === 'none' || b.state === 'no_command';
   if (floor.needs_backup) {
@@ -297,6 +297,8 @@ export function floorWho(floor: ProdFloor, bot: string): string {
     destructive: 'delete data',
     prod_key: 'use a production key',
   };
+  // 22f: a guessed migration may not touch the database, so don't claim it does.
+  if (floor.kind === 'deploy_migration' && floor.migration === 'guess') return `${bot} wants to deploy to production`;
   return `${bot} wants to ${what[floor.kind]}`;
 }
 

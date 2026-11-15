@@ -8,13 +8,13 @@ import {
   AWAY_SORT_HINT,
   sortAwaySection,
   ApprovalDecision,
-  AwayError,
   AwayItem,
   AwayResponse,
   AwayNotice,
   AwaySection,
   Tone,
-  actionFailureNotice,
+  failureNotice,
+  resolveFromList,
   awaySummary,
   awayApi,
   isAwayEmpty,
@@ -305,8 +305,7 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
       setNotice({ text: `${done} “${awayTitle(item)}”`, error: false });
     } catch (err) {
-      const status = err instanceof AwayError ? err.status : 0;
-      setNotice(actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', awayTitle(item)));
+      setNotice(failureNotice(err, awayTitle(item)));
     } finally {
       setBusy(null);
     }
@@ -327,17 +326,8 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       onOpen={onOpen}
       onAnswer={(item, choice) => act(item, () => awayApi.answer(item.id, choice))}
       onResolve={(item, decision, withoutBackup) =>
-        act(item, async () => {
-          try {
-            const res = await awayApi.resolve(item.id, decision, withoutBackup);
-            onApprovalResolved?.(item.id);
-            return res;
-          } catch (err) {
-            // Lapsed meanwhile: the chat's card is stale too.
-            if (err instanceof AwayError && (err.status === 409 || err.status === 404)) onApprovalResolved?.(item.id);
-            throw err;
-          }
-        }, decision === 'deny')
+        // Lapsed meanwhile: the chat's card is stale too (but not on a backup refusal: it is still waiting).
+        act(item, () => resolveFromList(item.id, onApprovalResolved, () => awayApi.resolve(item.id, decision, withoutBackup)), decision === 'deny')
       }
     />
   );

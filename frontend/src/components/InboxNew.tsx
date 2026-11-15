@@ -32,7 +32,7 @@ import { knownChecked, listsCriteria } from '../doneCheck';
 import { CheckMarker, DoneCheck } from './DoneCheck';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
-import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
+import { ApprovalDecision, AwayItem, awayApi, failureNotice, resolveFromList, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
 import { InboxGroup, InboxItem, ReviewItem, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
 import {
   BatchRow,
@@ -811,8 +811,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
       inboxStore.patch({ busy: null, notice: { text: `${done} “${title}”`, tone: 'ok' } });
     } catch (err) {
-      const status = err instanceof AwayError ? err.status : 0;
-      const n = actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', title);
+      const n = failureNotice(err, title);
       inboxStore.patch({ busy: null, notice: { text: n.text, tone: n.error ? 'error' : 'info' } });
     }
     const next = await loadInbox();
@@ -824,16 +823,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
   const onResolve = (item: InboxItem, decision: ApprovalDecision, withoutBackup?: boolean) =>
     act(
       item,
-      async () => {
-        try {
-          const r = await awayApi.resolve(item.id, decision, withoutBackup);
-          onApprovalResolved?.(item.id);
-          return r;
-        } catch (err) {
-          if (err instanceof AwayError && (err.status === 409 || err.status === 404)) onApprovalResolved?.(item.id);
-          throw err;
-        }
-      },
+      () => resolveFromList(item.id, onApprovalResolved, () => awayApi.resolve(item.id, decision, withoutBackup)),
       decision === 'deny',
     );
 

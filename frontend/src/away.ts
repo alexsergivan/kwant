@@ -229,8 +229,40 @@ export function actionFailureNotice(status: number, serverMessage: string, title
 }
 
 export class AwayError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public body: unknown = null) {
     super(message);
+  }
+}
+
+/**
+ * 22f: a production-floor refusal (409 with `status: "needs_backup"`, any `code`). The card is still waiting on the
+ * server for a fresh backup, so it has not lapsed and must stay in the chat.
+ */
+export const isBackupRefusal = (err: unknown): err is AwayError =>
+  err instanceof AwayError && err.status === 409 && !!err.body && typeof err.body === 'object' && (err.body as { status?: unknown }).status === 'needs_backup';
+
+/** The notice for any failed one-tap action, given what was thrown. */
+export function failureNotice(err: unknown, title: string): AwayNotice {
+  if (isBackupRefusal(err)) {
+    const why = err.message && !/^Request failed \(HTTP/.test(err.message) ? err.message : 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.';
+    return { text: `${why} (“${title}”)`, error: true };
+  }
+  const status = err instanceof AwayError ? err.status : 0;
+  return actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', title);
+}
+
+/**
+ * Resolve an approval from Away or the Inbox. The chat's copy of the card is dropped when it was answered or has
+ * lapsed (409/404), but not on a backup refusal: that card is still waiting.
+ */
+export async function resolveFromList<T>(id: string, onResolved: ((id: string) => void) | undefined, run: () => Promise<T>): Promise<T> {
+  try {
+    const r = await run();
+    onResolved?.(id);
+    return r;
+  } catch (err) {
+    if (err instanceof AwayError && (err.status === 409 || err.status === 404) && !isBackupRefusal(err)) onResolved?.(id);
+    throw err;
   }
 }
 
@@ -242,13 +274,15 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   });
   if (!res.ok) {
     let message = `Request failed (HTTP ${res.status}).`;
+    let data: unknown = null;
     try {
-      const data = await res.json();
-      if (data && typeof data.error === 'string' && data.error) message = data.error;
+      data = await res.json();
+      const e = data && typeof data === 'object' ? (data as { error?: unknown }).error : undefined;
+      if (typeof e === 'string' && e) message = e;
     } catch {
       // no JSON body
     }
-    throw new AwayError(res.status, message);
+    throw new AwayError(res.status, message, data);
   }
   return res.json();
 }

@@ -159,7 +159,7 @@ export const FLOOR_DESTRUCTIVE = floorApproval('ap_2', 'Lin', 'sqlite3 data/kwan
 export const FLOOR_MIGRATION = floorApproval('ap_3', 'Vega', './scripts/deploy_test.sh 7c41e0a', {
   kind: 'deploy_migration', why: 'This command runs ./scripts/deploy_test.sh, a deploy script', needs_backup: true,
   blast: [['Where', 'kwant.jumpin.games · production'], ['What changes', 'App 4049325 → 7c41e0a · 1 change: #301 risk reasons'],
-    ['Migration', '0031_landed_risk.sql · adds 1 column to landed_cards · has a way back'],
+    ['Database', '0031_landed_risk.sql · adds 1 column to landed_cards · has a way back'],
     ['If it fails', 'The app goes back on its own. The database goes back only from a backup.']],
   migration: 'yes',
   backup: { state: 'old', age_s: 41 * 60, bytes: 412_000_000, path: null, error: null },
@@ -186,7 +186,7 @@ export const FLOOR_NO_COMMAND = floorApproval('ap_6', 'Lin', 'psql -c "DELETE FR
 
 // 22f: Oleks's deploy (Nov 15): the app can't tell if it changes the database, and the space has no backup command.
 const OLEKS_DEPLOY = 'set -e; R=root@164.90.207.66; D=/opt/tradebot; timeout 120 ssh -o BatchMode=yes -o ConnectTimeout=15 $R "cd $D && docker compose up -d --no-deps --force-recreate catalyst 2>&1 && docker compose ps catalyst"';
-const GUESS_BLAST: [string, string][] = [['Migration', 'The app can’t tell whether this deploy changes the database, so it counts as one.'],
+const GUESS_BLAST: [string, string][] = [['Database', "Might change it. The app can't tell from the command."],
   ['If it fails', 'The app goes back on its own. The database goes back only from a backup.'], ['Downtime', 'While the containers restart.'], ['Where', 'root@164.90.207.66']];
 export const FLOOR_GUESS_NO_COMMAND = floorApproval('ap_8', 'Builder', OLEKS_DEPLOY, {
   kind: 'deploy_migration', why: 'This command runs docker compose up over ssh', needs_backup: true, migration: 'guess', blast: GUESS_BLAST,

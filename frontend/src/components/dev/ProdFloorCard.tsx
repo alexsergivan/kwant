@@ -311,7 +311,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({
         <span className="dv-led mt-[5px]" data-s={floorLed(view.tone, view.case)} data-backup-led aria-hidden="true" />
         <p className="min-w-0 [overflow-wrap:anywhere]">
           {view.lead && <span className={`font-semibold ${LEAD[view.tone]}`}>{view.lead}</span>}
-          {justSaved && view.case === 'blocked' ? ' Command saved: Back up first takes one now.' : view.text}
+          {justSaved && view.case === 'blocked' ? ' Command saved. Press Back up first to take one.' : view.text}
           {view.file && (
             <>
               {' · '}

@@ -275,8 +275,9 @@ test('backup case 3: just taken via Back up first, then it ages and goes old aft
   ui = m.floorReducer(ui, { type: 'backup_done', result: { id: 'b', ok: true, path: '/x/b.tgz', bytes: 412_000_000, taken_at: null, error: null }, now: NOW });
   let v = m.floorView(f, ui, NOW + 3000, NOW);
   assert.equal(v.case, 'just_taken');
-  assert.equal(v.lead, 'Backup taken 3 s ago');
+  assert.equal(v.lead, 'Backup taken just now', 'under 5 s reads "just now", not "0 s ago"');
   assert.equal(v.main, 'allow');
+  assert.equal(m.floorView(f, ui, NOW + 6000, NOW).lead, 'Backup taken 6 s ago');
   v = m.floorView(f, ui, NOW + 11 * 60_000, NOW);
   assert.equal(v.case, 'blocked', 'stale again after 10 minutes');
   assert.equal(v.main, 'backup');
@@ -351,6 +352,23 @@ test('the floor card never offers "always allow", in any case', () => {
   assert.match(mig, /wants to deploy a database change/);
   assert.doesNotMatch(mig, /Allow this deploy/, 'blocked: Allow is replaced');
   assert.match(mig, /Back up first/);
+  assert.match(mig, /<dt[^>]*>Database<\/dt>/, '22f round 2: the row is "Database", not "Migration"');
+});
+
+test('22f round 2: a guessed migration deploy says "deploy to production"; a known one keeps "a database change"', () => {
+  assert.equal(m.floorWho(floorOf(fx.FLOOR_GUESS_NO_COMMAND), 'Builder'), 'Builder wants to deploy to production');
+  assert.equal(m.floorWho(floorOf(fx.FLOOR_MIGRATION), 'Vega'), 'Vega wants to deploy a database change');
+  const out = html(m.ModernApprovalCard, { approval: fx.FLOOR_GUESS_NO_COMMAND, onResolve() {} });
+  assert.equal(heading(out), 'Production floor: Builder wants to deploy to production');
+  assert.match(out, /Might change it\. The app can(&#x27;|')t tell from the command\./);
+});
+
+test('22f round 2: a backup taken in the last 5 s reads "just now"', () => {
+  const f = floorOf(fx.FLOOR_DEPLOY_FRESH);
+  const ui = m.initialFloorUi(f);
+  const b = { ...f, backup: { ...f.backup, age_s: 2 } };
+  assert.equal(m.floorView(b, ui, NOW, NOW).lead, 'Backup taken just now');
+  assert.equal(m.floorView({ ...f, backup: { ...f.backup, age_s: 5 } }, ui, NOW, NOW).lead, 'Backup taken 5 s ago');
 });
 
 /** The floor card's <h3> as text (tags stripped). */
