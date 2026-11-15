@@ -367,6 +367,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "waiting", ..] => true,
         // The review inbox (0.9 V1): what the person approves, sends back or rolls back, with held actions
         ["", "api", "inbox", ..] => true,
+        // The desktop island's glance (0.9.13): every space's Needs you, and a quick ask as the person
+        ["", "api", "glance", ..] => true,
         // Starting work-ahead runs now spends the person's tokens
         ["", "api", "work-ahead", ..] => true,
         // The idea jar is the person's: what they drop in, Look now, Do it and the shelf
@@ -942,6 +944,8 @@ mod tests {
         let (get, post, put, del) = (Method::GET, Method::POST, Method::PUT, Method::DELETE);
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
         assert!(person_only(&get, "/api/tool-notes"));
+        assert!(person_only(&get, "/api/glance"));
+        assert!(person_only(&post, "/api/glance/ask"));
         assert!(person_only(&post, "/api/questions/q1/answer"));
         assert!(person_only(&post, "/api/questions/q1/answer/"));
         assert!(!person_only(&get, "/api/questions/q1"));

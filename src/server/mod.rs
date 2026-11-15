@@ -43,6 +43,7 @@ pub mod skills;
 pub mod spaces;
 pub mod asks;
 pub mod away;
+pub mod glance;
 pub mod computer;
 pub mod mcp_directory;
 pub mod mcp_suggest;
@@ -627,6 +628,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tool-notes/:id", axum::routing::patch(tool_notes::edit).delete(tool_notes::delete))
         .route("/api/away/seen", post(away::seen))
         .route("/api/inbox", get(inbox::get))
+        // The desktop island (0.9.13): what needs you, works and just finished, in every space
+        .route("/api/glance", get(glance::get))
+        .route("/api/glance/ask", post(glance::ask))
         .route("/api/events", get(sse::sse_handler))
         .merge(show_once::routes::router())
         .fallback(crate::embedded::static_handler)
