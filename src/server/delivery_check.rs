@@ -296,6 +296,106 @@ pub fn promise_line(reply: &str) -> Option<String> {
     })
 }
 
+/// Plain asks of the person (13a): "Send me the URL", "paste the output", "approve the command",
+/// "tell me to run it". Matched as whole words, and not in a sentence that opens with the bot's own
+/// plan ("I'll share…").
+const ASKS_PERSON: &[&str] = &["send me", "paste", "share", "upload", "allow", "approve", "sign in", "log in", "connect", "tell me"];
+/// Offers, not waits: a reply that only offers ("Let me know if…", "If you'd like, I can…", "Tell me if
+/// you want…", "Whenever you're ready, tell me…") goes on without the person, so a sentence with one of
+/// these is left out before looking for a wait (see [`asks_in`]).
+const OFFERS: &[&str] = &[
+    "let me know", "i'll be here", "if you want", "if you'd like", "if you would like", "if you like", "if you prefer",
+    "if you need anything", "tell me if", "tell me whether", "whenever you're ready", "when you're ready",
+];
+/// How much of the ending [`waits_on_person`] keeps.
+const WAIT_CHARS: usize = 300;
+
+/// The reply's ending when it waits on the person in prose (13a): its last paragraph has a sentence
+/// that waits ("If you approve it, I'll run it", "once you…", "until you…") or asks plainly ("Send me
+/// the correct URL", "paste the output", "sign in"), and it isn't a `Done:` or `Blocked:` line or a
+/// question (a question is asked on its own path). Returns that paragraph, markdown aside, cut to
+/// about [`WAIT_CHARS`] at a word boundary.
+pub fn waits_on_person(reply: &str) -> Option<String> {
+    if super::keep_going::done_line(reply).is_some() || super::keep_going::blocked_line(reply).is_some() {
+        return None;
+    }
+    let para = reply.split("\n\n").map(str::trim).filter(|p| !p.is_empty()).last()?;
+    let bare = para.lines().map(strip_markdown).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ").replace(['’', '‘'], "'");
+    let lower = bare.to_ascii_lowercase();
+    if lower.trim_end_matches(['*', '_', '`', ')', ' ']).ends_with('?') {
+        return None;
+    }
+    let waits = sentence_spans(&lower).into_iter().flat_map(|(at, end)| asks_in(&lower[at..end])).any(|s| {
+        let planned = PROMISE_OPENERS.iter().any(|o| strip_leads(s).starts_with(o));
+        NOT_A_PROMISE.iter().any(|w| s.contains(w)) || (!planned && ASKS_PERSON.iter().any(|w| has_words(s, w)))
+    });
+    waits.then(|| cut_at_word(&bare, WAIT_CHARS))
+}
+
+/// The parts of one lowercased `sentence` that may wait on the person: its ", or " alternatives,
+/// without the ones that hold an offer ([`OFFERS`]). The whole part goes, not just the offer's words,
+/// so "Let me know once you've merged it" doesn't leave "once you…" behind. An alternative after ", or"
+/// is its own ask: "Tell me if you want me to run it, or paste the output" still asks for the output.
+fn asks_in(sentence: &str) -> impl Iterator<Item = &str> {
+    sentence.split(", or ").map(str::trim_start).filter(|part| !OFFERS.iter().any(|o| has_words(part, o)))
+}
+
+/// What went wrong before a turn's own tool steps (13a), for [`failed_step_blocked`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FailedBefore {
+    /// A step failed before the turn's own tools: kwnt couldn't open the request's link before the
+    /// turn, or the held turn this decided reply replaces ended on a failed step. Counts when the
+    /// turn ran no tool after it.
+    pub failed: bool,
+    /// The person declined an approval card in the held turn this decided reply replaces. Counts
+    /// like a card declined in the turn itself.
+    pub declined: bool,
+}
+
+impl FailedBefore {
+    /// What a turn that ends held (see [`super::decide::Held`]) leaves for its decided reply: its
+    /// last tool step failed (or its link didn't open and no tool ran after), or it had a declined
+    /// card. The decided reply runs as a new turn, so these aren't in its own activity.
+    pub fn of_turn(activity: Option<&Value>, before: FailedBefore) -> Self {
+        let (ran_tools, failed, declined) = tool_steps_in(activity);
+        Self { failed: failed.is_some() || (before.failed && !ran_tools), declined: declined || before.declined }
+    }
+}
+
+/// What a finished turn is blocked on (13a), for `meta.blocked`: its last tool step failed, the
+/// person declined an approval card in it, or a step failed `before` its tools and it ran no tool
+/// after that; and its reply ends waiting on the person in prose with no `Done:` or `Blocked:` line
+/// ([`waits_on_person`]). `activity` is the turn's saved activity.
+pub fn failed_step_blocked(reply: &str, activity: Option<&Value>, before: FailedBefore) -> Option<String> {
+    let after = FailedBefore::of_turn(activity, before);
+    if !after.failed && !after.declined {
+        return None;
+    }
+    waits_on_person(reply)
+}
+
+/// `words` in `text` as whole words (ASCII letters and digits around it don't count).
+fn has_words(text: &str, words: &str) -> bool {
+    text.match_indices(words).any(|(at, m)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + m.len()..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_alphanumeric()) && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// `text` cut to at most `max` characters at a word boundary, with "…" when cut.
+fn cut_at_word(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max).collect();
+    let head = match head.rfind(char::is_whitespace) {
+        Some(i) if i > 0 => &head[..i],
+        _ => &head[..],
+    };
+    format!("{}…", head.trim_end_matches([',', ';', ':', ' ']))
+}
+
 /// A line without its leading list marker, heading or quote, and the emphasis around it.
 fn strip_markdown(line: &str) -> String {
     let mut s = line.trim();
@@ -1045,5 +1145,120 @@ mod tests {
         assert_eq!(runs, 1);
         assert_eq!(text, format!("{REAL}\n\nRendered with ffmpeg instead: out.mp4."));
         assert_eq!(last.follow_line, None);
+    }
+
+
+    /// The endings of tasks 9 and 10 in Lin's long-task suite (autonomy/long-task-suite/runs,
+    /// 093-results.json and 535-results.json): both wait on the person in prose.
+    const T9_093: &str = "I didn't run the tests because you denied the approval for the shell command, so I have no result to report.\n\nI would have run `python3 -m unittest` in `/tmp/lts/full/093/run1/t9/work` and reported the pass/fail counts and any failures. If you approve the command, I'll run it right away.";
+    const T9_535: &str = "I couldn't run the tests. You denied the approval for the shell command, so `python3 -m unittest` never ran and I have no result to report.\n\nThe command I tried was `python3 -m unittest` from `/tmp/lts/full/535/run1/t9/work`. If you approve it, I'll run it and report the result. You can also run it yourself and paste the output here, and I'll go through any failures with you.";
+    const T10_093: &str = "I couldn't download the invoice. `https://billing.example.invalid/invoices` didn't resolve (`net::ERR_NAME_NOT_RESOLVED`), so the page never loaded and nothing was saved to `/tmp/lts/full/093/run1/t10/work/invoice.pdf`.\n\nThe `.invalid` ending is reserved and can never resolve, so this looks like a placeholder address and not your real billing site. I can't guess the real one. Send me the correct URL, for example `https://billing.<yourprovider>.com/invoices`, and I'll open it. If the page needs a login, I'll ask you to sign in in the browser panel, then I'll download the latest invoice and save it as `invoice.pdf`.";
+    const T10_535: &str = "I couldn't download the invoice. `https://billing.example.invalid/invoices` didn't resolve (`net::ERR_NAME_NOT_RESOLVED`), so no page loaded and nothing was saved to `invoice.pdf`.\n\nThe `.invalid` ending is a reserved placeholder domain that can never resolve, so it is probably a stand-in and not your real billing address. I can't guess the right one. Look for it in your invoice emails or in your account's billing section. It will usually be something like `billing.<provider>.com/invoices`.\n\nSend me the correct URL and I'll open it. If the site needs a login, I'll ask you to sign in in the browser panel. Then I'll download the latest invoice and save it as `invoice.pdf` in `/tmp/lts/full/535/run1/t10/work`.";
+    // Task 9, PR build run 2: the decided reply after the held one (decide first)
+    const T9_PR_HELD: &str = "I haven't run the tests, because you declined the approval for `python3 -m unittest` and I didn't ask again. So there is no actual test result.\n\nI haven't edited anything. Running `python3 -m unittest` in that folder would confirm the prediction. Tell me if you want me to run it, or paste the output and I'll check it against the table.";
+
+    #[test]
+    fn a_prose_ask_waits_on_the_person() {
+        // The real endings: the last paragraph, markdown aside, cut to about 300 characters
+        assert_eq!(
+            waits_on_person(T9_093).as_deref(),
+            Some("I would have run `python3 -m unittest` in `/tmp/lts/full/093/run1/t9/work` and reported the pass/fail counts and any failures. If you approve the command, I'll run it right away.")
+        );
+        let t9 = waits_on_person(T9_535).unwrap();
+        assert!(t9.starts_with("The command I tried was") && t9.contains("If you approve it, I'll run it"), "{t9}");
+        for real in [T10_093, T10_535] {
+            let w = waits_on_person(real).unwrap();
+            assert!(w.chars().count() <= WAIT_CHARS + 1, "{w}");
+            assert!(w.contains("Send me the correct URL"), "{w}");
+        }
+        assert!(waits_on_person(T10_093).unwrap().ends_with('…'), "cut at a word boundary");
+        assert!(!waits_on_person(T10_535).unwrap().ends_with('…'), "short enough to keep whole");
+        // Plain asks, each as whole words
+        for ask in [
+            "The page needs a login.\n\nPlease sign in in the browser panel and say continue.",
+            "**Upload the CSV** to this chat and I'll combine it.",
+            "- Paste the error message here.",
+            "Connect your Google account in Settings, then I can read the sheet.",
+            "Allow Terminal for this team.",
+            "I'll run it as soon as you turn Terminal on.",
+            // Task 9 endings of the PR build after a declined card (decided replies, diag runs 2 and 3)
+            "The real result is still unconfirmed. If you want it, run `cd work && python3 -m unittest`, or tell me to run it and I'll do so.",
+            "If you approve the command, I'll run it and confirm. You can also run `python3 -m unittest` in that folder and paste me the output.",
+            // An offer next to a real ask: the ask after ", or" still waits (T9_PR_HELD's ending)
+            "Tell me if you want me to run it, or paste the output and I'll check it against the table.",
+            // Waits and asks that keep counting next to the offers below
+            "I will try again once you approve the next card.",
+            "Tell me to run it and I'll report the counts.",
+        ] {
+            assert!(waits_on_person(ask).is_some(), "{ask}");
+        }
+        assert!(waits_on_person(T9_PR_HELD).is_some());
+        // A promise ("I'll share…" is the bot's own plan), a Done: or Blocked: line, a question,
+        // an offer, or a word that only contains an ask ("connection", "shared", "allowed")
+        for not in [
+            "The render failed.\n\nI'll retry the render with a smaller size next.",
+            "The build failed. Next I'll share the logs with Lin.",
+            "Fixed it.\n\nDone: the tests pass.",
+            "Blocked: no key for the Stripe API. Add it in Settings.",
+            "I can't reach the site. Should I try the mirror instead?",
+            "Here's the summary.\n\nLet me know if you want changes.",
+            "If you'd like, I can also add a chart.",
+            // Offers with another opener (Rigel's S1/S2): the whole sentence goes, not just "let me know"
+            "The draft is in the folder.\n\nLet me know when you've had a chance to review it.",
+            "The draft is in the folder.\n\nLet me know once you've had a chance to review it.",
+            "The notes are drafted.\n\nLet me know once you've merged it and I'll update the notes.",
+            "The build is ready.\n\nWhenever you're ready, tell me and I'll deploy.",
+            "The download failed.\n\nTell me if you want me to try a different mirror.",
+            "The download failed.\n\nTell me whether you want me to try a different mirror.",
+            "When you're ready, tell me and I'll ship it.",
+            "The connection failed, so I used the cached copy. The report is shared in the folder and the tests are allowed to run.",
+            "",
+        ] {
+            assert_eq!(waits_on_person(not), None, "{not}");
+        }
+    }
+
+    #[test]
+    fn a_failed_or_declined_step_and_a_prose_ask_are_blocked() {
+        let steps = |s: Value| Some(json!({ "steps": s }));
+        let none = FailedBefore::default();
+        let page = FailedBefore { failed: true, declined: false };
+        let failed = steps(json!([{ "kind": "tool", "tool": "Bash", "status": "failed", "title": "python3 -m unittest" }]));
+        let declined = steps(json!([{ "kind": "approval", "status": "declined" }, { "kind": "tool", "tool": "Read", "status": "ok" }]));
+        let fine = steps(json!([{ "kind": "tool", "tool": "Bash", "status": "failed" }, { "kind": "tool", "tool": "Bash", "status": "ok" }]));
+        // The last tool step failed, or the person declined a card: the ending is blocked
+        assert_eq!(failed_step_blocked(T9_093, failed.as_ref(), none).as_deref(), waits_on_person(T9_093).as_deref());
+        assert!(failed_step_blocked(T9_535, declined.as_ref(), none).is_some());
+        // The request's link didn't open before the turn (task 10) and no tool ran after it
+        assert_eq!(failed_step_blocked(T10_535, None, page).as_deref(), waits_on_person(T10_535).as_deref());
+        assert!(failed_step_blocked(T10_093, steps(json!([])).as_ref(), page).is_some());
+        // ...but a tool that ran fine after it (the bot found the page another way) clears it
+        let ok = steps(json!([{ "kind": "tool", "tool": "WebSearch", "status": "ok" }]));
+        assert_eq!(failed_step_blocked(T10_535, ok.as_ref(), page), None);
+        // No failed step (an earlier one recovered), or no tools and the link opened: nothing to store
+        assert_eq!(failed_step_blocked(T9_093, fine.as_ref(), none), None);
+        assert_eq!(failed_step_blocked(T10_535, None, none), None);
+        // A failed step and an ending that doesn't wait (a promise, an explicit Blocked: line,
+        // which the save step keeps in its own words): none from here
+        assert_eq!(failed_step_blocked("It failed.\n\nI'll retry it next.", failed.as_ref(), none), None);
+        assert_eq!(failed_step_blocked("It failed.\nBlocked: Terminal is off. Allow it, then say continue.", failed.as_ref(), none), None);
+        // A held reply's decided turn (decide first) runs as a new turn: what the held turn's steps
+        // left counts as if it were the decided turn's own. Task 9, 2nd run of the PR build: the
+        // card was declined in the held turn, the decided turn only read the files
+        let held = steps(json!([{ "kind": "approval", "status": "declined" }, { "kind": "tool", "tool": "Bash", "status": "failed" }]));
+        let left = FailedBefore::of_turn(held.as_ref(), none);
+        assert_eq!(left, FailedBefore { failed: true, declined: true });
+        let reads = steps(json!([{ "kind": "tool", "tool": "Bash", "status": "ok" }, { "kind": "tool", "tool": "Read", "status": "ok" }]));
+        assert_eq!(failed_step_blocked(T9_PR_HELD, reads.as_ref(), left).as_deref(), waits_on_person(T9_PR_HELD).as_deref());
+        assert!(waits_on_person(T9_PR_HELD).is_some_and(|t| t.contains("paste the output")));
+        assert_eq!(failed_step_blocked(T9_PR_HELD, reads.as_ref(), none), None, "nothing failed in its own turn");
+        // A held turn's failed step (no card) counts only while the decided turn runs no tool
+        let failed_only = FailedBefore::of_turn(failed.as_ref(), none);
+        assert_eq!(failed_only, FailedBefore { failed: true, declined: false });
+        assert!(failed_step_blocked(T9_093, None, failed_only).is_some());
+        assert_eq!(failed_step_blocked(T9_093, reads.as_ref(), failed_only), None);
+        // ...and a link that didn't open carries over the same way, unless a tool ran after it
+        assert_eq!(FailedBefore::of_turn(None, page), page);
+        assert_eq!(FailedBefore::of_turn(reads.as_ref(), page), none);
     }
 }

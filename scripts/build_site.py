@@ -286,7 +286,8 @@ CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-hum
             "v096-real-chrome-signin-card",
             "v097-working-avatar-card",
             "v098-done-check-card",
-            "v099-update-off-race-card"}
+            "v099-update-off-race-card",
+            "v0913-browser-upload-card"}
 
 
 def shot(root, name, alt, sizes):

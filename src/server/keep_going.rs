@@ -14,7 +14,9 @@
 //! The `Done:` line is stored on the reply's meta as [`DONE_KEY`]. A lead whose last line is
 //! `Blocked: <what is blocked>. <what would unblock it>` (0.9.4) never gets a keep-going turn: the
 //! line becomes a question card at once, like a question, and its answer resumes the chain. The
-//! save step stores any reply's `Blocked:` line on its meta as [`BLOCKED_KEY`].
+//! save step stores any reply's `Blocked:` line on its meta as [`BLOCKED_KEY`], and (13a) the
+//! ending of a reply that waits on the person in prose after a failed or declined tool step; that
+//! stored text counts the same.
 
 use super::routes::{try_kwant_turn, TurnOpts, TurnScope};
 use super::AppState;
@@ -119,6 +121,18 @@ async fn lead_delegations(state: &AppState, context: &str, lead: &Kwant) -> Vec<
         .collect()
 }
 
+/// The `meta.blocked` text saved on `lead`'s `reply` (its newest message with that text that is new
+/// since `snap`), if any.
+fn saved_blocked(msgs: &[Message], snap: &Snapshot, lead: &Kwant, reply: &str) -> Option<String> {
+    let reply = msgs
+        .iter()
+        .rev()
+        .filter(|m| !snap.messages.contains(&m.id))
+        .find(|m| m.sender_role == "kwant" && (m.sender_id == lead.id || m.sender_id == lead.name) && m.text.trim() == reply.trim())?;
+    let text = meta_of(reply)[BLOCKED_KEY]["text"].as_str()?.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 fn meta_of(m: &Message) -> Value {
     m.meta.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null)
 }
@@ -194,6 +208,11 @@ async fn verdict(scope: &TurnScope, lead: &Kwant, snap: &Snapshot, reply: &str) 
     }
     // Blocked: only the person (or a setting) unblocks it, so it is asked, never pushed on
     if let Some(blocked) = blocked_line(reply) {
+        return Verdict::Asks(format!("Blocked: {blocked}"));
+    }
+    // ...or the save step found it blocked without the line (13a: a failed or declined step and a
+    // reply that waits on the person in prose), on the lead's newest reply of this turn
+    if let Some(blocked) = saved_blocked(&msgs, snap, lead, reply) {
         return Verdict::Asks(format!("Blocked: {blocked}"));
     }
     let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();

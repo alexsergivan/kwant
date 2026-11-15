@@ -1,6 +1,7 @@
 // LLM profiles: one account per engine (a work and a personal Claude, say). Keys are write-only.
 
 export type Engine = 'claude' | 'codex' | 'grok' | 'custom';
+import { dateClock, timeText } from './clock';
 export type ProfileKind = 'system' | 'cli_home' | 'api_key' | 'custom_api';
 
 /** How a Custom API account's server talks: OpenAI chat completions or Anthropic Messages. */
@@ -169,7 +170,7 @@ export function formatUntil(at: Date, now = Date.now()): string {
   if (mins < 60) return `in ${mins} min`;
   const hours = Math.round(mins / 60);
   if (hours < 24) return `in ${hours} h`;
-  return at.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return dateClock(at) ?? '';
 }
 
 /** Below this much left, a limit's bar and the avatar badge turn amber (account-usage design §2.2). */
@@ -199,7 +200,7 @@ export interface UsageRow {
 export const hasUsageLimits = (p: Pick<Profile, 'engine' | 'kind'>) => (p.engine === 'claude' || p.engine === 'codex') && (p.kind === 'system' || p.kind === 'cli_home');
 
 /** A time on the person's own clock: "22:29" or "10:29 PM". */
-const clockOf = (at: Date) => at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const clockOf = (at: Date) => timeText(at) ?? '';
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 const weekday = (at: Date) => at.toLocaleDateString(undefined, { weekday: 'short' });
 

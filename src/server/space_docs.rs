@@ -93,18 +93,26 @@ fn plain_name_problem(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Why a new document can't be called `name`: 400 `bad_name` (not a plain one-line name, or too
-/// long), 415 `wrong_kind` (a kind kwant doesn't read).
+/// Why a new document can't be called `name`: 400 `bad_name` (not a plain one-line name, too
+/// long, or holding a control or bidi mark), 415 `wrong_kind` (a kind kwant doesn't read).
 pub fn upload_name_problem(name: &str) -> Option<(StatusCode, &'static str, &'static str)> {
     if let Some(why) = plain_name_problem(name) {
         Some((StatusCode::BAD_REQUEST, "bad_name", why))
     } else if name.len() > MAX_NAME_BYTES || name.chars().any(char::is_control) {
         Some((StatusCode::BAD_REQUEST, "bad_name", "a document's name is one line of at most 200 bytes"))
+    } else if name.chars().any(is_bidi_control) {
+        Some((StatusCode::BAD_REQUEST, "bad_name", "a document's name can't hold invisible direction marks (they can make it read differently)"))
     } else if kind_of(name).is_none() {
         Some((StatusCode::UNSUPPORTED_MEDIA_TYPE, "wrong_kind", WRONG_KIND))
     } else {
         None
     }
+}
+
+/// The invisible marks that change which way text runs (U+200E/F, U+202A–U+202E, U+2066–U+2069):
+/// in a name they can make `invoice.md\u{202E}fdp.exe` look like another file.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 fn kind_of(name: &str) -> Option<&'static str> {
@@ -920,6 +928,15 @@ mod tests {
             ("", Some((StatusCode::BAD_REQUEST, "bad_name"))),
             ("faq.md ", Some((StatusCode::BAD_REQUEST, "bad_name"))),
             ("a\nb.md", Some((StatusCode::BAD_REQUEST, "bad_name"))),
+            ("a\u{7F}b.md", Some((StatusCode::BAD_REQUEST, "bad_name"))),
+            ("a\u{1F}b.md", Some((StatusCode::BAD_REQUEST, "bad_name"))),
+            ("faq\u{202E}dm.txt", Some((StatusCode::BAD_REQUEST, "bad_name"))),
+            ("faq\u{200E}.md", Some((StatusCode::BAD_REQUEST, "bad_name"))),
+            ("faq\u{200F}.md", Some((StatusCode::BAD_REQUEST, "bad_name"))),
+            ("\u{202A}faq.md", Some((StatusCode::BAD_REQUEST, "bad_name"))),
+            ("faq\u{2066}x\u{2069}.md", Some((StatusCode::BAD_REQUEST, "bad_name"))),
+            ("Préférences – 2026.md", None),
+            ("سياسة.md", None),
             (long.as_str(), Some((StatusCode::BAD_REQUEST, "bad_name"))),
             ("photo.png", Some((StatusCode::UNSUPPORTED_MEDIA_TYPE, "wrong_kind"))),
             ("faq", Some((StatusCode::UNSUPPORTED_MEDIA_TYPE, "wrong_kind"))),
@@ -1139,6 +1156,7 @@ mod tests {
                 ("sub%2Fescape.md", b"x".to_vec(), StatusCode::BAD_REQUEST, "bad_name"),
                 ("%2Ehidden.md", b"x".to_vec(), StatusCode::BAD_REQUEST, "bad_name"),
                 ("a%0Ab.md", b"x".to_vec(), StatusCode::BAD_REQUEST, "bad_name"),
+                ("invoice%E2%80%AEdm.txt", b"x".to_vec(), StatusCode::BAD_REQUEST, "bad_name"),
                 ("", b"x".to_vec(), StatusCode::BAD_REQUEST, "bad_name"),
                 ("photo.png", b"x".to_vec(), StatusCode::UNSUPPORTED_MEDIA_TYPE, "wrong_kind"),
                 ("readme", b"x".to_vec(), StatusCode::UNSUPPORTED_MEDIA_TYPE, "wrong_kind"),
@@ -1310,6 +1328,36 @@ mod tests {
                 assert_eq!(s, status, "{uri}");
                 assert!(v["error"].as_str().is_some_and(|m| !m.is_empty()), "{uri}: {v}");
             }
+        }
+
+        /// space-docs qa-2 item 3: a page that isn't a number was axum's plain-text "Failed to
+        /// deserialize query string"; it is JSON with a code now (roadmap 14d).
+        #[tokio::test]
+        async fn a_page_that_isnt_a_number_is_a_json_bad_request() {
+            let e = setup().await;
+            add(&e, "faq.md", b"words").await;
+            let req = Request::builder()
+                .uri(format!("{BASE}/page?file=faq.md&page=abc"))
+                .header("authorization", format!("Bearer {}", person(&e)))
+                .body(Body::empty())
+                .unwrap();
+            let resp = e.app.clone().oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(resp.headers()[header::CONTENT_TYPE], "application/json");
+            let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+            assert_eq!((v["code"].as_str(), v["error"].as_str()), (Some("bad_request"), Some("That request wasn't in the form kwant expected.")), "{v}");
+            assert!(v["detail"].as_str().unwrap().starts_with("Failed to deserialize query string"), "{v}");
+        }
+
+        /// space-docs qa-2 item 4: a name with a right-to-left override can pass for another file.
+        #[tokio::test]
+        async fn a_name_with_a_bidi_mark_is_refused_and_nothing_is_written() {
+            let e = setup().await;
+            for name in ["invoice%E2%80%AEdm.txt", "faq%E2%80%8E.md", "a%E2%81%A6b%E2%81%A9.md", "a%7Fb.md"] {
+                let (s, v) = add(&e, name, b"x").await;
+                assert_eq!((s, v["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_name")), "{name}: {v}");
+            }
+            assert!(!docs(&e).exists() || std::fs::read_dir(docs(&e)).unwrap().next().is_none());
         }
     }
 }
