@@ -14,7 +14,7 @@ export interface WorkingAvatarProps {
    * 16b: this turn is a double-check of another bot's work. The line says so in the same words as the
    * bot's status and the Live now chip (`auditTurnLine`), instead of "is working on it".
    */
-  audit?: { line: string; onOpenTask?: () => void } | null;
+  audit?: { line: string; short?: string; onOpenTask?: () => void } | null;
 }
 
 export const WorkingAvatar: React.FC<WorkingAvatarProps> = ({ name, audit }) => {

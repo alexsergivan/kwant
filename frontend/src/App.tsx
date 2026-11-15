@@ -3548,6 +3548,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       auditHere
         ? {
             line: auditTurnLine(auditHere, kwantNames),
+            // The phone strip is narrow: the Live now chip's words, the full line stays as its title.
+            short: auditShortLine(auditHere, kwantNames),
             onOpenTask: missionBoard && auditHere.task_id
               ? () => {
                   setPendingTaskId(auditHere.task_id);

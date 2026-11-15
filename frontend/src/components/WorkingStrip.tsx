@@ -30,7 +30,7 @@ interface WorkingStripProps {
    * 16b: the turn double-checks another bot's work: its line replaces "is getting started" / "is working
    * on it". On a phone, where the live bubble is hidden, the strip also carries "Open the task".
    */
-  audit?: { line: string; onOpenTask?: () => void } | null;
+  audit?: { line: string; short?: string; onOpenTask?: () => void } | null;
 }
 
 /**
@@ -71,7 +71,7 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
             <ModernAvatar role={title} name={name} size={16} />
           </span>
           <p className="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite" title={sentence.audit ? sentence.text : undefined} data-strip-audit={sentence.audit ? '' : undefined}>
-            {sentence.audit ? sentence.text : <><span className="font-medium text-zinc-300">{name}</span>{sentence.text.slice(name.length)}</>}
+            {sentence.audit ? audit?.short || sentence.text : <><span className="font-medium text-zinc-300">{name}</span>{sentence.text.slice(name.length)}</>}
           </p>
           {sentence.audit && audit?.onOpenTask && !answer && (
             <button

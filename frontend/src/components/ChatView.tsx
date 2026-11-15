@@ -374,7 +374,7 @@ export interface ChatViewProps {
   /** The running reply's steps so far (thinking, tools, waits). */
   liveActivity?: LiveActivity | null;
   /** 16b: the running turn double-checks another bot's work: its line and a way to the audited task. */
-  liveAudit?: { line: string; onOpenTask?: () => void } | null;
+  liveAudit?: { line: string; short?: string; onOpenTask?: () => void } | null;
   /** Draws a bot's browser-step card (message meta kind "human_step"). */
   renderHumanStep?: (msg: ChatMessage, meta: HumanStepMeta, flash: boolean) => React.ReactNode;
   /** Changes when another chat opens, so the view jumps to its bottom. */

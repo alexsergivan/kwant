@@ -5,7 +5,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { loadBundled } from './bundle.mjs';
 
-const m = await loadBundled(`export * from './src/missions'; export { auditTurnLine } from './src/auditor'; export { stripSentence } from './src/workingStrip';`);
+const m = await loadBundled(`export * from './src/missions'; export { auditTurnLine, auditShortLine } from './src/auditor'; export { stripSentence } from './src/workingStrip';`);
 const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
@@ -67,6 +67,18 @@ test('the strip on desktop and phone: the audit line, with "Open the task" on th
   assert.doesNotMatch(plain, /Open the task|data-strip-audit/);
 });
 
+test('the phone strip says the short line; the full line stays as its title, and desktop keeps the full line', () => {
+  const short = m.auditShortLine(audit, names);
+  assert.match(short, /^Double-checking “Weekly report”/);
+  const esc = (x) => x.replace(/"/g, '&quot;');
+  const phone = ui.strip({ name: 'Writer', phone: true, audit: { line, short, onOpenTask: open } });
+  assert.ok(phone.includes(`data-strip-audit="">${short}</p>`), 'phone text is the short line');
+  assert.ok(phone.includes(`title="${esc(line)}"`), 'phone title is the full line');
+  const desk = ui.strip({ name: 'Writer', phone: false, audit: { line, short, onOpenTask: open } });
+  assert.ok(desk.includes(`data-strip-audit="">${line}</p>`), 'desktop text stays the full line');
+  assert.match(read('src/App.tsx'), /short: auditShortLine\(auditHere, kwantNames\)/);
+});
+
 test('App finds the open chat’s running audit turn and opens its task on the board', () => {
   const app = read('src/App.tsx');
   assert.match(app, /t\.context_id === openCtx && t\.state === 'running' && t\.audit/);
@@ -113,11 +125,19 @@ test('verifier_done', () => {
 test('verifier_skipped: every reason the server gives', () => {
   const r = (reason) => m.eventText(ev('verifier_skipped', { reason }));
   assert.equal(r('off'), 'Not checked: the checker is off');
-  assert.equal(r('kwant_task'), 'Not checked: the app checked this one itself');
+  assert.equal(r('kwant_task'), 'Not checked: it’s the app’s own task');
   assert.equal(r('round_limit'), 'Not checked: it was already checked the most times allowed');
   assert.equal(r('no_checkpoint'), 'Not checked: there was no checkpoint to re-run it from');
   assert.equal(r('nothing_to_reproduce'), 'Not checked: there was nothing to re-run');
   assert.equal(r('new_reason'), 'Not checked: the checker skipped it');
+});
+
+test('tier_stepped_down names the tier it drops to, or says one level when the tier is unknown', () => {
+  const r = (d) => m.eventText(ev('tier_stepped_down', d));
+  assert.equal(r({ from_tier: 'act', to_tier: 'sandbox' }), 'You rolled it back, so its owner drops to Sandbox on this kind of work');
+  assert.equal(r({ from_tier: 'sandbox', to_tier: 'observe' }), 'You rolled it back, so its owner drops to Observe on this kind of work');
+  assert.equal(r({ to_tier: 'mystery' }), 'You rolled it back, so its owner drops one level on this kind of work');
+  assert.equal(r({}), 'You rolled it back, so its owner drops one level on this kind of work');
 });
 
 test('checkpoint_pruned is quiet', () => {

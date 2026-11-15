@@ -7,7 +7,7 @@
 import { spendStopEventText } from './spendStop';
 import { PersonCancelledError, personFetch } from './auth';
 import { relativeTime } from './away';
-import { Capabilities, CapabilityChange, CapabilityChangedEvent, ENGINE_CANT_SANDBOX, ProposalDecision, ProposalStatus, Scorecard, TaskTier, Tier, TierProposal } from './flightSchool';
+import { Capabilities, CapabilityChange, CapabilityChangedEvent, ENGINE_CANT_SANDBOX, ProposalDecision, ProposalStatus, Scorecard, TaskTier, Tier, TierProposal, isTier, tierLabel } from './flightSchool';
 import type { Risk, RiskResolution, TaskRisks } from './auditor';
 import { AuditTurn, auditShortLine, auditTurnLine, auditWhyLine, routineSkipText } from './auditor';
 import { Dispute, DisputeStatus, Fact, FactChangedEvent, FactDetail, FactDisputeEvent, FactStatus, ledgerSetting } from './truthLedger';
@@ -1529,7 +1529,7 @@ const CHECKPOINT_WHEN: Record<string, string> = { before_run: ' before the run',
 /** Why the checker (verifier.rs skip_reason) didn't check it, after "Not checked: ". */
 const VERIFIER_SKIP: Record<string, string> = {
   off: 'the checker is off',
-  kwant_task: 'the app checked this one itself',
+  kwant_task: 'it’s the app’s own task',
   round_limit: 'it was already checked the most times allowed',
   no_checkpoint: 'there was no checkpoint to re-run it from',
   nothing_to_reproduce: 'there was nothing to re-run',
@@ -1693,7 +1693,10 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     case 'contract_updated':
       return `${Who} changed what it needs to count as done`;
     case 'tier_stepped_down':
-      return 'After the rollback, this bot asks first more often on this kind of work';
+      // isTier first: tierLabel falls back to "Act", which would be wrong for a step down.
+      return isTier(d.to_tier)
+        ? `You rolled it back, so its owner drops to ${tierLabel(d.to_tier)} on this kind of work`
+        : 'You rolled it back, so its owner drops one level on this kind of work';
     case 'checkpoint_pruned':
       // Retention housekeeping: an old checkpoint went. Nothing for the person to act on.
       return '';
