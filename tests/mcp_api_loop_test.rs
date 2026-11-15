@@ -92,6 +92,7 @@ fn ctx(approver: Arc<dyn ToolApprover>, timeout_secs: i64, max: usize) -> McpTur
         max_tool_iterations: max,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     }
 }
 
