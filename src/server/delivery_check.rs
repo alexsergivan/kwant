@@ -437,7 +437,9 @@ const NOT_A_VERB: &[&str] = &[
 const CHOOSES: &[&str] = &["you want", "you prefer", "you'd like", "you'd prefer", "you would like", "you would prefer"];
 /// Verbs after "[`CHOOSES`] to" that hand the person the next step (19b round 2) or name what they pick
 /// (21e: "which one you want to keep", "which file you'd like to use"). Not "try": "what you'd like to
-/// try next" offers more.
+/// try next" offers more. Past "do" and "proceed", the verb must end the part or be followed only by
+/// "with" (21e round 2): "what you'd like to keep an eye on", "which parts you'd like to go over next"
+/// and "what you'd like to take away from this" are closing courtesies.
 const CHOOSE_TO: &[&str] = &["do", "proceed", "keep", "use", "pick", "choose", "go", "take", "run"];
 /// Verbs after "[`CHOOSES`] me to" that ask the person to pick what the bot does (19b round 2).
 const CHOOSE_ME_TO: &[&str] = &["do", "take", "use", "go", "pick", "choose", "keep", "retry", "try", "run"];
@@ -469,7 +471,16 @@ fn picks(rest: &str) -> bool {
                 i + n <= words.len()
                     && words[i..i + n].join(" ") == *c
                     && match words.get(i + n).copied() {
-                        Some("to") => words.get(i + n + 1).is_some_and(|v| CHOOSE_TO.contains(v)),
+                        Some("to") => words.get(i + n + 1).is_some_and(|v| {
+                            // 21e round 2: past "do" and "proceed", a verb names the pick only when the
+                            // part ends there or with "with" ("which one you want to keep", "…to go
+                            // with"); "what you'd like to keep an eye on" or "to go over next" offers more.
+                            let tail = &words[i + n + 2..];
+                            CHOOSE_TO.contains(v)
+                                && (["do", "proceed"].contains(v)
+                                    || tail.iter().all(|w| w.is_empty())
+                                    || (tail.first() == Some(&"with") && tail[1..].iter().all(|w| w.is_empty())))
+                        }),
                         Some("me") => {
                             words.get(i + n + 1) == Some(&"to") && words.get(i + n + 2).is_some_and(|v| CHOOSE_ME_TO.contains(v))
                         }
@@ -1554,6 +1565,7 @@ mod tests {
             ("Tell me what went wrong on your side, or which mirror to use.", true),
             ("Let me know which file you'd like to use.", true),
             ("Let me know which way you want to go.", true),
+            ("Let me know which version you want to go with.", true),
             // ... the three arguable ones stay no, and so does a closer after ", or "
             ("Let me know what you need or want me to do.", false),
             ("Let me know what you'd like to try next.", false),
@@ -1563,6 +1575,10 @@ mod tests {
             ("Let me know what else you need, or which ones you'd like to see next.", false),
             ("When you're ready, let me know what else you need, or which file to use.", false),
             ("I can retry, or which file to use.", false),
+            // ... and so does a new verb with more words after it (21e round 2, Rigel's #699 QA)
+            ("Let me know what you'd like to keep an eye on.", false),
+            ("Let me know which parts you'd like to go over next.", false),
+            ("Let me know what else you need, or what you'd like to take away from this.", false),
         ];
         for (sentence, waits) in table {
             let reply = format!("The download failed.\n\n{sentence}");
@@ -1579,6 +1595,7 @@ mod tests {
         assert!(!or_names_pick("let me know what else you need.") && !or_names_pick("i can retry, or which file to use"));
         assert!(!or_names_pick("let me know what happens, or what else you need") && !or_names_pick("let me know, or whatever you need"));
         assert!(picks(" one you want to keep") && !picks(" you'd like to try next"));
+        assert!(picks(" branch you want to go with") && picks(" you'd like to do next") && !picks(" you'd like to keep an eye on"));
     }
 
     #[test]
