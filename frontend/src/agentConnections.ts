@@ -3,6 +3,7 @@
 // state while the "copy it now" view is open and nowhere else: not in a list, URL, log or storage.
 
 export type BotScope = 'all' | string[];
+import { dateText, timeText } from './clock';
 
 export interface AgentConnection {
   id: string;
@@ -212,10 +213,9 @@ export function listJoin(xs: string[]): string {
   return `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
 }
 
-/** "7 Nov 2026" in the person's zone. */
-export function shortDate(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+/** "Nov 7, 2026" or "7 Nov 2026": the person's zone and locale. */
+export function shortDate(iso: string, locale?: string): string {
+  return dateText(iso, { locale, year: true }) ?? '';
 }
 
 /** "Never", "Just now", "12 min ago", "3 h ago", or a date. */
@@ -245,12 +245,12 @@ export function callLine(c: Pick<AgentCall, 'tool' | 'bot' | 'outcome'>): string
   return c.outcome === 'refused' ? `${line}, refused` : line;
 }
 
-/** "00:12" today, else "6 Nov, 23:40". */
-export function callTime(iso: string, now = new Date()): string {
+/** "12:12 AM" today, else "Nov 6, 11:40 PM" (on the device's own clock). */
+export function callTime(iso: string, now = new Date(), locale?: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}, ${time}`;
+  const time = timeText(d, { locale })!;
+  return d.toDateString() === now.toDateString() ? time : `${dateText(d, { locale })}, ${time}`;
 }
 
 /** "Claude Code (coding agent)" for a message a coding agent sent, else null (the person's own). */

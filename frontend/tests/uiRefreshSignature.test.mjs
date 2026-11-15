@@ -76,7 +76,7 @@ test('selectMood: finished fades after a moment, failed stays until the next tur
 });
 test('moodLabel: words for the tooltip, "Resting until 03:00" for quota', () => {
   const at = new Date(2026, 10, 3, 3, 0);
-  assert.equal(m.moodLabel('resting', 'Dev', at, new Date(2026, 10, 3, 1, 0).getTime()), 'Resting until 03:00');
+  assert.equal(m.moodLabel('resting', 'Dev', at, new Date(2026, 10, 3, 1, 0).getTime()), 'Resting until 3:00 AM');
   assert.equal(m.moodLabel('needs_you', 'Dev'), 'Dev needs you');
   assert.equal(m.moodLabel('failed', 'Dev'), "Dev's last turn failed");
   assert.equal(m.moodLabel('idle', 'Dev'), null);
