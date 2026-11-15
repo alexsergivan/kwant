@@ -1316,6 +1316,19 @@ pub async fn resume_after_restart(state: &AppState) {
 /// latest check that left something for the person, while that is still open. Each has the away
 /// feed's keys (`timestamp`, `link`) and the contract's (`at`, `mission_id`, `task_id`, `thread_id`).
 pub async fn waiting_items(state: &AppState, space: &SpaceId) -> Vec<Value> {
+    waiting_items_in(state, Some(space)).await.into_iter().map(|(_, v)| v).collect()
+}
+
+/// [`waiting_items`] of every space in one pass, by space id (the desktop glance).
+pub async fn waiting_items_by_space(state: &AppState) -> HashMap<String, Vec<Value>> {
+    let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+    for (space, v) in waiting_items_in(state, None).await {
+        out.entry(space).or_default().push(v);
+    }
+    out
+}
+
+async fn waiting_items_in(state: &AppState, only: Option<&SpaceId>) -> Vec<(String, Value)> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for c in state.db.watch_checks_needing_you(200).await.unwrap_or_default() {
@@ -1323,7 +1336,7 @@ pub async fn waiting_items(state: &AppState, space: &SpaceId) -> Vec<Value> {
             continue;
         }
         let Ok(Some(m)) = state.db.get_mission(&c.mission_id).await else { continue };
-        if m.space_id != space.as_str() || matches!(m.status.as_str(), "done" | "cancelled") {
+        if only.is_some_and(|s| m.space_id != s.as_str()) || matches!(m.status.as_str(), "done" | "cancelled") {
             continue;
         }
         // A newer check of the mission that found nothing for the person closes the item
@@ -1336,7 +1349,7 @@ pub async fn waiting_items(state: &AppState, space: &SpaceId) -> Vec<Value> {
         }
         let first = actions_of(&c).into_iter().find(|a| a["kind"] == "needs_you");
         let at = c.finished_at.unwrap_or(c.started_at);
-        out.push(json!({
+        out.push((m.space_id.clone(), json!({
             "kind": "watch", "id": c.id, "kwant_id": c.kwant_id,
             "kwant_name": super::name_of(state, Some(&c.kwant_id)).await.unwrap_or_else(|| "A bot".into()),
             "title": clip(&clean(&m.title), 120), "summary": inbox["line"], "status": "open",
@@ -1344,7 +1357,7 @@ pub async fn waiting_items(state: &AppState, space: &SpaceId) -> Vec<Value> {
             "mission_id": m.id, "task_id": first.map(|a| a["task_id"].clone()),
             "thread_id": m.thread_id,
             "link": {"thread_id": m.thread_id, "channel_id": m.channel_id, "direct_kwant_id": m.direct_kwant_id},
-        }));
+        })));
     }
     out
 }

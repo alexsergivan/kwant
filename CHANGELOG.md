@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.14] - 2026-11-15
+
+kwant 0.9.14: switching between This Mac and your servers in one window, a new chat from any message, smoother long chats while a bot writes, a Blocked label that catches an ask next to an offer and bots that stop repeating a call that keeps failing.
+
+### Added
+- **Switch places in one window (desktop app).** Window › Switch place… (⌘⇧O on a Mac, Ctrl+Shift+O on Windows and Linux) opens a small picker with This Mac and each server you added, its status and how many things wait for you there. Picking one switches the current window in place: it keeps its size and spot, and the place you left stays connected in the background, so its nudges keep coming. ⌥↩ (Alt+↩) or ⌥-click still opens it side by side, and ⌘1/⌘2 and the tray rows now switch in place too. (#650)
+- **Continue in a new chat from any message.** In a chat with one bot, ⋯ under a message › **Continue in a new chat from here** opens a new chat with the same bot that holds the conversation up to that message, titled "<chat> (continued)", with the files sent up to then. A line at the top, like "Continued from "Price check" · 2 messages" (or "Continued from your main chat with Ben"), opens the original chat at that message; the original stays as it was. Very long chats bring the newest 1,000 messages. Team chats can't be continued. New `POST /api/messages/:id/continue` (the person only; bots get 403). (#618, #617)
+- **`GET /api/glance` (server, for the coming desktop island).** One person-only call returns what needs you, what each bot is doing now (its current step, never its thinking), what just finished and which bots you can ask, across every space, with an ETag so a quiet server answers 304. `POST /api/glance/ask` sends a quick message into your chat with a bot. An approval is marked `can_allow_inline` only when it is low-risk: money, the push floor, GitHub writes, shell commands, publishing, deploys, sending email and anything that pushes, merges or releases always need the full card. The app doesn't use it yet. (#646)
+
+### Changed
+- **Long chats stay smooth while a bot writes.** A reply that's still coming in now updates the chat at most once per screen frame, and only that message redraws, so a long chat no longer stutters while a bot types. In a 300-message chat, script time fell from 29 s to 12 s per 40 s of streaming, and frames slower than 50 ms from 75% to about 4%. (#642)
+
+### Fixed
+- Only the person can answer a bot's question: `POST /api/questions/:id/answer` now refuses a bot's token with 403 `person_only`, so no bot can answer a question meant for you, its own or another bot's. Answers from the app and from Telegram work as before. (#653)
+- A finished task's done line no longer reads as fully checked when some of its criteria weren't covered by any part: those criteria get one phrase, failed first, like "Failed: 2 of 2 parts checked; 1 criterion not met." The card's state and its checks are unchanged. (#654)
+- After a failed or declined step, a reply that asks you for something and offers more in the same sentence, like "Paste the output, and let me know if it fails.", now shows as Blocked; one that only offers, like "Let me know if you want me to retry, or if you'd rather skip it.", no longer does. (#658)
+- On API engines, Codex and Grok, a bot no longer sends the same tool call with the same arguments a fourth time after it failed three times in a row with the same error: it's told to change course or end with a Blocked line, instead of retrying until the call limit. The claude CLI and kwant's own tools aren't covered yet. (#657)
+
 ## [Mac 0.9.13] - 2026-11-15
 
 kwant 0.9.13: bots that download and upload files in their browser, a mic to dictate into the message box, done cards that show each part of what you asked, a team home in empty team chats, double-checks where they count, with who and why, fewer false Blocked replies after a failed step, a clear Blocked when a bot stops after a failed step, one clock format across the app, customer chats on Telegram, memory search that leaves out unrelated notes and plain, consistent API errors.
