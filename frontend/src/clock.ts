@@ -80,6 +80,18 @@ export function localClock(at: When, now: number = Date.now(), locale?: string):
   return `${dateText(d, { locale, year: d.getFullYear() !== today.getFullYear() })}, ${time}`;
 }
 
+/** A time inside a sentence that says "at": "at 9:40 AM" today, "on Nov 10 at 9:40 AM" on another day, and
+ *  "on Nov 10, 2025 at 9:40 AM" in another year ("at 09:40" / "on 10 Nov at 09:40" in en-GB). Same day rule as
+ *  `localClock`, with no "yesterday". Null for a missing or unreadable time. (Clock says day, roadmap 18d.) */
+export function atClock(at: When, now: number = Date.now(), locale?: string): string | null {
+  const d = toDate(at);
+  if (!d) return null;
+  const today = new Date(now);
+  const time = timeText(d, { locale })!;
+  if (sameDay(d, today)) return `at ${time}`;
+  return `on ${dateText(d, { locale, year: d.getFullYear() !== today.getFullYear() })} at ${time}`;
+}
+
 /** A stored wall-clock "HH:MM" (a routine's `time`) the way this device writes it: "8:30 AM" in en-US,
  *  "08:30" in en-GB. Anything that isn't HH:MM comes back as it was. */
 export function wallClock(hhmm: string, locale?: string): string {

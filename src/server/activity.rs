@@ -169,6 +169,62 @@ fn waits_of(steps: &[Step]) -> TurnWaits {
     }
 }
 
+/// What a running turn is doing now, for a glance (the desktop island's "Working now"): the
+/// title of its newest step that still runs or waits, and when that step started. Thinking text is
+/// never read (a running thinking step isn't redacted yet), only its kind; titles are the log's own
+/// one-line, redacted summaries ("Reading acme.com"). `None` when the turn has no steps yet.
+pub fn current_step(turn_id: &str) -> Option<(String, String)> {
+    let turn = TurnActivity::find(turn_id)?;
+    turn.with_log(|log| step_now(log.steps()))
+}
+
+fn step_now(steps: &[Step]) -> Option<(String, String)> {
+    let open = |s: &&Step| matches!(s.status, "running" | "waiting");
+    if let Some(s) = steps.iter().rev().filter(open).find(|s| s.kind != "thinking") {
+        return Some((island_title(s), s.started_at.clone()));
+    }
+    if let Some(s) = steps.iter().rev().find(open) {
+        return Some(("Thinking".to_string(), s.started_at.clone()));
+    }
+    // Between steps: the last one that ended says where it got to
+    steps.iter().rev().find(|s| s.kind != "thinking").map(|s| (island_title(s), s.started_at.clone()))
+}
+
+/// A step's title as the island shows it (17a). A shell step names only its program ("Running
+/// git"), never the command: the island sits on the person's screen above every app, shared
+/// screens and calls included, and redaction only catches known secret shapes. The chat's
+/// activity list keeps the full command. Every other step keeps its title.
+fn island_title(s: &Step) -> String {
+    if s.kind != "tool" || !s.tool.as_deref().is_some_and(crate::drivers::activity::is_shell_tool) {
+        return s.title.clone();
+    }
+    match shell_program(&s.title) {
+        Some(program) => format!("Running {program}"),
+        None => "Running a command".to_string(),
+    }
+}
+
+/// The program a shell step runs, when it's a plain word: the file name of the first word of the
+/// command in its "Running `…`" title (`/usr/bin/git status` gives `git`). It reads the title, not
+/// `detail`, because a failed step's detail becomes the failure reason. `None` for anything else
+/// (`FOO=bar make`, a quote, `$(…)`, an empty or missing command): no further parsing, so `sudo …`
+/// is `sudo` and `bash -c …` is `bash`.
+fn shell_program(title: &str) -> Option<&str> {
+    let command = title.strip_prefix("Running `")?;
+    let first = command.split_whitespace().next()?;
+    // A one-word command ends at the title's closing backtick
+    let first = if command.split_whitespace().nth(1).is_none() { first.strip_suffix('`')? } else { first };
+    // Only a plain path: no quote, `$`, `=` or backtick anywhere in it
+    if !first.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-/~".contains(&b)) {
+        return None;
+    }
+    let program = first.rsplit('/').next()?;
+    let plain = (1..=24).contains(&program.len())
+        && program.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+        && program.bytes().any(|b| b.is_ascii_alphanumeric());
+    plain.then_some(program)
+}
+
 /// Adds `meta.activity` to a reply's meta.
 pub fn with_activity(meta: Option<Value>, activity: Option<Value>) -> Option<Value> {
     let Some(activity) = activity else { return meta };
@@ -183,6 +239,78 @@ pub fn with_activity(meta: Option<Value>, activity: Option<Value>) -> Option<Val
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn current_step_names_the_running_tool_never_thinking_text() {
+        let (tx, _rx) = broadcast::channel(16);
+        let tag = TurnTag { turn_id: "turn-step-test".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        assert_eq!(current_step("turn-step-test"), None);
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Bash".into(), args: json!({"command": "ls"}) });
+        let (title, started) = current_step("turn-step-test").unwrap();
+        assert!(!title.is_empty() && !started.is_empty(), "{title}");
+        approval_waiting("turn-step-test", "ap", "Bash");
+        assert!(current_step("turn-step-test").unwrap().0.starts_with("Waiting for your approval"));
+        assert_eq!(current_step("no-such-turn"), None);
+    }
+
+    /// 17a: the island names a shell step's program, never its command; other steps keep their titles.
+    #[test]
+    fn current_step_names_a_shell_program_never_the_command() {
+        let long_pipeline = format!("grep -rn TODO src | {}sort | uniq -c", "sed -e 's/a/b/' | ".repeat(16));
+        assert!(long_pipeline.chars().count() >= 300);
+        let shell = |cmd: &str| ("Bash", json!({ "command": cmd }));
+        let cases: Vec<((&str, Value), &str)> = vec![
+            (shell("curl -H \"Authorization: Bearer abc123def456\" https://api.example.com/v1/x"), "Running curl"),
+            (shell("FOO=bar make"), "Running a command"),
+            (shell("/usr/local/bin/node x.js"), "Running node"),
+            (shell(&long_pipeline), "Running grep"),
+            (("mcp__x__run_shell_command", json!({"command": "git status"})), "Running git"),
+            (("exec_command", json!({"command": ["bash", "-lc", "cargo test -p kwnt"]})), "Running cargo"),
+            (shell("sudo apt install jq"), "Running sudo"),
+            (shell("bash -c 'echo hi'"), "Running bash"),
+            (shell("ls"), "Running ls"),
+            (shell("$(which git) status"), "Running a command"),
+            (shell("\"/opt/my tool/run\" --fast"), "Running a command"),
+            (shell("`which git` log"), "Running a command"),
+            (shell(". ~/.profile"), "Running a command"),
+            (shell("a_program_name_that_is_far_too_long_to_show --x"), "Running a command"),
+            (shell(""), "Running a command"),
+            (("Bash", Value::Null), "Running a command"),
+        ];
+        let (tx, _rx) = broadcast::channel(64);
+        for (n, ((tool, args), want)) in cases.into_iter().enumerate() {
+            let id = format!("turn-island-{n}");
+            let tag = TurnTag { turn_id: id.clone(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+            let turn = TurnActivity::start(tx.clone(), tag);
+            turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: tool.into(), args: args.clone() });
+            let (title, _) = current_step(&id).unwrap();
+            assert_eq!(title, want, "{tool} {args}");
+            assert!(!title.contains('`'), "{title}");
+            // The chat's activity list keeps the command
+            let chat = turn.with_log(|log| log.steps()[0].clone());
+            assert_eq!(chat.title.starts_with("Running `"), chat.detail.is_some(), "{}", chat.title);
+        }
+
+        // A failed shell step still names its program between steps, though its detail is now the failure
+        let tag = TurnTag { turn_id: "turn-island-failed".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx.clone(), tag);
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Bash".into(), args: json!({"command": "git push origin main"}) });
+        turn.observe(&RuntimeEvent::ToolCallCompleted { id: "1".into(), result: json!({"status": "error", "error": "Permission denied (publickey)"}) });
+        assert_eq!(current_step("turn-island-failed").unwrap().0, "Running git");
+
+        // A Reading step and a thinking step read as they do today; an approval keeps its title
+        let tag = TurnTag { turn_id: "turn-island-other".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        let read = json!({"file_path": "/tmp/notes.md"});
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Read".into(), args: read.clone() });
+        assert_eq!(current_step("turn-island-other").unwrap().0, crate::drivers::activity::summarize("Read", &read).0);
+        turn.observe(&RuntimeEvent::ToolCallCompleted { id: "1".into(), result: json!({"status": "ok"}) });
+        turn.observe(&RuntimeEvent::ThinkingDelta("the key is in ~/.env".into()));
+        assert_eq!(current_step("turn-island-other").unwrap().0, "Thinking");
+        approval_waiting("turn-island-other", "ap", "Bash");
+        assert_eq!(current_step("turn-island-other").unwrap().0, "Waiting for your approval: Running a command");
+    }
 
     #[test]
     fn turn_waits_reads_the_waiting_step_and_the_running_tool() {

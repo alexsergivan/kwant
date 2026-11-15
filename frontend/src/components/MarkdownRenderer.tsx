@@ -90,6 +90,8 @@ interface MarkdownRendererProps {
   content: string;
   className?: string;
   isStreaming?: boolean;
+  /** The typing cursor after the text; while streaming by default. A finished streaming block has none (15a). */
+  cursor?: boolean;
   /** The message's `results` (Smart Results). Only for a final bot reply. */
   results?: unknown;
   messageId?: string;
@@ -160,13 +162,16 @@ function listSource(node: HastNode, children: React.ReactNode): ReplySource {
   };
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
+// Memoized (14b): a finished message parses its markdown again only when its own props change, never
+// because the reply streaming below it moved on.
+export const MarkdownRenderer = React.memo(function MarkdownRenderer({
   content,
   className = '',
   isStreaming = false,
+  cursor = isStreaming,
   results,
   messageId,
-}) => {
+}: MarkdownRendererProps) {
   // Never while streaming: the block appears when the final message arrives.
   const smart = !isStreaming && !!messageId && resultBlocks(results).length > 0;
   const slot = smart ? blockAt(results, { kind: 'slot' }) : null;
@@ -381,10 +386,10 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         />
       )}
 
-      {isStreaming && (
+      {cursor && (
         <span className="inline-block w-1.5 h-4 ml-0.5 align-middle bg-sky-400 animate-pulse rounded-sm" />
       )}
     </div>
     </ReplyText.Provider>
   );
-};
+});

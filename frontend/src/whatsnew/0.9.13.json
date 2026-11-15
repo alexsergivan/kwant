@@ -1,0 +1,52 @@
+{
+  "version": "0.9.13",
+  "date": "2026-11-15",
+  "highlights": [
+    {
+      "id": "bot-browser-files",
+      "title": "Bots download and upload files in their browser",
+      "text": "A bot can open menus that show only on hover, save a page's download in its own folder and give a page's file picker a file. Under Ask, each upload asks you first.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "dictation",
+      "title": "Dictate into the message box",
+      "text": "Press the mic between @ and Send and talk. The words land in the box for you to read over, with Undo, and nothing is sent until you press Send.",
+      "image": "dictation.webp",
+      "open": null
+    },
+    {
+      "id": "dictation-phone",
+      "title": "Dictate on your phone too",
+      "text": "On a phone the mic sits where Send is until you start typing, so you can say a long message instead of typing it.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "request-parts",
+      "title": "Every part of your request on the done card",
+      "text": "A done card lists the parts of your request, in your words, as Passed, Not met or No check, so a part nothing verified stands out.",
+      "image": "request-parts.webp",
+      "open": null
+    },
+    {
+      "id": "auditor-turn",
+      "title": "Double-checks where they count",
+      "text": "A routine run is double-checked on its first run, after its instructions change, and then at most once a week. While a check runs, you see which task is checked, by whom and why.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "failed-step-offers",
+      "title": "Offers after a failed step don't count as Blocked",
+      "text": "When a step fails and the bot only offers choices, like \"I can retry, or try another way\", it no longer shows as Blocked or asks you with a question card.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Memory search no longer lists unrelated notes; with no real match the bot now sees \"No matching notes.\"",
+    "API errors now always have a plain sentence and a short code."
+  ]
+}
