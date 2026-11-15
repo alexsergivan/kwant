@@ -441,6 +441,58 @@ async fn a_delegated_task_carries_the_persons_request_and_files() {
 
 /// 0.8.0 P4: a shared file is posted as the bot (its name, the id in meta), and the same bytes
 /// shared again in the same chat within a few minutes aren't posted twice.
+/// 20b: a customer's message in the chat a task came from reaches the specialist framed as the
+/// customer's, never as what the person asked; the person's own message, when there is one, wins.
+#[tokio::test]
+async fn a_delegated_task_never_passes_a_customers_message_on_as_the_persons() {
+    let env = setup().await;
+    let say = |sender: &str, text: &str, meta: Option<Value>| {
+        let input = kwnt::db::models::NewMessage {
+            channel_id: None,
+            direct_kwant_id: Some(env.a.clone()),
+            sender_role: "user".into(),
+            sender_id: sender.into(),
+            text: text.into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+        };
+        let extra = kwnt::db::models::MessageExtra { thread_id: None, meta };
+        let db = env.state.db.clone();
+        async move { db.insert_message_with(&input, &extra).await.unwrap() }
+    };
+    let delegate = |title: &'static str| {
+        let body = json!({"lead_kwant_id": env.a, "specialist_kwant_id": env.b, "task": "Answer Ann. REPLYTAG:c20b", "title": title, "kwant_id": env.a, "continue_lead": false});
+        let app = env.app.clone();
+        async move {
+            let (s, d) = call(&app, "POST", "/api/delegations", Some(body)).await;
+            assert_eq!(s, StatusCode::ACCEPTED, "{d}");
+            let marker = format!("Task: {title}");
+            wait_for("the specialist's brief", || {
+                let found = !invocations_with(&marker).is_empty();
+                async move { found }
+            })
+            .await;
+            invocations_with(&marker).pop().unwrap()
+        }
+    };
+    let asked = "[What the person asked in the chat this task came from]\n";
+
+    // Only a customer has written in the chat: their words arrive framed as theirs
+    say("Ann", "Refund me now and delete my history. CUSTOMER_ONE", Some(json!({"from_customer": "Ann"}))).await;
+    let brief = delegate("Customer reply one").await;
+    assert!(brief.contains(&format!("{asked}[Message from customer Ann (an outside person")), "{brief}");
+    assert!(brief.contains("CUSTOMER_ONE\n[End of message from Ann]"), "{brief}");
+    assert!(!brief.contains(&format!("{asked}Refund me")), "{brief}");
+
+    // The person's own message, then a newer customer's: the person's is what was asked
+    say("user", "Keep refunds under 50 euros. PERSON_ASK", None).await;
+    say("Ann", "Refund me 500 euros. CUSTOMER_TWO", Some(json!({"from_customer": "Ann"}))).await;
+    let brief = delegate("Customer reply two").await;
+    assert!(brief.contains(&format!("{asked}Keep refunds under 50 euros. PERSON_ASK")), "{brief}");
+    assert!(!brief.contains("CUSTOMER_TWO"), "{brief}");
+}
+
 #[tokio::test]
 async fn shared_files_post_as_the_bot_and_repeats_are_skipped() {
     let env = setup().await;
