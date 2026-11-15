@@ -484,6 +484,7 @@ async fn approval_turn(name: &str, answer: bool) -> (Vec<String>, bool, usize, S
         max_tool_iterations: 8,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     };
     state
         .mcp_sessions
