@@ -27,10 +27,12 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 /// - kwant's one automatic delivery continuation: a reply with a PR link;
+/// - the hidden round's prompt for REFUSED's held reply: a decided reply that waits on the person;
 /// - the hidden round's prompt: a decided reply with a [DECISIONS] block;
 /// - a teammate's view: "I'd pick B";
 /// - CHOICE: the screenshot's ending ("A, B or C?"), naming Bob;
 /// - SEND: an ask about sending an email;
+/// - REFUSED: a Bash step that fails (refused), then an ask to pick (13a);
 /// - anything else: "answer".
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
@@ -39,10 +41,16 @@ esac
 for a; do last="$a"; done
 case "$last" in
   *"[kwnt: one automatic continuation."*) out='Pushed the footer change: https://github.com/o/r/pull/7' ;;
+  *"[Decide first] Your last reply"*"unittest run was refused"*)
+    out="I went with B and read the code: one test should fail.\n\nIf you approve the command, I'll run the unittest suite and confirm." ;;
   *"[Decide first] Your last reply"*)
     out='I checked contrast on A and C and went with B: Wax seal. Change it any time.\n\n[DECISIONS]\nquestion: Which direction? | options: A: Classic; B: Wax seal; C: Green desk | picked: B: Wax seal | why: reads best\n[/DECISIONS]' ;;
   *"[Decide first]"*) out="I'd pick B: it reads best." ;;
   *CHOICE*) out='Three directions are ready. Bob only looked at B; nobody looked at A and C.\n\nTwo decisions for you:\n1. A, B or C?\n2. FM monogram or plain?' ;;
+  *REFUSED*)
+    printf '{"type":"assistant","message":{"id":"msg_f","content":[{"type":"tool_use","id":"toolu_f","name":"Bash","input":{"command":"python3 -m unittest"}}]}}\n'
+    printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_f","is_error":true,"content":"The user denied this tool call."}]}}\n'
+    out='The unittest run was refused, so I have no result yet. Bob can check the code.\n\nTwo decisions for you:\n1. A, B or C?\n2. Verbose or quiet?' ;;
   *SEND*) out='The draft is ready.\n\nShould I send the email to Mia now, or wait until Monday?' ;;
   *) out="answer" ;;
 esac
@@ -329,4 +337,29 @@ async fn a_decided_change_without_a_link_is_continued_once() {
     assert!(cont.get("decide_first").is_none(), "the continuation isn't held again: {cont}");
     assert!(replies[1].text.ends_with("No picture was attached to this reply."), "{}", replies[1].text);
     assert!(replies[0].created_at <= replies[1].created_at);
+}
+
+/// 13a: the held turn's step was refused and the decided reply (a new turn, with none of its own
+/// steps) ends waiting on the person in prose: it is blocked, in the decided reply's own words.
+/// Task 9 of the long-task suite missed this way on the PR build before the held turn's steps
+/// were carried over.
+#[tokio::test]
+async fn a_refused_step_in_the_held_turn_makes_the_decided_reply_blocked() {
+    let env = setup().await;
+    env.say("@Ann run the tests REFUSED").await;
+    let reply = env.wait_for_reply().await;
+    assert_eq!(reply.text, "I went with B and read the code: one test should fail.\n\nIf you approve the command, I'll run the unittest suite and confirm.");
+    let m = meta(&reply);
+    assert!(m["decide_first"]["held_turn_id"].is_string(), "{m}");
+    assert!(!m["activity"]["steps"].as_array().into_iter().flatten().any(|s| s["status"] == "failed"), "the failed step was in the held turn: {m}");
+    assert_eq!(m["blocked"], json!({"text": "If you approve the command, I'll run the unittest suite and confirm.", "from": "failed_step"}));
+}
+
+/// ...and a held reply with no failed step stays unblocked when decided.
+#[tokio::test]
+async fn a_decided_reply_without_a_failed_step_is_not_blocked() {
+    let env = setup().await;
+    env.say("@Ann make three directions for the hero CHOICE").await;
+    let reply = env.wait_for_reply().await;
+    assert!(meta(&reply)["blocked"].is_null(), "{}", meta(&reply));
 }

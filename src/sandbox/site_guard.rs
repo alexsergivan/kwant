@@ -185,13 +185,13 @@ fn system_resolve(name: &str, port: u16) -> Option<Vec<IpAddr>> {
 pub const NAVIGATION_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Whether a bot action (`act`'s `action`, and `key` for a key press) can load a page: a click,
-/// and Enter or Space (which follow a focused link or press a focused button). A scroll, plain
-/// typing and other keys can't, so they skip [`NAVIGATION_WAIT`]. A page script that navigates on
+/// and Enter or Space (which follow a focused link or press a focused button). A scroll, a hover,
+/// plain typing and other keys can't, so they skip [`NAVIGATION_WAIT`]. A page script that navigates on
 /// some other key is still refused by the guard; the bot hears of it on the same reply if the
 /// refusal arrives in time, else on its next action.
 pub fn may_navigate(action: &str, key: Option<&str>) -> bool {
     match action {
-        "scroll" | "type" => false,
+        "scroll" | "type" | "hover" => false,
         "key" => matches!(key.unwrap_or("Enter"), "Enter" | " " | "Space" | "Spacebar"),
         _ => true,
     }
@@ -503,7 +503,7 @@ mod tests {
         for (action, key) in [("click", None), ("click_text", None), ("key", None), ("key", Some("Enter")), ("key", Some(" ")), ("key", Some("Space"))] {
             assert!(may_navigate(action, key), "{action} {key:?}");
         }
-        for (action, key) in [("scroll", None), ("type", None), ("key", Some("Tab")), ("key", Some("Escape")), ("key", Some("ArrowDown"))] {
+        for (action, key) in [("scroll", None), ("type", None), ("hover", None), ("key", Some("Tab")), ("key", Some("Escape")), ("key", Some("ArrowDown"))] {
             assert!(!may_navigate(action, key), "{action} {key:?}");
         }
     }

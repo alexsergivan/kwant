@@ -6,6 +6,7 @@
 import { isKwantWorking, subscribeKwant } from './kwantActivity';
 import { parsePick } from './engines';
 import { activeLimit, type Profile } from './profiles';
+import { timeText } from './clock';
 
 export type Mood = 'resting' | 'needs_you' | 'thinking' | 'working' | 'failed' | 'finished' | 'idle';
 
@@ -43,10 +44,9 @@ export function selectMood(i: MoodInputs): Mood {
   return 'idle';
 }
 
-const pad = (n: number) => String(n).padStart(2, '0');
-/** "03:00" in the person's zone, with the day when it isn't today. */
+/** "3:00 AM" / "03:00" on the device's clock, with the day when it isn't today. */
 export function restingClock(at: Date, now = Date.now()): string {
-  const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  const time = timeText(at) ?? '';
   return at.toDateString() === new Date(now).toDateString() ? time : `${at.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
 }
 

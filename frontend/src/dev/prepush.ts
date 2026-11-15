@@ -5,6 +5,7 @@
 import { personFetch } from '../auth';
 import { DevModeError } from '../devMode';
 import { parseFreshEyes, type FreshEyes } from './freshEyes';
+import { atClock, localClock, timeText } from '../clock';
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown, max = 2000): string | null => (typeof v === 'string' && v.trim() !== '' ? v.slice(0, max) : null);
@@ -375,9 +376,7 @@ export const requiredPassed = (c: PrepushCard): number => c.checks.filter((k) =>
 
 export function hhmm(ms: number | null): string | null {
   if (ms === null) return null;
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return null;
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return timeText(ms);
 }
 
 export function footer(c: PrepushCard, bot: string): string {
@@ -413,8 +412,8 @@ export function needsYouLead(c: PrepushCard, bot: string): string {
 }
 
 /** P2b's line around the branch, which the card renders as code (Mira Later 6). */
-export function clearedParts(c: PrepushCard): { before: string; branch: string; after: string } {
-  const at = hhmm(c.updated_at);
+export function clearedParts(c: PrepushCard, now: number = Date.now()): { before: string; branch: string; after: string } {
+  const at = c.updated_at === null ? null : localClock(c.updated_at, now);
   return { before: 'Cleared to push ', branch: c.branch, after: ` after ${plural(requiredPassed(c), 'check')} passed${at ? ` · ${at}` : ''}` };
 }
 
@@ -424,9 +423,9 @@ export function clearedLine(c: PrepushCard): string {
 }
 
 // The override's first sentence on its own: what the person did, with no promise about the next push.
-export function overriddenHead(c: PrepushCard): string {
-  const at = hhmm(c.override?.at ?? null);
-  return `You let this push go${at ? ` at ${at}` : ''} with ${plural(openCount(c), 'finding')} open.`;
+export function overriddenHead(c: PrepushCard, now: number = Date.now()): string {
+  const at = atClock(c.override?.at ?? null, now);
+  return `You let this push go${at ? ` ${at}` : ''} with ${plural(openCount(c), 'finding')} open.`;
 }
 
 export function overriddenLine(c: PrepushCard, bot: string): string {
@@ -613,9 +612,9 @@ export const asksLine = (bot: string, a: PushApproval): string =>
   a.reason ? `${bot}'s push still needs your OK. ${a.reason.charAt(0).toUpperCase()}${a.reason.slice(1)}. Pushes like this always ask, every time.` : `${bot}'s push still needs your OK. Pushes like this always ask, every time.`;
 
 /** A follow-up card's own lead line, so the two cards read as one story. */
-export const afterRetryLine = (c: PrepushCard): string => {
-  const at = hhmm(c.grant?.at ?? null);
-  return `After you asked for a fix${at ? ` at ${at}` : ''}.`;
+export const afterRetryLine = (c: PrepushCard, now: number = Date.now()): string => {
+  const at = atClock(c.grant?.at ?? null, now);
+  return `After you asked for a fix${at ? ` ${at}` : ''}.`;
 };
 
 /**

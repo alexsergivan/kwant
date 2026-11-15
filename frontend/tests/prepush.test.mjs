@@ -2,6 +2,11 @@
 // the Inbox "Needs you" item, the "Checked with fresh eyes" chip (R1–R3) and the semgrep tile.
 // Data is shaped like Juno's card_json (ba2157a5); see src/dev/prepushFixtures.ts.
 process.env.TZ = 'UTC';
+// 18d: a time from another day says its day ("on Nov 10 at 9:40 AM"). These fixtures are read late on their own
+// day, so the copy below stays time only; the clock still ticks. The other-day copy has its own test.
+const realNow = Date.now.bind(Date);
+const fixtureShift = realNow() - Date.parse('2026-11-09T23:00:00Z');
+Date.now = () => realNow() - fixtureShift;
 
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
@@ -128,9 +133,9 @@ test('counts come from the server: open findings are its blockers, never a check
   assert.equal(m.inboxLine(card(fx.PP_NEEDS_YOU), 'Pixel'), "Pixel's push is waiting for you: 1 finding open");
   assert.equal(m.inboxLine(card(fx.PP_FAILED_NEEDS_YOU), 'Pixel'), "Pixel's push is waiting for you: the checks couldn't run");
   assert.equal(m.requiredPassed(card(fx.PP_CLEAR)), 5, 'semgrep not installed is not a passed check');
-  assert.equal(m.clearedLine(card(fx.PP_CLEAR)), 'Cleared to push pixel/inbox-empty-state after 5 checks passed · 14:02');
+  assert.equal(m.clearedLine(card(fx.PP_CLEAR)), 'Cleared to push pixel/inbox-empty-state after 5 checks passed · 2:02 PM');
   assert.equal(m.foldLine(card(fx.PP_NEEDS_YOU)), '4 checks passed · registry · tamper · rules · review');
-  assert.equal(m.overriddenLine(card(fx.PP_OVERRIDDEN), 'Pixel'), 'You let this push go at 14:09 with 1 finding open. It covers this commit only.', 'old server, no grant: unchanged');
+  assert.equal(m.overriddenLine(card(fx.PP_OVERRIDDEN), 'Pixel'), 'You let this push go at 2:09 PM with 1 finding open. It covers this commit only.', 'old server, no grant: unchanged');
 });
 
 test('a check that could not run never reads as passed', () => {
@@ -180,7 +185,7 @@ test('P2 clear: a card seen live shows Clear, then folds to P2b after about 2 s;
 
   const hist = await mount(m.PrepushCard, { card: card(fx.PP_CLEAR), bot: 'Pixel' });
   assert.equal(hist.host.querySelector('[data-prepush-phase]').dataset.prepushPhase, 'P2b');
-  assert.match(text(hist.host), /Cleared to push pixel\/inbox-empty-state after 5 checks passed · 14:02/);
+  assert.match(text(hist.host), /Cleared to push pixel\/inbox-empty-state after 5 checks passed · 2:02 PM/);
   await click(button(hist.host, 'Show checks'));
   assert.equal(hist.host.querySelector('[data-prepush-phase]').dataset.prepushPhase, 'P2');
   assert.equal(hist.host.querySelectorAll('[data-check]').length, 6);
@@ -264,7 +269,7 @@ test('P5 shows the server\'s refusal and keeps the reason', async () => {
 test('P6 pushed anyway: neutral chip, the time and the quoted reason; open findings stay rose; no actions', () => {
   const out = html(m.PrepushCard, { card: card(fx.PP_OVERRIDDEN), bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
   assert.match(out, /class="kw-chip shrink-0[^"]*"[^>]*>Pushed anyway/);
-  assert.match(out, /You let this push go at 14:09 with 1 finding open\./);
+  assert.match(out, /You let this push go at 2:09 PM with 1 finding open\./);
   assert.match(out, /<blockquote[^>]*>.*The key is a revoked test key/);
   assert.match(out, /data-check="secrets" data-state="hit"/);
   assert.doesNotMatch(out, /<button[^>]*>Push anyway/);

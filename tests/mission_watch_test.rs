@@ -125,6 +125,7 @@ async fn turn(e: &Env, bot: &Kwant, purpose: Option<&str>) -> String {
         state: "running".into(),
         since: chrono::Utc::now(),
         purpose: purpose.map(String::from),
+        audit: None,
     });
     let origin = TurnOrigin { channel_id: Some(e.general.clone()), ..Default::default() };
     let scope = SelfScope { kwant_id: bot.id.clone(), kwant_name: bot.name.clone(), origin: Some(origin), turn_id: Some(turn_id.clone()), ..Default::default() };
@@ -498,6 +499,7 @@ fn turn_in(e: &Env, bot: &Kwant, context_id: &str, thread: Option<&str>, purpose
         state: "running".into(),
         since: chrono::Utc::now(),
         purpose: purpose.map(String::from),
+        audit: None,
     });
     turn_id
 }
