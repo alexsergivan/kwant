@@ -30,6 +30,13 @@ pub struct RepeatGuard {
     entries: Mutex<Vec<Entry>>,
 }
 
+/// 18a: `SelfScope` derives `Debug`; the entries hold hashes and error texts, so only their count shows.
+impl std::fmt::Debug for RepeatGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepeatGuard").field("entries", &self.lock().len()).finish()
+    }
+}
+
 /// What the guard says before a call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stopped {
@@ -102,13 +109,22 @@ impl RepeatGuard {
     }
 }
 
+/// How every stop text starts. A result that carries it is a call the guard didn't send (18a: the
+/// claude CLI's results reach tool_failures as plain text, without a `repeat_stopped` field).
+pub const STOP_PREFIX: &str = "kwnt didn't send this call: the same call (same tool, same arguments)";
+
+/// Whether a call's result text is the guard's stop text.
+pub fn is_stop_text(text: &str) -> bool {
+    text.contains(STOP_PREFIX)
+}
+
 /// What the model reads instead of a stopped call's result. No connection words of its own, so
 /// tool_failures doesn't read it as a connection failure (the quoted error may have some; a
 /// stopped call is skipped there by its `repeat_stopped` field).
 pub fn stop_text(count: u32, error: &str) -> String {
     let error = super::truncate_text(error.trim(), QUOTE_MAX_CHARS);
     format!(
-        "kwnt didn't send this call: the same call (same tool, same arguments) already failed {count} times in this \
+        "{STOP_PREFIX} already failed {count} times in this \
          turn with the same error: \"{error}\". Change the arguments or try another way. If only the person can fix \
          it, end your reply with \"Blocked: <what is blocked>. <what would unblock it>\"."
     )
@@ -138,6 +154,19 @@ mod tests {
         assert!(s.text.ends_with("end your reply with \"Blocked: <what is blocked>. <what would unblock it>\"."));
         // Still stopped on a 5th try: the stop itself isn't recorded as a new outcome
         assert!(g.check(&k).is_some());
+    }
+
+    #[test]
+    fn the_stop_text_is_recognised_and_debug_shows_only_a_count() {
+        let g = RepeatGuard::default();
+        let k = RepeatGuard::key("browser_open", &json!({"url": "https://x.test"}));
+        fail(&g, &k, 3, "secret-looking error: connection closed");
+        let s = g.check(&k).unwrap();
+        assert!(s.text.starts_with(STOP_PREFIX));
+        assert!(is_stop_text(&s.text));
+        assert!(is_stop_text(&format!("Error: {}", s.text)), "a wrapper in front still reads as a stop");
+        assert!(!is_stop_text("secret-looking error: connection closed"));
+        assert_eq!(format!("{g:?}"), "RepeatGuard { entries: 1 }");
     }
 
     #[test]
