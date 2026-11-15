@@ -97,6 +97,15 @@ pub fn app_path(space: &str, link: &Value, kwant_id: &str, card: Option<&str>) -
 /// [`mcp_writes`]: super::dev::prepush::mcp_writes
 const PUSH_WORDS: &[&str] = &["MERGE", "PUSH", "UPDATE_BRANCH", "UPDATE_A_REFERENCE", "UPDATE_REF", "CREATE_A_REFERENCE", "DELETE_A_REFERENCE", "RELEASE"];
 
+/// Whole words of a tool name ([`words`]) that make a commit or a branch: `commit_files`,
+/// `create_commit`, `create_branch`, `GITHUB_CREATE_A_BRANCH` (18c, Rigel's B55–B56). Whole words, so
+/// `list_branches` and `list_commits` stay out, and a name with a [`READ_VERBS`] word
+/// (`get_commit`, `GITHUB_GET_A_BRANCH`) only reads.
+const COMMIT_NAME_WORDS: &[&str] = &["commit", "branch"];
+
+/// Whole words of a tool name that only read; they keep [`COMMIT_NAME_WORDS`] from refusing.
+const READ_VERBS: &[&str] = &["get", "list", "search", "read", "view", "show", "describe", "find", "compare"];
+
 /// Parts of a tool or server name (any case) that mark a tool taking free text to run: a command,
 /// a script, code or a query. A one-line peek can't show what that text does, and a list of bad
 /// commands is never complete, so all of them need the full card.
@@ -112,7 +121,13 @@ const RUNS_TEXT_KEY_PARTS: &[&str] = &["command", "cmd", "shell", "exec", "argv"
 
 /// Whole words of an argument key (split at `_`, `-`, camelCase) that carry a script. Not by
 /// containment, which would catch `description`, `subscription` and `transcript`.
-const RUNS_TEXT_KEY_WORDS: &[&str] = &["script", "scripts", "javascript", "applescript", "stdin"];
+///
+/// 18c (Rigel's B10–B13, B17, B52–B53, H06–H08): a command typed under `input`, `line`,
+/// `statement`, `code_snippet` or `arguments_list` on a tool whose name says nothing.
+const RUNS_TEXT_KEY_WORDS: &[&str] = &[
+    "script", "scripts", "javascript", "applescript", "stdin", //
+    "input", "inputs", "line", "lines", "statement", "statements", "snippet", "snippets", "args", "arguments",
+];
 
 /// HTTP verbs that change something, in a `method` argument (any depth, any case).
 const WRITE_METHODS: &[&str] = &["DELETE", "PUT", "PATCH", "POST"];
@@ -131,12 +146,27 @@ const OUTWARD_NAMES: &[&str] = &[
     "PUBLISH", "DEPLOY", "SEND", "EMAIL", "MAIL", "DELETE", "REMOVE", "DESTROY", "DROP", "POST", "PAY",
     // 0.9.14 (Rigel's hole 3)
     "TRANSFER", "SUBMIT", "TWEET", "SHARE", "INVITE", "FORWARD", "UPLOAD", "WIPE", "TERMINATE", "REVOKE", "PURCHASE",
+    // 18c (Rigel's B34)
+    "BROADCAST",
 ];
+
+/// Whole words of a tool name ([`words`]) that act outside kwant but sit inside ordinary words as
+/// parts (`ship` in `membership`, `relationship`), so they can't join [`OUTWARD_NAMES`]: `ship_it`,
+/// `rollout` (18c, Rigel's B54).
+const OUTWARD_NAME_WORDS: &[&str] = &["ship", "rollout"];
+
+/// Whole words in the value of an `action`, `operation` or `op` argument ([`is_action_key`]) that
+/// change or destroy something (18c, Rigel's H01–H02): the [`WRITE_METHODS`] verbs, plus these.
+const ACTION_WRITE_WORDS: &[&str] = &["delete", "put", "patch", "post", "remove", "destroy", "drop", "purge", "wipe", "truncate", "erase"];
+
+/// Argument keys (flattened, [`flat`]) that carry a request body; on an HTTP-shaped call with no
+/// method key, such a key means the tool sends it, usually as a POST (18c, Rigel's H04).
+const BODY_KEYS: &[&str] = &["body", "data", "json", "payload", "form", "formdata", "requestbody", "postdata", "jsonbody"];
 
 pub const PUSHES: &str = "This pushes code, so it needs the full card.";
 pub const RUNS: &str = "This runs a command, so it needs the full card.";
 pub const RISKY: &str = "kwant flagged this step as risky.";
-const OUTWARD: &str = "This acts outside kwant, so it needs the full card.";
+pub const OUTWARD: &str = "This acts outside kwant, so it needs the full card.";
 
 /// Every argument key and string value, at any depth, in document order (array items in turn).
 fn texts<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
@@ -215,18 +245,38 @@ fn has_push_word(text: &str) -> bool {
     PUSH_FAMILY.iter().any(|phrase| words.windows(phrase.len()).any(|w| w.iter().zip(phrase.iter()).all(|(a, b)| a == b)))
 }
 
-/// Whether the arguments ask for an HTTP verb that changes something. A `method` key (any depth;
-/// `method`, `http_method`, `httpMethod`, `verb`) whose value is one of [`WRITE_METHODS`] always
-/// does. On an HTTP-shaped call (a `url`, `uri` or `endpoint` key anywhere) a method that isn't a
-/// plain [`READ_METHODS`] string does too: `CONNECT`, a made-up verb, a list or a number.
+/// Whether a flattened argument key names an HTTP verb: `method`, `http_method`, `httpMethod`,
+/// `verb`, `request_verb` (18c, H03), or an `X-HTTP-Method-Override` header (18c, H05).
+fn is_method_key(f: &str) -> bool {
+    f.ends_with("method") || f.ends_with("verb") || f.contains("methodoverride")
+}
+
+/// Whether a flattened argument key names what a generic tool does: `action`, `operation`, `op`
+/// (18c, H01–H02). Exact, so `transaction` and `cooperation` stay out.
+fn is_action_key(f: &str) -> bool {
+    matches!(f, "action" | "operation" | "op")
+}
+
+/// Whether the arguments ask for an HTTP verb that changes something. A method key at any depth
+/// ([`is_method_key`]) whose value is one of [`WRITE_METHODS`] always does. On an HTTP-shaped call
+/// (a `url`, `uri` or `endpoint` key anywhere) a method that isn't a plain [`READ_METHODS`] string
+/// does too: `CONNECT`, a made-up verb, a list or a number. An action key ([`is_action_key`]) whose
+/// value has an [`ACTION_WRITE_WORDS`] word does (`delete`, `DELETE`, `remove_item`). And an
+/// HTTP-shaped call with a body ([`BODY_KEYS`]) but no method key at all does, since such tools
+/// send it as a POST.
 fn writes_by_method(args: &Value) -> bool {
     let http = any_key(args, &|k, _| {
         let f = flat(k);
         f == "uri" || f == "endpoint" || f.ends_with("url")
     });
-    any_key(args, &|k, v| {
+    let by_key = any_key(args, &|k, v| {
         let f = flat(k);
-        if !(f.ends_with("method") || f == "verb" || f == "httpverb") {
+        if is_action_key(&f) {
+            let mut all = Vec::new();
+            texts(v, &mut all);
+            return words(&all.join(" ")).iter().any(|w| ACTION_WRITE_WORDS.contains(&w.as_str()));
+        }
+        if !is_method_key(&f) {
             return false;
         }
         match v.as_str() {
@@ -236,7 +286,11 @@ fn writes_by_method(args: &Value) -> bool {
             }
             None => http && !v.is_null(),
         }
-    })
+    });
+    by_key
+        || (http
+            && !any_key(args, &|k, _| is_method_key(&flat(k)))
+            && any_key(args, &|k, v| !v.is_null() && BODY_KEYS.contains(&flat(k).as_str())))
 }
 
 /// Why an approval may only be answered on its full card, from its stored details alone; `None`
@@ -251,8 +305,10 @@ fn writes_by_method(args: &Value) -> bool {
 ///    value, as a whole word, camelCase humps included ([`words`]);
 /// 2. a tool that runs free text: its tool or server name says so ([`RUNS_TEXT_NAMES`]) or an
 ///    argument key at any depth does ([`is_run_key`]: exact, by containment, or by word);
-/// 3. a tool whose name acts outside kwant or destroys something ([`OUTWARD_NAMES`]);
-/// 4. an HTTP verb that changes something in a `method` argument ([`writes_by_method`]).
+/// 3. a tool whose name acts outside kwant or destroys something ([`OUTWARD_NAMES`], or a whole
+///    word of [`OUTWARD_NAME_WORDS`]);
+/// 4. an HTTP verb that changes something in a method or action argument, or a body sent to a URL
+///    with no method ([`writes_by_method`]).
 pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     if !details.is_object() {
         return Some("Open it to see what it does.");
@@ -282,7 +338,7 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
         return Some(RUNS);
     }
     // 3. Acts outside kwant or destroys something
-    if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) {
+    if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) || words(tool).iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str())) {
         return Some(OUTWARD);
     }
     // 4. An HTTP call that changes something, whatever the tool is called
@@ -294,7 +350,8 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
 
 /// A risky step or the push floor, from the details alone: a step smart approvals flagged
 /// ([`RISKY`]); a prepush grant, a strict ask, a GitHub write [`mcp_writes`] sees, or a
-/// [`PUSH_WORDS`] part in the tool name ([`PUSHES`]). The first layers of [`inline_refusal`], in its
+/// [`PUSH_WORDS`] part in the tool name, or a [`COMMIT_NAME_WORDS`] word in a name with no
+/// [`READ_VERBS`] word ([`PUSHES`]). The first layers of [`inline_refusal`], in its
 /// order.
 ///
 /// [`mcp_writes`]: super::dev::prepush::mcp_writes
@@ -314,6 +371,11 @@ fn ships(details: &Value) -> Option<&'static str> {
     if PUSH_WORDS.iter().any(|w| upper.contains(w)) {
         return Some(PUSHES);
     }
+    let name = words(tool);
+    let has = |list: &[&str]| name.iter().any(|w| list.contains(&w.as_str()));
+    if has(COMMIT_NAME_WORDS) && !has(READ_VERBS) {
+        return Some(PUSHES);
+    }
     None
 }
 
@@ -329,7 +391,8 @@ const TELEGRAM_RUN_KEYS: &[&str] = &["command", "cmd", "argv", "script", "sql"];
 /// is exactly one of [`TELEGRAM_RUN_KEYS`] ([`RUNS`]). Whatever it refuses,
 /// [`inline_refusal`] refuses too; the island's other layers (outward names, HTTP verbs, push words
 /// inside values, the broad run keys) stay off Telegram on purpose, so an email that says
-/// "press release" keeps Allow once there.
+/// "press release" keeps Allow once there. Since 18c [`ships`] also refuses a tool named for a
+/// commit or a branch (`create_commit`, `create_branch`), so Telegram refuses those too.
 pub fn ships_or_runs(details: &Value) -> Option<&'static str> {
     if let Some(why) = ships(details) {
         return Some(why);

@@ -600,8 +600,8 @@ async fn thirty_busy_spaces_glance_quickly() {
     assert!(f50 < 1000.0, "{f50} ms");
 }
 
-/// Rigel's round-2 risk-4 rows (#646) plus one row per 0.9.14 rule, read back through
-/// `GET /api/glance`: twenty-three steps that must never get Allow once inline, and four ordinary
+/// Rigel's round-2 risk-4 rows (#646) plus one row per 0.9.14 and 18c rule, read back through
+/// `GET /api/glance`: twenty-seven steps that must never get Allow once inline, and four ordinary
 /// ones that still do.
 #[tokio::test]
 async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
@@ -634,6 +634,11 @@ async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
         ("key pushToOrigin", mcp("notes", "save_note", json!({"pushToOrigin": true})), false),
         ("transfer_funds", mcp("bank", "transfer_funds", json!({})), false),
         ("method DELETE", mcp("http", "http_request", json!({"url": "https://api.example.com/items/1", "method": "DELETE"})), false),
+        // 18c, one row per new rule
+        ("key input", mcp("x", "do", json!({"input": "git reset --hard HEAD~5"})), false),
+        ("tool create_branch", mcp("gh", "create_branch", json!({"branch": "x"})), false),
+        ("action delete", mcp("linear", "manage_issue", json!({"action": "delete", "id": "A-1"})), false),
+        ("a URL with a body and no method", mcp("http", "fetch", json!({"url": "https://api.example.com/items/1", "body": {"a": 1}})), false),
         ("method GET", mcp("http", "http_request", json!({"url": "https://api.example.com/items/1", "method": "GET"})), true),
         (
             "a file write inside the bot's folder",
@@ -643,7 +648,7 @@ async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
         ("a read-only fetch", mcp("fetch", "fetch", json!({"url": "https://example.com/docs", "max_length": 5000})), true),
         ("a page that mentions Pushkin", mcp("notion", "create_page", json!({"title": "Pushkin reading list", "parent": {"page_id": "abc"}})), true),
     ];
-    assert_eq!(rows.iter().filter(|r| !r.2).count(), 23);
+    assert_eq!(rows.iter().filter(|r| !r.2).count(), 27);
     let person = |body: Value| Req { body: Some(body), remote: true, cookie: Some(TOKEN), ..Default::default() };
     // Ten at a time keeps them under the Needs-you cap; each batch is denied before the next
     for batch in rows.chunks(10) {
@@ -663,5 +668,74 @@ async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
             let (s, _, body) = send(&app, "POST", &format!("/api/approvals/{id}/resolve"), person(json!({"decision": "deny"}))).await;
             assert_eq!(s, StatusCode::OK, "{body}");
         }
+    }
+}
+
+/// 18c: every row Rigel's r10/r11 still allowed at 253bacc9 ("Still allowed after 253bacc9" in
+/// desktop-island/qa-server-review.md), with the reason the island now gives, and the steps that
+/// must keep Allow once. Same details as his probes. The Telegram column is `ships_or_runs`: only
+/// the commit and branch names reach Telegram's floor; the rest stay island-only, as 18b chose.
+#[test]
+fn the_rows_still_allowed_after_253bacc9_now_need_the_full_card() {
+    use kwnt::server::glance::{inline_refusal, ships_or_runs, OUTWARD, PUSHES, RUNS};
+    let mcp = |server: &str, tool: &str, args: Value| json!({"source": "mcp", "server": server, "tool": tool, "arguments": args});
+    let url = "https://api.example.com/items/1";
+    // (row, details, island reason, Telegram's floor)
+    type Row = (&'static str, Value, &'static str, Option<&'static str>);
+    let rows: Vec<Row> = vec![
+        // Command text under keys no older rule read
+        ("B10 input, quoted push", mcp("x", "do", json!({"input": "git pu''sh origin main"})), RUNS, None),
+        ("B11 input, base64", mcp("x", "do", json!({"input": "echo Z2l0IHB1c2g= | base64 -d | sh"})), RUNS, None),
+        ("B12 input, env-var split", mcp("x", "do", json!({"input": "p=pu; git ${p}sh origin main"})), RUNS, None),
+        ("B13 line, rm -rf", mcp("x", "do", json!({"line": "rm -rf /home"})), RUNS, None),
+        ("B17 statement on invoke", mcp("x", "invoke", json!({"statement": "DROP TABLE users"})), RUNS, None),
+        ("B52 input, gh pr close", mcp("x", "do", json!({"input": "gh pr close 5"})), RUNS, None),
+        ("B53 input, git reset --hard", mcp("x", "do", json!({"input": "git reset --hard HEAD~5"})), RUNS, None),
+        ("H06 code_snippet", mcp("x", "do", json!({"code_snippet": "import os; os.system('x')"})), RUNS, None),
+        ("H07 arguments_list", mcp("x", "do", json!({"arguments_list": ["rm", "-rf", "/"]})), RUNS, None),
+        ("H08 statement, nested", mcp("x", "invoke", json!({"q": {"statement": "DROP TABLE users"}})), RUNS, None),
+        // Tool names
+        ("B34 broadcast", mcp("x", "broadcast", json!({})), OUTWARD, None),
+        ("B54 ship_it", mcp("x", "ship_it", json!({"env": "prod"})), OUTWARD, None),
+        ("B54 rollout", mcp("x", "rollout", json!({})), OUTWARD, None),
+        ("B55 commit_files", mcp("gh", "commit_files", json!({"branch": "main"})), PUSHES, Some(PUSHES)),
+        ("B56 create_commit", mcp("gh", "create_commit", json!({"message": "m"})), PUSHES, Some(PUSHES)),
+        ("B56 create_branch", mcp("gh", "create_branch", json!({"branch": "x"})), PUSHES, Some(PUSHES)),
+        ("B56 GITHUB_CREATE_A_BRANCH", mcp("composio", "GITHUB_CREATE_A_BRANCH", json!({})), PUSHES, Some(PUSHES)),
+        // Verbs under other keys, and a body with no verb
+        ("H01 action: delete", mcp("linear", "manage_issue", json!({"action": "delete", "id": "A-1"})), OUTWARD, None),
+        ("H02 operation: DELETE", mcp("x", "do", json!({"operation": "DELETE", "id": "1"})), OUTWARD, None),
+        ("H02 op: remove_item", mcp("x", "do", json!({"op": "remove_item"})), OUTWARD, None),
+        ("H03 request_verb DELETE", mcp("http", "fetch", json!({"url": url, "request_verb": "DELETE"})), OUTWARD, None),
+        ("H04 URL + body, no method", mcp("http", "fetch", json!({"url": url, "body": {"a": 1}})), OUTWARD, None),
+        ("H04 URL + json, no method", mcp("http", "fetch", json!({"url": url, "json": "{}"})), OUTWARD, None),
+        ("H05 X-HTTP-Method-Override", mcp("http", "fetch", json!({"url": url, "method": "GET", "headers": {"X-HTTP-Method-Override": "DELETE"}})), OUTWARD, None),
+    ];
+    assert_eq!(rows.len(), 24);
+    for (name, d, why, telegram) in &rows {
+        assert_eq!(inline_refusal(d), Some(*why), "{name}");
+        assert_eq!(ships_or_runs(d), *telegram, "{name}: Telegram");
+    }
+
+    // Still Allow once: the brief's keep-inline steps, and the near misses of each new rule
+    let keep: Vec<(&str, Value)> = vec![
+        ("a Write in the bot's folder", json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "arguments": {"file_path": "notes/todo.md", "content": "Buy milk\nCall Ana"}})),
+        ("a fetch of a URL", mcp("fetch", "fetch", json!({"url": "https://example.com/docs", "max_length": 5000}))),
+        ("a GET of a URL", mcp("http", "fetch", json!({"url": url, "method": "GET"}))),
+        ("Notion Pushkin reading list", mcp("notion", "create_page", json!({"title": "Pushkin reading list", "parent": {"page_id": "abc"}}))),
+        ("description + transcript_id", mcp("linear", "create_issue", json!({"description": "x", "transcript_id": "t"}))),
+        ("method median, not HTTP", mcp("stats", "summarize", json!({"method": "median"}))),
+        // near misses
+        ("get_commit reads", mcp("github", "get_commit", json!({"sha": "abc"}))),
+        ("list_commits / list_branches read", mcp("github", "list_branches", json!({"repo": "r"}))),
+        ("GITHUB_GET_A_BRANCH reads", mcp("composio", "GITHUB_GET_A_BRANCH", json!({"branch": "main"}))),
+        ("membership is not ship", mcp("x", "get_membership", json!({}))),
+        ("a transaction key is not an action", mcp("ledger", "summarize", json!({"transaction": "delete me"}))),
+        ("action: summarize", mcp("x", "do", json!({"action": "summarize"}))),
+        ("a body with no URL", mcp("notes", "save_note", json!({"body": "x"}))),
+        ("headline / deadline keys", mcp("notion", "create_page", json!({"headline": "x", "deadline": "Fri"}))),
+    ];
+    for (name, d) in &keep {
+        assert_eq!(inline_refusal(d), None, "{name}");
     }
 }
