@@ -194,3 +194,14 @@ test('a "Marketing_Team" reads once in the pill, its detail and the home footer'
   assert.equal(t.detail, '@Marketing_Team answers. Type @ and a name to ask one member.');
   assert.equal(m.teamAnswerLine('SalesTeam'), 'The SalesTeam answers. Type\u00a0@ and a name to ask one member.');
 });
+
+test('the sidebar team row says "Open the @Marketing_Team chat", not "… team team chat" (20e)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const side = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
+  assert.ok(side.includes('title={`Open the @${teamNamed(t.name)} chat`}'), 'the row title goes through teamNamed');
+  assert.ok(!side.includes('team chat`}'), 'no hand-added " team" left in a sidebar title');
+  const title = (name) => `Open the @${m.teamNamed(name)} chat`;
+  assert.equal(title('Marketing_Team'), 'Open the @Marketing_Team chat');
+  assert.equal(title('SalesTeam'), 'Open the @SalesTeam chat');
+  assert.equal(title('helpers'), 'Open the @helpers team chat');
+});
