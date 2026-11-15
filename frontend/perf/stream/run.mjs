@@ -24,6 +24,10 @@ const LABEL = arg('label', '');
 // 15a: --end-shot after the last token (still streaming), --final-shot once the saved reply has landed.
 const END_SHOT = arg('end-shot', '');
 const FINAL_SHOT = arg('final-shot', '');
+// 16a: --measure file.json writes the reply's geometry at the last token and once landed (bubble, blocks).
+const MEASURE = arg('measure', '');
+// 16a: --message-html file.html saves the landed message's HTML (the viewport shot depends on the scroll).
+const MESSAGE_HTML = arg('message-html', '');
 const { chromium } = await import(process.env.PLAYWRIGHT_CORE ?? '/home/maus/work/iris-ft-shots/node_modules/playwright-core/index.mjs');
 const exe = process.env.CHROMIUM ?? '/home/maus/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux-arm64/chrome-headless-shell';
 
@@ -130,12 +134,34 @@ const result = {
 };
 console.log(JSON.stringify(result));
 if (END_SHOT) await page.screenshot({ path: END_SHOT });
-if (FINAL_SHOT) {
+// The bubble's box and each text block's box relative to it: same x and heights live and landed = no shift, no re-wrap.
+const geometry = (sel) =>
+  page.evaluate((sel) => {
+    const md = document.querySelector(sel);
+    const bubble = md?.closest('[data-live-bubble-body]') ?? md?.parentElement;
+    if (!bubble) return null;
+    const b = bubble.getBoundingClientRect();
+    const r = (n) => Math.round(n * 100) / 100;
+    const blocks = [...bubble.querySelectorAll('p, li, h1, h2, h3, h4, pre, table, blockquote')].map((el) => {
+      const e = el.getBoundingClientRect();
+      return { tag: el.tagName.toLowerCase(), x: r(e.left), w: r(e.width), h: r(e.height), dy: r(e.top - b.top), lines: el.getClientRects().length };
+    });
+    return { bubble: { x: r(b.left), w: r(b.width), h: r(b.height) }, text: blocks[0] ? { x: blocks[0].x } : null, blocks };
+  }, sel);
+const live = MEASURE ? await geometry('[data-live-bubble-body] .markdown-content') : null;
+if (FINAL_SHOT || MEASURE || MESSAGE_HTML) {
   await page.evaluate(() => window.__harness.finish());
   await page.waitForSelector('[data-message-id="m-final"]', { timeout: 30000 });
-  await page.waitForFunction(() => !document.querySelector('[data-live-bubble-body]'), null, { timeout: 30000 }).catch(() => {});
+  await page.waitForFunction(() => !document.querySelector('[data-live-bubble-body] .markdown-content'), null, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(800);
-  await page.screenshot({ path: FINAL_SHOT });
+  if (FINAL_SHOT) await page.screenshot({ path: FINAL_SHOT });
+  if (MESSAGE_HTML) fs.writeFileSync(MESSAGE_HTML, await page.locator('[data-message-id="m-final"]').evaluate((el) => el.outerHTML));
+}
+if (MEASURE) {
+  const landed = await geometry('[data-message-id="m-final"] .markdown-content');
+  const same = !!live && !!landed && live.blocks.length === landed.blocks.length;
+  const moved = same ? live.blocks.filter((l, i) => ['x', 'w', 'h', 'dy'].some((k) => l[k] !== landed.blocks[i][k])).length : null;
+  fs.writeFileSync(MEASURE, JSON.stringify({ width: WIDTH, label: LABEL, live, landed, blocksMoved: moved }, null, 1));
 }
 await browser.close();
 server.close();

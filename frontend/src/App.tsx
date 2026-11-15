@@ -290,9 +290,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // What the open chat is streaming; other chats' streams are kept in streamsRef until opened.
   // The open chat's streaming reply (14b): a store only the live reply subscribes to, not App state, so a
   // token never re-renders the app or the finished messages. Updates land once per frame, with one blip.
-  const streamStore = useMemo(
-    () => createStreamText({}, { onFrame: (prev, next) => next.text !== prev.text && playSfx('blip') }),
-    [],
+  // useState, not useMemo: React may drop a memo, and the store must live as long as the app (#642 QA).
+  const [streamStore] = useState(() =>
+    createStreamText({}, { onFrame: (prev, next) => next.text !== prev.text && playSfx('blip') }),
   );
   const streamsRef = useRef<Record<string, { text: string; thinking: string }>>({});
   // Running turns' live steps by turn id (with the chat they belong to), until the saved reply shows.
