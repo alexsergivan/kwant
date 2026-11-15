@@ -2778,9 +2778,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
             className={`relative ${phone ? toolPhone : 'w-11 h-11 sm:w-9 sm:h-9 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] focus-visible:outline-sky-400'} rounded-xl flex items-center justify-center flex-shrink-0 transition-colors focus-visible:outline focus-visible:outline-2`}
           >
             <AtSign size={phone ? 18 : 17} aria-hidden="true" />
-            {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
+            {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip.
+                15e: it sits centred above the 18 px glyph with 2 px clear (its bottom edge 9 + 2 px above the
+                button's middle), so it never covers the "@". Same hide rules as desktop's tag below. */}
             {phone && !isStreaming && (
-              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${dict.popOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`} />
+              <NewTag id="mention" className={`absolute left-1/2 -translate-x-1/2 bottom-[calc(50%+11px)] ${isMentionOpen ? 'hidden' : ''} ${dict.popOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`} />
             )}
           </button>
           {stacked && <span className="flex-1" aria-hidden="true" />}
