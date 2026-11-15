@@ -102,6 +102,7 @@ async fn turn(e: &Env) -> (String, String, TempDir) {
         state: "running".into(),
         since: Utc::now(),
         purpose: None,
+        audit: None,
     });
     (turn_id, token, folder)
 }
