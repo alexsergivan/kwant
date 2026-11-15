@@ -151,9 +151,27 @@ test('checkpoint_pruned is quiet', () => {
 // when an emitter writes a kind that isn't on it.
 const SERVER_KINDS = JSON.parse(read('src/generated/taskEventKinds.json'));
 
-// Server kinds that still have no plain words (17d found them; their copy is Iris's). Each one is shown as
-// "Kwant: <raw kind>" until eventText words it; then remove it here, and the guard below covers it.
-const NEEDS_COPY = ['lead_review_asked', 'spec'];
+// Server kinds that still have no plain words. Each one is shown as "Kwant: <raw kind>" until eventText words it;
+// then remove it here, and the guard below covers it. Empty since 19c; keep it so the next new kind lands here.
+const NEEDS_COPY = [];
+
+test('lead_review_asked: kwant asked the lead, by name when known', () => {
+  const names = { lead1: 'Ada' };
+  assert.equal(m.eventText(ev('lead_review_asked', { delegation_id: 'd1', lead_kwant_id: 'lead1' }), names), 'Kwant asked Ada to review the hand-off');
+  assert.equal(m.eventText(ev('lead_review_asked', { lead_kwant_id: 'gone' }), names), 'Kwant asked the lead to review the hand-off');
+  assert.equal(m.eventText(ev('lead_review_asked', {})), 'Kwant asked the lead to review the hand-off');
+  assert.equal(m.eventText({ ...ev('lead_review_asked'), detail: null }), 'Kwant asked the lead to review the hand-off');
+});
+
+test('spec: the bot wrote down what done means, with a count of points', () => {
+  const bot = (detail) => ({ ...ev('spec', detail), actor: 'k1', actor_name: 'Lin' });
+  assert.equal(m.eventText(bot({ lines: ['a', 'b', 'c'] })), 'Lin wrote down what done means (3 points)');
+  assert.equal(m.eventText(bot({ lines: ['a'] })), 'Lin wrote down what done means (1 point)');
+  assert.equal(m.eventText(bot({ lines: [] })), 'Lin wrote down what done means');
+  assert.equal(m.eventText(bot({ lines: 'not a list' })), 'Lin wrote down what done means');
+  assert.equal(m.eventText({ ...bot({}), detail: null }), 'Lin wrote down what done means');
+  assert.equal(m.isQuietEvent({ kind: 'spec' }), false);
+});
 
 test('the server list is the checked-in JSON, and the kinds waiting for copy are on it and still raw', () => {
   assert.ok(Array.isArray(SERVER_KINDS) && SERVER_KINDS.length > 50, 'the list loaded');
