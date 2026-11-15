@@ -460,7 +460,7 @@ async fn add_hand_off_task(db: &crate::db::Database, v: &mut Value) {
 /// Adds `action`, `dismissable`, `task_id` on a failed hand-off with a board task and, when the item's thread belongs to another bot,
 /// `link.thread_kwant_id`: the client looks a thread up under its owner, and finding it under the
 /// item's bot failed, falling back to the direct chat (one way to Quant's case).
-async fn annotate(state: &AppState, items: &mut [Value]) {
+pub(super) async fn annotate(state: &AppState, items: &mut [Value]) {
     let mut owners: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     for v in items.iter_mut() {
         add_hand_off_task(&state.db, v).await;
