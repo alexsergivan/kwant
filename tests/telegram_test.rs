@@ -740,12 +740,14 @@ async fn a_tap_on_an_older_message_now_refused_goes_link_only_and_an_ordinary_on
 
     // An ordinary call (an email that says "press release") still gets Allow once, and the tap
     // resolves via "telegram"
+    let mut events = env.state.event_sender.subscribe();
     let (_, d) = floor_allowed().remove(0);
     let (id, rx) = approval(&env, d).await;
     let card = tg.wait_send(&bot, |c| c.text().contains("<code>GMAIL_SEND_EMAIL</code>")).await;
     assert_eq!(card.callbacks().len(), 1, "{:?}", card.buttons());
     tg.tap(&bot, &PERSON, card.message_id(), &card.callbacks()[0]);
     assert!(matches!(tokio::time::timeout(Duration::from_secs(20), rx).await.unwrap().unwrap(), ApprovalDecision::AllowOnce));
+    assert_eq!(withdrawn(&mut events, &id).await, (Some("telegram".into()), Some("allowed_once".into())));
     let row = listed(&env, &id).await;
     assert_eq!((row["answered_via"].as_str(), row["status"].as_str()), (Some("telegram"), Some("allowed_once")), "{row}");
 }

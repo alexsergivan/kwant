@@ -681,7 +681,10 @@ mod tests {
 
     /// 18b: the calls Telegram's Allow once refuses on top of `link_only_reason`, with their
     /// line, and the ordinary ones it keeps (the brief's table).
-    pub(crate) fn floor_rows() -> (Vec<(&'static str, Value, &'static str)>, Vec<(&'static str, Value)>) {
+    /// A refused row: its name, the details, Telegram's line.
+    type Refused = (&'static str, Value, &'static str);
+
+    fn floor_rows() -> (Vec<Refused>, Vec<(&'static str, Value)>) {
         let mcp = |server: &str, tool: &str, args: Value| json!({"source": "mcp", "server": server, "tool": tool, "arguments": args});
         let with = |k: &str, v: Value| {
             let mut d = mcp("files", "lookup", json!({"q": "x"}));
