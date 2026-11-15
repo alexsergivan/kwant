@@ -7,7 +7,7 @@ import type { CriterionStatus, InboxItem, ReviewItem, VerdictResult } from './ap
 import { VERDICT_WORD } from './api/inbox';
 import type { RestorePreview, RestoreResult } from './missions';
 import { TIER_LABELS } from './flightSchool';
-import { localClock } from './clock';
+import { atClock, localClock } from './clock';
 
 /** What the item view hands back when an action is done (Pixel's pane removes the item, opens the next). */
 export interface ReviewDone {
@@ -63,10 +63,10 @@ export function confidenceText(v: ReviewItem['verdict']): string | null {
 export function checkerMeta(i: Pick<ReviewItem, 'verdict' | 'risk'>): string | null {
   const v = i.verdict;
   if (!v.checker || v.result === 'none') return null;
-  const at = clock(v.checked_at);
+  const at = atClock(v.checked_at ?? null);
   const parts: string[] = [];
   if (v.checker.tier_note === 'different_tier') parts.push(`Checked on a different tier of ${v.checker.engine} (no other engine set up)`);
-  else parts.push(`Checked by fresh eyes on ${v.checker.engine}${at ? ` at ${at}` : ''}`);
+  else parts.push(`Checked by fresh eyes on ${v.checker.engine}${at ? ` ${at}` : ''}`);
   if (isNum(v.steps_run) && isNum(v.steps_total) && v.steps_total > 0) {
     if (v.steps_run === v.steps_total) parts.push(i.risk.level === 'high' ? `all ${v.steps_total} steps, because it’s high risk` : `all ${v.steps_total} steps`);
     else parts.push(`${v.steps_run} of ${v.steps_total} steps`);
