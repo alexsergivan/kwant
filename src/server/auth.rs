@@ -405,6 +405,10 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // The Mac app's update: check and install (which swaps and relaunches the app) are the
         // person's; the status stays readable
         ["", "api", "app", "update", ..] => *method != Method::GET && *method != Method::HEAD,
+        // Answering a bot's question saves the answer as the person's own message and resumes the
+        // bot with it: a bot (the asker or any other) answering would put words in the person's
+        // mouth (Rigel, #646 advisory 1). Telegram answers in-process, not through this route
+        ["", "api", "questions", _, "answer"] => *method == Method::POST,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         // Retry on a card that expired unanswered asks the person again: theirs to press (0.9.5)
         ["", "api", "approvals", _, "retry"] => *method == Method::POST,
@@ -938,6 +942,10 @@ mod tests {
         let (get, post, put, del) = (Method::GET, Method::POST, Method::PUT, Method::DELETE);
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
         assert!(person_only(&get, "/api/tool-notes"));
+        assert!(person_only(&post, "/api/questions/q1/answer"));
+        assert!(person_only(&post, "/api/questions/q1/answer/"));
+        assert!(!person_only(&get, "/api/questions/q1"));
+        assert!(!person_only(&post, "/api/questions/q1/cancel"));
         assert!(person_only(&post, "/api/spaces/s1/docs"));
         assert!(person_only(&post, "/api/spaces/s1/docs/"));
         assert!(person_only(&del, "/api/spaces/s1/docs/faq.md"));

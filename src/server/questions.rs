@@ -13,7 +13,7 @@ use crate::db::questions::{clean_question, Question, QuestionError, QuestionPlac
 use crate::drivers::events::RuntimeEvent;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -533,13 +533,50 @@ pub async fn cancel_for_turn(state: &AppState, turn_id: &str) {
     }
 }
 
-/// `POST /api/questions/:id/cancel`: the user dismisses the question; a waiting turn carries on
-/// without an answer.
-pub async fn cancel(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+/// The bot a bearer token belongs to while its turn runs: its own tools' token or its MCP
+/// session's (the same token, kept in both maps).
+async fn turn_token_bot(state: &AppState, token: &str) -> Option<String> {
+    if let Some(s) = state.self_tools.lock().await.get(token) {
+        return Some(s.kwant_id.clone());
+    }
+    state.mcp_sessions.lock().await.get(token).map(|s| s.kwant_id.clone())
+}
+
+/// Why this caller may not dismiss `q`; `None` for the person (no bearer, or the API token) and
+/// for the bot that asked it (its live turn token). Any other bearer gets a 403: another bot's
+/// turn token, and one that is no live turn's and not the API token (an ended turn's, a made-up
+/// one), so a bot can't dismiss a question it didn't ask (#653, Rigel). The app and the desktop
+/// app send no bearer; Telegram cancels in-process, not through this route.
+async fn cancel_refusal(state: &AppState, headers: &HeaderMap, q: &Question) -> Option<Response> {
+    let presented: Vec<&str> = headers
+        .get_all(header::AUTHORIZATION)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .map(|v| v.strip_prefix("Bearer ").unwrap_or(v).trim())
+        .collect();
+    for token in presented {
+        let allowed = match turn_token_bot(state, token).await {
+            Some(bot) => bot == q.kwant_id,
+            None => state.api_token.matches(token),
+        };
+        if !allowed {
+            let msg = "only the person or the bot that asked can dismiss this question";
+            return Some((StatusCode::FORBIDDEN, Json(json!({ "error": msg, "code": "not_the_asker" }))).into_response());
+        }
+    }
+    None
+}
+
+/// `POST /api/questions/:id/cancel`: the person, or the bot that asked, dismisses the question; a
+/// waiting turn carries on without an answer. Another bot gets a 403 ([`cancel_refusal`]).
+pub async fn cancel(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
     let q = match load(&state, &id).await {
         Ok(q) => q,
         Err(r) => return r.into_response(),
     };
+    if let Some(refused) = cancel_refusal(&state, &headers, &q).await {
+        return refused;
+    }
     if q.status != "open" {
         return error(StatusCode::CONFLICT, format!("the question is already {}", q.status));
     }
