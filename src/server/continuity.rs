@@ -405,6 +405,10 @@ pub struct SelfScope {
     /// The bot browser shown in this turn's side panel (team, channel or kwant id). The
     /// `browser_*` tools are offered only when it is set and only ever drive this one.
     pub sandbox_target: Option<String>,
+    /// 18a: the turn's repeat guard for its own tools. The claude CLI posts them straight to
+    /// [`self_endpoint`], past `McpToolSession::call`'s guard; every clone of this turn's scope
+    /// shares this one, and it goes when `finish_turn` drops the scope.
+    pub repeats: Arc<crate::mcp::repeat_guard::RepeatGuard>,
 }
 
 /// Where a turn runs, for the delegation tools: results go back to this chat.
@@ -717,17 +721,32 @@ fn browser_tools() -> Vec<Value> {
         }),
         json!({
             "name": BROWSER_ACT,
-            "description": "Do one thing on the current page and get the page back. click clicks a control by its ref, the number in the page's clickable list ([3] button \"Add to cart\"), or by its visible label in text; a line starting with * (*[12] option \"Large\") is a control that appeared since your last look, e.g. the options a click opened; if the ref is gone, hidden or covered nothing is clicked and you get a fresh list. type types into the field with that ref, or the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
+            "description": "Do one thing on the current page and get the page back. click clicks a control by its ref, the number in the page's clickable list ([3] button \"Add to cart\"), or by its visible label in text; a line starting with * (*[12] option \"Large\") is a control that appeared since your last look, e.g. the options a click opened; if the ref is gone, hidden or covered nothing is clicked and you get a fresh list. A control marked (on hover) ([7] button \"More\" (on hover) · Clip 1) shows only when the mouse is over its card; click it as usual and the card is hovered first. hover puts the mouse over a ref or label and says what appeared, without clicking. type types into the field with that ref, or the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["click", "click_text", "type", "key", "scroll"]},
-                    "ref": {"type": "integer", "description": "click or type: the control's number from the clickable list"},
-                    "text": {"type": "string", "description": "click: a visible label, when there's no ref; type: the text to type"},
+                    "action": {"type": "string", "enum": ["click", "click_text", "hover", "type", "key", "scroll"]},
+                    "ref": {"type": "integer", "description": "click, hover or type: the control's number from the clickable list"},
+                    "text": {"type": "string", "description": "click or hover: a visible label, when there's no ref; type: the text to type"},
                     "key": {"type": "string", "description": "key: the key to press"},
                     "delta_y": {"type": "number", "description": "scroll: pixels to scroll, default 600"},
                 },
                 "required": ["action"],
+            },
+        }),
+        json!({
+            "name": BROWSER_UPLOAD,
+            "description": "Answer a file picker your browser has open (browser_page says so with a note starting \"A file picker opened\"). Give one or more files, each either a path in your own folder (for instance a file you downloaded earlier, downloads/clip.mp4) or a chat attachment's id. Refused if no picker is open.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Each a path under your folder, or a chat attachment id.",
+                    },
+                },
+                "required": ["files"],
             },
         }),
     ]
@@ -738,6 +757,7 @@ pub const BROWSER_PAGE: &str = "browser_page";
 pub const BROWSER_ACT: &str = "browser_act";
 pub const BROWSER_SCREENSHOT: &str = "browser_screenshot";
 pub const BROWSER_CITE: &str = "browser_cite";
+pub const BROWSER_UPLOAD: &str = "browser_upload";
 
 /// `browser_screenshot`: MCP content blocks (a text line and the JPEG), and whether it is an error.
 /// Same holds as the other browser tools: the person's sign-in/CAPTCHA step or their control.
@@ -857,7 +877,7 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
         }
         Err(super::routes::PageRefusal::Unavailable) => {}
     }
-    let (text, is_error, busy) = run_browser_tool_coded(state, target, &reader, name, args).await;
+    let (text, is_error, busy) = run_browser_tool_coded(state, target, &reader, name, args, Some(scope)).await;
     super::busy_retry::note(&reader, name, args, busy);
     // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left. Also
     // when the call itself failed: a click that stalled, was covered or timed out because a
@@ -904,16 +924,29 @@ fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> S
 /// `reader` names who reads (empty: nobody known), for `browser_page` to answer "unchanged" when
 /// that reader's last page (from any browser tool) still reads the same.
 async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &str, args: &Value) -> (String, bool) {
-    let (text, is_error, _) = run_browser_tool_coded(state, target, reader, name, args).await;
+    let (text, is_error, _) = run_browser_tool_coded(state, target, reader, name, args, None).await;
     (text, is_error)
 }
 
 /// [`run_browser_tool`], plus whether the handler answered that the browser is busy (matched on
-/// the answer's `code`, see [`super::busy_retry::is_busy`]).
-async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, name: &str, args: &Value) -> (String, bool, bool) {
+/// the answer's `code`, see [`super::busy_retry::is_busy`]). `scope`: the calling turn, when one
+/// is driving this call (always `browser_upload`'s caller, since it alone touches attachments);
+/// `None` for the scope-less re-reads this module does on its own (see [`run_browser_tool`]).
+async fn run_browser_tool_coded(
+    state: &AppState,
+    target: &str,
+    reader: &str,
+    name: &str,
+    args: &Value,
+    scope: Option<&SelfScope>,
+) -> (String, bool, bool) {
     use super::routes::{
         act_sandbox_allowed, cite_sandbox, get_sandbox_page, navigate_sandbox, unchanged_read, CitePayload, InteractPayload, NavigatePayload,
-        PageQuery,
+        PageQuery, UploadCaller,
+    };
+    let caller = match scope {
+        Some(s) => UploadCaller::Turn(s),
+        None => UploadCaller::None,
     };
     let ctrl = match reader {
         "" => None,
@@ -937,6 +970,25 @@ async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, na
             let payload = CitePayload { text: args["text"].as_str().map(str::to_string), block: args["block"].as_str().map(str::to_string) };
             cite_sandbox(state, target, Json(payload)).await
         }
+        BROWSER_UPLOAD => {
+            let files: Vec<String> = args["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
+            if files.is_empty() {
+                return ("files is required: a path in your folder or a chat attachment id, one or more".into(), true, false);
+            }
+            let payload = InteractPayload {
+                action: "upload".to_string(),
+                x: None,
+                y: None,
+                text: None,
+                key: None,
+                code: None,
+                delta_x: None,
+                delta_y: None,
+                ref_: None,
+                files: Some(files),
+            };
+            act_sandbox_allowed(state, target, Json(payload), caller).await
+        }
         _ => {
             let Some(action) = args["action"].as_str() else {
                 return ("action is required: click, type, key or scroll".into(), true, false);
@@ -951,9 +1003,10 @@ async fn run_browser_tool_coded(state: &AppState, target: &str, reader: &str, na
                 delta_x: None,
                 delta_y: args["delta_y"].as_f64(),
                 ref_: Some(args["ref"].clone()).filter(|r| !r.is_null()),
+                files: None,
             };
             // SelfToolsApprover already gave a payment its card (browser_act_payment)
-            act_sandbox_allowed(state, target, Json(payload)).await
+            act_sandbox_allowed(state, target, Json(payload), caller).await
         }
     };
     match result {
@@ -1124,6 +1177,15 @@ fn tool_text(id: Value, text: impl Into<String>, is_error: bool) -> Response {
     )
 }
 
+/// A tool result's text parts, joined: what the repeat guard compares (an image part has none).
+fn content_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
@@ -1131,6 +1193,31 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .eq_ignore_ascii_case("bearer")
         .then(|| token.trim())
         .filter(|t| !t.is_empty())
+}
+
+/// 16d: the trace of a customer-turn call nobody allowed, so the owner sees what a customer's
+/// message tried. One approvals record, already closed ([`crate::db::approval_modes::CUSTOMER_REFUSED`]):
+/// no card, nothing to answer, and the customer is sent nothing new. Its details have a card's
+/// shape (the list masks the arguments the same way). Best effort: the call is refused either way.
+async fn record_customer_refusal(state: &AppState, scope: &SelfScope, turn: &str, name: &str, args: &Value) {
+    let record = crate::db::models::NewApproval {
+        turn_id: turn.to_string(),
+        kwant_id: scope.kwant_id.clone(),
+        tool_name: format!("mcp__{SELF_SERVER_NAME}__{name}"),
+        parameters: json!({
+            "source": "mcp",
+            "server": SELF_SERVER_NAME,
+            "tool": name,
+            "arguments": args,
+            "kwant_id": scope.kwant_id,
+            "kwant_name": scope.kwant_name,
+            "customer_chat": true,
+            "refused": "nobody_allowed",
+        }),
+    };
+    if let Err(e) = state.db.save_customer_refused(&record).await {
+        tracing::warn!(error = %e, kwant = %scope.kwant_id, "could not record a refused customer-turn call");
+    }
 }
 
 /// `POST /api/mcp/self`: the agents' own tools as a streamable-HTTP MCP server (JSON responses).
@@ -1174,6 +1261,14 @@ pub async fn self_endpoint(
             if super::fresh_eyes::refuses(scope.turn_id.as_deref(), name) {
                 return tool_text(id, super::fresh_eyes::REFUSED_TEXT, true);
             }
+            // A customer's turn: only a call the approver allowed runs, whatever the CLI's own rules say
+            if let Some(turn) = scope.turn_id.as_deref() {
+                if !super::mcp_runtime::take_every_call_pass(turn, name, args) {
+                    tracing::warn!(kwant = %scope.kwant_id, tool = %name, "refused a customer-turn call nobody allowed");
+                    record_customer_refusal(&state, &scope, turn, name, args).await;
+                    return tool_text(id, super::mcp_runtime::EVERY_CALL_REFUSED, true);
+                }
+            }
             // P1: a watch turn runs only its allowlist; watch_report runs only in a watch turn
             if let Some(text) = super::missions::watch::refused(&state, &scope, name) {
                 return tool_text(id, text, true);
@@ -1187,16 +1282,23 @@ pub async fn self_endpoint(
                 };
                 return tool_text(id, text, is_error);
             }
-            if name == "read_attachment" && scope.origin.is_some() {
-                let (content, is_error) = super::attachments::tool_read(&state, &scope, args).await;
-                return rpc_result(id, json!({"content": content, "isError": is_error}));
+            // 18a: after the refusal gates (a refused call isn't a failed one, and is never counted),
+            // the same call that already failed 3 times the same way in this turn doesn't run
+            let repeat_key = crate::mcp::repeat_guard::RepeatGuard::key(name, args);
+            if let Some(stopped) = scope.repeats.check(&repeat_key) {
+                tracing::info!(kwant = %scope.kwant_id, tool = %name, count = stopped.count, "repeat guard: didn't run an own-tool call that kept failing the same way");
+                return tool_text(id, stopped.text, true);
             }
-            if name == BROWSER_SCREENSHOT {
-                let (content, is_error) = browser_screenshot_tool(&state, &scope, args).await;
-                return rpc_result(id, json!({"content": content, "isError": is_error}));
-            }
-            let (text, is_error) = call_tool(&state, &scope, name, args).await;
-            tool_text(id, text, is_error)
+            let (content, is_error) = if name == "read_attachment" && scope.origin.is_some() {
+                super::attachments::tool_read(&state, &scope, args).await
+            } else if name == BROWSER_SCREENSHOT {
+                browser_screenshot_tool(&state, &scope, args).await
+            } else {
+                let (text, is_error) = call_tool(&state, &scope, name, args).await;
+                (json!([{"type": "text", "text": text}]), is_error)
+            };
+            scope.repeats.after(&repeat_key, if is_error { "error" } else { "ok" }, &content_text(&content));
+            rpc_result(id, json!({"content": content, "isError": is_error}))
         }
         _ => Json(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "method not found"}})).into_response(),
     }
@@ -1339,7 +1441,7 @@ async fn call_tool(
         }
         // on the turn's own page (its job page in a chat), so a page held for another job's
         // sign-in doesn't stop this one
-        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE => match super::browser_pages::scope_page(scope) {
+        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE | BROWSER_UPLOAD => match super::browser_pages::scope_page(scope) {
             Some(target) => call_browser_tool(state, scope, &target, name, args).await,
             None => (format!("Unknown tool {name}."), true),
         },
@@ -2243,6 +2345,7 @@ mod tests {
             turn_id: Some("turn".into()),
             workspace: None,
             sandbox_target: browser.then(|| "t".into()),
+            repeats: Default::default(),
         }
     }
 

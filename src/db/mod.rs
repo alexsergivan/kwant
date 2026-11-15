@@ -30,6 +30,7 @@ pub mod work_ahead;
 pub mod api_context;
 pub mod usage;
 pub mod missions;
+pub mod event_kinds;
 pub mod mission_graph;
 pub mod checkpoints;
 pub mod autofix;
@@ -56,6 +57,7 @@ pub mod bot_budget;
 pub mod agent_connections;
 pub mod dev_jira;
 pub mod telegram;
+pub mod telegram_customers;
 pub mod show_once;
 pub mod isolated_folders;
 pub mod tool_notes;
@@ -292,6 +294,7 @@ impl Database {
         db.migrate_dev_jira().await?;
         // 0.7.8: Telegram bridge (add-only)
         db.migrate_telegram().await?;
+        db.migrate_telegram_customers().await?;
         // 0.7.9: Show it once recordings (add-only). After every step that can rebuild `kwants`
         // or `skills`, which would drop its delete triggers
         db.migrate_show_once().await?;
