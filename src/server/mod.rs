@@ -47,6 +47,7 @@ pub mod mcp_suggest;
 pub mod page_source;
 pub mod tool_failures;
 pub mod tool_notes;
+pub mod transcribe;
 pub mod connection_suggest;
 pub mod bot_actions;
 pub mod hires;
@@ -335,6 +336,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dev/prepush/:id/override", post(dev::prepush::override_card))
         .route("/api/dev/prepush/:id/retry", post(dev::prepush::retry_card))
         .route("/api/dev/cards/:id", get(dev::routes::card))
+        .route("/api/dev/cards/:id/recipients", get(dev::routes::recipients))
         .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/dev/cards/:id/post", post(dev::post::post))
         .route("/api/dev/cards/:id/changes", get(dev::line_notes::changes))
@@ -423,6 +425,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/connections/telegram/unpair", post(telegram::routes::unpair))
         .route("/api/connections/telegram/unpair/undo", post(telegram::routes::undo_unpair))
         .route("/api/connections/telegram/test", post(telegram::routes::test))
+        .route(
+            "/api/connections/telegram/customers",
+            get(telegram::customers::get).patch(telegram::customers::patch).delete(telegram::customers::delete),
+        )
+        .route("/api/connections/telegram/customers/token", put(telegram::customers::put_token))
+        .route("/api/connections/telegram/customers/chats/:chat_id/reply", post(telegram::customers::reply))
         .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/connections/composio/switch", post(connections::switch_composio))
         .route("/api/connections/composio/key", put(connections::replace_composio_key))
@@ -464,6 +472,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/hires/:id/accept", post(hires::accept_route))
         .route("/api/hires/:id/deny", post(hires::deny_route))
         .route("/api/spaces/:id/hire-policy", get(hires::get_policy).put(hires::put_policy))
+        .route("/api/spaces/:id/transcribe", get(transcribe::status).post(transcribe::transcribe))
         .route("/api/channels/:id", get(continuity::get_channel).patch(continuity::patch_channel))
         .route("/api/search", get(continuity::search))
         .route("/api/kwants/:id/memories", get(continuity::list_memories).post(continuity::add_memory))

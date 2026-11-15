@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
@@ -9,7 +10,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
-import { markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
+import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -169,7 +170,9 @@ import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
 import { JiraSetupHost } from './components/JiraSetup';
-import { useDevModeOn } from './components/DevModeSwitch';
+import { useDevMode, useDevModeOn } from './components/DevModeSwitch';
+import { DevModeSuggestion, SUGGEST_HIDDEN } from './components/DevModeSuggestion';
+import { dismissSuggest, ensureDevState, suggestDismissed, suggestShows } from './devSuggest';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { DEV_TICKET_EVENT, DEV_TICKET_PROGRESS_EVENT } from './components/dev/TicketsTab';
 import { PrepushNeedsYou, PrepushThread, threadCards, usePrepushCards, type PrepushEventDetail } from './components/dev/PrepushThread';
@@ -382,6 +385,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     markMovedSeen();
     setMovedHidden(true);
   };
+  // The suggestion's Turn on: Settings › This space › General, the Dev mode card (first there) in view and
+  // focused. It doesn't switch Dev mode on: the person presses the button on the card.
+  const openDevSuggest = () => {
+    openSpaceSettings('general');
+    focusDevSettings();
+  };
   const openMoved = () => {
     openSpaceSettings('general');
     ringDevSettings();
@@ -459,6 +468,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(null);
     setSettingsFocusRow(null);
     setSettingsClosedCount((n) => n + 1);
+    // A key may have been added or removed: the dictation mic asks again.
+    refreshDictation();
     // Accounts may have changed: the getting-started list counts the ready ones.
     onSpacesChanged();
   };
@@ -582,6 +593,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Dev mode (0.7): the open space's state, read by the switch, the hats and the grid.
   useEffect(() => devStore.setCurrent(space.id), [space.id]);
   const devOn = useDevModeOn(space.id);
+  // Dev mode visibility: the "this space has code" suggestion in #general reads the same cached state.
+  const devState = useDevMode(space.id);
+  useEffect(() => ensureDevState(space.id), [space.id]);
+  // Not now: the space it was hidden in, for the one out-of-sight "Hidden." line.
+  const [suggestHiddenIn, setSuggestHiddenIn] = useState<string | null>(null);
   // 0.8.0 B3: the space's pre-push cards (Dev mode only): the bot's thread and the Inbox read them.
   const prepush = usePrepushCards(space.id, devOn);
   const prepushWaiting = prepushNeedsYou(prepush.cards, prepush.acted).length;
@@ -3919,6 +3935,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         teams={teams}
       />
     ) : null;
+  const devSuggest = suggestShows({ inGeneral: isGeneral, state: devState, dismissed: suggestDismissed(space.id), gettingStarted: !!setupBanner || !!getStartedCard, canRun }) && devState ? (
+    <DevModeSuggestion
+      spaceName={space.name}
+      state={devState}
+      onOpen={openDevSuggest}
+      onDismiss={() => {
+        dismissSuggest(space.id);
+        setSuggestHiddenIn(space.id);
+        document.querySelector<HTMLTextAreaElement>('[data-composer-form] textarea')?.focus();
+      }}
+    />
+  ) : null;
+  // Mounted (empty) in #general before Not now fills it, so a screen reader hears the line.
+  const devSuggestStatus = isGeneral ? (
+    <p role="status" className="sr-only" data-dev-suggestion-status>
+      {suggestHiddenIn === space.id ? SUGGEST_HIDDEN : ''}
+    </p>
+  ) : null;
   const setupChecklist = (
     <SpaceReadyCard
       spaceName={space.name}
@@ -4178,6 +4212,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={inboxCount} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
+          spaceId={space.id}
+          onToast={pushToast}
           heldNotes={heldNotes}
           dropOff={!!spaceSettingsTab}
           title={chatTitle}
@@ -4287,7 +4323,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onHighlightDone={() => setHighlightMessageId(null)}
           subHeader={subHeader}
           threadLine={isPhone && threadBarProps ? <ThreadPicker {...threadBarProps} /> : undefined}
-          notice={setupBanner}
+          notice={
+            setupBanner ?? (
+              <>
+                {devSuggest}
+                {devSuggestStatus}
+              </>
+            )
+          }
           topCard={
             isChannel && currentTeam ? (
               <TeamNeedsTop
@@ -4404,7 +4447,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     />
   );
   const attentionRankOf = new Map((attention ?? []).map((a) => [a.kwant.id, a.rank]));
-  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title, rank: attentionRankOf.get(k.id) }))} defaultBotId={!isChannel ? selectedId : null} onOpenChat={(id, thread) => { if (thread) { openThread(id, thread); return; } if (!openTarget({ channel_id: null, kwant_id: id })) pushToast('That bot no longer exists.'); }} />;
+  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title, rank: attentionRankOf.get(k.id) }))} defaultBotId={!isChannel ? selectedId : null} onOpenTask={missionBoard ? (id) => { setPendingTaskId(id); showPage('board'); } : undefined} onOpenChat={(id, thread) => { if (thread) { openThread(id, thread); return; } if (!openTarget({ channel_id: null, kwant_id: id })) pushToast('That bot no longer exists.'); }} />;
   const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…

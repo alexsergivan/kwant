@@ -22,6 +22,7 @@
 // Route helpers return the refusal `Response` itself, as in `continuity.rs`.
 #![allow(clippy::result_large_err)]
 
+use super::recipient::Asked;
 use super::facts::{DevFacts, FileDiff};
 use crate::drivers::events::RuntimeEvent;
 use super::routes::REFUSAL;
@@ -311,14 +312,21 @@ pub fn message_text(pr: Option<u64>, branch: Option<&str>, head: &str, notes: &[
     out
 }
 
-/// What the notes' message adds when they go to a team's lead because a person wrote the PR:
-/// the same rules as a Fix it task for a lead (no force-push; a draft PR when the branch can't
-/// take a push).
-pub fn lead_note(team: &str, repo: &str, pr: Option<u64>) -> String {
-    let owner = if repo.trim().is_empty() { "this repo" } else { repo.trim() };
+/// What the notes' message adds when they go to a bot that didn't write the PR: a team's lead
+/// (a person wrote it) or a bot the person picked. The same rules as a Fix it task for them (no
+/// force-push; a draft PR when the branch can't take a push). Nothing for the author bot.
+pub fn asked_note(asked: Asked, repo: &str, pr: Option<u64>) -> String {
+    let why = match asked {
+        Asked::Author => return String::new(),
+        Asked::TeamLead(team) => {
+            let owner = if repo.trim().is_empty() { "this repo" } else { repo.trim() };
+            format!("A person wrote this PR, not you. You're getting these notes as the lead of {team}, the team that owns {owner}. Do it yourself or hand it to a member.")
+        }
+        Asked::Chosen(writer) => format!("You were picked for these notes. {writer} wrote this PR, not you."),
+    };
     let link = pr.map(|p| format!("links PR #{p}")).unwrap_or_else(|| "names the branch".into());
     format!(
-        "\n\nA person wrote this PR, not you. You're getting these notes as the lead of {team}, the team that owns {owner}. Do it yourself or hand it to a member. \
+        "\n\n{why} \
          Push as a new commit on the PR's branch; never force-push or rewrite their commits. \
          If you can't push there (the PR comes from a fork, or the push is refused): put the change on a new branch from the PR's head and open a draft PR that {link}, and say so in your reply."
     )
@@ -746,6 +754,9 @@ pub struct SendBody {
     #[serde(default)]
     pub ids: Option<Vec<String>>,
     pub send_id: String,
+    /// "Send to…": the bot id that gets the notes instead of the rule's pick.
+    #[serde(default)]
+    pub to: Option<String>,
 }
 
 /// The ids a send names, sorted, as stored to compare a repeat.
@@ -760,7 +771,7 @@ fn ids_key(ids: &Option<Vec<String>>) -> Option<String> {
 /// `POST /api/dev/cards/:id/notes/send`
 pub async fn send(State(state): State<AppState>, headers: HeaderMap, Path(card_id): Path<String>, body: Option<Json<Value>>) -> Response {
     let Some(Ok(b)) = body.map(|Json(v)| serde_json::from_value::<SendBody>(v)) else {
-        return err(StatusCode::BAD_REQUEST, "bad_request", "send {send_id, ids?}");
+        return err(StatusCode::BAD_REQUEST, "bad_request", "send {send_id, ids?, to?}");
     };
     let send_id = b.send_id.trim().to_string();
     if send_id.is_empty() || send_id.len() > 100 {
@@ -787,12 +798,24 @@ pub async fn send(State(state): State<AppState>, headers: HeaderMap, Path(card_i
     if let Err(r) = writable(&state, &pr).await {
         return r;
     }
-    // The author bot, else the lead of the team that owns the repo (fix-it-any-pr)
-    let Some(to) = super::recipient::pick(&state, &pr.space, &pr.current.repo, Some(&pr.facts)).await else {
-        return err(StatusCode::CONFLICT, "no_author", &super::recipient::nobody_for_notes(&pr.facts.repo));
+    let to = match b.to.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        // "Send to…": a bot of the card's space
+        Some(id) => match super::recipient::chosen(&state, &pr.space, id).await {
+            Some(r) => r,
+            None => return err(StatusCode::BAD_REQUEST, "bad_recipient", super::recipient::BAD_RECIPIENT),
+        },
+        // The author bot, else the lead of the team that owns the repo (fix-it-any-pr)
+        None => match super::recipient::pick(&state, &pr.space, &pr.current.repo, Some(&pr.facts)).await {
+            Some(r) => r,
+            None => return err(StatusCode::CONFLICT, "no_author", &super::recipient::nobody_for_notes(&pr.facts.repo)),
+        },
     };
     let bot = to.bot.clone();
     let lead_of = to.team.as_deref().filter(|_| to.via == super::recipient::Via::TeamLead);
+    let kwants = state.db.list_kwants(&pr.space).await.unwrap_or_default();
+    let author_id = super::recipient::author_bot(&pr.facts, &kwants).map(|k| k.id.clone());
+    let writer = super::recipient::writer(Some(&pr.facts), &kwants);
+    let asked = to.asked(author_id.as_deref(), &writer);
     let rows = match state.db.line_notes_of_pr(&pr.current.space_id, &pr.current.repo, &pr.current.ref_).await {
         Ok(r) => r,
         Err(e) => return internal(e),
@@ -820,9 +843,7 @@ pub async fn send(State(state): State<AppState>, headers: HeaderMap, Path(card_i
     let outgoing: Vec<Outgoing> =
         drafts.iter().map(|r| Outgoing { path: r.path.clone(), code: serde_json::from_str(&r.code).unwrap_or_default(), text: r.text.clone() }).collect();
     let mut text = message_text(pr.facts.pr, pr.facts.head_branch.as_deref(), &pr.current.head_sha, &outgoing);
-    if let Some(team) = lead_of {
-        text.push_str(&lead_note(team, &pr.facts.repo, pr.facts.pr));
-    }
+    text.push_str(&asked_note(asked, &pr.facts.repo, pr.facts.pr));
     let meta_notes: Vec<Value> = drafts
         .iter()
         .zip(&outgoing)
