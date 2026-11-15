@@ -10,6 +10,9 @@
 //! - Only This Mac's window (`main`, showing the kwant on 127.0.0.1) learns how many things wait
 //!   in other places (`window.__KWANT_ELSEWHERE__`). A server's page never learns anything about
 //!   any other place.
+//! - Perch settings (desktop-island/build-brief.md, Part 2): only This Mac's page learns them
+//!   (`window.__KWANT_ISLAND__`) and only it may change them (`kwant-app://island?mode=…&shortcut=…`,
+//!   whitelisted values, at most once a second). The same ask from any other window is ignored.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -39,6 +42,66 @@ const FROM_TOP: f64 = 8.0;
 pub enum AppAsk {
     /// Open the picker; `at` is the chip's bottom-left in window (CSS) coordinates, unclamped.
     Places { at: Option<(f64, f64)> },
+    /// Perch settings from This Mac's Settings page (both values are required).
+    Island { mode: PerchMode, shortcut: PerchShortcut },
+}
+
+/// When the perch shows (design.md §8): "Only when something is happening", "Always", "Off".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PerchMode {
+    Busy,
+    Always,
+    Off,
+}
+
+impl PerchMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PerchMode::Busy => "busy",
+            PerchMode::Always => "always",
+            PerchMode::Off => "off",
+        }
+    }
+    /// Exactly one of the three words; anything else is `None`.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "busy" => Some(PerchMode::Busy),
+            "always" => Some(PerchMode::Always),
+            "off" => Some(PerchMode::Off),
+            _ => None,
+        }
+    }
+}
+
+/// The perch's global shortcut: ⌥⌘K / Ctrl+Alt+K, ⌃⌥Space / Ctrl+Alt+Space, or none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PerchShortcut {
+    K,
+    Space,
+    Off,
+}
+
+impl PerchShortcut {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PerchShortcut::K => "k",
+            PerchShortcut::Space => "space",
+            PerchShortcut::Off => "off",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "k" => Some(PerchShortcut::K),
+            "space" => Some(PerchShortcut::Space),
+            "off" => Some(PerchShortcut::Off),
+            _ => None,
+        }
+    }
+}
+
+/// The rate-limit key for perch settings from a window (its own budget, apart from the picker's).
+pub fn island_key(label: &str) -> String {
+    format!("{label}#island")
 }
 
 /// Reads a `kwant-app://` address. `None`: not one we know (it is refused and ignored).
@@ -52,6 +115,12 @@ pub fn parse_app(url: &str) -> Option<AppAsk> {
         "places" => {
             let at = query.and_then(|q| param(q, "at")).and_then(parse_at);
             Some(AppAsk::Places { at })
+        }
+        "island" => {
+            let q = query?;
+            let mode = PerchMode::parse(param(q, "mode")?)?;
+            let shortcut = PerchShortcut::parse(param(q, "shortcut")?)?;
+            Some(AppAsk::Island { mode, shortcut })
         }
         _ => None,
     }
@@ -266,6 +335,26 @@ pub fn elsewhere_script(label: &str, page_is_local: bool, waiting_elsewhere: usi
     ))
 }
 
+/// Whether a window may read or change perch settings: This Mac's window while it shows This
+/// Mac's own kwant. Server windows, the picker, the perch and the loading page may not.
+pub fn island_allowed(label: &str, page_is_local: bool) -> bool {
+    label == MAIN_WINDOW && page_is_local
+}
+
+/// The script that gives This Mac's Settings page the perch settings (`available`: false on
+/// Wayland), or `None` for any other window or page.
+pub fn island_script(label: &str, page_is_local: bool, mode: PerchMode, shortcut: PerchShortcut, available: bool) -> Option<String> {
+    if !island_allowed(label, page_is_local) {
+        return None;
+    }
+    Some(format!(
+        "window.__KWANT_ISLAND__=Object.freeze({{mode:\"{}\",shortcut:\"{}\",available:{}}});try{{window.dispatchEvent(new Event('kwant-island'))}}catch(e){{}}",
+        mode.as_str(),
+        shortcut.as_str(),
+        available
+    ))
+}
+
 /// What waits in the places other than This Mac (`counts`: (is This Mac, count) per place).
 pub fn waiting_elsewhere(counts: &[(bool, usize)]) -> usize {
     counts.iter().filter(|(this_mac, _)| !this_mac).map(|(_, n)| *n).sum()
@@ -300,9 +389,70 @@ mod tests {
 
     #[test]
     fn unknown_app_asks_are_ignored() {
-        for url in ["kwant-app://island?mode=off", "kwant-app://", "kwant-app://placesx", "kwant-nudge://open", "https://kwant-app/places"] {
+        for url in ["kwant-app://", "kwant-app://placesx", "kwant-app://islandx?mode=off&shortcut=k", "kwant-nudge://open", "https://kwant-app/places"] {
             assert_eq!(parse_app(url), None, "{url}");
         }
+    }
+
+    #[test]
+    fn perch_settings_take_only_whitelisted_values() {
+        assert_eq!(
+            parse_app("kwant-app://island?mode=busy&shortcut=k"),
+            Some(AppAsk::Island { mode: PerchMode::Busy, shortcut: PerchShortcut::K })
+        );
+        assert_eq!(
+            parse_app("kwant-app://island?shortcut=space&mode=always"),
+            Some(AppAsk::Island { mode: PerchMode::Always, shortcut: PerchShortcut::Space })
+        );
+        assert_eq!(
+            parse_app("kwant-app://island/?mode=off&shortcut=off"),
+            Some(AppAsk::Island { mode: PerchMode::Off, shortcut: PerchShortcut::Off })
+        );
+        for url in [
+            "kwant-app://island",
+            "kwant-app://island?mode=off",
+            "kwant-app://island?shortcut=k",
+            "kwant-app://island?mode=Busy&shortcut=k",
+            "kwant-app://island?mode=busy&shortcut=K",
+            "kwant-app://island?mode=busy%20&shortcut=k",
+            "kwant-app://island?mode=busy&shortcut=cmd+q",
+            "kwant-app://island?mode=&shortcut=",
+            "kwant-app://island?mode=always;alert(1)&shortcut=k",
+            "kwant-app://island?mode=\"},x:{\"&shortcut=k",
+        ] {
+            assert_eq!(parse_app(url), None, "{url}");
+        }
+        for m in [PerchMode::Busy, PerchMode::Always, PerchMode::Off] {
+            assert_eq!(PerchMode::parse(m.as_str()), Some(m));
+        }
+        for k in [PerchShortcut::K, PerchShortcut::Space, PerchShortcut::Off] {
+            assert_eq!(PerchShortcut::parse(k.as_str()), Some(k));
+        }
+    }
+
+    #[test]
+    fn only_this_mac_s_page_reads_or_changes_perch_settings() {
+        for label in ["server-68747470733a2f2f6b77616e742e6a756d70696e2e67616d6573", "server-", "connect", PICKER_WINDOW, "perch", "kwant-nudge-pill"] {
+            assert!(!island_allowed(label, true), "{label}");
+            assert_eq!(island_script(label, true, PerchMode::Busy, PerchShortcut::K, true), None, "{label}");
+        }
+        assert!(!island_allowed(MAIN_WINDOW, false), "main on the loading page or a remote page");
+        assert_eq!(island_script(MAIN_WINDOW, false, PerchMode::Busy, PerchShortcut::K, true), None);
+        let js = island_script(MAIN_WINDOW, true, PerchMode::Always, PerchShortcut::Space, false).unwrap();
+        assert!(js.starts_with("window.__KWANT_ISLAND__=Object.freeze({mode:\"always\",shortcut:\"space\",available:false});"), "{js}");
+        assert!(js.contains("new Event('kwant-island')"));
+        assert!(!js.contains("ELSEWHERE"));
+    }
+
+    #[test]
+    fn perch_settings_have_their_own_once_a_second_budget() {
+        let mut limit = RateLimit::default();
+        let t0 = Instant::now();
+        assert!(limit.allow(MAIN_WINDOW, t0, ASK_EVERY), "the picker");
+        assert!(limit.allow(&island_key(MAIN_WINDOW), t0, ASK_EVERY), "settings don't share the picker's budget");
+        let saved = (1..200).filter(|i| limit.allow(&island_key(MAIN_WINDOW), t0 + Duration::from_millis(*i * 4), ASK_EVERY)).count();
+        assert_eq!(saved, 0, "200 asks within 0.8 s save nothing more");
+        assert!(limit.allow(&island_key(MAIN_WINDOW), t0 + Duration::from_millis(1000), ASK_EVERY));
     }
 
     #[test]
