@@ -361,6 +361,11 @@ fn window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
         .focused(false)
         .accept_first_mouse(true)
         .visible(false)
+        // It is made hidden and stays hidden until the page reports its size (`place`), and in
+        // Busy mode it is hidden most of the time. WebKit throttles a hidden page's timers and
+        // may suspend it after a few minutes (macOS 14+), and then the page never measures, so
+        // the window never shows. The page is small and mostly idle.
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .on_navigation(move |url| {
             if url.scheme() == "kwant-island" {
                 on_perch_url(&nav_app, url);
@@ -634,23 +639,31 @@ fn place<R: Runtime>(app: &AppHandle<R>, state: PageState, content: (f64, f64)) 
     let Some(w) = app.get_webview_window(perch::WINDOW) else {
         return;
     };
-    let wants = {
+    let (wants, by_key) = {
         let shared = app.state::<Shared>();
         let st = shared.perch.lock().unwrap();
-        perch::wants_window(&st.prefs, st.available, &st.snap, st.open_by_key)
+        (perch::wants_window(&st.prefs, st.available, &st.snap, st.open_by_key), st.open_by_key)
     };
     if state == PageState::Hidden || !wants {
         let _ = w.hide();
         return;
     }
     let Some(screen) = screen(app, &w) else {
+        tracing::warn!("the perch found no screen to hang on");
         return;
     };
     let (x, y, fw, fh) = perch::frame(screen.shape, screen.w, screen.notch_left, screen.top, state, content);
     let _ = w.set_size(LogicalSize::new(fw, fh));
     let _ = w.set_position(LogicalPosition::new(screen.x + x, screen.y + y));
+    let was_visible = w.is_visible().unwrap_or(true);
     // shown, not focused: the person keeps typing where they were
     let _ = w.show();
+    // ...except when the shortcut opened it: `toggle` asked for the keyboard before the window
+    // was on screen, and AppKit gives a hidden window none
+    if by_key && !was_visible && state == PageState::Expanded {
+        let _ = w.set_focusable(true);
+        let _ = w.set_focus();
+    }
 }
 
 /// The screen the perch hangs on, in logical points from the primary screen's top-left.
