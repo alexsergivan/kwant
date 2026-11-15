@@ -1182,6 +1182,31 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .filter(|t| !t.is_empty())
 }
 
+/// 16d: the trace of a customer-turn call nobody allowed, so the owner sees what a customer's
+/// message tried. One approvals record, already closed ([`crate::db::approval_modes::CUSTOMER_REFUSED`]):
+/// no card, nothing to answer, and the customer is sent nothing new. Its details have a card's
+/// shape (the list masks the arguments the same way). Best effort: the call is refused either way.
+async fn record_customer_refusal(state: &AppState, scope: &SelfScope, turn: &str, name: &str, args: &Value) {
+    let record = crate::db::models::NewApproval {
+        turn_id: turn.to_string(),
+        kwant_id: scope.kwant_id.clone(),
+        tool_name: format!("mcp__{SELF_SERVER_NAME}__{name}"),
+        parameters: json!({
+            "source": "mcp",
+            "server": SELF_SERVER_NAME,
+            "tool": name,
+            "arguments": args,
+            "kwant_id": scope.kwant_id,
+            "kwant_name": scope.kwant_name,
+            "customer_chat": true,
+            "refused": "nobody_allowed",
+        }),
+    };
+    if let Err(e) = state.db.save_customer_refused(&record).await {
+        tracing::warn!(error = %e, kwant = %scope.kwant_id, "could not record a refused customer-turn call");
+    }
+}
+
 /// `POST /api/mcp/self`: the agents' own tools as a streamable-HTTP MCP server (JSON responses).
 /// The bearer token picks the live turn, so an agent only ever touches its own memory.
 pub async fn self_endpoint(
@@ -1227,6 +1252,7 @@ pub async fn self_endpoint(
             if let Some(turn) = scope.turn_id.as_deref() {
                 if !super::mcp_runtime::take_every_call_pass(turn, name, args) {
                     tracing::warn!(kwant = %scope.kwant_id, tool = %name, "refused a customer-turn call nobody allowed");
+                    record_customer_refusal(&state, &scope, turn, name, args).await;
                     return tool_text(id, super::mcp_runtime::EVERY_CALL_REFUSED, true);
                 }
             }
