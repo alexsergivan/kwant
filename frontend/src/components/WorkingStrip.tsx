@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Square } from 'lucide-react';
 import type { LiveActivity } from '../activity';
-import { formatElapsed, turnStart, waitingOn, workingLabel } from '../workingStrip';
+import { formatElapsed, stripSentence, turnStart, waitingOn } from '../workingStrip';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { ModernAvatar } from './ModernAvatar';
 import { WatchButton } from './WatchLive';
@@ -26,6 +26,11 @@ interface WorkingStripProps {
   onWatch?: () => void;
   /** Forces the phone or desktop look (tests); by default it follows the window. */
   phone?: boolean;
+  /**
+   * 16b: the turn double-checks another bot's work: its line replaces "is getting started" / "is working
+   * on it". On a phone, where the live bubble is hidden, the strip also carries "Open the task".
+   */
+  audit?: { line: string; onOpenTask?: () => void } | null;
 }
 
 /**
@@ -37,7 +42,7 @@ interface WorkingStripProps {
  * On desktop (0.8.0) it is the same kind of quiet line at desktop size. Both sit inside the composer
  * section (ChatView renders them there; on a phone too since 0.8.1 F4), lined up with the box below.
  */
-export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, writing, onStop, onAnswer, onWatch, phone: forcePhone }) => {
+export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, writing, onStop, onAnswer, onWatch, phone: forcePhone, audit }) => {
   const mountedAt = useRef(Date.now());
   const [now, setNow] = useState(() => Date.now());
   const phoneLayout = usePhoneLayout();
@@ -52,7 +57,7 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
   if (!active) return null;
 
   const state = { live, queued, awaitingAnswer, awaitingBrowser, writing };
-  const label = workingLabel(state);
+  const sentence = stripSentence(name, state, audit?.line);
   const elapsed = formatElapsed(now - turnStart(live, mountedAt.current));
   const on = waitingOn(state);
   const waiting = !!queued || !!awaitingAnswer || on !== null;
@@ -65,14 +70,25 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
           <span className={`shrink-0 inline-flex ${waiting ? '' : 'kw-avatar-working'}`}>
             <ModernAvatar role={title} name={name} size={16} />
           </span>
-          <p className="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite">
-            <span className="font-medium text-zinc-300">{name}</span> is {label}
+          <p className="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite" title={sentence.audit ? sentence.text : undefined} data-strip-audit={sentence.audit ? '' : undefined}>
+            {sentence.audit ? sentence.text : <><span className="font-medium text-zinc-300">{name}</span>{sentence.text.slice(name.length)}</>}
           </p>
+          {sentence.audit && audit?.onOpenTask && !answer && (
+            <button
+              type="button"
+              onClick={audit.onOpenTask}
+              data-open-audited-task=""
+              data-compact=""
+              className="kws-hit -mr-1 shrink-0 inline-flex h-7 items-center rounded-md px-1.5 text-xs font-medium text-[#b8adff] underline underline-offset-2 hover:text-[#d6d0ff] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff]"
+            >
+              Open the task
+            </button>
+          )}
           {/* Hidden behind Answer: what to do next matters more than for how long. Below 400 px with
-              Watch showing, the time goes so the line never wraps. */}
+              Watch or "Open the task" showing, the time goes so the line never wraps. */}
           {!answer && (
             <span
-              className={`shrink-0 tabular-nums text-xs leading-4 text-zinc-500${onWatch ? ' hidden min-[400px]:inline' : ''}`}
+              className={`shrink-0 tabular-nums text-xs leading-4 text-zinc-500${onWatch || (sentence.audit && audit?.onOpenTask) ? ' hidden min-[400px]:inline' : ''}`}
               aria-hidden="true"
               data-working-elapsed=""
             >
@@ -122,8 +138,8 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
       <span className={`shrink-0 inline-flex ${waiting ? '' : 'kw-avatar-working'}`}>
         <ModernAvatar role={title} name={name} size={20} />
       </span>
-      <p className="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite">
-        <span className="font-medium text-zinc-200">{name}</span> is {label}
+      <p className="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite" title={sentence.audit ? sentence.text : undefined} data-strip-audit={sentence.audit ? '' : undefined}>
+        {sentence.audit ? sentence.text : <><span className="font-medium text-zinc-200">{name}</span>{sentence.text.slice(name.length)}</>}
       </p>
       {/* Own box, so a long step name never cuts the time off. Hidden behind Answer, as on the phone. */}
       {!answer && (

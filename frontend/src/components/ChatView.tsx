@@ -373,6 +373,8 @@ export interface ChatViewProps {
   awaitingBot?: { id: string; name: string } | null;
   /** The running reply's steps so far (thinking, tools, waits). */
   liveActivity?: LiveActivity | null;
+  /** 16b: the running turn double-checks another bot's work: its line and a way to the audited task. */
+  liveAudit?: { line: string; onOpenTask?: () => void } | null;
   /** Draws a bot's browser-step card (message meta kind "human_step"). */
   renderHumanStep?: (msg: ChatMessage, meta: HumanStepMeta, flash: boolean) => React.ReactNode;
   /** Changes when another chat opens, so the view jumps to its bottom. */
@@ -593,6 +595,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   awaitingBrowser,
   awaitingBot,
   liveActivity,
+  liveAudit,
   renderHumanStep,
   contextKey,
   deciding,
@@ -930,6 +933,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       onAnswer={showWaitingCard}
       onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       phone={phone}
+      audit={liveAudit}
     />
   );
   // Cards are last in the stream. While the person follows the chat, keep the bottom pinned when a
@@ -2438,6 +2442,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         ? discussionState.currentSpeaker
                         : streamingSpeakerName || title
                     }
+                    audit={liveAudit}
                   />
                 )}
               </div>

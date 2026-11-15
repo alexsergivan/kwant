@@ -1521,7 +1521,19 @@ export const safeHttps = (url: string | null | undefined): string | null => {
 // ---------------------------------------------------------------------------
 // Activity
 
-const QUIET_EVENTS = new Set(['lessons_held_out', 'audit_fresh_eyes']);
+const QUIET_EVENTS = new Set(['lessons_held_out', 'audit_fresh_eyes', 'checkpoint_pruned']);
+/** "12 files", "1 file". */
+const count = (n: unknown, one: string): string | null => (typeof n === 'number' ? `${n} ${one}${n === 1 ? '' : 's'}` : null);
+/** When a checkpoint was saved, after "saved a checkpoint" (16b). A checkpoint the person saved needs none. */
+const CHECKPOINT_WHEN: Record<string, string> = { before_run: ' before the run', after_run: ' after the run', before_restore: ' before the restore' };
+/** Why the checker (verifier.rs skip_reason) didn't check it, after "Not checked: ". */
+const VERIFIER_SKIP: Record<string, string> = {
+  off: 'the checker is off',
+  kwant_task: 'kwant checked this one itself',
+  round_limit: 'it was already checked the most times allowed',
+  no_checkpoint: 'there was no checkpoint to re-run it from',
+  nothing_to_reproduce: 'there was nothing to re-run',
+};
 /** Events the Activity list leaves out: they have no text for the person. */
 export const isQuietEvent = (e: Pick<TaskEvent, 'kind'>): boolean => QUIET_EVENTS.has(e.kind);
 
@@ -1586,6 +1598,9 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       return `AutoFix sent it back to Ready: ${strategyLabel(str(d.strategy) ?? '').toLowerCase()}`;
     case 'autofix_scheduled':
       return str(d.status) === 'suggested' ? 'AutoFix suggested a retry. It waits for your OK' : `AutoFix planned a retry: ${strategyLabel(str(d.strategy) ?? '').toLowerCase()}`;
+    case 'autofix_held':
+      // The spending-stop wording comes first (spendStop.ts); this is any other hold.
+      return 'AutoFix waits. It retries once it can';
     case 'autofix_started':
       return 'AutoFix started a retry';
     case 'autofix_finished': {
@@ -1633,6 +1648,55 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       return '';
     case 'class_changed':
       return `${Who} changed its kind of work${str(d.to) ? ` to ${str(d.to)}` : ''}`;
+    // 16b: checkpoints and the checker (verifier) in plain words, not "Kwant: Checkpoint".
+    case 'checkpoint': {
+      const left = typeof d.skipped === 'number' && d.skipped > 0 ? `${count(d.skipped, 'file')} left out` : null;
+      const parts = [count(d.files, 'file'), formatBytes(typeof d.bytes === 'number' ? d.bytes : null), left].filter(Boolean);
+      return `${Who} saved a checkpoint${CHECKPOINT_WHEN[str(d.kind) ?? ''] ?? ''}${parts.length ? ` (${parts.join(', ')})` : ''}`;
+    }
+    case 'checkpoint_failed':
+      return `${Who} couldn’t save a checkpoint${CHECKPOINT_WHEN[str(d.kind) ?? ''] ?? ''}${str(d.error) ? `: ${str(d.error)}` : ''}`;
+    case 'verifier_started':
+      return typeof d.round === 'number' && d.round > 1 ? `The checker started round ${d.round}` : 'The checker started';
+    case 'verifier_turn': {
+      const bot = str(d.kwant_id) ? names[str(d.kwant_id)!] : null;
+      const how = str(d.difference) === 'model' ? ', on a different AI model' : str(d.difference) === 'tier' ? ', on a different model size' : '';
+      return `${bot ?? 'A teammate'} took on the check${how}`;
+    }
+    case 'verifier_done': {
+      const n = typeof d.findings === 'number' ? d.findings : 0;
+      const missed = Array.isArray(d.couldnt_verify) && d.couldnt_verify.length > 0 ? `. It couldn’t check ${count(d.couldnt_verify.length, 'step')}` : '';
+      const v = str(d.verdict);
+      const head =
+        v === 'pass'
+          ? 'The checker passed it'
+          : v === 'fail'
+            ? `The checker found ${n > 0 ? count(n, 'problem') : 'a problem'}${str(d.next) === 'sent_back' ? ', so it went back for a fix' : str(d.next) === 'escalated' ? ', so it waits for you' : ''}`
+            : 'The checker needs you to look at it';
+      return `${head}${missed}`;
+    }
+    case 'verifier_skipped':
+      return `Not checked: ${VERIFIER_SKIP[str(d.reason) ?? ''] ?? 'the checker skipped it'}`;
+    case 'verdict_overturned':
+      return `${Who} overruled the checker${str(d.to) ? `: ${str(d.to) === 'pass' ? 'it passes' : str(d.to) === 'fail' ? 'it fails' : 'it needs you'}` : ''}`;
+    // Kinds the guard test found falling back to "Kwant: <raw kind>" (16b).
+    case 'watch':
+      return `${Who} moved it to ${stateLabel(e.to_state ?? '').label}${note ? `: ${note}` : ''}`;
+    case 'skipped':
+      return 'Skipped for now';
+    case 'handoff_ended':
+      return str(d.status) === 'completed' ? 'The hand-off finished. Unblock it to review the result' : 'The hand-off stopped. Unblock it to carry on';
+    case 'check_wait_more':
+      return `${Who} gave a check ${typeof d.hours === 'number' ? (d.hours === 1 ? '1 more hour' : `${d.hours} more hours`) : 'more time'}`;
+    case 'skill_drafted_from':
+      return `${Who} drafted a skill from this task`;
+    case 'contract_updated':
+      return `${Who} changed what it needs to count as done`;
+    case 'tier_stepped_down':
+      return 'After the rollback, this bot asks first more often on this kind of work';
+    case 'checkpoint_pruned':
+      // Retention housekeeping: an old checkpoint went. Nothing for the person to act on.
+      return '';
     default:
       return `${Who}: ${humanize(e.kind)}`;
   }

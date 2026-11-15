@@ -31,6 +31,18 @@ export function workingLabel(s: WorkingState): string {
 }
 
 /**
+ * 16b: the strip's whole sentence. During an audit the generic "is getting started" / "is working on
+ * it" give way to the audit's own line (`auditTurnLine`, which already starts with the bot's name), so
+ * the challenger's chat reads like its status and the Live now chip. A step, the reply or a wait still
+ * says what it is: those are more specific than the audit.
+ */
+export function stripSentence(name: string, s: WorkingState, auditLine?: string | null): { audit: boolean; text: string } {
+  const label = workingLabel(s);
+  if (auditLine && (label === 'getting started' || label === 'working on it')) return { audit: true, text: auditLine };
+  return { audit: false, text: `${name} is ${label}` };
+}
+
+/**
  * What the bot waits on the person for, so the phone strip can offer "Answer ↑" (spec A3): a question,
  * an approval card, or null (working, in line, or a browser step, which has its own card and button).
  */

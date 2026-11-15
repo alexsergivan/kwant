@@ -8,12 +8,21 @@ const PLUS: Array<[number, number]> = [[18, 1], [17, 2], [19, 2], [18, 3]];
 const TIPS: Array<[number, number]> = [[18, 0], [16, 2], [20, 2], [18, 4]];
 const LINES: Array<[number, number]> = [[8, 11], [10, 9], [12, 6]]; // [y, width], x = 19
 
-export const WorkingAvatar: React.FC<{ name: string }> = ({ name }) => {
+export interface WorkingAvatarProps {
+  name: string;
+  /**
+   * 16b: this turn is a double-check of another bot's work. The line says so in the same words as the
+   * bot's status and the Live now chip (`auditTurnLine`), instead of "is working on it".
+   */
+  audit?: { line: string; onOpenTask?: () => void } | null;
+}
+
+export const WorkingAvatar: React.FC<WorkingAvatarProps> = ({ name, audit }) => {
   // Same role and name as the row's avatar, so the bot at the laptop is the bot in the portrait.
   const c = useCreatureFor(name, name);
-  const label = `${name} is working on the answer`;
+  const label = audit ? audit.line : `${name} is working on the answer`;
   return (
-    <div className="kw-wa" role="status" aria-label={label} data-working-avatar="">
+    <div className="kw-wa" role="status" aria-label={label} data-working-avatar="" data-audit={audit ? '' : undefined}>
       <svg className="kw-wa-scene" viewBox="0 0 36 18" width={108} height={54} aria-hidden="true" focusable="false">
         <rect x={1} y={17} width={35} height={1} fill="var(--kw-wa-ground)" />
         <g transform="translate(-5 -2)">
@@ -36,12 +45,23 @@ export const WorkingAvatar: React.FC<{ name: string }> = ({ name }) => {
           <rect className="kw-wa-s1" x={18} y={2} width={1} height={1} fill="var(--kw-wa-spark-core)" />
         </g>
       </svg>
-      <p className="kw-wa-text" aria-hidden="true">
-        <span className="kw-wa-name">{name}</span> is working on it
-        <span className="kw-wa-dots">
-          <span className="kw-mood-dot">.</span><span className="kw-mood-dot kw-mood-dot-1">.</span><span className="kw-mood-dot kw-mood-dot-2">.</span>
-        </span>
-      </p>
+      {audit ? (
+        <div className="kw-wa-text kw-wa-audit">
+          <p aria-hidden="true">{audit.line}</p>
+          {audit.onOpenTask && (
+            <button type="button" className="kw-wa-open" onClick={audit.onOpenTask} data-open-audited-task="">
+              Open the task
+            </button>
+          )}
+        </div>
+      ) : (
+        <p className="kw-wa-text" aria-hidden="true">
+          <span className="kw-wa-name">{name}</span> is working on it
+          <span className="kw-wa-dots">
+            <span className="kw-mood-dot">.</span><span className="kw-mood-dot kw-mood-dot-1">.</span><span className="kw-mood-dot kw-mood-dot-2">.</span>
+          </span>
+        </p>
+      )}
       <span className="sr-only">{label}</span>
     </div>
   );
