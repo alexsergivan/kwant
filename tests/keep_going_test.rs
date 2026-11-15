@@ -475,7 +475,8 @@ async fn a_step_that_fails_on_every_try_is_one_reply_and_one_blocked_card() {
     assert!(env.prompts("kg").is_empty(), "no keep-going turn");
     let msgs = messages(&env).await;
     let replies = lead_replies(&env, &msgs);
-    let new: Vec<&&Message> = replies[before..].iter().collect();
+    // kwant's Blocked card is a message of the lead's too (`meta.kind`), not a reply
+    let new: Vec<&&Message> = replies[before..].iter().filter(|m| meta_of(m).get("kind").is_none()).collect();
     assert_eq!(new.len(), 2, "the turn and its continuation: {:?}", new.iter().map(|m| &m.text).collect::<Vec<_>>());
     assert!(new[0].text.starts_with("The last checks"), "{}", new[0].text);
     assert!(new[1].text.starts_with("The earlier checks"), "{}", new[1].text);
@@ -516,7 +517,8 @@ async fn a_keep_going_turn_hears_what_failed_and_a_repeat_ends_in_a_blocked_card
     let lead = env.lead_name.clone();
     let text = format!("{lead} couldn't run `journalctl -u maker --since 17:18`: Error: no terminal session is open.");
     let msgs = messages(&env).await;
-    let last = *lead_replies(&env, &msgs).last().unwrap();
+    // the newest reply, not kwant's Blocked card after it (`meta.kind`)
+    let last = *lead_replies(&env, &msgs).iter().rev().find(|m| meta_of(m).get("kind").is_none()).unwrap();
     assert_eq!(meta_of(last)[keep_going::TURN_KEY], 1);
     assert_eq!(meta_of(last)[keep_going::BLOCKED_KEY], json!({"text": text, "from": "repeat"}));
     let cards = env.state.db.list_questions(None, Some(&env.channel), None).await.unwrap();
