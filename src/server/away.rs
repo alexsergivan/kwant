@@ -338,6 +338,7 @@ async fn space_of(state: &AppState, cache: &mut HashMap<String, SpaceId>, kwant_
 /// it, `message_id` the chat notice that carries Retry or Continue, `retry` set when Retry is
 /// `POST /api/waiting/:id/retry` rather than the chat's own.
 pub(super) async fn stopped_items(state: &AppState, space: &SpaceId) -> Vec<Value> {
+    close_gone_places(state, space).await;
     let rows = state.db.list_waiting(Some(space)).await.unwrap_or_default();
     let mut out = Vec::new();
     for w in rows.into_iter().filter(|w| w.kind.as_deref() == Some(crate::db::waiting::STOPPED)) {
@@ -386,6 +387,77 @@ pub(super) async fn stopped_items(state: &AppState, space: &SpaceId) -> Vec<Valu
     out
 }
 
+/// 22i: an item whose bot, channel or thread is gone has nowhere to open, and the client fell back
+/// to the bot's direct chat, where nothing says what is needed. Close those, live, before listing.
+async fn close_gone_places(state: &AppState, space: &SpaceId) {
+    for w in state.db.waiting_places_gone(Some(space)).await.unwrap_or_default() {
+        if let Ok(Some(closed)) = state.db.claim_waiting(&w.id).await {
+            tracing::info!(waiting_id = %closed.id, kwant_id = %closed.kwant_id, "closed a Needs-you item whose chat is gone");
+            super::waiting::closed(state, std::slice::from_ref(&closed), super::waiting::REASON_PLACE_GONE);
+        }
+    }
+}
+
+/// 22i: what the person does about an item, so its row can say it in one word:
+/// `retry` (rerun what stopped or failed), `continue` (a chain paused at its cap), `ask_again`
+/// (an approval that expired), `answer` (a bot's question), `decide` (an approval, a watch item or
+/// work that is stuck), `browser` (a sign-in, code or CAPTCHA step). `None` for what only needs a
+/// look (finished work).
+pub(super) fn action_of(v: &Value) -> Option<&'static str> {
+    let kind = v["kind"].as_str().unwrap_or("");
+    let status = v["status"].as_str().unwrap_or("");
+    Some(match kind {
+        "approval" | "watch" => "decide",
+        "question" => "answer",
+        "stopped" if v.get("human_step_id").is_some_and(|h| !h.is_null()) => "browser",
+        "stopped" => match v["retry"]["type"].as_str() {
+            Some("approval") => "ask_again",
+            Some("continue") => "continue",
+            _ => "retry",
+        },
+        "delegation" | "routine_run" => match status {
+            "stuck" => "decide",
+            "failed" | "interrupted" | "error" => "retry",
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
+/// Whether the person may clear the item with `POST /api/waiting/:id/dismiss`: a stop, a failed or
+/// stuck hand-off or routine run. A question, approval, watch item or browser step has its own
+/// answer or decline, which tells the bot; dismissing it would leave the bot waiting.
+pub(super) fn dismissable(v: &Value) -> bool {
+    let kind = v["kind"].as_str().unwrap_or("");
+    let status = v["status"].as_str().unwrap_or("");
+    match kind {
+        "stopped" => v.get("human_step_id").is_none_or(|h| h.is_null()),
+        "delegation" | "routine_run" => matches!(status, "stuck" | "failed" | "interrupted" | "error"),
+        _ => false,
+    }
+}
+
+/// Adds `action`, `dismissable` and, when the item's thread belongs to another bot,
+/// `link.thread_kwant_id`: the client looks a thread up under its owner, and finding it under the
+/// item's bot failed, falling back to the direct chat (one way to Quant's case).
+async fn annotate(state: &AppState, items: &mut [Value]) {
+    let mut owners: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    for v in items.iter_mut() {
+        v["action"] = json!(action_of(v));
+        v["dismissable"] = json!(dismissable(v));
+        let Some(thread_id) = v["link"]["thread_id"].as_str().map(str::to_string) else { continue };
+        if !owners.contains_key(&thread_id) {
+            let owner = state.db.get_thread(&thread_id).await.ok().flatten().map(|t| t.kwant_id);
+            owners.insert(thread_id.clone(), owner);
+        }
+        if let Some(Some(owner)) = owners.get(&thread_id) {
+            if v["kwant_id"].as_str() != Some(owner.as_str()) {
+                v["link"]["thread_kwant_id"] = json!(owner);
+            }
+        }
+    }
+}
+
 /// What waits on the person in a space, as `GET /api/away` lists it under `waiting`: open
 /// questions, approvals, what a mission watcher left (P1) and work that stopped and waits to be
 /// resumed (0.9.5), newest first and cut to [`MAX_ITEMS`], with how many there are in all.
@@ -411,6 +483,7 @@ pub(super) async fn waiting_with(state: &AppState, space: &SpaceId, approvals: V
     waiting.extend(stopped);
     waiting.sort_by(|a, b| b["timestamp"].as_str().unwrap_or("").cmp(a["timestamp"].as_str().unwrap_or("")));
     waiting.truncate(MAX_ITEMS as usize);
+    annotate(state, &mut waiting).await;
     Ok((waiting, count))
 }
 
@@ -448,14 +521,18 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     let Ok((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed)) = result else {
         return internal();
     };
+    let mut finished: Vec<Value> = finished.into_iter().map(item).collect();
+    let mut failed: Vec<Value> = failed.into_iter().map(item).collect();
+    annotate(&state, &mut finished).await;
+    annotate(&state, &mut failed).await;
     Json(json!({
         "since": rfc3339(since),
         "last_seen": seen.map(rfc3339),
         "now": rfc3339(now),
         "stuck_after_minutes": STUCK_AFTER_MINUTES,
         "waiting": waiting,
-        "finished": finished.into_iter().map(item).collect::<Vec<_>>(),
-        "failed": failed.into_iter().map(item).collect::<Vec<_>>(),
+        "finished": finished,
+        "failed": failed,
         "unseen": {
             "waiting": waiting_count,
             "finished": unseen_finished,
@@ -478,6 +555,31 @@ pub async fn seen(State(state): State<AppState>, Scope(space): Scope) -> Respons
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 22i: every row says what the person does, and only stops and failed or stuck work can be
+    /// dismissed (the rest has an answer that tells the bot).
+    #[test]
+    fn items_say_what_is_needed_and_whether_they_can_be_dismissed() {
+        let cases = [
+            (json!({"kind": "approval", "status": "pending"}), Some("decide"), false),
+            (json!({"kind": "watch", "status": "open"}), Some("decide"), false),
+            (json!({"kind": "question", "status": "open"}), Some("answer"), false),
+            (json!({"kind": "stopped", "status": "open", "human_step_id": "h1", "retry": null}), Some("browser"), false),
+            (json!({"kind": "stopped", "status": "open", "retry": null}), Some("retry"), true),
+            (json!({"kind": "stopped", "status": "open", "retry": {"type": "continue"}}), Some("continue"), true),
+            (json!({"kind": "stopped", "status": "open", "retry": {"type": "approval", "approval_id": "a1"}}), Some("ask_again"), true),
+            (json!({"kind": "delegation", "status": "failed"}), Some("retry"), true),
+            (json!({"kind": "delegation", "status": "interrupted"}), Some("retry"), true),
+            (json!({"kind": "delegation", "status": "stuck"}), Some("decide"), true),
+            (json!({"kind": "routine_run", "status": "error"}), Some("retry"), true),
+            (json!({"kind": "delegation", "status": "completed"}), None, false),
+            (json!({"kind": "routine_run", "status": "success"}), None, false),
+        ];
+        for (v, action, can_dismiss) in cases {
+            assert_eq!(action_of(&v), action, "{v}");
+            assert_eq!(dismissable(&v), can_dismiss, "{v}");
+        }
+    }
 
     #[test]
     fn summaries_are_one_short_masked_line() {

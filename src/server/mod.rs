@@ -515,6 +515,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/attachments/:id", get(attachments::get))
         .route("/api/attachments/:id/content", get(attachments::content))
         .route("/api/waiting", get(waiting::list))
+        .route("/api/waiting/:id/dismiss", post(waiting::dismiss))
         .route("/api/questions", get(questions::list))
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))
