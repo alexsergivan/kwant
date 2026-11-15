@@ -182,6 +182,23 @@ async fn names_and_ids_cannot_traverse() {
     assert_eq!(s, StatusCode::BAD_REQUEST, "context_id is required");
 }
 
+/// 22l: a song sent in the chat reaches the bot as a file: its name, type, size and id on the
+/// "[Attached files]" line, never its bytes in the prompt.
+#[tokio::test]
+async fn a_sent_song_reaches_the_agent_as_a_file_by_id() {
+    let env = setup().await;
+    let mut mp3 = b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0SONG_BYTES_NEVER_IN_PROMPT".to_vec();
+    mp3.resize(4096, 0);
+    let (s, song) = upload(&env, "song.mp3", mp3).await;
+    assert_eq!((s, song["mime"].as_str()), (StatusCode::CREATED, Some("audio/mpeg")), "{song}");
+    let id = song["id"].as_str().unwrap();
+    send_direct(&env, &env.a, "listen REPLYTAG:au1", json!({"attachment_ids": [id]})).await;
+    wait_reply(&env, &env.a, "answer au1").await;
+    let args = invocations_with("REPLYTAG:au1").pop().unwrap();
+    assert!(args.contains("[Attached files]") && args.contains(&format!("song.mp3 (audio/mpeg, 4 KB) id {id}")), "{args}");
+    assert!(!args.contains("SONG_BYTES_NEVER_IN_PROMPT"), "audio is never inlined");
+}
+
 #[tokio::test]
 async fn sent_files_reach_the_agent_and_only_its_chat() {
     let env = setup().await;

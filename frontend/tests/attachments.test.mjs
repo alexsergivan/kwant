@@ -22,7 +22,7 @@ test('the 20 MB limit and empty files are caught before upload', () => {
 });
 
 test('server refusals read as plain language', () => {
-  assert.match(a.uploadErrorText(413), /Max 20 MB, videos 100 MB/);
+  assert.match(a.uploadErrorText(413), /Max 20 MB, videos and audio 100 MB/);
   assert.match(a.uploadErrorText(415), /isn't supported/);
   assert.equal(a.uploadErrorText(400, 'bad name'), 'bad name');
   assert.match(a.uploadErrorText(0), /interrupted/);
@@ -132,15 +132,15 @@ test('P1: supported types pass, everything else is refused before upload', () =>
   assert.match(a.preflightFile({ name: 'main.tf', type: '', size: 21 * MB }), /Max 20 MB/);
   const refused = [
     ['a.zip', 'application/zip'], ['setup.exe', 'application/x-msdownload'], ['r.docx', ''], ['photo.heic', 'image/heic'],
-    ['song.mp3', 'audio/mpeg'], ['film.mkv', 'video/x-matroska'], ['clip.avi', 'video/x-msvideo'], ['x.bin', 'application/octet-stream'],
+    ['song.aiff', 'audio/aiff'], ['film.mkv', 'video/x-matroska'], ['clip.avi', 'video/x-msvideo'], ['x.bin', 'application/octet-stream'],
     ['noext', 'application/zip'],
     // a binary mime on an unknown extension, and a known binary extension with no mime
-    ['data.foo', 'application/zip'], ['installer.dmg', ''], ['tune.xyz', 'audio/ogg'], ['deck.abc', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    ['data.foo', 'application/zip'], ['installer.dmg', ''], ['tune.xyz', 'audio/x-aiff'], ['beat.mid', ''], ['old.wma', 'audio/x-ms-wma'], ['deck.abc', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
   ];
   for (const [name, type] of refused) {
     const why = a.preflightFile({ name, type, size: 1000 });
     assert.ok(why, `${name} should be refused`);
-    assert.match(why, /can't be attached\. Images, videos \(MP4, MOV, WebM\), PDFs and text or code files work\./);
+    assert.match(why, /can't be attached\. Images, videos \(MP4, MOV, WebM\), audio \(MP3, M4A, WAV, OGG, FLAC\), PDFs and text or code files work\./);
   }
   assert.equal(a.attachKind({ name: 'main.ts', type: 'video/mp2t' }), 'text');
   assert.equal(a.attachKind({ name: 'v.mov', type: 'video/quicktime' }), 'video');
@@ -151,7 +151,7 @@ test('P1: supported types pass, everything else is refused before upload', () =>
 test('P1: videos may be 100 MB, everything else 20 MB', () => {
   assert.equal(a.preflightFile({ name: 'v.mp4', type: 'video/mp4', size: 100 * MB }), null);
   assert.match(a.preflightFile({ name: 'v.mp4', type: 'video/mp4', size: 120 * MB }), /v\.mp4 is too big \(120\.0 MB\)\. Videos can be up to 100 MB\./);
-  assert.match(a.preflightFile({ name: 'p.png', type: 'image/png', size: 21 * MB }), /Max 20 MB \(videos 100 MB\)/);
+  assert.match(a.preflightFile({ name: 'p.png', type: 'image/png', size: 21 * MB }), /Max 20 MB \(videos and audio 100 MB\)/);
   assert.match(a.preflightFile({ name: 'v.webm', type: 'video/webm', size: 0 }), /empty/);
   // the type is checked first: a huge zip says the type, not the size
   assert.match(a.preflightFile({ name: 'big.zip', type: 'application/zip', size: 500 * MB }), /can't be attached/);
@@ -316,4 +316,31 @@ test('P3: cancelling while it waits to retry stops it', async () => {
   } finally {
     fake.restore();
   }
+});
+
+test('22l: audio (MP3, M4A, AAC, WAV, OGG/Opus, FLAC) is taken up to 100 MB, like video', () => {
+  const ok = [
+    ['song.mp3', 'audio/mpeg'], ['song.mp3', ''], ['memo.m4a', 'audio/x-m4a'], ['book.m4b', ''], ['raw.aac', 'audio/aac'],
+    ['take.wav', 'audio/wav'], ['voice.opus', 'audio/opus'], ['voice.ogg', 'audio/ogg'], ['old.oga', ''], ['album.flac', 'audio/flac'],
+    // the mime alone, with no or an odd extension
+    ['recording', 'audio/mpeg'], ['clip.xyz', 'audio/wav'],
+  ];
+  for (const [name, type] of ok) {
+    assert.equal(a.attachKind({ name, type }), 'audio', `${name} (${type || 'no type'})`);
+    assert.equal(a.preflightFile({ name, type, size: 60 * MB }), null, `${name}: a 60 MB episode goes`);
+  }
+  assert.equal(a.capFor('audio'), 100 * MB);
+  assert.equal(a.MAX_AUDIO_BYTES, a.MAX_VIDEO_BYTES);
+  assert.equal(a.preflightFile({ name: 'ep.mp3', type: 'audio/mpeg', size: 100 * MB }), null);
+  assert.equal(a.preflightFile({ name: 'ep.mp3', type: 'audio/mpeg', size: 120 * MB }), 'ep.mp3 is too big (120.0 MB). Audio files can be up to 100 MB.');
+  assert.match(a.preflightFile({ name: 'ep.mp3', type: 'audio/mpeg', size: 0 }), /empty/);
+  // The browser only screens: a renamed binary goes up and the server refuses it by its bytes
+  assert.equal(a.uploadErrorText(415), `That file type isn't supported. ${a.SUPPORTED_TYPES_TEXT}`);
+  assert.ok(a.isAudio('audio/mpeg; codecs=mp3') && !a.isAudio('audio/x-aiff') && !a.isAudio('video/mp4'));
+  assert.equal(a.previewRefusesMime('audio/mpeg'), false);
+  assert.equal(a.previewRefusesMime('audio/x-aiff'), true);
+  const kinds = [['audio/mpeg', 'ep.mp3', 'MP3'], ['audio/mp4', 'memo.m4a', 'M4A'], ['audio/mp4', 'book.m4b', 'M4B'], ['audio/aac', 'r.aac', 'AAC'],
+    ['audio/wav', 't.wav', 'WAV'], ['audio/ogg', 'v.ogg', 'OGG'], ['audio/ogg', 'v.opus', 'Opus'], ['audio/flac', 'a.flac', 'FLAC']];
+  for (const [mime, name, label] of kinds) assert.equal(a.fileKind(mime, name), label, `${mime} ${name}`);
+  assert.equal(a.LIMITS_LINE, 'Up to 20 MB each · videos and audio 100 MB');
 });
