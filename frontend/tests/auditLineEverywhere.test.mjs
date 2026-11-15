@@ -113,7 +113,7 @@ test('verifier_done', () => {
 test('verifier_skipped: every reason the server gives', () => {
   const r = (reason) => m.eventText(ev('verifier_skipped', { reason }));
   assert.equal(r('off'), 'Not checked: the checker is off');
-  assert.equal(r('kwant_task'), 'Not checked: kwant checked this one itself');
+  assert.equal(r('kwant_task'), 'Not checked: the app checked this one itself');
   assert.equal(r('round_limit'), 'Not checked: it was already checked the most times allowed');
   assert.equal(r('no_checkpoint'), 'Not checked: there was no checkpoint to re-run it from');
   assert.equal(r('nothing_to_reproduce'), 'Not checked: there was nothing to re-run');

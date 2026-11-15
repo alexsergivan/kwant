@@ -1529,7 +1529,7 @@ const CHECKPOINT_WHEN: Record<string, string> = { before_run: ' before the run',
 /** Why the checker (verifier.rs skip_reason) didn't check it, after "Not checked: ". */
 const VERIFIER_SKIP: Record<string, string> = {
   off: 'the checker is off',
-  kwant_task: 'kwant checked this one itself',
+  kwant_task: 'the app checked this one itself',
   round_limit: 'it was already checked the most times allowed',
   no_checkpoint: 'there was no checkpoint to re-run it from',
   nothing_to_reproduce: 'there was nothing to re-run',
