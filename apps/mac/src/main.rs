@@ -17,10 +17,12 @@ mod nudge_linux;
 mod nudge_mac;
 #[cfg(windows)]
 mod nudge_windows;
+mod picker;
 mod places;
 mod redact;
 mod remote;
 mod startup;
+mod switcher;
 mod target;
 mod update;
 
@@ -242,6 +244,14 @@ struct Shared {
     last_focused: Mutex<Option<String>>,
     /// Wakes the menu's poll after a change.
     wake: Mutex<Option<mpsc::Sender<()>>>,
+    /// What the menu's last poll said of each place (by key), for the place picker.
+    status: Mutex<HashMap<String, menu::Status>>,
+    /// What waits in the places other than This Mac, as This Mac's page was told last.
+    elsewhere: Mutex<Option<usize>>,
+    /// The place picker's rows and state (`picker.rs`).
+    picker: Mutex<picker::PickerState>,
+    /// The pages' picker asks, at most one a second per window.
+    asks: Mutex<switcher::RateLimit>,
 }
 
 impl Shared {
@@ -259,6 +269,10 @@ impl Shared {
             unreachable: Mutex::new(Default::default()),
             last_focused: Mutex::new(None),
             wake: Mutex::new(None),
+            status: Mutex::new(HashMap::new()),
+            elsewhere: Mutex::new(None),
+            picker: Mutex::new(picker::PickerState::default()),
+            asks: Mutex::new(switcher::RateLimit::default()),
         }
     }
 }
@@ -364,6 +378,10 @@ fn main() {
             }
             WindowEvent::Focused(true) if is_place_window(window.label()) => {
                 *window.state::<Shared>().last_focused.lock().unwrap() = Some(window.label().to_string());
+            }
+            // a click outside the place picker closes it
+            WindowEvent::Focused(false) if window.label() == switcher::PICKER_WINDOW => {
+                picker::blurred(window.app_handle());
             }
             _ => {}
         })
@@ -696,6 +714,11 @@ fn save_open<R: Runtime>(app: &AppHandle<R>) {
 /// What a link in a place's window does (`popup`: it asked for a new window). A link to another
 /// place opens that place's window; a page off every place goes to the browser.
 fn route<R: Runtime>(app: &AppHandle<R>, me: &Place, url: &Url, popup: bool) -> bool {
+    // the place chip (and Ctrl+Shift+O) asking for the place picker: handled, never loaded
+    if url.scheme() == "kwant-app" {
+        picker::on_app_url(app, &me.window_label(), url);
+        return false;
+    }
     // port 0 never matches a link: This Mac's window before its kwant runs
     let mine = home(app, me).unwrap_or(Home::Local { port: 0 });
     let others: Vec<(Place, Home)> = current(app)
@@ -732,7 +755,11 @@ fn make_window<R: Runtime>(app: &AppHandle<R>, place: &Place, goto: Goto, visibl
     let title = places::window_title(place, &current(app));
     let (nav_app, nav_place) = (app.clone(), place.clone());
     let (pop_app, pop_place) = (app.clone(), place.clone());
-    let window = match WebviewWindowBuilder::new(app, place.window_label(), WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, place.window_label(), WebviewUrl::App("index.html".into()));
+    // Ctrl+Shift+O opens the place picker (macOS has the Window menu's ⌘⇧O)
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.initialization_script(switcher::SHORTCUT_SCRIPT);
+    let window = match builder
         .title(title)
         .visible(visible)
         .inner_size(1280.0, 820.0)
@@ -750,6 +777,8 @@ fn make_window<R: Runtime>(app: &AppHandle<R>, place: &Place, goto: Goto, visibl
             route(&pop_app, &pop_place, &url, true);
             NewWindowResponse::Deny
         })
+        // This Mac's page learns what waits elsewhere (no other window does)
+        .on_page_load(|window, payload| picker::page_loaded(&window, payload.url(), payload.event()))
         .build()
     {
         Ok(w) => w,
@@ -1175,6 +1204,7 @@ fn set_window_menu(app: &AppHandle, places: &[Place]) {
         let bar = Menu::default(app)?;
         if let Some(window) = bar.get(tauri::menu::WINDOW_SUBMENU_ID).and_then(|k| k.as_submenu().cloned()) {
             window.append(&PredefinedMenuItem::separator(app)?)?;
+            window.append(&MenuItem::with_id(app, "switch_place", "Switch place…", true, Some("CmdOrCtrl+Shift+O"))?)?;
             for (i, place) in places.iter().enumerate() {
                 let accel = (i < 9).then(|| format!("CmdOrCtrl+{}", i + 1));
                 let text = match place {
@@ -1195,7 +1225,11 @@ fn set_window_menu(app: &AppHandle, places: &[Place]) {
 /// Every menu click: the tray's and the Window menu's.
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
-        "open" => open_place(app, &Place::ThisMac, Goto::Stay),
+        "open" => picker::switch_from_last(app, &Place::ThisMac),
+        "switch_place" => {
+            let (app, from) = (app.clone(), picker::last_place_window(app));
+            std::thread::spawn(move || picker::open(&app, from, None));
+        }
         "update" => {
             // The window shows the download and the relaunch
             if let Err(e) = kwnt::app_update::UpdateHub::shared().install() {
@@ -1226,8 +1260,9 @@ fn on_menu(app: &AppHandle, id: &str) {
         }
         _ => {
             if let Some(key) = id.strip_prefix("place:").or_else(|| id.strip_prefix("win:")) {
+                // the tray's rows and ⌘1/⌘2 switch in place
                 if let Some(place) = place_by_key(app, key) {
-                    open_place(app, &place, Goto::Stay);
+                    picker::switch_from_last(app, &place);
                 }
             } else if let Some(origin) = id.strip_prefix("remove:") {
                 confirm_remove(app, origin);
@@ -1339,6 +1374,9 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
                     menu::Status::Connecting
                 })
             };
+            *shared.status.lock().unwrap() = status.clone();
+            let counts: Vec<(bool, usize)> = all.iter().map(|p| (*p == Place::ThisMac, status_of(p).count())).collect();
+            picker::set_elsewhere(&app, switcher::waiting_elsewhere(&counts));
             *shared.unreachable.lock().unwrap() = all
                 .iter()
                 .filter(|p| status_of(p) == menu::Status::Unreachable)
@@ -1751,6 +1789,82 @@ mod tests {
             }
         }
         nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// The place picker is a bundled page in its own window (`places`), which no capability
+    /// lists: it reaches Rust only through `kwant-places://` navigations, never a command.
+    #[test]
+    fn the_place_picker_can_call_no_command() {
+        let (_app, window, data_dir) = app_with("picker-window", switcher::PICKER_WINDOW, Places::default());
+        for from in ["tauri://localhost/places.html", "http://tauri.localhost/places.html"] {
+            for cmd in COMMANDS {
+                let refused = invoke(&window, cmd, from, args());
+                assert!(matches!(&refused, Err(serde_json::Value::String(_))), "{cmd} from {from}: {refused:?}");
+            }
+        }
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    fn server_place() -> (Places, Place) {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        (places, Place::Server(origin))
+    }
+
+    /// A server's page may open the picker (it shows only our own page), but at most once a
+    /// second, and the address is never loaded. An unknown kwant-app ask is refused and doesn't
+    /// use up the second.
+    #[test]
+    fn a_page_opens_the_picker_at_most_once_a_second_and_never_loads_the_address() {
+        let (places, server) = server_place();
+        let label = server.window_label();
+        let (app, _window, data_dir) = app_with("picker-asks", &label, places);
+        let handle = app.handle();
+        let island: Url = "kwant-app://island?mode=off&shortcut=off".parse().unwrap();
+        assert!(!route(handle, &server, &island, false), "never loaded");
+        assert_eq!(picker::on_app_url(handle, &label, &island), None, "not a picker ask");
+        let ask: Url = "kwant-app://places?at=76,44".parse().unwrap();
+        assert_eq!(
+            picker::on_app_url(handle, &label, &ask),
+            Some(switcher::AppAsk::Places { at: Some((76.0, 44.0)) }),
+            "the first ask opens it"
+        );
+        for _ in 0..50 {
+            assert_eq!(picker::on_app_url(handle, &label, &ask), None, "again within a second: ignored");
+            assert!(!route(handle, &server, &ask, false), "and never loaded");
+            assert!(!route(handle, &server, &ask, true), "nor as a popup");
+        }
+        assert!(picker::on_app_url(handle, MAIN, &ask).is_some(), "another window has its own second");
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// Only This Mac's window showing This Mac's kwant learns what waits elsewhere; a server's
+    /// window, the picker and This Mac's loading page never do.
+    #[test]
+    fn only_this_mac_s_page_hears_what_waits_elsewhere() {
+        let (places, server) = server_place();
+        let (app, _window, data_dir) = app_with("elsewhere", MAIN, places);
+        let handle = app.handle();
+        *handle.state::<Shared>().elsewhere.lock().unwrap() = Some(3);
+        let local: Url = "http://127.0.0.1:1/spaces/spc_default".parse().unwrap();
+        let remote: Url = "https://kwant.example.com/".parse().unwrap();
+        let loading: Url = "tauri://localhost/index.html".parse().unwrap();
+        let js = picker::elsewhere_for(handle, MAIN, &local).expect("This Mac's page");
+        assert!(js.contains("__KWANT_ELSEWHERE__=3"), "{js}");
+        for (label, url) in [
+            (server.window_label(), &remote),
+            (server.window_label(), &local),
+            (switcher::PICKER_WINDOW.to_string(), &local),
+            (CONNECT.to_string(), &local),
+            (MAIN.to_string(), &remote),
+            (MAIN.to_string(), &loading),
+        ] {
+            assert_eq!(picker::elsewhere_for(handle, &label, url), None, "{label} at {url}");
+        }
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
