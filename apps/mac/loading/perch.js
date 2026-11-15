@@ -306,7 +306,7 @@
         list.append(b);
       });
       if (places.length > 3) {
-        var more = el('button', { class: 'perch__place', type: 'button', title: 'All places', text: '+' + (places.length - 2) });
+        var more = el('button', { class: 'perch__place', type: 'button', title: 'All places', text: '+' + (places.length - 2), 'aria-label': (places.length - 2) + ' more places, show all' });
         more.addEventListener('click', function () { send('places'); });
         list.append(more);
       }
