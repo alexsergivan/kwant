@@ -164,7 +164,7 @@ test('B1: a direct commit (pr null) parses and draws as a normal landed card nam
   assert.match(out, /class="kw-chip">Direct push</);
   assert.match(out, /<a href="https:\/\/github\.com\/alexsergivan\/kwant\/commit\/c0ffee1"/);
   assert.doesNotMatch(out, /PR #/);
-  assert.match(out, /Committed 19:02/);
+  assert.match(out, /Committed 7:02 PM/);
   assert.doesNotMatch(out, />Verified</);
   assert.doesNotMatch(out, /data-verified/);
   assert.doesNotMatch(out, /text-warn|kw-chip-warn|amber/, 'no warning tone: like an old merge with no reviewer');
@@ -203,7 +203,7 @@ test('the landed card: plain words, the details fold, a failed card and day sepa
   assert.match(c, /What changes for you/);
   assert.match(c, /<details/);
   assert.match(c, /Under the hood<\/span><span aria-hidden="true">·<\/span><span class="font-mono[^"]*">4 files<\/span><span role="img" aria-label="249 lines added, 15 removed"/);
-  assert.match(c, /Merged 18:48 by/);
+  assert.match(c, /Merged 6:48 PM by/);
   assert.match(c, /Pixel<\/span><\/span><span>\(bot · Claude Sonnet\)/);
   const f = html(m.LandedCard, { card: landed(fx.LANDED_NO_TEXT) });
   assert.match(f, /Bump vite to 6\.4\.4/);
@@ -231,7 +231,7 @@ test('roll-up: title, needs-you tiles, +N more, the empty state, no routine link
   assert.match(html(m.Rollup, { ...base, rollup: fx.ROLLUP_MANY }), /\+4 more areas/);
   assert.match(html(m.Rollup, { ...base, rollup: fx.ROLLUP_MANY }), /main is red/);
   const e = html(m.Rollup, { ...base, rollup: fx.ROLLUP_EMPTY, last_merge: { pr: 290, merged_at: '2026-11-04T19:26:00Z' } });
-  assert.match(e, /Nothing landed since you last looked\. Last merge: #290, 19:26\./);
+  assert.match(e, /Nothing landed since you last looked\. Last merge: #290, 7:26 PM\./);
   assert.deepEqual(m.needsYouAreas(fx.LANDED_ROUTE.cards.map((c) => m.parseLanded(c))), ['Chat', 'Live activity']);
 
   const { branch: _b, ...noBranch } = base;
@@ -541,7 +541,7 @@ test('Fix it sends the finding and offers Undo for 10 s', async () => {
   });
   await click(button(host.querySelector('[data-finding="f1"]'), 'Fix it'));
   const row = host.querySelector('[data-finding="f1"]');
-  assert.match(row.textContent, /Sent to Pixel as a task · 01:00/);
+  assert.match(row.textContent, /Sent to Pixel as a task · 1:00 AM/);
   assert.match(button(row, 'Undo').textContent, /8 s/);
   await click(button(row, 'Undo'));
   assert.deepEqual(actions, [['f1', 'fix'], ['f1', 'undo_fix']]);

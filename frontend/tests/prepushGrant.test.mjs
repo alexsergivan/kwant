@@ -77,7 +77,7 @@ const type = async (el, value) => {
 // ---------------------------------------------------------------------------------------------------
 // 0.9.7 prepush-grant (autonomy/prepush-retry/brief.md, Frontend): the press is the approval.
 
-const HM = (ms) => new Date(ms).toISOString().slice(11, 16);
+const HM = (ms) => new Date(ms).toLocaleTimeString(undefined, { timeStyle: 'short' }).replace(/\u202f/g, ' ');
 const all = (...ks) => ks.map((k) => card(fx[k]));
 
 test('grant and superseded parse; pushed is a known status now; a junk grant is dropped', () => {

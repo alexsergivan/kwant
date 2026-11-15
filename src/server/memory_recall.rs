@@ -13,14 +13,14 @@
 //! background, at most [`FILL_BATCH`] × [`FILL_ROUNDS`] per fill and one fill per kwant at a time;
 //! after a provider error that provider is left alone for [`COOLDOWN`].
 
-use super::AppState;
+use super::{profile_turn, AppState};
 use crate::db::continuity::{Memory, MAX_MEMORY_SEARCH_LIMIT};
 use crate::db::spaces::SpaceId;
 use crate::drivers::engines::{EngineId, EngineStatus};
 use crate::profiles::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -42,8 +42,13 @@ pub const COOLDOWN: Duration = Duration::from_secs(60);
 const CANDIDATES: usize = MAX_MEMORY_SEARCH_LIMIT as usize;
 /// Reciprocal Rank Fusion constant: score = Σ 1/(RRF_K + rank).
 const RRF_K: f64 = 60.0;
-/// Below this cosine a note isn't related enough to be a by-meaning candidate.
-const MIN_COSINE: f32 = 0.2;
+/// Below this cosine a note isn't related enough to be a by-meaning candidate, for OpenAI
+/// `text-embedding-3-small`: it scores unrelated text about 0.0–0.15 and a paraphrase 0.3 or more.
+pub const OPENAI_MIN_COSINE: f32 = 0.25;
+/// The same floor for a local Ollama model. `nomic-embed-text` and `mxbai-embed-large` score
+/// unrelated text 0.3–0.4, so a lower floor keeps every note; any other local model gets this,
+/// the stricter of the two.
+pub const LOCAL_MIN_COSINE: f32 = 0.5;
 
 /// Where a space's embeddings come from.
 #[derive(Clone, PartialEq)]
@@ -72,6 +77,14 @@ impl EmbedSource {
         }
     }
 
+    /// The lowest cosine that counts as related, on this model's own scale.
+    pub fn min_cosine(&self) -> f32 {
+        match self {
+            EmbedSource::OpenAi { .. } => OPENAI_MIN_COSINE,
+            EmbedSource::Ollama { .. } => LOCAL_MIN_COSINE,
+        }
+    }
+
     /// Cooldown key: one per provider endpoint, never containing the key.
     fn cooldown_key(&self) -> String {
         match self {
@@ -96,8 +109,9 @@ pub fn pick_ollama_model<'a>(models: impl IntoIterator<Item = &'a str>) -> Optio
 /// cached engine checks: never a network call.
 ///
 /// 1. An enabled OpenAI API-key account of the space (an `api_key` profile on Codex) with a key.
-/// 2. The host's OpenAI key (Settings, else `OPENAI_API_KEY`), unless This machine is off for
-///    Codex in the space or the OpenAI API engine is turned off.
+/// 2. The host's OpenAI key (Settings, else `OPENAI_API_KEY`), when the OpenAI API engine's last
+///    check passed (so a revoked key isn't tried again every minute) and This machine isn't off
+///    for Codex in the space (the rule turns use: [`profile_turn::host_off`]).
 /// 3. A local Ollama whose last check was ready and that has an embedding model pulled.
 pub async fn source_for_space(state: &AppState, space: &SpaceId) -> Option<EmbedSource> {
     let db = &state.db;
@@ -111,8 +125,8 @@ pub async fn source_for_space(state: &AppState, space: &SpaceId) -> Option<Embed
                 }
             }
         }
-        let host_off = profiles.iter().any(|p| p.kind == "system" && !p.enabled && Engine::parse(&p.engine) == Some(Engine::Codex));
-        if !host_off {
+        let host_ready = state.engines.report(EngineId::OpenaiApi).status == EngineStatus::Ready;
+        if host_ready && !profile_turn::host_off(state, space).await.contains(&Engine::Codex) {
             let key = db
                 .get_setting("openai_api_key")
                 .await
@@ -229,8 +243,56 @@ pub fn rrf(lists: &[&[String]]) -> Vec<String> {
 
 /// Providers in their cooldown after an error, until when.
 static COOLING: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-/// Kwants with a fill running.
-static FILLING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Kwants with a fill running, each with whether a note changed since that fill read its notes.
+static FILLING: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn filling() -> std::sync::MutexGuard<'static, HashMap<String, bool>> {
+    FILLING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A kwant's place in [`FILLING`]: one fill per kwant at a time. Dropping it frees the place, so
+/// a fill that panics or is cancelled doesn't leave the kwant marked as filling until restart.
+struct FillSlot {
+    kwant_id: String,
+    released: bool,
+}
+
+impl FillSlot {
+    /// The kwant's slot, or `None` when a fill is already running; then that fill is told to run
+    /// one more pass, so the note that changed gets its vector without waiting for a search.
+    fn take(kwant_id: &str) -> Option<FillSlot> {
+        let mut map = filling();
+        if let Some(dirty) = map.get_mut(kwant_id) {
+            *dirty = true;
+            return None;
+        }
+        map.insert(kwant_id.to_string(), false);
+        Some(FillSlot { kwant_id: kwant_id.to_string(), released: false })
+    }
+
+    /// After a pass: `true` (and the flag cleared) when a note changed during it, so another
+    /// pass is due; else frees the slot. One lock for both, so no change slips in between.
+    fn again_or_release(&mut self) -> bool {
+        let mut map = filling();
+        if let Some(dirty) = map.get_mut(&self.kwant_id) {
+            if *dirty {
+                *dirty = false;
+                return true;
+            }
+        }
+        map.remove(&self.kwant_id);
+        self.released = true;
+        false
+    }
+}
+
+impl Drop for FillSlot {
+    fn drop(&mut self) {
+        if !self.released {
+            filling().remove(&self.kwant_id);
+        }
+    }
+}
 
 fn cooling(source: &EmbedSource) -> bool {
     let mut map = COOLING.lock().unwrap();
@@ -294,7 +356,7 @@ pub async fn search(state: &AppState, kwant_id: &str, q: &str, limit: i64) -> Re
     let mut by_meaning: Vec<(f32, &String)> = vectors
         .iter()
         .map(|(id, v)| (cosine(&query_vec, v), id))
-        .filter(|(c, _)| *c >= MIN_COSINE)
+        .filter(|(c, _)| *c >= source.min_cosine())
         .collect();
     by_meaning.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let meaning_ids: Vec<String> = by_meaning.into_iter().take(CANDIDATES).map(|(_, id)| id.clone()).collect();
@@ -318,13 +380,15 @@ pub fn fill_soon(state: &AppState, kwant_id: &str) {
 
 /// Embeds up to `rounds` × [`FILL_BATCH`] of the kwant's notes whose vector is missing or stale,
 /// and returns how many it stored. 0 without a provider (no call made), during a cooldown, or
-/// when another fill for the kwant is running.
+/// when another fill for the kwant is running: that fill then makes one more pass when it ends.
 pub async fn fill_now(state: &AppState, kwant_id: &str, rounds: usize) -> usize {
-    if !FILLING.lock().unwrap().insert(kwant_id.to_string()) {
+    let Some(mut slot) = FillSlot::take(kwant_id) else {
         return 0;
+    };
+    let mut stored = fill_rounds(state, kwant_id, rounds).await;
+    while slot.again_or_release() {
+        stored += fill_rounds(state, kwant_id, rounds).await;
     }
-    let stored = fill_rounds(state, kwant_id, rounds).await;
-    FILLING.lock().unwrap().remove(kwant_id);
     stored
 }
 
@@ -433,6 +497,46 @@ mod tests {
         assert!(!format!("{openai:?}").contains("sk-secret"));
         assert_eq!(openai.model_id(), "openai/text-embedding-3-small");
         assert_eq!(ollama.model_id(), "ollama/nomic-embed-text");
+    }
+
+    #[test]
+    fn each_model_has_its_own_floor() {
+        let openai = EmbedSource::OpenAi { base: "https://x".into(), key: "k".into() };
+        assert_eq!(openai.min_cosine(), 0.25);
+        for model in ["nomic-embed-text:latest", "mxbai-embed-large", "snowflake-arctic-embed:s"] {
+            let local = EmbedSource::Ollama { root: "http://o".into(), model: model.into() };
+            assert_eq!(local.min_cosine(), 0.5, "{model}: the stricter floor");
+        }
+    }
+
+    #[test]
+    fn a_panicking_fill_frees_its_kwant() {
+        let kwant = "fill-slot-panic-test";
+        let caught = std::panic::catch_unwind(|| {
+            let _slot = FillSlot::take(kwant).unwrap();
+            assert!(FillSlot::take(kwant).is_none(), "one fill per kwant");
+            panic!("a fill panicked");
+        });
+        assert!(caught.is_err());
+        assert!(!filling().contains_key(kwant), "the slot was freed by the panic");
+        let mut slot = FillSlot::take(kwant).expect("a new fill may start");
+        assert!(!slot.again_or_release());
+        assert!(!filling().contains_key(kwant));
+    }
+
+    #[test]
+    fn a_change_during_a_fill_asks_for_one_more_pass() {
+        let kwant = "fill-slot-dirty-test";
+        let mut slot = FillSlot::take(kwant).unwrap();
+        assert!(FillSlot::take(kwant).is_none(), "a write while the fill runs");
+        assert!(FillSlot::take(kwant).is_none(), "and another: still one more pass");
+        assert!(slot.again_or_release(), "one more pass");
+        assert!(filling().contains_key(kwant), "still filling during that pass");
+        assert!(!slot.again_or_release(), "nothing changed during it");
+        assert!(!filling().contains_key(kwant));
+        drop(slot);
+        assert!(FillSlot::take(kwant).is_some(), "drop after release frees nothing twice");
+        filling().remove(kwant);
     }
 
     #[test]

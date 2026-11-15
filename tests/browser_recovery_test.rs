@@ -163,7 +163,8 @@ async fn a_browser_that_is_not_there_gets_the_docker_text_at_once() {
     assert_eq!(status, 503);
     let error = body["error"].as_str().unwrap();
     assert_ne!(error, BROWSER_BUSY);
-    assert!(body.get("code").is_none() && body.get("retryable").is_none(), "{body}");
+    // No route code: only the status's own (14d), and nothing says retry
+    assert!(body["code"] == "server_error" && body.get("retryable").is_none(), "{body}");
     assert!(started.elapsed() < Duration::from_secs(5), "a refused connection isn't retried for 45 s");
 
     app_task.abort();
