@@ -24,7 +24,10 @@ export const onStrip = (item: Pick<AwayItem, 'kind'>): boolean => item.kind !== 
  * A stopped item resumes by Ask again (an approval that expired), Continue (a paused chain), the
  * browser step it waits on, or Retry (resend the person's message).
  */
-export function askAction(item: Pick<AwayItem, 'kind' | 'retry' | 'human_step_id'> & { action?: unknown }): AskAction | null {
+export function askAction(item: Pick<AwayItem, 'kind' | 'retry' | 'human_step_id'> & { action?: unknown; task_id?: string | null }): AskAction | null {
+  // A failed hand-off or run retries only through its board task (#700, Ada): no task_id, no Retry,
+  // whatever the server says; the person asks the bot again in the thread.
+  if (isHandOff(item) && !item.task_id && (item.action === 'retry' || item.action === undefined)) return null;
   if (typeof item.action === 'string' && ACTIONS.has(item.action)) return item.action as AskAction;
   // A 22i server says "nothing resolves it" with an explicit null: only Done, clear it.
   if (item.action === null) return null;
@@ -44,6 +47,9 @@ export function askAction(item: Pick<AwayItem, 'kind' | 'retry' | 'human_step_id
   return null;
 }
 
+/** A hand-off or routine run (a failed one is pinned as a rank-2 row and shown on its thread's strip). */
+export const isHandOff = (item: Pick<AwayItem, 'kind'>): boolean => item.kind === 'delegation' || item.kind === 'routine_run';
+
 /** The action's button words (design.md §2, final copy). */
 export const ACTION_LABEL: Record<AskAction, string> = {
   retry: 'Retry',
@@ -60,7 +66,7 @@ export const BUSY_LABEL: Partial<Record<AskAction, string>> = { retry: 'Retrying
 /** Actions that resolve the ask (the strip waits on the server); the rest only take the person to it. */
 export const RESOLVES: ReadonlySet<AskAction> = new Set(['retry', 'continue', 'ask_again']);
 
-const failed = (item: Pick<AwayItem, 'status'>) => item.status === 'failed';
+const failed = (item: Pick<AwayItem, 'status'>) => item.status === 'failed' || item.status === 'interrupted' || item.status === 'error';
 
 /** The strip's kind word, the same words as the sidebar tooltip (design.md §2, §4). */
 export function askKind(item: Pick<AwayItem, 'kind' | 'status'>, action: AskAction | null): string {
@@ -82,7 +88,11 @@ export function askKind(item: Pick<AwayItem, 'kind' | 'status'>, action: AskActi
 }
 
 /** The strip's hint under the line: what the button does, so pressing it is never a guess. */
-export function askHint(item: Pick<AwayItem, 'kind' | 'status'>, action: AskAction | null, bot: string): string {
+export function askHint(item: Pick<AwayItem, 'kind' | 'status'>, action: AskAction | null, bot: string, clearable = true): string {
+  // No button and nothing to clear it with: it clears on its own once handled (Mira's fix 4).
+  if (!action && !clearable) return `Write to ${bot} in the chat. This clears once it’s handled.`;
+  // design.md §2 "no action", for a hand-off: its thread is where the bot is asked again.
+  if (!action && isHandOff(item) && failed(item)) return `There’s no button for this one. Ask ${bot} again in this thread, or clear it once it’s handled.`;
   switch (action) {
     case 'retry':
       return failed(item) ? 'Retry runs it again from the start.' : `Retry sends your last message to ${bot} again.`;
@@ -132,11 +142,16 @@ export function askLine(item: Pick<AwayItem, 'kind' | 'title' | 'summary' | 'que
   const title = t(item.title);
   const summary = t(item.summary);
   if (item.kind === 'approval' && t(item.question)) return t(item.question);
-  if (!title) return summary;
+  // The kind word sits right above the line, so the line doesn't say it again (Mira's fix 1).
+  const bare = (x: string) => {
+    const rest = x.replace(/^(Failed|Stuck|Stopped|Paused)\s*:\s*/i, '');
+    return rest === x || !rest ? x : rest.charAt(0).toUpperCase() + rest.slice(1);
+  };
+  if (!title) return bare(summary);
   // A title cut for one row ("The model sent nothing for 120 s, so…") gives way to the whole sentence.
   const cut = /(…|\.\.\.)$/.test(title);
-  if (cut && summary && summary.length > title.length) return summary;
-  return title;
+  if (cut && summary && summary.length > title.length) return bare(summary);
+  return bare(title);
 }
 
 /** The place a chat is: what the pane shows now, or where an item lives. */
@@ -211,7 +226,62 @@ export function stripIndex(asks: Pick<AwayItem, 'id'>[], shownId: string | null,
 }
 
 /**
- * What the strip's Retry sends again when the server has no `POST /api/waiting/:id/retry`: the notice's
+ * Whether the strip offers "Done, clear it": the server's `dismissable` (Lin, #700) when it sends one;
+ * older servers leave it out and every ask keeps the button (its 404 says the version can't clear it).
+ */
+export const canClear = (item: Pick<AwayItem, 'dismissable'>): boolean => (typeof item.dismissable === 'boolean' ? item.dismissable : true);
+
+/**
+ * A dismiss refused with 409 because the ask has its own answer, which tells the bot (#700): the button
+ * the strip switches to instead. Anything else is an error.
+ */
+export function switchFor(code: string | null | undefined): AskAction | null {
+  switch (code) {
+    case 'use_question_answer':
+      return 'answer';
+    case 'use_approval_decide':
+    case 'use_watch_decide':
+      return 'decide';
+    case 'use_step_decline':
+      return 'browser';
+  }
+  return null;
+}
+
+/** The kind the dismiss body names (#700 takes the item's kind from /api/away; a browser step is "browser"). */
+export const dismissKind = (item: Pick<AwayItem, 'kind' | 'human_step_id'>): string => (item.kind === 'stopped' && item.human_step_id ? 'browser' : item.kind);
+
+/**
+ * Where Retry goes. There is no `POST /api/waiting/:id/retry` (#700 won't add one):
+ * - an approval that ran out asks again (`POST /api/approvals/:id/retry`);
+ * - a failed task or routine run that names its task retries it (`POST /api/tasks/:id/retry`);
+ * - a stopped turn or a reply sends the person's last message again, as the server's notice says, which
+ *   closes the item with reason `person_wrote`;
+ * - a failed hand-off or run with no task to retry: null (the strip says to write to the bot).
+ */
+export type RetryRoute = { via: 'approval'; id: string } | { via: 'task'; id: string } | { via: 'resend' };
+export function retryRoute(item: Pick<AwayItem, 'kind' | 'retry' | 'task_id'>): RetryRoute | null {
+  if (item.retry && item.retry.type === 'approval' && item.retry.approval_id) return { via: 'approval', id: item.retry.approval_id };
+  if (item.kind === 'delegation' || item.kind === 'routine_run') return item.task_id ? { via: 'task', id: item.task_id } : null;
+  return { via: 'resend' };
+}
+
+/**
+ * SSE `waiting_updated` (#700): an item that closed leaves Needs attention and the strip at once,
+ * without waiting for the refetch. `closedId` is the closed item's id, or null when the event isn't a
+ * close (an open item: the refetch picks it up); `dropClosed` returns the same list when it has no such item.
+ */
+export function closedId(data: unknown): string | null {
+  const item = (data as { item?: { id?: unknown; status?: unknown } } | null)?.item;
+  return item && item.status === 'closed' && typeof item.id === 'string' && item.id ? item.id : null;
+}
+export function dropClosed<T extends { id: string }>(list: T[], id: string | null): T[] {
+  if (!id || !list.some((i) => i.id === id)) return list;
+  return list.filter((i) => i.id !== id);
+}
+
+/**
+ * What the strip's Retry sends again for a stopped turn or a reply: the notice's
  * own Retry target when the notice is loaded (none when a step may already have gone out), else the
  * person's newest message in this chat, which is what Retry in the chat resends.
  */

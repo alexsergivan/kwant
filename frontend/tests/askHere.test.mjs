@@ -3,6 +3,7 @@
 // steps through several, shows when the message isn't rendered, and goes when the item closes.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
 
@@ -130,7 +131,7 @@ test('asks here: only the open chat (thread, channel or direct), oldest first, m
   assert.equal(m.stripIndex([], null, 3), 0);
 });
 
-test('Retry without the server endpoint resends the notice target, else the newest message of yours', () => {
+test('Retry of a stopped turn resends the notice target, else the newest message of yours', () => {
   const you = (id, text) => ({ id, sender_role: 'user', sender_id: 'you', text, meta: null, created_at: '' });
   const bot = (id, text, meta = null) => ({ id, sender_role: 'kwant', sender_id: 'quant', text, meta, created_at: '' });
   // The notice isn't loaded (Oleks's case): the newest message of the person's
@@ -409,4 +410,157 @@ test('pinned row tooltip: shows at once on keyboard focus, after 300 ms on hover
   assert.ok(tip().hidden, 'Esc hides it');
   m.flushSync(() => root.unmount());
   host.remove();
+});
+
+// ---- round 2: Lin's #700 API (docs/live-activity.md §3) ----
+
+test('open target: link.thread_kwant_id opens the thread under the bot that owns it (Oleks’s Quant case)', () => {
+  // The thread belongs to Builder, not to the item's bot: looking it up under Quant found nothing.
+  const it = item('stopped', { id: 'w9', message_id: 'm-n', link: link({ thread_id: 't-b', thread_kwant_id: 'builder' }) });
+  assert.deepEqual(m.openTarget(it), { channel_id: null, kwant_id: 'builder', thread_id: 't-b', focus: 'm-n', focusKind: 'message' });
+  // Absent (the bot's own thread, or an older server): the item's kwant_id, as before
+  assert.equal(m.openTarget(item('stopped', { link: link({ thread_id: 't-q' }) })).kwant_id, 'quant');
+  assert.equal(m.openTarget(item('stopped', { link: link({ thread_id: 't-q', thread_kwant_id: null }) })).kwant_id, 'quant');
+  // The strip still finds it in that thread
+  assert.ok(m.isHere(it, { thread: 't-b', kwant: 'builder' }));
+});
+
+test('Done, clear it follows dismissable; older servers keep it; the body names the kind', () => {
+  assert.equal(m.canClear({ dismissable: true }), true);
+  assert.equal(m.canClear({ dismissable: false }), false);
+  assert.equal(m.canClear({}), true, 'missing (an older server): the round-1 inference, always offered');
+  assert.equal(m.dismissKind(stopped), 'stopped');
+  assert.equal(m.dismissKind(item('stopped', { human_step_id: 'hs' })), 'browser');
+  assert.equal(m.dismissKind(item('routine_run')), 'routine_run');
+});
+
+test('a 409 use_* dismiss switches to the ask’s own button; other codes are errors', () => {
+  assert.equal(m.switchFor('use_question_answer'), 'answer');
+  assert.equal(m.switchFor('use_approval_decide'), 'decide');
+  assert.equal(m.switchFor('use_watch_decide'), 'decide');
+  assert.equal(m.switchFor('use_step_decline'), 'browser');
+  for (const c of ['person_only', 'not_found', 'bad_kind', null, undefined]) assert.equal(m.switchFor(c), null);
+});
+
+test('Retry never goes to /api/waiting/:id/retry: approval, task, or resend', () => {
+  assert.deepEqual(m.retryRoute(item('stopped', { retry: { type: 'approval', approval_id: 'ap9' } })), { via: 'approval', id: 'ap9' });
+  assert.deepEqual(m.retryRoute(item('routine_run', { status: 'error', task_id: 'tk1' })), { via: 'task', id: 'tk1' });
+  assert.deepEqual(m.retryRoute(item('delegation', { status: 'failed', task_id: 'tk2' })), { via: 'task', id: 'tk2' });
+  assert.equal(m.retryRoute(item('delegation', { status: 'failed' })), null, 'no task to retry: write to the bot');
+  assert.deepEqual(m.retryRoute(stopped), { via: 'resend' });
+  // The client has no waiting-retry call at all.
+  const src = readFileSync(new URL('../src/away.ts', import.meta.url), 'utf8');
+  assert.ok(!/waiting\/\$\{[^}]+\}\/retry/.test(src) && !/retryWaiting/.test(src));
+});
+
+test('waiting_updated: a closed item drops at once; an open one waits for the refetch', () => {
+  const list = [stopped, item('question', { id: 'q1' })];
+  const ev = (status, id = 'w1') => ({ item: { id, kind: 'stopped', status, reason: status === 'closed' ? 'person_wrote' : null } });
+  assert.equal(m.closedId(ev('closed')), 'w1');
+  assert.deepEqual(m.dropClosed(list, m.closedId(ev('closed'))).map((i) => i.id), ['q1']);
+  assert.equal(m.closedId(ev('open')), null);
+  assert.equal(m.dropClosed(list, m.closedId(ev('open'))), list, 'open: unchanged (same list)');
+  assert.equal(m.dropClosed(list, m.closedId(ev('closed', 'other'))), list, 'not in the list: unchanged');
+  assert.equal(m.closedId(null), null);
+  assert.equal(m.closedId({}), null);
+});
+
+test('strip: Done hidden when not dismissable; a 409 use_* switches the button and drops Done', async () => {
+  const shown = [];
+  const step = item('stopped', { id: 'hs2', human_step_id: 'hs2', action: 'browser', dismissable: false, title: 'Sign in to the exchange' });
+  let r1 = mount({ asks: [step] });
+  assert.equal(r1.host.querySelector('[data-strip-dismiss]'), null, 'not dismissable: no Done');
+  assert.equal(r1.host.querySelector('[data-strip-action]').getAttribute('data-strip-action'), 'browser');
+  r1.unmount();
+  // An older-server stall with no action the client knows; the server says use the question
+  const odd = item('stopped', { id: 'w5', action: null, title: 'Waiting on your answer' });
+  const { host, unmount } = mount({ asks: [odd], onDismiss: async () => ({ use: 'answer' }), onShow: async (it) => (shown.push(it.id), true) });
+  const q = (s) => host.querySelector(s);
+  assert.equal(q('[data-strip-action]'), null);
+  q('[data-strip-dismiss]').click();
+  await tick();
+  await tick();
+  assert.equal(q('[data-strip-dismiss]'), null, 'Done goes');
+  assert.equal(q('[data-strip-action]').textContent, 'Go to the question');
+  assert.equal(q('[data-strip-error]'), null, 'not an error');
+  assert.equal(q('[data-strip-hint]').textContent, 'This one clears when you answer it on its card.', 'says why Done went (fix 5)');
+  q('[data-strip-action]').click();
+  await tick();
+  assert.deepEqual(shown, ['w5']);
+  unmount();
+});
+
+// ---- round 2 addition (Ada, #700 decision): failed hand-off rows ----
+const handOff = (over = {}) => item('delegation', { id: 'd1', status: 'failed', kwant_name: 'Builder', title: 'The hand-off to Builder failed', link: link({ thread_id: 't-h' }), ...over });
+
+test('failed hand-off with task_id: Retry, and it retries the board task', async () => {
+  const h = handOff({ action: 'retry', task_id: 'tk7', dismissable: true });
+  assert.equal(m.askAction(h), 'retry');
+  assert.deepEqual(m.retryRoute(h), { via: 'task', id: 'tk7' });
+  const calls = [];
+  const { host, unmount } = mount({ asks: [h], onAction: async (it, a) => void calls.push(`${a}:${it.id}`) });
+  assert.equal(host.querySelector('[data-strip-action]').textContent, 'Retry');
+  assert.ok(host.querySelector('[data-strip-dismiss]'));
+  host.querySelector('[data-strip-action]').click();
+  await tick();
+  assert.deepEqual(calls, ['retry:d1']);
+  unmount();
+});
+
+test('failed hand-off without task_id: no action button, only Done, and the hint says ask again in the thread', () => {
+  const h = handOff({ action: null, dismissable: true });
+  assert.equal(m.askAction(h), null);
+  const { host, unmount } = mount({ asks: [h] });
+  assert.equal(host.querySelector('[data-strip-action]'), null);
+  assert.ok(host.querySelector('[data-strip-dismiss]'), 'Done, clear it');
+  assert.equal(host.querySelector('[data-strip-hint]').textContent, 'There’s no button for this one. Ask Builder again in this thread, or clear it once it’s handled.');
+  assert.equal(m.askKind(h, null), 'Failed');
+  unmount();
+  // the bot's later reply closes it live (waiting_updated, reason later_reply)
+  assert.deepEqual(m.dropClosed([h], m.closedId({ item: { id: 'd1', kind: 'delegation', status: 'closed', reason: 'later_reply' } })), []);
+});
+
+test('older server: a hand-off row with no task_id never gets an inferred Retry', () => {
+  assert.equal(m.askAction(handOff()), null, 'no action field, no task');
+  assert.equal(m.askAction(handOff({ status: 'interrupted' })), null);
+  assert.equal(m.askAction(handOff({ action: 'retry' })), null, 'even a retry the server sent needs the task');
+  assert.equal(m.askAction(item('routine_run', { status: 'error' })), null);
+  assert.equal(m.retryRoute(handOff()), null);
+});
+
+// ---- round 2: Mira's design check (design-check.md, fixes 1-9) ----
+test('fix 1: the line drops a Failed: / Stuck: prefix the kind word already says', () => {
+  assert.equal(m.askLine(item('delegation', { title: 'Stuck: Quant has been on the same step for 25 minutes.' })), 'Quant has been on the same step for 25 minutes.');
+  assert.equal(m.askLine(item('stopped', { status: 'failed', title: 'Failed: Backtest maker-first-rebalance.' })), 'Backtest maker-first-rebalance.');
+  assert.equal(m.askLine(item('stopped', { title: 'Failed:' })), 'Failed:', 'nothing left: keep it');
+  assert.equal(m.askLine(item('delegation', { title: 'Failed: the hand-off stopped.' })), 'The hand-off stopped.', 'starts with a capital');
+  assert.equal(m.askLine(stopped), STALL, 'other lines unchanged');
+});
+
+test('fixes 3 and 4: no Retry with nowhere to go; no action and not dismissable: no button row and its own hint', async () => {
+  // fix 3: the server says retry, but there is no task: no button, only Done
+  let r = mount({ asks: [handOff({ action: 'retry', dismissable: true })] });
+  assert.equal(r.host.querySelector('[data-strip-action]'), null);
+  assert.ok(r.host.querySelector('[data-strip-dismiss]'));
+  r.unmount();
+  // fix 4
+  const lone = item('delegation', { id: 'z', action: null, dismissable: false, title: 'Quant is still on it.' });
+  assert.equal(m.askHint(lone, null, 'Quant', false), 'Write to Quant in the chat. This clears once it’s handled.');
+  r = mount({ asks: [lone] });
+  assert.equal(r.host.querySelector('[data-strip-buttons]'), null, 'no empty button row');
+  assert.equal(r.host.querySelector('[data-strip-hint]').textContent, 'Write to Quant in the chat. This clears once it’s handled.');
+  r.unmount();
+});
+
+test('fixes 2, 7, 8: phone browser step stacks, icons never shrink, compact steppers, a focus ring on the strip', () => {
+  const step = item('stopped', { id: 'hs3', human_step_id: 'hs3', action: 'browser', dismissable: true, title: 'Sign in' });
+  let r = mount({ asks: [step], phone: true });
+  assert.match(r.host.querySelector('[data-strip-buttons]').className, /flex-col-reverse/);
+  assert.match(r.host.querySelector('[data-strip-action] svg').getAttribute('class'), /shrink-0/);
+  assert.match(r.host.querySelector('[data-needs-you-strip]').className, /kw-focus/);
+  assert.doesNotMatch(r.host.querySelector('[data-needs-you-strip]').className, /outline-none/);
+  r.unmount();
+  r = mount({ asks: [stopped, item('question', { id: 'q2' })], phone: true });
+  for (const l of ['Previous ask', 'Next ask']) assert.ok(r.host.querySelector(`[aria-label="${l}"]`).hasAttribute('data-compact'));
+  r.unmount();
 });

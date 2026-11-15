@@ -9,6 +9,8 @@ export interface AwayLink {
   thread_id: string | null;
   channel_id: string | null;
   direct_kwant_id: string | null;
+  /** 22i (Lin, #700): set only when the item's thread belongs to another bot; open the thread under it. */
+  thread_kwant_id?: string | null;
 }
 
 export interface AwayItem {
@@ -48,6 +50,8 @@ export interface AwayItem {
   fix?: { label: string; opens?: string } | null;
   /** 22i (Lin's server part): what resolves the item. Older servers leave it out; `askAction` infers it. */
   action?: 'retry' | 'continue' | 'ask_again' | 'answer' | 'decide' | 'browser' | null;
+  /** 22i (Lin, #700): whether "Done, clear it" may close it. Older servers leave it out (the strip infers). */
+  dismissable?: boolean;
 }
 
 export interface AwayCounts {
@@ -171,7 +175,7 @@ export type AwayTarget = { thread: string; kwant: string } | { channel: string }
 
 export function awayTarget(item: Pick<AwayItem, 'kwant_id' | 'link'>): AwayTarget {
   const l = item.link;
-  if (l.thread_id) return { thread: l.thread_id, kwant: item.kwant_id };
+  if (l.thread_id) return { thread: l.thread_id, kwant: l.thread_kwant_id || item.kwant_id };
   if (l.channel_id) return { channel: l.channel_id };
   return { direct: l.direct_kwant_id || item.kwant_id };
 }
@@ -231,7 +235,8 @@ export function actionFailureNotice(status: number, serverMessage: string, title
 }
 
 export class AwayError extends Error {
-  constructor(public status: number, message: string) {
+  /** The server's machine-readable `code` (22i dismiss: `not_found`, `person_only`, `use_*`), when it sent one. */
+  constructor(public status: number, message: string, public code: string | null = null) {
     super(message);
   }
 }
@@ -244,13 +249,15 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   });
   if (!res.ok) {
     let message = `Request failed (HTTP ${res.status}).`;
+    let code: string | null = null;
     try {
       const data = await res.json();
       if (data && typeof data.error === 'string' && data.error) message = data.error;
+      if (data && typeof data.code === 'string' && data.code) code = data.code;
     } catch {
       // no JSON body
     }
-    throw new AwayError(res.status, message);
+    throw new AwayError(res.status, message, code);
   }
   return res.json();
 }
@@ -266,10 +273,10 @@ export const awayApi = {
   approvals: (status: string) => call<unknown>('GET', `/api/approvals?status=${enc(status)}`),
   /** 0.9.5: ask again for an approval that expired unanswered (starts a new turn; grants nothing). */
   retryApproval: (approvalId: string) => call<unknown>('POST', `/api/approvals/${enc(approvalId)}/retry`),
-  /** 22i: Retry on a stopped item, server side (resends the person's message in that chat). */
-  retryWaiting: (id: string) => call<unknown>('POST', `/api/waiting/${enc(id)}/retry`),
-  /** 22i: "Done, clear it" (the person only): closes one item kwant can't close by itself. */
-  dismiss: (id: string) => call<unknown>('POST', `/api/waiting/${enc(id)}/dismiss`),
+  /** 22i: Retry on a failed task or routine run that names its task (`missions` retry_task). */
+  retryTask: (taskId: string) => call<unknown>('POST', `/api/tasks/${enc(taskId)}/retry`),
+  /** 22i: "Done, clear it" (the person only, Lin #700): closes one item kwant can't close by itself. */
+  dismiss: (id: string, kind: string) => call<unknown>('POST', `/api/waiting/${enc(id)}/dismiss`, { kind }),
 };
 
 /**

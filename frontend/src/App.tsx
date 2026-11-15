@@ -152,7 +152,7 @@ import {
   turnsAwaitingAnswer,
 } from './questions';
 import { AwayError, AwayItem, affectsAway, awayApi } from './away';
-import { asksHere, openTarget as askOpenTarget, resendTarget, type AskAction, type Here } from './askHere';
+import { asksHere, closedId, isHandOff, dismissKind, dropClosed, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
 import { NeedsYouStrip } from './components/NeedsYouStrip';
 import { chainBudgetApi } from './chainBudget';
 import { needsYouRows, attentionRows } from './chatsTab';
@@ -625,20 +625,22 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [awayWaiting, setAwayWaiting] = useState(0);
   /** What waits on you right now (approvals, questions), for the phone Chats tab's Needs you. */
   const [awayList, setAwayItems] = useState<AwayItem[]>([]);
+  /** H5: unseen failed and finished items (ranks 2 and 3), and whether the first fetch has landed. */
+  const [awayDone, setAwayDone] = useState<{ failed: AwayItem[]; finished: AwayItem[] } | null>(null);
   // 22i: items the person just resolved from the strip go from the row and the strip at once; an id
   // leaves this set once the server's list no longer has it.
   const [clearedAsks, setClearedAsks] = useState<ReadonlySet<string>>(() => new Set());
   const awayItems = useMemo(() => (clearedAsks.size ? awayList.filter((i) => !clearedAsks.has(i.id)) : awayList), [awayList, clearedAsks]);
+  // Rank-2 failed rows, minus any just cleared (a failed hand-off's "Done, clear it").
+  const awayFailed = useMemo(() => (awayDone?.failed ?? []).filter((i) => !clearedAsks.has(i.id)), [awayDone, clearedAsks]);
   useEffect(() => {
     setClearedAsks((prev) => {
       if (!prev.size) return prev;
-      const live = new Set(awayList.map((i) => i.id));
+      const live = new Set([...awayList, ...(awayDone?.failed ?? [])].map((i) => i.id));
       const next = new Set([...prev].filter((id) => live.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [awayList]);
-  /** H5: unseen failed and finished items (ranks 2 and 3), and whether the first fetch has landed. */
-  const [awayDone, setAwayDone] = useState<{ failed: AwayItem[]; finished: AwayItem[] } | null>(null);
+  }, [awayList, awayDone]);
   /** H5: when the person last opened each bot's chat (a finished item older than that is read). */
   const [openedAt, setOpenedAt] = useState<Record<string, number>>({});
   // H4 (#499): each bot's status from the server; null on an older server (today's lines stay).
@@ -1285,6 +1287,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     sse.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data);
+        if (event.type === 'waiting_updated' || event.type === 'WaitingUpdated') {
+          // 22i (#700): a closed item leaves Needs attention and the strip now; an open one comes with the refetch.
+          const gone = closedId(event.data);
+          if (gone) {
+            setAwayItems((prev) => dropClosed(prev, gone));
+            setAwayDone((prev) => (prev ? { failed: dropClosed(prev.failed, gone), finished: prev.finished } : prev));
+          }
+        }
         if (affectsAway(event.type)) refreshAwayCount(800);
         if (changesBots(event.type, event.data)) {
           setRosterFresh(false);
@@ -4138,7 +4148,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     ? attentionRows({
         kwants,
         needs: needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))),
-        failed: awayDone.failed,
+        failed: awayFailed,
         finished: awayDone.finished,
         busy: busyKwants,
         status: botStatus,
@@ -4288,7 +4298,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // list as the Needs-attention rows, so both go the moment the item closes.
   const askHere: Here | null =
     page !== 'chat' || !selectedId ? null : openThreadId ? { thread: openThreadId, kwant: selectedId } : isChannel ? { channel: selectedId } : { direct: selectedId };
-  const asks = asksHere(awayItems, askHere);
+  // A failed hand-off or run also shows on its thread's strip (#700: Retry with a board task, else Done only).
+  const asks = asksHere([...awayItems, ...awayFailed.filter(isHandOff)], askHere);
   const askHereKey = !askHere ? '' : 'thread' in askHere ? `t:${askHere.thread}` : 'channel' in askHere ? `c:${askHere.channel}` : `d:${askHere.direct}`;
   const runAsk = async (item: AwayItem, action: AskAction) => {
     playSfx('click');
@@ -4304,14 +4315,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       if (item.retry?.type !== 'approval') throw new Error('this ask has no approval to ask again');
       await awayApi.retryApproval(item.retry.approval_id);
     } else if (action === 'continue') {
-      if (!item.message_id) throw new Error('its notice is gone, so write in the chat to carry on');
+      if (!item.message_id) throw new Error('its notice isn’t in this chat anymore');
       await chainBudgetApi.continue(item.message_id);
     } else {
-      // Retry: the server's own when it has one (Lin, 22i), else the chat's resend of the person's message.
-      try {
-        await awayApi.retryWaiting(item.id);
-      } catch (e) {
-        if (!(e instanceof AwayError && (e.status === 404 || e.status === 405))) throw e;
+      // Retry (#700 has no /api/waiting/:id/retry): an approval that ran out asks again, a failed task
+      // or run retries its task, a stopped turn or reply sends the person's last message again.
+      const route = retryRoute(item);
+      if (!route) throw new Error('there’s nothing here to run again');
+      if (route.via === 'approval') await awayApi.retryApproval(route.id);
+      else if (route.via === 'task') await awayApi.retryTask(route.id);
+      else {
         const target = resendTarget(messages, item.message_id);
         if (!target) throw new Error('there’s no message of yours here to send again');
         const sent = await handleSendMessage(target.text, target.attachments);
@@ -4322,15 +4335,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     // Sent: the strip waits for the close event (design.md §2); the list refreshes in case it was missed.
     refreshAwayCount(300);
   };
-  const dismissAsk = async (item: AwayItem) => {
-    if (item.human_step_id) {
+  const dismissAsk = async (item: AwayItem): Promise<{ use: AskAction } | void> => {
+    if (item.human_step_id && item.dismissable === undefined) {
+      // An older server: a browser step clears by marking it done.
       const err = await answerHumanStep(item.human_step_id, 'done');
       if (err) throw new Error(err);
     } else {
       try {
-        await awayApi.dismiss(item.id);
+        await awayApi.dismiss(item.id, dismissKind(item));
       } catch (e) {
-        if (e instanceof AwayError && (e.status === 404 || e.status === 405)) throw new Error('this version can’t clear it yet. Update the app, or resolve it in the chat');
+        if (!(e instanceof AwayError)) throw e;
+        // 409: it has its own answer, which tells the bot; the strip switches to that button.
+        const use = e.status === 409 ? switchFor(e.code) : null;
+        if (use) return { use };
+        if (e.code === 'person_only') throw new Error('only you can clear it, from your own sign-in');
+        if (e.code === 'not_found') {
+          // Already gone on the server: it leaves the row and the strip now.
+          setClearedAsks((prev) => new Set(prev).add(item.id));
+          refreshAwayCount(300);
+          return;
+        }
+        if (e.status === 404 || e.status === 405) throw new Error('this version can’t clear it yet. Update the app, or resolve it in the chat');
         throw e;
       }
     }

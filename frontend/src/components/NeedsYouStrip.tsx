@@ -11,6 +11,8 @@ import {
   askHint,
   askKind,
   askLine,
+  canClear,
+  retryRoute,
   failLine,
   stripHeading,
   stripIndex,
@@ -22,8 +24,11 @@ export interface NeedsYouStripProps {
   asks: AwayItem[];
   /** Runs Retry, Continue, Ask again or Open the browser step. A throw shows its message as the reason. */
   onAction: (item: AwayItem, action: AskAction) => Promise<unknown> | void;
-  /** "Done, clear it": closes the item (the person only). */
-  onDismiss: (item: AwayItem) => Promise<unknown>;
+  /**
+   * "Done, clear it": closes the item (the person only). Resolves `{ use }` when the server refused it
+   * because the ask has its own answer (#700's 409 `use_*`): the strip switches its button to that one.
+   */
+  onDismiss: (item: AwayItem) => Promise<{ use: AskAction } | void | unknown>;
   /**
    * Go to the question / approval: scroll to its card and ring it, loading history around it when needed.
    * Resolves false when the card can't be found; the strip then offers Open in Inbox. With `quiet`, only
@@ -78,6 +83,9 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const [gone, setGone] = useState(false);
+  // A dismiss the server refused (409 use_*): the ask's own button instead, and no Done.
+  const [switched, setSwitched] = useState<AskAction | null>(null);
+  const actionRef = useRef<HTMLButtonElement | null>(null);
   const sentTimer = useRef<number | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
   const hadFocus = useRef(false);
@@ -120,6 +128,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
       setClearing(false);
       setSent(false);
       setGone(false);
+      setSwitched(null);
       actLock.current = false;
       clearLock.current = false;
       if (sentTimer.current) window.clearTimeout(sentTimer.current);
@@ -168,7 +177,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
     const fresh = asks.find((a) => !was.ids.has(a.id));
     if (fresh) {
       const act = askAction(fresh);
-      say(`${fresh.kwant_name} needs you: ${act ? ACTION_LABEL[act] : 'Done, clear it'}`);
+      say(`${fresh.kwant_name} needs you: ${act ? ACTION_LABEL[act] : canClear(fresh) ? 'Done, clear it' : `write to ${fresh.kwant_name}`}`);
     }
   }, [asks, hereKey]);
   const live = (
@@ -178,7 +187,10 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
   );
 
   if (!item) return live;
-  const action = askAction(item);
+  // A Retry with nowhere to go (a failed hand-off with no board task) isn't offered (Mira's fix 3).
+  const base = askAction(item);
+  const action = switched ?? (base === 'retry' && !retryRoute(item) ? null : base);
+  const clearable = canClear(item) && !switched;
   const n = shown.length;
   const bot = item.kwant_name || 'the bot';
   const heading = stripHeading(shown);
@@ -202,7 +214,14 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
     setClearing(true);
     cleared.current = true;
     try {
-      await onDismiss(item);
+      const r = await onDismiss(item);
+      const use = r && typeof r === 'object' && 'use' in r ? (r as { use: AskAction }).use : null;
+      if (use) {
+        // Not an error: this ask is resolved on its own card, so the button goes there.
+        cleared.current = false;
+        setSwitched(use);
+        window.setTimeout(() => actionRef.current?.focus(), 0);
+      }
     } catch (e) {
       cleared.current = false;
       setError(failLine('dismiss', e instanceof Error && e.message ? e.message : null, bot));
@@ -251,29 +270,41 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
   const Icon = gone ? Inbox : action ? ICON[action] : null;
   const busyAct = acting && resolving;
   const label = gone ? 'Open in Inbox' : action ? (busyAct ? BUSY_LABEL[action] ?? ACTION_LABEL[action] : ACTION_LABEL[action]) : '';
-  const hint = gone ? 'Its card isn’t in this chat anymore.' : sent ? `Sent. This clears once ${bot} answers.` : askHint(item, action, bot);
+  // After a 409 switch: why Done went away (Mira's fix 5).
+  const switchedHint =
+    switched === 'answer'
+      ? 'This one clears when you answer it on its card.'
+      : switched === 'decide'
+        ? 'This one clears when you Allow or Deny it on its card.'
+        : switched === 'browser'
+          ? `This one clears when you finish or decline it in ${bot}’s browser.`
+          : null;
+  const hint = gone ? 'Its card isn’t in this chat anymore.' : sent ? `Sent. This clears once ${bot} answers.` : switchedHint ?? askHint(item, action, bot, clearable);
   const stepBtn =
     'kws-hit inline-flex items-center justify-center w-7 h-7 rounded-lg border border-hairline-strong text-zinc-200 hover:bg-white/[0.08] disabled:opacity-40 disabled:cursor-default kw-focus';
 
   const buttons = (
     <div
       data-strip-buttons
-      className={phone ? 'mt-2.5 flex gap-2' : stacked ? 'mt-2 flex justify-end gap-2' : 'flex items-center gap-2 self-center row-start-2 col-start-2'}
+      className={phone ? `mt-2.5 flex gap-2 ${action === 'browser' && !gone ? 'flex-col-reverse' : ''}` : stacked ? 'mt-2 flex justify-end gap-2' : 'flex items-center gap-2 self-center row-start-2 col-start-2'}
     >
-      <button
-        type="button"
-        data-strip-dismiss
-        disabled={clearing || leaving}
-        aria-busy={clearing || undefined}
-        aria-label="Done, clear it from Needs attention"
-        onClick={() => void clear()}
-        className={`kw-btn-ghost ${btnH} ${phone ? 'flex-1' : ''} disabled:opacity-60 disabled:cursor-default`}
-      >
-        {clearing ? <Loader2 size={13} aria-hidden="true" className="kw-dict-spin" /> : <Check size={13} aria-hidden="true" />}
-        {clearing ? 'Clearing…' : 'Done, clear it'}
-      </button>
+      {clearable && (
+        <button
+          type="button"
+          data-strip-dismiss
+          disabled={clearing || leaving}
+          aria-busy={clearing || undefined}
+          aria-label="Done, clear it from Needs attention"
+          onClick={() => void clear()}
+          className={`kw-btn-ghost ${btnH} ${phone ? 'flex-1' : ''} disabled:opacity-60 disabled:cursor-default`}
+        >
+          {clearing ? <Loader2 size={13} aria-hidden="true" className="kw-dict-spin" /> : <Check size={13} aria-hidden="true" />}
+          {clearing ? 'Clearing…' : 'Done, clear it'}
+        </button>
+      )}
       {action && (
         <button
+          ref={actionRef}
           type="button"
           data-strip-action={gone ? 'inbox' : action}
           disabled={busyAct || clearing || leaving}
@@ -282,7 +313,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
           onClick={() => void act()}
           className={`kw-btn-primary ${btnH} ${phone ? 'flex-[1.4]' : ''} whitespace-nowrap`}
         >
-          {busyAct ? <Loader2 size={14} aria-hidden="true" className="kw-dict-spin" /> : Icon && <Icon size={14} aria-hidden="true" />}
+          {busyAct ? <Loader2 size={14} aria-hidden="true" className="kw-dict-spin shrink-0" /> : Icon && <Icon size={14} aria-hidden="true" className="shrink-0" />}
           {label}
         </button>
       )}
@@ -303,7 +334,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
         onBlur={(e) => {
           if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget as Node)) hadFocus.current = false;
         }}
-        className={`${leaving ? 'kw-needs-leave' : 'kw-pin-enter'} max-w-4xl mx-auto mb-2 rounded-xl border border-amber-300/35 bg-surface-main px-3 py-2.5 outline-none ${
+        className={`${leaving ? 'kw-needs-leave' : 'kw-pin-enter'} max-w-4xl mx-auto mb-2 rounded-xl border border-amber-300/35 bg-surface-main px-3 py-2.5 kw-focus ${
           phone ? 'max-h-[45vh]' : 'max-h-[240px]'
         } overflow-y-auto ${stacked ? '' : 'grid grid-cols-[1fr_auto] gap-x-4'}`}
         style={{ backgroundImage: 'linear-gradient(rgb(252 211 77 / 0.06), rgb(252 211 77 / 0.06))' }}
@@ -315,13 +346,13 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
           </h2>
           {n > 1 && (
             <span className="ml-auto flex items-center gap-1.5 shrink-0" data-strip-steps>
-              <button type="button" className={stepBtn} onClick={() => step(-1)} disabled={i === 0} aria-label="Previous ask">
+              <button type="button" data-compact className={stepBtn} onClick={() => step(-1)} disabled={i === 0} aria-label="Previous ask">
                 <ChevronLeft size={14} aria-hidden="true" />
               </button>
               <span className="text-meta tabular-nums text-zinc-300" aria-live="polite" data-strip-count>
                 {i + 1} of {n}
               </span>
-              <button type="button" className={stepBtn} onClick={() => step(1)} disabled={i === n - 1} aria-label="Next ask">
+              <button type="button" data-compact className={stepBtn} onClick={() => step(1)} disabled={i === n - 1} aria-label="Next ask">
                 <ChevronRight size={14} aria-hidden="true" />
               </button>
             </span>
@@ -347,7 +378,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
             </p>
           )}
         </div>
-        {buttons}
+        {clearable || action ? buttons : null}
       </section>
     </>
   );
