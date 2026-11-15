@@ -267,6 +267,18 @@ pub fn cause_of(conn: &Connection, why: &str) -> Option<Cause> {
     None
 }
 
+/// Whether a finished call's result can say anything about its connection. A card the person
+/// declined, or a call the turn's end cut off, isn't the connection's; nor is a call the repeat
+/// guard (15c) didn't send, whose earlier failures were already counted.
+pub fn about_the_connection(result: &Value) -> bool {
+    let status = result["status"].as_str().unwrap_or("");
+    if matches!(status, "denied" | "cancelled" | "unanswered") || result.get("repeat_stopped").is_some() {
+        return false;
+    }
+    // 18a: the claude CLI's result of a stopped own-tool call is just its text
+    !crate::drivers::activity::failed_reason(result).flatten().is_some_and(crate::mcp::repeat_guard::is_stop_text)
+}
+
 /// A failed call → the connection failure it is, if any.
 pub fn classify(name: &str, args: &Value, why: &str, servers: &[Server]) -> Option<Failure> {
     let conn = connection_of(name, args, servers)?;
@@ -546,9 +558,7 @@ impl TurnWatch {
                 let Some((name, args)) = self.lock().calls.remove(id) else {
                     return;
                 };
-                let status = result["status"].as_str().unwrap_or("");
-                // A card the person declined, or a call the turn's end cut off, isn't the connection's
-                if matches!(status, "denied" | "cancelled" | "unanswered") {
+                if !about_the_connection(result) {
                     return;
                 }
                 let why = crate::drivers::activity::failed_reason(result);

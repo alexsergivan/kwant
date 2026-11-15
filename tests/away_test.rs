@@ -396,6 +396,7 @@ async fn live_approval(app: &Router, state: &AppState, kwant: &kwnt::db::models:
         state: "running".into(),
         since: Utc::now(),
         purpose: None,
+        audit: None,
     });
     let ask = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
         "arguments": {"tool_name": tool, "input": input, "tool_use_id": "tu_1"}}});

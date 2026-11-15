@@ -26,6 +26,10 @@ pub const INHERIT: &str = "inherit";
 /// How long a card that outlived its turn can still be answered to resume the work.
 pub const WAITING_APPROVAL_HOURS: i64 = 24;
 
+/// The status of an approvals record for a customer-turn call nobody allowed (16d): closed from
+/// the start, nothing to answer.
+pub const CUSTOMER_REFUSED: &str = "refused";
+
 /// What `approvals` resolves to for one bot.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ApprovalMode {
@@ -376,6 +380,23 @@ impl Database {
             .bind(&input.kwant_id)
             .bind(&input.tool_name)
             .bind(serde_json::to_string(&input.parameters)?)
+            .execute(&self.pool)
+            .await?;
+        Ok(id)
+    }
+
+    /// Records a call in a customer's turn that kwnt's tool endpoint refused because nobody allowed
+    /// it (16d), as [`CUSTOMER_REFUSED`]: already closed, so it is never a card, never answered and
+    /// never resumed. It only shows in the bot's approvals list. Its id.
+    pub async fn save_customer_refused(&self, input: &super::models::NewApproval) -> Result<String, DbError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(&id)
+            .bind(&input.turn_id)
+            .bind(&input.kwant_id)
+            .bind(&input.tool_name)
+            .bind(serde_json::to_string(&input.parameters)?)
+            .bind(CUSTOMER_REFUSED)
             .execute(&self.pool)
             .await?;
         Ok(id)
