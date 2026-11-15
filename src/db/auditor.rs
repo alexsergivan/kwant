@@ -62,6 +62,16 @@ impl Risk {
     }
 }
 
+/// A routine's latest audit (see [`Database::last_routine_audit`]).
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct RoutineAudit {
+    pub audit_id: String,
+    pub task_id: String,
+    pub created_at: DateTime<Utc>,
+    /// The routine's fingerprint when it was audited ([`crate::server::missions::auditor::routine_fingerprint`]).
+    pub fingerprint: Option<String>,
+}
+
 /// A challenge's risk before it's stored.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRisk {
@@ -212,6 +222,25 @@ impl Database {
     pub async fn audits_since(&self, since: DateTime<Utc>) -> Result<i64, DbError> {
         let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM task_audits WHERE created_at >= ?").bind(since).fetch_one(&self.pool).await?;
         Ok(n)
+    }
+
+    /// The latest audit of any run of `routine_id` that checked (or is checking) it: queued, in a
+    /// stage or done, not skipped, failed or interrupted. With the routine fingerprint its
+    /// `audit_started` event recorded (`None` for audits from before 14a).
+    pub async fn last_routine_audit(&self, routine_id: &str) -> Result<Option<RoutineAudit>, DbError> {
+        Ok(sqlx::query_as::<_, RoutineAudit>(
+            "SELECT a.id AS audit_id, a.task_id, a.created_at, \
+               (SELECT json_extract(e.detail, '$.routine_fp') FROM task_events e \
+                 WHERE e.task_id = a.task_id AND e.kind = 'audit_started' AND json_valid(e.detail) \
+                   AND json_extract(e.detail, '$.audit_id') = a.id LIMIT 1) AS fingerprint \
+             FROM task_audits a JOIN tasks t ON t.id = a.task_id AND t.source_kind = 'routine' \
+             JOIN routine_runs r ON r.id = t.source_id \
+             WHERE r.routine_id = ? AND a.status IN ('queued', 'challenge', 'rebuttal', 'done') \
+             ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1",
+        )
+        .bind(routine_id)
+        .fetch_optional(&self.pool)
+        .await?)
     }
 
     /// How many audits each bot challenged since `since`.

@@ -493,6 +493,7 @@ async fn a_shared_screenshot_posts_as_the_bot_and_counts_for_the_turn() {
         state: "running".into(),
         since: chrono::Utc::now(),
         purpose: None,
+        audit: None,
     });
     let scope = SelfScope {
         kwant_id: env.a.clone(),
