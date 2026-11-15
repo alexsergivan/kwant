@@ -7,6 +7,7 @@
 // Needs playwright-core and a Chromium: PLAYWRIGHT_CORE=/path/to/playwright-core/index.mjs CHROMIUM=/path/to/chrome
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +21,9 @@ const RATE = Number(arg('rate', 50));
 const WIDTH = Number(arg('width', 1280));
 const SHOT = arg('shot', '');
 const LABEL = arg('label', '');
+// 15a: --end-shot after the last token (still streaming), --final-shot once the saved reply has landed.
+const END_SHOT = arg('end-shot', '');
+const FINAL_SHOT = arg('final-shot', '');
 const { chromium } = await import(process.env.PLAYWRIGHT_CORE ?? '/home/maus/work/iris-ft-shots/node_modules/playwright-core/index.mjs');
 const exe = process.env.CHROMIUM ?? '/home/maus/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux-arm64/chrome-headless-shell';
 
@@ -87,13 +91,15 @@ const out = await page.evaluate(() => {
   const m = window.__m;
   m.on = false;
   const over50First = m.frames.slice(0, Math.floor(m.frames.length / 2)).filter((x) => x > 50).length;
+  // The reply's second half (by frame order): where a growing reply costs most (15a).
+  const second = m.frames.slice(Math.floor(m.frames.length / 2));
   const f = m.frames.slice().sort((a, b) => a - b);
   const pct = (p) => f[Math.min(f.length - 1, Math.floor((f.length * p) / 100))] ?? 0;
   // The streamed text's last words are on screen once the stream ends (nothing late or lost).
   const words = window.__harness.streamed().match(/[A-Za-z]{5,}/g) ?? [];
   const tail = words.slice(-3).join(' ');
   const shown = [...document.querySelectorAll('.markdown-content')].map((e) => e.textContent).join(' ').match(/[A-Za-z]{5,}/g) ?? [];
-  return { over50First, commits: m.commits, frames: f.length, longest: f[f.length - 1] ?? 0, p95: pct(95), over50: f.filter((x) => x > 50).length, tail, tailShown: shown.join(' ').includes(tail) };
+  return { over50First, commits: m.commits, frames: f.length, longest: f[f.length - 1] ?? 0, p95: pct(95), over50: f.filter((x) => x > 50).length, tail, tailShown: shown.join(' ').includes(tail), secondFrames: second.length, secondLongest: Math.max(0, ...second) };
 });
 const secs = sent.ms / 1000;
 const result = {
@@ -114,10 +120,22 @@ const result = {
   framesOver50: out.over50,
   over50FirstHalf: out.over50First,
   over50SecondHalf: out.over50 - out.over50First,
+  secondHalfFrames: out.secondFrames,
+  secondHalfLongestMs: Math.round(out.secondLongest),
+  over50SecondHalfPct: out.secondFrames ? +((100 * (out.over50 - out.over50First)) / out.secondFrames).toFixed(2) : 0,
+  load: os.loadavg().map((x) => +x.toFixed(2)),
   frames: out.frames,
   lastWordsShown: out.tailShown,
   errors,
 };
 console.log(JSON.stringify(result));
+if (END_SHOT) await page.screenshot({ path: END_SHOT });
+if (FINAL_SHOT) {
+  await page.evaluate(() => window.__harness.finish());
+  await page.waitForSelector('[data-message-id="m-final"]', { timeout: 30000 });
+  await page.waitForFunction(() => !document.querySelector('[data-live-bubble-body]'), null, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: FINAL_SHOT });
+}
 await browser.close();
 server.close();
