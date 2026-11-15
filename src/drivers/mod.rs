@@ -980,6 +980,12 @@ pub trait Driver: Send + Sync {
     fn streams_progress(&self) -> bool {
         false
     }
+
+    /// Whether this driver's engine has no file tools of its own, so kwant offers the bot
+    /// `read_file`/`list_dir` on its own folder (#715). CLI engines read with their own tools.
+    fn needs_folder_tools(&self) -> bool {
+        false
+    }
 }
 
 /// The driver for a turn on `target_model` without a profile, and the engine it runs on: the

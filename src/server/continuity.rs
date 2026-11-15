@@ -409,6 +409,18 @@ pub struct SelfScope {
     /// [`self_endpoint`], past `McpToolSession::call`'s guard; every clone of this turn's scope
     /// shares this one, and it goes when `finish_turn` drops the scope.
     pub repeats: Arc<crate::mcp::repeat_guard::RepeatGuard>,
+    /// #715: the engine this turn runs on now has no file tools of its own (an API engine), so
+    /// `read_file`/`list_dir` on the bot's own folder ([`super::bot_files`]) are offered. Set per
+    /// engine attempt by the chat turn (a failover can move a turn from an API engine to a CLI);
+    /// every clone of the turn's scope shares it. Off by default: CLI engines read with their own tools.
+    pub folder_tools: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl SelfScope {
+    /// Whether this turn is offered `read_file`/`list_dir` on its bot's own folder (see `folder_tools`).
+    pub fn offers_folder_tools(&self) -> bool {
+        self.folder_tools.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// Where a turn runs, for the delegation tools: results go back to this chat.
@@ -474,6 +486,8 @@ pub(crate) const READ_ONLY_SELF_TOOLS: &[&str] = &[
     "hire_status",
     "list_attachments",
     "read_attachment",
+    super::bot_files::READ_FILE,
+    super::bot_files::LIST_DIR,
     "mcp_search",
     super::page_source::TOOL,
     "skill_get",
@@ -638,6 +652,9 @@ fn tool_list(scope: &SelfScope, board: bool, notes: bool) -> Value {
         list.extend(super::smart_results::present_result_tools());
         list.extend(super::mcp_suggest::tools());
         list.extend(super::page_source::tools());
+        if scope.offers_folder_tools() {
+            list.extend(super::bot_files::tools());
+        }
         if notes {
             list.push(super::tool_notes::tool());
         }
@@ -1318,6 +1335,20 @@ async fn call_tool(
         });
     };
     match name {
+        // #715: the bot's own folder, read-only, on engines without file tools of their own
+        n if super::bot_files::is_tool(n) => {
+            if !scope.offers_folder_tools() {
+                return (format!("{n} isn't offered on this engine: read files with your own tools."), true);
+            }
+            let Some(space) = db.space_of_kwant(&scope.kwant_id).await.ok().flatten() else {
+                return ("I couldn't find your space.".into(), true);
+            };
+            let folder = crate::tools::bot_workspace(&crate::db::spaces::space_data_dir(&state.config.data_dir, &space), &scope.kwant_id);
+            match super::bot_files::run(&folder, n, args) {
+                Ok(text) => (text, false),
+                Err(e) => (e, true),
+            }
+        }
         "search_history" => {
             let Some(query) = str_arg("query") else {
                 return ("query is required".into(), true);
@@ -2346,6 +2377,7 @@ mod tests {
             workspace: None,
             sandbox_target: browser.then(|| "t".into()),
             repeats: Default::default(),
+            folder_tools: Default::default(),
         }
     }
 
@@ -2356,6 +2388,34 @@ mod tests {
             .iter()
             .filter_map(|t| t["name"].as_str().map(String::from))
             .collect()
+    }
+
+    /// #715: only a turn on an engine without file tools (an API engine) is offered the bot's
+    /// folder, once; a CLI turn (claude, codex, grok) gets nothing new next to its own Read/read_file.
+    #[test]
+    fn only_api_engine_turns_are_offered_the_folder_tools_once() {
+        let cli = sign_in_scope(true, true, true);
+        let list = names(&cli);
+        assert!(!list.iter().any(|n| n == "read_file" || n == "list_dir" || n == "write_file"), "{list:?}");
+        let api = sign_in_scope(true, true, true);
+        api.folder_tools.store(true, std::sync::atomic::Ordering::Relaxed);
+        let list = names(&api);
+        for tool in ["read_file", "list_dir"] {
+            assert_eq!(list.iter().filter(|n| *n == tool).count(), 1, "{tool}: {list:?}");
+        }
+        assert!(!list.iter().any(|n| n == "write_file"), "read-only: {list:?}");
+        let mut unique = list.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), list.len(), "no tool name twice: {list:?}");
+        // Every clone of a turn's scope sees the attempt's engine (the registered one is a clone)
+        let registered = cli.clone();
+        cli.folder_tools.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(registered.offers_folder_tools());
+        cli.folder_tools.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(!names(&registered).iter().any(|n| n == "read_file"));
+        // Reads of the bot's own folder are free even in an always-ask turn
+        assert!(READ_ONLY_SELF_TOOLS.contains(&"read_file") && READ_ONLY_SELF_TOOLS.contains(&"list_dir"));
     }
 
     #[test]

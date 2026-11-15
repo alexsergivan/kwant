@@ -429,7 +429,7 @@ const DEFER_TOOLS_ABOVE_CHARS: usize = 12_000;
 const UPFRONT_TOOLS_CHARS: usize = 8_000;
 /// kwnt's own tools a turn always gets in full: talking to the person, memory, teammates, the
 /// browser and files. The rest (routines, bots, spaces, settings, …) are a lookup away.
-const CORE_SELF_TOOLS: [&str; 13] = [
+const CORE_SELF_TOOLS: [&str; 15] = [
     "ask_user",
     "search_history",
     "memory_add",
@@ -443,6 +443,8 @@ const CORE_SELF_TOOLS: [&str; 13] = [
     "list_attachments",
     "read_attachment",
     "share_file",
+    "read_file",
+    "list_dir",
 ];
 const FIND_TOOLS: &str = "kwnt_find_tools";
 const CALL_TOOL: &str = "kwnt_call_tool";
@@ -1629,6 +1631,11 @@ impl Driver for ApiDriver {
             tokens_used: tokens,
             ..Default::default()
         })
+    }
+
+    /// An API turn's only tools are kwant's and its MCP servers': no shell, no file reads (#715)
+    fn needs_folder_tools(&self) -> bool {
+        true
     }
 }
 
