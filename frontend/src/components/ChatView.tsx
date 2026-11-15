@@ -206,6 +206,13 @@ export interface RoutingState {
   basis?: string;
 }
 
+// One reply row geometry, shared by the live row and the finished one (16a), so a reply lands without a shift:
+// a 36 px avatar column from sm up, a 20 px avatar in the name line on phones, and the same bubble padding.
+const REPLY_AVATAR = 36;
+const REPLY_AVATAR_PHONE = 20;
+const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
+const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
+
 export interface ChatViewProps {
   /** H3: a line under the person's held message ("Waiting for Juno: …", Try again), by message id. */
   heldNotes?: Record<string, React.ReactNode>;
@@ -769,6 +776,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (liveTurnId) setTrailFrom(null);
   }, [liveTurnId]);
   const liveSpeaker = streamingSpeakerName || title;
+  // Who the live row shows: the current speaker in a discussion, else the replying bot.
+  const liveName = discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : liveSpeaker;
   const livePages = useMemo(() => pagesOfReply(liveActivity?.steps), [liveActivity?.steps]);
   const savedTrail = useMemo((): { id: string; bot: string; pages: ReplyPage[] } | null => {
     const from = (m: ChatMessage) => {
@@ -906,10 +915,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useLayoutEffect(() => {
     if (!streamProp) propStream.show({ text: streamingTextProp, thinking: streamingThinkingProp });
   }, [streamProp, propStream, streamingTextProp, streamingThinkingProp]);
-  // From here on these only say whether the reply has words (a thinking line) yet; they flip once per reply.
+  // Whether the reply is writing (has words) or thinking (has a thinking line) yet; each flips once per reply.
   // The words themselves reach StreamPart alone.
-  const streamingText = useStreamWriting(stream) || (!streamProp && !!streamingTextProp);
-  const streamingThinking = useStreamThinking(stream) || (!streamProp && !!streamingThinkingProp);
+  const writing = useStreamWriting(stream) || (!streamProp && !!streamingTextProp);
+  const thinking = useStreamThinking(stream) || (!streamProp && !!streamingThinkingProp);
   const lastScrollTopRef = useRef(0);
   // The empty chat's home opens at its top: on a phone a team home is taller than the screen, and its faces come first (13d).
   const homeShowingRef = useRef(false);
@@ -944,7 +953,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // (`phone` is the A1 PHONE_QUERY flag above).
   const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
   // What the live bubble holds before its first words: a pending approval reads as "waiting for your OK", not loading.
-  const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing: streamingText });
+  const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing });
   // The strip's "Answer ↑": the open question card, else the approval card, fully in view.
   const showWaitingCard = (on: 'question' | 'approval') => {
     if (on === 'approval') return showApproval();
@@ -964,7 +973,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     awaitingBrowser: !!awaitingBrowser,
     approvalOpen: pendingApprovals.length > 0,
     queued: !!queued,
-    writing: streamingText,
+    writing,
   });
   // Team words ("Stop team", the rail) only for a team turn; a single bot asking in a channel gets "Stop".
   const teamChat = isTeamTurn(home?.kind, !!discussionState?.inProgress);
@@ -991,7 +1000,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       queued={!!queued}
       awaitingAnswer={!!awaitingAnswer}
       awaitingBrowser={!!awaitingBrowser}
-      writing={streamingText}
+      writing={writing}
       // 22i: one ask gets one button. While the Needs-you strip shows it, the strip's Go to … is that button.
       onAnswer={needsYouOpen ? undefined : showWaitingCard}
       onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
@@ -1043,7 +1052,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
     checkApprovalVisible();
-  }, [messages, streamingText, streamingThinking, approvalKey, routingState, queued, contextKey]);
+  }, [messages, writing, thinking, approvalKey, routingState, queued, contextKey]);
   // Each streamed update (at most one a frame) keeps the bottom pinned while the person follows the chat.
   const onStreamGrowRef = useRef(() => {});
   onStreamGrowRef.current = () => {
@@ -1780,7 +1789,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <ModernAvatar
               role={isUser ? 'user' : title}
               name={displayName}
-              size={36}
+              size={REPLY_AVATAR}
               kwantId={replyKwantId}
               modelBadge={false}
             />
@@ -1802,7 +1811,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={20} kwantId={replyKwantId} modelBadge={false} /></span>}
+              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
               ranOn={ranOn}
               account={account}
               tokens={tokens}
@@ -1880,12 +1889,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
           })()}
           <div
-            className={`px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
+            className={`${REPLY_BUBBLE} ${
               isUser
                 ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
                 : workAhead
                   ? 'bg-indigo-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-indigo-400/25'
-                  : 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80'
+                  : REPLY_BUBBLE_BOT
             }`}
             data-work-ahead={workAhead ? '' : undefined}
           >
@@ -2480,27 +2489,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && !deciding && routingState?.phase !== 'deciding' && !askOnly && (
-          <div className="flex items-start gap-3.5 w-full max-w-5xl">
-            <ModernAvatar
-              role={
-                discussionState?.inProgress && discussionState.currentSpeaker
-                  ? discussionState.currentSpeaker
-                  : streamingSpeakerName || title
-              }
-              name={
-                discussionState?.inProgress && discussionState.currentSpeaker
-                  ? discussionState.currentSpeaker
-                  : streamingSpeakerName || title
-              }
-              size={34}
-            />
+          <div className="flex items-start gap-3.5 w-full max-w-5xl" data-live-row="">
+            {/* The finished reply's geometry (16a): avatar column from sm up, in the name line on phones */}
+            <span className="hidden sm:contents">
+              <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR} />
+            </span>
             <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
               <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
-                <span className="text-zinc-200">
-                  {discussionState?.inProgress && discussionState.currentSpeaker
-                    ? discussionState.currentSpeaker
-                    : streamingSpeakerName || title}
+                <span className="sm:hidden shrink-0 inline-flex">
+                  <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR_PHONE} />
                 </span>
+                <span className="text-zinc-200">{liveName}</span>
                 {queued ? (
                   <span className="inline-flex items-center gap-1 text-zinc-400 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" aria-hidden="true" />
@@ -2534,7 +2533,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 />
               )}
 
-              {streamingThinking && (
+              {thinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
                   <Sparkles size={13} className="text-violet-400 flex-shrink-0" />
                   <span className="truncate"><StreamPart stream={stream} part="thinking" onGrow={onStreamGrow} /></span>
@@ -2542,14 +2541,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
 
               {/* On a phone the strip says "working" and "waiting": no skeleton, no "Paused on…" bubble. */}
-              {(!phone || queued || streamingText) && (
-              <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full" data-live-bubble-body="">
+              {(!phone || queued || writing) && (
+              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT}`} data-live-bubble-body="">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
                     {queuedText(queued.reason, queued.slots)}
                   </p>
-                ) : streamingText ? (
+                ) : writing ? (
                   /* The scene's 62 px holds under the first words (kw-wa-hold, in StreamPart), so the bubble does not jump; they fade in once. */
                   <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
                 ) : awaitingAnswer ? (

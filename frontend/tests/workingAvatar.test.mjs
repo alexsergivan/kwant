@@ -61,7 +61,7 @@ test('queued and paused bubbles keep their text and do not hold the scene height
     'Paused on the approval below. Allow or deny it there; this reply carries on from it.',
   ]) assert.ok(chat.includes(s), s);
   assert.equal((chat.match(/kw-wa-hold/g) ?? []).length, 2, 'only the first-words wrapper (and its comment) name the hold');
-  assert.match(chat, /\{\(!phone \|\| queued \|\| streamingText\) && \(/, 'phones keep the strip, no bubble');
+  assert.match(chat, /\{\(!phone \|\| queued \|\| writing\) && \(/, 'phones keep the strip, no bubble');
 });
 
 test('motion is CSS keyframes on transform and opacity only, no JS timers, a 2.4 s loop', () => {
