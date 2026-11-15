@@ -6,6 +6,8 @@ import test from 'node:test';
 import { loadBundled } from './bundle.mjs';
 
 globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
+// CI runs Node 20, which has no global navigator (Node 21+ does); the Sidebar's InstallAppButton reads it.
+globalThis.navigator ??= { userAgent: 'test' };
 
 const m = await loadBundled(`
   import React from 'react';
