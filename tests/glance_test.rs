@@ -666,6 +666,42 @@ async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
     }
 }
 
+/// 21a: through the glance, ordinary reads of mail, files, posts and payments keep Allow once, and
+/// a name that acts on them still says it acts outside kwant.
+#[tokio::test]
+async fn reads_of_mail_files_and_payments_keep_allow_once_on_the_island() {
+    use kwnt::server::glance::OUTWARD;
+    let (app, state, _tmp) = setup().await;
+    let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].clone();
+    let mcp = |server: &str, tool: &str, args: Value| json!({"source": "mcp", "server": server, "tool": tool, "arguments": args});
+    let rows: Vec<(&str, Value, bool)> = vec![
+        ("GMAIL_FETCH_EMAILS", mcp("composio", "GMAIL_FETCH_EMAILS", json!({"max_results": 10})), true),
+        ("DROPBOX_LIST_FILES", mcp("composio", "DROPBOX_LIST_FILES", json!({"path": "/"})), true),
+        ("WORDPRESS_GET_POST", mcp("composio", "WORDPRESS_GET_POST", json!({"post_id": 7})), true),
+        ("get_payment_status", mcp("stripe", "get_payment_status", json!({"id": "pi_1"})), true),
+        ("rollout_status", mcp("ci", "rollout_status", json!({})), true),
+        ("GMAIL_SEND_EMAIL", mcp("composio", "GMAIL_SEND_EMAIL", json!({"to": "a@example.com"})), false),
+        ("find_and_share_file", mcp("drive", "find_and_share_file", json!({})), false),
+        ("pay_invoice", mcp("stripe", "pay_invoice", json!({"id": "in_1"})), false),
+        ("get_post with a POST body", mcp("x", "get_post", json!({"url": "https://api.example.com/posts", "method": "POST", "body": {"t": "x"}})), false),
+    ];
+    let mut made = Vec::new();
+    for (name, details, _) in &rows {
+        let tool = details["tool"].as_str().unwrap().to_string();
+        made.push((name, approval(&state, &bot.id, &tool, details.clone()).await));
+    }
+    let (v, _) = glance(&app).await;
+    for ((name, (id, _rx)), (_, _, inline)) in made.iter().zip(&rows) {
+        let a = &find(&v["needs_you"], id)["approval"];
+        assert_eq!(a["can_allow_inline"], *inline, "{name}: {a}");
+        if *inline {
+            assert!(a["why_open"].is_null(), "{name}: {a}");
+        } else {
+            assert_eq!(a["why_open"], OUTWARD, "{name}: {a}");
+        }
+    }
+}
+
 /// 18c: every row Rigel's r10/r11 still allowed at 253bacc9 ("Still allowed after 253bacc9" in
 /// desktop-island/qa-server-review.md), with the reason the island now gives, and the steps that
 /// must keep Allow once. Same details as his probes. The Telegram column is `ships_or_runs`: only
