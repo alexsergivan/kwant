@@ -74,6 +74,12 @@ test('closed and stale cards', () => {
   assert.match(ui.render(props({ live: rec({ status: 'done' }) })), /Done\. Pixel is carrying on/);
   assert.match(ui.render(props({ live: rec({ status: 'declined' }) })), /Skipped/);
   assert.match(ui.render(props({ live: rec({ status: 'cancelled' }) })), /reply was stopped/);
+  // 22m: a file sent while the bot waited closes the card, and it never reads "done"
+  const left = ui.render(props({ live: rec({ status: 'left_for_message' }) }));
+  assert.doesNotMatch(left, /<button/);
+  assert.match(left, /Closed: Pixel is reading the file you sent\./);
+  assert.doesNotMatch(left, /Done|carrying on|waiting for you/);
+  assert.equal(h.parseHumanStepMeta(meta({ status: 'left_for_message' })).status, 'left_for_message');
   assert.match(ui.render(props({ waiting: false })), /stopped waiting/);
   assert.match(ui.render(props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })) })), /spotted automatically/);
 });
@@ -113,6 +119,7 @@ test('card icons never shrink when a line wraps on a phone (shrink-0 on every ic
     'done': props({ live: rec({ status: 'done' }) }),
     'skipped': props({ live: rec({ status: 'declined' }) }),
     'cancelled': props({ live: rec({ status: 'cancelled' }) }),
+    'left for a file': props({ live: rec({ status: 'left_for_message' }) }),
   };
   const seen = new Set();
   for (const [name, p] of Object.entries(cards)) {

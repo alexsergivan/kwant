@@ -4,7 +4,8 @@ import { parseMetaObject } from './questions';
 import { request } from './threads';
 
 export type HumanStepKind = 'sign_in' | 'captcha' | 'two_factor' | 'other';
-export type HumanStepStatus = 'open' | 'done' | 'declined' | 'cancelled' | 'resolved_auto' | 'timed_out';
+/** `left_for_message` (22m): the person sent a file while the bot waited, so the card closed and the bot reads it. */
+export type HumanStepStatus = 'open' | 'done' | 'declined' | 'cancelled' | 'resolved_auto' | 'timed_out' | 'left_for_message';
 
 /** Where a CAPTCHA widget sits on the bot's page, in page pixels (1280×800). */
 export interface CaptchaTarget {
@@ -53,7 +54,7 @@ export interface HumanStepMeta {
 }
 
 const STEP_KINDS: HumanStepKind[] = ['sign_in', 'captcha', 'two_factor', 'other'];
-const STATUSES: HumanStepStatus[] = ['open', 'done', 'declined', 'cancelled', 'resolved_auto', 'timed_out'];
+const STATUSES: HumanStepStatus[] = ['open', 'done', 'declined', 'cancelled', 'resolved_auto', 'timed_out', 'left_for_message'];
 const kindOf = (v: unknown): HumanStepKind => (STEP_KINDS.includes(v as HumanStepKind) ? (v as HumanStepKind) : 'other');
 const statusOf = (v: unknown): HumanStepStatus => (STATUSES.includes(v as HumanStepStatus) ? (v as HumanStepStatus) : 'open');
 
