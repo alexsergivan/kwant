@@ -1,0 +1,49 @@
+{
+  "version": "0.9.14",
+  "date": "2026-11-15",
+  "highlights": [
+    {
+      "id": "desktop-places",
+      "title": "Switch between This Mac and your servers",
+      "text": "Press ⌘⇧O (Ctrl+Shift+O on Windows and Linux) and pick a place. The window switches in place, and the place you left stays connected, so its nudges still reach you.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "continue-chat",
+      "title": "Continue a chat in a new one",
+      "text": "Press ⋯ under a message in a one-bot chat and choose Continue in a new chat from here. The new chat has the same bot and everything up to that message.",
+      "image": "continue-chat.webp",
+      "open": null
+    },
+    {
+      "id": "smooth-streaming",
+      "title": "Long chats stay smooth while a bot writes",
+      "text": "A reply that's still coming in now redraws once per frame, and only that message, so a long chat keeps scrolling smoothly while a bot types.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "questions-person-only",
+      "title": "Only you answer your bots' questions",
+      "text": "A bot can no longer answer a question meant for you, its own or another bot's. Your answers from the app and Telegram work as before.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "done-line-honest",
+      "title": "A done line that never claims too much",
+      "text": "When a finished task has a criterion no part covered, its line says so, like \"1 criterion not met\", instead of reading as fully checked.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "blocked-asks-with-offers",
+      "title": "Blocked catches an ask next to an offer",
+      "text": "After a failed step, a reply like \"Paste the output, and let me know if it fails\" shows as Blocked, and one that only offers more help doesn't.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}
