@@ -115,6 +115,8 @@ export interface SidebarProps {
   selectedTeamId?: string | null;
   /** What busy bots are doing ("Working on …", "Working here"), shown under their name. */
   busyKwants?: Record<string, string>;
+  /** The full line behind a short busy line (an audit's who and why, 14a), for its tooltip. */
+  busyTitles?: Record<string, string>;
   /** Teammates who already replied in a team turn now waiting on the person: "Done · replied in @team". */
   doneKwants?: Record<string, string>;
   /** Busy bots' status for the avatar dot; bots not listed are Available (or Can't run). */
@@ -365,6 +367,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isChannel,
   selectedTeamId,
   busyKwants = {},
+  busyTitles,
   doneKwants = {},
   botStatus = {},
   needsYou = {},
@@ -692,7 +695,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${
                 warn || asked ? 'text-warn' : attLine ? attTone : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'
               }`}
-              title={busyLine}
+              title={busyLine === busyKwants[k.id] ? busyTitles?.[k.id] ?? busyLine : busyLine}
               data-bot-busy
             >
               <span

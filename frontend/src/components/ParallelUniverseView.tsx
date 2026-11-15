@@ -38,6 +38,7 @@ import {
   sourceHost,
   validateScenario,
 } from '../parallelUniverse';
+import { dateClock } from '../clock';
 
 const TONES: Record<Tone, string> = {
   emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
@@ -633,7 +634,7 @@ export const ScenarioDetail: React.FC<{
           <select id={runPick} className={`${field} !w-auto max-w-full`} value={current?.run.id ?? ''} onChange={(e) => onPickRun(e.target.value)}>
             {runs.map((r) => (
               <option key={r.id} value={r.id}>
-                {new Date(r.started_at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · {runStatus(r.status).label}
+                {dateClock(r.started_at) ?? r.started_at} · {runStatus(r.status).label}
               </option>
             ))}
           </select>

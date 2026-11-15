@@ -13,6 +13,7 @@
 
 import { personFetch } from '../auth';
 import { type Ticket, parseTicketList, strList, ticketsNeedCount } from './tickets';
+import { timeText } from '../clock';
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown, max = 500): string | null => (typeof v === 'string' && v.trim() !== '' ? v.slice(0, max) : null);
@@ -85,10 +86,7 @@ export const rateLimitedText = (retryAt: string | null, fmt: (iso: string) => st
 export const matchLine = (n: number): string => (n === 0 ? 'No open tickets match yet.' : `${n} open ${n === 1 ? 'ticket matches' : 'tickets match'} right now`);
 export const zeroMatchHelp = (label: string): string => `Add the label ${label} to one in Jira to try it.`;
 
-export const hhmm = (iso: string): string => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-};
+export const hhmm = (iso: string): string => timeText(iso) ?? '';
 
 // ---------------------------------------------------------------------------------------------------
 // The address: Cloud is known from the host; anything else is asked of the server (a check with no token

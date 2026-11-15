@@ -570,10 +570,10 @@ async fn no_way_to_register_is_a_clear_error() {
         .unwrap()
         .is_none());
 
-    // Other failures carry no code (Retry may help)
+    // Other failures carry no dead-end code, only the status's own (14d): Retry may help
     let e = env(oauth_mock::MockOptions { refuse_registration: true, ..Default::default() }).await;
     let id = create_http_server(&e).await;
     let (status, body) = call(&e.app, "POST", &format!("/api/mcp/servers/{id}/oauth/start"), Some(json!({"origin": ORIGIN}))).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert!(body.get("code").is_none(), "{body}");
+    assert_eq!(body["code"], "server_error", "{body}");
 }

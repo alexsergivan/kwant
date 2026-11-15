@@ -240,7 +240,7 @@ test('PX-2 (style-v2 §3/§4): header chip and subtitle, LED per status, Checked
     const { root } = await desk({ status: st, ...extra }, { onOpenLooseEnds() {} });
     const line = document.querySelector('[data-dv-status]');
     assert.equal(line.querySelector('[data-dv-led]').dataset.s, want[st], `${st}: LED`);
-    assert.match(line.querySelector('[data-dev-checked]').textContent, /^Checked \d\d:\d\d$/, `${st}: Checked lives in the status line`);
+    assert.match(line.querySelector('[data-dev-checked]').textContent, /^Checked \d{1,2}:\d\d [AP]M$/, `${st}: Checked lives in the status line`);
     assert.equal(document.querySelectorAll('[data-dev-checked]').length, 1, `${st}: not in the header too`);
     root.unmount();
   }
