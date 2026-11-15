@@ -1,5 +1,7 @@
 // 0.9.8 browser panel (design browser-panel/design.md D): when the panel closes itself.
 
+import { timeText } from './clock';
+
 export interface PaneOpener {
   /** `bot`: a browser event opened it; `person`: a chip, the Bot browser button, a step, a link. */
   by: 'bot' | 'person';
@@ -34,7 +36,7 @@ export function paneStatus(s: { running: boolean; finishedAt: string | null; loc
   if (s.running) return { kind: 'browsing', text: 'Browsing now' };
   if (s.finishedAt) {
     const d = new Date(s.finishedAt);
-    if (!Number.isNaN(d.getTime())) return { kind: 'finished', text: `Finished ${d.toLocaleTimeString(s.locale ?? [], { hour: 'numeric', minute: '2-digit' })}` };
+    if (!Number.isNaN(d.getTime())) return { kind: 'finished', text: `Finished ${timeText(d, { locale: s.locale })}` };
     return { kind: 'finished', text: 'Finished' };
   }
   return { kind: 'idle', text: 'Idle' };

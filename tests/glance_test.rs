@@ -230,6 +230,7 @@ async fn the_glance_lists_what_needs_you_works_and_finished_and_leaks_nothing() 
         state: "running".into(),
         since: Utc::now(),
         purpose: None,
+        audit: None,
     });
     // The hidden decide-first round and a queued turn aren't working
     for (id, st, purpose) in [("turn-decide", "running", Some("decide".to_string())), ("turn-queued", "queued", None)] {
@@ -241,6 +242,7 @@ async fn the_glance_lists_what_needs_you_works_and_finished_and_leaks_nothing() 
             state: st.into(),
             since: Utc::now(),
             purpose,
+            audit: None,
         });
     }
 

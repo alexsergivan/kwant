@@ -1,5 +1,6 @@
 pub mod discussion;
 pub mod routes;
+pub mod error_shape;
 pub mod delivery_plan;
 pub mod sse;
 pub mod browser_input;
@@ -25,6 +26,7 @@ pub mod bot_budget;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
+pub mod continue_chat;
 pub mod keep_going;
 pub mod parked;
 pub mod attachments;
@@ -426,6 +428,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/connections/telegram/unpair", post(telegram::routes::unpair))
         .route("/api/connections/telegram/unpair/undo", post(telegram::routes::undo_unpair))
         .route("/api/connections/telegram/test", post(telegram::routes::test))
+        .route(
+            "/api/connections/telegram/customers",
+            get(telegram::customers::get).patch(telegram::customers::patch).delete(telegram::customers::delete),
+        )
+        .route("/api/connections/telegram/customers/token", put(telegram::customers::put_token))
+        .route("/api/connections/telegram/customers/chats/:chat_id/reply", post(telegram::customers::reply))
         .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/connections/composio/switch", post(connections::switch_composio))
         .route("/api/connections/composio/key", put(connections::replace_composio_key))
@@ -512,6 +520,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/questions/:id/answer", post(questions::answer))
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
         .route("/api/messages/:id/reaction", put(reactions::put_reaction))
+        .route("/api/messages/:id/continue", post(continue_chat::continue_chat))
         .route("/api/work-ahead/run", post(work_ahead::run_now))
         .route("/api/ideas", get(idea_jar::list).post(idea_jar::create))
         .route("/api/ideas/:id", get(idea_jar::get).patch(idea_jar::edit).delete(idea_jar::delete))
@@ -623,5 +632,7 @@ pub fn create_router(state: AppState) -> Router {
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), spaces::row_guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
+        // Outermost, so the guard's own refusals get a code too (roadmap 14d)
+        .layer(axum::middleware::from_fn(error_shape::layer))
         .with_state(state)
 }

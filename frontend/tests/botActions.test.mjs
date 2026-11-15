@@ -47,7 +47,7 @@ test('applied routine card: summary, routine facts, Undo, Edit and Pause', () =>
   const t = text(html);
   assert.match(t, /Coach set up a routine/);
   assert.match(t, /Created routine 'Morning motivation'/);
-  assert.match(t, /When Every day at 07:00, Berlin time/);
+  assert.match(t, /When Every day at 7:00 AM, Berlin time/);
   assert.match(t, /Runs as Coach/);
   assert.match(t, /Posts in #general/);
   assert.match(t, /Next run/);
@@ -138,7 +138,7 @@ test('non-routine actions: no routine facts, verb fallback', () => {
 });
 
 test('schedules in words: ours for known shapes, the server text otherwise', () => {
-  assert.equal(b.scheduleWords({ type: 'monthly', time: '09:00', days: [1, 'last'], tz: 'UTC' }), 'Every month on the 1st and last day at 09:00, UTC');
+  assert.equal(b.scheduleWords({ type: 'monthly', time: '09:00', days: [1, 'last'], tz: 'UTC' }), 'Every month on the 1st and last day at 9:00 AM, UTC');
   assert.equal(b.scheduleWords({ type: 'cron', expression: '0 9 * * MON#2', tz: 'UTC' }), 'Custom rule 0 9 * * MON#2, UTC');
   assert.equal(b.scheduleWords({ type: 'lunar' }, 'when the moon is full'), 'When the moon is full');
   assert.equal(b.scheduleWords(null, ''), 'Unknown schedule');
@@ -343,7 +343,7 @@ test('a follow-up card says when it runs in local words, never the raw ISO time'
   assert.doesNotMatch(shown, /2026-11-06T|14:00:00Z/, shown);
   const d = new Date(at);
   const day = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const time = d.toLocaleTimeString(undefined, { timeStyle: 'short' }).replace(/\u202f/g, ' ');
   assert.match(shown, new RegExp(`once on ${day} at ${time}`), shown);
   assert.equal(b.summaryText(b.parseBotActionMeta(meta)), `scheduled a follow-up 'Follow-up: check the deploy', once on ${day} at ${time}, in the thread "Deploy"`);
   // A summary whose schedule we can't read stays as the server wrote it.

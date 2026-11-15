@@ -30,7 +30,8 @@ use tower::ServiceExt;
 /// queue `<dir>/res`), or anything else (the lead's first turn, a teammate's task, a turn on an
 /// answer), which replies "ok"; a teammate's task with "SPECHOLD:<file>" waits for that file
 /// first. Each queue line is one reply (`\n` for a line break); an empty queue replies "Here is
-/// where things stand.". A line "HOLD:<file> <reply>" waits for the file, then replies. Every
+/// where things stand.". A line "HOLD:<file> <reply>" waits for the file, then replies; a line
+/// "FAILED:<reply>" runs a Bash step that fails first, then replies. Every
 /// prompt is saved as `<dir>/prompts/<kind>-…`.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
@@ -62,6 +63,11 @@ else
   out="Here is where things stand."
 fi
 case "$out" in
+  FAILED:*)
+    out=${out#FAILED:}
+    printf '{"type":"assistant","message":{"id":"msg_f","content":[{"type":"tool_use","id":"toolu_f","name":"Bash","input":{"command":"run_tests.sh"}}]}}\n'
+    printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_f","is_error":true,"content":"Permission to use Bash has been denied."}]}}\n'
+    ;;
   HOLD:*)
     f=${out#HOLD:}; f=${f%% *}; out=${out#HOLD:* }
     i=0
@@ -405,6 +411,31 @@ async fn a_blocked_line_becomes_a_card_not_a_keep_going_turn() {
     let msgs = messages(&env).await;
     let last = *lead_replies(&env, &msgs).last().unwrap();
     assert_eq!(meta_of(last)[keep_going::DONE_KEY]["text"], "rendered the intro and checked its length.");
+}
+
+/// 13a: a lead whose last tool step failed and whose reply waits on the person in prose, with no
+/// `Blocked:` line, is blocked too: its ending is stored as `meta.blocked` (from "failed_step") and
+/// becomes a question card at once, never a keep-going turn.
+#[tokio::test]
+async fn a_failed_step_and_a_prose_ask_become_a_card_not_a_keep_going_turn() {
+    let env = setup().await;
+    env.queue("res", &["FAILED:The test run was refused, so I have no results.\\n\\nIf you approve the command, I'll run the tests and report back."]);
+    person_asks(&env, "Run the tests.").await;
+    hand_off(&env, "Check the test setup", true).await;
+    wait_for("the card", || async { !open_questions(&env).await.is_empty() }).await;
+    settled(&env).await;
+    assert!(env.prompts("kg").is_empty(), "blocked: asked, never pushed on");
+    let msgs = messages(&env).await;
+    let reply = lead_replies(&env, &msgs).into_iter().find(|m| m.text.starts_with("The test run was refused")).expect("the reply");
+    let meta = meta_of(reply);
+    let steps = meta["activity"]["steps"].as_array().cloned().unwrap_or_default();
+    assert!(steps.iter().any(|s| s["kind"] == "tool" && s["status"] == "failed"), "the failed step is in the activity: {meta}");
+    let text = "If you approve the command, I'll run the tests and report back.";
+    assert_eq!(meta[keep_going::BLOCKED_KEY], json!({"text": text, "from": "failed_step"}));
+    let open = open_questions(&env).await;
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0].question, format!("Blocked: {text}"));
+    assert_eq!(card_meta(&env, &open[0]).await[keep_going::ASK_KEY], true);
 }
 
 /// Two keep-going turns that still hand nothing on: one "Keep going?" card, never a second.

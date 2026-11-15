@@ -39,6 +39,7 @@ const VERBS: Record<string, Verb> = {
   browser_click: ['using the browser', 'use the browser'],
   browser_type: ['using the browser', 'use the browser'],
   browser_act: ['using the browser', 'use the browser'],
+  browser_upload: ['uploading a file to a website', 'upload a file to a website'],
   browser_snapshot: ['reading the browser page', 'read the browser page'],
   browser_screenshot: ['looking at the browser page', 'look at the browser page'],
   ask_user: ['asking you a question', 'ask you a question'],
