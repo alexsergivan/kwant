@@ -913,6 +913,7 @@ fn launch_local_chrome(profile: &Path, headless: bool) -> Result<Launched, Strin
     let launched = Launched::tracked(stderr_file.is_some().then_some(stderr_path));
     let mut cmd = std::process::Command::new(&chrome);
     cmd.args(chrome_args(profile, headless))
+        .args(super::browser_proxy::local_chrome_args())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(stderr_file.map_or_else(std::process::Stdio::null, std::process::Stdio::from));
