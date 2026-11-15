@@ -133,7 +133,7 @@ export function islandUrl(mode: unknown, shortcut: unknown): string | null {
 
 export const PERCH_COPY = {
   title: 'Perch',
-  about: 'A small bar at the top of your screen: who is working, what needs you, and quick answers without opening kwant.',
+  about: 'A small bar at the top of your screen: who is working, what needs you, and quick answers without opening the app.',
   modes: [
     { value: 'busy', label: 'When something’s happening', line: 'Shows while bots work or need you, and hides when nothing is going on.' },
     { value: 'always', label: 'Always', line: 'Stays at the top of the screen, even when nothing is going on.' },
