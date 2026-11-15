@@ -2051,6 +2051,10 @@ pub(super) struct TurnOpts {
     pub(super) quiet_finish: bool,
     /// Shown as the turn's `purpose` in `GET /api/turns` (`turns[]`).
     pub(super) purpose: Option<String>,
+    /// An audit turn's who and why, shown with the turn (`audit` in `GET /api/turns` and its
+    /// `turn_started` event).
+    /// Boxed: turn futures are large and a debug-build test thread overflowed its stack with it inline.
+    pub(super) audit: Option<Box<super::turns::AuditTurn>>,
     /// The model tier this turn runs on whatever Laya's effort says (see [`crate::router::with_tier`]).
     pub(super) tier: Option<crate::drivers::engines::Tier>,
     /// A Skill Foundry replay (a dry run, see [`super::mcp_runtime::RehearseApprover`]): runs only
@@ -2067,6 +2071,9 @@ pub(super) struct TurnOpts {
     /// Every driver runs it that way or refuses it, and the turn then fails; it is never run with
     /// tools (see `crate::drivers::TurnInput::no_tools`). Default false.
     pub(super) no_tools: bool,
+    /// Every tool call asks the person whatever the bot's approvals say (a business customer's
+    /// Telegram turn, see `mcp_runtime::every_call`). With no approval hook it runs with no tools.
+    pub(super) every_call: bool,
     /// This turn is the delivery check's one automatic continuation: it never gets another.
     pub(super) delivery_continued: bool,
     /// Set by the save step when the reply missed what the person expected: the continuation's
@@ -2080,6 +2087,9 @@ pub(super) struct TurnOpts {
     /// with "No picture was attached". Each [`try_kwant_turn`] starts a new one, so a later ask
     /// never inherits it. `None`: only the turn's own pictures and pushes count.
     pub(super) delivery_seen: Option<DeliverySeen>,
+    /// 13a: what the held turn this decided reply replaces left (a declined card, a failed last
+    /// step), so the save step counts it like the turn's own (see [`super::decide::Held`]).
+    pub(super) failed_before: super::delivery_check::FailedBefore,
     /// The chat slot passed from a turn to its delivery continuation: the first turn leaves its
     /// slot here when it holds the chat and the save step asked for a continuation, and the
     /// continuation starts on it instead of queueing. So a message that arrived meanwhile (and
@@ -2264,7 +2274,7 @@ fn person_words(person_turn: bool, current: Option<&Message>) -> Option<&str> {
 /// a bot (through the chat API, [`SENT_BY_BOT`]) sent. The one filter for the delivery plan's
 /// current and earlier messages.
 pub(crate) fn is_persons(m: &Message) -> bool {
-    if m.sender_role != "user" || crate::drivers::from_agent(m).is_some() {
+    if m.sender_role != "user" || crate::drivers::from_outsider(m) {
         return false;
     }
     let meta: Option<serde_json::Value> = m.meta.as_deref().and_then(|s| serde_json::from_str(s).ok());
@@ -2305,6 +2315,7 @@ pub(super) fn is_reply_by(m: &Message, bot: &str) -> bool {
 /// it was routed, so a routed turn's continuation runs on the same agent, effort and tier.
 struct Carried {
     always_ask: bool,
+    every_call: bool,
     strict_ask: bool,
     started_by: Option<String>,
     delegation_id: Option<String>,
@@ -2326,6 +2337,7 @@ impl Carried {
     fn of(o: &TurnOpts) -> Self {
         Carried {
             always_ask: o.always_ask,
+            every_call: o.every_call,
             strict_ask: o.strict_ask,
             started_by: o.started_by.clone(),
             delegation_id: o.delegation_id.clone(),
@@ -2341,8 +2353,8 @@ impl Carried {
     }
 
     fn into_opts(self) -> TurnOpts {
-        let Carried { always_ask, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _, source } = self;
-        TurnOpts { always_ask, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, source, ..Default::default() }
+        let Carried { always_ask, every_call, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _, source } = self;
+        TurnOpts { always_ask, every_call, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, source, ..Default::default() }
     }
 
     /// The delivery check's continuation of the turn: checked against the first turn's `plan`
@@ -2459,6 +2471,7 @@ pub(super) async fn turn_once(
         state: "running".into(),
         since: chrono::Utc::now(),
         purpose: opts.purpose.clone(),
+        audit: opts.audit.clone(),
     });
     // Kept until the turn ends, so a restart mid-reply is said in the chat (see interrupt_running_turns)
     let running = crate::db::continuity::RunningTurn {
@@ -2484,6 +2497,7 @@ pub(super) async fn turn_once(
         context_id: Some(tag.context_id.clone()),
         turn_id: Some(tag.turn_id.clone()),
         thread_id: tag.thread_id.clone(),
+        audit: opts.audit.as_ref().and_then(|a| serde_json::to_value(a).ok()).map(Box::new),
     });
     if scope.cancel_token.is_cancelled() {
         return Err("stopped by the user".into());
@@ -3018,6 +3032,9 @@ async fn run_kwant_turn_inner(
         let mut final_prompt = prompt.clone();
         // A replay opens no page: the bot's browser isn't its scratch folder
         let target_url_opt = if opts.rehearse.is_some() || opts.no_tools { None } else { opts.nav_target() };
+        // 13a: the request's link couldn't be opened before the turn (it didn't load, or a site rule
+        // refused it). A failed first step that isn't in the turn's activity
+        let mut page_failed = false;
 
         if let Some(target_url) = target_url_opt {
             event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -3074,6 +3091,7 @@ async fn run_kwant_turn_inner(
                     };
                 }
                 Err(crate::sandbox::BrowserError::Navigation(reason)) => {
+                    page_failed = true;
                     let shown_url = ctrl.current_url.lock().await.clone().unwrap_or_else(|| target_url.clone());
                     if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
                         event_broadcast.send(RuntimeEvent::BrowserScreenshot {
@@ -3089,6 +3107,7 @@ async fn run_kwant_turn_inner(
                     );
                 }
                 Err(crate::sandbox::BrowserError::SiteRule(refusal)) => {
+                    page_failed = true;
                     final_prompt = format!(
                         "{}\n\n[Sandbox Browser State: {} Tell the user this address is outside the sites your browser may open; don't try another way to reach it.]",
                         prompt, refusal.message
@@ -3145,6 +3164,7 @@ async fn run_kwant_turn_inner(
             started_by: opts.started_by.clone(),
             rehearse: opts.rehearse.clone(),
             purpose: opts.purpose.clone(),
+            every_call: opts.every_call,
         };
         // A no-tools turn starts no MCP server, kwant's own included
         let mcp_turn = if opts.no_tools {
@@ -3161,6 +3181,8 @@ async fn run_kwant_turn_inner(
             .await
         };
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
+        // A turn where every call must ask but kwant can't see its calls runs with no tools at all
+        let no_tools = opts.no_tools || (opts.every_call && mcp_ctx.is_none());
         if let Some(ctx) = &mcp_ctx {
             event_broadcast.activity.add_secrets(ctx.secret_values());
         }
@@ -3196,7 +3218,7 @@ async fn run_kwant_turn_inner(
         // 10c: a space with its own documents tells the bot how to quote them with the word-for-word
         // check (the web cite call lives in the browser block, which doesn't know the space)
         // (QA F1: chat, routine and hand-off turns only, the allow-list tool notes use)
-        if !opts.no_tools && !opts.fresh_eyes && super::tool_notes::wants(opts.purpose.as_deref()) {
+        if !no_tools && !opts.fresh_eyes && super::tool_notes::wants(opts.purpose.as_deref()) {
             let space = crate::db::spaces::SpaceId::new(&target_kwant.space_id);
             lessons.push_str(&super::space_docs::prompt_block(state, &space).await);
         }
@@ -3248,7 +3270,7 @@ async fn run_kwant_turn_inner(
             // The bot's own copy of the browser API, naming this chat (thread, channel or DM): a
             // CAPTCHA it meets is asked in the thread whose call met it. The same for every turn
             // of the thread, so the cached prompt tail doesn't change.
-            browser_api_url: (!opts.no_tools).then(|| bot_browser_api(state.config.port, &sandbox_target, &turn_scope)),
+            browser_api_url: (!no_tools).then(|| bot_browser_api(state.config.port, &sandbox_target, &turn_scope)),
             thread_id: context_id,
             kwant: target_kwant.clone(),
             prompt: final_prompt,
@@ -3270,7 +3292,7 @@ async fn run_kwant_turn_inner(
             skills,
             person: super::bot_actions::person_place(&state.db).await,
             store: Some(state.db.clone()),
-            no_tools: opts.no_tools,
+            no_tools,
             read_only,
             delivery,
             fresh_eyes: opts.fresh_eyes,
@@ -3607,6 +3629,7 @@ async fn run_kwant_turn_inner(
                                     context_id: Some(tag.context_id.clone()),
                                     turn_id: Some(tag.turn_id.clone()),
                                     thread_id: tag.thread_id.clone(),
+                                    audit: state.turns.audit_of(&tag.turn_id).map(Box::new),
                                 });
                             }
                             // Lets a task handed in during the turn pay for it then (see `super::missions::spend_at_hand_in`)
@@ -3998,8 +4021,22 @@ async fn run_kwant_turn_inner(
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
                 }
                 // 0.9.4: a reply that ends with `Blocked: <what>. <what unblocks it>` says so in its meta
-                if let Some(blocked) = super::keep_going::blocked_line(&asst_msg.text) {
-                    meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = serde_json::json!({ "text": blocked });
+                // 13a: with no such line, a turn whose last tool step failed (or was declined, or whose
+                // link didn't open and it ran no tool) and whose reply ends waiting on the person in
+                // prose is blocked too, in the bot's own words. Not while kwnt sends the turn one more
+                // try (a continuation): that reply isn't the last word. A decided reply counts what
+                // its held turn left too
+                let before = super::delivery_check::FailedBefore { failed: page_failed || opts.failed_before.failed, ..opts.failed_before };
+                let blocked = super::keep_going::blocked_line(&asst_msg.text)
+                    .map(|text| serde_json::json!({ "text": text }))
+                    .or_else(|| {
+                        let text = super::delivery_check::failed_step_blocked(&asst_msg.text, activity.as_ref(), before).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
+                        Some(serde_json::json!({ "text": text, "from": "failed_step" }))
+                    });
+                // ...and if this reply is held, its decided reply (a new turn) counts what this one left
+                let failed_before = super::delivery_check::FailedBefore::of_turn(activity.as_ref(), before);
+                if let Some(blocked) = blocked {
+                    meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = blocked;
                 }
                 let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);
@@ -4039,6 +4076,7 @@ async fn run_kwant_turn_inner(
                                 delivery: plan.clone(),
                                 delivery_next: opts.delivery_next.clone(),
                                 delivery_seen: opts.delivery_seen.clone(),
+                                failed_before,
                             });
                         }
                     }
@@ -6306,6 +6344,10 @@ pub struct InteractPayload {
     /// click (or type): a numbered ref from the page's clickable list instead of a label
     #[serde(default, rename = "ref")]
     pub ref_: Option<serde_json::Value>,
+    /// upload: each a workspace-relative path under `downloads/` (or elsewhere in the bot's
+    /// folder) or a chat attachment id, answering the currently open file picker.
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
 }
 
 pub async fn interact_sandbox(
@@ -6372,17 +6414,23 @@ pub async fn interact_sandbox(
 /// Compact, text-only page state for agents (no base64 image to wade through).
 async fn sandbox_page_state(ctrl: &crate::sandbox::BrowserController) -> serde_json::Value {
     let snap = ctrl.snapshot().await;
-    page_state_from(ctrl, snap, "").await
+    page_state_from(ctrl, snap, "", false).await
 }
 
 /// [`sandbox_page_state`] from a snapshot already read (`None`: the page couldn't be read).
 /// `find`: the bot's words for what it looks for, to list the matching controls first on a page
 /// with more than [`reads::SHOWN_CONTROLS`](crate::sandbox::reads::SHOWN_CONTROLS). `hash` says
-/// what the read shows, for [`get_sandbox_page`]'s `since`.
+/// what the read shows, for [`get_sandbox_page`]'s `since`. `consume`: whether a download's
+/// terminal status, once reported here, should stop being reported again. Only the one dedicated
+/// `browser_page` read a bot polls to learn a download finished should pass `true`; every other
+/// read that happens to build a page state as a side effect of something else (an action's own
+/// before/after snapshot, a navigation's result) must pass `false`, or it can win the race and
+/// swallow the terminal report before the bot's own poll ever sees it.
 async fn page_state_from(
     ctrl: &crate::sandbox::BrowserController,
     snap: Option<crate::sandbox::progress::Snapshot>,
     find: &str,
+    consume: bool,
 ) -> serde_json::Value {
     use crate::sandbox::reads;
     let (url, title, text) = match snap {
@@ -6418,6 +6466,13 @@ async fn page_state_from(
     }
     if let Some(captcha) = captcha {
         page["captcha"] = json!(captcha);
+    }
+    let download = if consume { ctrl.latest_download_report() } else { ctrl.peek_download_report() };
+    if let Some(download) = download {
+        page["download"] = download;
+    }
+    if let Some(chooser) = ctrl.open_chooser_report() {
+        page["file_chooser"] = chooser;
     }
     page
 }
@@ -6493,6 +6548,22 @@ impl BotCall {
     fn page_in(team: &str) -> impl Fn(&BotCall) -> String + '_ {
         move |by| super::browser_pages::call_page(team, Some(&by.kwant), by.chat.as_deref())
     }
+}
+
+/// Who a `browser_upload` call may answer a chat attachment id for. Not every path that reaches
+/// [`act_sandbox_allowed`] has a full turn to check an id against: a turn (the MCP path, which
+/// also honors the chat a delegated task came from — see [`super::attachments::visible`]), the
+/// bot (and chat, when the route names one) a curl call came in as, or neither, when no id can
+/// match and only a workspace path is accepted.
+#[derive(Clone, Copy, Default)]
+pub enum UploadCaller<'a> {
+    #[default]
+    None,
+    Turn(&'a super::continuity::SelfScope),
+    Bot {
+        kwant: &'a str,
+        chat: Option<&'a str>,
+    },
 }
 
 /// `POST /api/sandbox/:id/bot/:kwant_id/navigate`: the browser API a bot's prompt gave it before
@@ -6607,7 +6678,11 @@ async fn act_as(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let page = by.as_ref().map_or_else(|| team_id.clone(), BotCall::page_in(&team_id));
     refuse_while_held(&state, &page, by.is_some()).await?;
-    let result = act_sandbox(State(state.clone()), Path(page.clone()), payload).await;
+    let caller = match &by {
+        Some(b) => UploadCaller::Bot { kwant: &b.kwant, chat: b.chat.as_deref() },
+        None => UploadCaller::None,
+    };
+    let result = act_sandbox(State(state.clone()), Path(page.clone()), payload, caller).await;
     ask_on_wall(&state, &team_id, &page, by.as_ref().map(BotCall::caller), result).await
 }
 
@@ -6740,7 +6815,7 @@ pub async fn get_sandbox_page(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let snap = ctrl.snapshot().await;
-    let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default()).await;
+    let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default(), true).await;
     if query.wants_blocks() {
         add_blocks(&ctrl, &mut page).await;
     }
@@ -6788,14 +6863,23 @@ pub async fn cite_sandbox(
 
 /// What a read of a page that still reads the same returns instead of it.
 pub fn unchanged_read(page: &serde_json::Value) -> serde_json::Value {
-    json!({
+    let mut out = json!({
         "url": page["url"],
         "title": page["title"],
         "hash": page["hash"],
         "blocked": page["blocked"],
         "unchanged": true,
         "note": crate::sandbox::reads::UNCHANGED_NOTE,
-    })
+    });
+    // A download or an open chooser is news on its own, never folded into the page's hash: say so
+    // even on an otherwise unchanged read, so it's never missed between two look-the-same reads.
+    if page.get("download").is_some() {
+        out["download"] = page["download"].clone();
+    }
+    if page.get("file_chooser").is_some() {
+        out["file_chooser"] = page["file_chooser"].clone();
+    }
+    out
 }
 
 /// Agent-facing action endpoint (`POST /api/sandbox/:id/act`, the shell bots' browser API):
@@ -6807,6 +6891,7 @@ pub async fn act_sandbox(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
+    caller: UploadCaller<'_>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let args = json!({"action": payload.action, "text": payload.text, "key": payload.key, "ref": payload.ref_});
@@ -6819,7 +6904,134 @@ pub async fn act_sandbox(
         ));
         return Ok(Json(page));
     }
-    act_sandbox_allowed(State(state), Path(team_id), Json(payload)).await
+    act_sandbox_allowed(State(state), Path(team_id), Json(payload), caller).await
+}
+
+/// Turns `browser_upload`'s file list into what [`crate::sandbox::browser_downloads`] needs to
+/// answer a chooser: each entry is a chat attachment id visible to `caller` (same rule as
+/// `read_attachment`/`share_file`: the turn's own chat, the chat a delegated task came from, and
+/// files this bot shared — see [`super::attachments::visible`]; an id outside that falls through
+/// to the plain "isn't a file in your folder" refusal below, same as an id that doesn't exist, so
+/// a call never learns that an id exists in another chat) or, failing that, a path under the
+/// bot's own folder (opened through [`safe_fs`](crate::sandbox::safe_fs), so `..` and a symlink
+/// out of the folder are refused). Remote delivery (no filesystem in common with this Chrome)
+/// reads every file's bytes, capped at 100 MB in all; local delivery stages a copy made from the
+/// handle already opened and checked above (see [`stage_upload_copy`]) and passes that copy's
+/// path, rather than the original attachment blob or workspace path — Chrome may not actually
+/// read the file until well after this call returns, and by then a path handed back by name alone
+/// could point at something else.
+async fn resolve_upload_files(
+    state: &AppState,
+    workspace: &std::path::Path,
+    local: bool,
+    files: &[String],
+    caller: UploadCaller<'_>,
+) -> Result<Vec<crate::sandbox::browser_downloads::UploadFile>, String> {
+    use crate::sandbox::browser_downloads::{UploadFile, UploadSource};
+    use crate::sandbox::safe_fs;
+    const REMOTE_CAP: u64 = 100 * 1024 * 1024;
+    const TOO_BIG: &str = "That's more than this browser can take over a remote connection: 100 MB in all. Pick a smaller file.";
+    let mut remaining = REMOTE_CAP;
+    let mut out = Vec::with_capacity(files.len());
+    for raw in files {
+        let found = match caller {
+            UploadCaller::Turn(scope) => super::attachments::visible(state, scope, raw).await,
+            UploadCaller::Bot { kwant, chat } => super::attachments::visible_to(state, chat, Some(kwant), raw).await,
+            UploadCaller::None => None,
+        };
+        if let Some(a) = found {
+            if a.context_id.as_deref().is_some_and(|c| c.starts_with("document:")) {
+                return Err(format!("{} can't be used this way.", a.name));
+            }
+            let root = super::attachments::root(state);
+            let blob = super::attachments::blob_path(&root, &a.sha256)
+                .ok_or_else(|| format!("{} is missing.", a.name))?;
+            let last_modified_ms = a.created_at.timestamp_millis();
+            if local {
+                let src = std::fs::File::open(&blob).map_err(|_| format!("{} is missing.", a.name))?;
+                let path = stage_upload_copy(state, &a.name, src).await.map_err(|_| format!("Couldn't read {}.", a.name))?;
+                out.push(UploadFile { name: a.name, mime: a.mime, last_modified_ms, source: UploadSource::Path(path) });
+            } else {
+                let size = a.size.max(0) as u64;
+                if size > remaining {
+                    return Err(TOO_BIG.to_string());
+                }
+                let bytes = tokio::fs::read(&blob).await.map_err(|_| format!("Couldn't read {}.", a.name))?;
+                remaining -= size;
+                out.push(UploadFile { name: a.name, mime: a.mime, last_modified_ms, source: UploadSource::Bytes(bytes) });
+            }
+            continue;
+        }
+        let rel = std::path::Path::new(raw.trim_start_matches('/'));
+        let dir = safe_fs::Dir::open_strict(workspace).map_err(|_| "Your folder couldn't be opened.".to_string())?;
+        // An id-shaped `raw` that fell through here might be an attachment id in a chat `caller`
+        // can't see: echoing it back would tell the call it exists, so this refusal drops it
+        // (same wording as a path that isn't found); a path keeps its name, since that's never
+        // someone else's id.
+        let mut file = dir.open_file(rel).map_err(|_| match uuid::Uuid::parse_str(raw) {
+            Ok(_) => "That isn't a file in your folder or an attachment in this chat.".to_string(),
+            Err(_) => format!("{raw} isn't a file in your folder."),
+        })?;
+        let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        let last_modified_ms = chrono::Utc::now().timestamp_millis();
+        if local {
+            let path = stage_upload_copy(state, &name, file).await.map_err(|_| format!("Couldn't read {raw}."))?;
+            out.push(UploadFile { name, mime: String::new(), last_modified_ms, source: UploadSource::Path(path) });
+        } else {
+            let bytes = safe_fs::read_capped(&mut file, remaining).map_err(|_| TOO_BIG.to_string())?;
+            remaining -= bytes.len() as u64;
+            let mime = mime_guess::from_path(rel).first_or_octet_stream().to_string();
+            out.push(UploadFile { name, mime, last_modified_ms, source: UploadSource::Bytes(bytes) });
+        }
+    }
+    Ok(out)
+}
+
+const UPLOAD_TMP_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+const UPLOAD_TMP_ORPHAN_AGE: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A copy of `src` (an attachment blob, or a workspace file — in both cases a handle
+/// [`resolve_upload_files`] already opened and checked, read from directly rather than by
+/// re-opening its path afterward) under a short-lived folder of kwnt's own, outside every bot's
+/// workspace: same pattern as `browser_stream.rs`'s `chooser-tmp` for the live-view sheet.
+/// `DOM.setFileInputFiles` names the file from its path's own basename, so the copy is named
+/// after the real name, sanitized through [`super::attachments::clean_name`]. Staging outside the
+/// workspace, from the handle rather than the path, closes the window between the check already
+/// done on `src` and whenever Chrome actually reads the staged copy (the page may only do that
+/// once the person acts on it, e.g. only once a form is submitted, so the copy can't be removed
+/// right after this call returns either — it's swept up after `UPLOAD_TMP_TTL`, with
+/// `sweep_upload_tmp` as a backstop for an orphan left behind by a restart).
+async fn stage_upload_copy(state: &AppState, name: &str, mut src: std::fs::File) -> std::io::Result<PathBuf> {
+    let tmp_root = super::attachments::root(state).join("upload-tmp");
+    sweep_upload_tmp(&tmp_root).await;
+    let dir = tmp_root.join(uuid::Uuid::new_v4().to_string());
+    tokio::fs::create_dir_all(&dir).await?;
+    let dest = dir.join(super::attachments::clean_name(name));
+    let dest_for_copy = dest.clone();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let mut out = std::fs::File::create(&dest_for_copy)?;
+        std::io::copy(&mut src, &mut out)?;
+        Ok(())
+    })
+    .await
+    .map_err(std::io::Error::other)??;
+    tokio::spawn(async move {
+        tokio::time::sleep(UPLOAD_TMP_TTL).await;
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    });
+    Ok(dest)
+}
+
+/// Deletes any `upload-tmp` directory older than `UPLOAD_TMP_ORPHAN_AGE`, a backstop for the
+/// scheduled cleanup in [`stage_upload_copy`] if the process restarted before it ran.
+async fn sweep_upload_tmp(tmp_root: &std::path::Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(tmp_root).await else { return };
+    let cutoff = std::time::SystemTime::now() - UPLOAD_TMP_ORPHAN_AGE;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.metadata().await.ok().and_then(|m| m.modified().ok()).is_some_and(|m| m < cutoff) {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
 }
 
 /// [`act_sandbox`] without the payment check: for `browser_act`, whose approver already asked.
@@ -6827,6 +7039,7 @@ pub async fn act_sandbox_allowed(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
+    caller: UploadCaller<'_>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = page_controller(&state, &team_id).await?;
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
@@ -6845,7 +7058,7 @@ pub async fn act_sandbox_allowed(
     let here = before.as_ref().map(|b| b.url.clone()).unwrap_or_default();
     let repeat = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).before(&here, key.as_deref());
     if let Some(stop) = repeat {
-        let mut page = page_state_from(&ctrl, before, "").await;
+        let mut page = page_state_from(&ctrl, before, "", false).await;
         page["stalled"] = json!(true);
         page["error"] = json!(stop);
         return Ok(Json(page));
@@ -6886,9 +7099,49 @@ pub async fn act_sandbox_allowed(
             .await
             .map(|_| "scrolled".to_string())
             .map_err(|e| e.to_string()),
+        ("upload", _) => {
+            let files = payload.files.clone().unwrap_or_default();
+            if files.is_empty() {
+                Err("files is required: a path in your folder or a chat attachment id.".to_string())
+            } else {
+                // `team_id` here is the page key: a job page (bot+chat) key for the common case,
+                // not a team/channel/kwant id by itself, so it's resolved the same way
+                // `controller_for` resolves this very controller's own workspace (open_page ->
+                // controller_for both strip the page key down to its team/bot id first).
+                match resolve_sandbox_target_info(&state, super::browser_pages::page_team(&team_id)).await {
+                    Some((_, workspace)) => {
+                        let local = state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local;
+                        match resolve_upload_files(&state, &workspace, local, &files, caller).await {
+                            Ok(resolved) => {
+                                let requested = resolved.len();
+                                ctrl.answer_upload(local, resolved).await.map(|names| {
+                                    let mut message = format!(
+                                        "Gave the page {}. Check the page shows it before you go on.",
+                                        names.join(", ")
+                                    );
+                                    if names.len() < requested {
+                                        if let Some(first) = names.first() {
+                                            message.push_str(&format!(
+                                                " This picker takes one file, so only {first} was used."
+                                            ));
+                                        }
+                                    }
+                                    message
+                                })
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    None => Err("Couldn't find your folder.".to_string()),
+                }
+            }
+        }
+        // Shows what a page shows on hover (a tile's ⋮ menu) and says what appeared; clicks nothing
+        ("hover", Some(target)) => ctrl.hover_target(&target).await.map_err(|e| e.to_string()),
         ("click_text" | "click", None) => Err("click needs ref (a number from the clickable list) or text (a label).".to_string()),
+        ("hover", None) => Err("hover needs ref (a number from the clickable list) or text (a label).".to_string()),
         (other, _) => Err(format!(
-            "Unknown action \"{}\". Use click (with ref or text), type (with text), key (with key) or scroll (with delta_y).",
+            "Unknown action \"{}\". Use click (with ref or text), hover (with ref or text), type (with text), key (with key), scroll (with delta_y) or upload (with files).",
             other
         )),
     };
@@ -6909,6 +7162,11 @@ pub async fn act_sandbox_allowed(
     };
     let mut after = ctrl.snapshot().await;
     let mut changed = diff(&after);
+    // A hover mostly shows what was already in the page's text (an opacity-0 button): what it
+    // brought up is the change
+    if payload.action == "hover" && changed.is_none() {
+        changed = result.as_ref().ok().and_then(|r| r.split_once("Appeared: ")).map(|(_, a)| format!("Appeared: {a}"));
+    }
     if changed.is_none() {
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         after = ctrl.snapshot().await;
@@ -6923,7 +7181,7 @@ pub async fn act_sandbox_allowed(
         }
     }
     let stall = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).after(changed.is_some());
-    let mut page = page_state_from(&ctrl, after, "").await;
+    let mut page = page_state_from(&ctrl, after, "", false).await;
     page["changed"] = json!(changed.as_deref().unwrap_or("Nothing on the page changed."));
     match result {
         Ok(done) => page["result"] = json!(done),

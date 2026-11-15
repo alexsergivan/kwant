@@ -1,6 +1,8 @@
 // 0.9.8 done-check (autonomy/done-check/design.md): one box between the chips and the answer that says whether
 // anything checked a done item, with each check on demand; and the one-word marker on done rows in the list.
 // Server text (line, what, how, evidence) is drawn as text only, never as links or HTML.
+// request-parts (autonomy/request-parts/ui-brief.md): with written parts, the box leads with one row per part of the
+// person's request, its criteria folded under it, and today's checks follow under "How it was checked".
 
 import React, { useId, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, CircleDashed, Clock, Shield, ShieldCheck, ShieldHalf, ShieldX, X, type LucideIcon } from 'lucide-react';
@@ -13,7 +15,16 @@ import {
   ITEM_WORD,
   type ItemKind,
   MARKER,
+  NO_CRITERIA_HELP,
+  PART_COLOUR,
+  PART_WORD,
+  PARTS_HEADING,
+  type CheckedPart,
+  type PartResult,
   SECTION_LABEL,
+  criteriaToggle,
+  partKind,
+  partsLayout,
   STATE_STYLE,
   droppedLine,
   howText,
@@ -32,6 +43,57 @@ const STATE_ICON: Record<CheckState, LucideIcon> = {
   not_checked: Shield,
 };
 
+const PART_ICON: Record<PartResult, LucideIcon> = { passed: Check, failed: X, not_checked: CircleDashed };
+
+/** One part of the person's request: their words, its result, and the criteria that prove it on demand. */
+const PartRow: React.FC<{ part: CheckedPart }> = ({ part }) => {
+  const id = `${useId()}-criteria`;
+  const kind = partKind(part.result);
+  // A part that was not met opens its fold, so the failing criterion shows without a tap.
+  const [open, setOpen] = useState(kind === 'failed');
+  const Icon = PART_ICON[kind];
+  const n = part.criteria.length;
+  return (
+    <li className="grid grid-cols-[14px_minmax(0,1fr)] gap-x-2.5 py-2 border-b border-hairline last:border-b-0" data-part={kind}>
+      <Icon size={14} className={`mt-1 ${PART_COLOUR[kind]}`} aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="text-body text-zinc-100 break-words [overflow-wrap:anywhere]" data-part-text>
+          {part.text}
+        </p>
+        <div className="text-meta flex flex-wrap items-baseline gap-x-1 break-words [overflow-wrap:anywhere]">
+          <span className={`font-semibold ${PART_COLOUR[kind]}`} data-part-result>
+            {PART_WORD[kind]}
+          </span>
+          {n === 0 && <span className="text-zinc-400" data-part-no-criteria> · {NO_CRITERIA_HELP}</span>}
+          {n > 0 && (
+            <>
+              <span className="text-zinc-400" aria-hidden="true">·</span>
+              <button type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)} className={linkBtn} data-compact data-part-toggle>
+                {criteriaToggle(open, n)}
+                <ChevronDown size={14} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
+              </button>
+            </>
+          )}
+        </div>
+        {n > 0 && (
+          <ul id={id} hidden={!open} className={`mt-1 border-l-2 border-hairline-strong pl-2 space-y-1 ${open ? 'kw-fade-in' : ''}`} data-part-criteria>
+            {part.criteria.map((c, i) => {
+              const ck = partKind(c.result);
+              return (
+                <li key={c.id || i} className="text-meta break-words [overflow-wrap:anywhere]" data-criterion={ck}>
+                  <span className="text-zinc-200">{c.text}</span>
+                  <span className="text-zinc-400"> · </span>
+                  <span className={`font-semibold ${PART_COLOUR[ck]}`}>{PART_WORD[ck]}</span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </li>
+  );
+};
+
 const ITEM_ICON: Record<ItemKind, { Icon: LucideIcon; cls: string }> = {
   passed: { Icon: Check, cls: 'text-ok' },
   failed: { Icon: X, cls: 'text-bad' },
@@ -48,11 +110,16 @@ export const DoneCheck: React.FC<{
   const listId = `${useId()}-checks`;
   const state = checked.state;
   const style = STATE_STYLE[state];
-  const [open, setOpen] = useState(style.open);
+  const layout = partsLayout(checked);
+  // With parts shown, the failing criterion sits under its part, so the checks list starts closed and the answer
+  // stays above the fold on a phone (design-check-ui.md fix 1). Today's card keeps its open-when-failed rule.
+  const [open, setOpen] = useState(style.open && !layout);
   const { prefix, rest } = splitLine(state, checked.line);
   const Icon = STATE_ICON[state];
   const items = checked.items;
   const n = items.length + checked.items_dropped;
+  const partsId = `${listId}-parts`;
+  const howId = `${listId}-how`;
   return (
     <section aria-label={SECTION_LABEL} data-done-check={state} className={`rounded-2xl border px-4 py-3 flex flex-col gap-2 min-w-0 ${style.box}`}>
       <p className="grid grid-cols-[16px_minmax(0,1fr)] gap-x-2.5 text-body text-zinc-100" data-check-line>
@@ -70,6 +137,23 @@ export const DoneCheck: React.FC<{
           )}
         </span>
       </p>
+      {layout && checked.parts && (
+        <div className="ml-[26px] min-w-0" data-parts={layout}>
+          <p id={partsId} className="text-meta font-semibold text-zinc-300" data-parts-heading>
+            {PARTS_HEADING}
+          </p>
+          <ul aria-labelledby={partsId} className="border-t border-hairline" data-parts-list>
+            {checked.parts.map((p, i) => (
+              <PartRow key={i} part={p} />
+            ))}
+          </ul>
+        </div>
+      )}
+      {layout && items.length > 0 && (
+        <p id={howId} className="ml-[26px] mt-3 text-meta font-semibold text-zinc-300" data-how-heading>
+          {SECTION_LABEL}
+        </p>
+      )}
       {items.length > 0 ? (
         <>
           <div className="ml-[26px]">
@@ -78,7 +162,7 @@ export const DoneCheck: React.FC<{
               <ChevronDown size={14} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
             </button>
           </div>
-          <ul id={listId} hidden={!open} className={`ml-[26px] border-t border-hairline ${open ? 'kw-fade-in' : ''}`} data-check-list>
+          <ul id={listId} hidden={!open} aria-labelledby={layout ? howId : undefined} className={`ml-[26px] border-t border-hairline ${open ? 'kw-fade-in' : ''}`} data-check-list>
             {items.map((it, i) => {
               const kind = itemKind(it);
               const { Icon: ItemIcon, cls } = ITEM_ICON[kind];

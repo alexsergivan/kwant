@@ -765,7 +765,7 @@ fn not_open(status: &str, why: Option<&str>) -> Response {
         ("stale", Some(w)) => format!("this proposal is stale: {w}"),
         _ => format!("this proposal is already {status}"),
     };
-    (StatusCode::CONFLICT, Json(json!({"error": error, "status": status}))).into_response()
+    (StatusCode::CONFLICT, Json(json!({"error": error, "status": status, "code": status}))).into_response()
 }
 
 #[derive(Deserialize, Default)]

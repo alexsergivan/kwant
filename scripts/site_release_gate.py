@@ -17,6 +17,10 @@ Reads the newest `## [Mac X.Y.Z]` heading in CHANGELOG.md and checks site-src/, 
    (title 60 characters or fewer, text 200 or fewer, image null or a .webp of 80 KB or less in
    frontend/public/whatsnew/X.Y.Z/, open null or an in-app place such as "settings/teams") and 0-15 fixes of 140
    characters or fewer. frontend/src/whatsNewSheet.ts checks the same limits in the app.
+7. site-src/media-versions.json names, for every home page clip and the reel, the CHANGELOG version it was last
+   recorded on. A clip fails once it's on an older minor version than the newest release, or more than 3 patch
+   releases behind it on the same minor (the reel is exempt: it's a standing "Watch it work" piece, not tied to
+   a feature).
 
 Usage: python3 scripts/site_release_gate.py [--warn]
 Exit 0 when kwant.si and the README are current, else 1 with one line per gap. --warn prints the gaps and exits 0:
@@ -165,6 +169,38 @@ def whatsnew_gaps(version, root=ROOT):
     return out
 
 
+def media_freshness_gaps(version, root=ROOT):
+    """Every home page clip in site-src/media-versions.json that's gone stale against the newest release
+    `version`: on an older minor, or more than 3 patch releases behind on the same minor. The "reel" entry
+    (the "Watch it work" clip) is never checked: it isn't tied to a release."""
+    rel = "site-src/media-versions.json"
+    path = root / rel
+    if not path.exists():
+        return [f"{rel} is missing: list every home page clip (and \"reel\") with the CHANGELOG version it was "
+                f"last recorded on"]
+    try:
+        versions = json.loads(path.read_text())
+    except ValueError as err:
+        return [f"{rel} isn't valid JSON ({err})"]
+    if not isinstance(versions, dict):
+        return [f"{rel} must be a JSON object"]
+    newest = tuple(int(x) for x in version.split("."))
+    out = []
+    for name, v in sorted(versions.items()):
+        if name == "reel":
+            continue
+        if not isinstance(v, str) or not re.fullmatch(r"\d+\.\d+\.\d+", v):
+            out.append(f"{rel}: {name} is {v!r}, should be a \"X.Y.Z\" version")
+            continue
+        major, minor, patch = (int(x) for x in v.split("."))
+        stale = (major, minor) != newest[:2] or newest[2] - patch > 3
+        if stale:
+            out.append(f"{rel}: {name} was recorded on {v}, {version} is current (re-record it: "
+                       f"site-media-kit/shoot.sh <sha> shots.json out-dir, keeping the name {name}, then update "
+                       f"{rel} to {version})")
+    return out
+
+
 def gaps(root=ROOT):
     src, media = root / "site-src", root / "site" / "assets" / "media"
     version, entry = newest((root / "CHANGELOG.md").read_text())
@@ -206,6 +242,7 @@ def gaps(root=ROOT):
     if gap:
         out.append(gap)
     out += whatsnew_gaps(version, root)
+    out += media_freshness_gaps(version, root)
     return out
 
 
