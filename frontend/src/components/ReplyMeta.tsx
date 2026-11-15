@@ -44,10 +44,13 @@ export interface ReplyMetaProps extends ReplyFacts {
 /** The quiet line for a reply that ran on another account. It wraps rather than clips, so it fits at 390 px. */
 // The reply's name line, shared with the live row in ChatView (17c) so the name line keeps its type and height
 // when the reply lands. replyNameLine(extra) puts extra between the box and the type classes: the finished line
-// passes 'sm:flex-wrap' (its class string is unchanged), the live line 'min-h-6' (the Details button's height).
+// passes 'sm:flex-wrap' (its class string is unchanged), the live line REPLY_NAME_LINE_LIVE_HEIGHT.
 export const REPLY_NAME = 'min-w-0 truncate text-[13px] font-semibold text-zinc-50';
 const REPLY_NAME_LINE_BOX = 'mb-1.5 flex min-w-0 max-w-full flex-nowrap';
 const REPLY_NAME_LINE_TYPE = 'items-center gap-x-2 gap-y-1 text-xs text-zinc-400 font-medium';
+// The Details button's height: min-h-6, and 44 px where modern.css makes every control a 44 px tap target
+// (touch screens below 768 px), so the live line is as tall as the finished one there too.
+export const REPLY_NAME_LINE_LIVE_HEIGHT = 'min-h-6 [@media(max-width:767px)_and_(pointer:coarse)]:min-h-11';
 export const replyNameLine = (extra: string): string => `${REPLY_NAME_LINE_BOX} ${extra} ${REPLY_NAME_LINE_TYPE}`;
 
 export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (

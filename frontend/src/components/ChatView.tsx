@@ -42,7 +42,7 @@ import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
-import { FailoverNote, REPLY_NAME, ReplyMeta, replyNameLine } from './ReplyMeta';
+import { FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
@@ -2381,7 +2381,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </span>
             <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
               {/* The finished name line's type and height (17c), so it doesn't grow when the reply lands */}
-              <div className={replyNameLine('min-h-6')} data-live-name-line="">
+              <div className={replyNameLine(REPLY_NAME_LINE_LIVE_HEIGHT)} data-live-name-line="">
                 <span className="sm:hidden shrink-0 inline-flex">
                   <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR_PHONE} />
                 </span>

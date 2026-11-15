@@ -14,7 +14,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'N
 const m = await loadBundled(`
   export { default as React } from 'react';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
-  export { ReplyMeta, REPLY_NAME, replyNameLine } from './src/components/ReplyMeta';
+  export { ReplyMeta, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, replyNameLine } from './src/components/ReplyMeta';
 `);
 const h = m.React.createElement;
 
@@ -24,10 +24,10 @@ test("the shared strings are the finished line's classes", () => {
     m.replyNameLine('sm:flex-wrap'),
     'mb-1.5 flex min-w-0 max-w-full flex-nowrap sm:flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400 font-medium',
   );
-  assert.equal(
-    m.replyNameLine('min-h-6'),
-    'mb-1.5 flex min-w-0 max-w-full flex-nowrap min-h-6 items-center gap-x-2 gap-y-1 text-xs text-zinc-400 font-medium',
-  );
+  // The live line is as tall as the Details button: 24 px, or 44 px as a phone tap target (modern.css).
+  assert.equal(m.REPLY_NAME_LINE_LIVE_HEIGHT, 'min-h-6 [@media(max-width:767px)_and_(pointer:coarse)]:min-h-11');
+  const css = readFileSync(new URL('../src/styles/modern.css', import.meta.url), 'utf8');
+  assert.match(css, /@media \(max-width: 767px\) and \(pointer: coarse\) \{\s+:is\(button,[^{]+\{\s+min-height: 44px;/);
 });
 
 test('the finished name line renders exactly as before (b5449933)', () => {
@@ -43,9 +43,9 @@ test('the finished name line renders exactly as before (b5449933)', () => {
 
 test("the live name line uses the shared strings, with the Details button's height", () => {
   const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
-  assert.match(chat, /import \{ FailoverNote, REPLY_NAME, ReplyMeta, replyNameLine \} from '\.\/ReplyMeta';/);
+  assert.match(chat, /import \{ FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine \} from '\.\/ReplyMeta';/);
   const liveRow = chat.slice(chat.indexOf('data-live-row=""'), chat.indexOf('data-live-bubble-body=""'));
-  assert.match(liveRow, /<div className=\{replyNameLine\('min-h-6'\)\} data-live-name-line="">/);
+  assert.match(liveRow, /<div className=\{replyNameLine\(REPLY_NAME_LINE_LIVE_HEIGHT\)\} data-live-name-line="">/);
   assert.match(liveRow, /<span className=\{REPLY_NAME\}>\{liveName\}<\/span>/);
   assert.doesNotMatch(liveRow, /text-\[11px\] text-zinc-400 font-medium|className="text-zinc-200">\{liveName\}/);
   // The chips keep their wording and colours.
