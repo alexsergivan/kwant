@@ -1,0 +1,23 @@
+{
+  "version": "0.9.12",
+  "date": "2026-11-14",
+  "highlights": [
+    {
+      "id": "dev-mode",
+      "title": "Dev mode says when it finds your code",
+      "text": "Dev mode is now first in Space settings › General. When it finds a team's repo it says so, like \"Found octocat/Hello-World in Web team\", with Turn on Dev mode next to it.",
+      "image": "dev-mode.webp",
+      "open": null
+    },
+    {
+      "id": "dev-suggest",
+      "title": "A nudge in #general when a space has code",
+      "text": "#general shows \"Code space has code\" with Turn on Dev mode, which opens the setting; nothing turns on by itself. Not now hides it for that space.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Long jobs on API engines send far less: older tool results shrink to a short note the bot can read back in full."
+  ]
+}

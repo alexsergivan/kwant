@@ -19,6 +19,7 @@ use axum::{
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 /// Most items per list.
 pub const MAX_ITEMS: i64 = 50;
@@ -27,7 +28,7 @@ pub const STUCK_AFTER_MINUTES: i64 = 30;
 /// How far back the page looks when the user has never marked it seen.
 pub const DEFAULT_LOOKBACK_DAYS: i64 = 7;
 pub const SUMMARY_CHARS: usize = 200;
-const TITLE_CHARS: usize = 120;
+pub(super) const TITLE_CHARS: usize = 120;
 /// Argument names whose values are never shown in an approval's summary.
 const SECRET_ARG_HINTS: [&str; 6] = ["key", "token", "secret", "password", "auth", "cookie"];
 
@@ -281,19 +282,22 @@ pub async fn unread_total(state: &AppState, space: &SpaceId) -> Result<i64, crat
 
 /// The space's approvals the broker still waits on, each linked to the chat its turn runs in.
 pub(super) async fn waiting_approvals(state: &AppState, space: &SpaceId) -> Result<Vec<AwayRow>, crate::db::DbError> {
+    Ok(approvals_by_space(state, Some(space)).await?.remove(space).unwrap_or_default())
+}
+
+/// The waiting approvals of every space (`only`: just that one), in one pass: each card's space
+/// is looked up once, and only the cards that are kept are linked to their chat.
+pub(super) async fn approvals_by_space(state: &AppState, only: Option<&SpaceId>) -> Result<HashMap<SpaceId, Vec<AwayRow>>, crate::db::DbError> {
+    let mut spaces: HashMap<String, SpaceId> = HashMap::new();
+    let mut by_space: HashMap<SpaceId, Vec<AwayRow>> = HashMap::new();
     let live = state.broker.pending_ids().await;
-    let mut rows = state.db.away_pending_approvals(&live).await?;
-    let mut mine = Vec::with_capacity(rows.len());
-    for row in rows.drain(..) {
-        let of = state.db.space_of_kwant(&row.kwant_id).await?.unwrap_or_else(SpaceId::default_space);
-        if &of == space {
-            mine.push(row);
-        }
-    }
-    let mut rows = mine;
     let turns = state.turns.active_turns();
-    // turn_id isn't in the row; look it up by ticket
-    for row in &mut rows {
+    for mut row in state.db.away_pending_approvals(&live).await? {
+        let of = space_of(state, &mut spaces, &row.kwant_id).await?;
+        if only.is_some_and(|s| s != &of) {
+            continue;
+        }
+        // turn_id isn't in the row; look it up by ticket
         let turn_id = state.db.get_approval(&row.id).await?.map(|a| a.turn_id);
         let turn = turns.iter().find(|t| Some(&t.turn_id) == turn_id.as_ref());
         match turn {
@@ -304,15 +308,30 @@ pub(super) async fn waiting_approvals(state: &AppState, space: &SpaceId) -> Resu
             },
             None => row.direct_kwant_id = Some(row.kwant_id.clone()),
         }
+        by_space.entry(of).or_default().push(row);
     }
     // Cards whose turn stopped waiting: still answerable, and a late Allow resumes the work
     for row in state.db.away_waiting_approvals().await? {
-        let of = state.db.space_of_kwant(&row.kwant_id).await?.unwrap_or_else(SpaceId::default_space);
-        if &of == space && !rows.iter().any(|r| r.id == row.id) {
+        let of = space_of(state, &mut spaces, &row.kwant_id).await?;
+        if only.is_some_and(|s| s != &of) {
+            continue;
+        }
+        let rows = by_space.entry(of).or_default();
+        if !rows.iter().any(|r| r.id == row.id) {
             rows.push(row);
         }
     }
-    Ok(rows)
+    Ok(by_space)
+}
+
+/// A bot's space, read once per call ([`approvals_by_space`]).
+async fn space_of(state: &AppState, cache: &mut HashMap<String, SpaceId>, kwant_id: &str) -> Result<SpaceId, crate::db::DbError> {
+    if let Some(s) = cache.get(kwant_id) {
+        return Ok(s.clone());
+    }
+    let of = state.db.space_of_kwant(kwant_id).await?.unwrap_or_else(SpaceId::default_space);
+    cache.insert(kwant_id.to_string(), of.clone());
+    Ok(of)
 }
 
 /// The space's open stopped items, as Needs-you cards: `title` is what stopped and what resumes
@@ -367,6 +386,34 @@ pub(super) async fn stopped_items(state: &AppState, space: &SpaceId) -> Vec<Valu
     out
 }
 
+/// What waits on the person in a space, as `GET /api/away` lists it under `waiting`: open
+/// questions, approvals, what a mission watcher left (P1) and work that stopped and waits to be
+/// resumed (0.9.5), newest first and cut to [`MAX_ITEMS`], with how many there are in all.
+/// `GET /api/glance` reads the same list, so the island and the nudge agree.
+pub(super) async fn waiting(state: &AppState, space: &SpaceId) -> Result<(Vec<Value>, i64), crate::db::DbError> {
+    let approvals = waiting_approvals(state, space).await?;
+    let watch = crate::server::missions::watch::waiting_items(state, space).await;
+    waiting_with(state, space, approvals, watch).await
+}
+
+/// [`waiting`] with the space's approvals and watch items already read (the glance reads them
+/// for every space in one pass).
+pub(super) async fn waiting_with(state: &AppState, space: &SpaceId, approvals: Vec<AwayRow>, watch: Vec<Value>) -> Result<(Vec<Value>, i64), crate::db::DbError> {
+    let mut rows = state.db.away_open_questions(space, MAX_ITEMS).await?;
+    let count = state.db.away_count_open_questions(space).await? + approvals.len() as i64;
+    rows.extend(approvals);
+    rows.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
+    rows.truncate(MAX_ITEMS as usize);
+    let stopped = stopped_items(state, space).await;
+    let count = count + watch.len() as i64 + stopped.len() as i64;
+    let mut waiting: Vec<Value> = rows.into_iter().map(item).collect();
+    waiting.extend(watch);
+    waiting.extend(stopped);
+    waiting.sort_by(|a, b| b["timestamp"].as_str().unwrap_or("").cmp(a["timestamp"].as_str().unwrap_or("")));
+    waiting.truncate(MAX_ITEMS as usize);
+    Ok((waiting, count))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AwayQuery {
     pub since: Option<String>,
@@ -390,12 +437,7 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     let stuck_before = now - Duration::minutes(STUCK_AFTER_MINUTES);
 
     let result = async {
-        let mut waiting = state.db.away_open_questions(&space, MAX_ITEMS).await?;
-        let approvals = waiting_approvals(&state, &space).await?;
-        let waiting_count = state.db.away_count_open_questions(&space).await? + approvals.len() as i64;
-        waiting.extend(approvals);
-        waiting.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
-        waiting.truncate(MAX_ITEMS as usize);
+        let (waiting, waiting_count) = waiting(&state, &space).await?;
         let finished = state.db.away_finished(&space, since, MAX_ITEMS).await?;
         let failed = state.db.away_failed(&space, since, stuck_before, MAX_ITEMS).await?;
         // The badge counts from the marker, whatever this page asked for
@@ -406,16 +448,6 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     let Ok((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed)) = result else {
         return internal();
     };
-    // What a mission watcher left for the person (P1)
-    let watch = crate::server::missions::watch::waiting_items(&state, &space).await;
-    // Work that stopped without finishing and waits for the person to resume it (0.9.5)
-    let stopped = stopped_items(&state, &space).await;
-    let waiting_count = waiting_count + watch.len() as i64 + stopped.len() as i64;
-    let mut waiting: Vec<Value> = waiting.into_iter().map(item).collect();
-    waiting.extend(watch);
-    waiting.extend(stopped);
-    waiting.sort_by(|a, b| b["timestamp"].as_str().unwrap_or("").cmp(a["timestamp"].as_str().unwrap_or("")));
-    waiting.truncate(MAX_ITEMS as usize);
     Json(json!({
         "since": rfc3339(since),
         "last_seen": seen.map(rfc3339),

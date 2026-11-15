@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
@@ -9,7 +10,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
-import { markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
+import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -87,9 +88,10 @@ import { setBadgeBots, setBadgeEngines, setBadgeProfiles } from './modelBadgeDat
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
-import { recentWork, type ChatHome } from './botHome';
+import { recentWork, teamMembersLeadFirst, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
+import { auditShortLine, auditTurnLine } from './auditor';
 import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api, heldFromReply, heldLine, heldMessages, stillHeld } from './h4Status';
 import { HeldLine } from './components/HeldLine';
 import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
@@ -156,7 +158,8 @@ import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
-import { personFetch } from './auth';
+import { PersonCancelledError, personFetch } from './auth';
+import { ContinueError, continueChatApi, continueErrorLine, continuedLine, forkOf } from './continueChat';
 import { OPEN_ADD_TOOL_EVENT, type OpenAddTool } from './mcp';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
@@ -170,7 +173,9 @@ import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
 import { JiraSetupHost } from './components/JiraSetup';
-import { useDevModeOn } from './components/DevModeSwitch';
+import { useDevMode, useDevModeOn } from './components/DevModeSwitch';
+import { DevModeSuggestion, SUGGEST_HIDDEN } from './components/DevModeSuggestion';
+import { dismissSuggest, ensureDevState, suggestDismissed, suggestShows } from './devSuggest';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { DEV_TICKET_EVENT, DEV_TICKET_PROGRESS_EVENT } from './components/dev/TicketsTab';
 import { PrepushNeedsYou, PrepushThread, threadCards, usePrepushCards, type PrepushEventDetail } from './components/dev/PrepushThread';
@@ -387,6 +392,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     markMovedSeen();
     setMovedHidden(true);
   };
+  // The suggestion's Turn on: Settings › This space › General, the Dev mode card (first there) in view and
+  // focused. It doesn't switch Dev mode on: the person presses the button on the card.
+  const openDevSuggest = () => {
+    openSpaceSettings('general');
+    focusDevSettings();
+  };
   const openMoved = () => {
     openSpaceSettings('general');
     ringDevSettings();
@@ -464,6 +475,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(null);
     setSettingsFocusRow(null);
     setSettingsClosedCount((n) => n + 1);
+    // A key may have been added or removed: the dictation mic asks again.
+    refreshDictation();
     // Accounts may have changed: the getting-started list counts the ready ones.
     onSpacesChanged();
   };
@@ -587,6 +600,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Dev mode (0.7): the open space's state, read by the switch, the hats and the grid.
   useEffect(() => devStore.setCurrent(space.id), [space.id]);
   const devOn = useDevModeOn(space.id);
+  // Dev mode visibility: the "this space has code" suggestion in #general reads the same cached state.
+  const devState = useDevMode(space.id);
+  useEffect(() => ensureDevState(space.id), [space.id]);
+  // Not now: the space it was hidden in, for the one out-of-sight "Hidden." line.
+  const [suggestHiddenIn, setSuggestHiddenIn] = useState<string | null>(null);
   // 0.8.0 B3: the space's pre-push cards (Dev mode only): the bot's thread and the Inbox read them.
   const prepush = usePrepushCards(space.id, devOn);
   const prepushWaiting = prepushNeedsYou(prepush.cards, prepush.acted).length;
@@ -2418,6 +2436,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  // Continue in a new chat from here (continueChat.ts). A 403 means this session is a bot's: the item hides.
+  const [botSession, setBotSession] = useState(false);
+  const [focusComposerKey, setFocusComposerKey] = useState(0);
+  const handleContinueFrom = async (msg: ChatMessage): Promise<string | void> => {
+    const kwantId = selectedIdRef.current;
+    try {
+      const t = await continueChatApi.fromMessage<Thread>(msg.id, personFetch);
+      knownThreadsRef.current.add(t.id);
+      setThreadsByKwant((prev) => ({ ...prev, [t.kwant_id]: upsertThread(prev[t.kwant_id], t) }));
+      if (selectedIdRef.current !== kwantId || isChannelRef.current) return;
+      setOpenThreadId(t.id);
+      setFocusComposerKey((n) => n + 1);
+      playSfx('click');
+    } catch (err) {
+      if (err instanceof PersonCancelledError) return err.message;
+      if (err instanceof ContinueError && err.status === 403) setBotSession(true);
+      return continueErrorLine(err);
+    }
+  };
+
   /** Stops a thread's work: its delegation when one is open (so the lead hears), else its turns. */
   const handleStopThread = async (t: Thread): Promise<string | void> => {
     const d = t.delegation ? delegationsRef.current[t.delegation.id] ?? t.delegation : null;
@@ -3539,6 +3577,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The bot's conversations, the open thread's controls, and "working on…" elsewhere.
   const agentThreads = currentKwant ? threadsByKwant[currentKwant.id] : undefined;
   const shownThread = openThreadId ? agentThreads?.find((t) => t.id === openThreadId) ?? null : null;
+  // Continue in a new chat: only in a chat with one bot (its main chat or a `chat` thread we know), never a team's.
+  const canContinueHere = !!currentKwant && !currentTeam && !botSession && (!openThreadId || shownThread?.kind === 'chat');
+  const fork = forkOf(shownThread);
+  const continuedFrom =
+    fork && currentKwant
+      ? {
+          text: continuedLine(
+            fork.context === currentKwant.id ? currentKwant.name : agentThreads?.find((t) => t.id === fork.context)?.title ?? 'an earlier chat',
+            fork.copied,
+            fork.truncated,
+            fork.context === currentKwant.id,
+          ),
+          onOpen: () => {
+            if (fork.context === currentKwant.id) setOpenThreadId(null);
+            else openThreadChecked(currentKwant.id, fork.context);
+            setHighlightMessageId(fork.messageId);
+            playSfx('click');
+          },
+        }
+      : null;
   const elsewhere = currentKwant ? backgroundTurns(turns, currentKwant.id).filter((t) => t.context_id !== openCtx) : [];
   const describeContext = (ctx: string, kwantId: string): string =>
     threadsByKwant[kwantId]?.find((t) => t.id === ctx)?.title ??
@@ -3554,7 +3612,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           else openTarget({ channel_id: t.context_id, kwant_id: null });
         }}
         className="inline-flex items-center gap-1.5 min-w-0 max-w-[16rem] sm:max-w-xs px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-[11px] text-sky-200 hover:bg-sky-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-        title={elsewhere.map((t) => describeContext(t.context_id, t.kwant_id)).join(', ')}
+        title={elsewhere.map((t) => (t.audit ? auditTurnLine(t.audit, kwantNames, { subject: false }) : describeContext(t.context_id, t.kwant_id))).join(', ')}
       >
         {awaitingTurns.has(elsewhere[0].turn_id) ? (
           <HelpCircle size={10} className="shrink-0 text-amber-300" aria-hidden="true" />
@@ -3562,8 +3620,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           <Loader2 size={10} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
         )}
         <span className="truncate">
+          {elsewhere[0].audit && elsewhere[0].state === 'running' && !browserTurns.has(elsewhere[0].turn_id) && !awaitingTurns.has(elsewhere[0].turn_id) ? auditShortLine(elsewhere[0].audit, kwantNames) : <>
           {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : browserTurns.has(elsewhere[0].turn_id) ? 'Needs you in the browser in ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
           {describeContext(elsewhere[0].context_id, elsewhere[0].kwant_id)}
+          </>}
         </span>
         {elsewhere.length > 1 && <span className="shrink-0 text-sky-300/80">+{elsewhere.length - 1} more</span>}
       </button>
@@ -3702,7 +3762,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const vmSwitcher = switcherEntries.length >= 2 ? { entries: switcherEntries, current: activeSandboxId, onPick: watchOwner } : null;
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
-  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
+  const busyTitles: Record<string, string> = {};
+  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext, names: kwantNames, titles: busyTitles });
   // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
   const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
@@ -3772,7 +3833,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   useEffect(() => setBadgeEngines(engines.engines), [engines.engines]);
   useEffect(() => setBadgeProfiles(profiles), [profiles]);
 
-  // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
+  // What the empty chat shows: a bot's home, #general's, a team's home, or nothing special for another channel.
   const chatHome: ChatHome = currentKwant
     ? {
         kind: 'bot',
@@ -3780,7 +3841,20 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         recent: recentWork(threadsByKwant[currentKwant.id]),
         onOpenRecent: (id: string) => openThread(currentKwant.id, id),
       }
-    : { kind: isGeneral ? 'general' : currentTeam ? 'team' : 'channel' };
+    : currentTeam && !isGeneral
+      ? {
+          kind: 'team',
+          team: {
+            name: currentTeam.name,
+            purpose: currentTeam.description,
+            lead: kwants.find((k) => k.id === currentTeam.lead_kwant_id)?.name,
+            members: teamMembersLeadFirst(
+              [...kwants.filter((k) => k.id === currentTeam.lead_kwant_id), ...currentTeamMembers],
+              currentTeam.lead_kwant_id,
+            ),
+          },
+        }
+      : { kind: isGeneral ? 'general' : 'channel' };
 
   // Delete is off while the bot runs anywhere, the open chat included.
   const workingKwants = new Set(Object.values(turns).map((t) => t.kwant_id));
@@ -3918,6 +3992,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         teams={teams}
       />
     ) : null;
+  const devSuggest = suggestShows({ inGeneral: isGeneral, state: devState, dismissed: suggestDismissed(space.id), gettingStarted: !!setupBanner || !!getStartedCard, canRun }) && devState ? (
+    <DevModeSuggestion
+      spaceName={space.name}
+      state={devState}
+      onOpen={openDevSuggest}
+      onDismiss={() => {
+        dismissSuggest(space.id);
+        setSuggestHiddenIn(space.id);
+        document.querySelector<HTMLTextAreaElement>('[data-composer-form] textarea')?.focus();
+      }}
+    />
+  ) : null;
+  // Mounted (empty) in #general before Not now fills it, so a screen reader hears the line.
+  const devSuggestStatus = isGeneral ? (
+    <p role="status" className="sr-only" data-dev-suggestion-status>
+      {suggestHiddenIn === space.id ? SUGGEST_HIDDEN : ''}
+    </p>
+  ) : null;
   const setupChecklist = (
     <SpaceReadyCard
       spaceName={space.name}
@@ -3993,6 +4085,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      busyTitles={busyTitles}
       doneKwants={doneKwants}
       browsingOwners={globes.owners}
       browsingBots={globes.bots}
@@ -4177,6 +4270,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={inboxCount} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
+          spaceId={space.id}
+          onToast={pushToast}
           heldNotes={heldNotes}
           dropOff={!!spaceSettingsTab}
           title={chatTitle}
@@ -4281,11 +4376,22 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 }
               : undefined
           }
+          onContinueFrom={canContinueHere ? handleContinueFrom : undefined}
+          threadKind={shownThread?.kind ?? null}
+          continuedFrom={continuedFrom}
+          focusComposerKey={focusComposerKey}
           highlightMessageId={highlightMessageId}
           onHighlightDone={() => setHighlightMessageId(null)}
           subHeader={subHeader}
           threadLine={isPhone && threadBarProps ? <ThreadPicker {...threadBarProps} /> : undefined}
-          notice={setupBanner}
+          notice={
+            setupBanner ?? (
+              <>
+                {devSuggest}
+                {devSuggestStatus}
+              </>
+            )
+          }
           topCard={
             isChannel && currentTeam ? (
               <TeamNeedsTop

@@ -15,6 +15,7 @@
 
 pub mod api;
 pub mod bridge;
+pub mod customers;
 pub mod pairing;
 pub mod routes;
 pub mod text;
