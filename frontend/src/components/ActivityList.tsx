@@ -191,12 +191,20 @@ const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: nu
   );
 };
 
+/** The saved reply's steps row (and the live one once it folds, 18f): one class string, so both are the same height. */
+export const STEPS_ROW_BUTTON =
+  'max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
+/** The list the steps row opens to. */
+export const STEPS_ROW_LIST = 'mt-1.5 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]';
+
 /**
  * While the bot works: every step so far, newest last. `compact` (phone, 0.6.13 spec C2) folds it to
  * one 44 px row, "Steps · 2 ▸", that opens to the same list; the engine's note (what it can't show of
  * its thinking) moves behind an ⓘ in that row, since the working strip already says the bot works.
+ * `folded` (desktop, once the reply has words, 18f) draws the saved reply's one row instead of the card,
+ * so landing only changes its label; opened, it stays open until the reply lands.
  */
-export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; compact?: boolean; lead?: React.ReactNode }> = ({ live, idBase, compact = false, lead }) => {
+export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; compact?: boolean; folded?: boolean; lead?: React.ReactNode }> = ({ live, idBase, compact = false, folded = false, lead }) => {
   const { steps } = live;
   const [open, setOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -261,6 +269,30 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
       </section>
     );
   }
+  if (folded) {
+    const listId = `${idBase}-live`;
+    return (
+      <section aria-label="What the bot is doing" data-steps-folded="" className="mb-2 max-w-full">
+        <div className="flex max-w-full min-w-0 items-center gap-2">
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={open ? listId : undefined} className={STEPS_ROW_BUTTON}>
+            <ListTree size={13} className="text-sky-400/80" aria-hidden="true" />
+            {/* No time while running, as in the card */}
+            <span className="truncate min-w-0">Working · {work} {work === 1 ? 'step' : 'steps'}</span>
+            <ChevronRight size={13} className={`flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
+          </button>
+          {lead && <div className="min-w-0 shrink">{lead}</div>}
+        </div>
+        {announce}
+        {open && (
+          <div className={STEPS_ROW_LIST}>
+            <div className="max-h-[22rem] overflow-y-auto">
+              <Steps steps={steps} live={live} id={listId} />
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  }
   return (
     <section aria-label="What the bot is doing" className="mb-2 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]">
       <p className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
@@ -292,14 +324,14 @@ export const SavedActivityList: React.FC<{ activity: SavedActivity; idBase: stri
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+        className={STEPS_ROW_BUTTON}
       >
         <ListTree size={13} className={failed ? 'text-rose-300' : 'text-sky-400/80'} aria-hidden="true" />
         <span className="truncate min-w-0">{activitySummary(activity)}</span>
         <ChevronRight size={13} className={`flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
       </button>
       {open && (
-        <div className="mt-1.5 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]">
+        <div className={STEPS_ROW_LIST}>
           <Steps steps={activity.steps} dropped={activity.dropped} id={listId} />
           {children}
         </div>

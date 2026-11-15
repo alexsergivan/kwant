@@ -38,7 +38,7 @@ import { QuestionMeta, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
 import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
-import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
+import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
@@ -2411,6 +2411,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   live={liveActivity}
                   idBase={`live-${liveActivity.turnId}`}
                   compact={phone}
+                  folded={!phone && foldLiveSteps({ writing, steps: liveActivity.steps })}
                   lead={
                     livePages.length > 0 ? (
                       <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
