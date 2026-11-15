@@ -48,11 +48,12 @@ const mcpView = (approval: PendingApproval) => {
 };
 
 /** Arguments worth a line of their own on the card, in this order (0.6.13 spec C1). */
-const KEY_FACTS = ['title', 'name', 'path', 'url', 'repo', 'command'];
+const KEY_FACTS = ['title', 'name', 'path', 'files', 'url', 'repo', 'command'];
 
 /**
  * Up to two short "key: value" lines from a tool's arguments, so the card says what the call is
- * about without opening the details. Only text and numbers; everything else stays in the details.
+ * about without opening the details. Text, numbers, and an array of strings (joined); everything
+ * else stays in the details.
  */
 export function keyFacts(args: unknown, max = 2): Array<[string, string]> {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return [];
@@ -60,7 +61,10 @@ export function keyFacts(args: unknown, max = 2): Array<[string, string]> {
   const out: Array<[string, string]> = [];
   for (const k of KEY_FACTS) {
     const v = a[k];
-    const text = typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '';
+    const text = typeof v === 'string' ? v.trim()
+      : typeof v === 'number' ? String(v)
+      : Array.isArray(v) ? v.filter((x) => typeof x === 'string').join(', ')
+      : '';
     if (text) out.push([k, text]);
     if (out.length >= max) break;
   }

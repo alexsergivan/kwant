@@ -123,6 +123,7 @@ async fn turn(e: &Env, folder: &Path) -> (String, String) {
         state: "running".into(),
         since: Utc::now(),
         purpose: None,
+        audit: None,
     });
     (turn_id, token)
 }

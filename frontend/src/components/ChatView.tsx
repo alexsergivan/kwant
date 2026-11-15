@@ -14,9 +14,9 @@ import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
-import { AccountCard, BotHome } from './BotHome';
+import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
-import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
+import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
@@ -80,7 +80,7 @@ import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSugg
 import { routeReasonText, routeWhyText } from '../routeReason';
 import { useInbox } from '../inboxStore';
 import { doneItemsOf, doneOf } from '../replyDone';
-import { APPROVE_TEXT, asksApproval, changePlaceholder } from '../approvalAsk';
+import { APPROVE_TEXT, asksApproval, changePlaceholder, metaHidesApprove } from '../approvalAsk';
 import { DoneCheckLine } from './DoneMarker';
 import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
@@ -110,6 +110,7 @@ import { liveBubble, waitingOn } from '../workingStrip';
 import { COMPOSE_PREFILL_EVENT, withPrefill } from './results/SmartResult';
 import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
+import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, useDictation } from './DictationMic';
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
 
 export interface ChatMessage {
@@ -346,6 +347,10 @@ export interface ChatViewProps {
   onSendToOtherBot?: (question: ChatMessage, kwantId: string) => Promise<string | void>;
   /** Opens Space settings → Accounts; turns a "nothing can run" reply into a card with a button. */
   onOpenAccounts?: () => void;
+  /** The space's real id (spc_…): the dictation mic asks it whether it can turn speech into text. */
+  spaceId?: string;
+  /** A short notice at the corner of the window (dictation stopped because you left the chat). */
+  onToast?: (title: string, detail?: string) => void;
   /** Opens Settings › All spaces › Usage at the daily spending stop. */
   onOpenUsage?: () => void;
   /** Opens App settings at the Computer card, "Run Claude inside the VM" focused (isolation notices). */
@@ -575,6 +580,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   rerouteTargets = [],
   onSendToOtherBot,
   onOpenAccounts,
+  spaceId,
+  onToast,
   onOpenUsage,
   onOpenComputerSettings,
   budgetBotId = null,
@@ -644,6 +651,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Dictation (design.md): the mic between @ and Send; one line at the top of the box says what's happening.
+  const reducedMotion = useMedia('(prefers-reduced-motion: reduce)');
+  const dict = useDictation({
+    spaceId,
+    chatKey: contextKey,
+    phone,
+    touch,
+    value: inputVal,
+    textareaRef,
+    setValue: setInputVal,
+    onToast: onToast ? (t) => onToast(t) : undefined,
+  });
 
   const handleInsertTag = (tag: string) => {
     playSfx('click');
@@ -827,8 +846,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.
   const stickRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  // The empty chat's home opens at its top: on a phone a team home is taller than the screen, and its faces come first (13d).
+  const homeShowingRef = useRef(false);
   const pinToBottom = (el: HTMLDivElement) => {
-    el.scrollTop = el.scrollHeight;
+    el.scrollTop = homeShowingRef.current ? 0 : el.scrollHeight;
     lastScrollTopRef.current = el.scrollTop;
   };
   // A waiting card whose buttons are off screen while the person reads further up.
@@ -1068,7 +1089,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const last = messages[messages.length - 1];
     if (!last || last.sender_role !== 'kwant' || last.id.startsWith('temp-') || isStreaming || awaitingAnswer || pendingApprovals.length > 0) return null;
     const meta = parseMetaObject(last.meta);
-    if (meta && (meta.blocked || meta.question_id || meta.kind)) return null;
+    if (metaHidesApprove(meta)) return null;
     return asksApproval(last.text) ? last.id : null;
   }, [messages, isStreaming, awaitingAnswer, pendingApprovals.length]);
   const approve = async (msg: ChatMessage) => {
@@ -1208,13 +1229,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
     });
   };
 
-  const canSend = ideaMode ? !ideaBlocked : composerReady(inputVal, uploads);
+  // Send waits for dictation to finish, like it waits for uploads.
+  const canSend = !dict.busy && (ideaMode ? !ideaBlocked : composerReady(inputVal, uploads));
   // The line under the field: too long or a file shows at once; an empty idea only once Enter was tried.
   const ideaLine = (ideaError && ideaError.text === inputVal ? ideaError.line : null) ?? (ideaBlocked && (ideaTried || ideaLength(inputVal) > 0 || uploads.length > 0) ? ideaBlocked : null);
   const stillUploading = uploads.some((u) => u.state === 'uploading');
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (dict.busy) return;
+    dict.noteSent();
     // A reply in progress doesn't block the next message (it waits its turn); a team discussion does.
     if (ideaMode) {
       // Ideas never wait on a reply or a discussion: the jar is not a bot.
@@ -1839,14 +1863,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
     );
   };
 
-  // The empty chat shows the bot home (a bot's own chat, or #general) instead of a bare pane and a row of chips
+  // The empty chat shows a home (a bot's own chat, #general, or a team's chat) instead of a bare pane and a row of chips
   const showHome =
-    !!home && (home.kind === 'bot' || home.kind === 'general') && !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
-  // first-screen E: nothing can run and Get started (the welcome) isn't on screen. A bot's chat and #general
-  // show it inside the home; an empty team chat shows it on its own.
+    !!home &&
+    (home.kind === 'bot' || home.kind === 'general' || (home.kind === 'team' && !!home.team)) &&
+    !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
+  homeShowingRef.current = showHome;
+  // first-screen E: nothing can run and Get started (the welcome) isn't on screen. The home shows it in place of its asks.
   const accountCard = accountCardShows({ canRun, getStartedShowing: !!welcome });
-  const teamAccountCard =
-    accountCard && home?.kind === 'team' && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
   // Who answers what's typed: the chat decides, an @mention overrides
   const target = answerTarget({
     kind: home?.kind ?? 'channel',
@@ -2007,7 +2031,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const showAnswers = !ideaMode && (!phone || home?.kind !== 'bot' || target.kind === 'mention');
   const showHintText = !(phone && touch);
   const measure16 = (t: string) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : '');
-  const placeholder = changeFor && replyTo ? changePlaceholder(changeFor) : askOnly
+  const placeholder = dict.phase === 'recording' && !inputVal
+    ? 'Speak now…'
+    : changeFor && replyTo
+    ? changePlaceholder(changeFor)
+    : askOnly
     ? phone
       ? fitPlaceholder(answerPlaceholder(awaitingBot?.name || streamingSpeakerName || title), 'Your answer…', fieldWidth, measure16)
       : answerPlaceholder(awaitingBot?.name || streamingSpeakerName || title)
@@ -2248,18 +2276,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <BotHome
               home={home}
               spaceName={spaceName}
-              team={activeKwants}
+              team={home.kind === 'team' ? home.team?.members : activeKwants}
               prompts={suggestions}
+              answerLine={home.kind === 'team' ? teamAnswerLine(teamName) : undefined}
               canRun={canRun}
               onPick={handlePromptSuggestion}
               accountCard={accountCard}
               onOpenAccounts={onOpenAccounts}
             />
-          </div>
-        )}
-        {teamAccountCard && (
-          <div className="mx-auto flex w-full max-w-3xl px-1">
-            <AccountCard onOpenAccounts={onOpenAccounts} />
           </div>
         )}
         {groupDiscussionThreads(arranged.messages, { foldOpen: askOnly }).map((item, n, items) => {
@@ -2649,6 +2673,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
               onSelect={handleSelectMention}
             />
           )}
+          <DictationSetupPopover d={dict} phone={phone} onOpenAccounts={onOpenAccounts} />
+          <DictationLine d={dict} phone={phone} botName={title} reduced={reducedMotion} />
+          <DictationAnnouncer d={dict} />
 
           <textarea
             ref={textareaRef}
@@ -2667,6 +2694,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             onChange={(e) => {
               const val = e.target.value;
               setInputVal(val);
+              dict.noteTyping();
               e.target.style.height = 'auto';
               e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
               checkMention(val, e.target.selectionStart);
@@ -2734,7 +2762,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <AtSign size={phone ? 18 : 17} aria-hidden="true" />
             {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
             {phone && !isStreaming && (
-              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`} />
+              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${dict.popOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`} />
             )}
           </button>
           {stacked && <span className="flex-1" aria-hidden="true" />}
@@ -2747,8 +2775,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {!phone && !isStreaming && (
             <NewTag
               id="mention"
-              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`}
-              style={{ right: 'calc(11px + var(--kw-cbtn-step))' }}
+              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${dict.popOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`}
+              style={{ right: dict.view === 'hidden' ? 'calc(11px + var(--kw-cbtn-step))' : 'calc(11px + 2 * var(--kw-cbtn-step))' }}
             />
           )}
 
@@ -2772,6 +2800,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {ideaLength(inputVal).toLocaleString('en-US')} / {IDEA_MAX.toLocaleString('en-US')}
             </span>
           )}
+          <MicButton d={dict} phone={phone} />
           {ideaMode ? (
             <button
               type="submit"
@@ -2788,14 +2817,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               <JarIcon size={phone ? 18 : 17} />
             </button>
-          ) : (askOnly || !(isStreaming && (discussionState?.inProgress || !canSend))) && (
+          ) : !(phone && !stacked && dict.view !== 'hidden') && (askOnly || !(isStreaming && (discussionState?.inProgress || (!canSend && !dict.busy)))) && (
             <button
               type="submit"
-              aria-label={stillUploading ? 'Send (waiting for uploads)' : askOnly ? 'Send (answers the question)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
-              title={stillUploading ? 'Waiting for uploads to finish' : undefined}
+              aria-label={dict.busy ? 'Send (waiting for dictation)' : stillUploading ? 'Send (waiting for uploads)' : askOnly ? 'Send (answers the question)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
+              title={dict.busy ? 'Waiting for dictation to finish' : stillUploading ? 'Waiting for uploads to finish' : undefined}
               disabled={!canSend}
               data-send-ready={canSend ? 'true' : 'false'}
-              className={`${phone ? 'w-11 h-11 focus-visible:outline-[#b8adff]' : 'w-11 h-11 sm:w-9 sm:h-9 focus-visible:outline-sky-300'} rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,filter,box-shadow,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${
+              className={`${phone ? 'w-11 h-11 ml-1.5 focus-visible:outline-[#b8adff]' : 'w-11 h-11 sm:w-9 sm:h-9 focus-visible:outline-sky-300'} rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,filter,box-shadow,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${
                 canSend
                   ? phone
                     ? 'bg-[#6c58e0] text-white hover:bg-[#5845bd] active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'

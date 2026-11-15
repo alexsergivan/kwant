@@ -123,6 +123,7 @@ async fn turn_with(e: &Env, bot: &Kwant, opts: mcp_runtime::TurnApprovalOpts) ->
         state: "running".into(),
         since: Utc::now(),
         purpose: None,
+        audit: None,
     });
     (turn_id, token, folder)
 }
