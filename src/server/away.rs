@@ -415,9 +415,17 @@ pub(super) fn action_of(v: &Value) -> Option<&'static str> {
             Some("continue") => "continue",
             _ => "retry",
         },
-        "delegation" | "routine_run" => match status {
+        // A failed hand-off reruns only through its board task (`task_id`); without one there is
+        // no Retry to offer: the person asks again in its thread (a later reply closes the row) or
+        // dismisses it
+        "delegation" => match status {
             "stuck" => "decide",
-            "failed" | "interrupted" | "error" => "retry",
+            "failed" | "interrupted" if v["task_id"].is_string() => "retry",
+            _ => return None,
+        },
+        "routine_run" => match status {
+            "stuck" => "decide",
+            "error" => "retry",
             _ => return None,
         },
         _ => return None,
@@ -437,12 +445,25 @@ pub(super) fn dismissable(v: &Value) -> bool {
     }
 }
 
-/// Adds `action`, `dismissable` and, when the item's thread belongs to another bot,
+/// 22i: a failed or interrupted hand-off gets `task_id` when the board has a failed task for it,
+/// which `POST /api/tasks/:id/retry` reruns. Without it the row's `action` is `null`.
+async fn add_hand_off_task(db: &crate::db::Database, v: &mut Value) {
+    if v["kind"] != "delegation" || !matches!(v["status"].as_str(), Some("failed" | "interrupted")) {
+        return;
+    }
+    let Some(id) = v["id"].as_str() else { return };
+    if let Ok(Some(task_id)) = db.retryable_hand_off_task(id).await {
+        v["task_id"] = json!(task_id);
+    }
+}
+
+/// Adds `action`, `dismissable`, `task_id` on a failed hand-off with a board task and, when the item's thread belongs to another bot,
 /// `link.thread_kwant_id`: the client looks a thread up under its owner, and finding it under the
 /// item's bot failed, falling back to the direct chat (one way to Quant's case).
 async fn annotate(state: &AppState, items: &mut [Value]) {
     let mut owners: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     for v in items.iter_mut() {
+        add_hand_off_task(&state.db, v).await;
         v["action"] = json!(action_of(v));
         v["dismissable"] = json!(dismissable(v));
         let Some(thread_id) = v["link"]["thread_id"].as_str().map(str::to_string) else { continue };
@@ -568,8 +589,10 @@ mod tests {
             (json!({"kind": "stopped", "status": "open", "retry": null}), Some("retry"), true),
             (json!({"kind": "stopped", "status": "open", "retry": {"type": "continue"}}), Some("continue"), true),
             (json!({"kind": "stopped", "status": "open", "retry": {"type": "approval", "approval_id": "a1"}}), Some("ask_again"), true),
-            (json!({"kind": "delegation", "status": "failed"}), Some("retry"), true),
-            (json!({"kind": "delegation", "status": "interrupted"}), Some("retry"), true),
+            (json!({"kind": "delegation", "status": "failed", "task_id": "t1"}), Some("retry"), true),
+            (json!({"kind": "delegation", "status": "interrupted", "task_id": "t1"}), Some("retry"), true),
+            (json!({"kind": "delegation", "status": "failed"}), None, true),
+            (json!({"kind": "delegation", "status": "interrupted"}), None, true),
             (json!({"kind": "delegation", "status": "stuck"}), Some("decide"), true),
             (json!({"kind": "routine_run", "status": "error"}), Some("retry"), true),
             (json!({"kind": "delegation", "status": "completed"}), None, false),
@@ -579,6 +602,49 @@ mod tests {
             assert_eq!(action_of(&v), action, "{v}");
             assert_eq!(dismissable(&v), can_dismiss, "{v}");
         }
+    }
+
+    /// 22i: a failed hand-off offers Retry only with a failed board task to rerun, and carries its
+    /// `task_id`; with the board off (no task) or a task that isn't failed it offers no Retry, so
+    /// the row never has a button with nowhere to go. It stays dismissable either way.
+    #[tokio::test]
+    async fn a_failed_hand_off_offers_retry_only_with_a_board_task_to_rerun() {
+        use crate::db::missions::NewTask;
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
+        let row = |id: &str| json!({"kind": "delegation", "id": id, "status": "failed", "link": {"thread_id": "t"}});
+        // No board task (the board is off by default)
+        let mut v = row("d1");
+        add_hand_off_task(&db, &mut v).await;
+        assert!(v.get("task_id").is_none(), "{v}");
+        assert_eq!(action_of(&v), None);
+        assert!(dismissable(&v));
+        // A failed board task for it: Retry reruns that task
+        let task = |state: &str, source: &str| NewTask {
+            title: "Hand-off".into(),
+            state: state.into(),
+            priority: 1,
+            max_attempts: 3,
+            source_kind: "delegation".into(),
+            source_id: Some(source.into()),
+            created_by: "kwant".into(),
+            ..Default::default()
+        };
+        let t = db.create_task(&SpaceId::default_space(), &task("failed", "d1")).await.unwrap();
+        let mut v = row("d1");
+        add_hand_off_task(&db, &mut v).await;
+        assert_eq!(v["task_id"], json!(t.id));
+        assert_eq!(action_of(&v), Some("retry"));
+        // A task that isn't failed can't be retried there, so no Retry either
+        db.create_task(&SpaceId::default_space(), &task("blocked", "d2")).await.unwrap();
+        let mut v = row("d2");
+        add_hand_off_task(&db, &mut v).await;
+        assert!(v.get("task_id").is_none(), "{v}");
+        assert_eq!(action_of(&v), None);
+        // Other rows are left alone
+        let mut v = json!({"kind": "routine_run", "id": "d1", "status": "error"});
+        add_hand_off_task(&db, &mut v).await;
+        assert!(v.get("task_id").is_none());
     }
 
     #[test]

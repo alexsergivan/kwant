@@ -294,6 +294,18 @@ impl Database {
         Ok(sqlx::query_scalar(sql).bind(ref_id).fetch_optional(&self.pool).await?)
     }
 
+    /// 22i: the board task a failed hand-off's Retry can rerun (`POST /api/tasks/:id/retry`, which
+    /// moves only a `failed` task). `None` when the board has no such task (it is off by default)
+    /// or the task isn't failed: the row then offers no Retry, only its thread and Dismiss.
+    pub async fn retryable_hand_off_task(&self, delegation_id: &str) -> Result<Option<String>, DbError> {
+        Ok(sqlx::query_scalar(
+            "SELECT id FROM tasks WHERE source_kind = 'delegation' AND source_id = ? AND state = 'failed' ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(delegation_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
     /// 22i: the person's Dismiss (`POST /api/waiting/:id/dismiss`) of one Needs-attention item.
     /// `kind` is the item's `kind` from `/api/away` (`stopped`, `reply`, `delegation`,
     /// `routine_run`, …); without it, `id` is looked up as a waiting item, then a hand-off, then a

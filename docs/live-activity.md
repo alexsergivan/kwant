@@ -331,6 +331,12 @@ Every item in `waiting`, `finished` and `failed` carries:
 - `dismissable`: `true` for a stop and for a failed or stuck hand-off or routine run.
 - `link.thread_kwant_id`: present only when the item's thread belongs to another bot. Open the
   thread under this bot, not the item's `kwant_id`.
+- `task_id`: only on a `failed` or `interrupted` hand-off (`kind: "delegation"`) whose board task
+  is `failed`. Its Retry is `POST /api/tasks/:task_id/retry`, and `action` is `"retry"` only then.
+  Without it (the board is off by default) a failed hand-off has `action: null` and
+  `dismissable: true`: the person opens its thread and asks the bot again there, and that bot's
+  next finished reply closes the row (`later_reply`), or they dismiss it. There is no
+  `/api/waiting/:id/retry`.
 
 ### `POST /api/waiting/:id/dismiss` (the person only)
 
