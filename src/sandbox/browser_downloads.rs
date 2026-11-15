@@ -73,6 +73,9 @@ const CONTAINER_TOO_BIG: &str =
 /// a small chore (making the folder, removing a file).
 const CONTAINER_COPY_WAIT: Duration = Duration::from_secs(300);
 const CONTAINER_CHORE_WAIT: Duration = Duration::from_secs(15);
+/// The image's own non-root user (the one Chrome runs as): every `docker exec` kwant runs in
+/// the container uses it, so a future image that defaults to root can't quietly widen them.
+const CONTAINER_USER: &str = "browser";
 
 /// Where a session's Chrome keeps a download, and so how it reaches the bot's `downloads/`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,7 +108,7 @@ impl DownloadHome {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum DlStatus {
     InProgress,
     Done(String),
@@ -125,6 +128,8 @@ struct DownloadEntry {
     /// kwant asked Chrome to cancel it for passing the cap, so the `canceled` that follows says
     /// so (and the cancel isn't sent again on every later progress event).
     too_big: Option<&'static str>,
+    /// The container's file is being copied out: a newer download must leave it alone.
+    copying: bool,
 }
 
 #[derive(Clone)]
@@ -667,29 +672,48 @@ async fn handle_event(
             let Some(guid) = params["guid"].as_str().map(str::to_string) else { return };
             let frame_id = params["frameId"].as_str().unwrap_or_default();
             let name = sanitize_name(params["suggestedFilename"].as_str().unwrap_or("download"));
-            let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
-            // Another bot's session may see this event too (see the module doc's accepted gap):
-            // only claim it when the frame it started on is actually this page's own.
-            if !s.frames.contains(frame_id) {
-                return;
-            }
-            let status = match home {
-                DownloadHome::Elsewhere => DlStatus::Failed(REMOTE_DOWNLOAD_REFUSAL.into()),
-                // the guid names the file inside the container: never let it be a path
-                DownloadHome::Container(_) if !plain_guid(&guid) => {
-                    DlStatus::Failed("the browser gave the download a name kwant can't use.".into())
+            let replaced = {
+                let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+                // Another bot's session may see this event too (see the module doc's accepted gap):
+                // only claim it when the frame it started on is actually this page's own.
+                if !s.frames.contains(frame_id) {
+                    return;
                 }
-                _ => DlStatus::InProgress,
+                // This center tracks one download at a time. In the container an earlier one still
+                // running would go on filling the shared tmpfs with nobody left to cap, land or remove
+                // it, so it is stopped and removed as the new one takes its place.
+                let replaced = match (home, s.download.as_ref()) {
+                    (DownloadHome::Container(_), Some(prev))
+                        if prev.guid != guid && matches!(prev.status, DlStatus::InProgress) && !prev.copying && plain_guid(&prev.guid) =>
+                    {
+                        Some(prev.guid.clone())
+                    }
+                    _ => None,
+                };
+                let status = match home {
+                    DownloadHome::Elsewhere => DlStatus::Failed(REMOTE_DOWNLOAD_REFUSAL.into()),
+                    // the guid names the file inside the container: never let it be a path
+                    DownloadHome::Container(_) if !plain_guid(&guid) => {
+                        DlStatus::Failed("the browser gave the download a name kwant can't use.".into())
+                    }
+                    _ => DlStatus::InProgress,
+                };
+                s.download = Some(DownloadEntry {
+                    guid,
+                    name,
+                    total: None,
+                    received: 0,
+                    status,
+                    reported_terminal: false,
+                    too_big: None,
+                    copying: false,
+                });
+                replaced
             };
-            s.download = Some(DownloadEntry {
-                guid,
-                name,
-                total: None,
-                received: 0,
-                status,
-                reported_terminal: false,
-                too_big: None,
-            });
+            if let (DownloadHome::Container(container), Some(prev)) = (home, replaced) {
+                let _ = call_raw(ws, msg_id, "Browser.cancelDownload", cancel_params(&prev, landing.browser_context_id)).await;
+                tokio::spawn(remove_from_container(container.clone(), prev));
+            }
         }
         "Browser.downloadProgress" => {
             // A browser on another computer already answered `downloadWillBegin` as failed and
@@ -728,8 +752,16 @@ async fn handle_event(
                     entry.received = received;
                     match state.as_str() {
                         "completed" => match (home, file_path) {
+                            // it can finish between two progress events, past the cap: never copy that out
+                            (DownloadHome::Container(_), _) if entry.too_big.is_some() || received.max(total.unwrap_or(0)) > cap => {
+                                entry.status = DlStatus::Cancelled(entry.too_big.unwrap_or(home.too_big()).to_string());
+                                clear_container = true;
+                            }
                             // the container's file is the guid kwant checked, whatever path Chrome reports
-                            (DownloadHome::Container(_), _) => finish = Some((entry.name.clone(), String::new())),
+                            (DownloadHome::Container(_), _) => {
+                                entry.copying = true;
+                                finish = Some((entry.name.clone(), String::new()));
+                            }
                             (_, Some(path)) => finish = Some((entry.name.clone(), path)),
                             (_, None) => entry.status = DlStatus::Failed("Chrome didn't say where the file landed.".into()),
                         },
@@ -875,19 +907,20 @@ async fn docker_chore(args: &[&str]) -> Result<(), String> {
 }
 
 /// Makes sure the container has its download folder (its tmpfs starts empty after every
-/// restart), and sweeps anything an interrupted landing left there for an hour.
+/// restart), and sweeps anything an interrupted landing left there over an hour ago. It runs
+/// when a session connects or reconnects, so the sweep is a backstop, not a timer.
 async fn prepare_container_dir(container: &str) {
-    if let Err(e) = docker_chore(&["exec", container, "mkdir", "-p", CONTAINER_DOWNLOAD_DIR]).await {
+    if let Err(e) = docker_chore(&["exec", "-u", CONTAINER_USER, container, "mkdir", "-p", CONTAINER_DOWNLOAD_DIR]).await {
         tracing::warn!("browser downloads: couldn't make {CONTAINER_DOWNLOAD_DIR} in {container}: {e}");
         return;
     }
-    let _ = docker_chore(&["exec", container, "find", CONTAINER_DOWNLOAD_DIR, "-mindepth", "1", "-mmin", "+60", "-delete"]).await;
+    let _ = docker_chore(&["exec", "-u", CONTAINER_USER, container, "find", CONTAINER_DOWNLOAD_DIR, "-mindepth", "1", "-mmin", "+60", "-delete"]).await;
 }
 
 /// Removes a download's file (and any partial file) from the container's tmpfs.
 async fn remove_from_container(container: String, guid: String) {
     let [file, partial] = container_paths(&guid);
-    if let Err(e) = docker_chore(&["exec", &container, "rm", "-f", "--", &file, &partial]).await {
+    if let Err(e) = docker_chore(&["exec", "-u", CONTAINER_USER, &container, "rm", "-f", "--", &file, &partial]).await {
         tracing::warn!("browser downloads: couldn't remove {file} from {container}: {e}");
     }
 }
@@ -907,8 +940,11 @@ async fn copy_out_of_container(container: &str, staging: &Path, guid: &str) -> R
     }
     let file = options.open(&staged).map_err(|e| e.to_string())?;
     let [source, _] = container_paths(guid);
+    // `head -c`, not `cat`: whatever sits at that path (a symlink to /dev/zero, say), at most one
+    // byte past the cap ever reaches this disk, and the size check below then refuses it.
+    let limit = (CONTAINER_MAX_DOWNLOAD_BYTES + 1).to_string();
     let run = tokio::process::Command::new("docker")
-        .args(["exec", container, "cat", "--", &source])
+        .args(["exec", "-u", CONTAINER_USER, container, "head", "-c", &limit, "--", &source])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(file))
         .stderr(std::process::Stdio::piped())
@@ -1173,6 +1209,68 @@ mod tests {
         let report = center.report().unwrap();
         assert_eq!(report["status"], "cancelled");
         assert!(report["note"].as_str().unwrap().contains("over 400 MB"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn a_container_download_that_finishes_past_the_cap_is_never_copied_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Container("kwnt-browser-unit-test-none".into());
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g5", "frameId": "F1", "suggestedFilename": "big.bin"})).await;
+        // no size announced, and it finished before a progress event could pass the cap
+        feed(&shared, &landing, "Browser.downloadProgress", json!({"guid": "g5", "state": "completed", "receivedBytes": 401 * 1024 * 1024})).await;
+        let entry = shared.lock().unwrap().download.clone().unwrap();
+        assert!(!entry.copying, "no copy-out was started");
+        assert!(matches!(&entry.status, DlStatus::Cancelled(why) if why.contains("over 400 MB")), "{:?}", entry.status);
+    }
+
+    #[tokio::test]
+    async fn a_container_download_at_the_cap_is_still_copied_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Container("kwnt-browser-unit-test-none".into());
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g6", "frameId": "F1", "suggestedFilename": "ok.bin"})).await;
+        feed(&shared, &landing, "Browser.downloadProgress", json!({"guid": "g6", "state": "completed", "receivedBytes": CONTAINER_MAX_DOWNLOAD_BYTES})).await;
+        assert!(shared.lock().unwrap().download.as_ref().unwrap().copying, "the copy-out started");
+    }
+
+    #[tokio::test]
+    async fn a_second_container_download_stops_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Container("kwnt-browser-unit-test-none".into());
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g1", "frameId": "F1", "suggestedFilename": "a.bin"})).await;
+        let sent = feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g7", "frameId": "F1", "suggestedFilename": "b.bin"})).await;
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["method"], "Browser.cancelDownload");
+        assert_eq!(sent[0]["params"], json!({"guid": "g1", "browserContextId": "ctx-1"}));
+        assert_eq!(shared.lock().unwrap().download.as_ref().unwrap().guid, "g7");
+    }
+
+    #[tokio::test]
+    async fn a_second_container_download_leaves_one_being_copied_out_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Container("kwnt-browser-unit-test-none".into());
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g8", "frameId": "F1", "suggestedFilename": "a.bin"})).await;
+        shared.lock().unwrap().download.as_mut().unwrap().copying = true;
+        let sent = feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "g9", "frameId": "F1", "suggestedFilename": "b.bin"})).await;
+        assert!(sent.is_empty(), "{sent:?}");
+    }
+
+    #[tokio::test]
+    async fn a_second_local_download_sends_no_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = DownloadHome::Local;
+        let shared = claimed();
+        let landing = container_landing(&home, dir.path());
+        feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "l1", "frameId": "F1", "suggestedFilename": "a.bin"})).await;
+        let sent = feed(&shared, &landing, "Browser.downloadWillBegin", json!({"guid": "l2", "frameId": "F1", "suggestedFilename": "b.bin"})).await;
+        assert!(sent.is_empty(), "{sent:?}");
     }
 
     #[tokio::test]
