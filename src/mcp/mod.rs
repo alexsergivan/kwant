@@ -544,6 +544,10 @@ pub struct McpTurnContext {
     pub approvals: Approvals,
     /// Tool call records for the reply's `tool_calls` field; drivers and the permission endpoint append.
     pub records: Arc<Mutex<Vec<Value>>>,
+    /// A business customer's turn (`every_call`, B1): `servers` holds only kwnt's own, and agent
+    /// CLIs run with none of their built-in tools, so their own allow rules have nothing to let
+    /// through without a card. A CLI that can't be held to that runs the turn with no tools.
+    pub kwnt_only: bool,
 }
 
 /// Where an agent CLI reaches this turn's MCP gateway. The token is sent as a bearer token.
