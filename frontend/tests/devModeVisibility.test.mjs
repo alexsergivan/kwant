@@ -286,14 +286,19 @@ test('Suggestion: names the space and repo; Not now persists for that space acro
 
 test('Suggestion → Settings: Turn on opens General and focuses the Dev mode card (scrolled into view)', async () => {
   reset(offFound);
+  // Count scrolls before the wait starts: on a slow runner focusDevSettings can find the card
+  // before mount() returns, so a stub put on the card afterwards would miss the call.
+  let scrolled = 0;
+  const proto = window.HTMLElement.prototype;
+  const realScroll = proto.scrollIntoView;
+  proto.scrollIntoView = function () { if (this.hasAttribute('data-dev-settings')) scrolled++; };
   // The card mounts after Settings opens: focusDevSettings waits for it.
   m.focusDevSettings(document, 20);
   const v = await mount(h(m.DevModeSettings, { spaceId: 'spc_demo', spaceName: 'Demo' }));
   await settle();
   const card = v.host.querySelector('[data-dev-settings]');
-  let scrolled = 0;
-  card.scrollIntoView = () => scrolled++;
   await new Promise((r) => setTimeout(r, 120));
+  if (realScroll) proto.scrollIntoView = realScroll; else delete proto.scrollIntoView;
   assert.equal(document.activeElement, card.querySelector('[data-dev-turn-on]'), 'focus lands on the card\'s Turn on');
   assert.ok(card.contains(document.activeElement));
   assert.equal(card.hasAttribute('data-dev-arrived'), true, 'outlined');
