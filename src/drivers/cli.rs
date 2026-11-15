@@ -1582,6 +1582,8 @@ impl Driver for CliDriver {
         let mut _mcp_config: Option<crate::mcp::cli_config::ConfigFile> = None;
         // 21d: the curl config claude's repeat-guard hooks post through; lives as long as the CLI
         let mut repeat_hook: Option<crate::mcp::cli_config::ConfigFile> = None;
+        // Whether this computer's `--settings` already went in (claude: before its prompt)
+        let mut settings_added = false;
 
         let effort = input.effort_level.as_deref().unwrap_or("medium");
 
@@ -1854,6 +1856,17 @@ impl Driver for CliDriver {
                 // JSON lines as claude works, ending in one result that tells a usage limit or
                 // sign-out apart from a reply; partial messages keep a long answer from looking stalled
                 cmd.arg("--output-format").arg("stream-json").arg("--verbose").arg("--include-partial-messages");
+                // This computer's settings (Mac hardening, 21d's repeat-guard hooks) go before the
+                // prompt, so the prompt stays the last argument (QA 21d round 3)
+                if isolated.is_none() {
+                    let mut settings = self.local_settings_args(cfg!(target_os = "macos"));
+                    if let Some(hook) = &repeat_hook {
+                        // 21d: in the same one `--settings`, joined with any hooks already there
+                        super::mac_local::merge_settings_arg(&mut settings, crate::mcp::cli_hooks::settings(&hook.path));
+                    }
+                    cmd.args(settings);
+                    settings_added = true;
+                }
                 cmd.arg("-p").arg(&effective_prompt);
             }
         }
@@ -1865,13 +1878,11 @@ impl Driver for CliDriver {
             if let Some(env) = &self.profile_env {
                 env.apply(&mut cmd);
             }
-            // claude -p has no subcommand, so its overrides can follow the other options
-            let mut settings = self.local_settings_args(cfg!(target_os = "macos"));
-            if let Some(hook) = &repeat_hook {
-                // 21d: in the same one `--settings`, joined with any hooks already there
-                super::mac_local::merge_settings_arg(&mut settings, crate::mcp::cli_hooks::settings(&hook.path));
+            // claude's own settings were added before its prompt; the other CLIs' overrides
+            // follow their other options
+            if !settings_added {
+                cmd.args(self.local_settings_args(cfg!(target_os = "macos")));
             }
-            cmd.args(settings);
         }
 
         // codex's reply comes from its -o file; its stdout carries the `--json` steps
@@ -2839,6 +2850,10 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 assert_eq!(v["sandbox"]["enabled"], true, "with the Mac hardening, in the same object");
             }
             assert!(argv.iter().all(|a| !a.contains("tokTOK123")), "the token stays out of argv: {argv:?}");
+            // The prompt stays the last argument, after the settings (QA 21d round 3: the hooks
+            // after it hid an ask_user call from a CLI that reads its prompt last)
+            assert_eq!(argv[argv.len() - 2], "-p", "{argv:?}");
+            assert!(argv.iter().position(|a| a == "--settings").unwrap() < argv.len() - 2, "{argv:?}");
             assert_eq!(std::fs::read_to_string(fake.path("curl")).unwrap(), format!("url = \"{url}/hook\"\n"));
             let left: Vec<_> = std::fs::read_dir(cfg.path()).unwrap().flatten().map(|e| e.file_name()).collect();
             assert!(left.is_empty(), "the turn's config files go with it: {left:?}");

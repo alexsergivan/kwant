@@ -218,6 +218,16 @@ mod tests {
             on_event(&g, &failed("mcp__github__create_issue", mcp.clone(), "422"));
         }
         assert_eq!(on_event(&g, &pre("mcp__github__create_issue", mcp)), None, "left to the MCP guards");
+        // kwnt's own ask_user (and its question tool) never pass through these hooks: a question
+        // that "fails" (dismissed, timed out) any number of times is never denied or counted
+        for tool in ["mcp__kwnt_tools__ask_user", "mcp__kwnt__ask_user", "mcp__kwnt_tools__question"] {
+            let ask = json!({"question": "Ship it?", "choices": ["yes", "no"]});
+            for _ in 0..5 {
+                assert_eq!(on_event(&g, &pre(tool, ask.clone())), None, "{tool}");
+                assert_eq!(on_event(&g, &failed(tool, ask.clone(), "The person dismissed the question.")), None, "{tool}");
+            }
+            assert_eq!(on_event(&g, &pre(tool, ask)), None, "{tool} is never denied");
+        }
         // Junk never panics and never denies
         for junk in [json!(null), json!({}), json!({"hook_event_name": "PreToolUse"}), json!({"tool_name": "Bash"})] {
             assert_eq!(on_event(&g, &junk), None);
