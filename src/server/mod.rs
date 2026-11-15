@@ -26,6 +26,7 @@ pub mod bot_budget;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
+pub mod continue_chat;
 pub mod keep_going;
 pub mod parked;
 pub mod attachments;
@@ -42,12 +43,14 @@ pub mod skills;
 pub mod spaces;
 pub mod asks;
 pub mod away;
+pub mod glance;
 pub mod computer;
 pub mod mcp_directory;
 pub mod mcp_suggest;
 pub mod page_source;
 pub mod tool_failures;
 pub mod tool_notes;
+pub mod openai_key;
 pub mod transcribe;
 pub mod connection_suggest;
 pub mod bot_actions;
@@ -170,6 +173,8 @@ pub struct AppState {
     pub spend: Arc<spend_stop::Clock>,
     /// Claude replies run inside the VM ("Run Claude inside the VM", Linux only, off by default)
     pub agent_vm: Arc<crate::sandbox::agent_vm::AgentVm>,
+    /// Dictation's 2-at-once slots and the wait for one (a test shortens the wait).
+    pub dictation: Arc<transcribe::Slots>,
 }
 
 impl AppState {
@@ -226,6 +231,7 @@ impl AppState {
             mission_runs: Arc::default(),
             spend: Arc::default(),
             agent_vm,
+            dictation: Arc::default(),
         }
     }
 
@@ -519,6 +525,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/questions/:id/answer", post(questions::answer))
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
         .route("/api/messages/:id/reaction", put(reactions::put_reaction))
+        .route("/api/messages/:id/continue", post(continue_chat::continue_chat))
         .route("/api/work-ahead/run", post(work_ahead::run_now))
         .route("/api/ideas", get(idea_jar::list).post(idea_jar::create))
         .route("/api/ideas/:id", get(idea_jar::get).patch(idea_jar::edit).delete(idea_jar::delete))
@@ -622,6 +629,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tool-notes/:id", axum::routing::patch(tool_notes::edit).delete(tool_notes::delete))
         .route("/api/away/seen", post(away::seen))
         .route("/api/inbox", get(inbox::get))
+        // The desktop island (0.9.13): what needs you, works and just finished, in every space
+        .route("/api/glance", get(glance::get))
+        .route("/api/glance/ask", post(glance::ask))
         .route("/api/events", get(sse::sse_handler))
         .merge(show_once::routes::router())
         .fallback(crate::embedded::static_handler)
