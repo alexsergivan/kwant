@@ -46,6 +46,8 @@ export interface AwayItem {
   /** "sign_in" or "reconnect" (an app to connect again); older servers may leave it out. */
   cause?: string;
   fix?: { label: string; opens?: string } | null;
+  /** 22i (Lin's server part): what resolves the item. Older servers leave it out; `askAction` infers it. */
+  action?: 'retry' | 'continue' | 'ask_again' | 'answer' | 'decide' | 'browser' | null;
 }
 
 export interface AwayCounts {
@@ -264,6 +266,10 @@ export const awayApi = {
   approvals: (status: string) => call<unknown>('GET', `/api/approvals?status=${enc(status)}`),
   /** 0.9.5: ask again for an approval that expired unanswered (starts a new turn; grants nothing). */
   retryApproval: (approvalId: string) => call<unknown>('POST', `/api/approvals/${enc(approvalId)}/retry`),
+  /** 22i: Retry on a stopped item, server side (resends the person's message in that chat). */
+  retryWaiting: (id: string) => call<unknown>('POST', `/api/waiting/${enc(id)}/retry`),
+  /** 22i: "Done, clear it" (the person only): closes one item kwant can't close by itself. */
+  dismiss: (id: string) => call<unknown>('POST', `/api/waiting/${enc(id)}/dismiss`),
 };
 
 /**
@@ -284,5 +290,10 @@ const AWAY_EVENTS = new Set([
   'delegation_updated', 'DelegationUpdated',
   'routine_run', 'RoutineRun',
   'ApprovalRequired', 'ApprovalWithdrawn',
+  // 22i: a stopped item closes when a later reply there ends, a browser step when it is done, and
+  // any item when it is cleared; each refreshes Needs attention and the strip without a reload.
+  'turn_ended', 'TurnEnded',
+  'human_step_updated', 'HumanStepUpdated',
+  'waiting_updated', 'WaitingUpdated', 'waiting_closed', 'WaitingClosed',
 ]);
 export const affectsAway = (type: unknown): boolean => typeof type === 'string' && AWAY_EVENTS.has(type);

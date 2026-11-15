@@ -98,6 +98,7 @@ import { awayApi } from '../away';
 import { parseBudgetNotice } from '../botBudget';
 import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
 import { isSystemNotice, parseExpiredApproval, parseInterruption, retryTargets } from '../interruptions';
+import { ringElement } from '../ring';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
@@ -319,6 +320,12 @@ export interface ChatViewProps {
   focusComposerKey?: number;
   /** A message to scroll to and flash (from search). */
   highlightMessageId?: string | null;
+  /** 22i: also ring what `highlightMessageId` lands on (a Needs-attention row's ask), like a pre-push card. */
+  highlightRing?: boolean;
+  /** 22i: the "Needs you" strip, right above the composer. */
+  needsYouStrip?: React.ReactNode;
+  /** 22i: the strip shows an ask here, so the working line drops its own "Answer ↑". */
+  needsYouOpen?: boolean;
   onHighlightDone?: () => void;
   /** Set while `messages` is an older window (a search hit beyond the latest page). */
   viewingHistory?: boolean;
@@ -595,6 +602,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   pinned = [],
   onEditInstructions,
   highlightMessageId,
+  highlightRing,
+  needsYouStrip,
+  needsYouOpen,
   onContinueFrom,
   threadKind,
   continuedFrom,
@@ -982,7 +992,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       awaitingAnswer={!!awaitingAnswer}
       awaitingBrowser={!!awaitingBrowser}
       writing={streamingText}
-      onAnswer={showWaitingCard}
+      // 22i: one ask gets one button. While the Needs-you strip shows it, the strip's Go to … is that button.
+      onAnswer={needsYouOpen ? undefined : showWaitingCard}
       onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       phone={phone}
       audit={liveAudit}
@@ -1045,7 +1056,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Runs after the auto-scroll above, so it wins.
   const [flashId, setFlashId] = useState<string | null>(null);
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
-  const [flashKind, setFlashKind] = useState<'search' | 'quote'>('search');
+  // 22i: a Needs-attention landing ('ask') is the same amber flash as search, tagged so tests tell them apart.
+  const [flashKind, setFlashKind] = useState<'search' | 'quote' | 'ask'>('search');
   useEffect(() => {
     if (!highlightMessageId) return;
     // 0.8.1 F6: an approval's card (a notification names it), not a message
@@ -1054,7 +1066,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       if (!card) return;
       const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-      setFlashKind('search');
+      if (highlightRing) ringElement(card);
+      setFlashKind(highlightRing ? 'ask' : 'search');
       setFlashId(highlightMessageId);
       onHighlightDone?.();
       return;
@@ -1071,10 +1084,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!el) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-    setFlashKind('search');
+    setFlashKind(highlightRing ? 'ask' : 'search');
     setFlashId(highlightMessageId);
     onHighlightDone?.();
-  }, [highlightMessageId, messages, openThoughts, onHighlightDone, pendingApprovals]);
+  }, [highlightMessageId, highlightRing, messages, openThoughts, onHighlightDone, pendingApprovals]);
   useEffect(() => {
     if (!flashId) return;
     const t = setTimeout(() => setFlashId(null), flashKind === 'quote' ? 1600 : 2400);
@@ -1747,6 +1760,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       <div
         key={msg.id}
         data-message-id={msg.id}
+        data-flash-kind={flashId === msg.id ? flashKind : undefined}
         tabIndex={-1}
         data-shared-under={underReply ? '' : undefined}
         // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
@@ -2703,6 +2717,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* Phone and desktop (0.8.1 F4): the quiet line sits inside the composer section, right above the box. */}
         {budgetBanner}
         {workingStrip}
+        {/* 22i: below the working line, right above the box (design.md §2 order). */}
+        {needsYouStrip}
 
         <form
           onSubmit={handleSubmit}

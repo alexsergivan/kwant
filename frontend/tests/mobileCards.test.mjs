@@ -236,7 +236,9 @@ test('ChatView puts the strip inside the composer section, right above the box, 
   const formAt = src.indexOf('<form', at);
   assert.ok(sectionAt > 0 && at > sectionAt, 'inside the composer section');
   assert.ok(src.indexOf('aria-label="Ask a member"', sectionAt) < at, 'below the Ask chips');
-  assert.equal(src.slice(at + '{workingStrip}'.length, formAt).trim(), '', 'directly above the box');
+  // 22i (design.md §2): the Needs-you strip sits between the working line and the box, nothing else
+  const between = src.slice(at + '{workingStrip}'.length, formAt).replace(/\{\/\*[\s\S]*?\*\/\}/g, '').trim();
+  assert.equal(between, '{needsYouStrip}', 'directly above the box, under the Needs-you strip');
   assert.doesNotMatch(src, /\{!?phone && workingStrip\}/, 'no layout-specific place (Rigel: 390 sat outside the section)');
   assert.equal(src.split('{workingStrip}').length - 1, 1, 'rendered once');
   assert.equal(src.match(/<WorkingStrip\b/g).length, 1, 'one element');

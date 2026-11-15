@@ -105,7 +105,9 @@ test('desktop: pinned "Needs attention · 4" above Channels, copies with "Also l
   for (const p of pins) {
     assert.equal(p.getAttribute('role'), 'button');
     assert.equal(p.hasAttribute('data-bot-row'), false);
-    assert.equal(d.getElementById(p.getAttribute('aria-describedby')).textContent, 'Also listed in @core');
+    // 22i: described by its tooltip (the whole ask) and by where else it is listed
+    const also = p.getAttribute('aria-describedby').split(' ').find((id) => id.startsWith('pin-also-'));
+    assert.equal(d.getElementById(also).textContent, 'Also listed in @core');
   }
   // Line tones: amber, rose, zinc-200
   const tone = (id) => block.querySelector(`[data-pin-row="${id}"] [data-bot-busy]`).getAttribute('class');

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare, CalendarClock } from 'lucide-react';
 import { ModernAvatar, useModelBadge } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
@@ -17,6 +17,8 @@ import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
 import { type AttentionRow, type NeedsYouRow, PINNED_RANK, workingIds, directIds, rollupLabel } from '../chatsTab';
+import { askAction, askKind, askLine, isAsk } from '../askHere';
+import { localClock } from '../clock';
 import type { InboxItem } from '../api/inbox';
 import { useDevMode } from './DevModeSwitch';
 import { MovedPointer, SpaceSubline } from './FirstScreenBits';
@@ -535,6 +537,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // team the lead is marked and others can be removed; on phones those sit in a sheet.
   // On the phone's Chats tab a row is a plain launcher (`chat`): taller, no actions, and a
   // Needs-you row says in amber what the bot is waiting for and opens the chat on that card.
+  // 22i: the pinned row's tooltip (design.md §4): 300 ms after hover, at once on keyboard focus; to the
+  // right of the row, or below it when the window has less than 328 px there.
+  const [rowTip, setRowTip] = useState<{ id: string; top: number; left: number } | null>(null);
+  const rowTipTimer = useRef<number | null>(null);
+  const showRowTip = (id: string, el: HTMLElement, delay: number) => {
+    if (rowTipTimer.current) window.clearTimeout(rowTipTimer.current);
+    const place = () => {
+      const r = el.getBoundingClientRect();
+      const below = window.innerWidth - r.right < 328;
+      setRowTip({ id, top: below ? r.bottom + 8 : r.top, left: below ? r.left : r.right + 8 });
+    };
+    if (delay) rowTipTimer.current = window.setTimeout(place, delay);
+    else place();
+  };
+  const hideRowTip = () => {
+    if (rowTipTimer.current) window.clearTimeout(rowTipTimer.current);
+    rowTipTimer.current = null;
+    setRowTip(null);
+  };
+  useEffect(() => () => {
+    if (rowTipTimer.current) window.clearTimeout(rowTipTimer.current);
+  }, []);
   const botRow = (k: Kwant, team?: Team, chat?: { needs?: NeedsYouRow; att?: AttentionRow<Kwant> }, pin?: { att: AttentionRow<Kwant>; alsoIn?: string }) => {
     // Phones never light a row: the list is a launcher, and coming back to it shows no stale selection
     const active = !phone && !isChannel && selectedId === k.id;
@@ -572,6 +596,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
           : busyKwants[k.id];
     // A teammate who finished its part of a team turn that now waits on the person (UX audit #2)
     const doneLine = !busyLine && !warn ? doneKwants[k.id] : undefined;
+    // 22i: a pinned row's line is cut to one line; hover and focus give the whole ask (the stopped
+    // reply's full sentence, the approval's question), as a tooltip and as the row's name.
+    // 22i: a pinned row's line is cut to one line; hover and focus show the whole ask in a small tooltip
+    // (design.md §4): "Quant · Stopped · 18:44" over the full line. A native title never shows on focus.
+    const rowItem = asked?.item ?? att?.item;
+    const fullLine = pin && busyLine ? (rowItem && isAsk(rowItem) ? askLine(rowItem) || busyLine : busyLine) : undefined;
+    const tipKind = !att
+      ? undefined
+      : att.rank === 3
+        ? 'To review'
+        : att.rank === 4
+          ? 'Finished'
+          : rowItem
+            ? askKind(rowItem, askAction(rowItem))
+            : att.rank === 2
+              ? 'Failed'
+              : needs > 0
+                ? 'Browser step'
+                : undefined;
+    const tipHead = fullLine ? [k.name, tipKind, rowItem ? localClock(rowItem.timestamp) : null].filter(Boolean).join(' · ') : undefined;
+    const tipId = fullLine ? `pin-tip-${k.id}` : undefined;
+    const tipOpen = !!tipId && rowTip?.id === k.id;
     // A stuck or finished row opens where that happened (its thread or chat), like its Inbox card
     // A review row opens its item in the Inbox
     const open = asked && onOpenNeedsYou
@@ -592,12 +638,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
         tabIndex={0}
         onClick={open}
         // Only the row's own Enter: Enter on its ✕ or Edit is for that button, not for opening the chat.
-        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && open()}
+        onKeyDown={(e) => {
+          if (tipId && e.key === 'Escape') hideRowTip();
+          if (e.key === 'Enter' && e.target === e.currentTarget) open?.();
+        }}
+        onMouseEnter={tipId ? (e) => showRowTip(k.id, e.currentTarget, 300) : undefined}
+        onMouseLeave={tipId ? hideRowTip : undefined}
+        onFocus={tipId ? (e) => e.target === e.currentTarget && e.currentTarget.matches?.(':focus-visible') && showRowTip(k.id, e.currentTarget, 0) : undefined}
+        onBlur={tipId ? hideRowTip : undefined}
         // The pinned copy is not the bot's row: focus returns to the one in its team
         data-bot-row={pin ? undefined : k.id}
         data-pin-row={pin ? k.id : undefined}
         data-rank={att?.rank}
-        aria-describedby={pin?.alsoIn ? `pin-also-${k.id}` : undefined}
+        aria-describedby={[tipId, pin?.alsoIn ? `pin-also-${k.id}` : null].filter(Boolean).join(' ') || undefined}
         data-chat-row={chat ? (asked ? 'needs' : 'bot') : undefined}
         className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
@@ -686,6 +739,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             )}
           </div>
+          {tipId && (
+            <div
+              role="tooltip"
+              id={tipId}
+              data-pin-tip={k.id}
+              hidden={!tipOpen}
+              style={tipOpen ? { top: rowTip!.top, left: rowTip!.left } : undefined}
+              className="fixed z-50 max-w-[320px] rounded-lg border border-hairline-strong bg-surface-overlay px-2.5 py-2 text-meta shadow-[0_8px_24px_rgb(0_0_0/0.5)] pointer-events-none"
+            >
+              <span className="block text-zinc-400">{tipHead}</span>
+              <span className="block text-zinc-100 break-words whitespace-normal">{fullLine}</span>
+            </div>
+          )}
           {pin?.alsoIn && (
             <span id={`pin-also-${k.id}`} className="sr-only">
               Also listed in @{pin.alsoIn}
@@ -696,7 +762,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${
                 warn || asked ? 'text-warn' : attLine ? attTone : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'
               }`}
-              title={busyLine === busyKwants[k.id] ? busyTitles?.[k.id] ?? busyLine : busyLine}
+              title={fullLine ? undefined : busyLine === busyKwants[k.id] ? busyTitles?.[k.id] ?? busyLine : busyLine}
               data-bot-busy
             >
               <span
@@ -705,7 +771,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }`}
                 aria-hidden="true"
               />
-              <span className="truncate">{busyLine}</span>
+              <span className={chat && (asked || attLine) ? 'line-clamp-2 whitespace-normal' : 'truncate'}>{busyLine}</span>
             </p>
           ) : doneLine ? (
             <p className={`flex items-center gap-1.5 text-meta text-zinc-400 truncate${actionRoom}`} title={doneLine} data-bot-done="">
