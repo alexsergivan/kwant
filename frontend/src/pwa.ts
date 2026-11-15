@@ -23,6 +23,35 @@ export function isIos(nav: Pick<Navigator, 'userAgent' | 'maxTouchPoints'>): boo
   return /iPhone|iPad|iPod/.test(nav.userAgent) || (/Macintosh/.test(nav.userAgent) && nav.maxTouchPoints > 1);
 }
 
+/** Android phones and tablets, where installing is the browser menu's Add to Home screen or Install app. */
+export function isAndroid(nav: Pick<Navigator, 'userAgent'>): boolean {
+  return /Android/.test(nav.userAgent);
+}
+
+/** 127.0.0.1, localhost, *.localhost, ::1, 0.0.0.0: addresses only this computer can open (the Mac
+ *  app's This Mac, local dev). A phone scanning a QR of one would open itself. */
+export function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || h === '0.0.0.0' || /^127\.\d+\.\d+\.\d+$/.test(h);
+}
+
+/** What "Use kwant bots on your phone" offers on a computer: a one-time sign-in QR (`signin`), a QR of
+ *  this address (`address`), why a phone can't reach this computer (`loopback`), or why a phone
+ *  can't install from plain http (`insecure`). Loopback is checked first: http://127.0.0.1 is not
+ *  "insecure", it's unreachable. */
+export type PhoneAppKind = 'signin' | 'address' | 'loopback' | 'insecure';
+
+export function phoneAppKind(s: { hostname: string; protocol: string; authRequired: boolean; deviceLogin: boolean }): PhoneAppKind {
+  if (isLoopbackHost(s.hostname)) return 'loopback';
+  if (s.protocol !== 'https:') return 'insecure';
+  return s.authRequired && s.deviceLogin ? 'signin' : 'address';
+}
+
+/** The kwant.si how-to the card links to, and the https proxy section. */
+export const PHONE_GUIDE_URL = 'https://kwant.si/docs/phone.html';
+export const TELEGRAM_GUIDE_URL = 'https://kwant.si/docs/telegram.html';
+export const HTTPS_GUIDE_URL = 'https://kwant.si/docs/install.html#proxy';
+
 export type InstallHintKind = 'prompt' | 'ios' | null;
 
 /** Which install hint to show: the browser's own install button (Android, Chrome), the Share

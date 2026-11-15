@@ -408,13 +408,13 @@ export type AddState =
   | { kind: 'error'; message: string };
 
 /** The QR code, drawn here: the sign-in code never goes to a QR service. */
-export const QrImage: React.FC<{ text: string }> = ({ text }) => {
+export const QrImage: React.FC<{ text: string; label?: string }> = ({ text, label = 'QR code for the one-time sign-in link' }) => {
   const { size, d } = qrPath(text);
   return (
     <svg
       viewBox={`0 0 ${size} ${size}`}
       role="img"
-      aria-label="QR code for the one-time sign-in link"
+      aria-label={label}
       shapeRendering="crispEdges"
       className="block w-full h-auto rounded-lg bg-white"
     >
@@ -423,25 +423,35 @@ export const QrImage: React.FC<{ text: string }> = ({ text }) => {
   );
 };
 
+/** Where AddDevice sits: Settings › Signed-in devices (`settings`), or step 1 of "Use kwant bots on
+ *  your phone" (`phone`), where step 2 right below already says to add it to the Home Screen. */
+export type AddDeviceVariant = 'settings' | 'phone';
+
+const phonePrimary =
+  'w-full sm:w-auto flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500';
+
 /** What "Add a phone or browser" shows in each state. Exported for tests. */
 export const AddDeviceView: React.FC<{
   state: AddState;
   now?: number;
   copied?: 'yes' | 'failed' | null;
+  variant?: AddDeviceVariant;
   onShow: () => void;
   onHide: () => void;
   onCopy: () => void;
-}> = ({ state, now = Date.now(), copied = null, onShow, onHide, onCopy }) => {
+}> = ({ state, now = Date.now(), copied = null, variant = 'settings', onShow, onHide, onCopy }) => {
+  const phone = variant === 'phone';
+  const linkId = `add-device-link-${variant}`;
   if (state.kind === 'idle' || state.kind === 'minting' || state.kind === 'error')
     return (
       <div className="space-y-2">
-        <button type="button" onClick={onShow} disabled={state.kind === 'minting'} className={`${secondary} w-full sm:w-auto disabled:opacity-50`}>
+        <button type="button" onClick={onShow} disabled={state.kind === 'minting'} className={phone ? phonePrimary : `${secondary} w-full sm:w-auto disabled:opacity-50`}>
           {state.kind === 'minting' ? (
             <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
           ) : (
             <QrCode size={14} aria-hidden="true" />
           )}
-          Add a phone or browser
+          {phone ? 'Show QR code' : 'Add a phone or browser'}
         </button>
         {state.kind === 'error' && (
           <p className="flex items-center gap-1.5 text-[11px] text-rose-300" role="alert">
@@ -460,6 +470,7 @@ export const AddDeviceView: React.FC<{
         <p className="text-[11px] text-zinc-400 leading-relaxed">
           {state.browser || 'A new browser'} signed in with the code. It’s used up now. If that wasn’t you, sign it out below.
         </p>
+        {phone && <p className="text-[11px] text-zinc-300 leading-relaxed">Next, on the phone: add it to the Home Screen (step 2).</p>}
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={onShow} className={secondary}>
             Add another
@@ -495,16 +506,21 @@ export const AddDeviceView: React.FC<{
       <div className="mx-auto w-full max-w-[220px]">
         <QrImage text={link.url} />
       </div>
+      {!phone && (
+        <p className="text-[11px] text-zinc-400 leading-relaxed">
+          On a phone, then add it to the Home Screen: Share › Add to Home Screen on iPhone, ⋮ › Add to Home screen on Android.
+        </p>
+      )}
       <p className="flex items-start gap-1.5 text-[11px] text-amber-200/90 leading-relaxed">
         <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
         Anyone who scans this can sign in once. Don’t share or screenshot it.
       </p>
       <div className="flex gap-2">
-        <label className="sr-only" htmlFor="add-device-link">
+        <label className="sr-only" htmlFor={linkId}>
           One-time sign-in link
         </label>
         <input
-          id="add-device-link"
+          id={linkId}
           readOnly
           value={link.url}
           onFocus={(e) => e.currentTarget.select()}
@@ -533,7 +549,7 @@ export const AddDeviceView: React.FC<{
 
 /** "Add a phone or browser": mints a one-time link, shows it as a QR code with a countdown, hides it
  *  when it expires or the page is left, and says "Signed in ✓" once a new browser used it. */
-export const AddDevice: React.FC<{ onSignedIn: () => void }> = ({ onSignedIn }) => {
+export const AddDevice: React.FC<{ onSignedIn: () => void; variant?: AddDeviceVariant }> = ({ onSignedIn, variant = 'settings' }) => {
   const [state, setState] = useState<AddState>({ kind: 'idle' });
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState<'yes' | 'failed' | null>(null);
@@ -630,7 +646,7 @@ export const AddDevice: React.FC<{ onSignedIn: () => void }> = ({ onSignedIn }) 
     }
   };
 
-  return <AddDeviceView state={state} now={now} copied={copied} onShow={show} onHide={hide} onCopy={copy} />;
+  return <AddDeviceView state={state} now={now} copied={copied} variant={variant} onShow={show} onHide={hide} onCopy={copy} />;
 };
 
 /** Settings section: who is signed in, with Sign out for each other browser. */

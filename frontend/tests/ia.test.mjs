@@ -126,14 +126,18 @@ test('the Inbox row keeps the unseen badge and marks the open page', () => {
   assert.match(ui.sidebar({ ...base, inboxActive: true }), /aria-current="page"[^>]*>(?:(?!<\/button>)[\s\S])*>Inbox</);
 });
 
-test('Install is a tip that can be dismissed, and stays in Settings › All spaces', () => {
-  const tip = src('components/InstallAppButton.tsx');
-  assert.match(tip, /dismissInstallTip\(\)/);
-  assert.match(tip, /Install any time from Settings › All spaces/);
-  assert.match(src('components/SpaceSettings.tsx'), /<InstallAppButton/);
-  assert.equal(nav.installTipDismissed(), false);
-  nav.dismissInstallTip();
-  assert.equal(nav.installTipDismissed(), true);
+test('the sidebar tip points to the phone card, can be dismissed, and Install moved into that card', () => {
+  const card = src('components/PhoneAppCard.tsx') + src('components/PhoneAppTip.tsx');
+  assert.match(card, /Tip: use kwant bots on your phone/);
+  assert.match(card, /dismissPhoneTip\(\)/);
+  assert.match(card, /Find it any time in Settings › All spaces/);
+  assert.match(card, /<InstallAppButton className=\{rowBtn\} label="Install on this computer"/);
+  assert.match(src('components/Sidebar.tsx'), /<PhoneAppTip /);
+  assert.doesNotMatch(src('components/Sidebar.tsx'), /<InstallAppButton/);
+  assert.match(src('components/SpaceSettings.tsx'), /<PhoneAppCard /);
+  assert.equal(nav.phoneTipDismissed(), false);
+  nav.dismissPhoneTip();
+  assert.equal(nav.phoneTipDismissed(), true);
 });
 
 // ---------------------------------------------------------------------------
