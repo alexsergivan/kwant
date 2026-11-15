@@ -42,8 +42,9 @@ export const PhoneAppTip: React.FC<{ className: string; onOpen: () => void }> = 
           }}
           className={className}
         >
-          <Smartphone size={15} className="text-sky-400" aria-hidden="true" />
-          <span className="truncate flex-1">Tip: use kwant bots on your phone</span>
+          <Smartphone size={15} className="shrink-0 text-sky-400" aria-hidden="true" />
+          {/* Wraps instead of truncating: the sidebar is ~240 px, and "on your phone" is the point of the tip. */}
+          <span className="flex-1 min-w-0 leading-snug">Tip: use kwant bots on your phone</span>
         </button>
         <button
           type="button"
