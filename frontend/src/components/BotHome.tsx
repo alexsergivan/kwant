@@ -4,7 +4,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { useKwantMood } from './AvatarMood';
 import { NewTag } from './NewTag';
 import { markNewSeen } from '../whatsNew';
-import { ChatHome, ago, goodAt, starterCards } from '../botHome';
+import { ChatHome, ago, goodAt, starterCards, teamHomeLine } from '../botHome';
 import { ACCOUNT_WAYS } from '../firstScreen';
 
 const ICONS = [Sparkles, ListChecks, Lightbulb, Wand2];
@@ -22,6 +22,8 @@ interface BotHomeProps {
   accountCard?: boolean;
   /** Space settings › Accounts. */
   onOpenAccounts?: () => void;
+  /** A team's home: who answers, in the composer pill's own words (answerTarget(...).detail). */
+  answerLine?: string;
 }
 
 /**
@@ -66,9 +68,11 @@ export const AccountCard: React.FC<{ onOpenAccounts?: () => void }> = ({ onOpenA
  * try; #general opens on "What do you want done?" with the team's faces and three example asks. Everything comes from what the client
  * already has. It waits 220ms before showing (.kw-home) so a chat still loading its messages never flashes it.
  */
-export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canRun, onPick, accountCard = false, onOpenAccounts }) => {
+export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canRun, onPick, accountCard = false, onOpenAccounts, answerLine }) => {
   const bot = home.kind === 'bot' ? home.bot : undefined;
-  const cards = starterCards(prompts);
+  // A team's chat: its name and purpose over the same faces, chips and asks as #general (13d).
+  const crew = home.kind === 'team' ? home.team : undefined;
+  const cards = starterCards(prompts, crew ? 3 : 4);
   const chips = bot ? goodAt(bot) : [];
   const shown = team.slice(0, 8);
   const extra = team.length - shown.length;
@@ -79,7 +83,7 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
   const general = home.kind === 'general';
 
   return (
-    <section className="kw-home mx-auto flex w-full max-w-3xl flex-col items-center px-1 pb-6 pt-4 text-center sm:pt-10" aria-label={bot ? `${bot.name}, home` : 'Start a conversation'} data-bot-home={home.kind}>
+    <section className="kw-home mx-auto flex w-full max-w-3xl flex-col items-center px-1 pb-6 pt-4 text-center sm:pt-10" aria-label={bot ? `${bot.name}, home` : crew ? `${crew.name}, team home` : 'Start a conversation'} data-bot-home={home.kind}>
       {/* The hero: a soft glow behind the floating avatar. Static at .35; it breathes in violet only while the bot works. */}
       <div className="relative mb-4 flex h-36 w-36 items-center justify-center sm:h-44 sm:w-44">
         <span
@@ -104,9 +108,11 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
         )}
       </div>
 
-      <h2 className="text-display font-bold text-zinc-50">{bot ? bot.name : 'What do you want done?'}</h2>
-      <p className="mt-1 max-w-md text-body text-zinc-300">
-        {bot ? bot.title : 'Say it in your own words. The bot that fits best picks it up, or type @ and a name to choose one.'}
+      <h2 className="text-display font-bold text-zinc-50" data-team-home-title={crew ? '' : undefined}>
+        {bot ? bot.name : crew ? crew.name : 'What do you want done?'}
+      </h2>
+      <p className="mt-1 max-w-md text-body text-zinc-300" data-team-home-line={crew ? '' : undefined}>
+        {bot ? bot.title : crew ? teamHomeLine(crew) : 'Say it in your own words. The bot that fits best picks it up, or type @ and a name to choose one.'}
       </p>
 
       {bot ? (
@@ -122,13 +128,17 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
         )
       ) : (
         shown.length > 0 && (
-          <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5" role="list" aria-label="Bots that can answer here">
-            {shown.map((k) => (
-              <span key={k.id} role="listitem" className="kw-chip pl-1" title={k.title}>
-                <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} />
-                {k.name}
-              </span>
-            ))}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5" role="list" aria-label={crew ? `Who is in ${crew.name}` : 'Bots that can answer here'}>
+            {shown.map((k) => {
+              const leads = !!crew?.lead && k.name === crew.lead;
+              return (
+                <span key={k.id} role="listitem" className="kw-chip pl-1" title={leads ? `${k.title}, leads the team` : k.title} data-lead={leads ? '' : undefined}>
+                  <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} />
+                  {k.name}
+                  {leads && <span className="text-zinc-400">· lead</span>}
+                </span>
+              );
+            })}
             {extra > 0 && <span role="listitem" className="kw-chip">+{extra} more</span>}
           </div>
         )
@@ -139,7 +149,7 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
       ) : cards.length > 0 && (
         <div className="mt-8 w-full text-left">
           <p className="mb-2 flex items-center gap-1.5 text-meta font-semibold uppercase tracking-wider text-zinc-400">
-            <MessageSquareText size={13} aria-hidden="true" /> {general ? 'For example' : 'Try asking'} <NewTag id="starters" className="ml-1.5 normal-case tracking-normal" />
+            <MessageSquareText size={13} aria-hidden="true" /> {general || crew ? 'For example' : 'Try asking'} <NewTag id="starters" className="ml-1.5 normal-case tracking-normal" />
           </p>
           <div className={`kw-stagger grid grid-cols-1 gap-2.5 ${cards.length === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`} role="group" aria-label="Suggested prompts">
             {cards.map((prompt, i) => {
@@ -188,10 +198,18 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
       )}
 
       {!accountCard && (
+        crew ? (
+          // Can wrap on a phone, so the @ sits inline with the words instead of beside the block.
+          <p className="mt-8 max-w-md text-balance text-meta text-zinc-400" data-answer-line="">
+            <AtSign size={13} aria-hidden="true" className="mr-1.5 inline-block align-[-2px]" />
+            {answerLine ?? `${crew.name} answers. Type @ and a name to ask one member.`}
+          </p>
+        ) : (
         <p className="mt-8 flex items-center gap-1.5 text-meta text-zinc-400">
           <AtSign size={13} aria-hidden="true" />
           {general ? 'Type @ to ask one bot yourself.' : 'Type @ to bring another bot into the conversation.'}
         </p>
+        )
       )}
     </section>
   );

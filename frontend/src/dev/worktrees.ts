@@ -3,6 +3,7 @@
 // cache per space. Until #486 merges the routes may 404: the tab then says the server doesn't have them yet.
 
 import { personFetch } from '../auth';
+import { dateText, timeText } from '../clock';
 
 export type WorktreeState = 'live' | 'missing' | 'leftover' | 'removed';
 
@@ -321,12 +322,11 @@ export const worktreeCount = (l: WorktreeList | null): number => (l ? l.repos.re
 // ---------------------------------------------------------------------------
 // Copy (designs/h1-worktrees.md "Copy (all)")
 
-const pad = (n: number) => String(n).padStart(2, '0');
-export const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+export const hhmm = (d: Date) => timeText(d) ?? '';
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
-/** "14:05" today, "yesterday", "Mon" within a week, else "3 Nov". */
+/** "2:05 PM" today, "yesterday", "Mon" within a week, else "Nov 3" (device clock and date order). */
 export function dayLabel(iso: string, now: number): { day: string; time: string; today: boolean } {
   const d = new Date(iso);
   const days = Math.round((dayStart(new Date(now)) - dayStart(d)) / 86_400_000);
@@ -334,7 +334,7 @@ export function dayLabel(iso: string, now: number): { day: string; time: string;
   if (days <= 0) return { day: '', time, today: true };
   if (days === 1) return { day: 'yesterday', time, today: false };
   if (days < 7) return { day: DAYS[d.getDay()], time, today: false };
-  return { day: `${d.getDate()} ${d.toLocaleString('en', { month: 'short' })}`, time, today: false };
+  return { day: dateText(d) ?? '', time, today: false };
 }
 
 export type Led = 'run' | 'ok' | 'off' | 'warn';

@@ -165,7 +165,7 @@ test('a row: name, spaces and bots, the added date, and "Never" before first use
   const t = text(m.row({ c: conn(), now: Date.parse('2026-11-07T01:00:00Z') }));
   assert.ok(t.includes('Claude Code'));
   assert.ok(t.includes('Work · All bots'));
-  assert.ok(t.includes('Added 7 Nov 2026'));
+  assert.ok(t.includes('Added Nov 7, 2026'));
   assert.ok(t.includes('Last used Never'));
   assert.ok(t.includes('Revoke'));
   assert.ok(t.includes('Recent activity'));

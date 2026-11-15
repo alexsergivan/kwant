@@ -5,6 +5,7 @@
 import { personFetch } from '../auth';
 import { DevModeError } from '../devMode';
 import { parseFreshEyes, type FreshEyes } from './freshEyes';
+import { timeText } from '../clock';
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown, max = 2000): string | null => (typeof v === 'string' && v.trim() !== '' ? v.slice(0, max) : null);
@@ -375,9 +376,7 @@ export const requiredPassed = (c: PrepushCard): number => c.checks.filter((k) =>
 
 export function hhmm(ms: number | null): string | null {
   if (ms === null) return null;
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return null;
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return timeText(ms);
 }
 
 export function footer(c: PrepushCard, bot: string): string {

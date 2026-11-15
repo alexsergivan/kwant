@@ -260,7 +260,7 @@ export const DoneSections: React.FC<{
           {trail.length ? (
             <ol className="space-y-1.5">
               {dropped > 0 && (
-                <li className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 text-meta text-zinc-400" data-trail-dropped>
+                <li className="grid grid-cols-[5.75rem_minmax(0,1fr)] gap-x-2 text-meta text-zinc-400" data-trail-dropped>
                   <span aria-hidden="true" />
                   <span>
                     {dropped} more {dropped === 1 ? 'step' : 'steps'} before these
@@ -268,8 +268,8 @@ export const DoneSections: React.FC<{
                 </li>
               )}
               {trail.map((r, i) => (
-                <li key={i} className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 text-body" data-trail-row data-status={r.failed ? 'error' : r.skipped ? 'skipped' : 'ok'}>
-                  <time className="tabular-nums text-meta text-zinc-400 pt-px">{r.at}</time>
+                <li key={i} className="grid grid-cols-[5.75rem_minmax(0,1fr)] gap-x-2 text-body" data-trail-row data-status={r.failed ? 'error' : r.skipped ? 'skipped' : 'ok'}>
+                  <time className="tabular-nums whitespace-nowrap text-meta text-zinc-400 pt-px">{r.at}</time>
                   <span className={`min-w-0 break-words ${r.failed ? 'text-rose-200' : r.skipped ? 'text-zinc-400' : 'text-zinc-100'}`}>
                     {r.by && (
                       <>

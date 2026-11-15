@@ -44,8 +44,13 @@ static CALLS: Mutex<Vec<Call>> = Mutex::new(Vec::new());
 /// Uploads that came without a `Content-Length` matching their size (a chunked upload).
 static UNSIZED: AtomicUsize = AtomicUsize::new(0);
 
+/// The stub's log. Tests run in parallel, so a panic in one must not poison it for the rest.
+fn calls() -> std::sync::MutexGuard<'static, Vec<Call>> {
+    CALLS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn calls_with(key: &str) -> Vec<Call> {
-    CALLS.lock().unwrap().iter().filter(|c| c.0 == key).cloned().collect()
+    calls().iter().filter(|c| c.0 == key).cloned().collect()
 }
 
 /// The value of a multipart text field, or the file part's name and size.
@@ -75,7 +80,7 @@ async fn stub(headers: HeaderMap, body: Bytes) -> Response {
     if declared != Some(body.len()) {
         UNSIZED.fetch_add(1, Ordering::SeqCst);
     }
-    CALLS.lock().unwrap().push((key.clone(), model.clone(), field(&body, "language"), file, size));
+    calls().push((key.clone(), model.clone(), field(&body, "language"), file, size));
     match (key.as_str(), model.as_str()) {
         ("sk-bad", _) => (
             StatusCode::UNAUTHORIZED,
@@ -198,11 +203,12 @@ async fn with_no_key_it_is_unavailable_and_says_why() {
     assert_eq!(code, StatusCode::OK);
     assert_eq!(v, json!({"available": false, "source": null, "why": transcribe::WHY_NO_KEY}));
 
-    let before = CALLS.lock().unwrap().len();
-    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![1; 1000])).await;
+    // Other tests call the shared stub at the same time, so a total count races. This
+    // recording's size (1001 bytes) is used by no other test: no stub call may carry it.
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![1; 1001])).await;
     assert_eq!(code, StatusCode::CONFLICT);
     assert_eq!(v, json!({"error": transcribe::WHY_NO_KEY, "code": "no_transcriber", "why": transcribe::WHY_NO_KEY}));
-    assert_eq!(CALLS.lock().unwrap().len(), before, "no upstream call without a key");
+    assert!(calls().iter().all(|c| c.4 != 1001), "no upstream call without a key");
 
     let (code, _) = status(&app, "spc_missing").await;
     assert_eq!(code, StatusCode::NOT_FOUND);
