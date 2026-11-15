@@ -3007,6 +3007,7 @@ async fn run_kwant_turn_inner(
             turn_id: Some(tag.turn_id.clone()),
             workspace: workspace_dir.clone(),
             sandbox_target: Some(sandbox_target.clone()),
+            repeats: Default::default(),
         };
         // A replay works in its own scratch browser and asks nobody
         let _turn_on_browser = opts.rehearse.is_none().then(|| state.human_steps.track_turn(&sandbox_target, turn_scope.clone()));

@@ -405,6 +405,10 @@ pub struct SelfScope {
     /// The bot browser shown in this turn's side panel (team, channel or kwant id). The
     /// `browser_*` tools are offered only when it is set and only ever drive this one.
     pub sandbox_target: Option<String>,
+    /// 18a: the turn's repeat guard for its own tools. The claude CLI posts them straight to
+    /// [`self_endpoint`], past `McpToolSession::call`'s guard; every clone of this turn's scope
+    /// shares this one, and it goes when `finish_turn` drops the scope.
+    pub repeats: Arc<crate::mcp::repeat_guard::RepeatGuard>,
 }
 
 /// Where a turn runs, for the delegation tools: results go back to this chat.
@@ -1173,6 +1177,15 @@ fn tool_text(id: Value, text: impl Into<String>, is_error: bool) -> Response {
     )
 }
 
+/// A tool result's text parts, joined: what the repeat guard compares (an image part has none).
+fn content_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
@@ -1243,16 +1256,23 @@ pub async fn self_endpoint(
                 };
                 return tool_text(id, text, is_error);
             }
-            if name == "read_attachment" && scope.origin.is_some() {
-                let (content, is_error) = super::attachments::tool_read(&state, &scope, args).await;
-                return rpc_result(id, json!({"content": content, "isError": is_error}));
+            // 18a: after the refusal gates (a refused call isn't a failed one, and is never counted),
+            // the same call that already failed 3 times the same way in this turn doesn't run
+            let repeat_key = crate::mcp::repeat_guard::RepeatGuard::key(name, args);
+            if let Some(stopped) = scope.repeats.check(&repeat_key) {
+                tracing::info!(kwant = %scope.kwant_id, tool = %name, count = stopped.count, "repeat guard: didn't run an own-tool call that kept failing the same way");
+                return tool_text(id, stopped.text, true);
             }
-            if name == BROWSER_SCREENSHOT {
-                let (content, is_error) = browser_screenshot_tool(&state, &scope, args).await;
-                return rpc_result(id, json!({"content": content, "isError": is_error}));
-            }
-            let (text, is_error) = call_tool(&state, &scope, name, args).await;
-            tool_text(id, text, is_error)
+            let (content, is_error) = if name == "read_attachment" && scope.origin.is_some() {
+                super::attachments::tool_read(&state, &scope, args).await
+            } else if name == BROWSER_SCREENSHOT {
+                browser_screenshot_tool(&state, &scope, args).await
+            } else {
+                let (text, is_error) = call_tool(&state, &scope, name, args).await;
+                (json!([{"type": "text", "text": text}]), is_error)
+            };
+            scope.repeats.after(&repeat_key, if is_error { "error" } else { "ok" }, &content_text(&content));
+            rpc_result(id, json!({"content": content, "isError": is_error}))
         }
         _ => Json(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "method not found"}})).into_response(),
     }
@@ -2299,6 +2319,7 @@ mod tests {
             turn_id: Some("turn".into()),
             workspace: None,
             sandbox_target: browser.then(|| "t".into()),
+            repeats: Default::default(),
         }
     }
 
