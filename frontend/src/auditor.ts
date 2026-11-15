@@ -3,6 +3,7 @@
 // person closes them. An audit never marks work passed or failed; only checks do. Pure helpers,
 // shared by the app and the node tests.
 import type { AwayItem, AwayLink } from './away';
+import { localClock } from './clock';
 
 export type AuditStatus = 'queued' | 'challenge' | 'rebuttal' | 'done' | 'skipped' | 'failed' | 'interrupted';
 export type RiskStatus = 'open' | 'disputed' | 'resolved' | 'dismissed';
@@ -53,7 +54,117 @@ export interface TaskRisks {
 /** Shown wherever audits show: what an audit is and isn't. */
 export const NOT_A_PASS_TEXT = 'An audit never marks work passed or failed. Only checks do that, so “no risks raised” is not a pass.';
 export const SETTING_HINT =
-  'On important tasks, or ones nothing outside the bot will check, a second bot challenges the work with evidence and the owner answers once. An audit never marks work passed or failed, and each audit uses tokens.';
+  'On important tasks, or ones nothing outside the bot will check, a second bot challenges the work with evidence and the owner answers once. Routine runs without a check are double-checked on their first run and then at most once a week. An audit never marks work passed or failed, and each audit uses tokens.';
+
+/** A running audit turn, as `GET /api/turns` and the turn-started event carry it (14a). */
+export interface AuditTurn {
+  audit_id: string;
+  task_id: string;
+  task_title: string;
+  source_kind: string;
+  trigger: string;
+  stage: string;
+  challenger_kwant_id: string;
+  owner_kwant_id: string;
+}
+
+/** What is being double-checked, in the person's words. */
+const WORK_KIND: Record<string, string> = { routine: 'routine run', delegation: 'hand-off' };
+/** Why it earned a second check. */
+export const AUDIT_WHY: Record<string, string> = {
+  low_confidence: 'nothing else checks it',
+  high_impact: 'it’s marked high priority',
+  manual: 'you asked for it',
+};
+
+export interface AuditWho {
+  challenger?: string | null;
+  owner?: string | null;
+  /** The task's title; a routine run's "Routine: " prefix is dropped. */
+  title?: string | null;
+  sourceKind?: string | null;
+  trigger?: string | null;
+  /** `rebuttal`: the owner is answering. Anything else: the challenger is checking. */
+  stage?: string | null;
+}
+
+const possessive = (n: string) => (n.endsWith('s') ? `${n}’` : `${n}’s`);
+
+/** "routine run “Daily digest”", "hand-off", "task “Fix the footer”". */
+export function auditWork(sourceKind: string | null | undefined, title: string | null | undefined): string {
+  const kind = WORK_KIND[sourceKind ?? ''] ?? 'task';
+  const t = (title ?? '').replace(/^Routine:\s*/, '').trim();
+  return t ? `${kind} “${t}”` : kind;
+}
+
+export type AuditTense = 'now' | 'will' | 'started' | 'done';
+
+/**
+ * One plain line for who is double-checking whose work, and why (14a). `subject: false` drops the
+ * first name, for places already under that bot's name (the sidebar). `tense`: `started` for the
+ * activity log, `done` for a finished audit, `will` for a queued one. A missing name reads
+ * "A teammate" / "a teammate’s"; the audit's internals are never named.
+ */
+export function auditWhyLine(w: AuditWho, opts: { subject?: boolean; tense?: AuditTense } = {}): string {
+  const subject = opts.subject !== false;
+  const tense = opts.tense ?? 'now';
+  const challenger = w.challenger?.trim() || null;
+  const owner = w.owner?.trim() || null;
+  const work = auditWork(w.sourceKind, w.title);
+  const why = AUDIT_WHY[w.trigger ?? ''];
+  const tail = why ? `: ${why}.` : '.';
+  const cap = (v: string) => v[0].toUpperCase() + v.slice(1);
+  if (w.stage === 'rebuttal' && tense === 'now') {
+    const by = challenger ? `${possessive(challenger)} double-check` : 'a double-check';
+    const head = subject ? `${owner ?? 'A teammate'} is answering` : 'Answering';
+    return `${head} ${by} of the ${work}${tail}`;
+  }
+  const whose = owner ? possessive(owner) : 'a teammate’s';
+  const verb = { now: 'is double-checking', will: 'will double-check', started: 'started double-checking', done: 'double-checked' }[tense];
+  const head = subject ? `${challenger ?? 'A teammate'} ${verb}` : cap(verb.replace(/^is /, ''));
+  return `${head} ${whose} ${work}${tail}`;
+}
+
+/** The heading of one audit on its task (the task itself is on screen, so no title). */
+export function auditHeaderLine(a: Pick<Audit, 'status' | 'trigger' | 'challenger_kwant_id' | 'owner_kwant_id'>, names: Record<string, string>, sourceKind?: string | null): string {
+  const tense: AuditTense = a.status === 'queued' ? 'will' : auditLive(a) ? 'now' : a.status === 'done' ? 'done' : 'started';
+  return auditWhyLine({ challenger: names[a.challenger_kwant_id], owner: names[a.owner_kwant_id], sourceKind, trigger: a.trigger }, { tense });
+}
+
+/** The line for a running audit turn, with names looked up. */
+export function auditTurnLine(a: AuditTurn, names: Record<string, string>, opts: { subject?: boolean } = {}): string {
+  return auditWhyLine(
+    { challenger: names[a.challenger_kwant_id], owner: names[a.owner_kwant_id], title: a.task_title, sourceKind: a.source_kind, trigger: a.trigger, stage: a.stage },
+    opts,
+  );
+}
+
+/**
+ * The short line for compact places (sidebar busy line, Live now chip, header pill): the bot is
+ * already the row's name, so it says which work, with no reason and no period (14a). The full
+ * `auditTurnLine` goes in the tooltip.
+ */
+export function auditShortLine(a: AuditTurn, names: Record<string, string>): string {
+  const t = (a.task_title ?? '').replace(/^Routine:\s*/, '').trim();
+  const owner = names[a.owner_kwant_id]?.trim();
+  const what = t ? `“${t}”` : `${owner ? possessive(owner) : 'a teammate’s'} ${WORK_KIND[a.source_kind] ?? 'task'}`;
+  return a.stage === 'rebuttal' ? `Answering the double-check of ${what}` : `Double-checking ${what}`;
+}
+
+/** "today at 8:15 PM" today, "on Nov 7, 8:15 PM" another day. */
+const when = (iso: string | null | undefined, now: number): string | null => {
+  const c = localClock(iso, now);
+  return c ? `${c.includes(',') ? 'on' : 'today at'} ${c}` : null;
+};
+
+/** Why a routine run went unchecked: "this routine was double-checked today at 9:00 AM; next check from Nov 14, 9:00 AM". */
+export function routineSkipText(lastAuditAt: string | null | undefined, nextFrom: string | null | undefined, now: number = Date.now()): string {
+  const last = when(lastAuditAt, now);
+  const next = when(nextFrom, now);
+  if (last && next) return `this routine was double-checked ${last}; next check from ${next.replace(/^on /, '')}`;
+  if (last) return `this routine was double-checked ${last}`;
+  return 'this routine was double-checked in the last week';
+}
 
 export const unresolved = (r: Pick<Risk, 'status'>) => r.status === 'open' || r.status === 'disputed';
 
