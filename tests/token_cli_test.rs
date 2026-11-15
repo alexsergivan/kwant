@@ -101,8 +101,12 @@ fn token_without_a_running_server_fails_without_printing_the_token() {
     let dir = tempfile::tempdir().unwrap();
     let tok = "abcdefghijklmnopqrstuvwxyz012345";
     std::fs::write(dir.path().join("api-token"), format!("{tok}\n")).unwrap();
-    // A port nobody listens on
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    // A port nobody listens on: bound and never listening for the whole test, so a parallel
+    // test's server can't be given it the way a freed port can
+    let refusing = tokio::net::TcpSocket::new_v4().unwrap();
+    refusing.set_reuseaddr(false).unwrap();
+    refusing.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let port = refusing.local_addr().unwrap().port();
     let out = kwnt_token_link(dir.path(), port);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -110,6 +114,7 @@ fn token_without_a_running_server_fails_without_printing_the_token() {
     assert!(!stdout.contains(tok) && !stderr.contains(tok), "{stdout}\n{stderr}");
     assert!(stderr.contains("Is `kwnt serve` running?"), "{stderr}");
     assert!(stderr.contains("kwnt token --raw"), "{stderr}");
+    drop(refusing);
 }
 
 #[test]
