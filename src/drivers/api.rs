@@ -1355,14 +1355,19 @@ impl ApiDriver {
                     .send(RuntimeEvent::ToolCallPending { id: id.to_string(), name: name.to_string(), args: shown_args })
                     .await;
                 let outcome = session.call(caller, id, name, raw_args).await;
+                let mut completed = json!({
+                    "status": outcome.status,
+                    "content": crate::mcp::truncate_text(&outcome.text, crate::mcp::RECORD_RESULT_MAX_CHARS),
+                });
+                // 15c: a call kwnt didn't send says so, so the failure line doesn't count it
+                if let Some(n) = outcome.record.get("repeat_stopped") {
+                    completed["repeat_stopped"] = n.clone();
+                }
                 let _ = event_tx
                     .send(RuntimeEvent::ToolCallCompleted {
                         id: id.to_string(),
                         result: super::activity::with_page_title(
-                            json!({
-                                "status": outcome.status,
-                                "content": crate::mcp::truncate_text(&outcome.text, crate::mcp::RECORD_RESULT_MAX_CHARS),
-                            }),
+                            completed,
                             name,
                             &outcome.text,
                         ),
