@@ -38,8 +38,9 @@ pub fn consolidated_in(tail: &[Message]) -> Option<(&Message, Value)> {
 }
 
 /// The messages after the person's last one, and when that was. `None` when the person never wrote.
+/// A customer's or a connected agent's "user" message isn't the person's (16d).
 fn since_last_user(recent: &[Message]) -> Option<(&[Message], chrono::DateTime<chrono::Utc>)> {
-    let i = recent.iter().rposition(|m| m.sender_role == "user")?;
+    let i = recent.iter().rposition(crate::drivers::from_person)?;
     Some((&recent[i + 1..], recent[i].created_at?))
 }
 
@@ -259,5 +260,27 @@ mod tests {
         let names = ["Writer", "Analyst"];
         assert!(hands_on("Here's the draft.\n@Analyst, can you check the numbers?", &names));
         assert!(!hands_on("Here's the draft.\nWhich tone do you want?", &names));
+    }
+
+    /// 16d: a customer's message isn't the person's, so the asks since the person's last message
+    /// still all count (the list is still owed), and an answer isn't taken from the customer.
+    #[test]
+    fn a_customers_message_is_not_the_persons_last_one() {
+        use crate::drivers::tests::{customer_said, said};
+        let at = |m: Message, min: i64| Message { created_at: Some(chrono::DateTime::from_timestamp(1_700_000_000 + min * 60, 0).unwrap()), ..m };
+        let recent = vec![
+            at(said("user", "Plan the launch"), 0),
+            at(said("kwant", "Which date?"), 1),
+            at(customer_said("Is the shop open?"), 2),
+            at(said("kwant", "Which budget?"), 3),
+        ];
+        let (tail, since) = since_last_user(&recent).unwrap();
+        assert_eq!(tail.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["Which date?", "Is the shop open?", "Which budget?"]);
+        assert_eq!(since, recent[0].created_at.unwrap());
+        // Only customers wrote: the person never did
+        assert!(since_last_user(&[at(customer_said("hello"), 0), at(said("kwant", "Which date?"), 1)]).is_none());
+        // The person's own message still counts
+        let mine = [at(said("user", "a"), 0), at(said("kwant", "b"), 1), at(said("user", "c"), 2)];
+        assert!(since_last_user(&mine).unwrap().0.is_empty());
     }
 }
