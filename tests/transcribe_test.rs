@@ -23,6 +23,7 @@ use kwnt::{
     server::{continuity::SelfScope, create_router, mcp_runtime::PermissionSession, memory_recall, transcribe, AppState},
     tools::ToolRunner,
 };
+use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::Write;
