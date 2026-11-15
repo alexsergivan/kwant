@@ -3,6 +3,7 @@
 // Contract: dev-mode/plan/plan.md §3.2 and §3.6, the route JSON in dev-mode/impl/lin.md.
 
 import { personFetch } from './auth';
+import { dateText, timeText } from './clock';
 
 // ---------------------------------------------------------------------------
 // Server shapes
@@ -352,10 +353,9 @@ export interface RepoRow {
   fix: ForgeFix | null;
 }
 
-/** "14:32", 24-hour local time: the desk header's "Checked" format, shared by the repo rows. */
+/** "2:32 PM" / "14:32" on the device's clock: the desk header's "Checked" format, shared by the repo rows. */
 export function checkedLabel(ms: number): string {
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return timeText(ms) ?? '';
 }
 
 /** A repo row's poll time in the header's format ("15:30"), or null. */
@@ -1359,15 +1359,15 @@ export const emptyState = (): DevModeState => ({
 // ---------------------------------------------------------------------------
 // Dev desk
 
-/** "Today", "Yesterday", or "Tue 3 Nov", in the viewer's local time. */
-export function dayLabel(iso: string, now = new Date()): string {
+/** "Today", "Yesterday", or "Tue, Nov 3" / "Tue 3 Nov", in the viewer's local time and locale. */
+export function dayLabel(iso: string, now = new Date(), locale?: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((day(now) - day(d)) / 86_400_000);
   if (diff === 0) return 'Today';
   if (diff === 1) return 'Yesterday';
-  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  return dateText(d, { locale, weekday: true }) ?? '';
 }
 
 /** The day separator goes on the first card of each day, newest first. */

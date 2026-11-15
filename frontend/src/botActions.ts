@@ -4,6 +4,7 @@
 import { parseMetaObject } from './questions';
 import { Schedule, WEEKDAYS, describeSchedule, formatWhen } from './continuity';
 import { PersonCancelledError, personFetch } from './auth';
+import { dateText, timeText } from './clock';
 
 // ---------------------------------------------------------------------------
 // Bot actions
@@ -186,12 +187,11 @@ export function scheduleWords(schedule: unknown, scheduleText?: unknown): string
   return typeof scheduleText === 'string' && scheduleText ? sentence(scheduleText) : 'Unknown schedule';
 }
 
-/** "once on Fri, Nov 6 at 03:00 PM" in the viewer's own time zone, the way `formatWhen` writes it. */
-export function onceWords(iso: string): string | null {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  const day = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+/** "once on Fri, Nov 6 at 3:00 PM" in the viewer's own time zone and clock. */
+export function onceWords(iso: string, locale?: string): string | null {
+  const day = dateText(iso, { locale, weekday: true });
+  const time = timeText(iso, { locale });
+  if (!day || !time) return null;
   return `once on ${day} at ${time}`;
 }
 
