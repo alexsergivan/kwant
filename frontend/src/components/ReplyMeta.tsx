@@ -42,6 +42,14 @@ export interface ReplyMetaProps extends ReplyFacts {
 }
 
 /** The quiet line for a reply that ran on another account. It wraps rather than clips, so it fits at 390 px. */
+// The reply's name line, shared with the live row in ChatView (17c) so the name line keeps its type and height
+// when the reply lands. replyNameLine(extra) puts extra between the box and the type classes: the finished line
+// passes 'sm:flex-wrap' (its class string is unchanged), the live line 'min-h-6' (the Details button's height).
+export const REPLY_NAME = 'min-w-0 truncate text-[13px] font-semibold text-zinc-50';
+const REPLY_NAME_LINE_BOX = 'mb-1.5 flex min-w-0 max-w-full flex-nowrap';
+const REPLY_NAME_LINE_TYPE = 'items-center gap-x-2 gap-y-1 text-xs text-zinc-400 font-medium';
+export const replyNameLine = (extra: string): string => `${REPLY_NAME_LINE_BOX} ${extra} ${REPLY_NAME_LINE_TYPE}`;
+
 export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
   <p data-failover-note="" className="-mt-0.5 mb-1.5 max-w-full text-xs leading-snug text-zinc-500 break-words">
     {text}
@@ -79,9 +87,9 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
   const hasDetails = facts.length > 0 || hasContent(children) || !!why.panel;
   return (
     <div className="w-full max-w-full min-w-0">
-      <div className="mb-1.5 flex min-w-0 max-w-full flex-nowrap sm:flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400 font-medium">
+      <div className={replyNameLine('sm:flex-wrap')}>
         {avatar && <span className="sm:hidden shrink-0 inline-flex">{avatar}</span>}
-        <span className="min-w-0 truncate text-[13px] font-semibold text-zinc-50">{name}</span>
+        <span className={REPLY_NAME}>{name}</span>
         {done && <DoneMarker done={done} />}
         {handoff && <EngineChip label={[ranOn, account].filter(Boolean).join(' · ')} short={ranOn ? ranOn.split(' · ').pop() : null} handoff={handoff} />}
         {time && (
