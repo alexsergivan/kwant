@@ -69,7 +69,7 @@ test('the panel shows the window total, a bar per day, models and the day list',
   assert.match(html, /\$1\.75<\/span><span[^>]*> in the last 7 days/);
   assert.equal(html.match(/data-day="/g).length, 7);
   assert.match(html, /aria-label="Today: \$1\.50"/);
-  assert.match(html, /aria-label="Wed 11 Nov: no AI use"/);
+  assert.match(html, /aria-label="Wed, Nov 11: no AI use"/);
   assert.match(html, /data-usage-readout="true"><\/span>/, "nothing named until a bar is hovered or focused");
   // One tab stop for the bars: today's.
   assert.equal(html.match(/<li tabindex="0"/g).length, 1);

@@ -30,6 +30,18 @@ export function lastSentences(text: string, n = 2): string {
   return parts.slice(-n).join(' ');
 }
 
+/**
+ * True when a reply's meta rules out the Approve / Change… row: a question or a card of its own (`question_id`, `kind`),
+ * or a Blocked reply (`blocked`), which shows as Blocked instead. Except a failed step's Blocked (`from: "failed_step"`,
+ * 13a): it ends asking in the bot's own words ("If you approve it, I'll run it"), so the one-tap OK stays (Ada, Nov 14).
+ */
+export function metaHidesApprove(meta: Record<string, unknown> | null | undefined): boolean {
+  if (!meta) return false;
+  if (meta.question_id || meta.kind) return true;
+  const blocked = meta.blocked as { from?: unknown } | null | undefined;
+  return !!blocked && blocked.from !== 'failed_step';
+}
+
 /** True when the reply's last two sentences ask the person for an OK and nothing there says it's settled. */
 export function asksApproval(text: string | null | undefined): boolean {
   if (!text) return false;

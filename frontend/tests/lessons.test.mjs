@@ -89,8 +89,9 @@ test('eventText: self_checked, lessons_shown and lessons_held_out', () => {
   assert.equal(m.eventText(ev('lessons_held_out', { keys: ['a'] })), '');
 });
 
-test('isQuietEvent: only the holdout is left out of Activity', () => {
+test('isQuietEvent: the holdout and the fresh-eyes event are left out of Activity', () => {
   assert.equal(m.isQuietEvent(ev('lessons_held_out')), true);
+  assert.equal(m.isQuietEvent(ev('audit_fresh_eyes')), true);
   assert.equal(m.isQuietEvent(ev('lessons_shown')), false);
   assert.equal(m.isQuietEvent(ev('self_checked')), false);
 });
