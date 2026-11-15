@@ -26,6 +26,8 @@ const END_SHOT = arg('end-shot', '');
 const FINAL_SHOT = arg('final-shot', '');
 // 16a: --measure file.json writes the reply's geometry at the last token and once landed (bubble, blocks).
 const MEASURE = arg('measure', '');
+// 16a: --message-html file.html saves the landed message's HTML (the viewport shot depends on the scroll).
+const MESSAGE_HTML = arg('message-html', '');
 const { chromium } = await import(process.env.PLAYWRIGHT_CORE ?? '/home/maus/work/iris-ft-shots/node_modules/playwright-core/index.mjs');
 const exe = process.env.CHROMIUM ?? '/home/maus/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux-arm64/chrome-headless-shell';
 
@@ -147,12 +149,13 @@ const geometry = (sel) =>
     return { bubble: { x: r(b.left), w: r(b.width), h: r(b.height) }, text: blocks[0] ? { x: blocks[0].x } : null, blocks };
   }, sel);
 const live = MEASURE ? await geometry('[data-live-bubble-body] .markdown-content') : null;
-if (FINAL_SHOT || MEASURE) {
+if (FINAL_SHOT || MEASURE || MESSAGE_HTML) {
   await page.evaluate(() => window.__harness.finish());
   await page.waitForSelector('[data-message-id="m-final"]', { timeout: 30000 });
   await page.waitForFunction(() => !document.querySelector('[data-live-bubble-body] .markdown-content'), null, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(800);
   if (FINAL_SHOT) await page.screenshot({ path: FINAL_SHOT });
+  if (MESSAGE_HTML) fs.writeFileSync(MESSAGE_HTML, await page.locator('[data-message-id="m-final"]').evaluate((el) => el.outerHTML));
 }
 if (MEASURE) {
   const landed = await geometry('[data-message-id="m-final"] .markdown-content');
