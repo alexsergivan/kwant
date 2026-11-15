@@ -3561,6 +3561,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
   // The open chat's running turn's live steps (the newest, when several reply at once).
   const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
+  // 16b: the open chat's running turn double-checks another bot's work (the challenger's own chat).
+  const auditHere = isCurrentContextStreaming ? Object.values(turns).find((t) => t.context_id === openCtx && t.state === 'running' && t.audit)?.audit ?? null : null;
+  const liveAudit = useMemo(
+    () =>
+      auditHere
+        ? {
+            line: auditTurnLine(auditHere, kwantNames),
+            // The phone strip is narrow: the Live now chip's words, the full line stays as its title.
+            short: auditShortLine(auditHere, kwantNames),
+            onOpenTask: missionBoard && auditHere.task_id
+              ? () => {
+                  setPendingTaskId(auditHere.task_id);
+                  showPage('board');
+                }
+              : undefined,
+          }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [auditHere?.audit_id, auditHere?.stage, auditHere?.task_title, kwantNames, missionBoard],
+  );
   const needsYouByKwant = openStepsByKwant(humanSteps);
   const chatQueue = queuedInChat(turns, openCtx);
   const asQueued = (t: TrackedTurn): QueuedState => ({
@@ -4451,6 +4471,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           awaitingBrowser={awaitingBrowserHere}
           awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
+          liveAudit={liveAudit}
           renderHumanStep={renderHumanStep}
           contextKey={openCtx}
           deciding={decidingHere ? { botName: kwantName(decidingHere.kwantId) ?? chatTitle, consulted: decidingHere.consulted } : null}
