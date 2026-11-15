@@ -13,6 +13,7 @@ pub mod prod_floor;
 pub mod oauth_mock;
 pub mod directory;
 pub mod registry;
+pub mod repeat_guard;
 pub mod session;
 pub mod shell_risk;
 
