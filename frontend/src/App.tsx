@@ -122,6 +122,7 @@ import {
   turnsIn,
   upsertThread,
 } from './threads';
+import { createStreamText, NO_STREAM } from './streamText';
 import { Profile, profilesApi } from './profiles';
 import { FailoverEvent, createOutageLog, failoverNotice, outageKey } from './failover';
 import type { SwitchNote } from './failoverNotes';
@@ -287,8 +288,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openCtxRef = useRef(openCtx);
   openCtxRef.current = openCtx;
   // What the open chat is streaming; other chats' streams are kept in streamsRef until opened.
-  const [streamingText, setStreamingText] = useState('');
-  const [streamingThinking, setStreamingThinking] = useState('');
+  // The open chat's streaming reply (14b): a store only the live reply subscribes to, not App state, so a
+  // token never re-renders the app or the finished messages. Updates land once per frame, with one blip.
+  const streamStore = useMemo(
+    () => createStreamText({}, { onFrame: (prev, next) => next.text !== prev.text && playSfx('blip') }),
+    [],
+  );
   const streamsRef = useRef<Record<string, { text: string; thinking: string }>>({});
   // Running turns' live steps by turn id (with the chat they belong to), until the saved reply shows.
   const [activity, setActivity] = useState<Record<string, LiveActivity & { ctx: string }>>({});
@@ -872,8 +877,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       delete liveKwantRef.current[ctx];
     }
     if (ctx === openCtxRef.current) {
-      setStreamingText('');
-      setStreamingThinking('');
+      streamStore.show({ text: '', thinking: '' });
     }
     if (!ctx || !(ctx in liveRef.current)) return;
     const next = { ...liveRef.current };
@@ -1152,8 +1156,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setHistoryWindow((w) => (w && w.ctx !== openCtx ? null : w));
     if (!openCtx) return;
     const b = streamsRef.current[openCtx];
-    setStreamingText(b?.text ?? '');
-    setStreamingThinking(b?.thinking ?? '');
+    streamStore.show({ text: b?.text ?? '', thinking: b?.thinking ?? '' });
     setMessages(messagesCacheRef.current[openCtx] || []);
     setMessagesError(null);
     refreshContext(openCtx).then(() => {
@@ -1230,8 +1233,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       if (turnsIn(turnsRef.current, ctx).length > 0) {
         streamsRef.current[ctx] = { text: '', thinking: '' };
         if (ctx === openCtxRef.current) {
-          setStreamingText('');
-          setStreamingThinking('');
+          streamStore.show({ text: '', thinking: '' });
         }
         return;
       }
@@ -1374,8 +1376,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (d.state === 'deciding') {
               if (streamsRef.current[ctx]) streamsRef.current[ctx] = { text: '', thinking: '' };
               if (ctx === openCtxRef.current) {
-                setStreamingText('');
-                setStreamingThinking('');
+                streamStore.show({ text: '', thinking: '' });
               }
             } else {
               refreshContext(ctx);
@@ -1552,12 +1553,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (event.type === 'TextDelta') buf.text += event.data;
             else buf.thinking = event.data;
             if (!(ctx in liveRef.current)) markLiveKwant(ctx, event.kwant_id);
-            if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) {
-              if (event.type === 'TextDelta') {
-                setStreamingText(buf.text);
-                playSfx('blip');
-              } else setStreamingThinking(buf.thinking);
-            }
+            // At most one update per frame (14b); the blip goes with it (streamStore's onFrame).
+            if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) streamStore.schedule(() => ({ ...buf }));
             break;
           }
           case 'activity':
@@ -1693,8 +1690,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               refreshContext(targetId).then(() => {
                 streamsRef.current[targetId] = { text: '', thinking: '' };
                 if (openCtxRef.current === targetId) {
-                  setStreamingText('');
-                  setStreamingThinking('');
+                  streamStore.show({ text: '', thinking: '' });
                 }
               });
               markLive(targetId, spkName);
@@ -1715,6 +1711,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'TurnComplete': {
             const ctx = streamTarget(event, streamingContextIdRef.current);
+            // The last tokens show now, not a frame later (14b): the stream stays up until the saved reply lands.
+            if (ctx === openCtxRef.current) streamStore.flush();
             if (ctx === openCtxRef.current) {
               playSfx('coin');
               // Live events only (the stream has no replay; history loads via refreshContext).
@@ -1817,6 +1815,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'Error': {
             const ctx = streamTarget(event, streamingContextIdRef.current);
+            if (ctx === openCtxRef.current) streamStore.flush();
             if (ctx && ctx === streamingContextIdRef.current) {
               discussionInProgressRef.current = false;
               setDiscussionState({ inProgress: false });
@@ -1841,6 +1840,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   /** Stop in the composer: the open thread's turn, the direct chat's, or the channel's. */
   const handleCancelDiscussion = async () => {
     const ctx = openCtxRef.current;
+    // What already streamed shows at once (14b), so Stop never leaves the last words a frame behind.
+    streamStore.flush();
     const threadId = openThreadId;
     try {
       if (threadId) {
@@ -1931,8 +1932,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       streamingContextIdRef.current = targetId;
       if (!(targetId in liveRef.current)) {
         streamsRef.current[targetId] = { text: '', thinking: '' };
-        setStreamingText('');
-        setStreamingThinking('');
+        streamStore.show({ text: '', thinking: '' });
       }
       markLive(targetId, speakerName);
     }
@@ -2257,8 +2257,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           if (!(ctx in liveRef.current)) {
             streamsRef.current[ctx] = { text: '', thinking: '' };
             if (ctx === openCtxRef.current) {
-              setStreamingText('');
-              setStreamingThinking('');
+              streamStore.show({ text: '', thinking: '' });
             }
           }
           markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot'));
@@ -4302,8 +4301,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           messages={viewingHistory ? historyWindow.messages : messages}
           viewingHistory={viewingHistory}
           onJumpToLatest={() => setHistoryWindow(null)}
-          streamingText={isCurrentContextStreaming ? streamingText : ''}
-          streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
+          stream={isCurrentContextStreaming ? streamStore : NO_STREAM}
           pendingApprovals={approvalsHere}
           prepush={
             devOn && currentKwant && !viewingHistory ? (
