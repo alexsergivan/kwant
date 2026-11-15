@@ -125,6 +125,7 @@ async fn ask(e: &Env, tool: &str, input: impl FnOnce(&Path) -> Value) -> Outcome
         state: "running".into(),
         since: Utc::now(),
         purpose: None,
+        audit: None,
     });
     let mut events = e.state.event_sender.subscribe();
     let rpc = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",

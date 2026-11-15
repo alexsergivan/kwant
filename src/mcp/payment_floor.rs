@@ -1091,6 +1091,8 @@ mod tests {
         assert!(act(json!({"action": "key", "key": "Tab"}), Some("https://shop.example.com/checkout")).is_none());
         assert!(act(json!({"action": "key", "key": "Enter"}), Some("https://example.com/search")).is_none());
         assert!(act(json!({"action": "scroll"}), Some("https://shop.example.com/checkout")).is_none());
+        // A hover only moves the mouse: it never pays, even over "Pay now" on a checkout page
+        assert!(act(json!({"action": "hover", "text": "Pay now"}), Some("https://shop.example.com/checkout")).is_none());
         // Typing a card number anywhere
         assert!(act(json!({"action": "type", "text": "4111-1111-1111-1111"}), None).is_some());
         assert!(act(json!({"action": "type", "text": "4111 1111 1111 1112"}), None).is_none(), "fails Luhn");

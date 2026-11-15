@@ -2,10 +2,13 @@
 //! review gets one challenge from a teammate (with evidence) and one rebuttal from its owner; the
 //! risks left unresolved are listed on the task until the person closes them. An audit never
 //! verifies or fails a task and never counts agreement as proof: only outcome checks verify (§4).
-//! Off by default. See docs/mission-control.md §18.
+//! On by default, within a daily cap. A routine run with no check of its own is audited on its
+//! first run and after its instructions change, then at most once a week (14a). See
+//! docs/mission-control.md §18.
 
 use super::routes::{bad, conflict, internal, not_found};
-use crate::db::auditor::{audit_json, Answer, Audit, NewRisk};
+use crate::db::auditor::{audit_json, Answer, Audit, NewRisk, RoutineAudit};
+use crate::db::continuity::RoutineRow;
 use crate::db::missions::{OutcomeCheck, Task};
 use crate::db::models::Kwant;
 use crate::db::spaces::SpaceId;
@@ -20,7 +23,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -109,6 +112,74 @@ pub fn trigger_of(task: &Task, checks: &[OutcomeCheck]) -> Option<&'static str> 
         return Some("high_impact");
     }
     (super::checks_summary(task, checks)["status"] == "not_checked").then_some("low_confidence")
+}
+
+/// How long a routine's runs with no check of their own go without a second check once one of
+/// them was audited (14a). Its first run, and its first run after its instructions or acceptance
+/// changed, are audited whatever the date.
+pub const ROUTINE_RECHECK_DAYS: i64 = 7;
+/// The `audit_skipped` reason for such a run (with `last_audit_at` and `next_audit_from`).
+pub const ROUTINE_CHECKED: &str = "routine_recently_checked";
+
+/// A routine's instructions and acceptance, hashed. An audit of one of its runs records it, so a
+/// later run can tell the routine changed since.
+pub fn routine_fingerprint(instructions: &str, acceptance: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(instructions.trim().as_bytes());
+    h.update([0u8]);
+    h.update(acceptance.map(str::trim).unwrap_or("").as_bytes());
+    h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Whether a routine run that only a `low_confidence` audit would check gets one, given its
+/// routine's latest audit (14a): yes when there is none, when the routine changed since (or that
+/// audit is from before fingerprints), and once [`ROUTINE_RECHECK_DAYS`] have passed.
+pub fn routine_due(last: Option<&RoutineAudit>, fingerprint: &str, now: DateTime<Utc>) -> bool {
+    match last {
+        None => true,
+        Some(a) => a.fingerprint.as_deref() != Some(fingerprint) || now - a.created_at >= Duration::days(ROUTINE_RECHECK_DAYS),
+    }
+}
+
+/// The routine a routine run's task came from; `None` for other tasks or a deleted routine.
+async fn routine_of(state: &AppState, task: &Task) -> Option<RoutineRow> {
+    if task.source_kind != "routine" {
+        return None;
+    }
+    let (routine_id, _) = state.db.routine_run_of(task.source_id.as_deref()?).await.ok().flatten()?;
+    state.db.get_routine(&routine_id).await.ok().flatten()
+}
+
+/// [`trigger_of`] for a task just in review, except that a routine run's `low_confidence` audit
+/// waits its turn ([`routine_due`]): when it isn't due, `audit_skipped` is logged on the task with
+/// [`ROUTINE_CHECKED`] and when the routine was last audited, and this is `None`. High impact,
+/// hand-offs, goals and every other task are unchanged.
+pub async fn review_trigger(state: &AppState, task: &Task) -> Option<&'static str> {
+    let checks = state.db.list_checks(&task.id).await.unwrap_or_default();
+    let trigger = trigger_of(task, &checks)?;
+    if trigger != "low_confidence" {
+        return Some(trigger);
+    }
+    let Some(routine) = routine_of(state, task).await else { return Some(trigger) };
+    let last = match state.db.last_routine_audit(&routine.id).await {
+        Ok(last) => last,
+        Err(e) => {
+            tracing::warn!(task_id = %task.id, error = %e, "routine's last audit not read; auditing");
+            return Some(trigger);
+        }
+    };
+    let fingerprint = routine_fingerprint(&routine.instructions, routine.acceptance.as_deref());
+    match last {
+        Some(last) if !routine_due(Some(&last), &fingerprint, Utc::now()) => {
+            let next = last.created_at + Duration::days(ROUTINE_RECHECK_DAYS);
+            let detail = json!({"reason": ROUTINE_CHECKED, "routine_id": routine.id, "last_audit_at": last.created_at,
+                                "last_audit_task_id": last.task_id, "next_audit_from": next});
+            event(state, &task.id, "audit_skipped", "kwant", detail).await;
+            None
+        }
+        _ => Some(trigger),
+    }
 }
 
 /// Whether `task` is at or above the auditor's impact bar.
@@ -275,8 +346,7 @@ pub fn on_review(state: &AppState, task: &Task) {
         if !enabled(&state).await {
             return;
         }
-        let checks = state.db.list_checks(&task.id).await.unwrap_or_default();
-        if let Some(trigger) = trigger_of(&task, &checks) {
+        if let Some(trigger) = review_trigger(&state, &task).await {
             if let Err(why) = begin(&state, &task, trigger).await {
                 tracing::info!(task_id = %task.id, why, "no audit");
             }
@@ -315,7 +385,14 @@ pub async fn start(state: &AppState, task: &Task, trigger: &str) -> Result<Audit
         Err(e) => return Err(e.to_string()),
     };
     let model = model_mode(state).await;
-    event(state, &task.id, "audit_started", "kwant", json!({"audit_id": audit.id, "trigger": trigger, "challenger": challenger.id, "pool": pool, "model": model})).await;
+    let mut detail = json!({"audit_id": audit.id, "trigger": trigger, "challenger": challenger.id, "owner": owner, "source_kind": task.source_kind,
+                            "pool": pool, "model": model});
+    // What the routine said when its run was audited, so a later run can tell it changed (14a)
+    if let Some(r) = routine_of(state, task).await {
+        detail["routine_id"] = json!(r.id);
+        detail["routine_fp"] = json!(routine_fingerprint(&r.instructions, r.acceptance.as_deref()));
+    }
+    event(state, &task.id, "audit_started", "kwant", detail).await;
     Ok(audit)
 }
 
@@ -477,6 +554,17 @@ async fn run_stage(state: &AppState, audit: &Audit, task: &Task, bot: &Kwant, st
             }
             let mut opts = TurnOpts::always_asking("Audit");
             (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(PURPOSE.into()));
+            // So the person sees who is double-checking whose work and why (14a)
+            opts.audit = Some(Box::new(crate::server::turns::AuditTurn {
+                audit_id: audit.id.clone(),
+                task_id: task.id.clone(),
+                task_title: task.title.clone(),
+                source_kind: task.source_kind.clone(),
+                trigger: audit.trigger.clone(),
+                stage: stage.into(),
+                challenger_kwant_id: audit.challenger_kwant_id.clone(),
+                owner_kwant_id: audit.owner_kwant_id.clone(),
+            }));
             // B1: the challenger reviews with fresh eyes (the spec and the result in its prompt,
             // no chat, notes or history tools); the rebuttal is the owner answering for its work
             opts.fresh_eyes = stage_is_fresh(stage);

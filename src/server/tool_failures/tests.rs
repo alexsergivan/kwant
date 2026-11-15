@@ -54,6 +54,26 @@ fn a_tools_own_error_is_not_a_connection_failure() {
     assert!(classify("mcp__unknown__x", &json!({}), "401", &servers()).is_none());
 }
 
+/// 15c: the repeat guard's stop text has no connection words of its own, and a stopped call is
+/// skipped before classifying (its quoted error may have some).
+#[test]
+fn a_repeat_stop_is_not_a_connection_failure() {
+    let stop = crate::mcp::repeat_guard::stop_text(3, "invalid arguments: repo is required");
+    for name in ["mcp__github__get_repo", "mcp__composio__GITHUB_GET_REPO", "mcp__kwnt__kwnt_fetch"] {
+        assert!(classify(name, &json!({}), &stop, &servers()).is_none(), "{name}");
+    }
+    let conn = Connection { key: "kwnt".into(), label: "kwant's own tools".into(), server_id: None };
+    assert_eq!(cause_of(&conn, &stop), None);
+    // A stopped 401 would read as a sign-in, so it never gets that far
+    let stopped_401 = json!({"status": "error", "content": crate::mcp::repeat_guard::stop_text(3, "401 Unauthorized"), "repeat_stopped": 3});
+    assert!(!about_the_connection(&stopped_401));
+    assert!(about_the_connection(&json!({"status": "error", "content": "401 Unauthorized"})));
+    assert!(about_the_connection(&json!({"status": "ok"})));
+    for status in ["denied", "cancelled", "unanswered"] {
+        assert!(!about_the_connection(&json!({ "status": status })), "{status}");
+    }
+}
+
 /// A Composio app that lost its account needs connecting again, keyed by the app, not the server.
 #[test]
 fn composio_failures_are_per_app_and_need_a_reconnect() {

@@ -974,6 +974,22 @@ urgent (`high_impact`) or no check that counts and isn't the owner's will judge 
 (`manual`). One audit per task attempt; one audit runs at a time server-wide. A skipped audit (cap,
 no challenger) logs `audit_skipped`.
 
+**Routine runs (14a).** A routine run's task (`source_kind = routine`) that would be audited only as
+`low_confidence` is audited on its routine's first run that reaches review, on the first run after
+the routine's instructions or acceptance changed, and otherwise at most once per routine per 7 days.
+Any other run logs `audit_skipped` with reason `routine_recently_checked`, `routine_id`,
+`last_audit_at`, `last_audit_task_id` and `next_audit_from`. "Last audited" is the newest audit of
+any run of the routine that is `queued`, in a stage or `done` (not skipped, failed or interrupted);
+"changed" compares a hash of the routine's instructions and acceptance, which `audit_started`
+records as `routine_fp` (an audit from before 14a has none, so the next run is audited). No column
+or migration: the audits, the runs and the task events answer it. High-impact routine runs, manual
+audits, hand-offs, goals and every other task are audited as before, and the daily cap still holds.
+
+**Who and why.** `audit_started` also records `owner` and `source_kind`. An audit turn's entry in
+`GET /api/turns` and its `turn_started` event carry `audit: {audit_id, task_id, task_title,
+source_kind, trigger, stage, challenger_kwant_id, owner_kwant_id}`, so the app can say in one line
+who is double-checking whose work and why, instead of a plain "working".
+
 **Challenger.** A bot of the task's space other than the owner, the mission's lead and the lead that
 handed the task off, that knows the kind of work. Pools, best first:
 
@@ -1527,10 +1543,10 @@ Routine and hand-off turns aren't tied to a task, so they get the chat-sized blo
 
 A bot's `memory_search` finds notes by meaning as well as by words, using the space's own embeddings (`src/server/memory_recall.rs`).
 
-**Provider.** First the space's OpenAI account: a Codex API-key account, else the host's OpenAI key (Settings, else `OPENAI_API_KEY`) unless This machine is off for Codex. Both need the OpenAI API engine enabled, and use `text-embedding-3-small`. Else a local Ollama whose last check was ready and that has an embedding model pulled (`nomic-embed-text`, then `mxbai-embed-large`, then any `*embed*`). Claude has no embeddings API. Picking the provider reads only the database and the cached engine checks.
+**Provider.** First the space's OpenAI account: a Codex API-key account, else the host's OpenAI key (Settings, else `OPENAI_API_KEY`) when the OpenAI API engine's last check passed and This machine isn't off for Codex (the same `host_off` rule turns use). Both need the OpenAI API engine enabled, and use `text-embedding-3-small`. Else a local Ollama whose last check was ready and that has an embedding model pulled (`nomic-embed-text`, then `mxbai-embed-large`, then any `*embed*`). Claude has no embeddings API. Picking the provider reads only the database and the cached engine checks.
 
 **No provider: today's search.** The result is exactly the FTS5 keyword search, with no HTTP call and nothing added to the wait.
 
-**With a provider.** The query is embedded once, with a 1.5 s timeout. The keyword top 20 and the cosine top 20 (cosine ≥ 0.2) are merged by Reciprocal Rank Fusion (score = Σ 1/(60 + rank)), then the Truth Ledger view filters the result as before. If the query can't be embedded in time, the search is keyword-only and that provider isn't asked again for 60 s.
+**With a provider.** The query is embedded once, with a 1.5 s timeout. The keyword top 20 and the cosine top 20 above the model's floor (0.25 for OpenAI `text-embedding-3-small`; 0.5 for a local model, which scores unrelated text 0.3–0.4) are merged by Reciprocal Rank Fusion (score = Σ 1/(60 + rank)), then the Truth Ledger view filters the result as before. If the query can't be embedded in time, the search is keyword-only and that provider isn't asked again for 60 s.
 
-**Vectors.** They live in `kwant_memory_vectors(memory_id, model, dim, vec, text_hash)` as little-endian f32. They are filled in the background after each memory write, and lazily when a search finds missing or stale ones: the text or the model changed. Each fill embeds up to 4 batches of 32 notes, and only one runs per bot at a time. Deleting a note deletes its vector through a trigger.
+**Vectors.** They live in `kwant_memory_vectors(memory_id, model, dim, vec, text_hash)` as little-endian f32. They are filled in the background after each memory write, and lazily when a search finds missing or stale ones: the text or the model changed. Each fill embeds up to 4 batches of 32 notes, and only one runs per bot at a time; a note written while one runs makes it do one more pass when it ends. A fill that fails or is cancelled frees its bot for the next one. Deleting a note deletes its vector through a trigger.

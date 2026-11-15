@@ -1,7 +1,8 @@
 //! 0.9.4 follow-through: a turn whose last tool step failed and whose reply ends on a plan it
 //! didn't carry out ("I'll retry the render…") gets exactly one automatic continuation, with no
 //! delivery plan needed. A reply that ends with `Blocked: …` instead gets none, and its meta keeps
-//! the line (`meta.blocked`).
+//! the line (`meta.blocked`). So does one that ends waiting on the person in prose (13a): its meta
+//! keeps that ending, from "failed_step".
 //!
 //! The bot's folder isn't a git repository and the asks aren't for a picture or a change, so
 //! nothing but follow-through can continue them.
@@ -58,6 +59,7 @@ async fn a_failed_step_and_a_promise_get_one_continuation() {
     let first = meta_of(&replies[0]);
     assert_eq!(first["delivery"]["missing"], serde_json::json!(["follow_through"]), "{first}");
     assert_eq!(first["delivery"]["continues"], true, "{first}");
+    assert!(first.get("blocked").is_none(), "a plan, not a wait: {first}");
     let steps = first["activity"]["steps"].as_array().cloned().unwrap_or_default();
     assert!(steps.iter().any(|s| s["kind"] == "tool" && s["status"] == "failed"), "the failed step is in the activity: {first}");
 
@@ -94,6 +96,29 @@ async fn a_blocked_line_ends_it_without_a_continuation() {
     assert_eq!(
         meta["blocked"],
         serde_json::json!({"text": "terminal commands are off for this bot. Allow Terminal for this team, then say continue."}),
+        "{meta}"
+    );
+    assert_ne!(meta["delivery"]["continues"], true, "{meta}");
+    let all = requests(&env);
+    assert!(!all.iter().any(|r| r.contains(FOLLOW)), "{all:#?}");
+    assert_eq!(all.len(), 1, "{all:#?}");
+}
+
+#[tokio::test]
+async fn a_failed_step_and_a_prose_ask_are_blocked_without_a_continuation() {
+    let env = setup().await;
+    let a = env.a.clone();
+    send_direct(&env, &a, "How long are the credits' frames? WAITSTEP:zqwait REPLYTAG:zqwait", serde_json::json!({})).await;
+    wait_for("a reply", || async { !replies_of(&env, &a).await.is_empty() }).await;
+    wait_for("the bot to finish", || async { bot_idle(&env, &a) }).await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let replies = replies_of(&env, &a).await;
+    assert_eq!(replies.len(), 1, "no continuation: {replies:#?}");
+    let meta = meta_of(&replies[0]);
+    assert_eq!(
+        meta["blocked"],
+        serde_json::json!({"text": "If you approve the command, I'll run the render right away.", "from": "failed_step"}),
         "{meta}"
     );
     assert_ne!(meta["delivery"]["continues"], true, "{meta}");
