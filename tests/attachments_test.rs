@@ -462,7 +462,7 @@ async fn a_delegated_task_never_passes_a_customers_message_on_as_the_persons() {
         async move { db.insert_message_with(&input, &extra).await.unwrap() }
     };
     let delegate = |title: &'static str| {
-        let body = json!({"lead_kwant_id": env.a, "specialist_kwant_id": env.b, "task": "Answer Ann. REPLYTAG:c20b", "title": title, "kwant_id": env.a, "continue_lead": false});
+        let body = json!({"lead_kwant_id": env.a, "specialist_kwant_id": env.b, "task": format!("Answer Ann ({title}). REPLYTAG:c20b"), "title": title, "kwant_id": env.a, "continue_lead": false});
         let app = env.app.clone();
         async move {
             let (s, d) = call(&app, "POST", "/api/delegations", Some(body)).await;
