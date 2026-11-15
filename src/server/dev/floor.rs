@@ -267,7 +267,7 @@ pub async fn allow_check(db: &Database, details: &Value, without_backup: bool) -
     }
     let backup = super::backup::state_of(db, space_id, false).await;
     let (code, error) = if without_backup {
-        ("backup_required", "This step can't be allowed without a backup: it changes data for sure. Back up first.")
+        ("backup_required", "This step needs a fresh backup before it runs. It can't be allowed without one.")
     } else {
         ("needs_backup", "Back up first: this step needs a backup from the last 10 minutes")
     };
@@ -709,7 +709,7 @@ mod tests {
             let r = allow_check(&db, &c, true).await.unwrap_err();
             assert_eq!(r["code"], "backup_required", "{c}");
             assert_eq!(r["can_allow_without_backup"], false, "{c}");
-            assert!(r["error"].as_str().unwrap().contains("can't be allowed without a backup"), "{r}");
+            assert!(r["error"].as_str().unwrap().contains("can't be allowed without one"), "{r}");
             assert_eq!(allow_check(&db, &c, false).await.unwrap_err()["code"], "needs_backup");
         }
         // A fresh backup: everything goes through, and nothing counts as skipped

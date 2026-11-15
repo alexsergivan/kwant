@@ -384,7 +384,7 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
         Some(Some(c)) => {
             let c = c.trim().to_string();
             if c.chars().count() > BACKUP_COMMAND_CHARS || c.contains('\0') {
-                return coded(StatusCode::BAD_REQUEST, "backup_too_long", format!("the backup command must be at most {BACKUP_COMMAND_CHARS} characters"));
+                return coded(StatusCode::BAD_REQUEST, "backup_too_long", "That command is too long. Keep it to 2,000 characters.");
             }
             (!c.is_empty()).then_some(c)
         }
