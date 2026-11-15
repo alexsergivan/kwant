@@ -396,7 +396,7 @@ test('picking a choice answers that question', async () => {
 
 test('once asked, the card says it waits for the answer on Jira and offers See the comment', () => {
   const out = html(m.TicketCard, { ...N, ticket: T('needs_answer'), brief: B(fx.BRIEF_ASKED), onAskPreview: async () => fx.ASK_PREVIEW });
-  assert.match(out, /Asked Dana Park on Jira at 10:04 AM\. You can still answer here\./);
+  assert.match(out, /Asked Dana Park on Jira at 10:04\u00a0AM\. You can still answer here\./);
   assert.match(out, /Ann checks the Jira comment every 5 minutes\. The first answer wins, here or there\./);
   assert.doesNotMatch(out, /data-ask=/);
 });
@@ -686,12 +686,12 @@ test('18d: ticket cards say the day when a time was not today', () => {
   Date.now = () => Date.parse('2026-11-08T09:00:00Z');
   try {
     const back = html(m.TicketCard, { ...N, ticket: T('taken_back'), onCloseCard: () => {} });
-    assert.match(back, / on Nov 7 at 10:12 AM\. Work paused; nothing was thrown away\./);
+    assert.match(back, / on Nov 7 at 10:12\u00a0AM\. Work paused; nothing was thrown away\./);
     assert.doesNotMatch(back, / at Nov 7, /);
     const landed = html(m.TicketCard, { ...N, ticket: T('landed'), brief: B(fx.BRIEF_ANSWERED) });
-    assert.match(landed, /merged Nov 7, 11:20 AM/);
+    assert.match(landed, /merged Nov 7, 11:20\u00a0AM/);
     const asked = html(m.TicketCard, { ...N, ticket: T('needs_answer'), brief: B(fx.BRIEF_ASKED), onAskPreview: async () => fx.ASK_PREVIEW });
-    assert.match(asked, /Asked Dana Park on Jira on Nov 7 at 10:04 AM\. You can still answer here\./);
+    assert.match(asked, /Asked Dana Park on Jira on Nov 7 at 10:04\u00a0AM\. You can still answer here\./);
   } finally {
     Date.now = now;
   }

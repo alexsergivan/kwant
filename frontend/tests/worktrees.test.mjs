@@ -99,10 +99,10 @@ const tick = async (el) => {
 const row = (host, id) => host.querySelector(`[data-wt-row="${id}"]`);
 const text = (el) => {
   // Block boundaries read as a space, the way a screen reader or a person reads the row.
-  if (!el.querySelectorAll) return el.textContent.replace(/\s+/g, ' ').trim();
+  if (!el.querySelectorAll) return el.textContent.replace(/[^\S\u00a0]+/g, ' ').trim();
   const c = el.cloneNode(true);
   for (const b of c.querySelectorAll('p, h2, h3, div, li, ul, button, label, select, input, span, code')) { b.before(' '); b.after(' '); }
-  return c.textContent.replace(/\s+/g, ' ').replace(/ ([.,?’)])/g, '$1').replace(/\( /g, '(').trim();
+  return c.textContent.replace(/[^\S\u00a0]+/g, ' ').replace(/ ([.,?’)])/g, '$1').replace(/\( /g, '(').trim();
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -121,13 +121,13 @@ test('parseList keeps repos, drops removed and malformed rows, and reads other w
 test('row status and time copy', () => {
   const W = (o) => m.parseWorktree(o);
   assert.deepEqual(m.rowStatus(W(fx.WORKING), fx.NOW), { led: 'run', text: 'is working here', kind: 'working' });
-  assert.equal(m.rowStatus(W(fx.FINISHED_DUE), fx.NOW).text, 'finished 1:42 PM');
+  assert.equal(m.rowStatus(W(fx.FINISHED_DUE), fx.NOW).text, 'finished 1:42\u00a0PM');
   assert.equal(m.rowStatus(W(fx.FINISHED_DUE), fx.NOW).led, 'ok');
   assert.equal(m.rowStatus(W(fx.CLEANED), fx.NOW).text, 'finished yesterday');
   assert.equal(m.rowStatus(W(fx.MINE), fx.NOW).text, 'made by you');
   assert.equal(m.rowStatus(W(fx.MISSING), fx.NOW).kind, 'missing');
   assert.equal(m.rowTime(W(fx.WORKING), fx.NOW), 'active now');
-  assert.equal(m.rowTask(W(fx.MINE), fx.NOW), 'No task. Made from the Dev desk 9:12 AM');
+  assert.equal(m.rowTask(W(fx.MINE), fx.NOW), 'No task. Made from the Dev desk 9:12\u00a0AM');
   assert.equal(m.rowTask(W({ ...fx.MINE, thread_title: 'lin/search-index' }), fx.NOW), 'Chat: lin/search-index', 'thread_title (contract v3) when there is no task');
   assert.equal(m.changesLabel(0), 'No uncommitted changes');
   assert.equal(m.changesLabel(1), '1 uncommitted file');
@@ -137,17 +137,17 @@ test('row status and time copy', () => {
 
 test('P3 states: due, kept, cleaning, cleaned with kept notes, failed', () => {
   const W = (o) => m.parseWorktree(o);
-  assert.deepEqual(m.p3State(W(fx.FINISHED_DUE)), { kind: 'due', at: '2:42 PM', dirs: [] });
+  assert.deepEqual(m.p3State(W(fx.FINISHED_DUE)), { kind: 'due', at: '2:42\u00a0PM', dirs: [] });
   assert.deepEqual(m.p3State(W({ ...fx.FINISHED_DUE, keep_build: true })), { kind: 'kept' });
   assert.deepEqual(m.p3State(W(fx.FINISHED_DUE), { cleaning: true }), { kind: 'cleaning' });
-  assert.deepEqual(m.p3State(W(fx.CLEANED)), { kind: 'cleaned', size: '1.2 GB', at: '6:40 PM', dirs: ['.vite', 'target'] });
+  assert.deepEqual(m.p3State(W(fx.CLEANED)), { kind: 'cleaned', size: '1.2 GB', at: '6:40\u00a0PM', dirs: ['.vite', 'target'] });
   assert.deepEqual(m.keptNotes(W(fx.CLEANED)), ['Kept dist: Git tracks a file in it.']);
   assert.equal(m.p3State(W(fx.WORKING)), null);
   assert.equal(m.p3State(W(fx.MISSING)), null);
   assert.deepEqual(m.p3State(W(fx.FINISHED_DUE), { failed: 'Lin is working here' }), { kind: 'failed', reason: 'Lin is working here' });
   // D1: Clean now on a kept worktree shows the cleaned result, its kept notes and a toast.
   const keptClean = { ...fx.FINISHED_DUE, keep_build: true, clean_at: null, cleaned_at: '2026-11-10T15:10:00Z', cleaned: ['node_modules', 'web/dist'], cleaned_bytes: 300_000, kept: [{ dir: 'dist', why: 'tracked' }] };
-  assert.deepEqual(m.p3State(W(keptClean)), { kind: 'cleaned', size: '300 KB', at: '3:10 PM', dirs: ['node_modules', 'dist'] });
+  assert.deepEqual(m.p3State(W(keptClean)), { kind: 'cleaned', size: '300 KB', at: '3:10\u00a0PM', dirs: ['node_modules', 'dist'] });
   assert.deepEqual(m.keptNotes(W(keptClean)), ['Kept dist: Git tracks a file in it.']);
   assert.equal(m.cleanToast(W(keptClean)), 'Cleaned 300 KB of build output. Kept dist: Git tracks a file in it.');
   // A clean from before this finish doesn't hide "kept".
@@ -205,10 +205,10 @@ test('the list groups by repo with counts, rows in every state, and an empty rep
   assert.match(text(w1), /↑2/);
   assert.equal(w1.querySelector('[data-wt-act="remove"]').getAttribute('aria-disabled'), 'true');
   assert.match(text(w1), /Pixel is working here\. Stop Pixel first\./);
-  assert.match(text(row(host, 'w2')), /Lin finished 1:42 PM/);
+  assert.match(text(row(host, 'w2')), /Lin finished 1:42\u00a0PM/);
   assert.match(text(row(host, 'w2')), /up to date|↑4/);
   assert.match(text(row(host, 'w4')), /You made by you try-vite-6/);
-  assert.match(text(row(host, 'w4')), /No task\. Made from the Dev desk 9:12 AM/);
+  assert.match(text(row(host, 'w4')), /No task\. Made from the Dev desk 9:12\u00a0AM/);
   assert.match(text(row(host, '/home/ann/code/shop-hotfix')), /shop-hotfix made outside kwant hotfix\/1\.4\.2/);
   assert.equal(row(host, '/home/ann/code/shop-hotfix').querySelector('[data-wt-act="remove"]'), null, 'outside rows are read-only');
   const site = host.querySelector('[data-wt-repo="site"]');
@@ -222,7 +222,7 @@ test('P3 line: Keep it, then Clean now; a refused clean says why and nothing els
   const host = await mount();
   const p3 = () => row(host, 'w2').querySelector('[data-wt-p3]');
   assert.equal(p3().dataset.wtP3, 'due');
-  assert.match(text(p3()), /Build output is cleaned at 2:42 PM · Keep it/);
+  assert.match(text(p3()), /Build output is cleaned at 2:42\u00a0PM · Keep it/);
   await click(p3().querySelector('[data-wt-keep]'));
   assert.deepEqual(calls.at(-2).body ?? calls.find((c) => c.url.endsWith('/keep')).body, { keep: true });
   assert.equal(p3().dataset.wtP3, 'kept');
@@ -230,7 +230,7 @@ test('P3 line: Keep it, then Clean now; a refused clean says why and nothing els
   assert.equal(p3().dataset.wtP3, 'failed');
   assert.match(text(p3()), /Couldn’t clean build output: Lin is working here\. Nothing else was touched\. · Try again/);
   const cleaned = row(host, 'w3').querySelector('[data-wt-p3]');
-  assert.match(text(cleaned), /Cleaned 1\.2 GB of build output at 6:40 PM \(\.vite, target\) · Kept dist: Git tracks a file in it\./);
+  assert.match(text(cleaned), /Cleaned 1\.2 GB of build output at 6:40\u00a0PM \(\.vite, target\) · Kept dist: Git tracks a file in it\./);
 });
 
 test('D1: Clean now on a kept worktree shows the cleaned line, its kept notes and a toast', async () => {
@@ -245,7 +245,7 @@ test('D1: Clean now on a kept worktree shows the cleaned line, its kept notes an
   await click(p3().querySelector('[data-wt-clean]'));
   assert.ok(calls.some((c) => c.method === 'POST' && c.url.endsWith('/w2/clean')));
   assert.equal(p3().dataset.wtP3, 'cleaned');
-  assert.match(text(p3()), /Cleaned 300 KB of build output at 3:10 PM \(node_modules\) · Kept dist: Git tracks a file in it\./);
+  assert.match(text(p3()), /Cleaned 300 KB of build output at 3:10\u00a0PM \(node_modules\) · Kept dist: Git tracks a file in it\./);
   assert.match(text(host.querySelector('[data-wt-toast]')), /^Cleaned 300 KB of build output\. Kept dist: Git tracks a file in it\.$/);
 });
 
