@@ -105,13 +105,33 @@ const RUNS_TEXT_NAMES: &[&str] = &["RUN", "EXEC", "COMMAND", "CMD", "SHELL", "BA
 /// Argument keys (any depth, any case) that carry free text to run.
 const RUNS_TEXT_KEYS: &[&str] = &["command", "cmd", "argv", "args", "script", "code", "shell", "query", "sql"];
 
+/// Parts of an argument key (any depth; lowercased with `_`, `-`, `.` and spaces dropped) that
+/// carry free text to run, matched by containment: `command_line`, `commandLine`, `shell_command`,
+/// `cmdline`, `bash_command`, `exec_args` (0.9.14, Rigel's hole 1).
+const RUNS_TEXT_KEY_PARTS: &[&str] = &["command", "cmd", "shell", "exec", "argv"];
+
+/// Whole words of an argument key (split at `_`, `-`, camelCase) that carry a script. Not by
+/// containment, which would catch `description`, `subscription` and `transcript`.
+const RUNS_TEXT_KEY_WORDS: &[&str] = &["script", "scripts", "javascript", "applescript", "stdin"];
+
+/// HTTP verbs that change something, in a `method` argument (any depth, any case).
+const WRITE_METHODS: &[&str] = &["DELETE", "PUT", "PATCH", "POST"];
+
+/// HTTP verbs that only read; on an HTTP-shaped call (it has a URL argument) any other `method`
+/// value, or one that isn't a plain string, needs the full card.
+const READ_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
+
 /// Whole words (in the tool name, any argument key or any string value) that push, merge, publish
 /// or release, or move refs and tags.
 const PUSH_FAMILY: &[&[&str]] = &[&["push"], &["merge"], &["publish"], &["release"], &["send", "pack"], &["receive", "pack"], &["refs"], &["deploy"], &["tag"]];
 
 /// Parts of a tool name (any case) that act outside kwant or destroy something: publishing,
 /// sending, deleting, posting or paying.
-const OUTWARD_NAMES: &[&str] = &["PUBLISH", "DEPLOY", "SEND", "EMAIL", "MAIL", "DELETE", "REMOVE", "DESTROY", "DROP", "POST", "PAY"];
+const OUTWARD_NAMES: &[&str] = &[
+    "PUBLISH", "DEPLOY", "SEND", "EMAIL", "MAIL", "DELETE", "REMOVE", "DESTROY", "DROP", "POST", "PAY",
+    // 0.9.14 (Rigel's hole 3)
+    "TRANSFER", "SUBMIT", "TWEET", "SHARE", "INVITE", "FORWARD", "UPLOAD", "WIPE", "TERMINATE", "REVOKE", "PURCHASE",
+];
 
 const PUSHES: &str = "This pushes code, so it needs the full card.";
 const RUNS: &str = "This runs a command, so it needs the full card.";
@@ -130,21 +150,92 @@ fn texts<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
     }
 }
 
-/// Whether any key at any depth is one of [`RUNS_TEXT_KEYS`].
-fn has_run_key(v: &Value) -> bool {
+/// Whether `f(key, value)` holds for any key at any depth.
+fn any_key(v: &Value, f: &dyn Fn(&str, &Value) -> bool) -> bool {
     match v {
-        Value::Array(items) => items.iter().any(has_run_key),
-        Value::Object(map) => map.iter().any(|(k, v)| RUNS_TEXT_KEYS.iter().any(|r| k.eq_ignore_ascii_case(r)) || has_run_key(v)),
+        Value::Array(items) => items.iter().any(|i| any_key(i, f)),
+        Value::Object(map) => map.iter().any(|(k, v)| f(k, v) || any_key(v, f)),
         _ => false,
     }
 }
 
-/// Whether `text` holds a [`PUSH_FAMILY`] word as a whole word: lowercased, with anything but
-/// letters and digits (spaces, tabs, `_`, `-`, `/`, quotes, dots) as a break.
+/// `text` lowercased, letters and digits only: `command_line`, `commandLine` and `Command-Line`
+/// all become `commandline`.
+fn flat(text: &str) -> String {
+    text.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// The lowercased words of `text`. Anything but letters and digits (spaces, tabs, `_`, `-`, `/`,
+/// quotes, dots) is a break, and so is a camelCase hump: `pushToOrigin` is push, to, origin, and
+/// `HTTPPush` is http, push. A word in one case throughout (`Pushkin`, `PUSHKIN`) stays whole.
+fn words(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if !c.is_alphanumeric() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        if c.is_uppercase() && !cur.is_empty() {
+            // cur is non-empty, so chars[i - 1] is a letter or digit of this word
+            let prev = chars[i - 1];
+            let next_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+            if prev.is_lowercase() || prev.is_numeric() || (prev.is_uppercase() && next_lower) {
+                out.push(std::mem::take(&mut cur));
+            }
+        }
+        cur.extend(c.to_lowercase());
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Whether an argument key carries free text to run: one of [`RUNS_TEXT_KEYS`], a key holding a
+/// [`RUNS_TEXT_KEY_PARTS`] part once flattened, or one with a [`RUNS_TEXT_KEY_WORDS`] word.
+fn is_run_key(k: &str) -> bool {
+    RUNS_TEXT_KEYS.iter().any(|r| k.eq_ignore_ascii_case(r))
+        || RUNS_TEXT_KEY_PARTS.iter().any(|p| flat(k).contains(p))
+        || words(k).iter().any(|w| RUNS_TEXT_KEY_WORDS.contains(&w.as_str()))
+}
+
+/// Whether any key at any depth carries free text to run ([`is_run_key`]).
+fn has_run_key(v: &Value) -> bool {
+    any_key(v, &|k, _| is_run_key(k))
+}
+
+/// Whether `text` holds a [`PUSH_FAMILY`] word as a whole word ([`words`]).
 fn has_push_word(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    PUSH_FAMILY.iter().any(|phrase| words.windows(phrase.len()).any(|w| w == *phrase))
+    let words = words(text);
+    PUSH_FAMILY.iter().any(|phrase| words.windows(phrase.len()).any(|w| w.iter().zip(phrase.iter()).all(|(a, b)| a == b)))
+}
+
+/// Whether the arguments ask for an HTTP verb that changes something. A `method` key (any depth;
+/// `method`, `http_method`, `httpMethod`, `verb`) whose value is one of [`WRITE_METHODS`] always
+/// does. On an HTTP-shaped call (a `url`, `uri` or `endpoint` key anywhere) a method that isn't a
+/// plain [`READ_METHODS`] string does too: `CONNECT`, a made-up verb, a list or a number.
+fn writes_by_method(args: &Value) -> bool {
+    let http = any_key(args, &|k, _| {
+        let f = flat(k);
+        f == "uri" || f == "endpoint" || f.ends_with("url")
+    });
+    any_key(args, &|k, v| {
+        let f = flat(k);
+        if !(f.ends_with("method") || f == "verb" || f == "httpverb") {
+            return false;
+        }
+        match v.as_str() {
+            Some(s) => {
+                let verb = s.trim().to_ascii_uppercase();
+                WRITE_METHODS.contains(&verb.as_str()) || (http && !READ_METHODS.contains(&verb.as_str()))
+            }
+            None => http && !v.is_null(),
+        }
+    })
 }
 
 /// Why an approval may only be answered on its full card, from its stored details alone; `None`
@@ -154,12 +245,13 @@ fn has_push_word(text: &str) -> bool {
 /// folder), then adds what a one-line peek can't show safely: a risky step (`smart_reason`), the
 /// push floor (a prepush grant, a GitHub write, a merge) and details it can't read.
 ///
-/// It fails closed in three layers, each of which refuses on its own (Ada, #646 round 2):
+/// It fails closed in four layers, each of which refuses on its own (Ada, #646 round 2; 0.9.14):
 /// 1. a push-family word ([`PUSH_FAMILY`]) anywhere in the tool name, an argument key or a string
-///    value, as a whole word;
+///    value, as a whole word, camelCase humps included ([`words`]);
 /// 2. a tool that runs free text: its tool or server name says so ([`RUNS_TEXT_NAMES`]) or an
-///    argument key at any depth does ([`RUNS_TEXT_KEYS`]);
-/// 3. a tool whose name acts outside kwant or destroys something ([`OUTWARD_NAMES`]).
+///    argument key at any depth does ([`is_run_key`]: exact, by containment, or by word);
+/// 3. a tool whose name acts outside kwant or destroys something ([`OUTWARD_NAMES`]);
+/// 4. an HTTP verb that changes something in a `method` argument ([`writes_by_method`]).
 pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     if !details.is_object() {
         return Some("Open it to see what it does.");
@@ -200,6 +292,10 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     }
     // 3. Acts outside kwant or destroys something
     if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) {
+        return Some(OUTWARD);
+    }
+    // 4. An HTTP call that changes something, whatever the tool is called
+    if writes_by_method(args) {
         return Some(OUTWARD);
     }
     None
@@ -622,6 +718,81 @@ mod tests {
         assert_eq!(inline_refusal(&mcp("x", "Remove_Item", json!({}))), Some(OUTWARD));
         assert_eq!(inline_refusal(&mcp("x", "create_post", json!({}))), Some(OUTWARD));
         assert_eq!(inline_refusal(&mcp("x", "pay_invoice", json!({}))), Some(OUTWARD));
+    }
+
+    /// The 0.9.14 hardening (Rigel's holes 1–4 on #646): one row per new rule, each on a tool name
+    /// no older layer refuses, with the reason it must give.
+    fn hardening_rows() -> Vec<(&'static str, Value, &'static str)> {
+        let note = |args: Value| mcp("notes", "save_note", args);
+        let http = |args: Value| mcp("http", "http_request", args);
+        let url = "https://api.example.com/items/1";
+        vec![
+            // 1. Command keys by containment or word
+            ("key command_line", note(json!({"command_line": "ls -la"})), RUNS),
+            ("key commandLine, nested", note(json!({"opts": {"commandLine": "ls -la"}})), RUNS),
+            ("key shell_command", note(json!({"shell_command": "whoami"})), RUNS),
+            ("key cmdline", note(json!({"cmdline": "whoami"})), RUNS),
+            ("key bash_command", note(json!({"bash_command": "whoami"})), RUNS),
+            ("key exec_args in a list", note(json!({"steps": [{"exec_args": ["x"]}]})), RUNS),
+            ("key user_script", note(json!({"user_script": "x()"})), RUNS),
+            // 2. camelCase push-family words
+            ("key pushToOrigin", note(json!({"pushToOrigin": true})), PUSHES),
+            ("key mergeBranch", note(json!({"mergeBranch": "dev"})), PUSHES),
+            ("value forcePush", note(json!({"op": "forcePush"})), PUSHES),
+            ("value HTTPPush", note(json!({"op": "HTTPPush"})), PUSHES),
+            ("tool createTag", mcp("git_ops", "createTag", json!({})), PUSHES),
+            ("tool v2Deploy", mcp("site", "v2Deploy", json!({})), PUSHES),
+            // 3. Outward names
+            ("submit_form", mcp("x", "submit_form", json!({})), OUTWARD),
+            ("transfer_funds", mcp("x", "transfer_funds", json!({})), OUTWARD),
+            ("tweet", mcp("x", "tweet", json!({})), OUTWARD),
+            ("share_page", mcp("x", "share_page", json!({})), OUTWARD),
+            ("invite_user", mcp("x", "invite_user", json!({})), OUTWARD),
+            ("forward_message", mcp("x", "forward_message", json!({})), OUTWARD),
+            ("upload_file", mcp("x", "upload_file", json!({})), OUTWARD),
+            ("wipe_disk", mcp("x", "wipe_disk", json!({})), OUTWARD),
+            ("terminate_instance", mcp("x", "terminate_instance", json!({})), OUTWARD),
+            ("revoke_token", mcp("x", "revoke_token", json!({})), OUTWARD),
+            ("purchase_item", mcp("x", "purchase_item", json!({})), OUTWARD),
+            // 4. HTTP verbs that change something
+            ("method DELETE", http(json!({"url": url, "method": "DELETE"})), OUTWARD),
+            ("method PUT", http(json!({"url": url, "method": "PUT"})), OUTWARD),
+            ("method PATCH", http(json!({"url": url, "method": "PATCH"})), OUTWARD),
+            ("method POST", http(json!({"url": url, "method": "POST"})), OUTWARD),
+            ("httpMethod post, nested, no url", mcp("api", "call", json!({"options": {"httpMethod": " post "}})), OUTWARD),
+            ("method CONNECT on a URL", http(json!({"url": url, "method": "CONNECT"})), OUTWARD),
+            ("method as a list on a URL", http(json!({"url": url, "method": ["GET", "DELETE"]})), OUTWARD),
+        ]
+    }
+
+    #[test]
+    fn every_0914_hardening_row_needs_the_full_card() {
+        let rows = hardening_rows();
+        assert_eq!(rows.len(), 31);
+        for (name, d, why) in rows {
+            assert_eq!(inline_refusal(&d), Some(why), "{name}");
+        }
+    }
+
+    /// What the 0.9.14 rules must not catch: a read, a `description` key (it holds "script"), a
+    /// camelCase key with no push word, "Pushkin" in a hump, and a `method` that isn't HTTP.
+    #[test]
+    fn the_0914_hardening_keeps_ordinary_steps_inline() {
+        let url = "https://api.example.com/items/1";
+        for (name, d) in [
+            ("method GET on a URL", mcp("http", "http_request", json!({"url": url, "method": "get"}))),
+            ("method HEAD on a URL", mcp("http", "http_request", json!({"url": url, "method": "HEAD"}))),
+            ("a description key", mcp("linear", "create_issue", json!({"title": "Bug", "description": "Steps to reproduce"}))),
+            ("a camelCase key", mcp("notion", "create_page", json!({"pageTitle": "Reading list"}))),
+            ("Pushkin in a hump", mcp("notion", "create_page", json!({"title": "readPushkin"}))),
+            ("a method that isn't HTTP", mcp("stats", "summarize", json!({"method": "median"}))),
+        ] {
+            assert_eq!(inline_refusal(&d), None, "{name}");
+        }
+        assert_eq!(words("pushToOrigin HTTPPush v2Deploy Pushkin PUSHKIN git_push"), ["push", "to", "origin", "http", "push", "v2", "deploy", "pushkin", "pushkin", "git", "push"]);
+        for (name, d) in realistic_rows() {
+            assert_eq!(inline_refusal(&d), None, "{name}");
+        }
     }
 
     /// Realistic steps that still get Allow once, so the rule isn't "always no".

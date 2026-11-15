@@ -595,8 +595,9 @@ async fn thirty_busy_spaces_glance_quickly() {
     assert!(f50 < 1000.0, "{f50} ms");
 }
 
-/// Rigel's round-2 risk-4 rows (#646), read back through `GET /api/glance`: nineteen steps that
-/// must never get Allow once inline, and three ordinary ones that still do.
+/// Rigel's round-2 risk-4 rows (#646) plus one row per 0.9.14 rule, read back through
+/// `GET /api/glance`: twenty-three steps that must never get Allow once inline, and four ordinary
+/// ones that still do.
 #[tokio::test]
 async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
     let (app, state, _tmp) = setup().await;
@@ -623,6 +624,12 @@ async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
         ("deploy", mcp("vercel", "deploy", json!({})), false),
         ("send_email", mcp("gmail", "send_email", json!({})), false),
         ("delete_page", mcp("notion", "delete_page", json!({})), false),
+        // 0.9.14 hardening, one row per rule
+        ("key commandLine", mcp("notes", "save_note", json!({"commandLine": "ls -la"})), false),
+        ("key pushToOrigin", mcp("notes", "save_note", json!({"pushToOrigin": true})), false),
+        ("transfer_funds", mcp("bank", "transfer_funds", json!({})), false),
+        ("method DELETE", mcp("http", "http_request", json!({"url": "https://api.example.com/items/1", "method": "DELETE"})), false),
+        ("method GET", mcp("http", "http_request", json!({"url": "https://api.example.com/items/1", "method": "GET"})), true),
         (
             "a file write inside the bot's folder",
             json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "arguments": {"file_path": "notes/todo.md", "content": "Buy milk\nCall Ana"}}),
@@ -631,7 +638,7 @@ async fn risky_steps_never_get_allow_once_and_ordinary_ones_still_do() {
         ("a read-only fetch", mcp("fetch", "fetch", json!({"url": "https://example.com/docs", "max_length": 5000})), true),
         ("a page that mentions Pushkin", mcp("notion", "create_page", json!({"title": "Pushkin reading list", "parent": {"page_id": "abc"}})), true),
     ];
-    assert_eq!(rows.iter().filter(|r| !r.2).count(), 19);
+    assert_eq!(rows.iter().filter(|r| !r.2).count(), 23);
     let person = |body: Value| Req { body: Some(body), remote: true, cookie: Some(TOKEN), ..Default::default() };
     // Ten at a time keeps them under the Needs-you cap; each batch is denied before the next
     for batch in rows.chunks(10) {
