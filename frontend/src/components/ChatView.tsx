@@ -35,6 +35,7 @@ import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
 import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
+import { RefusedCustomerCall } from './RefusedCustomerCall';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
@@ -225,7 +226,8 @@ export interface ChatViewProps {
   /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
   prepush?: React.ReactNode;
   /** Approvals answered in Telegram while this chat was open (G4): kept as a resolved row. */
-  settledApprovals?: PendingApproval[];
+  /** Settled lines; `refused` marks a customer's call nobody allowed (22d). */
+  settledApprovals?: (PendingApproval & { refused?: true })[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -2524,10 +2526,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* P4: the running bot's shares, already in the place its saved reply will give them */}
         {liveRowShown && arranged.live.map((m) => renderMessage(m))}
 
-        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
-        {settledApprovals.map((approval) => (
-          <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
-        ))}
+        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload;
+            22d: a customer's call nobody allowed, in that customer's chat */}
+        {settledApprovals.map((approval) =>
+          approval.refused ? (
+            <RefusedCustomerCall key={approval.id} approval={approval} />
+          ) : (
+            <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
+          ),
+        )}
 
         {/* 0.8.0 B3: checks before this bot pushes */}
         {prepush}
