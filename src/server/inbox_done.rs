@@ -1484,7 +1484,7 @@ mod tests {
             evidence: vec![evidence("ev1", "report.pdf", None)],
             ..Default::default()
         };
-        assert_eq!(checked(&[t.clone()], None)["line"], "Failed: 1 of 2 parts checked; \"make the PDF\": not met.");
+        assert_eq!(checked(std::slice::from_ref(&t), None)["line"], "Failed: 1 of 2 parts checked; \"make the PDF\": not met.");
         // An unlinked one not checked beside it gets its own phrase; the linked failure isn't counted again
         let mut t2 = t;
         t2.criteria.push(criterion("c4", "By Friday", "", &[]));
