@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Browser proxy.** `KWNT_BROWSER_PROXY=socks5://host:port` (or `http://`) sends the bots' browser out through a proxy, so sites see a home connection instead of a datacenter one. It applies to the compose browser, the browser container kwant starts itself and local Chrome; kwant's own services and private ranges always skip it. `kwnt doctor` checks that the proxy answers and that its exit address differs from the direct one. Credentials in the value are refused. See `docs/browser-proxy.md`.
+
 ## [Mac 0.9.15] - 2026-11-15
 
 kwant 0.9.15: the perch: what needs you and what your bots are doing, at the top of your screen, steadier dictation when several people talk at once, long replies that stream in a block at a time, replies that land without a jump, double-checks you can see wherever they run, customer messages that never count as yours, an island that names the program, never the command, a Pointing line that fits next to Refresh, a Blocked label for a bot that asks you to decide, a Telegram Allow once that never pushes code or runs a command, times that say which day, a hand-back line that fits, Claude bots that stop repeating a kwant tool call that keeps failing and an island Allow once that holds back more risky steps.
