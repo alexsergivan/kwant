@@ -56,8 +56,8 @@ pub enum Migration {
     Guess,
 }
 
-/// The Migration row of a deploy kwant can't tell about.
-const GUESS_ROW: &str = "kwant can't tell whether this deploy changes the database, so it counts as one.";
+/// The Database row of a deploy kwant can't tell about.
+const GUESS_ROW: &str = "Might change it. The app can't tell from the command.";
 
 /// Why a call hits the floor, with the blast-radius rows the card shows (only what's known).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -94,12 +94,12 @@ impl Floor {
 
     /// The stronger of two findings; rows of both are kept.
     /// A migration deploy stays a guess only when every migration in it is one: a known one wins,
-    /// with its own Migration row.
+    /// with its own Database row.
     fn merge(self, other: Floor) -> Floor {
         let (mut keep, extra) = if other.kind.rank() > self.kind.rank() { (other, self) } else { (self, other) };
         if keep.migration == Some(Migration::Guess) && extra.migration == Some(Migration::Yes) {
             keep.migration = Some(Migration::Yes);
-            keep.blast.retain(|(l, _)| l != "Migration");
+            keep.blast.retain(|(l, _)| l != "Database");
         }
         for (l, v) in extra.blast {
             if !keep.blast.iter().any(|(k, _)| *k == l) {
@@ -150,7 +150,7 @@ impl DevCtx {
         let migration = !self.no_data() && self.migration != Some(false);
         if migration {
             let known = self.migration == Some(true);
-            let mut f = Floor::new(FloorKind::DeployMigration, why).row("Migration", if known { "This deploy changes the database." } else { GUESS_ROW });
+            let mut f = Floor::new(FloorKind::DeployMigration, why).row("Database", if known { "This deploy changes it." } else { GUESS_ROW });
             if !known {
                 f.migration = Some(Migration::Guess);
             }
@@ -979,7 +979,7 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool, over_
         "redis-cli" => a.iter().any(|x| x.eq_ignore_ascii_case("flushall") || x.eq_ignore_ascii_case("flushdb")).then(|| destroy("redis-cli empties the store".into())),
         // Migrations run against production
         _ if migrate_cmd(program, a) => (env_prod || a.iter().any(|x| is_prod_flag(x) || prod_env(x)) || flag_value(a, &["--settings"]).is_some_and(prod_settings))
-            .then(|| Floor::new(FloorKind::DeployMigration, format!("{program} migrates a production database")).row("Migration", "Runs database migrations on production.")),
+            .then(|| Floor::new(FloorKind::DeployMigration, format!("{program} migrates a production database")).row("Database", "This command changes it on production.")),
         _ => None,
     }
 }
@@ -1432,7 +1432,7 @@ mod tests {
         assert!(!f.needs_backup);
         let unknown = shell_reason("fly deploy", &ctx()).unwrap();
         assert!(unknown.needs_backup);
-        assert!(unknown.blast.iter().any(|(l, v)| l == "Migration" && v.contains("can't tell")));
+        assert!(unknown.blast.iter().any(|(l, v)| l == "Database" && v.contains("can't tell")));
     }
 
     #[test]
