@@ -321,7 +321,7 @@ export function floorSentence(why: string): string {
 }
 
 export function floorSubline(floor: ProdFloor): string {
-  if (floor.kind === 'deploy_migration' && floor.migration === 'guess') return 'kwant can’t tell if this deploy changes the database, so it asks for a backup from the last 10 minutes first.';
+  if (floor.kind === 'deploy_migration' && floor.migration === 'guess') return 'The app can’t tell if this deploy changes the database, so it asks for a backup from the last 10 minutes first.';
   if (floor.kind === 'deploy_migration') return 'This deploy changes the database, so it counts as destructive: it needs a backup from the last 10 minutes first.';
   if (floor.kind === 'destructive') return 'Destructive commands need a backup from the last 10 minutes first.';
   if (floor.kind === 'deploy') return 'Dev mode is on, so deploys always ask you, even with approvals off.';

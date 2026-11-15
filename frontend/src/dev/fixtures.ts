@@ -184,19 +184,19 @@ export const FLOOR_NO_COMMAND = floorApproval('ap_6', 'Lin', 'psql -c "DELETE FR
   backup: { state: 'no_command', age_s: null, bytes: null, path: null, error: null },
 });
 
-// 22f: Oleks's deploy (Nov 15): kwant can't tell if it changes the database, and the space has no backup command.
+// 22f: Oleks's deploy (Nov 15): the app can't tell if it changes the database, and the space has no backup command.
 const OLEKS_DEPLOY = 'set -e; R=root@164.90.207.66; D=/opt/tradebot; timeout 120 ssh -o BatchMode=yes -o ConnectTimeout=15 $R "cd $D && docker compose up -d --no-deps --force-recreate catalyst 2>&1 && docker compose ps catalyst"';
-const GUESS_BLAST: [string, string][] = [['Migration', 'kwant can’t tell whether this deploy changes the database, so it counts as one.'],
+const GUESS_BLAST: [string, string][] = [['Migration', 'The app can’t tell whether this deploy changes the database, so it counts as one.'],
   ['If it fails', 'The app goes back on its own. The database goes back only from a backup.'], ['Downtime', 'While the containers restart.'], ['Where', 'root@164.90.207.66']];
 export const FLOOR_GUESS_NO_COMMAND = floorApproval('ap_8', 'Builder', OLEKS_DEPLOY, {
   kind: 'deploy_migration', why: 'This command runs docker compose up over ssh', needs_backup: true, migration: 'guess', blast: GUESS_BLAST,
   backup: { state: 'no_command', age_s: null, bytes: null, path: null, error: null },
-}, '~/.kwnt/spaces/spc_4837/workspaces/Binance Trading Lab');
+}, '~/dev/binance-trading-lab');
 
 export const FLOOR_GUESS_OLD = floorApproval('ap_9', 'Builder', OLEKS_DEPLOY, {
   kind: 'deploy_migration', why: 'This command runs docker compose up over ssh', needs_backup: true, migration: 'guess', blast: GUESS_BLAST,
   backup: { state: 'old', age_s: 2 * 3600, bytes: 18_400_000, path: '/srv/b.sql', error: null },
-}, '~/.kwnt/spaces/spc_4837/workspaces/Binance Trading Lab');
+}, '~/dev/binance-trading-lab');
 
 export const FLOOR_FAILED = floorApproval('ap_7', 'Lin', 'sqlite3 data/kwant.db "DROP TABLE old_x;"', {
   kind: 'destructive', why: 'This database command runs DROP TABLE', needs_backup: true,

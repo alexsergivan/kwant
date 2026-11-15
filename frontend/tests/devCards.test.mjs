@@ -771,8 +771,8 @@ test('22f: Allow without a backup only for a guessed deploy, in no_command, bloc
   assert.equal(m.canSkipBackup({ ...floorOf(fx.FLOOR_DESTRUCTIVE), migration: 'guess' }), false, 'destructive never, even if a payload says guess');
 });
 
-test('22f: a guessed deploy says kwant can’t tell, not that it changes the database', () => {
-  assert.match(m.floorSubline(floorOf(fx.FLOOR_GUESS_NO_COMMAND)), /^kwant can’t tell if this deploy changes the database/);
+test('22f: a guessed deploy says the app can’t tell, not that it changes the database', () => {
+  assert.match(m.floorSubline(floorOf(fx.FLOOR_GUESS_NO_COMMAND)), /^The app can’t tell if this deploy changes the database/);
   assert.match(m.floorSubline(floorOf(fx.FLOOR_MIGRATION)), /^This deploy changes the database/);
 });
 
