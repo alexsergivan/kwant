@@ -439,3 +439,25 @@ test('copy has no emoji and no HTML from data', async () => {
     assert.doesNotMatch(el.textContent, /\p{Extended_Pictographic}/u);
   }
 });
+
+// 18d (clock says day): a held action or a send-back from another day says the day, "on Nov 10 at 9:40 AM";
+// today it stays "at 9:40 AM". The day is the device's own, so the pattern allows any locale's short date.
+test('18d: "You allowed / denied / sent it back" say the day when it was not today', async () => {
+  const daysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString();
+  const ON_DAY = String.raw`on (?:[A-Z][a-z]{2} \d{1,2}|\d{1,2} [A-Z][a-z]{2})(?:,? \d{4})? at \d{1,2}:\d{2}(?:\s?[AP]M)?`;
+  const allowed = { ...FX.heldAllowed, held_actions: FX.heldAllowed.held_actions.map((h) => ({ ...h, resolved_at: daysAgo(3) })) };
+  let r = await mount(allowed, fakeApi().api);
+  assert.match(r.q('[data-held]').textContent.replace(/\s+/g, ' '), new RegExp(`You allowed this ${ON_DAY}\\. It ran:`));
+  r.root?.unmount?.();
+  const denied = { ...FX.heldDenied, held_actions: FX.heldDenied.held_actions.map((h) => ({ ...h, resolved_at: daysAgo(2) })) };
+  r = await mount(denied, fakeApi().api);
+  assert.match(r.qa('[data-held]')[0].textContent.replace(/\s+/g, ' '), new RegExp(`You denied this ${ON_DAY}\\. It didn’t run\\.`));
+  assert.doesNotMatch(r.qa('[data-held]')[0].textContent, / at (?:[A-Z][a-z]{2} \d|\d{1,2} [A-Z][a-z]{2}),/, 'never "at Nov 10, 9:40 AM"');
+  const back = { ...FX.failRoundLimit, previous_round: { ...FX.failRoundLimit.previous_round, sent_back_at: daysAgo(4) } };
+  r = await mount(back, fakeApi().api);
+  assert.match(r.q('[data-round-box]').textContent.replace(/\s+/g, ' '), new RegExp(`You sent it back ${ON_DAY}:`));
+  // Today: the time alone, after "at".
+  const today = { ...FX.heldAllowed, held_actions: FX.heldAllowed.held_actions.map((h) => ({ ...h, resolved_at: new Date().toISOString() })) };
+  r = await mount(today, fakeApi().api);
+  assert.match(r.q('[data-held]').textContent.replace(/\s+/g, ' '), /You allowed this at \d{1,2}:\d{2}(?:\s?[AP]M)?\. It ran:/);
+});
