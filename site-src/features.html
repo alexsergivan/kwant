@@ -46,12 +46,42 @@ card_art: team
       <h2>Files in the bot's browser, and dictation in the message box</h2>
       <p>Bots open hover-only menus, save downloads in their own folder and upload files to a page's file picker. A mic between @ and Send turns what you say into text in the message box, for you to read over before you send it. Done cards list each part of what you asked, in your words, and show which part nothing checked. An empty team chat opens on a team home with its members, its lead and three things to ask. Routine runs are double-checked when it counts, and a running check says which task, whose, and why.</p>
     </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="bot-browser-files">Bots download and upload files in their browser</h3>
+        <p>A bot's browser now lists controls that show only on hover, like a video tile's <strong>⋮</strong>, and moves the mouse over the tile before clicking one. A page's download lands in the bot's own folder under <strong>downloads/</strong>, never on your computer, and <strong>browser_upload</strong> gives a page's file picker a copy of a file from the bot's folder or from the chat's attachments. Under Ask, each upload asks you first.</p>
+      </div>
+      <div class="frame">{{shot:v0913-browser-upload-card|Close-up of an Approval needed card: "Ben wants to upload a file to a website", "Started by an audit, not by you, so each change asks first", the file downloads/ridgeline-size-chart.pdf, the browser_upload details, and Deny or Allow once.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="dictation">Dictate into the message box</h3>
+        <p>Press the <strong>mic</strong> between @ and Send and talk. It shows <strong>Listening</strong> with the time and a level meter, then adds the text to the box: <strong>Added 23 words. Read them over, then press Send.</strong>, with Undo. Nothing is sent before you press Send. Dictation uses the space's OpenAI key, or the host's; without one the mic is muted and says how to set it up. On a phone the mic takes Send's place until you type.</p>
+      </div>
+      <div class="frame">{{shot:v0913-dictation|A direct chat with Ann while the composer listens: a red dot, "Listening 0:03", a level meter and "Esc or the mic stops · nothing goes to Ann until you press Send", with Cancel. The box says "Speak now…" and the mic button shows Stop.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="request-parts">Every part of your request on the done card</h3>
+        <p>A finished task's done card lists <strong>Parts of your request</strong> in your own words, each <strong>Passed</strong>, <strong>Not met</strong> or <strong>No check</strong>, and the check line counts them, like <strong>Partly checked: 2 of 3 parts checked</strong>. A part passes only when every check linked to it passed with evidence, so a bot's say-so never counts. <strong>Show what proves it</strong> folds out a part's checks, and a part that was not met opens on its own.</p>
+      </div>
+      <div class="frame">{{shot:v0913-request-parts|The Inbox with a done item from Ann, "Make the October returns report, put it in the shared folder and send it to Ana", Partly checked. The card lists Parts of your request: the report and the shared folder Passed, each with Show what proves it, and "Send it to Ana" as No check, "Nothing checked this part." Below are Looks good and Ask Ann to redo.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="team-home">A home for every team chat</h3>
+        <p>An empty team chat opens on a team home: the members with the lead marked, the team's description or a line like <strong>3 bots who work together. Ada leads.</strong>, three <strong>For example</strong> asks, and who answers, like <strong>The helpers team answers. Type @ and a name to ask one member.</strong> With no AI account connected, the account card sits inside it. The home goes once the chat has a message.</p>
+      </div>
+      <div class="frame">{{shot:v0913-team-home|The Helpers team's chat in Trailhead Outfitters, empty, with the team's name and description, its members (Ben, the lead, and Cody) and example tasks to start with.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="auditor-turn">Double-checks where they count</h3>
+        <p>A routine run that nothing else checks is double-checked on its first run, after its instructions change, and then at most once a week; a run in between says in its activity when the routine was last checked and when the next check is due. While a check runs, the checking bot shows <strong>Double-checking “Daily digest”</strong> in the sidebar, the working pill and <strong>Live now</strong>, with who checks whose work and why on hover. High-priority work and checks you ask for are double-checked as before.</p>
+      </div>
+      <div class="frame">{{shot:v0913-auditor-turn|The board while an audit double-checks a finished task: the live row reads Double-checking, with its tooltip explaining what is being checked.}}</div>
+    </div>
     <ul class="flist">
-      <li id="bot-browser-files" class="span3"><h3>Bots download and upload files in their browser</h3><p>A bot's browser now lists controls that show only on hover, like a video tile's <strong>⋮</strong>, and moves the mouse over the tile before clicking one. A page's download lands in the bot's own folder under <strong>downloads/</strong>, never on your computer, and <strong>browser_upload</strong> gives a page's file picker a copy of a file from the bot's folder or from the chat's attachments. Under Ask, each upload asks you first.</p></li>
-      <li id="dictation" class="span3"><h3>Dictate into the message box</h3><p>Press the <strong>mic</strong> between @ and Send and talk. It shows <strong>Listening</strong> with the time and a level meter, then adds the text to the box: <strong>Added 23 words. Read them over, then press Send.</strong>, with Undo. Nothing is sent before you press Send. Dictation uses the space's OpenAI key, or the host's; without one the mic is muted and says how to set it up. On a phone the mic takes Send's place until you type.</p></li>
-      <li id="request-parts" class="span3"><h3>Every part of your request on the done card</h3><p>A finished task's done card lists <strong>Parts of your request</strong> in your own words, each <strong>Passed</strong>, <strong>Not met</strong> or <strong>No check</strong>, and the check line counts them, like <strong>Partly checked: 2 of 3 parts checked</strong>. A part passes only when every check linked to it passed with evidence, so a bot's say-so never counts. <strong>Show what proves it</strong> folds out a part's checks, and a part that was not met opens on its own.</p></li>
-      <li id="team-home" class="span3"><h3>A home for every team chat</h3><p>An empty team chat opens on a team home: the members with the lead marked, the team's description or a line like <strong>3 bots who work together. Ada leads.</strong>, three <strong>For example</strong> asks, and who answers, like <strong>The helpers team answers. Type @ and a name to ask one member.</strong> With no AI account connected, the account card sits inside it. The home goes once the chat has a message.</p></li>
-      <li id="auditor-turn" class="span3"><h3>Double-checks where they count</h3><p>A routine run that nothing else checks is double-checked on its first run, after its instructions change, and then at most once a week; a run in between says in its activity when the routine was last checked and when the next check is due. While a check runs, the checking bot shows <strong>Double-checking “Daily digest”</strong> in the sidebar, the working pill and <strong>Live now</strong>, with who checks whose work and why on hover. High-priority work and checks you ask for are double-checked as before.</p></li>
       <li id="fixes-0913" class="span3"><h3>Smaller changes in 0.9.13</h3><p>After a failed step, a bot that only offers choices ("or try another way", "tell me if…") no longer shows as Blocked, and a blocked reply keeps its Approve row. When a bot stops after a failed or refused step and then asks you for something in its own words, the chat shows it as Blocked, and a lead asks you with a question card. Every clock time and short date in the app now follows your device's format, 12- or 24-hour, and a time from another day shows its date. Bots' memory search by meaning now needs a minimum match for each model, so unrelated notes stay out, and a host OpenAI key that fails its check isn't used for it. Every /api error now has one shape, a plain sentence and a short code, also for requests the server couldn't read.</p></li>
     </ul>
   </div>
