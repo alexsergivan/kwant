@@ -30,7 +30,7 @@ test('one image: one file goes, the card gives it to the bot', () => {
 test('three mixed files: counted by kind; a dragged link alongside is not a file; no items hides the count', () => {
   const p = d.previewDrag([file('image/jpeg'), file('image/webp'), file('application/pdf'), str('text/uri-list')]);
   assert.equal(p.count, 3);
-  assert.deepEqual(p.kinds, { image: 2, video: 0, pdf: 1, text: 0, file: 0 });
+  assert.deepEqual(p.kinds, { image: 2, video: 0, audio: 0, pdf: 1, text: 0, file: 0 });
   assert.equal(d.whatLine(p), '3 files · 2 images, 1 PDF');
   const q = d.previewDrag([file('video/mp4'), file('text/markdown'), file('application/json'), file('')]);
   assert.deepEqual([q.kinds.video, q.kinds.text, q.kinds.file], [1, 2, 1]);
