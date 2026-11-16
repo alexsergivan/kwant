@@ -2,6 +2,7 @@ import React from 'react';
 import { AlertTriangle, CircleDashed, Clock, XCircle, CheckCircle2 } from 'lucide-react';
 import { CheckStatus, VerificationBlock, VerificationCheck, inRange, isObj, isText, optText, parseCommon, uniqueIds } from '../../smartResults';
 import type { RendererProps } from './registry';
+import { stampClock } from '../../clock';
 
 const STATUSES: CheckStatus[] = ['passed', 'failed', 'error', 'pending'];
 
@@ -50,10 +51,10 @@ const STATUS_PILL: Record<CheckStatus, string> = {
   pending: 'border-zinc-600 bg-zinc-800/60 text-zinc-300',
 };
 
-function formatWhen(s: string | null): string | null {
+/** A check's time on the one clock (22c): "Nov 3, 8:15 PM" / "3 Nov, 20:15"; an unreadable time shows as it came. */
+export function formatWhen(s: string | null, now: number = Date.now(), locale?: string): string | null {
   if (!s) return null;
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? s : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return stampClock(s, now, locale) ?? s;
 }
 
 /** A task's outcome checks: the summary line, then each check with status, an expandable excerpt, and time. */

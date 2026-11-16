@@ -187,19 +187,46 @@ const OUTWARD_NOUNS: &[&str] = &["EMAIL", "MAIL", "DROP", "POST", "PAY", "SHARE"
 const OUTWARD_NAME_WORDS: &[&str] = &["ship", "rollout"];
 
 /// Whole words that, with the [`READ_VERBS`], say a name with only [`OUTWARD_NOUNS`] in it reads
-/// (21a). Local to the outward layer: `fetch` must not join [`READ_VERBS`], where it would lift
-/// push and commit words too.
-const OUTWARD_READ_WORDS: &[&str] = &["fetch"];
+/// (21a). Local to the outward layer: these must not join [`READ_VERBS`], where they would lift
+/// push and commit words too. 22h: `retrieve` (`STRIPE_RETRIEVE_PAYMENT_INTENT`, Rigel's F3) and
+/// `check` (`check_payment_status`, which the state route no longer lifts on its own).
+const OUTWARD_READ_WORDS: &[&str] = &["fetch", "retrieve", "check"];
 
 /// Last words of a tool name that make it a read of something's state: `rollout_status`,
-/// `get_payment_status`, `ship_state` (21a).
+/// `ship_state` (21a). Only for payments, a ship or a rollout, and only in a short name
+/// ([`reads_state`], 22h).
 const OUTWARD_READ_LAST_WORDS: &[&str] = &["status", "state"];
+
+/// The one part of [`OUTWARD_NOUNS`] whose state a name may read by ending in
+/// [`OUTWARD_READ_LAST_WORDS`] without a read verb (22h), with the [`OUTWARD_NAME_WORDS`]:
+/// `payment_status`, `rollout_status`, `ship_status`. A post, share, upload, mail or drop status is
+/// as often a write (`post_status`, `share_status`), so those need a read verb.
+const STATE_NOUNS: &[&str] = &["PAY"];
+
+/// [`OUTWARD_NOUNS`] and [`OUTWARD_NAME_WORDS`] as whole lowercase words: the outward thing used
+/// as a verb. One of these as a name's first word, ahead of its read word, acts: `post_list`,
+/// `share_get` (22h). After a Composio app prefix the second word counts (`SLACK_SHARE_GET`), and
+/// `DROPBOX_`, `GMAIL_`, `SHAREPOINT_` and `payment` aren't whole outward words, so they don't count.
+const OUTWARD_VERB_WORDS: &[&str] = &["email", "mail", "drop", "post", "pay", "share", "upload", "ship", "rollout"];
 
 /// Whole words that add a second action to a read name, so the read verb can't vouch for it:
 /// `find_and_share_file`, `get_then_pay`, `list_or_create_posts` (via `create`), `fetch_and_reply` (21a).
+/// 22h (Rigel's F1 on #692): `change_post_status`, `retry_payment_status`, `MAILCHIMP_SUBSCRIBE_TO_LIST`,
+/// `join_mailing_list`, `MAILCHIMP_ARCHIVE_MEMBER_FROM_LIST`. 22u (Rigel's gaps on #716):
+/// `opt_out_mailing_list`, `OPTOUT_EMAIL_LIST`, `resubscribe_mailing_list`, `notify_email_list`.
 const SECOND_ACTION_WORDS: &[&str] = &[
     "and", "then", "create", "update", "add", "set", "put", "write", "edit", "modify", "reply", "save", "schedule", "upsert", "insert",
+    // 22h
+    "change", "toggle", "retry", "capture", "refund", "subscribe", "unsubscribe", "join", "leave", "archive",
+    // 22u
+    "opt", "optout", "resubscribe", "notify",
 ];
+
+/// Word runs of a tool name ([`words`]) that sign someone up to a list or off it, so they act
+/// outside kwant whatever the list is called and whatever read word the name has (22u, Rigel's
+/// gaps on #716): `resubscribe_list`, `subscribe_to_list`, `opt_out_of_list`, `optInList`. Whole
+/// words, so `list_subscribers`, `get_subscription` and `opt_level` stay out.
+const OUTWARD_LIST_RUNS: &[&[&str]] = &[&["subscribe"], &["unsubscribe"], &["resubscribe"], &["optout"], &["optin"], &["opt", "out"], &["opt", "in"]];
 
 /// Whole words in the value of an `action`, `operation` or `op` argument ([`is_action_key`]) that
 /// change or destroy something (18c, Rigel's H01–H02): the [`WRITE_METHODS`] verbs, plus these.
@@ -301,9 +328,27 @@ const GIT_KEY_WORDS: &[&str] = &["ref", "refs", "branch", "branches", "tag", "ta
 /// `refs/` are checked in [`git_signal`].
 const GIT_SIGNAL_WORDS: &[&str] = &["git", "gh", "origin", "upstream", "remote", "branch", "force"];
 
-/// Whether a value carries a git signal: a [`GIT_SIGNAL_WORDS`] word, `refs/`, or `HEAD`.
+/// Whole words ([`words`]) in a value that name a tool people type before a ship verb, so a push
+/// word with them is a command, not prose (22u, Rigel's F1 on #697): `npm publish`, `docker push`,
+/// `helm push chart.tgz oci://reg`, `kubectl rollout restart deploy/app`. Counted like
+/// [`GIT_SIGNAL_WORDS`], anywhere in the value.
+const SHIP_TOOL_WORDS: &[&str] = &[
+    "docker", "npm", "npx", "yarn", "pnpm", "cargo", "helm", "kubectl", "terraform", "vercel", "wrangler", "firebase", "netlify", "twine", "rsync", "scp",
+];
+
+/// Ship tools whose names are everyday words too, so they count only right before a push word
+/// (22u): `make deploy`, `fly deploy`, `make release`. "Make sure we merge it" and "fly to the
+/// release party" stay prose.
+const SHIP_TOOL_VERB_WORDS: &[&str] = &["make", "fly"];
+
+/// Whether a value carries a git signal: a [`GIT_SIGNAL_WORDS`] or [`SHIP_TOOL_WORDS`] word, a
+/// [`SHIP_TOOL_VERB_WORDS`] word right before a push word, `refs/`, or `HEAD`.
 fn git_signal(s: &str) -> bool {
-    words(s).iter().any(|w| GIT_SIGNAL_WORDS.contains(&w.as_str())) || s.contains("refs/") || s.split(|c: char| !c.is_alphanumeric()).any(|t| t == "HEAD")
+    let w = words(s);
+    w.iter().any(|w| GIT_SIGNAL_WORDS.contains(&w.as_str()) || SHIP_TOOL_WORDS.contains(&w.as_str()))
+        || w.windows(2).any(|p| SHIP_TOOL_VERB_WORDS.contains(&p[0].as_str()) && has_push_word(&p[1]))
+        || s.contains("refs/")
+        || s.split(|c: char| !c.is_alphanumeric()).any(|t| t == "HEAD")
 }
 
 /// Whether a value under this key is an action, a mode, a command or a git thing, so any push word
@@ -367,7 +412,8 @@ fn ships_by_name(tool: &str) -> bool {
 }
 
 /// Whether a tool name acts outside kwant or destroys something ([`inline_refusal`] step 3): a
-/// part of it is one of [`OUTWARD_NAMES`], or it has an outward noun ([`OUTWARD_NOUNS`] as a part,
+/// part of it is one of [`OUTWARD_NAMES`], it signs someone up to a list or off it
+/// ([`OUTWARD_LIST_RUNS`], 22u), or it has an outward noun ([`OUTWARD_NOUNS`] as a part,
 /// [`OUTWARD_NAME_WORDS`] as a whole word) and doesn't only read ([`reads_outward_noun`]).
 fn outward_by_name(tool: &str) -> bool {
     let upper = tool.to_ascii_uppercase();
@@ -375,20 +421,54 @@ fn outward_by_name(tool: &str) -> bool {
         return true;
     }
     let name = words(tool);
+    if OUTWARD_LIST_RUNS.iter().any(|run| name.windows(run.len()).any(|w| w.iter().zip(run.iter()).all(|(a, b)| a == b))) {
+        return true;
+    }
     let noun = OUTWARD_NOUNS.iter().any(|w| upper.contains(w)) || name.iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str()));
-    noun && !reads_outward_noun(&name)
+    noun && !reads_outward_noun(tool, &name)
 }
 
-/// Whether a name (already split by [`words`]) whose only outward words are nouns only reads them
-/// (21a): it has a [`READ_VERBS`] or [`OUTWARD_READ_WORDS`] word, or ends in one of
-/// [`OUTWARD_READ_LAST_WORDS`], and has none of [`SECOND_ACTION_WORDS`]. `GMAIL_LIST_THREADS`,
-/// `WORDPRESS_GET_POST` and `ship_status` read; `GMAIL_REPLY_TO_THREAD`, `find_and_share_file` and
-/// `set_payment_status` don't.
-fn reads_outward_noun(name: &[String]) -> bool {
-    let read = reads(name)
-        || name.iter().any(|w| OUTWARD_READ_WORDS.contains(&w.as_str()))
-        || name.last().is_some_and(|w| OUTWARD_READ_LAST_WORDS.contains(&w.as_str()));
-    read && !name.iter().any(|w| SECOND_ACTION_WORDS.contains(&w.as_str()))
+/// Whether a name whose only outward words are nouns only reads them (21a; tightened in 22h after
+/// Rigel's F1 on #692). It has none of [`SECOND_ACTION_WORDS`], and either:
+/// - a read word ([`READ_VERBS`], [`OUTWARD_READ_WORDS`]), and the name doesn't open with an
+///   [`OUTWARD_VERB_WORDS`] word ahead of it (the second word after a Composio app prefix):
+///   `GMAIL_LIST_THREADS`, `WORDPRESS_GET_POST`, `getPostStatus` read; `post_list`, `share_get` don't;
+/// - or it reads a payment's, a ship's or a rollout's state ([`reads_state`]): `rollout_status`.
+///
+/// `GMAIL_REPLY_TO_THREAD`, `find_and_share_file`, `set_payment_status`, `post_status` and
+/// `MAILCHIMP_SUBSCRIBE_TO_LIST` don't read.
+fn reads_outward_noun(tool: &str, name: &[String]) -> bool {
+    let is_read = |w: &String| READ_VERBS.contains(&w.as_str()) || OUTWARD_READ_WORDS.contains(&w.as_str());
+    // The verb's place: the first word, or the second after a Composio app prefix
+    let verb_at = usize::from(app_prefixed(tool));
+    let read_first = name.iter().position(is_read).is_some_and(|r| r <= verb_at || !OUTWARD_VERB_WORDS.contains(&name[verb_at].as_str()));
+    (read_first || reads_state(tool, name)) && !name.iter().any(|w| SECOND_ACTION_WORDS.contains(&w.as_str()))
+}
+
+/// Whether a name with no read verb reads a payment's, a ship's or a rollout's state (22h): it ends
+/// in [`OUTWARD_READ_LAST_WORDS`], its only [`OUTWARD_NOUNS`] part is a [`STATE_NOUNS`] one, and every
+/// word before the last is a payment, ship or rollout word, apart from the app prefix of a
+/// Composio-style name ([`app_prefixed`]). `payment_status`, `rollout_status`, `ship_state` and
+/// `STRIPE_PAYMENT_STATUS` read; `post_status`, `MASTODON_POST_STATUS`, `cancel_payment_status` and
+/// `post_payment_status` don't.
+fn reads_state(tool: &str, name: &[String]) -> bool {
+    let Some((last, before)) = name.split_last() else { return false };
+    if !OUTWARD_READ_LAST_WORDS.contains(&last.as_str()) {
+        return false;
+    }
+    let upper = tool.to_ascii_uppercase();
+    if OUTWARD_NOUNS.iter().any(|n| upper.contains(n) && !STATE_NOUNS.contains(n)) {
+        return false;
+    }
+    let skip = usize::from(app_prefixed(tool));
+    let state_word = |w: &String| OUTWARD_NAME_WORDS.contains(&w.as_str()) || STATE_NOUNS.iter().any(|n| w.to_ascii_uppercase().contains(n));
+    before.len() > skip && before.iter().skip(skip).all(state_word)
+}
+
+/// Whether a tool name looks like a Composio one, `APP_ACTION_THING`: no lower-case letter, an
+/// underscore, and three words or more, so its first word names the app (`STRIPE_PAYMENT_STATUS`).
+fn app_prefixed(tool: &str) -> bool {
+    !tool.chars().any(char::is_lowercase) && tool.contains('_') && words(tool).len() >= 3
 }
 
 /// Whether a tool or its server is named for running free text (20d: one place for Telegram and the
@@ -1329,6 +1409,286 @@ mod tests {
         assert!(!READ_VERBS.contains(&"fetch"));
         assert_eq!(inline_refusal(&mcp("x", "fetch_and_merge", json!({}))), Some(PUSHES));
         assert_eq!(inline_refusal(&mcp("x", "fetch_commit", json!({}))), Some(PUSHES));
+    }
+
+    /// Step 3's lift as 21a shipped it (#692 06b3406a, unchanged by 21b): a read verb, `fetch`, or a
+    /// last word `status`/`state`, with none of 21a's second-action words.
+    fn outward_at_21a(tool: &str) -> bool {
+        const SECOND_21A: &[&str] = &["and", "then", "create", "update", "add", "set", "put", "write", "edit", "modify", "reply", "save", "schedule", "upsert", "insert"];
+        let upper = tool.to_ascii_uppercase();
+        if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) {
+            return true;
+        }
+        let name = words(tool);
+        let noun = OUTWARD_NOUNS.iter().any(|w| upper.contains(w)) || name.iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str()));
+        let read = reads(&name) || name.iter().any(|w| w == "fetch") || name.last().is_some_and(|w| w == "status" || w == "state");
+        noun && !(read && !name.iter().any(|w| SECOND_21A.contains(&w.as_str())))
+    }
+
+    /// 22h (Rigel's F1, F3 and F5 on #692): (tool, step 3 at 21a refuses, island now).
+    fn writes_named_like_reads_rows() -> Vec<(&'static str, bool, Option<&'static str>)> {
+        vec![
+            // F1, must stay refused: (a) a post, share or upload status is as often a write
+            ("post_status", false, Some(OUTWARD)),
+            ("MASTODON_POST_STATUS", false, Some(OUTWARD)),
+            ("TWITTER_POST_STATUS", false, Some(OUTWARD)),
+            ("facebook_post_status", false, Some(OUTWARD)),
+            ("postStatus", false, Some(OUTWARD)),
+            ("share_status", false, Some(OUTWARD)),
+            ("shareStatus", false, Some(OUTWARD)),
+            ("upload_status", false, Some(OUTWARD)),
+            ("post_payment_status", false, Some(OUTWARD)),
+            // F1 (a): a verb before a payment's state, with or without a 22h second-action word
+            ("cancel_payment_status", false, Some(OUTWARD)),
+            ("approve_payment_status", false, Some(OUTWARD)),
+            // F1 (c): the new second-action words
+            ("retry_payment_status", false, Some(OUTWARD)),
+            ("capture_payment_status", false, Some(OUTWARD)),
+            ("refund_payment_status", false, Some(OUTWARD)),
+            ("change_payment_status", false, Some(OUTWARD)),
+            ("change_post_status", false, Some(OUTWARD)),
+            ("WORDPRESS_CHANGE_POST_STATUS", false, Some(OUTWARD)),
+            ("toggle_post_status", false, Some(OUTWARD)),
+            ("RETRY_PAYMENT_STATUS", false, Some(OUTWARD)),
+            ("MAILCHIMP_SUBSCRIBE_TO_LIST", false, Some(OUTWARD)),
+            ("MAILCHIMP_SUBSCRIBE_MEMBER_TO_LIST", false, Some(OUTWARD)),
+            ("MAILCHIMP_UNSUBSCRIBE_FROM_LIST", false, Some(OUTWARD)),
+            ("MAILCHIMP_ARCHIVE_MEMBER_FROM_LIST", false, Some(OUTWARD)),
+            ("MAILCHIMP_BATCH_SUBSCRIBE_LIST", false, Some(OUTWARD)),
+            ("GMAIL_UNSUBSCRIBE_FROM_MAILING_LIST", false, Some(OUTWARD)),
+            ("subscribe_to_mailing_list", false, Some(OUTWARD)),
+            ("join_mailing_list", false, Some(OUTWARD)),
+            ("leave_mailing_list", false, Some(OUTWARD)),
+            // F1 (b): the outward word is the verb, the read word comes after it
+            ("post_list", false, Some(OUTWARD)),
+            ("postList", false, Some(OUTWARD)),
+            ("share_list", false, Some(OUTWARD)),
+            ("share_get", false, Some(OUTWARD)),
+            ("post_get", false, Some(OUTWARD)),
+            ("post_show", false, Some(OUTWARD)),
+            ("upload_get", false, Some(OUTWARD)),
+            ("pay_list", false, Some(OUTWARD)),
+            ("SLACK_SHARE_GET", false, Some(OUTWARD)),
+            // Must allow: the brief's rows
+            ("get_payment_status", false, None),
+            ("rollout_status", false, None),
+            ("ship_status", false, None),
+            ("GMAIL_FETCH_EMAILS", false, None),
+            ("DROPBOX_LIST_FILES", false, None),
+            ("STRIPE_RETRIEVE_PAYMENT_INTENT", true, None),
+            ("STRIPE_RETRIEVE_A_PAYMENT_INTENT", true, None),
+            // Must allow: reads 21a allowed that sit next to the new rules
+            ("ship_state", false, None),
+            ("payment_status", false, None),
+            ("STRIPE_PAYMENT_STATUS", false, None),
+            ("check_payment_status", false, None),
+            ("STRIPE_CHECK_PAYMENT_STATUS", false, None),
+            ("getPostStatus", false, None),
+            ("get_post_status", false, None),
+            ("SHAREPOINT_GET_FILE", false, None),
+            ("MAILCHIMP_GET_LIST", false, None),
+            ("GMAIL_LIST_THREADS", false, None),
+            ("list_uploads", false, None),
+            // F2 is left as it is: marking mail read keeps Allow once
+            ("GMAIL_MARK_EMAIL_AS_READ", false, None),
+            ("mark_email_as_read", false, None),
+            // F3: check reads too now
+            ("check_email", true, None),
+        ]
+    }
+
+    #[test]
+    fn writes_named_like_reads_keep_the_full_card_and_reads_keep_allow_once() {
+        let rows = writes_named_like_reads_rows();
+        assert_eq!(rows.len(), 58);
+        for (tool, refused_at_21a, want) in rows {
+            assert!(outward_before_21a(tool), "{tool}: step 3 refused it before 21a");
+            assert_eq!(outward_at_21a(tool), refused_at_21a, "{tool}: at 21a");
+            let d = mcp("composio", tool, json!({}));
+            assert_eq!(inline_refusal(&d), want, "island: {tool}");
+            assert_eq!(ships_or_runs(&d), None, "telegram: {tool}");
+        }
+        // 21a's own rows keep their verdicts, and 21a's helper agrees with them
+        for (name, d, want) in outward_rows() {
+            let tool = d["tool"].as_str().unwrap();
+            if d["arguments"].as_object().is_some_and(|a| a.is_empty()) || want.is_none() {
+                assert_eq!(outward_at_21a(tool), want == Some(OUTWARD), "{name}: at 21a");
+            }
+        }
+    }
+
+    #[test]
+    fn retrieve_and_check_lift_outward_nouns_only() {
+        assert!(!READ_VERBS.contains(&"retrieve") && !READ_VERBS.contains(&"check"));
+        assert_eq!(inline_refusal(&mcp("x", "retrieve_and_merge", json!({}))), Some(PUSHES));
+        assert_eq!(inline_refusal(&mcp("x", "check_commit", json!({}))), Some(PUSHES));
+        // A Composio prefix moves the verb's place to the second word only in an APP_ACTION name
+        assert!(app_prefixed("SLACK_SHARE_GET") && app_prefixed("STRIPE_PAYMENT_STATUS"));
+        assert!(!app_prefixed("share_get_x") && !app_prefixed("POST_LIST") && !app_prefixed("GMAILFETCHEMAILS"));
+    }
+
+    /// 22u (Rigel's F1 on #697): ship commands typed as free text, with one row per
+    /// [`SHIP_TOOL_WORDS`] and [`SHIP_TOOL_VERB_WORDS`] word.
+    fn ship_command_rows() -> Vec<&'static str> {
+        vec![
+            // F1, as Rigel probed them
+            "npm publish",
+            "docker push",
+            "yarn publish",
+            "make deploy",
+            "fly deploy",
+            "wrangler deploy",
+            "docker push myorg/app:latest",
+            "cargo publish --allow-dirty",
+            "npm publish --access public",
+            "helm push chart.tgz oci://reg",
+            "vercel deploy --prod",
+            "firebase deploy --only hosting",
+            "kubectl rollout restart deploy/app",
+            "rsync -av dist/ web1:/srv/app and deploy",
+            "docker\u{a0}push",
+            // The other new signal words
+            "npx semantic-release",
+            "pnpm publish --access public",
+            "terraform apply and deploy",
+            "netlify deploy --prod",
+            "twine upload dist/* and tag the release",
+            "scp app.tgz web1:/srv && deploy",
+            "make release",
+            "fly deploy --app web",
+            "please run docker push for me",
+        ]
+    }
+
+    /// 22u: must keep Allow once under a key that isn't strict (a sentence, or a ship word with no
+    /// ship tool right before it).
+    fn ship_prose_rows() -> Vec<&'static str> {
+        vec![
+            "Our press release",
+            "press release",
+            "Release notes for 0.9",
+            "We will merge the two lists",
+            "Publish the launch blog post on Monday",
+            "Tag me when done",
+            "How to merge two spreadsheets",
+            "Meeting: deploy plan review",
+            "Make sure we merge the two lists",
+            "We fly out before the release party",
+            "Make the deploy checklist shorter",
+        ]
+    }
+
+    /// [`push_value_counts`] as #697 and #716 shipped it: [`GIT_SIGNAL_WORDS`], `refs/` and `HEAD`
+    /// were the only signals.
+    fn push_value_counts_at_21b(s: &str, strict: bool) -> bool {
+        let signal = words(s).iter().any(|w| GIT_SIGNAL_WORDS.contains(&w.as_str())) || s.contains("refs/") || s.split(|c: char| !c.is_alphanumeric()).any(|t| t == "HEAD");
+        let toks: Vec<&str> = s.split_whitespace().collect();
+        has_push_word(s) && (strict || toks.len() <= 1 || signal || (toks.len() == 2 && (has_push_word(toks[0]) || toks.iter().any(|t| t.chars().any(|c| c.is_ascii_digit())))))
+    }
+
+    #[test]
+    fn a_ship_command_in_free_text_needs_the_full_card() {
+        let rows = ship_command_rows();
+        assert_eq!(rows.len(), 24);
+        // Rigel's six keys: `input` is a run key (strict before and after), the other five aren't
+        let keys = ["text", "input", "message", "value", "content", "prompt"];
+        let mut flipped = 0;
+        for cmd in &rows {
+            for key in keys {
+                let d = mcp("x", "do_thing", json!({ key: cmd }));
+                let strict = strict_key(key);
+                assert_eq!(strict, key == "input", "{key}");
+                if !push_value_counts_at_21b(cmd, strict) {
+                    flipped += 1;
+                }
+                assert_eq!(inline_refusal(&d), Some(PUSHES), "island: {key}: {cmd}");
+                // Telegram never read push words in arguments, before or after
+                assert_eq!(ships_or_runs(&d), None, "telegram: {key}: {cmd}");
+            }
+        }
+        // Every row was Allow once under the five free-text keys at #716's head
+        assert_eq!(flipped, rows.len() * 5);
+        // A ship command under a run key or in an argv list already refused, and still does
+        assert_eq!(inline_refusal(&mcp("x", "do_thing", json!({"cmd": "npm publish"}))), Some(PUSHES));
+        assert_eq!(inline_refusal(&mcp("x", "do_thing", json!({"items": ["docker", "push"]}))), Some(PUSHES));
+    }
+
+    #[test]
+    fn prose_with_a_ship_word_keeps_allow_once() {
+        for key in ["text", "message", "value", "content", "prompt", "title", "subject"] {
+            for t in ship_prose_rows() {
+                assert!(!push_value_counts_at_21b(t, false), "at 21b: {t}");
+                assert_eq!(inline_refusal(&mcp("x", "do_thing", json!({ key: t }))), None, "island: {key}: {t}");
+            }
+        }
+        // A ship tool alone isn't a push: no push word, nothing to count
+        for t in ["docker build .", "npm install", "cargo test", "kubectl get pods", "make all"] {
+            assert_eq!(inline_refusal(&mcp("x", "do_thing", json!({"text": t}))), None, "{t}");
+        }
+        // The make/fly pair is whole words, side by side, in either case
+        assert!(git_signal("Make Deploy") && git_signal("FLY RELEASE") && git_signal("make_deploy"));
+        assert!(!git_signal("make the deploy") && !git_signal("maker deploy") && !git_signal("deploy make"));
+        // A ship tool counts anywhere, as a whole word only
+        assert!(git_signal("then docker it") && git_signal("NPM") && !git_signal("dockerfile") && !git_signal("helmet"));
+    }
+
+    /// 22u (Rigel's gaps on #716): list sign-ups and notices named like reads.
+    fn list_action_rows() -> Vec<(&'static str, Option<&'static str>)> {
+        vec![
+            // Must refuse: Rigel's names
+            ("opt_out_mailing_list", Some(OUTWARD)),
+            ("resubscribe_list", Some(OUTWARD)),
+            ("notify_email_list", Some(OUTWARD)),
+            ("OPTOUT_EMAIL_LIST", Some(OUTWARD)),
+            // Must refuse: the same words in other shapes
+            ("optOutMailingList", Some(OUTWARD)),
+            ("opt_in_list", Some(OUTWARD)),
+            ("subscribe_to_list", Some(OUTWARD)),
+            ("unsubscribe_from_list", Some(OUTWARD)),
+            ("resubscribe_mailing_list", Some(OUTWARD)),
+            ("NOTIFY_MAIL_LIST", Some(OUTWARD)),
+            ("get_email_list_and_notify", Some(OUTWARD)),
+            // Must allow: reads of subscribers and lists
+            ("list_subscribers", None),
+            ("get_subscription", None),
+            ("MAILCHIMP_LIST_SUBSCRIBERS", None),
+            ("MAILCHIMP_GET_LIST", None),
+            ("get_mailing_list", None),
+            ("list_notifications", None),
+            ("get_options", None),
+            ("opt_level", None),
+        ]
+    }
+
+    #[test]
+    fn list_sign_ups_and_notices_need_the_full_card() {
+        let rows = list_action_rows();
+        assert_eq!(rows.len(), 19);
+        for (tool, want) in rows {
+            let d = mcp("composio", tool, json!({}));
+            assert_eq!(inline_refusal(&d), want, "island: {tool}");
+            assert_eq!(ships_or_runs(&d), None, "telegram: {tool}");
+        }
+        for w in ["opt", "optout", "resubscribe", "notify"] {
+            assert!(SECOND_ACTION_WORDS.contains(&w), "{w}");
+        }
+        assert_eq!(words("opt_out"), ["opt", "out"]);
+        assert_eq!(words("optOut"), ["opt", "out"]);
+        assert_eq!(words("OPTOUT"), ["optout"]);
+    }
+
+    /// 22u changed only the signals and the list words: every older table keeps its verdicts.
+    #[test]
+    fn older_rows_keep_their_verdicts_after_22u() {
+        for (name, d, _before, want) in prose_rows() {
+            assert_eq!(inline_refusal(&d), want, "21b: {name}");
+        }
+        for (name, d, want) in outward_rows() {
+            assert_eq!(inline_refusal(&d), want, "21a: {name}");
+        }
+        for (tool, _, want) in writes_named_like_reads_rows() {
+            assert_eq!(inline_refusal(&mcp("composio", tool, json!({}))), want, "22h: {tool}");
+        }
     }
 
     #[test]

@@ -161,3 +161,47 @@ test('a team whose name already ends in "Team": no "team team" in the home foote
   assert.equal(t.detail, '@Booktun.ing Team answers. Type @ and a name to ask one member.');
   assert.equal(m.teamAnswerLine('steam'), 'The steam team answers. Type\u00a0@ and a name to ask one member.');
 });
+
+// 20e: a final "team" after "_", "-", ".", a space, an emoji or a camelCase hump is the team's own word.
+test('teamNamed: the team is named once, whatever joins "team" to the name', () => {
+  const cases = [
+    ['Marketing_Team', 'Marketing_Team'],
+    ['Sales-Team', 'Sales-Team'],
+    ['Ops.Team', 'Ops.Team'],
+    ['SalesTeam', 'SalesTeam'],
+    ['ops2Team', 'ops2Team'],
+    ['SALESTEAM', 'SALESTEAM'],
+    ['Booktun.ing Team', 'Booktun.ing Team'],
+    ['TEAM', 'TEAM'],
+    ['team', 'team'],
+    ['Ünïcödé 📚 Team', 'Ünïcödé 📚 Team'],
+    ['📚team', '📚team'],
+    ['  Marketing_Team  ', 'Marketing_Team'],
+    ['helpers', 'helpers team'],
+    ['  helpers ', 'helpers team'],
+    ['steam', 'steam team'],
+    ['Steam', 'Steam team'],
+    ['Dreamteam', 'Dreamteam team'],
+    ['Ünïcödé', 'Ünïcödé team'],
+    ['cafe\u0301team', 'cafe\u0301team team'],
+  ];
+  for (const [name, want] of cases) assert.equal(m.teamNamed(name), want, name);
+});
+
+test('a "Marketing_Team" reads once in the pill, its detail and the home footer', () => {
+  const t = m.answerTarget({ kind: 'team', text: '', teamName: 'Marketing_Team', names: [] });
+  assert.equal(t.label, '@Marketing_Team');
+  assert.equal(t.detail, '@Marketing_Team answers. Type @ and a name to ask one member.');
+  assert.equal(m.teamAnswerLine('SalesTeam'), 'The SalesTeam answers. Type\u00a0@ and a name to ask one member.');
+});
+
+test('the sidebar team row says "Open the @Marketing_Team chat", not "… team team chat" (20e)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const side = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
+  assert.ok(side.includes('title={`Open the @${teamNamed(t.name)} chat`}'), 'the row title goes through teamNamed');
+  assert.ok(!side.includes('team chat`}'), 'no hand-added " team" left in a sidebar title');
+  const title = (name) => `Open the @${m.teamNamed(name)} chat`;
+  assert.equal(title('Marketing_Team'), 'Open the @Marketing_Team chat');
+  assert.equal(title('SalesTeam'), 'Open the @SalesTeam chat');
+  assert.equal(title('helpers'), 'Open the @helpers team chat');
+});

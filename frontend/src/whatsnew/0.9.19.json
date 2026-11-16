@@ -1,0 +1,36 @@
+{
+  "version": "0.9.19",
+  "date": "2026-11-16",
+  "highlights": [
+    {
+      "id": "refused-call-in-chat",
+      "title": "See a customer's refused call in their chat",
+      "text": "When a customer's message tries something nobody allowed, kwant shows one quiet line in that customer's chat saying what it tried and when. Nothing to answer, and it stays out of your other chats.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "stopped-step-reopens",
+      "title": "A fixed step gets another try",
+      "text": "When a bot has fixed what made a step fail three times, like editing the code behind a failing test, it can now run that step again instead of staying stuck.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "others-messages-never-you",
+      "title": "Customer and bot messages say who wrote them",
+      "text": "A customer's message in a Telegram chat now reads \"Ann (customer)\" and a bot's message reads \"Scout (bot)\", each with its own letter, instead of \"You\" with your picture.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A bot's chat API message reads as that bot's in every history, never as yours, so other bots don't take it as your instruction.",
+    "A message a bot sends through the chat API names that bot, so other bots see who sent it instead of \"unnamed\".",
+    "A chat step on a Windows file names it briefly, like …\\acme\\contract.md, instead of showing the whole path.",
+    "The island's Allow once no longer covers a ship command like docker push or npm publish passed as plain text; it asks with the full card.",
+    "A step that fails the same way 3 times is stopped even when only numbers in its error change, like a timing, a port or an id.",
+    "A stopped step no longer gets 3 more tries from a shell command that only reads, like cat, ls or git status; an edit still does.",
+    "Requests to OpenRouter now name kwant as the app, so kwant's use counts on OpenRouter's app page; they never name you or your space."
+  ]
+}

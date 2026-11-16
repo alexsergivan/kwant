@@ -37,7 +37,8 @@ didn't say). Overloads and rate limits are retried, not failed over.
 chat API (`openai-chat`: OpenRouter, NVIDIA's `https://integrate.api.nvidia.com/v1`, LM Studio, Agent
 Maestro's `/api/openai/v1`, …) or the
 Anthropic Messages API (`anthropic-messages`: Agent Maestro's `/api/anthropic`). A space can have
-several; they belong to that space only. The base URL is cut back to the API root (a pasted
+several; they belong to that space only. Requests to OpenRouter name kwant as the app
+(https://kwant.si), so they count on OpenRouter's app page. Nothing about you or your space is sent. The base URL is cut back to the API root (a pasted
 `…/chat/completions` or `…/messages` is removed; Anthropic gets `/v1` added), must be http(s), and
 may not carry a user, password, query or fragment, so a key never sits in it. The account is
 checked with `GET {base}/models` when it is created or changed, on `POST …/check`, and again

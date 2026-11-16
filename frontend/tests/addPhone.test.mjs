@@ -88,9 +88,10 @@ test('expired: the code and QR are gone; New code and Hide remain', () => {
   assert.deepEqual(buttons(html), ['New code', 'Hide']);
 });
 
-test('signed in: "Signed in ✓" with the browser, no QR, and Add another', () => {
+test('signed in: one tick (the icon), "Signed in" with the browser, no QR, and Add another', () => {
   const html = m.view({ kind: 'signed_in', browser: 'Safari on iPhone' }, NOW);
-  assert.match(text(html), /Signed in ✓ Safari on iPhone signed in with the code/);
+  assert.match(text(html), /Signed in Safari on iPhone signed in with the code/);
+  assert.ok(!html.includes('✓'), 'no text tick next to the Check icon');
   assert.ok(!html.includes('kwnt_token'));
   assert.deepEqual(buttons(html), ['Add another', 'Done']);
 });
@@ -101,7 +102,7 @@ test('a failed mint says so and keeps the button', () => {
   assert.deepEqual(buttons(html), ['Add a phone or browser']);
 });
 
-// ---------------------------------------------------------------- "Signed in ✓" detection
+// ---------------------------------------------------------------- "Signed in" detection
 
 test('only a new link session counts as the phone that scanned', () => {
   const s = (id, via, current = false) => ({ id, via, current, browser: id, ip: '', created_at: '', last_seen: '' });

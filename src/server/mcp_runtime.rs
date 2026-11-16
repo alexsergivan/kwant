@@ -575,7 +575,7 @@ fn turn_conversation(state: &AppState, turn_id: &str) -> String {
 
 /// The chat a tracked turn runs in, as `{"thread_id"}`, `{"channel_id"}` or
 /// `{"direct_kwant_id"}`; `None` for a turn kwnt isn't tracking.
-async fn turn_chat(state: &AppState, turn_id: &str) -> Option<Value> {
+pub(super) async fn turn_chat(state: &AppState, turn_id: &str) -> Option<Value> {
     let turn = state.turns.active_turns().into_iter().find(|t| t.turn_id == turn_id)?;
     Some(match turn.thread_id {
         Some(thread) => json!({"thread_id": thread}),
@@ -747,7 +747,8 @@ pub fn expired_text(kwant_name: &str, tool_name: &str, hours: i64) -> String {
 /// expired (never, or Retry already ran).
 pub async fn retry_expired(state: &AppState, ticket_id: &str) -> Option<Value> {
     let (approval, chat) = state.db.claim_expired_approval(ticket_id).await.ok().flatten()?;
-    let _ = state.db.close_stopped_for_approval(ticket_id).await;
+    let rows = state.db.close_stopped_for_approval(ticket_id).await.unwrap_or_default();
+    super::waiting::closed(state, &rows, super::waiting::REASON_RESUMED);
     let not_resumed = |why: &str| Some(json!({"ticket_id": ticket_id, "status": "retried", "resumed": false, "reason": why}));
     let Ok(Some(kwant)) = state.db.get_kwant(&approval.kwant_id).await else {
         return not_resumed("the bot no longer exists");

@@ -8,13 +8,14 @@ import { statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
 import { Space } from '../spaces';
+import { teamNamed } from '../botHome';
 import { SpaceSwitcher, SpaceTile } from './Spaces';
 import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
 import { approvalsOff } from '../approvalMode';
 import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
-import { InstallAppButton } from './InstallAppButton';
+import { PhoneAppTip } from './PhoneAppTip';
 import { trapFocusTarget } from '../imports';
 import { type AttentionRow, type NeedsYouRow, PINNED_RANK, NEEDS_YOU_LABEL, workingIds, directIds, rollupLabel } from '../chatsTab';
 import { askAction, askKind, askLine, isAsk } from '../askHere';
@@ -105,6 +106,8 @@ export interface SidebarProps {
   onSwitchSpace: (id: string) => void;
   onCreateSpace: () => void;
   onOpenSpaceSettings: () => void;
+  /** The phone tip: Settings › All spaces, at "Use kwant bots on your phone". */
+  onOpenPhoneApp?: () => void;
   onOpenArchived: () => void;
   onOpenSearch: () => void;
   /** Phones show one tab at a time, full width. */
@@ -290,6 +293,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSwitchSpace,
   onCreateSpace,
   onOpenSpaceSettings,
+  onOpenPhoneApp,
   onOpenArchived,
   onOpenSearch,
   section = 'all',
@@ -780,7 +784,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onClick={() => onSelectTeam(t)}
         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelectTeam(t)}
         data-team-row={t.id}
-        title={`Open the @${t.name} team chat`}
+        title={`Open the @${teamNamed(t.name)} chat`}
         className={`w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-body font-medium transition-colors text-left group cursor-pointer ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
@@ -1174,8 +1178,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         )}
 
-        {/* Desktop: a one-time tip; Settings › All spaces keeps "Install app" for later */}
-        {section === 'all' && <InstallAppButton tip className={navRow(false)} />}
+        {/* Desktop: a one-time tip; Settings › All spaces keeps "Use kwant bots on your phone" for later */}
+        {section === 'all' && onOpenPhoneApp && <PhoneAppTip className={navRow(false)} onOpen={onOpenPhoneApp} />}
       </div>
 
       {/* Footer: what this space's bots run on, from the real checks */}

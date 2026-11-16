@@ -236,8 +236,44 @@ export function actionFailureNotice(status: number, serverMessage: string, title
 
 export class AwayError extends Error {
   /** The server's machine-readable `code` (22i dismiss: `not_found`, `person_only`, `use_*`), when it sent one. */
-  constructor(public status: number, message: string, public code: string | null = null) {
+  public code: string | null;
+  /** `body`: the parsed JSON error body (22f: a 409 `needs_backup` floor refusal), when there was one. */
+  constructor(public status: number, message: string, public body: unknown = null) {
     super(message);
+    const c = body && typeof body === 'object' ? (body as { code?: unknown }).code : undefined;
+    this.code = typeof c === 'string' && c ? c : null;
+  }
+}
+
+/**
+ * 22f: a production-floor refusal (409 with `status: "needs_backup"`, any `code`). The card is still waiting on the
+ * server for a fresh backup, so it has not lapsed and must stay in the chat.
+ */
+export const isBackupRefusal = (err: unknown): err is AwayError =>
+  err instanceof AwayError && err.status === 409 && !!err.body && typeof err.body === 'object' && (err.body as { status?: unknown }).status === 'needs_backup';
+
+/** The notice for any failed one-tap action, given what was thrown. */
+export function failureNotice(err: unknown, title: string): AwayNotice {
+  if (isBackupRefusal(err)) {
+    const why = err.message && !/^Request failed \(HTTP/.test(err.message) ? err.message : 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.';
+    return { text: `${why} (“${title}”)`, error: true };
+  }
+  const status = err instanceof AwayError ? err.status : 0;
+  return actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', title);
+}
+
+/**
+ * Resolve an approval from Away or the Inbox. The chat's copy of the card is dropped when it was answered or has
+ * lapsed (409/404), but not on a backup refusal: that card is still waiting.
+ */
+export async function resolveFromList<T>(id: string, onResolved: ((id: string) => void) | undefined, run: () => Promise<T>): Promise<T> {
+  try {
+    const r = await run();
+    onResolved?.(id);
+    return r;
+  } catch (err) {
+    if (err instanceof AwayError && (err.status === 409 || err.status === 404) && !isBackupRefusal(err)) onResolved?.(id);
+    throw err;
   }
 }
 
@@ -249,15 +285,15 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   });
   if (!res.ok) {
     let message = `Request failed (HTTP ${res.status}).`;
-    let code: string | null = null;
+    let data: unknown = null;
     try {
-      const data = await res.json();
-      if (data && typeof data.error === 'string' && data.error) message = data.error;
-      if (data && typeof data.code === 'string' && data.code) code = data.code;
+      data = await res.json();
+      const e = data && typeof data === 'object' ? (data as { error?: unknown }).error : undefined;
+      if (typeof e === 'string' && e) message = e;
     } catch {
       // no JSON body
     }
-    throw new AwayError(res.status, message, code);
+    throw new AwayError(res.status, message, data);
   }
   return res.json();
 }
@@ -268,7 +304,8 @@ export const awayApi = {
   get: (since?: string) => call<AwayResponse>('GET', `/api/away${since ? `?since=${enc(since)}` : ''}`).then(normalizeAway),
   seen: () => call<{ last_seen: string }>('POST', '/api/away/seen'),
   answer: (id: string, choice: number) => call<unknown>('POST', `/api/questions/${enc(id)}/answer`, { choice }),
-  resolve: (id: string, decision: ApprovalDecision) => call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, { decision }),
+  resolve: (id: string, decision: ApprovalDecision, withoutBackup = false) =>
+    call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, withoutBackup && decision === 'allow_once' ? { decision, without_backup: true } : { decision }),
   /** Approval records with this stored status, newest first (`answered_via` says where). */
   approvals: (status: string) => call<unknown>('GET', `/api/approvals?status=${enc(status)}`),
   /** 0.9.5: ask again for an approval that expired unanswered (starts a new turn; grants nothing). */
