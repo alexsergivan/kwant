@@ -108,10 +108,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
-          Install-PackageProvider -Name NuGet -Force | Out-Null
+          $have = Get-Command winget -ErrorAction SilentlyContinue
+          "winget on the image: $(if ($have) { winget --version } else { 'none' })"
+          # The manifests use schema 1.28, so the newest client validates them, as winget-pkgs does
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Force -AllowClobber
           Repair-WinGetPackageManager -AllUsers -Latest -Force
           winget --version
+          if ($LASTEXITCODE -ne 0) { Write-Error "winget isn't usable"; exit 1 }
       - name: winget validate
         shell: pwsh
         run: |
