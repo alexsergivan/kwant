@@ -84,6 +84,11 @@ const RULES = {
       [String.raw`#a78bfa(?![0-9a-f])`, '#9d8fff'],
       [String.raw`#c4b5fd(?![0-9a-f])`, '#b8adff'],
       [String.raw`#ddd6fe(?![0-9a-f])`, '#d3ccff'],
+      // Found by the guard, not in the ruling's list: light Perch in placeChip.css.
+      [String.raw`#f5f3ff(?![0-9a-f])`, '#f3f1ff'],
+      [String.raw`#ede9fe(?![0-9a-f])`, '#e8e4ff'],
+      [String.raw`#8b5cf6(?![0-9a-f])`, '#8270f5'],
+      [String.raw`#7c3aed(?![0-9a-f])`, '#6c58e0'],
       [String.raw`rgba?\(\s*167[\s,]+139[\s,]+250\b`, (m) => m.replace(/167([\s,]+)139([\s,]+)250/, '157$1143$2255')],
     ],
   },

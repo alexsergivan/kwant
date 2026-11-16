@@ -73,7 +73,7 @@
 }
 [data-theme="light"] .kw-perch {
   --pp-card: #ffffff; --pp-border: rgb(29 24 64 / .14); --pp-t1: #1d1840; --pp-t2: #5a5383; --pp-t3: #6b6494;
-  --pp-seg: #f5f3ff; --pp-mark: #8f5600; --pp-note: #f5f3ff;
+  --pp-seg: #f3f1ff; --pp-mark: #8f5600; --pp-note: #f3f1ff;
   --pp-icon: #5845bd; --pp-focus: #6c58e0;
 }
 .kw-perch { background: var(--pp-card); border: 1px solid var(--pp-border); border-radius: 12px; padding: 16px; }

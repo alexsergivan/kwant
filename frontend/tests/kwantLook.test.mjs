@@ -4,7 +4,8 @@
 // lavender info). This walks frontend/src (*.ts, *.tsx, *.css, skipping generated/) and fails on:
 //   (a) a stock Tailwind zinc/sky hex or rgb() (the list is the mockup kit's lint.py STOCK), and
 //   (b) a colour class or theme() from a Tailwind family kwant doesn't use.
-// emerald and violet are left out on purpose: they wait on Mira's ruling (audit section C).
+// emerald and violet (Mira's ruling, audit section C, roadmap 26g): emerald is teal / ok and violet is kwant's
+// sky (lavender), so their classes and stock hex fail too. scripts/retint-emerald-violet.mjs does the mapping.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -14,12 +15,17 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const src = join(root, 'src');
 
-// Same list as /home/maus/shared/ship-software-safely/mockup-kit/lint.py STOCK (Tailwind 3 zinc and sky, 50..950).
+// zinc and sky: same list as /home/maus/shared/ship-software-safely/mockup-kit/lint.py STOCK. emerald and violet:
+// Tailwind 3's own hex, which map to kwant teal and sky (KWANT). All 50..950.
 const SHADES = ['50', '100', '200', '300', '400', '500', '600', '700', '800', '900', '950'];
 const STOCK = {
   zinc: '#fafafa #f4f4f5 #e4e4e7 #d4d4d8 #a1a1aa #71717a #52525b #3f3f46 #27272a #18181b #09090b',
   sky: '#f0f9ff #e0f2fe #bae6fd #7dd3fc #38bdf8 #0ea5e9 #0284c7 #0369a1 #075985 #0c4a6e #082f49',
+  emerald: '#ecfdf5 #d1fae5 #a7f3d0 #6ee7b7 #34d399 #10b981 #059669 #047857 #065f46 #064e3b #022c22',
+  violet: '#f5f3ff #ede9fe #ddd6fe #c4b5fd #a78bfa #8b5cf6 #7c3aed #6d28d9 #5b21b6 #4c1d95 #2e1065',
 };
+// The kwant family each stock family's hex should become.
+const KWANT = { zinc: 'zinc', sky: 'sky', emerald: 'teal', violet: 'sky' };
 const HEX = new Map();
 for (const [fam, list] of Object.entries(STOCK)) list.split(' ').forEach((h, i) => HEX.set(h, `${fam}-${SHADES[i]}`));
 const rgbOf = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -37,6 +43,8 @@ const OFF = {
   cyan: 'sky (lavender), or text-info / var(--kw-info)', blue: 'sky (lavender), or text-info; control only for "you have the wheel"',
   indigo: 'sky (lavender), or text-info / var(--kw-info)', purple: 'sky (lavender), or text-info / var(--kw-info)',
   fuchsia: 'sky (lavender), or text-info / var(--kw-info)',
+  emerald: 'teal: text-ok, kw-chip-ok, kw-status-ok; solid buttons bg-teal-300 text-zinc-950 (scripts/retint-emerald-violet.mjs)',
+  violet: 'sky (lavender) of the same shade, text-info, kw-focus or kw-btn-primary (scripts/retint-emerald-violet.mjs)',
 };
 const fams = Object.keys(OFF).join('|');
 // bg-red-500, hover:text-slate-300/80, ring-blue-400, from-indigo-600 ..., and theme('colors.red.500')
@@ -46,7 +54,11 @@ const classRe = new RegExp(`(?<![\\w])(?:[\\w-]+-)?(${fams})-(50|[1-9]00|950)(?!
 const EXEMPT = [
   // A categorical picker: each space needs a different hue, not a status meaning or a kwant grey.
   // #0ea5e9 is SPACE_COLORS' "sky" swatch and its NAMED_COLORS alias for older rows; changing it would recolour saved spaces.
-  { file: 'src/spaces.ts', values: ['#0ea5e9'], why: 'SPACE_COLORS categorical picker' },
+  // #10b981 and #8b5cf6 are its emerald and violet swatches, user-picked the same way (Mira's ruling, exemption 1).
+  { file: 'src/spaces.ts', values: ['#0ea5e9', '#10b981', '#8b5cf6'], why: 'SPACE_COLORS categorical picker' },
+  // The holo sticker's conic rainbow (.tk-holo, earned results only). #c4b5fd is one stop of the rainbow, not an accent (exemption 2).
+  { file: 'src/styles/tickets.css', values: ['#c4b5fd'], why: 'holo conic gradient' },
+  // Exemption 3, Chart SERIES_COLORS, needs no entry: the sweep's section A moved the series to kwant classes, so no #34d399 is left.
 ];
 const exempt = (file, value) => EXEMPT.some((e) => e.file === file && e.values.includes(value.toLowerCase()));
 
@@ -68,7 +80,8 @@ export function scan() {
       for (const m of line.matchAll(hexRe)) {
         const h = m[0].slice(0, 7).toLowerCase();
         if (HEX.has(h) && !exempt(file, h)) {
-          const [fam, n] = HEX.get(h).split('-');
+          const [stock, n] = HEX.get(h).split('-');
+          const fam = KWANT[stock];
           out.push(`${at} stock Tailwind ${HEX.get(h)} ${m[0]}: use kwant's ${fam}-${n} (class ${fam}-${n}, theme('colors.${fam}.${n}')) or a --kw-* token`);
         }
       }
@@ -93,9 +106,13 @@ test('frontend/src stays in the kwant palette (no stock zinc/sky hex, no off-the
 test('the guard itself catches what it should and lets kwant tokens through', () => {
   const t = (s) => [...s.matchAll(classRe)].map((m) => m[0]);
   assert.deepEqual(t('bg-red-500/20 hover:text-slate-300 ring-blue-400 theme(\'colors.orange.400\')'), ['bg-red-500', 'text-slate-300', 'ring-blue-400', 'colors.orange.400']);
-  assert.deepEqual(t('bg-rose-500 text-zinc-400 border-sky-400 text-emerald-300 bg-violet-500 text-bad'), []);
+  assert.deepEqual(t('bg-rose-500 text-zinc-400 border-sky-400 bg-teal-300 text-bad text-ok'), []);
+  assert.deepEqual(t('text-emerald-300 hover:bg-violet-500/80 accent-emerald-500 theme(colors.violet.400)'), ['text-emerald-300', 'bg-violet-500', 'accent-emerald-500', 'colors.violet.400']);
+  assert.equal(HEX.get('#059669'), 'emerald-600');
+  assert.equal(HEX.get('#a78bfa'), 'violet-400');
   assert.equal(HEX.get('#38bdf8'), 'sky-400');
   assert.equal(RGB.get('39,39,42'), '#27272a');
   assert.ok(!'#1d1840 #6c58e0 #9d8fff'.match(hexRe).some((h) => HEX.has(h)), 'kwant retinted values are fine');
   assert.ok(exempt('src/spaces.ts', '#0EA5E9') && !exempt('src/components/Sidebar.tsx', '#0ea5e9'));
+  assert.ok(exempt('src/spaces.ts', '#10b981') && exempt('src/styles/tickets.css', '#c4b5fd') && !exempt('src/styles/tickets.css', '#a78bfa'));
 });
