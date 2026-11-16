@@ -807,7 +807,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
           <button
             type="button"
             onClick={() => openReview(inboxItem.task_id, 'dev')}
-            className="kw-focus inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 rounded-lg text-meta font-semibold bg-sky-600 text-white hover:bg-sky-500"
+            className="kw-focus inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 rounded-lg text-meta font-semibold bg-sky-600 text-white hover:bg-sky-700"
           >
             <ShieldCheck size={13} aria-hidden="true" /> Review in Inbox
           </button>

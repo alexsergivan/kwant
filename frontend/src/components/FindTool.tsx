@@ -202,7 +202,7 @@ export function buildGroups(opts: { composioApps: ComposioRowApp[]; connections:
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 motion-reduce:transition-none';
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-500`;
+const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-700`;
 const linkBtn =
   'inline-flex items-center gap-1 min-h-[44px] sm:min-h-[28px] text-xs font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
 const chip = 'inline-flex items-center px-1.5 py-px rounded-md border border-zinc-700 text-[11px] text-zinc-300';

@@ -111,7 +111,7 @@ const card = 'rounded-xl border border-zinc-800 bg-zinc-950/60';
 const rowBtn =
   'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 hover:text-zinc-100 transition-colors';
 const primaryBtn =
-  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50';
+  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50';
 
 /** Settings, in one place: "This space" (only the open space) and "All spaces" (the app). */
 export const SpaceSettings: React.FC<Props> = (p) => {

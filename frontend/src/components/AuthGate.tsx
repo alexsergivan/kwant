@@ -418,7 +418,7 @@ export const TokenForm: React.FC<{
             <button
               type="submit"
               disabled={busy || !token.trim()}
-              className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50"
+              className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50"
             >
               {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
             </button>

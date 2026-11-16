@@ -255,7 +255,7 @@ export const FolderBrowserModal: React.FC<FolderBrowserModalProps> = ({
               type="button"
               onClick={handleSelectCurrent}
               disabled={!currentPath}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-medium transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               <Check size={13} />
               <span>Select Current Folder</span>

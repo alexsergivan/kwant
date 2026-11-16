@@ -1085,7 +1085,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           </p>
           <div className={`mt-4 flex ${phone ? 'flex-col w-full' : ''} gap-2`}>
             {forge && (
-              <button type="button" onClick={() => onConnectForge?.(url, forge)} className={`${phone ? 'h-11' : 'h-9'} px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium ${FOCUS}`}>
+              <button type="button" onClick={() => onConnectForge?.(url, forge)} className={`${phone ? 'h-11' : 'h-9'} px-4 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium ${FOCUS}`}>
                 Connect {forge}
               </button>
             )}
@@ -1345,7 +1345,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             type="button"
             onClick={onPrimary}
             disabled={primaryDisabled}
-            className={`${btnH} ${phoneN ? 'basis-full' : ''} whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
+            className={`${btnH} ${phoneN ? 'basis-full' : ''} whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
           >
             {creating && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             {pickOther && !creating && <FolderOpen size={14} aria-hidden="true" />}

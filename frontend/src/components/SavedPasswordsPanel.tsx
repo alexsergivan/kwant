@@ -162,7 +162,7 @@ export const PasswordsProblemNotice: React.FC<{ problem: PasswordsProblem; onRet
         <button
           type="button"
           onClick={requestPersonToken}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-700"
         >
           <KeyRound size={12} aria-hidden="true" /> Enter access token
         </button>

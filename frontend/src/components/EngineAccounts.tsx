@@ -33,7 +33,7 @@ const input =
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400';
 const quietBtn = `${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-200 hover:bg-zinc-700`;
-const primaryBtn = `${smallBtn} border-sky-500/40 bg-sky-600 text-white hover:bg-sky-500`;
+const primaryBtn = `${smallBtn} border-sky-500/40 bg-sky-600 text-white hover:bg-sky-700`;
 
 const PILL: Record<Tone, string> = {
   ok: 'border-teal-400/30 bg-teal-400/10 text-teal-200',

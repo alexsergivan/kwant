@@ -82,7 +82,7 @@ export const ReviewItemStub: React.FC<ReviewItemViewProps> = ({ item, onApprove,
           type="button"
           aria-disabled={!!ap.blocked || busy}
           onClick={() => !ap.blocked && !busy && onApprove?.(item)}
-          className={`kw-focus inline-flex items-center gap-1.5 min-h-[44px] lg:min-h-[34px] px-4 rounded-lg text-sm font-semibold bg-sky-600 text-white ${ap.blocked || busy ? 'opacity-[.42] cursor-not-allowed' : 'hover:bg-sky-500'}`}
+          className={`kw-focus inline-flex items-center gap-1.5 min-h-[44px] lg:min-h-[34px] px-4 rounded-lg text-sm font-semibold bg-sky-600 text-white ${ap.blocked || busy ? 'opacity-[.42] cursor-not-allowed' : 'hover:bg-sky-700'}`}
           data-stub-approve
         >
           {busy ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}

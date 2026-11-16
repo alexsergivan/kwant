@@ -32,7 +32,7 @@ export type WaitState =
   | { kind: 'error'; message: string };
 
 const primary =
-  'w-full flex items-center justify-center gap-1.5 min-h-[44px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50';
+  'w-full flex items-center justify-center gap-1.5 min-h-[44px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50';
 const secondary =
   'flex items-center justify-center gap-1.5 min-h-[44px] px-4 rounded-lg text-xs font-medium text-zinc-200 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 transition-colors';
 
@@ -255,7 +255,7 @@ export const DeviceRequestCard: React.FC<{
             type="button"
             onClick={onApprove}
             disabled={!matches || !!busy}
-            className="flex-1 flex items-center justify-center gap-1.5 min-h-[44px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50"
+            className="flex-1 flex items-center justify-center gap-1.5 min-h-[44px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50"
           >
             {busy === 'approve' && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />} Approve
           </button>
@@ -428,7 +428,7 @@ export const QrImage: React.FC<{ text: string; label?: string }> = ({ text, labe
 export type AddDeviceVariant = 'settings' | 'phone';
 
 const phonePrimary =
-  'w-full sm:w-auto flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500';
+  'w-full sm:w-auto flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500';
 
 /** What "Add a phone or browser" shows in each state. Exported for tests. */
 export const AddDeviceView: React.FC<{

@@ -35,7 +35,7 @@ const errText = (e: unknown, fallback: string) => (e instanceof ConnectionError 
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 rounded-lg text-xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-50';
 const quiet = `${btn} text-zinc-300 border border-zinc-800 hover:bg-zinc-800 hover:text-zinc-100`;
-const primary = `${btn} text-white bg-sky-600 hover:bg-sky-500`;
+const primary = `${btn} text-white bg-sky-600 hover:bg-sky-700`;
 
 /** A Copy button that says Copied for two seconds. Copies only on click; nothing is kept. */
 export const CopyButton: React.FC<{ text: string; label: string }> = ({ text, label }) => {

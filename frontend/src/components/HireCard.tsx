@@ -206,7 +206,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
                   type="button"
                   onClick={() => decide('accept_once')}
                   disabled={busy !== null}
-                  className={`${btn} bg-sky-600 text-white hover:bg-sky-500 focus-visible:outline-sky-400`}
+                  className={`${btn} bg-sky-600 text-white hover:bg-sky-700 focus-visible:outline-sky-400`}
                 >
                   {busy === 'accept_once' && spin}
                   {busy === 'accept_once' ? 'Hiring…' : team ? `Approve all ${view.members.length}` : 'Accept once'}

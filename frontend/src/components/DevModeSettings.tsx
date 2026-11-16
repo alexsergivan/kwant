@@ -16,9 +16,9 @@ const card = 'rounded-xl border border-zinc-800 bg-zinc-950/60';
 const accentCard = 'rounded-xl border border-sky-500/40 bg-accent-soft';
 const rowBtn =
   'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 hover:text-zinc-100 transition-colors disabled:opacity-50';
-const primaryBtn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50';
+const primaryBtn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50';
 const turnOnBtn =
-  'inline-flex items-center justify-center gap-1.5 h-9 max-md:h-11 max-md:w-full px-3.5 rounded-lg text-[13px] font-semibold text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50 kw-focus';
+  'inline-flex items-center justify-center gap-1.5 h-9 max-md:h-11 max-md:w-full px-3.5 rounded-lg text-[13px] font-semibold text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50 kw-focus';
 const input = 'w-full bg-zinc-950 border rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 focus:outline-none border-zinc-800 focus:border-sky-500';
 /** What turning it on gives you, the same words in the card and the #general suggestion. */
 export const DEV_GAIN = 'your bots review pull requests, show what landed and guard deploys.';

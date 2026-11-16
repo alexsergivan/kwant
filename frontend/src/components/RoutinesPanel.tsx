@@ -418,7 +418,7 @@ export const RoutineForm: React.FC<{
         <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
           Cancel
         </button>
-        <button type="submit" disabled={saving} className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50">
+        <button type="submit" disabled={saving} className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50">
           {saving ? 'Saving…' : submitLabel ?? (initial ? 'Save routine' : 'Create routine')}
         </button>
       </div>
@@ -719,7 +719,7 @@ export const RoutinesPanel: React.FC<{
               onClick={() => setEditing('new')}
               disabled={kwants.length === 0}
               data-routine-new
-              className={`${smallBtn} shrink-0 justify-center min-h-11 sm:min-h-0 border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
+              className={`${smallBtn} shrink-0 justify-center min-h-11 sm:min-h-0 border-sky-500/50 bg-sky-600 text-white hover:bg-sky-700`}
             >
               <Plus size={11} aria-hidden="true" /> New routine
             </button>

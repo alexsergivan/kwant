@@ -43,7 +43,7 @@ const keyUrlOf = (e: CatalogEntry | undefined) => (e?.key_url && /^https:\/\//.t
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const primaryBtn = `${btn} bg-sky-600 text-white hover:bg-sky-500`;
+const primaryBtn = `${btn} bg-sky-600 text-white hover:bg-sky-700`;
 const linkBtn =
   'inline-flex items-center gap-1 min-h-[44px] sm:min-h-[32px] text-xs font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const field =

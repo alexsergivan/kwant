@@ -10,7 +10,7 @@ import { whatsNewFor } from '../whatsNewContent';
 
 const focus = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 const quiet = `inline-flex min-h-[28px] items-center gap-1 rounded-md px-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/[0.12] hover:text-sky-200 max-md:min-h-[44px] ${focus}`;
-const primary = `inline-flex min-h-[32px] items-center gap-1.5 rounded-lg bg-sky-600 px-3 text-xs font-semibold text-white hover:bg-sky-500 max-md:min-h-[44px] ${focus}`;
+const primary = `inline-flex min-h-[32px] items-center gap-1.5 rounded-lg bg-sky-600 px-3 text-xs font-semibold text-white hover:bg-sky-700 max-md:min-h-[44px] ${focus}`;
 const ghost = `inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-zinc-700 px-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800 max-md:min-h-[44px] ${focus}`;
 
 /** Where the How to update command runs, in plain words. */

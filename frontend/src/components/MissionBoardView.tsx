@@ -194,9 +194,9 @@ const actionBtn =
 const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
 /** A secondary action that shouldn't pull the eye: text only, same tap target. */
 const subtleBtn = `${actionBtn} -ml-3 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 underline underline-offset-2 decoration-zinc-600`;
-const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
+const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-700`;
 const goodBtn = `${actionBtn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`;
-const reviewBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
+const reviewBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-700`;
 const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg-rose-500/10`;
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40';
 // Card-sized buttons: compact on desktop, a full 40px tap target on the phone.

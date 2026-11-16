@@ -124,7 +124,7 @@ export const TeamNeedsCard: React.FC<TeamNeedsCardProps> = ({ template: t, handl
 
   const firstReq = !ctx.canRun ? '__account' : views.find(({ n, v }) => n.required && v.state !== 'done' && v.state !== 'checking')?.n.id;
   const btn = (primary: boolean) =>
-    `${phone ? 'h-11 w-full mt-2' : 'h-8'} shrink-0 px-3 rounded-lg text-[13px] font-medium disabled:opacity-50 ${primary ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'border border-zinc-700 text-zinc-100 hover:bg-white/5'} ${FOCUS}`;
+    `${phone ? 'h-11 w-full mt-2' : 'h-8'} shrink-0 px-3 rounded-lg text-[13px] font-medium disabled:opacity-50 ${primary ? 'bg-sky-600 hover:bg-sky-700 text-white' : 'border border-zinc-700 text-zinc-100 hover:bg-white/5'} ${FOCUS}`;
 
   const row = (key: string, s: NeedState, label: string, text: string, optional: boolean, action: React.ReactNode) => (
     <li key={key} data-need={key} data-s={s} className={`flex ${phone ? 'flex-wrap' : 'items-center'} gap-3 min-h-[52px] p-2 border-t border-white/5 first:border-t-0`}>

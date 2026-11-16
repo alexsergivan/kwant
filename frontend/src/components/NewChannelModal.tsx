@@ -208,7 +208,7 @@ export const NewChannelModal: React.FC<NewChannelModalProps> = ({ isOpen, onClos
               <button
                 type="submit"
                 disabled={submitting || members.length === 0}
-                className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 <Hash size={14} />
                 <span>{submitting ? 'Creating…' : 'Create channel'}</span>

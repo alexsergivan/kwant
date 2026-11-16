@@ -53,7 +53,7 @@ const KEY_DEFAULT = 'https://dashboard.composio.dev';
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[30px] px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 motion-reduce:transition-none';
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-500`;
+const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-700`;
 const roseBtn = `${btn} border border-zinc-700 bg-transparent text-rose-300 hover:bg-rose-500/10 hover:border-rose-500/40`;
 const roseFill = `${btn} border border-rose-500 bg-rose-600 text-white hover:bg-rose-500`;
 const field =

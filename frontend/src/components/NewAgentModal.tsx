@@ -700,7 +700,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             <button
               type="submit"
               disabled={submitting || !name.trim()}
-              className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
+              className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-50"
             >
               {isEdit ? 'Save changes' : joinTeamName ? 'Create and add to team' : 'Create bot'}
             </button>

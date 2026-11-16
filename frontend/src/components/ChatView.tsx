@@ -2980,7 +2980,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               data-idea-send
               className={`w-11 h-11 ${phone ? '' : 'sm:w-9 sm:h-9'} rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 ${
                 canSend
-                  ? 'bg-sky-600 text-white hover:bg-sky-500 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
+                  ? 'bg-sky-600 text-white hover:bg-sky-700 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
                   : 'bg-sky-500/20 text-sky-300/60 cursor-not-allowed'
               }`}
             >

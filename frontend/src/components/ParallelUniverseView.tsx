@@ -52,7 +52,7 @@ const TONES: Record<Tone, string> = {
 const actionBtn =
   'inline-flex items-center gap-1.5 min-h-[36px] sm:min-h-[30px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
+const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-700`;
 const field =
   'w-full min-h-[36px] px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-sky-500 aria-[invalid=true]:border-rose-500/60';
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 sm:p-4';

@@ -13,7 +13,7 @@ import {
 } from '../connectionSuggestions';
 
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2';
-const mainBtn = `inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3.5 rounded-xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-500 disabled:opacity-60 ${focusRing} focus-visible:outline-sky-300`;
+const mainBtn = `inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3.5 rounded-xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-60 ${focusRing} focus-visible:outline-sky-300`;
 const quietBtn = `inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 rounded-xl text-sm text-zinc-300 border border-zinc-700 hover:bg-zinc-800 ${focusRing} focus-visible:outline-sky-400`;
 
 export interface ConnectionSuggestionViewProps {

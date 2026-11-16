@@ -89,7 +89,7 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
                 <ExternalLink size={13} aria-hidden="true" /> Download manually
               </a>
             )}
-            <button type="button" onClick={onUpdate} className={`${btn} bg-sky-600 text-white hover:bg-sky-500`}>
+            <button type="button" onClick={onUpdate} className={`${btn} bg-sky-600 text-white hover:bg-sky-700`}>
               {view.kind === 'error' ? <RotateCw size={13} aria-hidden="true" /> : <ArrowUpCircle size={13} aria-hidden="true" />}
               {view.kind === 'error' ? 'Try again' : 'Update and restart'}
             </button>

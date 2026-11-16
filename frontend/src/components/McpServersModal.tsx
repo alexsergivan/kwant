@@ -136,7 +136,7 @@ export const SignInBox: React.FC<{
           type="button"
           onClick={onConnect}
           disabled={isConnecting && !macApp}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-60"
         >
           {isConnecting && !macApp ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
           {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : failure ? 'Retry' : 'Connect'}
@@ -988,7 +988,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
           <button
             type="button"
             onClick={openCatalog}
-            className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm whitespace-nowrap"
+            className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm whitespace-nowrap"
           >
             <Plus size={14} />
             Add server
@@ -1200,7 +1200,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-60"
         >
           {saving && <Loader2 size={13} className="animate-spin" />}
           {editing === 'new' ? 'Add & test' : 'Save & test'}

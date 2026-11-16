@@ -149,7 +149,7 @@ export const MemoryRow: React.FC<{
               type="button"
               onClick={save}
               disabled={busy || !text.trim() || text.length > MAX_MEMORY}
-              className={`${smallBtn} border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
+              className={`${smallBtn} border-sky-500/50 bg-sky-600 text-white hover:bg-sky-700`}
             >
               <Check size={11} /> Save
             </button>
@@ -317,7 +317,7 @@ export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string; onOpenT
           <button
             type="submit"
             disabled={adding || full || !draft.trim() || draft.length > MAX_MEMORY}
-            className={`${smallBtn} ml-auto border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
+            className={`${smallBtn} ml-auto border-sky-500/50 bg-sky-600 text-white hover:bg-sky-700`}
           >
             {adding ? <Loader2 size={11} className="animate-spin motion-reduce:animate-none" /> : <Plus size={11} />} Add
           </button>

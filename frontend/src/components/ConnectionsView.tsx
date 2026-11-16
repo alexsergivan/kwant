@@ -540,7 +540,7 @@ export const AddConnectionMenu: React.FC<{ choices: AddChoice[]; disabled?: bool
         disabled={disabled}
         aria-expanded={open}
         aria-controls={`${id}-list`}
-        className="inline-flex items-center gap-1.5 min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-60 shadow-sm whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+        className="inline-flex items-center gap-1.5 min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-60 shadow-sm whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
       >
         <Plus size={14} aria-hidden="true" />
         Add connection

@@ -140,7 +140,7 @@ export const PhoneAppCardView: React.FC<PhoneAppCardViewProps> = (p) => {
           <button
             type="button"
             onClick={p.onInstall}
-            className="w-full flex items-center justify-center gap-1.5 min-h-[44px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+            className="w-full flex items-center justify-center gap-1.5 min-h-[44px] px-4 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
           >
             <Download size={14} aria-hidden="true" /> Install
           </button>

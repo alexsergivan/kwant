@@ -65,7 +65,7 @@ export const InstallHint: React.FC = () => {
             <button
               type="button"
               onClick={runInstallPrompt}
-              className="mt-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-sky-600 px-4 font-medium text-white hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+              className="mt-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-sky-600 px-4 font-medium text-white hover:bg-sky-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
             >
               <Download size={14} aria-hidden="true" /> Install
             </button>

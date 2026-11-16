@@ -8,7 +8,7 @@ import { inDesktopApp } from '../externalLinks';
 const POLL_MS = 2000;
 
 const primaryBtn =
-  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
+  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 const quietBtn =
   'inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium text-zinc-300 border border-zinc-700 hover:text-zinc-100 hover:border-zinc-500 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 const link = 'inline-flex items-center gap-1 font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200';

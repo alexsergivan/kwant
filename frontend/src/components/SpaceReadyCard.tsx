@@ -120,7 +120,7 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
                   type="button"
                   onClick={step.action.onClick}
                   className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium ${FOCUS} ${
-                    step.done ? 'text-zinc-200 border border-zinc-700 hover:border-sky-500/50 hover:text-sky-200' : 'text-white bg-sky-600 hover:bg-sky-500'
+                    step.done ? 'text-zinc-200 border border-zinc-700 hover:border-sky-500/50 hover:text-sky-200' : 'text-white bg-sky-600 hover:bg-sky-700'
                   }`}
                 >
                   {step.action.icon}

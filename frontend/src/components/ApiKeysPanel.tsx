@@ -155,7 +155,7 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
                   <Check size={13} /> Saved for every space
                 </span>
               )}
-              <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50">
+              <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50">
                 {saving ? 'Saving…' : 'Save keys'}
               </button>
             </div>
