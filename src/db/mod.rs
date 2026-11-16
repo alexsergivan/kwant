@@ -310,7 +310,7 @@ impl Database {
         // 0.9.21 25e: "Always allow" kept across restarts (add-only, outside exports). After every
         // step that can rebuild `kwants`, `threads` or `channels`, which would drop its triggers
         db.migrate_always_allowed().await?;
-        // 0.9.22 26f: what each MCP server says it is (add-only). After every step that can
+        // 0.9.21 26f: what each MCP server says it is (add-only). After every step that can
         // rebuild `mcp_servers`, which would drop its trigger
         db.migrate_mcp_server_facts().await?;
         db.pool.close().await;

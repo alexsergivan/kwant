@@ -21,7 +21,7 @@ safe or "Always this session" was given: see [payments.md](payments.md).
 
 Whatever the mode, on a Home Assistant MCP server (it answers `initialize` with `serverInfo.name`
 `home-assistant`), a call that acts on a lock, a door, a garage door, a gate or an alarm shows a
-card (0.9.22, 26f), approvals `off` included, the way payments do: a `domain` of `lock` or
+card (since 0.9.21), approvals `off` included, the way payments do: a `domain` of `lock` or
 `alarm_control_panel`; `cover` with a `device_class` of garage, door or gate, or none; or any
 string argument (a name, an area, a `schedule_command` command) with the whole word lock, unlock,
 door, garage, gate, alarm or disarm, plurals too, in any case. "Always this session" on such a card,
