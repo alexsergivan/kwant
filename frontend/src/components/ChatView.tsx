@@ -11,8 +11,8 @@ import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
 import { onContinuity } from '../continuity';
 import { TrialWaitsCard } from './SkillsPanel';
-import { agentSenderLabel } from '../agentConnections';
-import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
+import { agentSenderLabel, messageAbout, otherSenderLabel, senderLetter } from '../agentConnections';
+import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, User, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
@@ -210,6 +210,20 @@ export interface RoutingState {
 // One reply row geometry, shared by the live row and the finished one (16a), so a reply lands without a shift:
 // a 36 px avatar column from sm up, a 20 px avatar in the name line on phones, and the same bubble padding.
 const REPLY_AVATAR = 36;
+
+/** 23c: someone else's "user" message (a customer, a bot's chat-API post) gets their letter, never the person's avatar. */
+function SenderLetter({ name }: { name: string }) {
+  const letter = senderLetter(name);
+  return (
+    <span
+      aria-hidden="true"
+      data-sender-letter={letter}
+      className="w-9 h-9 shrink-0 rounded-full bg-zinc-800 border border-zinc-700/60 text-zinc-200 text-sm font-semibold inline-flex items-center justify-center select-none"
+    >
+      {letter || <User size={16} className="text-zinc-400" />}
+    </span>
+  );
+}
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
@@ -1759,7 +1773,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ? emptyTrialReplyLine(parsePick(activeKwants.find((k) => k.id === msg.sender_id || k.name === msg.sender_id)?.preferred_model).family)
         : null;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
-    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
+    // 23c: a customer's or a bot's "user" message says who wrote it; the person (Telegram too) and a coding agent as before
+    const otherSender = isUser ? otherSenderLabel(msg.meta, knownBots, msg.sender_id) : null;
+    const displayName = isUser ? otherSender ?? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
     // P4: a share that now sits under its bot's reply reads as part of it, without a second header.
     const underReply = !isUser && filesOnly && (arranged.attached.has(msg.id) || liveShareIds.has(msg.id));
     const olderCopies = filesOnly ? arranged.earlier.get(msg.id) : undefined;
@@ -1790,13 +1806,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <span className="hidden sm:contents">
           {/* Laya hand-off: a reply she just routed brings the chosen bot's avatar up into the header */}
           <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
-            <ModernAvatar
-              role={isUser ? 'user' : title}
-              name={displayName}
-              size={REPLY_AVATAR}
-              kwantId={replyKwantId}
-              modelBadge={false}
-            />
+            {otherSender ? (
+              <SenderLetter name={otherSender} />
+            ) : (
+              <ModernAvatar
+                role={isUser ? 'user' : title}
+                name={displayName}
+                size={REPLY_AVATAR}
+                kwantId={replyKwantId}
+                modelBadge={false}
+              />
+            )}
           </span>
         </span>
         )}
@@ -1805,8 +1825,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {underReply ? (
             <span className="sr-only">Shared by {displayName}</span>
           ) : isUser ? (
-            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
-              <span className="text-zinc-200 shrink-0">{displayName}</span>
+            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap" data-sender={otherSender ? 'other' : undefined}>
+              <span className={otherSender ? 'text-zinc-200 min-w-0 truncate' : 'text-zinc-200 shrink-0'}>{displayName}</span>
               {fromTelegram(parseMetaObject(msg.meta)) && <ViaTelegram />}
             </div>
           ) : (
@@ -1889,7 +1909,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <div className={isUser ? 'relative w-full max-w-2xl' : 'contents'}>
           {isUser && (() => {
             // The person's message: the overflow sits in the empty gutter left of the bubble, bottom-aligned, no row
-            const more = continueMenu(msg, 'your message', 'end', 'hover');
+            const more = continueMenu(msg, messageAbout(otherSender), 'end', 'hover');
             return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
           })()}
           <div
