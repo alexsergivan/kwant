@@ -948,6 +948,8 @@ mod tests {
         assert!(person_only(&post, "/api/glance/ask"));
         assert!(person_only(&post, "/api/questions/q1/answer"));
         assert!(person_only(&post, "/api/questions/q1/answer/"));
+        // 22i: Dismiss in Needs attention is the person's alone
+        assert!(person_only(&post, "/api/waiting/w1/dismiss"));
         assert!(!person_only(&get, "/api/questions/q1"));
         assert!(!person_only(&post, "/api/questions/q1/cancel"));
         assert!(person_only(&post, "/api/spaces/s1/docs"));

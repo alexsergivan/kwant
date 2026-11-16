@@ -1076,3 +1076,14 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
   .kw-st-pop { animation: kw-st-pop 140ms ease-out both; }
   .kw-st-sheet { animation: kw-st-sheet 180ms ease-out both; }
 }
+
+/* 22i Needs-you strip (design.md §2 Motion): it leaves by fading 120 ms, and stepping between asks
+   cross-fades the ask 120 ms (opacity only). Nothing moves under reduced motion. */
+@keyframes kw-needs-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .kw-needs-fade { animation: kw-needs-fade 120ms var(--kw-ease, ease-out); }
+  .kw-needs-leave { opacity: 0; transition: opacity 120ms var(--kw-ease, ease-out); }
+}

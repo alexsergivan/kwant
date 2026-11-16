@@ -150,13 +150,13 @@ impl Database {
         .await?)
     }
 
-    /// The question was answered or dismissed.
-    pub async fn close_waiting_for_question(&self, question_id: &str) -> Result<u64, DbError> {
-        let res = sqlx::query("UPDATE waiting_on_person SET status = 'closed' WHERE question_id = ? AND status != 'closed'")
+    /// The question was answered or dismissed. Returns the items it closed (as every close
+    /// below does), so the caller can say so live (`server::waiting::closed`).
+    pub async fn close_waiting_for_question(&self, question_id: &str) -> Result<Vec<WaitingItem>, DbError> {
+        Ok(sqlx::query_as::<_, WaitingItem>("UPDATE waiting_on_person SET status = 'closed' WHERE question_id = ? AND status != 'closed' RETURNING *")
             .bind(question_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected())
+            .fetch_all(&self.pool)
+            .await?)
     }
 
     /// The person wrote in a chat: a thread (`thread_id`), a channel's main chat, or the direct
@@ -166,27 +166,21 @@ impl Database {
         channel_id: Option<&str>,
         direct_kwant_id: Option<&str>,
         thread_id: Option<&str>,
-    ) -> Result<u64, DbError> {
-        let res = match (thread_id, channel_id, direct_kwant_id) {
-            (Some(t), _, _) => {
-                sqlx::query("UPDATE waiting_on_person SET status = 'closed' WHERE status != 'closed' AND thread_id = ?").bind(t).execute(&self.pool).await?
-            }
-            (None, Some(c), _) => sqlx::query(
-                "UPDATE waiting_on_person SET status = 'closed' WHERE status != 'closed' AND channel_id = ? AND thread_id IS NULL",
-            )
-            .bind(c)
-            .execute(&self.pool)
-            .await?,
-            (None, None, Some(k)) => sqlx::query(
+    ) -> Result<Vec<WaitingItem>, DbError> {
+        let (sql, id) = match (thread_id, channel_id, direct_kwant_id) {
+            (Some(t), _, _) => ("UPDATE waiting_on_person SET status = 'closed' WHERE status != 'closed' AND thread_id = ? RETURNING *", t),
+            (None, Some(c), _) => (
+                "UPDATE waiting_on_person SET status = 'closed' WHERE status != 'closed' AND channel_id = ? AND thread_id IS NULL RETURNING *",
+                c,
+            ),
+            (None, None, Some(k)) => (
                 "UPDATE waiting_on_person SET status = 'closed' WHERE status != 'closed' AND channel_id IS NULL \
-                 AND thread_id IS NULL AND direct_kwant_id = ?",
-            )
-            .bind(k)
-            .execute(&self.pool)
-            .await?,
-            (None, None, None) => return Ok(0),
+                 AND thread_id IS NULL AND direct_kwant_id = ? RETURNING *",
+                k,
+            ),
+            (None, None, None) => return Ok(Vec::new()),
         };
-        Ok(res.rows_affected())
+        Ok(sqlx::query_as::<_, WaitingItem>(sql).bind(id).fetch_all(&self.pool).await?)
     }
 
     /// A bot's plain "waiting on a reply" entries in one chat (no question card) end: the ask
@@ -197,21 +191,21 @@ impl Database {
         channel_id: Option<&str>,
         direct_kwant_id: Option<&str>,
         thread_id: Option<&str>,
-    ) -> Result<u64, DbError> {
-        let res = sqlx::query(&format!(
-            "UPDATE waiting_on_person SET status = 'closed' WHERE question_id IS NULL AND kind IS NULL AND status != 'closed' AND {SAME_CHAT}"
+    ) -> Result<Vec<WaitingItem>, DbError> {
+        Ok(sqlx::query_as::<_, WaitingItem>(&format!(
+            "UPDATE waiting_on_person SET status = 'closed' WHERE question_id IS NULL AND kind IS NULL AND status != 'closed' AND {SAME_CHAT} RETURNING *"
         ))
-            .bind(kwant_id)
-            .bind(channel_id.unwrap_or(""))
-            .bind(direct_kwant_id.unwrap_or(""))
-            .bind(thread_id.unwrap_or(""))
-            .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected())
+        .bind(kwant_id)
+        .bind(channel_id.unwrap_or(""))
+        .bind(direct_kwant_id.unwrap_or(""))
+        .bind(thread_id.unwrap_or(""))
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     /// Records that a bot's work stopped in one chat: its earlier stopped item and its "waiting
     /// on a reply" item there close (this says more), and one new item opens. Never reminded.
+    /// Returns the new item and the ones it replaced.
     #[allow(clippy::too_many_arguments)]
     pub async fn add_stopped(
         &self,
@@ -222,15 +216,17 @@ impl Database {
         message_id: Option<&str>,
         line: &str,
         retry: Option<&str>,
-    ) -> Result<WaitingItem, DbError> {
+    ) -> Result<(WaitingItem, Vec<WaitingItem>), DbError> {
         let mut tx = self.begin_write().await?;
-        sqlx::query(&format!("UPDATE waiting_on_person SET status = 'closed' WHERE question_id IS NULL AND status != 'closed' AND {SAME_CHAT}"))
-            .bind(kwant_id)
-            .bind(channel_id.unwrap_or(""))
-            .bind(direct_kwant_id.unwrap_or(""))
-            .bind(thread_id.unwrap_or(""))
-            .execute(&mut *tx)
-            .await?;
+        let replaced = sqlx::query_as::<_, WaitingItem>(&format!(
+            "UPDATE waiting_on_person SET status = 'closed' WHERE question_id IS NULL AND status != 'closed' AND {SAME_CHAT} RETURNING *"
+        ))
+        .bind(kwant_id)
+        .bind(channel_id.unwrap_or(""))
+        .bind(direct_kwant_id.unwrap_or(""))
+        .bind(thread_id.unwrap_or(""))
+        .fetch_all(&mut *tx)
+        .await?;
         let row = sqlx::query_as::<_, WaitingItem>(
             "INSERT INTO waiting_on_person (id, kwant_id, channel_id, direct_kwant_id, thread_id, message_id, question, status, created_at, kind, retry) \
              VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?) RETURNING *",
@@ -248,7 +244,7 @@ impl Database {
         .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(row)
+        Ok((row, replaced))
     }
 
     /// The bot's work in that chat went on (a later reply finished): its stopped items there close.
@@ -258,39 +254,65 @@ impl Database {
         channel_id: Option<&str>,
         direct_kwant_id: Option<&str>,
         thread_id: Option<&str>,
-    ) -> Result<u64, DbError> {
-        let res = sqlx::query(&format!("UPDATE waiting_on_person SET status = 'closed' WHERE kind = 'stopped' AND status != 'closed' AND {SAME_CHAT}"))
-            .bind(kwant_id)
-            .bind(channel_id.unwrap_or(""))
-            .bind(direct_kwant_id.unwrap_or(""))
-            .bind(thread_id.unwrap_or(""))
-            .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected())
+    ) -> Result<Vec<WaitingItem>, DbError> {
+        Ok(sqlx::query_as::<_, WaitingItem>(&format!(
+            "UPDATE waiting_on_person SET status = 'closed' WHERE kind = 'stopped' AND status != 'closed' AND {SAME_CHAT} RETURNING *"
+        ))
+        .bind(kwant_id)
+        .bind(channel_id.unwrap_or(""))
+        .bind(direct_kwant_id.unwrap_or(""))
+        .bind(thread_id.unwrap_or(""))
+        .fetch_all(&self.pool)
+        .await?)
     }
 
-    /// Closes one item if it is still open; `false` when it was already closed (a second Retry).
-    pub async fn claim_waiting(&self, id: &str) -> Result<bool, DbError> {
-        let res = sqlx::query("UPDATE waiting_on_person SET status = 'closed' WHERE id = ? AND status != 'closed'").bind(id).execute(&self.pool).await?;
-        Ok(res.rows_affected() > 0)
+    /// Closes one item if it is still open; `None` when it was already closed or never existed
+    /// (a second Retry or Dismiss).
+    pub async fn claim_waiting(&self, id: &str) -> Result<Option<WaitingItem>, DbError> {
+        Ok(sqlx::query_as::<_, WaitingItem>("UPDATE waiting_on_person SET status = 'closed' WHERE id = ? AND status != 'closed' RETURNING *")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?)
     }
 
     /// Stopped items still open whose notice is `message_id` (a chain notice's Continue).
-    pub async fn close_waiting_for_message(&self, message_id: &str) -> Result<u64, DbError> {
-        let res = sqlx::query("UPDATE waiting_on_person SET status = 'closed' WHERE message_id = ? AND kind = 'stopped' AND status != 'closed'")
-            .bind(message_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected())
+    pub async fn close_waiting_for_message(&self, message_id: &str) -> Result<Vec<WaitingItem>, DbError> {
+        Ok(sqlx::query_as::<_, WaitingItem>(
+            "UPDATE waiting_on_person SET status = 'closed' WHERE message_id = ? AND kind = 'stopped' AND status != 'closed' RETURNING *",
+        )
+        .bind(message_id)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     /// The stopped item whose Retry asks again for approval card `approval_id`.
-    pub async fn close_stopped_for_approval(&self, approval_id: &str) -> Result<u64, DbError> {
-        let res = sqlx::query("UPDATE waiting_on_person SET status = 'closed' WHERE kind = 'stopped' AND status != 'closed' AND json_extract(retry, '$.approval_id') = ?")
-            .bind(approval_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected())
+    pub async fn close_stopped_for_approval(&self, approval_id: &str) -> Result<Vec<WaitingItem>, DbError> {
+        Ok(sqlx::query_as::<_, WaitingItem>(
+            "UPDATE waiting_on_person SET status = 'closed' WHERE kind = 'stopped' AND status != 'closed' \
+             AND json_extract(retry, '$.approval_id') = ? RETURNING *",
+        )
+        .bind(approval_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// 22i: open items whose place is gone, so nobody can see or resume them: the bot was
+    /// deleted, or the channel or thread they were asked in no longer exists. The caller closes
+    /// them ([`Self::claim_waiting`]); `space` limits it like [`Self::list_waiting`].
+    pub async fn waiting_places_gone(&self, space: Option<&super::spaces::SpaceId>) -> Result<Vec<WaitingItem>, DbError> {
+        Ok(sqlx::query_as::<_, WaitingItem>(
+            "SELECT * FROM waiting_on_person w WHERE w.status != 'closed'
+               AND (?1 IS NULL OR COALESCE((SELECT k.space_id FROM kwants k WHERE k.id = w.kwant_id), 'spc_default') = ?1)
+               AND (NOT EXISTS (SELECT 1 FROM kwants k WHERE k.id = w.kwant_id)
+                    OR (w.channel_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM channels c WHERE c.id = w.channel_id))
+                    OR (w.thread_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM threads t WHERE t.id = w.thread_id))
+                    OR (w.channel_id IS NULL AND w.thread_id IS NULL AND w.direct_kwant_id IS NOT NULL
+                        AND NOT EXISTS (SELECT 1 FROM kwants k WHERE k.id = w.direct_kwant_id)))
+             ORDER BY w.created_at",
+        )
+        .bind(space.map(|s| s.as_str()))
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     /// The entries whose reminder is due by `now`, each claimed (`open` → `reminded`) so it goes
@@ -366,7 +388,7 @@ mod tests {
         assert_eq!(db.next_waiting_due().await.unwrap(), None);
         // Reminded entries are still listed until the person writes
         assert_eq!(db.list_waiting(None).await.unwrap().len(), 2);
-        assert_eq!(db.close_waiting_in_chat(None, Some("k"), None).await.unwrap(), 2);
+        assert_eq!(db.close_waiting_in_chat(None, Some("k"), None).await.unwrap().len(), 2);
         assert!(db.list_waiting(None).await.unwrap().is_empty());
         // A closed question is never recorded again
         assert!(db.add_waiting(&item("k", None, Some("k"), None, Some("q1"))).await.unwrap().is_none());
@@ -380,9 +402,9 @@ mod tests {
         db.add_waiting(&item("b", Some("c1"), None, Some("t1"), None)).await.unwrap();
         db.add_waiting(&item("a", None, Some("a"), None, None)).await.unwrap();
         db.add_waiting(&item("b", Some("c2"), None, None, Some("q9"))).await.unwrap();
-        assert_eq!(db.close_waiting_in_chat(Some("c1"), None, None).await.unwrap(), 1);
-        assert_eq!(db.close_waiting_in_chat(None, None, Some("t1")).await.unwrap(), 1);
-        assert_eq!(db.close_waiting_for_question("q9").await.unwrap(), 1);
+        assert_eq!(db.close_waiting_in_chat(Some("c1"), None, None).await.unwrap().len(), 1);
+        assert_eq!(db.close_waiting_in_chat(None, None, Some("t1")).await.unwrap().len(), 1);
+        assert_eq!(db.close_waiting_for_question("q9").await.unwrap().len(), 1);
         let left = db.list_waiting(None).await.unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].direct_kwant_id.as_deref(), Some("a"));
@@ -396,23 +418,23 @@ mod tests {
         let db = Database::init(tmp.path()).await.unwrap();
         // A "waiting on your reply" item in the chat, then the work stops there
         db.add_waiting(&item("k", None, Some("k"), None, None)).await.unwrap();
-        let a = db.add_stopped("k", None, Some("k"), None, Some("m1"), "Stopped. Retry in the chat sends your message again.", None).await.unwrap();
+        let a = db.add_stopped("k", None, Some("k"), None, Some("m1"), "Stopped. Retry in the chat sends your message again.", None).await.unwrap().0;
         assert_eq!(a.kind.as_deref(), Some(STOPPED));
         let open = db.list_waiting(None).await.unwrap();
         assert_eq!(open.len(), 1, "the stop says more than the plain ask: {open:?}");
         // A second stop in the same chat replaces the first: one ask per chat
-        let b = db.add_stopped("k", None, Some("k"), None, Some("m2"), "Again", None).await.unwrap();
+        let b = db.add_stopped("k", None, Some("k"), None, Some("m2"), "Again", None).await.unwrap().0;
         let open = db.list_waiting(None).await.unwrap();
         assert_eq!(open.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), vec![b.id.as_str()]);
         // Never reminded
         assert!(db.take_due_waiting(Utc::now() + Duration::days(30)).await.unwrap().is_empty());
         // A stop elsewhere is untouched; a later reply of the bot there closes only that chat's
         db.add_stopped("k", Some("c1"), None, None, None, "In the channel", None).await.unwrap();
-        assert_eq!(db.close_stopped("k", None, Some("k"), None).await.unwrap(), 1);
+        assert_eq!(db.close_stopped("k", None, Some("k"), None).await.unwrap().len(), 1);
         assert_eq!(db.list_waiting(None).await.unwrap().len(), 1);
         // Plain closes don't take a stopped item with them, a write does
         db.add_waiting(&item("k", Some("c1"), None, None, None)).await.unwrap();
-        assert_eq!(db.close_waiting_in_chat(Some("c1"), None, None).await.unwrap(), 2);
+        assert_eq!(db.close_waiting_in_chat(Some("c1"), None, None).await.unwrap().len(), 2);
         assert!(db.list_waiting(None).await.unwrap().is_empty());
     }
 
@@ -420,16 +442,61 @@ mod tests {
     async fn a_stopped_item_closes_by_its_notice_or_its_approval_once() {
         let tmp = tempfile::tempdir().unwrap();
         let db = Database::init(tmp.path()).await.unwrap();
-        let cont = db.add_stopped("k", Some("c1"), None, None, Some("notice1"), "Paused", Some(r#"{"type":"continue"}"#)).await.unwrap();
+        let cont = db.add_stopped("k", Some("c1"), None, None, Some("notice1"), "Paused", Some(r#"{"type":"continue"}"#)).await.unwrap().0;
         assert_eq!(cont.retry.as_deref(), Some(r#"{"type":"continue"}"#));
         db.add_stopped("k", Some("c2"), None, None, Some("notice2"), "Expired", Some(r#"{"type":"approval","approval_id":"ap1"}"#)).await.unwrap();
-        assert_eq!(db.close_waiting_for_message("notice1").await.unwrap(), 1);
-        assert_eq!(db.close_waiting_for_message("notice1").await.unwrap(), 0);
-        assert_eq!(db.close_stopped_for_approval("ap2").await.unwrap(), 0);
-        assert_eq!(db.close_stopped_for_approval("ap1").await.unwrap(), 1);
+        assert_eq!(db.close_waiting_for_message("notice1").await.unwrap().len(), 1);
+        assert_eq!(db.close_waiting_for_message("notice1").await.unwrap().len(), 0);
+        assert_eq!(db.close_stopped_for_approval("ap2").await.unwrap().len(), 0);
+        assert_eq!(db.close_stopped_for_approval("ap1").await.unwrap().len(), 1);
         assert!(db.list_waiting(None).await.unwrap().is_empty());
-        let c = db.add_stopped("k", Some("c3"), None, None, None, "x", None).await.unwrap();
-        assert!(db.claim_waiting(&c.id).await.unwrap());
-        assert!(!db.claim_waiting(&c.id).await.unwrap(), "a second Retry gets nothing");
+        let c = db.add_stopped("k", Some("c3"), None, None, None, "x", None).await.unwrap().0;
+        assert!(db.claim_waiting(&c.id).await.unwrap().is_some());
+        assert!(db.claim_waiting(&c.id).await.unwrap().is_none(), "a second Retry gets nothing");
+    }
+
+    async fn bot(db: &Database, id: &str) {
+        sqlx::query("INSERT INTO kwants (id, name, title, persona_prompt, avatar_sprite, space_id) VALUES (?, ?, 't', 'p', 'a', 'spc_default')")
+            .bind(id)
+            .bind(format!("Bot {id}"))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+
+    /// 22i: an item asked in a chat that no longer exists (bot, channel or thread deleted) is
+    /// found so it can close, and deleting a bot closes its items itself.
+    #[tokio::test]
+    async fn items_whose_place_is_gone_are_found_and_a_deleted_bot_closes_its_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        bot(&db, "k1").await;
+        bot(&db, "k2").await;
+        sqlx::query("INSERT INTO channels (id, name, description, lead_kwant_id, member_kwants, routing_mode, space_id) VALUES ('c1', 'ops', '', 'k1', '[\"k1\"]', 'auto', 'spc_default')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let t1 = db.create_thread("k1", "Fix-it: repo #1", "chat", None, "kwant").await.unwrap();
+        // Places that exist
+        db.add_stopped("k1", None, Some("k1"), None, Some("m1"), "direct", None).await.unwrap();
+        db.add_stopped("k1", Some("c1"), None, None, Some("m2"), "channel", None).await.unwrap();
+        db.add_stopped("k1", None, None, Some(&t1.id), Some("m3"), "thread", None).await.unwrap();
+        assert!(db.waiting_places_gone(None).await.unwrap().is_empty());
+        // Places that don't: a channel and a thread that were deleted, a bot that never was
+        db.add_stopped("k1", Some("c-gone"), None, None, Some("m4"), "gone channel", None).await.unwrap();
+        db.add_stopped("k1", None, None, Some("t-gone"), Some("m5"), "gone thread", None).await.unwrap();
+        db.add_stopped("k-gone", None, Some("k-gone"), None, Some("m6"), "gone bot", None).await.unwrap();
+        let gone: Vec<String> = db.waiting_places_gone(None).await.unwrap().into_iter().map(|w| w.question).collect();
+        assert_eq!(gone, vec!["gone channel", "gone thread", "gone bot"]);
+        for w in db.waiting_places_gone(None).await.unwrap() {
+            assert!(db.claim_waiting(&w.id).await.unwrap().is_some());
+        }
+        assert!(db.waiting_places_gone(None).await.unwrap().is_empty());
+        assert_eq!(db.list_waiting(None).await.unwrap().len(), 3);
+        // Deleting k1 closes its three (direct chat, channel ask, its thread) in the same transaction
+        db.add_stopped("k2", None, Some("k2"), None, Some("m7"), "k2's own", None).await.unwrap();
+        assert!(db.delete_kwant_and_history("k1", "k2").await.unwrap());
+        let left: Vec<String> = db.list_waiting(None).await.unwrap().into_iter().map(|w| w.question).collect();
+        assert_eq!(left, vec!["k2's own"]);
     }
 }
