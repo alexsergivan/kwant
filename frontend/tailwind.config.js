@@ -65,7 +65,7 @@ export default {
       },
       backgroundImage: {
         // The one accent gradient: primary buttons, the active item, the bot-home hero glow
-        'accent-gradient': 'linear-gradient(135deg, #7a62f0 0%, #5b47d6 100%)',
+        'accent-gradient': 'linear-gradient(135deg, #745bef 0%, #5b47d6 100%)',
         'accent-soft': 'linear-gradient(135deg, rgb(122 98 240 / 0.22) 0%, rgb(91 71 214 / 0.10) 100%)',
       },
       boxShadow: {

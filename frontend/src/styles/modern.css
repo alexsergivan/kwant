@@ -753,7 +753,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-dvx-actions { margin-top: 14px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .kw-dvx-primary {
   display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 14px; border-radius: 10px;
-  background: linear-gradient(135deg, #7a62f0, #5b47d6); color: #fff; font-size: 14px; font-weight: 600;
+  background: linear-gradient(135deg, #745bef, #5b47d6); color: #fff; font-size: 14px; font-weight: 600;
 }
 .kw-dvx-primary:hover { filter: brightness(1.08); }
 .kw-dvx-guide { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; font-weight: 600; color: theme('colors.sky.300'); border-radius: 6px; }
@@ -875,7 +875,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   --accent: #b8adff;            /* sky-300: accent text */
   --accent-strong: #9d8fff;     /* sky-400: working / accent strokes */
   --accent-fill: #6c58e0;       /* sky-600: toggles on */
-  --accent-gradient: linear-gradient(135deg, #7a62f0 0%, #5b47d6 100%);
+  --accent-gradient: linear-gradient(135deg, #745bef 0%, #5b47d6 100%);
   --accent-soft: linear-gradient(135deg, rgb(122 98 240 / .22) 0%, rgb(91 71 214 / .10) 100%);
   /* Pixel's names for the same shades (PX-* classes use --dv-t*, --dv-accent*) */
   --dv-t1: var(--t1); --dv-t2: var(--t2); --dv-t3: var(--t3); --dv-t4: var(--t4); --dv-t5: var(--t5);
