@@ -565,7 +565,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
                       aria-hidden="true"
                       className={`w-5 h-5 shrink-0 rounded flex items-center justify-center border transition-all ${
                         isMember
-                          ? 'bg-sky-500 text-white border-sky-400'
+                          ? 'bg-sky-600 text-white border-sky-400'
                           : 'border-zinc-700 bg-zinc-900 text-transparent'
                       }`}
                     >
@@ -614,7 +614,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               <button
                 type="submit"
                 disabled={isSaving}
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium bg-sky-500 hover:bg-sky-400 text-white shadow-sm transition-all"
+                className="kw-btn-primary kw-focus gap-1.5 px-4 py-1.5 rounded-lg text-xs"
               >
                 <Check size={14} />
                 <span>{isSaving ? 'Saving...' : 'Save Changes'}</span>
