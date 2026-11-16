@@ -1,0 +1,34 @@
+{
+  "version": "0.9.18",
+  "date": "2026-11-16",
+  "highlights": [
+    {
+      "id": "chat-audio",
+      "title": "Drop audio files into a chat",
+      "text": "MP3, M4A, WAV, OGG and FLAC files up to 100 MB now go into a chat, so a bot can upload a song or a recording on a page for you.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "phone-reply-row",
+      "title": "Tidier reply buttons on a phone",
+      "text": "On a phone, Reply, 👍, 👎 and Copy sit on one row, result buttons get their own row, the empty gap under a reply is gone, and the Ask: row shows a small dot when a bot needs you.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "floor-never-dead-end",
+      "title": "Your deploy is never stuck behind Deny",
+      "text": "When kwant can't tell whether a production deploy changes the database, the card lets you set a backup command right there, or allow it without a backup once you confirm it doesn't.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A team named like \"Marketing_Team\" or \"SalesTeam\" reads \"@Marketing_Team\", never \"… team team\".",
+    "The bot browser's live preview no longer flashes white or grey while a page loads; it keeps the last picture until the new page shows.",
+    "A done, skipped or timed-out browser step card no longer says the bot needs you; it reads \"<name> asked for you in the browser\" in grey.",
+    "A customer's refused call now remembers the chat it happened in, so it can show in that customer's chat.",
+    "A bot whose step keeps failing stops once with a Blocked card naming the step and its error, instead of repeating itself."
+  ]
+}

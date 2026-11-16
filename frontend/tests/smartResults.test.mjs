@@ -301,7 +301,9 @@ test('no setting: ChatView always passes results and adds the action-row spot wh
   const { readFile } = await import('node:fs/promises');
   const read = (f) => readFile(new URL(`../src/${f}`, import.meta.url), 'utf8');
   const chat = await read('components/ChatView.tsx');
-  assert.match(chat, /\{msg\.results != null && <SmartActionsSlot messageId=\{msg\.id\} \/>\}/);
+  // 19f: desktop keeps the slot inline in the action row; a phone gives it its own row under the ghost icons
+  assert.match(chat, /\{!phone && msg\.results != null && <SmartActionsSlot messageId=\{msg\.id\} \/>\}/);
+  assert.match(chat, /\{phone && msg\.results != null && \(\s*<div[^>]*data-smart-row="">\s*<SmartActionsSlot messageId=\{msg\.id\} \/>/);
   assert.match(chat, /results=\{msg\.results\} messageId=\{msg\.id\}/);
   for (const f of ['components/ChatView.tsx', 'components/SettingsModal.tsx', 'smartResults.ts', 'components/MarkdownRenderer.tsx']) assert.doesNotMatch(await read(f), /smart_results|SmartResultsOn|smart-results-label/, f);
 });
