@@ -84,6 +84,32 @@ test('closed and stale cards', () => {
   assert.match(ui.render(props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })) })), /spotted automatically/);
 });
 
+test('a late Done or Skip on a closed step reads as a sentence, never the raw status (22m round 2)', () => {
+  const closed = ['done', 'declined', 'cancelled', 'resolved_auto', 'timed_out', 'left_for_message'];
+  for (const status of closed) {
+    for (const which of ['done', 'decline']) {
+      const text = h.closedStepText(status, which, 'Pixel');
+      assert.notEqual(text, undefined, `${status}/${which}: a closed step is mapped, so the raw 409 text never shows`);
+      if (text === null) continue;
+      assert.doesNotMatch(text, /left_for_message|resolved_auto|timed_out|already (open|declined|cancelled)\b/, `${status}/${which}: ${text}`);
+      assert.doesNotMatch(text, /_/, `${status}/${which}: ${text}`);
+      assert.match(text, /^[A-Z].*\.$/, `${status}/${which}: a sentence`);
+    }
+  }
+  // The file closed the card: Done says it didn't land and what to do; Skip says nothing
+  assert.equal(
+    h.closedStepText('left_for_message', 'done', 'Pixel'),
+    "This closed when you sent a file, so Pixel didn't get your Done. If you finished, say so in the chat.",
+  );
+  assert.equal(h.closedStepText('left_for_message', 'decline', 'Pixel'), null);
+  // The existing lines are unchanged
+  assert.equal(h.closedStepText('done', 'done', 'Pixel'), 'This was already marked done.');
+  assert.equal(h.closedStepText('declined', 'decline', 'Pixel'), 'This was already skipped.');
+  assert.equal(h.closedStepText('cancelled', 'done', 'Pixel'), 'This was closed: the reply was stopped.');
+  // An open step isn't closed: the caller keeps the real error
+  assert.equal(h.closedStepText('open', 'done', 'Pixel'), undefined);
+});
+
 test('meta line is one inline text run that wraps like a sentence', () => {
   const html = ui.render(props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })) }));
   const m = html.match(/<p data-hs-meta=""([^>]*)>([^]*?)<\/p>/);
