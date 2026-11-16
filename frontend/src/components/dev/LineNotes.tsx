@@ -481,7 +481,7 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
                 ))}
               </div>
             )}
-            {changes.cut && <p className="mt-2 text-meta text-[#8a8a96]">{cutLine(changes.cut)}</p>}
+            {changes.cut && <p className="mt-2 text-meta text-zinc-500">{cutLine(changes.cut)}</p>}
           </div>
         )}
 
@@ -761,9 +761,9 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
             {notesWord(n)}
           </span>
         )}
-        {omitted === 'binary' && <span className="w-full font-sans text-meta text-[#8a8a96] sm:w-auto">Binary file, not shown</span>}
+        {omitted === 'binary' && <span className="w-full font-sans text-meta text-zinc-500 sm:w-auto">Binary file, not shown</span>}
         {omitted === 'too_large' && (
-          <span className="w-full font-sans text-meta text-[#8a8a96] sm:w-auto">
+          <span className="w-full font-sans text-meta text-zinc-500 sm:w-auto">
             Too big to show here
             {p.prUrl && /^https:\/\//.test(p.prUrl) && (
               <>
@@ -773,7 +773,7 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
             )}
           </span>
         )}
-        {renamedOnly && <span className="w-full font-sans text-meta text-[#8a8a96] sm:w-auto">Renamed, no changes</span>}
+        {renamedOnly && <span className="w-full font-sans text-meta text-zinc-500 sm:w-auto">Renamed, no changes</span>}
         {big && !shown && (
           <button
             type="button"
@@ -821,7 +821,7 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
             <div className="sm:w-max sm:min-w-full">
               {f.hunks.map((h, hi) => (
                 <React.Fragment key={hi}>
-                  <div role="row" className="grid grid-cols-[34px_1fr] bg-violet-500/[.06] text-[#8a8a96] sm:grid-cols-[26px_38px_38px_1fr]">
+                  <div role="row" className="grid grid-cols-[34px_1fr] bg-violet-500/[.06] text-zinc-500 sm:grid-cols-[26px_38px_38px_1fr]">
                     <span role="gridcell" className="max-sm:hidden" />
                     <span role="gridcell" className="max-sm:hidden" />
                     <span role="gridcell" />
@@ -961,10 +961,10 @@ const Row: React.FC<RowProps> = React.memo(({ x, selected, noted, active, canNot
           <MessageSquare size={13} aria-hidden="true" className="text-violet-300 max-sm:hidden" />
         ) : null}
       </span>
-      <span role="gridcell" className="select-none pr-2 text-right text-[#8a8a96] max-sm:hidden" aria-hidden="true">
+      <span role="gridcell" className="select-none pr-2 text-right text-zinc-500 max-sm:hidden" aria-hidden="true">
         {l.old ?? ''}
       </span>
-      <span role="gridcell" className={`select-none pr-2 text-right ${l.kind === 'del' ? 'text-[#8a8a96] max-sm:text-rose-300/70' : 'text-[#8a8a96]'}`} aria-hidden="true">
+      <span role="gridcell" className={`select-none pr-2 text-right ${l.kind === 'del' ? 'text-zinc-500 max-sm:text-rose-300/70' : 'text-zinc-500'}`} aria-hidden="true">
         <span className="max-sm:hidden">{l.new ?? ''}</span>
         <span className="sm:hidden">{shownNo(l)}</span>
       </span>
@@ -1160,7 +1160,7 @@ const Composer: React.FC<ComposerProps> = ({ writing: w, setWriting, bot, onCanc
         maxLength={4000}
         onChange={(e) => setWriting((x) => (x ? { ...x, text: e.target.value, asking: false } : x))}
         onKeyDown={onKey}
-        className="mt-1.5 block min-h-[52px] w-full resize-y rounded-lg border border-hairline bg-[var(--dv-code-bg)] px-2.5 py-2 text-[13px] leading-5 text-zinc-100 placeholder:text-[#8a8a96] focus:border-violet-400 focus:outline-none"
+        className="mt-1.5 block min-h-[52px] w-full resize-y rounded-lg border border-hairline bg-[var(--dv-code-bg)] px-2.5 py-2 text-[13px] leading-5 text-zinc-100 placeholder:text-zinc-500 focus:border-violet-400 focus:outline-none"
       />
       {w.error && (
         <p role="alert" className="mt-1.5 text-meta text-rose-300">
@@ -1178,7 +1178,7 @@ const Composer: React.FC<ComposerProps> = ({ writing: w, setWriting, bot, onCanc
           <button type="button" onClick={onCancel} className="kw-btn-ghost !py-1">
             Cancel
           </button>
-          <span className="ml-auto text-[11.5px] text-[#8a8a96] max-sm:hidden">{keyHint()}</span>
+          <span className="ml-auto text-[11.5px] text-zinc-500 max-sm:hidden">{keyHint()}</span>
         </div>
       )}
     </div>
@@ -1226,7 +1226,7 @@ const NoteSheet: React.FC<{ writing: Writing; setWriting: ComposerProps['setWrit
           maxLength={4000}
           onChange={(e) => setWriting((x) => (x ? { ...x, text: e.target.value, asking: false } : x))}
           onKeyDown={onKey}
-          className="mt-2.5 block min-h-[76px] w-full resize-none rounded-xl border border-violet-400/70 bg-[var(--dv-code-bg)] px-3 py-2.5 text-[15px] leading-6 text-zinc-100 placeholder:text-[#8a8a96] focus:outline-none focus:ring-[3px] focus:ring-violet-500/20"
+          className="mt-2.5 block min-h-[76px] w-full resize-none rounded-xl border border-violet-400/70 bg-[var(--dv-code-bg)] px-3 py-2.5 text-[15px] leading-6 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-[3px] focus:ring-violet-500/20"
         />
         {w.error && (
           <p role="alert" className="mt-1.5 text-meta text-rose-300">

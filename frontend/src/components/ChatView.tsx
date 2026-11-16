@@ -1896,7 +1896,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               isUser
                 ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
                 : workAhead
-                  ? 'bg-indigo-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-indigo-400/25'
+                  ? 'bg-sky-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-sky-400/25'
                   : REPLY_BUBBLE_BOT
             }`}
             data-work-ahead={workAhead ? '' : undefined}
@@ -2429,7 +2429,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={onCancelDiscussion}
-                className="shrink-0 flex items-center gap-1 px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded border border-red-500/30 transition-colors cursor-pointer"
+                className="shrink-0 flex items-center gap-1 px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded border border-rose-500/30 transition-colors cursor-pointer"
               >
                 <Square size={11} fill="currentColor" />
                 <span>Stop<span className="hidden sm:inline"> Discussion</span></span>
@@ -2953,7 +2953,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onCancelDiscussion}
-              className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
+              className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
               title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop'}
               aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop'}
             >

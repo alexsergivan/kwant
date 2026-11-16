@@ -68,7 +68,11 @@ const MARKERS: React.FC<{ cx: number; cy: number; size: number }>[] = [
   ),
 ];
 const DASHES = [undefined, '6 3', '2 3', '8 2 2 2'];
-const SERIES_COLORS = ['#8270f5', '#38bdf8', '#34d399', '#fb923c'];
+// Four series from kwant's palette, lavender first; markers and dashes (bars: patterns) tell them apart without colour.
+// Each is a text colour the SVG reads as currentColor, so no hex lives here.
+const SERIES_TONES = ['text-sky-500', 'text-sky-200', 'text-teal-400', 'text-amber-400'];
+const tone = (i: number) => SERIES_TONES[i % SERIES_TONES.length];
+const C = 'currentColor';
 
 function niceTicks(min: number, max: number, count: number): number[] {
   if (min === max) {
@@ -90,24 +94,25 @@ function fmtTick(n: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n);
 }
 
-const BarPattern: React.FC<{ id: string; variant: number; color: string }> = ({ id, variant, color }) => {
+const BarPattern: React.FC<{ id: string; variant: number }> = ({ id, variant }) => {
+  const color = C;
   if (variant === 0) return <pattern id={id} />; // solid fill, no pattern needed
   if (variant === 1)
     return (
-      <pattern id={id} width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <pattern id={id} className={tone(variant)} width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
         <rect width="6" height="6" fill={color} fillOpacity={0.35} />
         <line x1="0" y1="0" x2="0" y2="6" stroke={color} strokeWidth="3" />
       </pattern>
     );
   if (variant === 2)
     return (
-      <pattern id={id} width="5" height="5" patternUnits="userSpaceOnUse">
+      <pattern id={id} className={tone(variant)} width="5" height="5" patternUnits="userSpaceOnUse">
         <rect width="5" height="5" fill={color} fillOpacity={0.35} />
         <circle cx="2.5" cy="2.5" r="1.1" fill={color} />
       </pattern>
     );
   return (
-    <pattern id={id} width="6" height="6" patternUnits="userSpaceOnUse">
+    <pattern id={id} className={tone(variant)} width="6" height="6" patternUnits="userSpaceOnUse">
       <rect width="6" height="6" fill={color} fillOpacity={0.35} />
       <path d="M0 0L6 6M6 0L0 6" stroke={color} strokeWidth="1.2" />
     </pattern>
@@ -176,7 +181,7 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
           {block.series.map((s, i) => (
             <span key={s.key} className="flex items-center gap-1.5 text-zinc-400">
               <svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden="true" className="shrink-0">
-                <g fill={SERIES_COLORS[i % SERIES_COLORS.length]} stroke={block.chart_kind === 'line' ? SERIES_COLORS[i % SERIES_COLORS.length] : 'none'}>
+                <g className={tone(i)} fill={C} stroke={block.chart_kind === 'line' ? C : 'none'}>
                   {React.createElement(MARKERS[i % MARKERS.length], { cx: 0, cy: 0, size: 4 })}
                 </g>
               </svg>
@@ -217,21 +222,21 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
             <desc id={`${uid}-desc`}>{block.summary ?? headers.join(', ')}</desc>
             <defs>
               {block.series.map((s, i) => (
-                <BarPattern key={s.key} id={`${uid}-pat-${i}`} variant={i} color={SERIES_COLORS[i % SERIES_COLORS.length]} />
+                <BarPattern key={s.key} id={`${uid}-pat-${i}`} variant={i} />
               ))}
             </defs>
 
             {/* Gridlines: scale, not data claims. */}
             {ticks.map((t) => (
               <g key={t}>
-                <line x1={PAD.left} x2={WIDTH - PAD.right} y1={yScale(t)} y2={yScale(t)} stroke="#27272a" strokeWidth={1} />
-                <text x={PAD.left - 8} y={yScale(t)} textAnchor="end" dominantBaseline="middle" fontSize={11} fill="#71717a">
+                <line x1={PAD.left} x2={WIDTH - PAD.right} y1={yScale(t)} y2={yScale(t)} className="stroke-zinc-800" strokeWidth={1} />
+                <text x={PAD.left - 8} y={yScale(t)} textAnchor="end" dominantBaseline="middle" fontSize={11} className="fill-zinc-500">
                   {fmtTick(t)}
                 </text>
               </g>
             ))}
-            <line x1={PAD.left} x2={PAD.left} y1={PAD.top} y2={HEIGHT - PAD.bottom} stroke="#3f3f46" strokeWidth={1} />
-            <line x1={PAD.left} x2={WIDTH - PAD.right} y1={HEIGHT - PAD.bottom} y2={HEIGHT - PAD.bottom} stroke="#3f3f46" strokeWidth={1} />
+            <line x1={PAD.left} x2={PAD.left} y1={PAD.top} y2={HEIGHT - PAD.bottom} className="stroke-zinc-700" strokeWidth={1} />
+            <line x1={PAD.left} x2={WIDTH - PAD.right} y1={HEIGHT - PAD.bottom} y2={HEIGHT - PAD.bottom} className="stroke-zinc-700" strokeWidth={1} />
 
             {/* X labels, thinned out so 390 px never clips. */}
             {block.points.map((p, i) => {
@@ -244,7 +249,7 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
                   y={HEIGHT - PAD.bottom + 16}
                   textAnchor={!isBar && i === n - 1 && n > 1 ? 'end' : 'middle'}
                   fontSize={11}
-                  fill="#a1a1aa"
+                  className="fill-zinc-400"
                 >
                   {p.x.length > labelChars ? (
                     <>
@@ -272,10 +277,10 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
                     cur.push({ x: xPos(i), y: yScale(v), i });
                   });
                   if (cur.length) segments.push(cur);
-                  const color = SERIES_COLORS[si % SERIES_COLORS.length];
+                  const color = C;
                   const Marker = MARKERS[si % MARKERS.length];
                   return (
-                    <g key={s.key}>
+                    <g key={s.key} className={tone(si)}>
                       {segments.map((seg, k) => (
                         <path
                           key={k}
@@ -331,10 +336,10 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
                           y={y}
                           width={Math.max(2, barWidth - 2)}
                           height={Math.max(0, h)}
-                          fill={si === 0 ? SERIES_COLORS[0] : `url(#${uid}-pat-${si})`}
-                          stroke={SERIES_COLORS[si % SERIES_COLORS.length]}
+                          fill={si === 0 ? C : `url(#${uid}-pat-${si})`}
+                          stroke={C}
                           strokeWidth={isActive ? 1.5 : 0}
-                          className="cursor-pointer outline-none"
+                          className={`cursor-pointer outline-none ${tone(si)}`}
                           onFocus={() => setActive({ seriesIdx: si, pointIdx: i })}
                           onBlur={() => setActive(null)}
                           onMouseEnter={() => setActive({ seriesIdx: si, pointIdx: i })}

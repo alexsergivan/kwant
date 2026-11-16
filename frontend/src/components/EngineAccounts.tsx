@@ -41,7 +41,7 @@ const PILL: Record<Tone, string> = {
   error: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
   muted: 'border-zinc-700 bg-zinc-800/60 text-zinc-400',
   busy: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
-  info: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200',
+  info: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
 };
 const PILL_DOT: Record<Tone, string> = {
   ok: 'bg-emerald-400',
@@ -49,7 +49,7 @@ const PILL_DOT: Record<Tone, string> = {
   error: 'bg-rose-400',
   muted: 'bg-zinc-500',
   busy: 'bg-sky-400 animate-pulse motion-reduce:animate-none',
-  info: 'bg-cyan-400',
+  info: 'bg-sky-400',
 };
 
 /** A status in words with a colored dot, so it never relies on color alone. */

@@ -41,13 +41,6 @@ export default {
           DEFAULT: '#7cc4ff',
           ink: '#071629',
         },
-        brand: {
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          400: '#38bdf8',
-          500: '#0ea5e9',
-          600: '#0284c7',
-        },
       },
       // Layered surfaces, dark to light: rail < side < main < raised < overlay. Use these instead of
       // picking a zinc shade, so depth reads the same everywhere. Backed by CSS variables (modern.css).

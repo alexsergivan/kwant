@@ -29,7 +29,7 @@ export function validFindings(raw: unknown): FindingsBlock | null {
 // Severity is always paired with its word, never colour alone; the dot is decorative.
 const DOT: Record<Severity, string> = {
   critical: 'bg-rose-500',
-  high: 'bg-orange-500',
+  high: 'bg-rose-300',
   medium: 'bg-amber-500',
   low: 'bg-sky-500',
   info: 'bg-zinc-500',
@@ -37,7 +37,7 @@ const DOT: Record<Severity, string> = {
 
 const STRIPE: Record<Severity, string> = {
   critical: 'border-l-rose-500',
-  high: 'border-l-orange-500',
+  high: 'border-l-rose-300',
   medium: 'border-l-amber-500',
   low: 'border-l-sky-500',
   info: 'border-l-zinc-500',

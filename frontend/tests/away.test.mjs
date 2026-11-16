@@ -102,7 +102,7 @@ test("an expired card's 409 shows the server's sentence as a plain notice, not a
   assert.deepEqual(a.actionFailureNotice(500, 'Boom', 'X'), { text: "Couldn't send it: Boom: “X”", error: true });
   const html = ui.render({ data: resp(), loading: false, error: null, busy: null, notice: a.actionFailureNotice(409, msg, 'X'), onRefresh() {}, onOpen() {}, onAnswer() {}, onResolve() {} });
   assert.match(html, /This card expired/);
-  assert.match(html, /bg-slate-500\/10/);
+  assert.match(html, /bg-zinc-500\/10/);
   assert.doesNotMatch(html, /bg-amber-500\/10 text-amber-200[^>]*>This card expired/);
 });
 

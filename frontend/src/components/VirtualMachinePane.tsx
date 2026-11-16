@@ -855,7 +855,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             )}
 
             {controlError && !botBusy && !heldElsewhere && (
-              <div role="alert" className="px-2.5 py-2 rounded-lg border border-red-500/30 bg-red-950/40 text-xs text-red-300">
+              <div role="alert" className="px-2.5 py-2 rounded-lg border border-rose-500/30 bg-rose-950/40 text-xs text-rose-300">
                 {controlError}
               </div>
             )}

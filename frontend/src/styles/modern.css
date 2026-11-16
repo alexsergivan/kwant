@@ -178,7 +178,7 @@
     padding-inline: 4px;
     min-height: 28px; /* when it wraps under Copy data it reads as a caption line, not a 36 px chip row */
     font-weight: 400;
-    color: rgb(161 161 170); /* zinc-400 */
+    color: theme('colors.zinc.400'); /* zinc-400 */
   }
 }
 
@@ -813,7 +813,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   display: flex; align-items: center; justify-content: center;
 }
 .kw-mb-layer { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.kw-mb-spark { position: absolute; top: -3px; left: -6px; line-height: 1; text-shadow: 0 0 2px #09090b, 0 0 2px #09090b; }
+.kw-mb-spark { position: absolute; top: -3px; left: -6px; line-height: 1; text-shadow: 0 0 2px theme('colors.zinc.950'), 0 0 2px theme('colors.zinc.950'); }
 .kw-mb-in { animation: kw-mb-in 150ms ease-out both; }
 .kw-mb-out { animation: kw-mb-out 150ms ease-out both; }
 @keyframes kw-mb-in { from { opacity: 0; } }

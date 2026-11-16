@@ -53,8 +53,8 @@ export interface WtBot {
   rank?: number;
 }
 
-// H5 mini dots (the sidebar's team rollup colours).
-const RANK_DOT: Record<RollupRank, string> = { 1: 'bg-amber-400', 2: 'bg-rose-400', 3: 'bg-[#38bdf8]', 4: 'bg-teal-400', 5: 'bg-[#9d8fff]' };
+// H5 mini dots (the sidebar's team rollup colours). Review (3) is a hollow lavender ring next to working's filled dot.
+const RANK_DOT: Record<RollupRank, string> = { 1: 'bg-amber-400', 2: 'bg-rose-400', 3: 'border-[1.5px] border-sky-300 bg-transparent', 4: 'bg-teal-400', 5: 'bg-[#9d8fff]' };
 
 export function useWorktrees(space: string, on: boolean): WorktreesData {
   const data = useSyncExternalStore(worktreeStore.subscribe, () => worktreeStore.get(space), () => worktreeStore.get(space));

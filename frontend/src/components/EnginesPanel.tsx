@@ -22,7 +22,7 @@ const SUMMARY_TEXT = {
   error: 'text-rose-300',
   muted: 'text-zinc-400',
   busy: 'text-sky-300',
-  info: 'text-cyan-200',
+  info: 'text-sky-200',
 } as const;
 const KIND_ICON = { cli: Cpu, api: Key, local: Server } as const;
 

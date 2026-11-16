@@ -891,7 +891,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       {notice && (
         <p
           className={`px-3 py-2 rounded-lg border text-xs ${
-            notice.tone === 'error' ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : notice.tone === 'info' ? 'border-slate-500/30 bg-slate-500/10 text-slate-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-100'
+            notice.tone === 'error' ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : notice.tone === 'info' ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-100'
           }`}
         >
           {notice.text}

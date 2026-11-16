@@ -5,15 +5,15 @@
   --pc-bg: var(--kw-surface-raised, #1a1538);
   --pc-ring: var(--kw-hairline-strong, rgb(255 255 255 / .14));
   --pc-hover: #231d4b;
-  --pc-text: #e4e4e7;
-  --pc-text-hi: #fafafa;
+  --pc-text: theme('colors.zinc.200');
+  --pc-text-hi: theme('colors.zinc.50');
   --pc-glyph: #b8adff;
-  --pc-chev: #a1a1aa;
+  --pc-chev: theme('colors.zinc.400');
   --pc-amber: #ffb020;
   --pc-amber-ink: #1b1033;
   --pc-amber-rim: transparent;
   --pc-focus: #8270f5;
-  --pc-line: rgb(39 39 42 / .6);
+  --pc-line: theme('colors.zinc.800 / 60%');
   --pc-dot-start: #fcd34d;
   --pc-dot-fail: #fda4af;
 }
@@ -67,8 +67,8 @@
 
 /* Settings → Perch */
 .kw-perch {
-  --pp-card: rgb(9 9 11 / .6); --pp-border: #27272a; --pp-t1: #f4f4f5; --pp-t2: #a1a1aa; --pp-t3: #71717a;
-  --pp-seg: #09090b; --pp-on: #6c58e0; --pp-on-text: #ffffff; --pp-mark: #ffb020; --pp-note: rgb(24 24 27 / .8);
+  --pp-card: theme('colors.zinc.950 / 60%'); --pp-border: theme('colors.zinc.800'); --pp-t1: theme('colors.zinc.100'); --pp-t2: theme('colors.zinc.400'); --pp-t3: theme('colors.zinc.500');
+  --pp-seg: theme('colors.zinc.950'); --pp-on: #6c58e0; --pp-on-text: #ffffff; --pp-mark: #ffb020; --pp-note: theme('colors.zinc.900 / 80%');
   --pp-icon: #b8adff; --pp-focus: #8270f5;
 }
 [data-theme="light"] .kw-perch {

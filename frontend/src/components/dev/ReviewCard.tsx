@@ -51,8 +51,8 @@ import { DismissForm, useDismiss } from './DismissForm';
 import { TicketMatches, itemFinding, matchFindingIds } from './TicketMatches';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
-const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
-const STRIPE: Record<Severity, string> = { critical: 'border-l-rose-500', high: 'border-l-orange-500', medium: 'border-l-amber-500', low: 'border-l-sky-500' };
+const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-rose-300', medium: 'bg-amber-500', low: 'bg-sky-500' };
+const STRIPE: Record<Severity, string> = { critical: 'border-l-rose-500', high: 'border-l-rose-300', medium: 'border-l-amber-500', low: 'border-l-sky-500' };
 const SEV_WORD: Record<Severity, string> = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 // S4 (WCAG 1.4.1): the severity is a word too, not only the dot's colour.
 const SEV_TONE: Record<Severity, string> = { critical: 'text-rose-300', high: 'text-rose-300', medium: 'text-amber-300', low: 'text-teal-300' };

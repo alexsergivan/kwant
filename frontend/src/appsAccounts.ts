@@ -28,7 +28,7 @@ export interface AppTile {
 /** The tiles, in order (brief: Gmail, Google Calendar, Slack, Notion, Shopify, GitHub). */
 export const APP_TILES: AppTile[] = [
   { slug: 'gmail', tint: 'text-rose-300', name: 'Gmail', blurb: 'Read mail, write drafts', can: ['Read and search your mail', 'Write drafts for you to check'], acts: 'Send mail' },
-  { slug: 'googlecalendar', tint: 'text-blue-300', name: 'Google Calendar', blurb: 'See and add events', can: ['See your calendar', 'Find free time'], acts: 'Add or move events' },
+  { slug: 'googlecalendar', tint: 'text-sky-300', name: 'Google Calendar', blurb: 'See and add events', can: ['See your calendar', 'Find free time'], acts: 'Add or move events' },
   { slug: 'slack', tint: 'text-amber-200', name: 'Slack', blurb: 'Read and post messages', can: ['Read channels and threads', 'Search messages'], acts: 'Post messages' },
   { slug: 'notion', tint: 'text-zinc-200', name: 'Notion', blurb: 'Read and edit pages', can: ['Read and search your pages', 'Draft new pages'], acts: 'Change or delete pages' },
   { slug: 'shopify', tint: 'text-emerald-300', name: 'Shopify', blurb: 'Orders and products', can: ['See orders, products and customers', 'Look up stock'], acts: 'Change orders or products' },

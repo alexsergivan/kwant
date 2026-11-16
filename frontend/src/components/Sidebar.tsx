@@ -475,11 +475,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const active = !phone && !isChannel && selectedId === k.id;
     const att = pin?.att ?? chat?.att;
     const asked = chat?.needs ?? (att?.rank === 1 ? att.needs : undefined);
-    // H5 ranks 2–4 say what broke, what waits for review (0.9 V1) or what finished, in rose, sky or
-    // zinc-200; a review that needs you says so in amber
+    // H5 ranks 2–4 say what broke, what waits for review (0.9 V1) or what finished, in rose, lavender (info) or
+    // zinc-200; a review that needs you says so in amber. Review's dot is a hollow lavender ring, so it never
+    // reads as working's filled, pulsing lavender dot.
     const attLine = att && (att.rank === 2 || att.rank === 3 || att.rank === 4 || (att.rank === 1 && att.review)) ? att.line : undefined;
-    const attTone = !att ? '' : att.rank === 1 ? 'text-warn' : att.rank === 2 ? 'text-rose-300' : att.rank === 3 ? 'text-[#7dd3fc]' : 'text-zinc-200';
-    const attDot = !att ? '' : att.rank === 1 ? 'kw-status-warn' : att.rank === 2 ? 'bg-rose-400' : att.rank === 3 ? 'bg-[#38bdf8]' : 'bg-teal-400';
+    const attTone = !att ? '' : att.rank === 1 ? 'text-warn' : att.rank === 2 ? 'text-rose-300' : att.rank === 3 ? 'text-info' : 'text-zinc-200';
+    const attDot = !att ? '' : att.rank === 1 ? 'kw-status-warn' : att.rank === 2 ? 'bg-rose-400' : att.rank === 3 ? 'border-[1.5px] border-sky-300 bg-transparent' : 'bg-teal-400';
     // Pinned to an engine that can't run, with failover off: its turn would fail, so no green dot
     const pinnedTip = pinnedCantRun(k, engines.engines);
     const status = asked ? 'needs_you' : statusOf(k.id, botStatus, pinnedTip ? false : canRun);
@@ -689,7 +690,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       else if (r === 5) c.working++;
     }
     const dots: Array<[number, string]> = c.needs || c.stuck || c.review || c.finished
-      ? ([[c.needs, 'bg-amber-400'], [c.stuck, 'bg-rose-400'], [c.review, 'bg-[#38bdf8]'], [c.finished, 'bg-teal-400']] as Array<[number, string]>).filter(([n]) => n > 0)
+      ? ([[c.needs, 'bg-amber-400'], [c.stuck, 'bg-rose-400'], [c.review, 'border-[1.5px] border-sky-300 bg-transparent'], [c.finished, 'bg-teal-400']] as Array<[number, string]>).filter(([n]) => n > 0)
       : c.working
         ? [[c.working, 'bg-[#9d8fff]']]
         : [];

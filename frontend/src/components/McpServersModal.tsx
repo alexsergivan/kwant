@@ -515,7 +515,17 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     if (popup) {
       try {
         popup.document.title = 'Signing in…';
-        popup.document.body.style.cssText = 'background:#18181b;color:#a1a1aa;font:14px system-ui;display:grid;place-items:center;height:100vh;margin:0';
+        // The popup has none of the app's CSS: give it kwant's surface, muted text and Inter (its @font-face rules).
+        const css = getComputedStyle(document.documentElement);
+        const faces = [...document.styleSheets]
+          .flatMap((s) => { try { return [...s.cssRules]; } catch { return []; } })
+          .filter((r) => r instanceof CSSFontFaceRule)
+          .map((r) => r.cssText)
+          .join('\n');
+        const st = popup.document.createElement('style');
+        st.textContent = faces;
+        popup.document.head.append(st);
+        popup.document.body.style.cssText = `background:${css.getPropertyValue('--kw-surface-main')};color:${css.getPropertyValue('--kw-muted')};font:14px ${getComputedStyle(document.body).fontFamily};display:grid;place-items:center;height:100vh;margin:0`;
         popup.document.body.textContent = `Opening sign-in for ${server.name}…`;
       } catch {
         // not ours to style; harmless

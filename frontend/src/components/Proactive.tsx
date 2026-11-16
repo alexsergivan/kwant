@@ -152,9 +152,9 @@ export const WorkAheadBody: React.FC<{ messageId: string; text: string }> = ({ m
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-start gap-2 text-left rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
       >
-        <Moon size={14} className="mt-0.5 shrink-0 text-indigo-300" aria-hidden="true" />
+        <Moon size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
         <span className="flex-1 min-w-0">
-          <span className="block text-[11px] font-medium uppercase tracking-wide text-indigo-300/90">While you were away</span>
+          <span className="block text-[11px] font-medium uppercase tracking-wide text-sky-300/90">While you were away</span>
           {!open && <span className="block text-sm text-zinc-300 break-words">{workAheadSummary(text)}</span>}
         </span>
         <span className="shrink-0 inline-flex items-center gap-0.5 text-[11px] text-zinc-500">

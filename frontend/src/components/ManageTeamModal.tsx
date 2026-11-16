@@ -592,8 +592,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               disabled={isDeleting}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                 confirmDelete
-                  ? 'bg-red-600 text-white border-red-500 animate-pulse'
-                  : 'text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border-red-500/20'
+                  ? 'bg-rose-600 text-white border-rose-500 animate-pulse motion-reduce:animate-none'
+                  : 'text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/20'
               }`}
             >
               <Trash2 size={13} />
