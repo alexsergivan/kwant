@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-- kwant closes a browser page's DevTools connections once it's been idle a while, and again when it closes the page, instead of leaving them open until the container ran out of room for more and every browser call started failing. (#753)
+- kwant closes a browser page's DevTools connections once it's been idle a while, and again when it closes the page, instead of leaving them open until the container ran out of room for more and every browser call started failing. Thanks @calintro (#753)
 
 ## [Mac 0.9.18] - 2026-11-16
 
