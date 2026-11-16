@@ -272,7 +272,11 @@ pub fn cause_of(conn: &Connection, why: &str) -> Option<Cause> {
 /// guard (15c) didn't send, whose earlier failures were already counted.
 pub fn about_the_connection(result: &Value) -> bool {
     let status = result["status"].as_str().unwrap_or("");
-    !matches!(status, "denied" | "cancelled" | "unanswered") && result.get("repeat_stopped").is_none()
+    if matches!(status, "denied" | "cancelled" | "unanswered") || result.get("repeat_stopped").is_some() {
+        return false;
+    }
+    // 18a: the claude CLI's result of a stopped own-tool call is just its text
+    !crate::drivers::activity::failed_reason(result).flatten().is_some_and(crate::mcp::repeat_guard::is_stop_text)
 }
 
 /// A failed call → the connection failure it is, if any.

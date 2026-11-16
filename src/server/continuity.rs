@@ -405,6 +405,10 @@ pub struct SelfScope {
     /// The bot browser shown in this turn's side panel (team, channel or kwant id). The
     /// `browser_*` tools are offered only when it is set and only ever drive this one.
     pub sandbox_target: Option<String>,
+    /// 18a: the turn's repeat guard for its own tools. The claude CLI posts them straight to
+    /// [`self_endpoint`], past `McpToolSession::call`'s guard; every clone of this turn's scope
+    /// shares this one, and it goes when `finish_turn` drops the scope.
+    pub repeats: Arc<crate::mcp::repeat_guard::RepeatGuard>,
 }
 
 /// Where a turn runs, for the delegation tools: results go back to this chat.
@@ -1173,6 +1177,15 @@ fn tool_text(id: Value, text: impl Into<String>, is_error: bool) -> Response {
     )
 }
 
+/// A tool result's text parts, joined: what the repeat guard compares (an image part has none).
+fn content_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
@@ -1180,6 +1193,55 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .eq_ignore_ascii_case("bearer")
         .then(|| token.trim())
         .filter(|t| !t.is_empty())
+}
+
+/// 16d: the trace of a customer-turn call nobody allowed, so the owner sees what a customer's
+/// message tried. One approvals record, already closed ([`crate::db::approval_modes::CUSTOMER_REFUSED`]):
+/// no card, nothing to answer, and the customer is sent nothing new. Its details have a card's
+/// shape (the list masks the arguments the same way). Best effort: the call is refused either way.
+async fn record_customer_refusal(state: &AppState, scope: &SelfScope, turn: &str, name: &str, args: &Value) {
+    let record = crate::db::models::NewApproval {
+        turn_id: turn.to_string(),
+        kwant_id: scope.kwant_id.clone(),
+        tool_name: format!("mcp__{SELF_SERVER_NAME}__{name}"),
+        parameters: json!({
+            "source": "mcp",
+            "server": SELF_SERVER_NAME,
+            "tool": name,
+            "arguments": args,
+            "kwant_id": scope.kwant_id,
+            "kwant_name": scope.kwant_name,
+            "customer_chat": true,
+            "refused": "nobody_allowed",
+        }),
+    };
+    let chat = refused_call_chat(state, scope, turn).await;
+    if let Err(e) = state.db.save_customer_refused(&record, chat.as_ref()).await {
+        tracing::warn!(error = %e, kwant = %scope.kwant_id, "could not record a refused customer-turn call");
+    }
+}
+
+/// 22a: the chat a refused customer call happened in, in a card's `resume` shape: the turn's
+/// thread, else its channel, else its bot's direct chat. From the turn's origin, else from the
+/// running turn as a card's chat is found; `None` when neither knows.
+async fn refused_call_chat(state: &AppState, scope: &SelfScope, turn: &str) -> Option<Value> {
+    match scope.origin.as_ref().and_then(chat_of_origin) {
+        Some(chat) => Some(chat),
+        None => super::mcp_runtime::turn_chat(state, turn).await,
+    }
+}
+
+/// A turn's origin as `{"thread_id"}`, `{"channel_id"}` or `{"direct_kwant_id"}`, the first one
+/// it has in that order; `None` when it has none.
+fn chat_of_origin(origin: &TurnOrigin) -> Option<Value> {
+    let some = |v: &Option<String>| v.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    if let Some(t) = some(&origin.thread_id) {
+        return Some(json!({"thread_id": t}));
+    }
+    if let Some(c) = some(&origin.channel_id) {
+        return Some(json!({"channel_id": c}));
+    }
+    some(&origin.direct_kwant_id).map(|k| json!({"direct_kwant_id": k}))
 }
 
 /// `POST /api/mcp/self`: the agents' own tools as a streamable-HTTP MCP server (JSON responses).
@@ -1227,6 +1289,7 @@ pub async fn self_endpoint(
             if let Some(turn) = scope.turn_id.as_deref() {
                 if !super::mcp_runtime::take_every_call_pass(turn, name, args) {
                     tracing::warn!(kwant = %scope.kwant_id, tool = %name, "refused a customer-turn call nobody allowed");
+                    record_customer_refusal(&state, &scope, turn, name, args).await;
                     return tool_text(id, super::mcp_runtime::EVERY_CALL_REFUSED, true);
                 }
             }
@@ -1243,16 +1306,23 @@ pub async fn self_endpoint(
                 };
                 return tool_text(id, text, is_error);
             }
-            if name == "read_attachment" && scope.origin.is_some() {
-                let (content, is_error) = super::attachments::tool_read(&state, &scope, args).await;
-                return rpc_result(id, json!({"content": content, "isError": is_error}));
+            // 18a: after the refusal gates (a refused call isn't a failed one, and is never counted),
+            // the same call that already failed 3 times the same way in this turn doesn't run
+            let repeat_key = crate::mcp::repeat_guard::RepeatGuard::key(name, args);
+            if let Some(stopped) = scope.repeats.check(&repeat_key) {
+                tracing::info!(kwant = %scope.kwant_id, tool = %name, count = stopped.count, "repeat guard: didn't run an own-tool call that kept failing the same way");
+                return tool_text(id, stopped.text, true);
             }
-            if name == BROWSER_SCREENSHOT {
-                let (content, is_error) = browser_screenshot_tool(&state, &scope, args).await;
-                return rpc_result(id, json!({"content": content, "isError": is_error}));
-            }
-            let (text, is_error) = call_tool(&state, &scope, name, args).await;
-            tool_text(id, text, is_error)
+            let (content, is_error) = if name == "read_attachment" && scope.origin.is_some() {
+                super::attachments::tool_read(&state, &scope, args).await
+            } else if name == BROWSER_SCREENSHOT {
+                browser_screenshot_tool(&state, &scope, args).await
+            } else {
+                let (text, is_error) = call_tool(&state, &scope, name, args).await;
+                (json!([{"type": "text", "text": text}]), is_error)
+            };
+            scope.repeats.after(&repeat_key, if is_error { "error" } else { "ok" }, &content_text(&content));
+            rpc_result(id, json!({"content": content, "isError": is_error}))
         }
         _ => Json(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "method not found"}})).into_response(),
     }
@@ -2190,6 +2260,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_refused_call_names_its_turns_chat_thread_first() {
+        use serde_json::json;
+        let o = |c: Option<&str>, d: Option<&str>, t: Option<&str>| TurnOrigin {
+            channel_id: c.map(Into::into),
+            direct_kwant_id: d.map(Into::into),
+            thread_id: t.map(Into::into),
+            ..Default::default()
+        };
+        assert_eq!(chat_of_origin(&o(None, Some("k1"), Some("t1"))), Some(json!({"thread_id": "t1"})));
+        assert_eq!(chat_of_origin(&o(Some("c1"), None, Some("t1"))), Some(json!({"thread_id": "t1"})));
+        assert_eq!(chat_of_origin(&o(Some("c1"), None, None)), Some(json!({"channel_id": "c1"})));
+        assert_eq!(chat_of_origin(&o(None, Some("k1"), None)), Some(json!({"direct_kwant_id": "k1"})));
+        assert_eq!(chat_of_origin(&o(Some(""), Some("k1"), Some(""))), Some(json!({"direct_kwant_id": "k1"})));
+        assert_eq!(chat_of_origin(&o(None, None, None)), None);
+    }
+
+    #[test]
     fn approval_chat_names_the_place() {
         use serde_json::json;
         assert_eq!(place_of_chat(Some(&json!({"channel_id": "c1"}))), (Some("c1".into()), None));
@@ -2299,6 +2386,7 @@ mod tests {
             turn_id: Some("turn".into()),
             workspace: None,
             sandbox_target: browser.then(|| "t".into()),
+            repeats: Default::default(),
         }
     }
 

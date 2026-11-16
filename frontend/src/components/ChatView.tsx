@@ -17,7 +17,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
-import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
+import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine, teamChipLabel, teamChipTitle } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
@@ -27,21 +27,22 @@ import { markNewSeen } from '../whatsNew';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { StreamMarkdown } from './StreamMarkdown';
 import { ToolCallsList } from './ToolCallsList';
 import { VirtualMachinePane, TerminalLogEntry } from './VirtualMachinePane';
 import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
-import { QuestionMeta, parseMetaObject, parseQuestionMeta } from '../questions';
+import { QuestionMeta, foldedAnswerIds, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
 import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
-import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
+import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
-import { FailoverNote, ReplyMeta } from './ReplyMeta';
+import { FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
@@ -81,7 +82,7 @@ import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSugg
 import { routeReasonText, routeWhyText } from '../routeReason';
 import { useInbox } from '../inboxStore';
 import { doneItemsOf, doneOf } from '../replyDone';
-import { APPROVE_TEXT, asksApproval, changePlaceholder, metaHidesApprove } from '../approvalAsk';
+import { APPROVE_TEXT, asksApproval, changePlaceholder, metaHidesApprove, refocusAfterApprove } from '../approvalAsk';
 import { DoneCheckLine } from './DoneMarker';
 import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
@@ -203,6 +204,13 @@ export interface RoutingState {
   /** How the bot was picked: by role, the team lead as fallback, keywords, or the only choice. */
   basis?: string;
 }
+
+// One reply row geometry, shared by the live row and the finished one (16a), so a reply lands without a shift:
+// a 36 px avatar column from sm up, a 20 px avatar in the name line on phones, and the same bubble padding.
+const REPLY_AVATAR = 36;
+const REPLY_AVATAR_PHONE = 20;
+const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
+const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
 
 export interface ChatViewProps {
   /** H3: a line under the person's held message ("Waiting for Juno: …", Try again), by message id. */
@@ -393,6 +401,8 @@ export interface ChatViewProps {
   awaitingBot?: { id: string; name: string } | null;
   /** The running reply's steps so far (thinking, tools, waits). */
   liveActivity?: LiveActivity | null;
+  /** 16b: the running turn double-checks another bot's work: its line and a way to the audited task. */
+  liveAudit?: { line: string; short?: string; onOpenTask?: () => void } | null;
   /** Draws a bot's browser-step card (message meta kind "human_step"). */
   renderHumanStep?: (msg: ChatMessage, meta: HumanStepMeta, flash: boolean) => React.ReactNode;
   /** Changes when another chat opens, so the view jumps to its bottom. */
@@ -515,7 +525,8 @@ const useNarrow = () => {
 
 /**
  * The live reply's words or thinking line (14b): the one place that re-renders with the stream, at most
- * once a frame. The finished messages around it never do. `onGrow` keeps the bottom pinned.
+ * once a frame. The finished messages around it never do. `onGrow` keeps the bottom pinned. Its markdown
+ * renders a block at a time (15a, StreamMarkdown): only the open block at the end is parsed each frame.
  */
 const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { stream: StreamText; part: keyof StreamView; onGrow: () => void }) {
   const streamingText = useStreamPart(stream, part);
@@ -523,7 +534,7 @@ const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { st
   if (part === 'thinking') return <>{streamingText}</>;
   return (
     <div className="kw-wa-in kw-wa-hold">
-      <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} isStreaming={true} />
+      <StreamMarkdown content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} />
     </div>
   );
 });
@@ -633,6 +644,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   awaitingBrowser,
   awaitingBot,
   liveActivity,
+  liveAudit,
   renderHumanStep,
   contextKey,
   deciding,
@@ -754,6 +766,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (liveTurnId) setTrailFrom(null);
   }, [liveTurnId]);
   const liveSpeaker = streamingSpeakerName || title;
+  // Who the live row shows: the current speaker in a discussion, else the replying bot.
+  const liveName = discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : liveSpeaker;
   const livePages = useMemo(() => pagesOfReply(liveActivity?.steps), [liveActivity?.steps]);
   const savedTrail = useMemo((): { id: string; bot: string; pages: ReplyPage[] } | null => {
     const from = (m: ChatMessage) => {
@@ -891,10 +905,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useLayoutEffect(() => {
     if (!streamProp) propStream.show({ text: streamingTextProp, thinking: streamingThinkingProp });
   }, [streamProp, propStream, streamingTextProp, streamingThinkingProp]);
-  // From here on these only say whether the reply has words (a thinking line) yet; they flip once per reply.
+  // Whether the reply is writing (has words) or thinking (has a thinking line) yet; each flips once per reply.
   // The words themselves reach StreamPart alone.
-  const streamingText = useStreamWriting(stream) || (!streamProp && !!streamingTextProp);
-  const streamingThinking = useStreamThinking(stream) || (!streamProp && !!streamingThinkingProp);
+  const writing = useStreamWriting(stream) || (!streamProp && !!streamingTextProp);
+  const thinking = useStreamThinking(stream) || (!streamProp && !!streamingThinkingProp);
   const lastScrollTopRef = useRef(0);
   // The empty chat's home opens at its top: on a phone a team home is taller than the screen, and its faces come first (13d).
   const homeShowingRef = useRef(false);
@@ -929,7 +943,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // (`phone` is the A1 PHONE_QUERY flag above).
   const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
   // What the live bubble holds before its first words: a pending approval reads as "waiting for your OK", not loading.
-  const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing: streamingText });
+  const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing });
   // The strip's "Answer ↑": the open question card, else the approval card, fully in view.
   const showWaitingCard = (on: 'question' | 'approval') => {
     if (on === 'approval') return showApproval();
@@ -949,7 +963,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     awaitingBrowser: !!awaitingBrowser,
     approvalOpen: pendingApprovals.length > 0,
     queued: !!queued,
-    writing: streamingText,
+    writing,
   });
   // Team words ("Stop team", the rail) only for a team turn; a single bot asking in a channel gets "Stop".
   const teamChat = isTeamTurn(home?.kind, !!discussionState?.inProgress);
@@ -976,10 +990,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
       queued={!!queued}
       awaitingAnswer={!!awaitingAnswer}
       awaitingBrowser={!!awaitingBrowser}
-      writing={streamingText}
+      writing={writing}
       onAnswer={showWaitingCard}
       onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       phone={phone}
+      audit={liveAudit}
     />
   );
   // Cards are last in the stream. While the person follows the chat, keep the bottom pinned when a
@@ -1026,7 +1041,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
     checkApprovalVisible();
-  }, [messages, streamingText, streamingThinking, approvalKey, routingState, queued, contextKey]);
+  }, [messages, writing, thinking, approvalKey, routingState, queued, contextKey]);
   // Each streamed update (at most one a frame) keeps the bottom pinned while the person follows the chat.
   const onStreamGrowRef = useRef(() => {});
   onStreamGrowRef.current = () => {
@@ -1200,12 +1215,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setApproving(msg.id);
     playSfx('click');
     stickRef.current = true;
+    // 18e: remember the row so focus can come back to the composer instead of the page top.
+    const row = (document.activeElement as HTMLElement | null)?.closest?.('[data-approve-row]') ?? null;
     try {
       const sent = await onSendMessage(APPROVE_TEXT, [], { replyTo: msg });
       // A failed send keeps the row (it is still the newest message) and offers the words in the composer.
       if (sent === false) setInputVal((now) => now || APPROVE_TEXT);
     } finally {
       setApproving(null);
+      // After React commits (the row may unmount, the button re-enables), check where focus ended up.
+      setTimeout(() => {
+        const active = document.activeElement;
+        const focusLost = !active || active === document.body || !active.isConnected;
+        const inRow = !!row && row.isConnected && !!active && row.contains(active);
+        if (refocusAfterApprove({ phone, focusLost, inRow })) focusComposer();
+      }, 0);
     }
   };
   const react = async (msg: ChatMessage, reaction: Reaction | null): Promise<boolean> => {
@@ -1484,6 +1508,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const liveBot = liveRowShown && streamingSpeakerName ? streamingSpeakerName : null;
   const arranged = useMemo(() => arrangeSharedFiles(messages, knownBots, liveBot), [messages, knownBots, liveBot]);
   const liveShareIds = useMemo(() => new Set(arranged.live.map((m) => m.id)), [arranged.live]);
+  // 14c: an answer given on a question card shows once, on the card; its saved "You" message is not
+  // drawn while that card is loaded (nothing folds when this chat doesn't draw question cards).
+  const askCards = !!renderQuestion;
+  const listed = useMemo(() => {
+    const folded = askCards ? foldedAnswerIds(arranged.messages) : null;
+    return folded?.size ? arranged.messages.filter((m) => !folded.has(m.id)) : arranged.messages;
+  }, [arranged.messages, askCards]);
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
@@ -1760,7 +1791,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <ModernAvatar
               role={isUser ? 'user' : title}
               name={displayName}
-              size={36}
+              size={REPLY_AVATAR}
               kwantId={replyKwantId}
               modelBadge={false}
             />
@@ -1782,7 +1813,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={20} kwantId={replyKwantId} modelBadge={false} /></span>}
+              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
               ranOn={ranOn}
               account={account}
               tokens={tokens}
@@ -1860,12 +1891,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
           })()}
           <div
-            className={`px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
+            className={`${REPLY_BUBBLE} ${
               isUser
                 ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
                 : workAhead
                   ? 'bg-indigo-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-indigo-400/25'
-                  : 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80'
+                  : REPLY_BUBBLE_BOT
             }`}
             data-work-ahead={workAhead ? '' : undefined}
           >
@@ -2165,6 +2196,32 @@ export const ChatView: React.FC<ChatViewProps> = ({
     requestAnimationFrame(() => checkMention(next, next.length));
   };
 
+  // 18f: once the reply has words the steps fold (desktop: the saved reply's row; phone: the compact row as is) and
+  // move below the bubble, into the landed action row's place, so landing moves nothing above the words.
+  const stepsBelow = !!liveActivity && foldLiveSteps({ writing, steps: liveActivity.steps });
+  const liveStepsList = liveActivity ? (
+    <LiveActivityList
+      live={liveActivity}
+      idBase={`live-${liveActivity.turnId}`}
+      compact={phone}
+      folded={stepsBelow}
+      lead={
+        livePages.length > 0 ? (
+          <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
+        ) : undefined
+      }
+    />
+  ) : null;
+
+  // 14c: on a phone the header's icon buttons carry a small caption under the icon (no hover there,
+  // so a title alone was never seen); from sm up they keep their inline word.
+  const headLabel = (wide: string, short: string = wide) => (
+    <>
+      <span className="hidden sm:inline">{wide}</span>
+      <span className="sm:hidden text-[10px] leading-3 font-medium" data-head-caption>{short}</span>
+    </>
+  );
+  const headPhone = 'max-sm:flex-col max-sm:gap-0.5 max-sm:h-11 max-sm:min-w-11 max-sm:px-1';
   return (
     <div
       ref={rootRef}
@@ -2245,12 +2302,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <button
                   type="button"
                   onClick={onManageTeam}
-                  className="kw-head-btn flex items-center justify-center gap-1.5 max-sm:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+                  className={`kw-head-btn ${headPhone} flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
                   title="Team members and settings"
                   aria-label="Manage team"
                 >
-                  <Settings2 size={12} className="text-zinc-400" />
-                  <span className="hidden sm:inline">Manage</span>
+                  <Settings2 size={12} className="text-zinc-400" aria-hidden="true" />
+                  {headLabel('Manage team', 'Team')}
                 </button>
               )}
             </div>
@@ -2260,12 +2317,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onEditInstructions}
-              className="kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+              className={`kw-head-btn ${headPhone} flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
               title="Pin instructions every bot reads in this channel"
               aria-label="Pin instructions"
             >
-              <Pin size={12} className="text-amber-300" />
-              <span className="hidden sm:inline">Pin</span>
+              <Pin size={12} className="text-amber-300" aria-hidden="true" />
+              {headLabel('Pin')}
             </button>
           )}
 
@@ -2273,12 +2330,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onEditKwant}
-              className="kw-head-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+              className={`kw-head-btn ${headPhone} flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
               title={`Edit ${title}'s name, avatar, model and persona`}
               aria-label={`Edit ${title}`}
             >
-              <Pencil size={12} className="text-zinc-400" />
-              <span className="hidden sm:inline">Edit</span>
+              <Pencil size={12} className="text-zinc-400" aria-hidden="true" />
+              {headLabel('Edit')}
             </button>
           )}
 
@@ -2290,7 +2347,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               playSfx('click');
               toggleVm();
             }}
-            className={`kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+            className={`kw-head-btn ${headPhone} max-sm:rounded-lg flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
               vmOpen
                 ? 'text-sky-200 bg-sky-400/15 border-sky-300/40'
                 : 'text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] border-hairline-strong hover:text-zinc-50'
@@ -2300,7 +2357,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-pressed={vmOpen}
           >
             <Monitor size={12} aria-hidden="true" />
-            <span className="hidden sm:inline">Bot browser</span>
+            {headLabel('Bot browser', 'Browser')}
           </button>
         </div>
       </div>
@@ -2399,7 +2456,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
           </div>
         )}
-        {groupDiscussionThreads(arranged.messages, { foldOpen: askOnly }).map((item, n, items) => {
+        {groupDiscussionThreads(listed, { foldOpen: askOnly }).map((item, n, items) => {
           if (item.kind === 'message') {
             const trial = trialCards.get(item.message.id);
             const above = items[n - 1];
@@ -2460,27 +2517,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && !deciding && routingState?.phase !== 'deciding' && !askOnly && (
-          <div className="flex items-start gap-3.5 w-full max-w-5xl">
-            <ModernAvatar
-              role={
-                discussionState?.inProgress && discussionState.currentSpeaker
-                  ? discussionState.currentSpeaker
-                  : streamingSpeakerName || title
-              }
-              name={
-                discussionState?.inProgress && discussionState.currentSpeaker
-                  ? discussionState.currentSpeaker
-                  : streamingSpeakerName || title
-              }
-              size={34}
-            />
+          <div className="flex items-start gap-3.5 w-full max-w-5xl" data-live-row="">
+            {/* The finished reply's geometry (16a): avatar column from sm up, in the name line on phones */}
+            <span className="hidden sm:contents">
+              <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR} />
+            </span>
             <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
-              <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
-                <span className="text-zinc-200">
-                  {discussionState?.inProgress && discussionState.currentSpeaker
-                    ? discussionState.currentSpeaker
-                    : streamingSpeakerName || title}
+              {/* The finished name line's type and height (17c), so it doesn't grow when the reply lands */}
+              <div className={replyNameLine(REPLY_NAME_LINE_LIVE_HEIGHT)} data-live-name-line="">
+                <span className="sm:hidden shrink-0 inline-flex">
+                  <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR_PHONE} />
                 </span>
+                <span className={REPLY_NAME}>{liveName}</span>
                 {queued ? (
                   <span className="inline-flex items-center gap-1 text-zinc-400 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" aria-hidden="true" />
@@ -2501,20 +2549,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && (
-                <LiveActivityList
-                  live={liveActivity}
-                  idBase={`live-${liveActivity.turnId}`}
-                  compact={phone}
-                  lead={
-                    livePages.length > 0 ? (
-                      <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
-                    ) : undefined
-                  }
-                />
-              )}
+              {liveActivity && !stepsBelow && liveStepsList}
 
-              {streamingThinking && (
+              {thinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
                   <Sparkles size={13} className="text-violet-400 flex-shrink-0" />
                   <span className="truncate"><StreamPart stream={stream} part="thinking" onGrow={onStreamGrow} /></span>
@@ -2522,14 +2559,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
 
               {/* On a phone the strip says "working" and "waiting": no skeleton, no "Paused on…" bubble. */}
-              {(!phone || queued || streamingText) && (
-              <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full" data-live-bubble-body="">
+              {(!phone || queued || writing) && (
+              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT}`} data-live-bubble-body="">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
                     {queuedText(queued.reason, queued.slots)}
                   </p>
-                ) : streamingText ? (
+                ) : writing ? (
                   /* The scene's 62 px holds under the first words (kw-wa-hold, in StreamPart), so the bubble does not jump; they fade in once. */
                   <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
                 ) : awaitingAnswer ? (
@@ -2549,10 +2586,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         ? discussionState.currentSpeaker
                         : streamingSpeakerName || title
                     }
+                    audit={liveAudit}
                   />
                 )}
               </div>
               )}
+
+              {/* 18f: once words stream, the steps row sits below the bubble, where the landed action row goes */}
+              {liveActivity && stepsBelow && liveStepsList}
 
               {!queued && <QueuedBeside items={queuedBeside} />}
             </div>
@@ -2648,13 +2689,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 data-compact={phone ? '' : undefined}
                 className={
                   phone
-                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
-                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    ? 'kws-hit h-7 shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    : 'shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
                 }
-                title={`Ask whole team @${teamName}`}
+                title={teamChipTitle(teamName)}
+                aria-label={teamChipTitle(teamName)}
+                data-team-chip=""
               >
-                <Users size={12} className="text-sky-400" />
-                <span>@{teamName} (Team)</span>
+                <Users size={12} className="shrink-0 text-sky-400" aria-hidden="true" />
+                <span className="min-w-0 truncate">{teamChipLabel(teamName)}</span>
               </button>
             )}
           </ScrollRow>
@@ -2871,9 +2914,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
             className={`relative ${phone ? toolPhone : 'w-11 h-11 sm:w-9 sm:h-9 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] focus-visible:outline-sky-400'} rounded-xl flex items-center justify-center flex-shrink-0 transition-colors focus-visible:outline focus-visible:outline-2`}
           >
             <AtSign size={phone ? 18 : 17} aria-hidden="true" />
-            {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
+            {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip.
+                15e: it sits centred above the 18 px glyph with 2 px clear (its bottom edge 9 + 2 px above the
+                button's middle), so it never covers the "@". Same hide rules as desktop's tag below. */}
             {phone && !isStreaming && (
-              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${dict.popOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`} />
+              <NewTag id="mention" className={`absolute left-1/2 -translate-x-1/2 bottom-[calc(50%+11px)] ${isMentionOpen ? 'hidden' : ''} ${dict.popOpen ? 'hidden' : ''} ${layerPhase || budgetBanner ? 'hidden' : ''}`} />
             )}
           </button>
           {stacked && <span className="flex-1" aria-hidden="true" />}
@@ -2962,12 +3007,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
         >
           {showAnswers && (
             <span
-              className={`kw-chip shrink-0 ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''}`}
+              className={`kw-chip min-w-0 ${showHintText ? 'max-w-[min(22rem,60%)]' : 'max-w-full'} ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''}`}
               title={target.detail}
               data-answer-target={target.kind}
             >
-              {target.kind === 'laya' ? <Sparkles size={12} aria-hidden="true" /> : <AtSign size={12} aria-hidden="true" />}
-              <span className="text-zinc-400 font-normal">Answers:</span> {target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}
+              {target.kind === 'laya' ? <Sparkles size={12} className="shrink-0" aria-hidden="true" /> : <AtSign size={12} className="shrink-0" aria-hidden="true" />}
+              <span className="shrink-0 whitespace-nowrap text-zinc-400 font-normal">Answers:</span>
+              <span className="min-w-0 truncate" data-answer-name="">{target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}</span>
             </span>
           )}
           {showHintText && (

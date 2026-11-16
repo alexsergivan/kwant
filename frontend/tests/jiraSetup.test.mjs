@@ -47,6 +47,7 @@ const m = await loadBundled(`
   export { JiraHint, JiraSettings } from './src/components/JiraSettings';
   export { devTeamRefs } from './src/devMode';
   export { popoverPlace } from './src/components/GitHubConnect';
+  export { atClock, timeText } from './src/clock';
 `);
 const { React, createRoot, fx } = m;
 const h = React.createElement;
@@ -409,7 +410,7 @@ test('errors: a rejected token, an address with no Jira, no projects visible (it
   await step1(s);
   await click(s.$('[data-jira-check]'));
   await settle(20);
-  assert.match(s.$('[data-jira-slow]').textContent, /Jira asked us to slow down\. Trying again at 10:09 AM\./);
+  assert.match(s.$('[data-jira-slow]').textContent, /Jira asked us to slow down\. Trying again at 10:09\u00a0AM\./);
   s.unmount();
 });
 
@@ -566,6 +567,29 @@ test('23: a key with no name shows alone; names are parsed as untrusted text', a
   const box = r.host.querySelector('[data-jira-settings="on"]');
   assert.match(box.querySelector('[data-jira-projects]').textContent, /^TRAIL\s*StorefrontSUP$/);
   assert.match(box.textContent, /ConfluenceSHOP, ENG/);
+  r.unmount();
+});
+
+test('19d: a rejected token says the day when it was not today; Checked stays a bare time', async () => {
+  const rejected = new Date(Date.now() - 3 * 86_400_000).toISOString();
+  m.jiraStore._reset();
+  form({ site: fx.fxSiteRow({ token_rejected_at: rejected }) });
+  let r = await mount(h(m.JiraSettings, { space: 'spc_demo', teams: [] }));
+  await settle(20);
+  const line = () => r.host.querySelector('[data-jira-status]').textContent;
+  assert.equal(line(), `Jira stopped accepting the token ${m.atClock(rejected)}. Nothing new is picked up.`);
+  assert.match(line(), /^Jira stopped accepting the token on .+ at \S+/, 'another day: "on <day> at <time>"');
+  // 22c: when the line wraps, the dot sits beside line 1, not between the lines.
+  const status = r.host.querySelector('[data-jira-status]');
+  assert.ok(status.className.includes('items-start') && !status.className.includes('items-center'), status.className);
+  assert.match(status.firstElementChild.className, /mt-\[0\.45em\] shrink-0/);
+  r.unmount();
+  m.jiraStore._reset();
+  const polled = new Date(Date.now() - 3 * 86_400_000).toISOString();
+  form({ site: fx.fxSiteRow({ polled_at: polled }) });
+  r = await mount(h(m.JiraSettings, { space: 'spc_demo', teams: [] }));
+  await settle(20);
+  assert.ok(line().startsWith(`Checked ${m.timeText(polled)} · `), line());
   r.unmount();
 });
 

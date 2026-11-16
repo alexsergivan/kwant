@@ -31,6 +31,11 @@ services:
     pids_limit: 512
     # CDP is full control of the browser: reachable by kwnt on this network only, never published.
     expose: ["9222"]
+    environment:
+      # Optional: send the browser's traffic through a proxy (socks5://host:port or http://host:port).
+      # See docs/browser-proxy.md. No credentials: Chromium cannot sign in to SOCKS.
+      KWNT_BROWSER_PROXY: ${KWNT_BROWSER_PROXY:-}
+      KWNT_BROWSER_PROXY_BYPASS: ${KWNT_BROWSER_PROXY_BYPASS:-}
 
   kwnt:
     build:
@@ -46,6 +51,9 @@ services:
       LAYA_URL: http://laya:8000
       KWNT_LAYA_MANAGED: "0"
       KWNT_BROWSER_CDP_URL: http://browser:9222
+      # same value as the browser service, so `kwnt doctor` can check the proxy
+      KWNT_BROWSER_PROXY: ${KWNT_BROWSER_PROXY:-}
+      KWNT_BROWSER_PROXY_BYPASS: ${KWNT_BROWSER_PROXY_BYPASS:-}
       # Your HTTPS address, e.g. https://kwant.example.com (comma list)
       KWNT_ALLOWED_ORIGINS: ${KWNT_ALLOWED_ORIGINS:-}
     volumes:

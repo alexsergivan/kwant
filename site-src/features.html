@@ -39,6 +39,58 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0917" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.17</p>
+      <h2>Kwant bots on your phone, and team chips that name the team once</h2>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0917" class="span3"><h3>Smaller changes in 0.9.17</h3><p>Settings › All spaces starts with a card that puts kwant bots on your phone in three steps, and the sidebar tip points to it. The Ask: row's team chip names the team once, long team names stay inside their pill, and Approve puts your keyboard back in the message box. Once a bot starts writing, its steps fold into one row under the reply, so nothing jumps when the reply lands. In Manage team, "Pick a repo" puts the cursor in the Repo URL field every time, even when the app is busy. A mail draft, page or note that only mentions a release, merge or deploy in a sentence, or a read like getting a GitHub release, keeps Allow once on the desktop island; commands, branches and tags still need the full card. After a failed step, a reply that asks you to pick, like "Let me know which one you want to keep" or "…, or which file to use", now shows Blocked; polite closing lines still don't. On the Claude engine, a bot whose own command or file read keeps failing the same way stops after three tries and changes course or says what's blocked, as it already did for kwant's tools. The desktop island names only the file a bot reads or edits, like "Reading contract.md", never its folders, so client folder names stay off a shared screen; the chat is unchanged. Import history, a check's time and the goal squares' tooltips read dates like the rest of kwant ("Nov 15, 3:42 PM"), and the terminal log's times stay on one line. A bot that can't get a file itself, such as a download its browser couldn't keep, asks you to drop it into the chat and uploads it on the page itself, instead of handing you the page. When kwant asks a lead to keep going, it quotes only your own messages, never a bot's or a customer's, and a hand-off from a customer-only chat carries their words marked as theirs. On the desktop island, writes whose names sound like reads, such as retrying a payment, posting a status or subscribing someone to a mailing list, keep the full card; plain reads like getting a payment status keep Allow once.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-0916" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.16</p>
+      <h2>Answers that show once, and approval options in plain words</h2>
+      <p>Your answer to a bot's question shows once, on its card, and phone chat headers name their buttons.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="answer-once">Your answer shows once, on the question</h3>
+        <p>When you answer a bot's question card, the card itself says <strong>You picked …</strong> or <strong>You answered: …</strong>, with <strong>· via Telegram</strong> when you answered there, instead of a second bubble below. Also tidier: the chats that wait on you are called <strong>Needs you</strong> everywhere, the space settings tab is called <strong>Bots</strong>, and on a phone the chat header's buttons have captions (Team, Pin, Edit, Browser).</p>
+      </div>
+      <div class="frame">{{shot:v0916-answer-once|kwant on desktop, in Ann's direct chat in the Trailhead Outfitters space: two question cards from Ann, each answered inside the card, with no separate answer message. "Which photo should lead the Ridgeline 2P page?" has Pitched by the lake ticked and reads "You picked Pitched by the lake · via Telegram", then Ann replies that the lake photo now leads the gallery. "The new price is $279. Should the page show the old $319 crossed out next to it?" has No, just $279 ticked and reads "You picked No, just $279", then Ann replies that the page shows $279 only.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0916" class="span3"><h3>Smaller changes in 0.9.16</h3><p>The approval options are explained in plain words, the phone's "New" tag no longer covers @, and a team's lead comes first in the Ask: row. The name above a reply that's still being written uses the finished reply's type, so it doesn't change when the reply lands. The desktop island says "Searching files", "Searching the web" or "Starting a helper", never the words a bot searches for. A follow-up never reads a customer's or agent's words as yours, and working ahead starts only from your own message. A task's activity says in words when kwant asked the lead to review a hand-off and when a bot wrote down what done means. After a failed step, a polite closing line no longer shows Blocked, and a reply that asks you to pick still does. Ordinary read tools, like get_release or list_merge_requests, get Allow once again on Telegram and the desktop island; steps that run a command or push code still ask in kwant. A tool call refused in a customer's turn shows once in the refused list, however often the bot retries it. A hand-off never passes a customer's, agent's or bot's message on as your request; their words stay marked as theirs. On a phone, a time never wraps away from its AM/PM, and older Jira and "Pushed" times say the day. Plain reads of mail, files, posts and payments, like listing Gmail threads or getting a payment status, keep Allow once on the desktop island; sending, posting, paying and deleting still need the full card. A bot that uses kwant's own browser can download files: they land in its downloads/ folder, up to 400 MB. The perch shows on a Mac again (it stayed hidden since 0.9.15), and ⌥⌘K opens it with the keyboard ready for Quick ask.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-0915" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.15</p>
+      <h2>The perch at the top of your screen, and steadier dictation</h2>
+      <p>The perch, a small island at the top of your screen, shows what needs you and what your bots are doing, and lets you allow a safe step or ask a bot without opening the app.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="perch">The perch, at the top of your screen</h3>
+        <p>A small island at the top of the screen, around the notch on a Mac, shows the faces of the bots that need you or are working. Click it or press <strong>⌥⌘K</strong> (Ctrl+Alt+K on Windows and Linux) to see what needs you, what each bot is doing now and what just finished, in every place. A low-risk approval gets <strong>Allow once</strong> right there; anything riskier opens the full card in kwant. <strong>Quick ask</strong> sends a bot a message without opening the app. Settings › Perch sets when it shows.</p>
+      </div>
+      <div class="frame">{{shot:v0915-perch-expanded|A Mac desktop with the perch opened under the notch with ⌥⌘K. Needs you · 4: Ann's price approval with Allow once and Deny, and Ben's question "Which photo goes on the Ridgeline 2P page?" with three answer chips. Working now: Cody "Checking stock for 12 tents" and Dana "Sorting 31 support emails". Just finished: Ann "Price check for two-person tents", Checked. Below are an empty Quick ask box addressed to Ann, and Places: This Mac 2 and kwant.example 2.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0915" class="span3"><h3>Smaller changes in 0.9.15</h3><p>In the desktop app, a chip at the top of the sidebar names the place the window is on, badges what waits for you in the others, and opens the place picker. Dictation keeps at most two recordings in memory at once, picks the OpenAI key the same way as memory search, and a slow transcription says "OpenAI didn't answer in time. Try again in a minute." While a reply streams in, only the block still being written redraws; finished paragraphs, lists, tables and code stay put. A finished reply no longer jumps: the live reply has the same avatar, bubble and spacing, and the cursor sits at the end of the line. While a bot double-checks another's work, its live reply and strip say so with Open the task, and activity names each step in plain words. When a customer's message tries a tool nobody allowed, the bot's approvals list keeps one closed record of it; a customer's message never counts as yours. The desktop island says which program a bot is running, like "Running git", never the full command. In the computer pane, "Pointing · 1 picked" fits on one line and never covers Refresh or Restart, on a phone too. After a failed step, a reply that asks you to decide shows as Blocked, and one that only reports the failure and offers help doesn't. On Telegram, a step that pushes code, runs a command or is flagged risky says so and asks you to approve it in kwant, with no Allow once button. Times from another day say which day, like "You allowed this on Nov 12 at 4:16 AM", and times that showed no day now add it. The computer pane's footer reads "Hand back to point" during a takeover, with nothing cut off, and the pick count holds still. On the Claude engine too, a bot whose kwant tool call keeps failing the same way stops after three tries and changes course or says what's blocked. More risky steps, like creating a commit or branch, a delete under an action key or a command hidden in an input field, open the full approval card instead of the island's Allow once.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-0914" class="fgroup">
   <div class="wrap">
     <div class="section-head">
@@ -46,8 +98,14 @@ card_art: team
       <h2>Switching places in one window, and a new chat from any message</h2>
       <p>⋯ › Continue in a new chat from here starts a new chat with the same bot from any message.</p>
     </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="continue-chat">Continue a chat from any message</h3>
+        <p>In a chat with one bot, press <strong>⋯</strong> under a message and choose <strong>Continue in a new chat from here</strong>. You get a new chat with the same bot, the conversation up to that message and the files sent so far. A line at the top, like <strong>Continued from "Price check" · 2 messages</strong>, opens the original chat at that message, which stays as it was. Very long chats bring the newest 1,000 messages.</p>
+      </div>
+      <div class="frame">{{shot:v0914-continue-chat|Ann's "Price check" chat in Trailhead Outfitters. Ann's reply has a price table for two-person tents (Trailhead Outfitters Ridgeline 2P $289, Summit Gear Ascent 2 $319, Northwind Cirrus Duo $274); the ⋯ in its action row is open on one item, "Continue in a new chat from here". The person's next request and Ann's draft follow below.}}</div>
+    </div>
     <ul class="flist">
-      <li id="continue-chat" class="span3"><h3>Continue a chat from any message</h3><p>In a chat with one bot, press <strong>⋯</strong> under a message and choose <strong>Continue in a new chat from here</strong>. You get a new chat with the same bot, the conversation up to that message and the files sent so far. A line at the top, like <strong>Continued from "Price check" · 2 messages</strong>, opens the original chat at that message, which stays as it was. Very long chats bring the newest 1,000 messages.</p></li>
       <li id="fixes-0914" class="span3"><h3>Smaller changes in 0.9.14</h3><p>In the desktop app, Window › Switch place… (⌘⇧O, or Ctrl+Shift+O) opens a picker of This Mac and your servers and switches the window in place. A reply that's still coming in redraws at most once per frame, and only that message, so long chats stay smooth while a bot writes. Only the person can answer a bot's question; a bot's token gets 403 person_only on the answer call. A done card's line names the criteria that no part covered ("1 criterion not met"), so it never reads as checked when it isn't. After a failed step, a reply that asks you for something next to an offer shows as Blocked; a reply that only offers more doesn't. A bot whose tool call keeps failing the same way stops after three tries and changes course or says what's blocked, instead of hitting the call limit.</p></li>
     </ul>
   </div>
@@ -1440,7 +1498,13 @@ card_art: team
     <div class="row-copy">
       <p class="kicker">Anywhere</p>
       <h2 id="phone-title">Check in from your phone</h2>
-      <p>The web app works on a phone, so you can read the team's summary or approve an action away from your desk.</p>
+      <p>kwant has a phone app, with no app store. Read the team's summary, answer questions and approve actions away from your desk, and get a notification when a bot needs you.</p>
+      <ol class="phone-steps">
+        <li>Scan the QR code in <b>Settings → All spaces → Signed-in devices → Add a phone or browser</b>, or open your kwant server's https address on the phone.</li>
+        <li>iPhone: Safari → <b>Share</b> → <b>Add to Home Screen</b>. Android: Chrome → <b>⋮</b> → <b>Add to Home screen</b>.</li>
+        <li>Open it from the Home Screen and turn on <b>Notify me on this device</b>.</li>
+      </ol>
+      <p><a class="more-link" href="docs/phone.html">How to install it →</a></p>
     </div>
     <div class="phones">
       <div class="phone">{{shot:phone-team-chat|The Product team summary on a phone screen.|240px}}</div>

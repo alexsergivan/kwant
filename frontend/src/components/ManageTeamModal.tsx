@@ -11,6 +11,17 @@ import { TeamRepoDevLine } from './TeamRepoDevLine';
 import { useEscapeLayer } from '../escape';
 import { SuggestMembersButton } from './ReadyTeamsEntry';
 
+/** The workspace tab a team opens on: its own folder or repo, else (A8, no workspace yet) Git Repo for "Pick a repo",
+ *  Local Folder for "Pick a folder", or Default. */
+export function seededWorkspaceType(
+  team: Pick<Team, 'workspace_path' | 'repo_url'>,
+  focusWorkspace: boolean | 'folder',
+): 'local' | 'repo' | 'default' {
+  if (team.workspace_path) return 'local';
+  if (team.repo_url) return 'repo';
+  return focusWorkspace === 'folder' ? 'local' : focusWorkspace ? 'repo' : 'default';
+}
+
 interface ManageTeamModalProps {
   isOpen: boolean;
   team: Team | null;
@@ -137,20 +148,9 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       setInstructions(team.instructions || '');
       setLeadKwantId(team.lead_kwant_id || (kwants[0]?.id ?? ''));
 
-      if (team.workspace_path) {
-        setWorkspaceType('local');
-        setWorkspacePath(team.workspace_path);
-        setRepoUrl('');
-      } else if (team.repo_url) {
-        setWorkspaceType('repo');
-        setWorkspacePath('');
-        setRepoUrl(team.repo_url);
-      } else {
-        // A8: no workspace yet, so "Pick a repo" lands on Git Repo.
-        setWorkspaceType(focusWorkspace === 'folder' ? 'local' : focusWorkspace ? 'repo' : 'default');
-        setWorkspacePath('');
-        setRepoUrl('');
-      }
+      setWorkspaceType(seededWorkspaceType(team, focusWorkspace));
+      setWorkspacePath(team.workspace_path || '');
+      setRepoUrl(team.workspace_path ? '' : team.repo_url || '');
 
       const parsedMembers: string[] = Array.isArray(team.member_kwants)
         ? team.member_kwants
@@ -164,16 +164,23 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
     }
   }, [team, kwants, isOpen, focusWorkspace]);
 
-  // A8: after the fields are seeded, bring Team Workspace into view and focus the selected tab's input.
+  // A8/21f: bring Team Workspace into view and focus the seeded tab's input, once per opening. This waits for the
+  // render where the seeded tab is showing (its input is in the DOM), instead of a frame that could fire before the
+  // seed's state change rendered. Switching tabs by hand afterwards doesn't pull focus back.
   const wsRef = useRef<HTMLDivElement>(null);
+  const wsFocusedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!isOpen || !team || !focusWorkspace) return;
-    const id = requestAnimationFrame(() => {
-      wsRef.current?.scrollIntoView?.({ block: 'center' });
-      wsRef.current?.querySelector<HTMLInputElement>('input[data-ws-input]')?.focus({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(id);
-  }, [isOpen, team, focusWorkspace]);
+    if (!isOpen || !team || !focusWorkspace) {
+      wsFocusedFor.current = null;
+      return;
+    }
+    if (wsFocusedFor.current === team.id || workspaceType !== seededWorkspaceType(team, focusWorkspace)) return;
+    const input = wsRef.current?.querySelector<HTMLInputElement>('input[data-ws-input]');
+    if (!input) return;
+    wsFocusedFor.current = team.id;
+    wsRef.current?.scrollIntoView?.({ block: 'center' });
+    input.focus({ preventScroll: true });
+  }, [isOpen, team, focusWorkspace, workspaceType]);
 
   if (!isOpen || !team) return null;
 

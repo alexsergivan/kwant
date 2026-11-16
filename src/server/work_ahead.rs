@@ -12,7 +12,7 @@
 
 use super::continuity::{notify, Notification};
 use super::decide::{work_ahead_cap, work_ahead_enabled};
-use super::routes::{scope_for, turn_once, TurnOpts};
+use super::routes::{is_persons, scope_for, turn_once, TurnOpts};
 use super::AppState;
 use crate::db::models::{Kwant, Message};
 use crate::db::spaces::SpaceId;
@@ -62,7 +62,8 @@ pub fn day_of(now: DateTime<Utc>) -> String {
 }
 
 /// Whether a chat's recent messages (oldest first) make it worth working ahead in at `now`: the
-/// person wrote there, a bot answered, the last message is between [`QUIET_HOURS`] and
+/// person wrote there (their own message, [`is_persons`]: not a customer's, a connected agent's or
+/// a bot's chat-API message), a bot answered, the last message is between [`QUIET_HOURS`] and
 /// [`STALE_HOURS`] old, and nothing since the person's last message was a work-ahead message.
 pub fn quiet_enough(messages: &[Message], now: DateTime<Utc>) -> Option<i64> {
     let last = messages.last()?;
@@ -71,7 +72,7 @@ pub fn quiet_enough(messages: &[Message], now: DateTime<Utc>) -> Option<i64> {
     if quiet < Duration::hours(QUIET_HOURS) || quiet > Duration::hours(STALE_HOURS) {
         return None;
     }
-    let person = messages.iter().rposition(|m| m.sender_role == "user")?;
+    let person = messages.iter().rposition(is_persons)?;
     let after = &messages[person + 1..];
     if !after.iter().any(|m| m.sender_role == "kwant") || after.iter().any(is_work_ahead) {
         return None;
@@ -304,6 +305,26 @@ mod tests {
         let wa = r#"{"kind":"work_ahead"}"#;
         assert_eq!(quiet_enough(&[msg("user", 30, None), msg("kwant", 29, None), msg("kwant", 5, Some(wa))], now), None, "once per person message");
         assert_eq!(quiet_enough(&[msg("kwant", 30, Some(wa)), msg("user", 7, None), msg("kwant", 6, None)], now), Some(6));
+    }
+
+    #[test]
+    fn only_the_persons_own_message_opens_a_chat_for_work_ahead() {
+        let now = Utc::now() + Duration::minutes(1);
+        let customer = r#"{"from_customer":"Ann"}"#;
+        let agent = r#"{"from_agent":"Codex"}"#;
+        let bot = r#"{"sent_by_bot":true}"#;
+        // A customer chat, a connected agent's or a bot's chat-API message never spends the owner's tokens
+        assert_eq!(quiet_enough(&[msg("user", 7, Some(customer)), msg("kwant", 6, None)], now), None, "a customer wrote");
+        assert_eq!(quiet_enough(&[msg("user", 7, Some(agent)), msg("kwant", 6, None)], now), None, "a connected agent wrote");
+        assert_eq!(quiet_enough(&[msg("user", 7, Some(bot)), msg("kwant", 6, None)], now), None, "a bot wrote through the chat API");
+        // The person's own message still counts, even with a customer's after it
+        assert_eq!(quiet_enough(&[msg("user", 9, None), msg("user", 8, Some(customer)), msg("kwant", 7, None)], now), Some(7));
+        // A work-ahead message after the person's last own message still blocks, whatever a customer wrote since
+        let wa = r#"{"kind":"work_ahead"}"#;
+        assert_eq!(
+            quiet_enough(&[msg("user", 30, None), msg("kwant", 29, None), msg("kwant", 20, Some(wa)), msg("user", 8, Some(customer)), msg("kwant", 7, None)], now),
+            None
+        );
     }
 
     #[test]

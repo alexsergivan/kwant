@@ -166,16 +166,29 @@ pub fn recent_turns(history: &[Message], prompt: &str) -> (Vec<(String, String)>
     if msgs.last().is_some_and(|m| is_persons(m) && m.text.trim() == prompt.trim()) {
         msgs.pop();
     }
-    let label = |m: &Message| match crate::drivers::from_agent(m) {
-        Some(agent) => format!("{} (agent)", crate::drivers::frame_safe_name(&agent)),
-        None if crate::drivers::from_customer(m).is_some() => format!("{} (customer)", crate::drivers::frame_safe_name(&crate::drivers::from_customer(m).unwrap_or_default())),
-        None if is_persons(m) => "person".to_string(),
-        None if m.sender_role == "user" => "a bot".to_string(),
-        None => m.sender_id.clone(),
-    };
-    let turns = msgs.iter().filter(|m| !m.text.trim().is_empty()).map(|m| (label(m), m.text.clone())).collect();
+    let turns = msgs.iter().filter(|m| !m.text.trim().is_empty()).map(|m| (sender_label(m, "person"), m.text.clone())).collect();
     let person = msgs.iter().filter(|m| is_persons(m)).map(|m| m.text.clone()).collect();
     (turns, person)
+}
+
+/// Who wrote `m`, for a bot reading an excerpt of the chat: a connected agent's name with
+/// "(agent)", a customer's with "(customer)", `person` only for the person's own message
+/// ([`is_persons`]), "a bot" for a bot's chat-API message, else the sender (a bot's name).
+/// The one set of labels for the planner's turns and a follow-up's excerpt.
+pub(crate) fn sender_label(m: &Message, person: &str) -> String {
+    if let Some(agent) = crate::drivers::from_agent(m) {
+        return format!("{} (agent)", crate::drivers::frame_safe_name(&agent));
+    }
+    if let Some(customer) = crate::drivers::from_customer(m) {
+        return format!("{} (customer)", crate::drivers::frame_safe_name(&customer));
+    }
+    if is_persons(m) {
+        person.to_string()
+    } else if m.sender_role == "user" {
+        "a bot".to_string()
+    } else {
+        m.sender_id.clone()
+    }
 }
 
 /// What the project is, from the README in `workspace` (empty without one).
