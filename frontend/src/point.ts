@@ -85,7 +85,7 @@ export const POINT_COPY = {
   barPhone: 'Tap the part you mean',
   keys: '↑ wider · Esc stop',
   waiting: 'Waiting for the page…',
-  handBack: 'Hand back to point at something',
+  handBack: 'Hand back to point',
   failed: "Couldn't read that part of the page. Try again.",
   limit: 'Up to 5 parts per message',
   capturing: 'Taking a picture…',

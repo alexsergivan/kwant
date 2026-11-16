@@ -1,0 +1,56 @@
+{
+  "version": "0.9.16",
+  "date": "2026-11-16",
+  "highlights": [
+    {
+      "id": "answer-once",
+      "title": "Your answer shows once, on the question",
+      "text": "When you answer a bot's question, the card itself says \"You picked …\" or \"You answered: …\", instead of repeating your answer in a bubble below it.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "phone-captions",
+      "title": "Named buttons in the phone chat header",
+      "text": "On a phone, the chat header's buttons now have captions: Team, Pin, Edit and Browser. The row of chips fades on the side that has more to scroll.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "approvals-plain",
+      "title": "Approval options in plain words",
+      "text": "Each approval option now says plainly what a bot does on its own and when a card asks you first, without jargon.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "live-name-line",
+      "title": "A reply's name stays put when it lands",
+      "text": "The name above a reply that's still being written already looks the way it will when the reply is done, so nothing changes size when it finishes.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "island-search-plain",
+      "title": "The island never shows what a bot searches for",
+      "text": "The desktop island says \"Searching files\", \"Searching the web\" or \"Starting a helper\". The words a bot searches for stay in the chat.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "follow-up-words",
+      "title": "Follow-ups never read a customer's words as yours",
+      "text": "When a bot follows up in a chat a customer or a connected agent also wrote in, their lines are marked as theirs, never as yours.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "After a failed step, \"Let me know what else you need\" no longer shows Blocked; \"Let me know which file to use\" still does.",
+    "Read tools like get_release or list_merge_requests get Allow once again on Telegram and the island; commands and pushes still don't.",
+    "A refused tool call that a bot retries now leaves one \"refused\" entry, not one per retry.",
+    "A hand-off passes on your own message as the request; a customer's, agent's or bot's words go along marked as theirs.",
+    "The island's Allow once works for plain reads of mail, files, posts and payments; sending, paying and deleting still need the card.",
+    "The perch shows on a Mac again (it stayed hidden since 0.9.15), and ⌥⌘K gives it the keyboard."
+  ]
+}

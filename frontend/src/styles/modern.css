@@ -193,7 +193,8 @@
 }
 
 /* Phone widths: sideways scrollers (chip rows, Space settings tabs) without a scrollbar, fading
-   24px at the right edge only while they can scroll further (ScrollRow sets data-at-end). */
+   32px at each edge only while they can scroll further that way (ScrollRow sets data-at-start and
+   data-at-end). 14c: the fade was 24px on the right only, too faint to read as "this scrolls". */
 @media (max-width: 767px) {
   .kw-scroll-row {
     scrollbar-width: none;
@@ -203,9 +204,19 @@
   .kw-scroll-row::-webkit-scrollbar {
     display: none;
   }
+  .kw-scroll-row {
+    --kw-fade-l: 0px;
+    --kw-fade-r: 0px;
+  }
+  .kw-scroll-row[data-at-start='false'] {
+    --kw-fade-l: 32px;
+  }
   .kw-scroll-row[data-at-end='false'] {
-    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    --kw-fade-r: 32px;
+  }
+  .kw-scroll-row:is([data-at-start='false'], [data-at-end='false']) {
+    mask-image: linear-gradient(to right, transparent, #000 var(--kw-fade-l), #000 calc(100% - var(--kw-fade-r)), transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--kw-fade-l), #000 calc(100% - var(--kw-fade-r)), transparent);
   }
 }
 
@@ -1019,7 +1030,7 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
   .kw-prepush-flash::after { display: block; box-shadow: 0 0 0 2px rgb(167 139 250 / 0.6); opacity: 0; animation: kw-prepush-flash 1.2s linear 1 both; }
 }
 
-/* H5: a row entering the pinned "Needs attention" block (reordering inside it is not animated) */
+/* H5: a row entering the pinned "Needs you" block (reordering inside it is not animated) */
 @keyframes kw-pin-enter {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }

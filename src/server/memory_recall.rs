@@ -13,11 +13,10 @@
 //! background, at most [`FILL_BATCH`] × [`FILL_ROUNDS`] per fill and one fill per kwant at a time;
 //! after a provider error that provider is left alone for [`COOLDOWN`].
 
-use super::{profile_turn, AppState};
+use super::AppState;
 use crate::db::continuity::{Memory, MAX_MEMORY_SEARCH_LIMIT};
 use crate::db::spaces::SpaceId;
 use crate::drivers::engines::{EngineId, EngineStatus};
-use crate::profiles::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -108,43 +107,26 @@ pub fn pick_ollama_model<'a>(models: impl IntoIterator<Item = &'a str>) -> Optio
 /// The space's embedding provider, or `None`. Reads only the database, the environment and the
 /// cached engine checks: never a network call.
 ///
-/// 1. An enabled OpenAI API-key account of the space (an `api_key` profile on Codex) with a key.
-/// 2. The host's OpenAI key (Settings, else `OPENAI_API_KEY`), when the OpenAI API engine's last
-///    check passed (so a revoked key isn't tried again every minute) and This machine isn't off
-///    for Codex in the space (the rule turns use: [`profile_turn::host_off`]).
-/// 3. A local Ollama whose last check was ready and that has an embedding model pulled.
+/// 1. The space's OpenAI key, in [`super::openai_key`]'s order (the one dictation uses too): an
+///    enabled OpenAI API-key account of the space, else the host's key unless This machine is off
+///    for Codex in the space; neither while the OpenAI API engine is turned off. Recall takes the
+///    host's key only when the OpenAI API engine's last check passed, so a revoked key isn't
+///    tried again every minute.
+/// 2. A local Ollama whose last check was ready and that has an embedding model pulled.
 pub async fn source_for_space(state: &AppState, space: &SpaceId) -> Option<EmbedSource> {
-    let db = &state.db;
-    let openai_on = state.engines.is_enabled(EngineId::OpenaiApi);
-    let profiles = db.list_profiles(space).await.unwrap_or_default();
-    if openai_on {
-        for p in profiles.iter().filter(|p| p.engine == "codex" && p.kind == "api_key" && p.enabled) {
-            if let Ok(Some(key)) = db.get_profile_key(&p.id).await {
-                if !key.0.trim().is_empty() {
-                    return Some(EmbedSource::OpenAi { base: "https://api.openai.com".into(), key: key.0.trim().to_string() });
-                }
-            }
-        }
-        let host_ready = state.engines.report(EngineId::OpenaiApi).status == EngineStatus::Ready;
-        if host_ready && !profile_turn::host_off(state, space).await.contains(&Engine::Codex) {
-            let key = db
-                .get_setting("openai_api_key")
-                .await
-                .ok()
-                .flatten()
-                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-                .filter(|k| !k.trim().is_empty());
-            if let Some(key) = key {
-                return Some(EmbedSource::OpenAi { base: "https://api.openai.com".into(), key: key.trim().to_string() });
-            }
-        }
+    let mut facts = super::openai_key::facts(state, space).await;
+    if state.engines.report(EngineId::OpenaiApi).status != EngineStatus::Ready {
+        facts.host_key = None;
+    }
+    if let Ok(key) = super::openai_key::pick(&facts) {
+        return Some(EmbedSource::OpenAi { base: "https://api.openai.com".into(), key });
     }
     let ollama = state.engines.report(EngineId::Ollama);
     if ollama.status != EngineStatus::Ready {
         return None;
     }
     let model = pick_ollama_model(ollama.models.iter().map(|m| m.id.as_str()))?;
-    let url = db.get_setting("ollama_url").await.ok().flatten();
+    let url = state.db.get_setting("ollama_url").await.ok().flatten();
     Some(EmbedSource::Ollama { root: crate::drivers::ollama_root(url.as_deref()), model })
 }
 

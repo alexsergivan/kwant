@@ -286,22 +286,31 @@ test('Suggestion: names the space and repo; Not now persists for that space acro
 
 test('Suggestion → Settings: Turn on opens General and focuses the Dev mode card (scrolled into view)', async () => {
   reset(offFound);
-  // The card mounts after Settings opens: focusDevSettings waits for it.
-  m.focusDevSettings(document, 20);
-  const v = await mount(h(m.DevModeSettings, { spaceId: 'spc_demo', spaceName: 'Demo' }));
-  await settle();
-  const card = v.host.querySelector('[data-dev-settings]');
+  // The scroll counter goes on before the poll starts: on a busy machine the 50 ms poll can find the card
+  // while mount() is still settling, so a counter put on the card afterwards missed the call (20c).
+  const orig = window.HTMLElement.prototype.scrollIntoView;
   let scrolled = 0;
-  card.scrollIntoView = () => scrolled++;
-  await new Promise((r) => setTimeout(r, 120));
-  assert.equal(document.activeElement, card.querySelector('[data-dev-turn-on]'), 'focus lands on the card\'s Turn on');
-  assert.ok(card.contains(document.activeElement));
-  assert.equal(card.hasAttribute('data-dev-arrived'), true, 'outlined');
-  assert.equal(card.getAttribute('tabindex'), '-1');
-  assert.equal(card.getAttribute('aria-labelledby'), 'dv-title');
-  assert.equal(scrolled, 1);
-  assert.equal(card.getAttribute('data-dev-off'), 'found', 'the repo is there to turn on');
-  const app = src('App.tsx');
-  assert.match(app, /const openDevSuggest = \(\) => \{\s*openSpaceSettings\('general'\);\s*focusDevSettings\(\);/);
-  v.root.unmount();
+  window.HTMLElement.prototype.scrollIntoView = function () {
+    if (this.hasAttribute('data-dev-settings')) scrolled++;
+  };
+  try {
+    // The card mounts after Settings opens: focusDevSettings waits for it.
+    m.focusDevSettings(document, 20);
+    const v = await mount(h(m.DevModeSettings, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+    await settle();
+    const card = v.host.querySelector('[data-dev-settings]');
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(document.activeElement, card.querySelector('[data-dev-turn-on]'), 'focus lands on the card\'s Turn on');
+    assert.ok(card.contains(document.activeElement));
+    assert.equal(card.hasAttribute('data-dev-arrived'), true, 'outlined');
+    assert.equal(card.getAttribute('tabindex'), '-1');
+    assert.equal(card.getAttribute('aria-labelledby'), 'dv-title');
+    assert.equal(scrolled, 1);
+    assert.equal(card.getAttribute('data-dev-off'), 'found', 'the repo is there to turn on');
+    const app = src('App.tsx');
+    assert.match(app, /const openDevSuggest = \(\) => \{\s*openSpaceSettings\('general'\);\s*focusDevSettings\(\);/);
+    v.root.unmount();
+  } finally {
+    window.HTMLElement.prototype.scrollIntoView = orig;
+  }
 });

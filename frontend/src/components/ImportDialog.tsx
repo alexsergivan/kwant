@@ -506,7 +506,7 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
       {undo.kind === 'in_use' && (
         <div role="alert" className="rounded-lg border border-zinc-700 bg-zinc-900 p-3">
           <p className="text-xs text-zinc-300">
-            {undo.names.length ? `${undo.names.join(', ')} ${undo.names.length === 1 ? 'has' : 'have'}` : 'Something it made has'} already been used, so this import can’t be undone in one step. Delete those bots yourself in Kwant bots.
+            {undo.names.length ? `${undo.names.join(', ')} ${undo.names.length === 1 ? 'has' : 'have'}` : 'Something it made has'} already been used, so this import can’t be undone in one step. Delete those bots yourself in Settings › This space › Bots.
           </p>
         </div>
       )}
