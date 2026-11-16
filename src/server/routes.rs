@@ -2257,9 +2257,10 @@ pub(super) async fn try_kwant_turn(
     super::delivery_check::after_turn(first, Some(prompt), scope.cancel_token.is_cancelled(), again).await
 }
 
-/// Set in the meta of a "user" message a bot sent through the chat API (its turn token, not the
-/// person's): its words are never read as the person's (see [`person_words`]).
-pub(crate) const SENT_BY_BOT: &str = "sent_by_bot";
+// Set in the meta of a "user" message a bot sent through the chat API (its turn token, not the
+// person's): its words are never read as the person's (see `person_words`). Drivers own it, so
+// the history a bot reads frames such a message too (22n).
+pub(crate) use crate::drivers::SENT_BY_BOT;
 
 /// The person's own words this turn answers, which the delivery check reads what they expect
 /// from: the saved message the prompt was built from, never the prompt itself (kwnt adds
@@ -2272,13 +2273,9 @@ fn person_words(person_turn: bool, current: Option<&Message>) -> Option<&str> {
 
 /// `m` is the person's own message: a "user" message that neither a connected outside agent nor
 /// a bot (through the chat API, [`SENT_BY_BOT`]) sent. The one filter for the delivery plan's
-/// current and earlier messages.
+/// current and earlier messages; the same as [`crate::drivers::from_person`].
 pub(crate) fn is_persons(m: &Message) -> bool {
-    if m.sender_role != "user" || crate::drivers::from_outsider(m) {
-        return false;
-    }
-    let meta: Option<serde_json::Value> = m.meta.as_deref().and_then(|s| serde_json::from_str(s).ok());
-    !meta.as_ref().is_some_and(|v| v[SENT_BY_BOT] == true)
+    crate::drivers::from_person(m)
 }
 
 /// The turn's one delivery plan (P9/P10): the prompt's "[What to deliver]" hint and the delivery
