@@ -116,6 +116,7 @@ import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
 import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, useDictation } from './DictationMic';
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
+import type { FloorResolveOpts } from '../dev/types';
 
 export interface ChatMessage {
   id: string;
@@ -263,7 +264,7 @@ export interface ChatViewProps {
   onSendMessage: (text: string, attachments: AttachmentRef[], opts?: SendOptions) => void | Promise<boolean | string | void>;
   /** Saves the person's thumbs on a bot reply; absent hides the thumbs. */
   onReact?: (msg: ChatMessage, reaction: Reaction | null) => Promise<ReactResult> | void;
-  onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
+  onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny', opts?: FloorResolveOpts) => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   /** Prompts offered above an empty chat, made from who is in it; none hides the bar. */
@@ -1992,13 +1993,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Action row (reply-chrome part 3): Reply, the thumbs, then Copy as a quiet icon; smart-result actions portal in after Copy */}
           {/* 0.9.8: on a phone the browsed chip gets its own 44 px row above the action row (it would wrap) */}
-          {!isUser && !filesOnly && phone && savedActivity && (
-            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0">
+          {/* 19f: only when the reply opened pages; BrowsedChip draws nothing otherwise, and the 44 px row was an empty gap */}
+          {!isUser && !filesOnly && phone && savedActivity && pagesOfReply(savedActivity.steps).length > 0 && (
+            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0" data-phone-browsed-row="">
               <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} phone onOpen={() => openBrowserFor(msg.id)} />
             </div>
           )}
           {!isUser && !filesOnly && (
-            <div className="mt-2 flex flex-wrap items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0">
+            <>
+            {/* 19f: on a phone the ghost icons keep one row (no wrap) and the smart-result actions get their own row below */}
+            <div
+              className={`mt-2 flex ${phone ? 'flex-nowrap' : 'flex-wrap'} items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0`}
+              data-reply-actions={phone ? 'phone' : 'desktop'}
+            >
               {!phone && savedActivity && (
                 <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} onOpen={() => openBrowserFor(msg.id)} />
               )}
@@ -2017,8 +2024,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
               <CopyGhost copied={copiedId === msg.id} tipId={`copy-tip-${msg.id}`} onCopy={() => handleCopy(text, msg.id)} />
               {continueMenu(msg, `${displayName}'s reply`, 'start')}
-              {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
+              {!phone && msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
+            {phone && msg.results != null && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-zinc-400 text-xs max-w-full min-w-0 empty:hidden" data-smart-row="">
+                <SmartActionsSlot messageId={msg.id} />
+              </div>
+            )}
+            </>
           )}
           {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={isUser ? 'end' : 'start'} />}
         </div>

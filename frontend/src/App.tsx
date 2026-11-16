@@ -186,6 +186,7 @@ import { ModernAvatar } from './components/ModernAvatar';
 import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
+import type { FloorResolveOpts } from './dev/types';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -2050,21 +2051,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const handleResolveApproval = async (
     ticketId: string,
-    decision: 'allow_once' | 'always_allow' | 'deny'
+    decision: 'allow_once' | 'always_allow' | 'deny',
+    opts?: FloorResolveOpts
   ) => {
     haptic('tap');
     try {
       const res = await fetch(`/api/approvals/${ticketId}/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision }),
+        // 22f: the person's own "Allow without a backup" on a deploy kwant only guessed changes the database.
+        body: JSON.stringify(opts?.withoutBackup && decision === 'allow_once' ? { decision, without_backup: true } : { decision }),
       });
       // Production floor (Dev mode): Allow without a fresh backup is refused and the card stays waiting.
       if (res.status === 409) {
         const body = await res.clone().json().catch(() => null);
         if (body && typeof body === 'object' && (body as { status?: unknown }).status === 'needs_backup') {
           haptic('warning');
-          pushToast('Back up first', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
+          const b = body as { code?: unknown; error?: unknown };
+          // 22f: `without_backup` refused (a destructive step, a known database change, or a card from before 22f).
+          if (b.code === 'backup_required' && typeof b.error === 'string' && b.error) pushToast('Needs a fresh backup', b.error);
+          else pushToast('Needs a fresh backup', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
           return;
         }
       }

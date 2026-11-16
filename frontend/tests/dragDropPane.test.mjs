@@ -330,7 +330,7 @@ test('some won\'t go: the won\'t-go rows, and a dropped folder is left out with 
     const twelve = [...Array.from({ length: 11 }, (_, i) => mkFile(`p${i}.png`)), mkFile('a.zip', 'application/zip')];
     await fire(list, 'dragenter', dataTransfer(twelve));
     const rows = [...v.host.querySelectorAll('[data-drop-warning] > div')].map((d) => d.textContent);
-    assert.deepEqual(rows, ["1 more won't fit: 10 files per message.", "1 ZIP can't go. Images, videos, PDFs and text or code files work."]);
+    assert.deepEqual(rows, ["1 more won't fit: 10 files per message.", "1 ZIP can't go. Images, videos, audio, PDFs and text or code files work."]);
     assert.equal(v.host.querySelector('[data-drop-summary]')?.textContent, '10 files · 10 images');
     await endDrag();
 
@@ -564,9 +564,9 @@ test('the limits line is built from the caps, in the same words (#478 L2)', asyn
   const v = ui.mount(props());
   try {
     await fire(parts(v.host).list, 'dragenter', dataTransfer([mkFile('a.png')]));
-    assert.equal(v.host.querySelector('[data-drop-limits]')?.textContent, 'Up to 20 MB each · videos 100 MB');
+    assert.equal(v.host.querySelector('[data-drop-limits]')?.textContent, 'Up to 20 MB each · videos and audio 100 MB');
     const clip = v.host.querySelector('button[aria-label="Attach files"]');
-    assert.equal(clip.getAttribute('title'), 'Attach files (or drop / paste them here). Max 20 MB each, videos 100 MB.');
+    assert.equal(clip.getAttribute('title'), 'Attach files (or drop / paste them here). Max 20 MB each, videos and audio 100 MB.');
   } finally {
     v.unmount();
     await endDrag();
