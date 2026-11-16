@@ -84,6 +84,8 @@ struct Fake {
     batch_delay_ms: Arc<AtomicU64>,
     /// Embed with [`shared_axis_embedding`] instead of [`fake_embedding`].
     shared_axis: Arc<AtomicBool>,
+    /// TEMP-22s: milliseconds to wait before answering a request that is only the edited note.
+    edited_delay_ms: Arc<AtomicU64>,
     /// Ollama's pulled models.
     models: Arc<std::sync::Mutex<Vec<String>>>,
 }
@@ -104,6 +106,12 @@ async fn inputs(f: &Fake, body: &Value) -> Vec<Vec<f32>> {
     f.embed_calls.fetch_add(1, Ordering::SeqCst);
     let texts: Vec<String> = body["input"].as_array().unwrap().iter().map(|t| t.as_str().unwrap().to_string()).collect();
     f.embedded_texts.fetch_add(texts.len(), Ordering::SeqCst);
+    if texts == ["Clients may get a refund within 30 days"] {
+        let d = f.edited_delay_ms.load(Ordering::SeqCst);
+        if d > 0 {
+            tokio::time::sleep(Duration::from_millis(d)).await;
+        }
+    }
     let delay = if texts.len() == 1 { &f.query_delay_ms } else { &f.batch_delay_ms }.load(Ordering::SeqCst);
     if delay > 0 {
         tokio::time::sleep(Duration::from_millis(delay)).await;
@@ -223,6 +231,19 @@ async fn memory_search(app: &Router, state: &AppState, k: &Kwant, query: &str) -
     v["result"]["content"][0]["text"].as_str().unwrap().to_string()
 }
 
+/// Waits up to 5 s until `memory_id` has a `model` vector for its current text: a background
+/// fill is done when it has saved the vector, not when the fake got its HTTP call.
+async fn wait_for_fresh_vector(state: &AppState, kwant_id: &str, memory_id: &str, model: &str) -> bool {
+    for _ in 0..100 {
+        let rows = state.db.memory_vector_rows(kwant_id).await.unwrap();
+        if rows.iter().any(|r| r.id == memory_id && r.fresh_vector(model, &memory_recall::text_hash(&r.text)).is_some()) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
 const VEHICLE: &str = "Oleks parks the vehicle in the garage on Elm street";
 const MONEY_BACK: &str = "Money-back policy: clients get their money returned within 30 days";
 
@@ -310,10 +331,38 @@ async fn without_a_provider_search_is_todays_keyword_search_with_no_http_call() 
 
 #[tokio::test]
 async fn stale_vectors_are_refilled_and_deleted_with_their_memory() {
+    stale_scenario(0, true).await;
+}
+
+// TEMP-22s: 20 copies (run in parallel with each other and the rest of the file), and the slow-reply repro
+macro_rules! x20 { ($($n:ident),*) => { $( #[tokio::test] async fn $n() { stale_scenario(0, true).await; } )* } }
+x20!(x20_01, x20_02, x20_03, x20_04, x20_05, x20_06, x20_07, x20_08, x20_09, x20_10, x20_11, x20_12, x20_13, x20_14, x20_15, x20_16, x20_17, x20_18, x20_19, x20_20);
+
+#[tokio::test]
+async fn x20_in_a_row() {
+    for i in 1..=20 {
+        stale_scenario(0, true).await;
+        println!("22s in a row: run {i}/20 passed");
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "left: None")]
+async fn repro_22s_old_wait_fails_when_the_edited_note_reply_is_300ms_late() {
+    stale_scenario(300, false).await;
+}
+
+#[tokio::test]
+async fn repro_22s_new_wait_passes_when_the_edited_note_reply_is_300ms_late() {
+    stale_scenario(300, true).await;
+}
+
+async fn stale_scenario(edited_delay_ms: u64, wait_for_vector: bool) {
     let (_app, state, tmp) = setup().await;
     let k = first_kwant(&state).await;
     let (vehicle, money_back) = seed(&state, &k).await;
     let (url, fake) = fake_server(&["mxbai-embed-large"]).await;
+    fake.edited_delay_ms.store(edited_delay_ms, Ordering::SeqCst);
     use_ollama(&state, &url).await;
     assert_eq!(memory_recall::fill_now(&state, &k.id, 4).await, 5);
 
@@ -328,6 +377,13 @@ async fn stale_vectors_are_refilled_and_deleted_with_their_memory() {
     }
     // 5 notes + 1 query + the 1 edited note, filled in the background
     assert_eq!(fake.embedded_texts.load(Ordering::SeqCst), 7);
+    // The fake counts a text when the request arrives; the fill saves the vector only after the
+    // reply, so search once that vector is in the database
+    assert!(
+        !wait_for_vector ||
+        wait_for_fresh_vector(&state, &k.id, &money_back, "ollama/mxbai-embed-large").await,
+        "the background fill saved the edited note's new vector"
+    );
     let hits = memory_recall::search(&state, &k.id, "reimburse", 10).await.unwrap();
     assert_eq!(hits.first().map(|m| m.id.as_str()), Some(money_back.as_str()));
 
