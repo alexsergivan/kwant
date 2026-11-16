@@ -260,11 +260,23 @@ pub fn settings(places: &Places, seatbelt: bool, ssh_auth_sock: Option<&str>) ->
 
 /// Merges `extra` into the `--settings` JSON already in `args` (a profile's env overrides), or
 /// appends `--settings extra`. Claude reads one `--settings`, so they must be one object.
+/// 21d: `hooks` merge per event (both lists of matchers run); any other key is replaced.
 pub fn merge_settings_arg(args: &mut Vec<String>, extra: Value) {
     if let Some(i) = args.iter().position(|a| a == "--settings") {
         if let Some(Ok(Value::Object(mut have))) = args.get(i + 1).map(|v| serde_json::from_str::<Value>(v)) {
             if let Value::Object(add) = extra {
                 for (k, v) in add {
+                    if let (true, Some(Value::Object(old)), Value::Object(new)) = (k == "hooks", have.get_mut("hooks"), &v) {
+                        for (event, matchers) in new {
+                            match (old.get_mut(event), matchers) {
+                                (Some(Value::Array(list)), Value::Array(more)) => list.extend(more.iter().cloned()),
+                                _ => {
+                                    old.insert(event.clone(), matchers.clone());
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     have.insert(k, v);
                 }
             }
@@ -386,6 +398,31 @@ mod tests {
         let mut args = vec!["-p".to_string(), "hi".to_string()];
         merge_settings_arg(&mut args, json!({ "permissions": {} }));
         assert_eq!(args[2], "--settings");
+    }
+
+    /// 21d: the repeat guard's hooks join hooks already in the one `--settings`, per event
+    #[test]
+    fn hooks_merge_per_event_into_the_one_settings() {
+        let mine = json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "mine"}]});
+        let mut args = vec!["--settings".to_string(), json!({ "env": { "A": "1" }, "hooks": { "PreToolUse": [mine], "Stop": [] } }).to_string()];
+        let guard = crate::mcp::cli_hooks::settings(std::path::Path::new("/d/claude-hook-1.curl"));
+        merge_settings_arg(&mut args, guard.clone());
+        merge_settings_arg(&mut args, settings(&places(), true, None));
+        assert_eq!(args.iter().filter(|a| *a == "--settings").count(), 1, "{args:?}");
+        let v: Value = serde_json::from_str(&args[1]).unwrap();
+        assert_eq!(v["env"]["A"], "1");
+        assert_eq!(v["sandbox"]["enabled"], true);
+        let pre = v["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 2, "the existing PreToolUse hook stays: {pre:?}");
+        assert_eq!(pre[0]["hooks"][0]["command"], "mine");
+        assert_eq!(pre[1], guard["hooks"]["PreToolUse"][0]);
+        assert_eq!(v["hooks"]["PostToolUse"], guard["hooks"]["PostToolUse"]);
+        assert_eq!(v["hooks"]["PostToolUseFailure"], guard["hooks"]["PostToolUseFailure"]);
+        assert_eq!(v["hooks"]["Stop"], json!([]));
+        // No --settings yet: the hooks alone become it
+        let mut args = vec!["-p".to_string(), "hi".to_string()];
+        merge_settings_arg(&mut args, guard.clone());
+        assert_eq!(args[3], guard.to_string());
     }
 
     #[test]
