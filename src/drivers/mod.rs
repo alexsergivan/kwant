@@ -492,12 +492,12 @@ pub const BROWSER_SPEED: &str = "\n[Browser speed]\n\
 /// the chat, and the bot answers the page's picker with it. A container bot once told the person
 /// "my browser can't download or attach files" and handed them the whole page job.
 /// The chat takes only some kinds and sizes (see [`crate::server::attachments`]), so the line says
-/// which: an MP3 or a 500 MB file would be refused at the person's end.
+/// which: a Word file or a 500 MB file would be refused at the person's end. Audio counts since 22l.
 pub const ASK_FOR_THE_FILE: &str = "If you can't get a file yourself (a download was refused or stopped, or only the person \
     has it), ask the person to drop it into this chat, then click the page's upload button and answer its picker with \
     browser_upload (the upload above) using that attachment's id. Never tell them you can't attach files, and never hand \
-    them the page's upload: all they do is hand over the file. The chat takes images, videos, PDFs and text files, up to \
-    20 MB (videos up to 100 MB); for any other file, say in your Blocked: line which file the page needs and that the chat \
+    them the page's upload: all they do is hand over the file. The chat takes images, videos, audio, PDFs and text files, \
+    up to 20 MB (videos and audio up to 100 MB); for any other file, say in your Blocked: line which file the page needs and that the chat \
     can't take it.";
 
 /// Every turn that can read something: look before proposing, retry before giving up, check
@@ -1429,19 +1429,23 @@ pub(crate) mod tests {
             assert!(ASK_FOR_THE_FILE.contains(part), "{part}");
         }
         // The kinds and sizes it names are the ones the chat really takes
-        use crate::server::attachments::{MAX_ATTACHMENT_BYTES, MAX_VIDEO_BYTES};
+        use crate::server::attachments::{MAX_ATTACHMENT_BYTES, MAX_AUDIO_BYTES, MAX_VIDEO_BYTES};
         let mb = |b: u64| format!("{} MB", b / (1024 * 1024));
+        assert_eq!(MAX_AUDIO_BYTES, MAX_VIDEO_BYTES, "the line names one cap for both");
         assert!(ASK_FOR_THE_FILE.contains(&format!("up to {}", mb(MAX_ATTACHMENT_BYTES))), "{ASK_FOR_THE_FILE}");
-        assert!(ASK_FOR_THE_FILE.contains(&format!("videos up to {}", mb(MAX_VIDEO_BYTES))), "{ASK_FOR_THE_FILE}");
-        let kinds: [(&str, &[u8], bool); 3] = [
+        assert!(ASK_FOR_THE_FILE.contains(&format!("videos and audio up to {}", mb(MAX_AUDIO_BYTES))), "{ASK_FOR_THE_FILE}");
+        let kinds: [(&str, &[u8], bool); 5] = [
             ("a.png", b"\x89PNG\r\n\x1a\n\0\0\0\0\0\0\0\0", true),
             ("a.pdf", b"%PDF-1.7\n0000000", true),
-            ("ep.mp3", b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0", false),
+            // 22l: the episode MP3 Oleks hit is taken now; a Word file still isn't
+            ("ep.mp3", b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0", true),
+            ("ep.mp3", b"MZ\x90\0\x03\0\0\0\x04\0\0\0\xff\xff\0\0", false),
+            ("cv.docx", b"PK\x03\x04\x14\0\x06\0\x08\0\0\0!\0\0\0", false),
         ];
         for (name, head, takes) in kinds {
             assert_eq!(crate::server::attachments::sniff(head, false, name).is_some(), takes, "{name}");
         }
-        assert!(ASK_FOR_THE_FILE.contains("images, videos, PDFs and text files"));
+        assert!(ASK_FOR_THE_FILE.contains("images, videos, audio, PDFs and text files"));
         assert!(ASK_FOR_THE_FILE.contains("say in your Blocked: line which file the page needs and that the chat can't take it"));
     }
 
