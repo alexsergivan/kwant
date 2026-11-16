@@ -1696,19 +1696,19 @@ impl BrowserController {
 
     /// Starts this session's own download/chooser connection, landing downloads under
     /// `workspace/downloads/` and reporting (but not auto-answering) file pickers it opens.
-    /// Idempotent: a session already running its own connection keeps it. `local`, `context_id`
+    /// Idempotent: a session already running its own connection keeps it. `home`, `context_id`
     /// and `staging_root` are passed straight to [`super::browser_downloads::DownloadCenter::start`].
     pub async fn configure_downloads(
         &self,
         workspace: std::path::PathBuf,
-        local: bool,
+        home: super::browser_downloads::DownloadHome,
         context_id: Option<String>,
         staging_root: std::path::PathBuf,
     ) {
         if self.downloads.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
             return;
         }
-        let center = super::browser_downloads::DownloadCenter::start(self.clone(), workspace, local, context_id, staging_root).await;
+        let center = super::browser_downloads::DownloadCenter::start(self.clone(), workspace, home, context_id, staging_root).await;
         let mut guard = self.downloads.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             *guard = Some(center);
