@@ -14,8 +14,11 @@
 //!   ends on a plan it didn't carry out ("I'll check the file sizes next.", see [`promise_line`])
 //!   gets the same one continuation, told to retry, try another way, or end with a
 //!   `Blocked: <what>. <what unblocks it>` line. It needs no plan. If the continuation still ends
-//!   on a promise after a failed step, its reply gets [`follow_line`]. A step the person declined
-//!   on an approval card is never pushed again. Follow-through is never a delivery note.
+//!   on a promise after a failed step, its reply gets [`follow_line`], and (22j) the save step
+//!   stores kwant's own [`blocked_text`] on it, so the lead's chain is Blocked at once (one card
+//!   naming the step and its error) instead of looping through keep-going turns. A step the
+//!   person declined on an approval card is never pushed again. Follow-through is never a
+//!   delivery note.
 //!
 //! What the person expected comes from the turn's one `DeliveryPlan` (`src/router/delivery.rs`),
 //! the same plan the prompt's "[What to deliver]" hint renders, read through [`Expect::from_plan`].
@@ -65,11 +68,46 @@ pub struct Seen {
     pub declined: bool,
 }
 
-/// A tool step that failed or was refused: the tool's name and the step's short title.
+/// A tool step that failed or was refused: the tool's name, the step's short title and (22j) its
+/// `detail`, which for a failed step is why it failed (see [`crate::drivers::activity`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailedStep {
     pub tool: String,
     pub title: String,
+    pub detail: String,
+}
+
+/// Longest error quoted from a failed step's detail (characters).
+const MAX_ERROR_CHARS: usize = 160;
+
+impl FailedStep {
+    /// What the step did, for a sentence: its title without the "Running "/"Using " kwant puts in
+    /// front ("`journalctl -u bot`"), or the tool's name when it has no title.
+    pub fn name(&self) -> String {
+        let title = self.title.trim();
+        let bare = ["Running ", "Using "].iter().find_map(|p| title.strip_prefix(p)).unwrap_or(title).trim();
+        if bare.is_empty() { self.tool.clone() } else { clip(bare, MAX_QUOTE_CHARS) }
+    }
+
+    /// The first non-empty line of the step's detail (why it failed), at most
+    /// [`MAX_ERROR_CHARS`], without a closing full stop. `None` when it has none.
+    pub fn error(&self) -> Option<String> {
+        let line = self.detail.lines().map(str::trim).find(|l| !l.is_empty())?;
+        let line = cut_at_word(line, MAX_ERROR_CHARS);
+        let line = line.trim_end_matches(['.', ' ']);
+        (!line.is_empty()).then(|| line.to_string())
+    }
+}
+
+/// 22j: kwant's own `meta.blocked` text for `bot`'s reply that still ended on a promise after
+/// `step` failed: "<Bot> couldn't run <step>: <error>." It becomes the Blocked card's question
+/// ("Blocked: …", see [`super::keep_going`]).
+pub fn blocked_text(bot: &str, step: &FailedStep) -> String {
+    match step.error() {
+        Some(error) if error.ends_with('…') => format!("{bot} couldn't run {}: {error}", step.name()),
+        Some(error) => format!("{bot} couldn't run {}: {error}.", step.name()),
+        None => format!("{bot} couldn't run {}.", step.name()),
+    }
 }
 
 impl Seen {
@@ -136,6 +174,9 @@ pub struct Verdict {
     /// Add [`follow_line`] for this tool: the continuation still ended on a promise after a
     /// failed step.
     pub follow_line: Option<String>,
+    /// The failed step behind [`Verdict::follow_line`] (22j): the save step stores
+    /// [`blocked_text`] for it, so the chain is Blocked, not stalled.
+    pub stuck_on: Option<FailedStep>,
 }
 
 /// The P9 continuation for a missing image (Ada's wording).
@@ -163,9 +204,10 @@ running, your bot browser, or a teammate who can). If nothing works, end with on
     )
 }
 
-/// Added to a continuation's reply that still ends on a promise after a failed step.
-pub fn follow_line(tool: &str) -> String {
-    format!("_kwant: this stopped after a failed step ({tool}) without another try or a reason._")
+/// Added to a continuation's reply that still ends on a promise after a failed step: the
+/// continuation was the other try, so the line says the step failed again (22j).
+pub fn follow_line(tool: &str, bot: &str) -> String {
+    format!("_kwant: {tool} failed again, and {bot} didn't try another way or say why._")
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -216,7 +258,8 @@ pub fn check(reply: &str, expect: Option<&Expect>, continued: bool, seen: &Seen)
     } else {
         v.no_picture_line = !image && (claims || (wants_image && firm));
         v.outcome = expect.map(|_| if planned.is_empty() { Outcome::Hit } else { Outcome::Miss });
-        v.follow_line = follow.map(|(step, _)| step.tool.clone());
+        v.follow_line = follow.as_ref().map(|(step, _)| step.tool.clone());
+        v.stuck_on = follow.map(|(step, _)| step.clone());
     }
     v
 }
@@ -674,6 +717,7 @@ pub fn tool_steps_in(activity: Option<&Value>) -> (bool, Option<FailedStep>, boo
     let failed = last.filter(|s| s["status"] == "failed").map(|s| FailedStep {
         tool: s["tool"].as_str().unwrap_or("a tool").to_string(),
         title: s["title"].as_str().unwrap_or("").to_string(),
+        detail: s["detail"].as_str().unwrap_or("").to_string(),
     });
     (last.is_some(), failed, declined)
 }
@@ -793,11 +837,11 @@ where
 }
 
 /// The reply as saved: with [`NO_PICTURE_LINE`](super::picture_claims::NO_PICTURE_LINE) and
-/// [`follow_line`] when the verdict says so.
-pub fn apply(reply: String, v: &Verdict) -> String {
+/// [`follow_line`] (naming `bot`) when the verdict says so.
+pub fn apply(reply: String, v: &Verdict, bot: &str) -> String {
     let reply = if v.no_picture_line { super::picture_claims::with_no_picture_line(&reply) } else { reply };
     match &v.follow_line {
-        Some(tool) => format!("{}\n\n{}", reply.trim_end(), follow_line(tool)).trim_start().to_string(),
+        Some(tool) => format!("{}\n\n{}", reply.trim_end(), follow_line(tool, bot)).trim_start().to_string(),
         None => reply,
     }
 }
@@ -848,14 +892,14 @@ mod tests {
         let v1 = check(first.0, expect.as_ref(), false, &first.1);
         let runs = AtomicUsize::new(0);
         let last = std::sync::Mutex::new(v1.clone());
-        let joined = after_turn(Ok(apply(first.0.into(), &v1)), v1.continue_with.clone(), false, |prompt| {
+        let joined = after_turn(Ok(apply(first.0.into(), &v1, "Ann")), v1.continue_with.clone(), false, |prompt| {
             let (runs, last, expect) = (&runs, &last, expect.clone());
             async move {
                 runs.fetch_add(1, Ordering::SeqCst);
                 assert!(prompt.contains("Missing from your last reply"), "{prompt}");
                 let v2 = check(then.0, expect.as_ref(), true, &then.1);
                 assert_eq!(v2.continue_with, None, "a continuation never continues again");
-                let text = apply(then.0.into(), &v2);
+                let text = apply(then.0.into(), &v2, "Ann");
                 *last.lock().unwrap() = v2;
                 Ok(text)
             }
@@ -953,7 +997,7 @@ mod tests {
         assert_eq!(v(SHARED), Verdict::default());
         assert_eq!(check("The button is orange now.", None, false, &SHOT), Verdict::default());
         assert_eq!(check("I can take a screenshot if you want.", None, false, &NOTHING), Verdict::default());
-        assert_eq!(apply(claim.into(), &v(NOTHING)), format!("{claim}\n\n{NO_PICTURE_LINE}"));
+        assert_eq!(apply(claim.into(), &v(NOTHING), "Ann"), format!("{claim}\n\n{NO_PICTURE_LINE}"));
         assert_eq!(meta(&Verdict::default(), None, true), None);
         assert_eq!(meta(&v(NOTHING), None, true).unwrap()["no_picture"], true);
         // A turn the check skipped records nothing, even with an expectation
@@ -1176,7 +1220,7 @@ mod tests {
         let v2 = check(reply, Some(&visible), true, &then);
         assert!(v2.missing.is_empty() && !v2.no_picture_line && !v2.share_last_shot, "{v2:?}");
         assert_eq!(v2.outcome, Some(Outcome::Hit));
-        assert!(!apply(reply.into(), &v2).contains(NO_PICTURE_LINE));
+        assert!(!apply(reply.into(), &v2, "Ann").contains(NO_PICTURE_LINE));
 
         // What the bug did: the continuation's own pictures only
         let per_turn = check(reply, Some(&visible), true, &NOTHING);
@@ -1212,7 +1256,7 @@ mod tests {
     const REAL: &str = "The render command was refused.\n\nI'll check the file sizes and measure the frame timings next.";
 
     fn failed(tool: &str) -> Seen {
-        Seen { ran_tools: true, failed_step: Some(FailedStep { tool: tool.into(), title: "render the video".into() }), ..NOTHING }
+        Seen { ran_tools: true, failed_step: Some(FailedStep { tool: tool.into(), title: "render the video".into(), detail: String::new() }), ..NOTHING }
     }
 
     #[test]
@@ -1256,12 +1300,12 @@ mod tests {
         let (ran, f, d) = tool_steps_in(steps(json!([
             { "kind": "thinking", "status": "done" },
             { "kind": "tool", "tool": "Read", "title": "read a.txt", "status": "ok" },
-            { "kind": "tool", "tool": "Bash", "title": "render", "status": "failed" },
+            { "kind": "tool", "tool": "Bash", "title": "render", "status": "failed", "detail": "exit 1: no such file" },
             { "kind": "note", "status": "done" },
         ]))
         .as_ref());
         assert!(ran && !d);
-        assert_eq!(f, Some(FailedStep { tool: "Bash".into(), title: "render".into() }));
+        assert_eq!(f, Some(FailedStep { tool: "Bash".into(), title: "render".into(), detail: "exit 1: no such file".into() }));
         // A later tool step that worked: nothing to follow through
         let (_, f, _) = tool_steps_in(steps(json!([
             { "kind": "tool", "tool": "Bash", "title": "render", "status": "failed" },
@@ -1304,16 +1348,36 @@ mod tests {
         let v = check("Still failing.\n\nI'll try again later.", None, true, &failed("Bash"));
         assert_eq!(v.continue_with, None);
         assert_eq!(v.follow_line.as_deref(), Some("Bash"));
-        let text = apply("Still failing.\n\nI'll try again later.".into(), &v);
-        assert!(text.ends_with(&follow_line("Bash")), "{text}");
-        assert_eq!(follow_line("Bash"), "_kwant: this stopped after a failed step (Bash) without another try or a reason._");
+        assert_eq!(v.stuck_on, failed("Bash").failed_step, "22j: the step the chain is Blocked on");
+        let text = apply("Still failing.\n\nI'll try again later.".into(), &v, "Quant");
+        assert!(text.ends_with(&follow_line("Bash", "Quant")), "{text}");
+        // 22j: the continuation was the other try, so the line says it failed again
+        assert_eq!(follow_line("Bash", "Quant"), "_kwant: Bash failed again, and Quant didn't try another way or say why._");
         assert_eq!(meta(&v, None, true).unwrap()["missing"], json!(["follow_through"]));
         assert_eq!(meta(&v, None, true).unwrap()["follow_line"], json!(true));
         // A continuation that got past it, or ended Blocked:, gets no line
         let ok = check("Rendered with ffmpeg instead: out.mp4.", None, true, &Seen { ran_tools: true, ..NOTHING });
         assert_eq!((ok.follow_line, ok.missing), (None, vec![]));
         let b = check("Blocked: terminal is off. Allow it, then say continue.", None, true, &failed("Bash"));
-        assert_eq!(b.follow_line, None);
+        assert_eq!((b.follow_line, b.stuck_on), (None, None));
+    }
+
+    /// 22j: kwant's own Blocked text names the step (a shell step by its command) and the first
+    /// line of its error, clipped.
+    #[test]
+    fn the_blocked_text_names_the_step_and_its_error() {
+        let step = |tool: &str, title: &str, detail: &str| FailedStep { tool: tool.into(), title: title.into(), detail: detail.into() };
+        let shell = step("run_terminal_command", "Running `journalctl -u maker --since 17:18`", "\nError: no terminal session is open.\nat line 2");
+        assert_eq!(shell.name(), "`journalctl -u maker --since 17:18`");
+        assert_eq!(shell.error().as_deref(), Some("Error: no terminal session is open"));
+        assert_eq!(blocked_text("Quant", &shell), "Quant couldn't run `journalctl -u maker --since 17:18`: Error: no terminal session is open.");
+        // No title: the tool's name; no detail: no error
+        assert_eq!(blocked_text("Quant", &step("run_terminal_command", "", "")), "Quant couldn't run run_terminal_command.");
+        assert_eq!(step("mcp__github__create_issue", "Using create_issue (github)", "401").name(), "create_issue (github)");
+        // A long error is cut at a word, at most 160 characters and the ellipsis
+        let long = step("Bash", "Running `x`", &"word ".repeat(80)).error().unwrap();
+        assert!(long.chars().count() <= 161 && long.ends_with('…'), "{long}");
+        assert!(blocked_text("Ann", &step("Bash", "Running `x`", &"word ".repeat(80))).ends_with("word…"));
     }
 
     #[test]

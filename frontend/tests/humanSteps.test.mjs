@@ -90,6 +90,31 @@ test('meta line is one inline text run that wraps like a sentence', () => {
   assert.match(bot, /<span class="text-zinc-200">Pixel<\/span> needs you in the browser$/);
 });
 
+test('a closed card stops asking: quiet past-tense eyebrow in zinc, never "needs you" (22p)', () => {
+  const eyebrow = (html) => html.match(/<p data-hs-meta="" class="([^"]*)">([^]*?)<\/p>/);
+  // Open: unchanged, amber hand, "needs you"
+  const open = eyebrow(ui.render(props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })) })));
+  assert.match(open[2], /^<svg[^>]*lucide-hand[^>]*text-amber-300[^]*?<\/svg><span class="text-zinc-200">Pixel<\/span> needs you in the browser · spotted automatically$/);
+  // Every closed status, from the live record and from the saved message; left_for_message comes with #721
+  for (const status of ['done', 'declined', 'timed_out', 'resolved_auto', 'cancelled', 'left_for_message']) {
+    for (const [how, p] of [
+      ['live', props({ live: rec({ status }) })],
+      ['live, auto', props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })), live: rec({ status }) })],
+      ...(status === 'left_for_message' ? [] : [['meta', props({ meta: h.parseHumanStepMeta(meta({ status })) })]]),
+    ]) {
+      const html = ui.render(p);
+      const m = eyebrow(html);
+      assert.ok(m, `${status} ${how}: eyebrow`);
+      assert.doesNotMatch(html, /needs you/i, `${status} ${how}: never "needs you"`);
+      assert.doesNotMatch(m[0], /amber/, `${status} ${how}: no amber in the eyebrow`);
+      assert.match(m[1], /text-zinc-500/);
+      const auto = how.endsWith('auto') ? ' · spotted automatically' : '';
+      assert.match(m[2], new RegExp(`^<svg[^>]*lucide-hand[^>]*text-zinc-500[^]*?</svg><span class="text-zinc-400">Pixel</span> asked for you in the browser${auto}$`), `${status} ${how}`);
+      assert.match(html, /border-zinc-800/, `${status} ${how}: quiet border`);
+    }
+  }
+});
+
 test('captcha card after the turn ended: one line, carries on by itself, not "stopped waiting"', () => {
   const html = ui.render(props({ waiting: false, meta: h.parseHumanStepMeta(meta({ step_kind: 'captcha' })) }));
   assert.match(html, /role="status" aria-live="polite"[^>]*><span[^>]*><svg[^]*?<\/svg> Pixel carries on by itself once it’s solved\. Nothing you do there is passed to Pixel\.<\/span><\/p>/);
