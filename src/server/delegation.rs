@@ -58,20 +58,12 @@ fn asked_in(msgs: &[Message], fits: impl Fn(&Message) -> bool) -> Option<&Messag
 }
 
 /// `text` (`m`'s text, maybe clipped) as a hand-off passes it on: the person's own words as they
-/// are, anyone else's framed as theirs ([`crate::drivers::user_history_text`] for a customer or
-/// a connected agent, [`crate::drivers::peer_message`] for a bot's chat-API message), so a
-/// customer's message never reaches the next bot as the owner's request. Framed after clipping,
-/// so the frame's end marker is never cut off.
+/// are, anyone else's framed as theirs by [`crate::drivers::user_history_text`] (a customer's, a
+/// connected agent's, a bot's chat-API message), so a customer's message never reaches the next
+/// bot as the owner's request. Framed after clipping, so the frame's end marker is never cut off.
 fn as_asked(m: &Message, text: String) -> String {
     if super::routes::is_persons(m) {
         return text;
-    }
-    if !crate::drivers::from_outsider(m) {
-        let name = match m.sender_id.trim() {
-            "" | "user" => "unnamed",
-            id => id,
-        };
-        return crate::drivers::peer_message(name, &text);
     }
     crate::drivers::user_history_text(&Message { text, ..m.clone() })
 }
