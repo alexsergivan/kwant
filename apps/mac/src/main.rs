@@ -146,6 +146,23 @@ impl Asker {
         }
     }
 
+    /// One OK, as a warning (a change that couldn't be saved). Blocks: never on the main thread.
+    fn warn<R: Runtime>(&self, app: &AppHandle<R>, title: &str, message: &str) {
+        match self {
+            Asker::Native => {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                app.dialog()
+                    .message(message)
+                    .title(title)
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCustom("OK".into()))
+                    .blocking_show();
+            }
+            #[cfg(test)]
+            Asker::Fixed { said, .. } => said.lock().unwrap().push((title.into(), message.into())),
+        }
+    }
+
     /// One OK. Blocks: never on the main thread.
     fn tell<R: Runtime>(&self, app: &AppHandle<R>, title: &str, message: &str) {
         match self {
@@ -164,12 +181,30 @@ impl Asker {
     }
 }
 
+/// What a setting that couldn't be saved says, wherever it was changed: the pages get it as
+/// `save_failed`, the tray, the menus and the Perch settings as one warning.
+pub(crate) const SAVE_FAILED: &str = "kwant couldn't save the change. Check that ~/.kwnt can be written.";
+const SAVE_FAILED_TITLE: &str = "kwant";
+
+/// The one warning for a change that couldn't be saved. Blocks: never on the main thread.
+pub(crate) fn say_save_failed<R: Runtime>(app: &AppHandle<R>) {
+    app.state::<Asker>().warn(app, SAVE_FAILED_TITLE, SAVE_FAILED);
+}
+
+/// The same, from the main thread (a menu click): the warning waits on its own thread.
+fn say_save_failed_later<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    std::thread::spawn(move || say_save_failed(&app));
+}
+
 /// What one Remove did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct Removed {
     cancelled: bool,
     removed: bool,
     revoked: bool,
+    /// The server list couldn't be saved: the server is still listed, and the app said so.
+    save_failed: bool,
 }
 
 /// The running server, when this app started one (not when it attached to another kwant).
@@ -993,29 +1028,36 @@ fn add_place<R: Runtime>(app: &AppHandle<R>, origin: Origin, link: Option<Url>) 
     Ok(added)
 }
 
-/// Takes a server out: its sign-in cookie, its window, its line in the file. With no place
-/// left, This Mac comes back on. Never on the main thread (cookies are read there).
-fn remove_place<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
+/// Takes a server's line out of the file first: with no place left, This Mac comes back on.
+/// `Ok(None)`: it wasn't listed. `Ok(Some(back_here))`: saved. `Err`: the file couldn't be
+/// written, and the list is as it was (nothing else is touched).
+fn unlist<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> std::io::Result<Option<bool>> {
+    let shared = app.state::<Shared>();
+    let mut places = shared.places.lock().unwrap();
+    let before = places.clone();
+    if !places.remove_server(origin) {
+        return Ok(None);
+    }
+    let back_here = places.all().is_empty();
+    if back_here {
+        places.set_this_mac(true);
+    }
+    if let Err(e) = places.save(&shared.data_dir) {
+        *places = before;
+        return Err(e);
+    }
+    Ok(Some(back_here))
+}
+
+/// Then lets an unlisted server go: its sign-in cookie, its window; This Mac's window when it
+/// came back on. Never on the main thread (cookies are read there).
+fn let_go<R: Runtime>(app: &AppHandle<R>, origin: &Origin, back_here: bool) {
     let label = Place::Server(origin.clone()).window_label();
     clear_token(app, origin);
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.destroy();
     }
     let shared = app.state::<Shared>();
-    let (removed, back_here) = {
-        let mut places = shared.places.lock().unwrap();
-        let removed = places.remove_server(origin);
-        let back_here = removed && places.all().is_empty();
-        if back_here {
-            places.set_this_mac(true);
-        }
-        if removed {
-            if let Err(e) = places.save(&shared.data_dir) {
-                tracing::warn!(error = %e, "couldn't save the server list");
-            }
-        }
-        (removed, back_here)
-    };
     shared.reach.lock().unwrap().remove(&origin.as_str());
     {
         let mut last = shared.last_focused.lock().unwrap();
@@ -1023,15 +1065,12 @@ fn remove_place<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
             *last = None;
         }
     }
-    if removed {
-        tracing::info!(host = %origin.host(), "removed a server");
-    }
+    tracing::info!(host = %origin.host(), "removed a server");
     if back_here {
         open_place(app, &Place::ThisMac, Goto::Stay);
     }
     refresh_titles(app);
     wake(app);
-    removed
 }
 
 /// Why "Run kwant on this Mac" didn't change.
@@ -1139,9 +1178,11 @@ fn unreachable_now<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
     by_window || shared.unreachable.lock().unwrap().contains(&Place::Server(origin.clone()).key())
 }
 
-/// Every Remove (tray or page): the native confirm, then the server sign-out, then the remove;
-/// a sign-out the server didn't confirm is said once. Blocks: never on the main thread or on
-/// an async task (it waits for the sign-out).
+/// Every Remove (tray or page): the native confirm, then the server's line out of the file,
+/// then the server sign-out and the rest of the remove; a sign-out the server didn't confirm is
+/// said once. A list that couldn't be saved keeps the server (signed in, its window open) and
+/// is said once instead. Blocks: never on the main thread or on an async task (it waits for
+/// the sign-out).
 fn confirm_and_remove<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Removed {
     let places = current(app);
     if !places.servers.contains(origin) {
@@ -1154,13 +1195,22 @@ fn confirm_and_remove<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Remove
     if !asker.confirm(app, &words.title, &words.message) {
         return Removed { cancelled: true, ..Removed::default() };
     }
+    let back_here = match unlist(app, origin) {
+        Ok(Some(back_here)) => back_here,
+        Ok(None) => return Removed::default(),
+        Err(e) => {
+            tracing::warn!(error = %e, "couldn't save the server list");
+            say_save_failed(app);
+            return Removed { save_failed: true, ..Removed::default() };
+        }
+    };
     let revoked = tauri::async_runtime::block_on(sign_out_of(app, origin));
-    let removed = remove_place(app, origin);
-    if removed && !revoked && !words.says_unreachable {
+    let_go(app, origin, back_here);
+    if !revoked && !words.says_unreachable {
         let (title, message) = removed_words(&host);
         asker.tell(app, &title, message);
     }
-    Removed { cancelled: false, removed, revoked }
+    Removed { cancelled: false, removed: true, revoked, save_failed: false }
 }
 
 /// Signs this app out of a server with the cookie it keeps for it (`DELETE /api/auth/session`).
@@ -1236,6 +1286,12 @@ fn apply_menu(app: &AppHandle, tray: &TrayIcon, shown: &mut TrayMenu, entries: V
     }
     for (i, entry) in entries.into_iter().enumerate() {
         if shown.entries[i] == entry {
+            // a click ticks a check item natively; a refused change (a save that failed) ticks it back
+            if let (Handle::Check(item), menu::Entry::Check { checked, .. }) = (&shown.handles[i], &entry) {
+                if item.is_checked().is_ok_and(|now| now != *checked) {
+                    let _ = item.set_checked(*checked);
+                }
+            }
             continue;
         }
         match (&shown.handles[i], &entry) {
@@ -1280,16 +1336,20 @@ fn set_window_menu(app: &AppHandle, places: &[Place]) {
     }
 }
 
-/// The tray's Show nudges: turns them on or off and saves that.
+/// The tray's Show nudges: saves the other choice, then takes it. A save that fails keeps the
+/// old one (the menu's poll ticks the item back to it).
 fn toggle_nudges<R: Runtime>(app: &AppHandle<R>) -> Result<bool, ToggleRefused> {
     let state = app.state::<Nudges>();
     let on = !state.show.load(Ordering::Relaxed);
-    state.show.store(on, Ordering::Relaxed);
-    if let Err(e) = (nudge::Prefs { show_nudges: on }).save(&state.data_dir) {
-        tracing::warn!(error = %e, "couldn't save Show nudges");
+    let saved = (nudge::Prefs { show_nudges: on }).save(&state.data_dir);
+    if saved.is_ok() {
+        state.show.store(on, Ordering::Relaxed);
     }
     wake(app);
-    Ok(on)
+    saved.map(|()| on).map_err(|e| {
+        tracing::warn!(error = %e, "couldn't save Show nudges");
+        ToggleRefused::SaveFailed
+    })
 }
 
 /// Every menu click: the tray's and the Window menu's.
@@ -1308,7 +1368,9 @@ fn on_menu(app: &AppHandle, id: &str) {
             show_last(app);
         }
         "nudges" => {
-            let _ = toggle_nudges(app);
+            if toggle_nudges(app).is_err() {
+                say_save_failed_later(app);
+            }
         }
         "perch" => {
             let app = app.clone();
@@ -1319,6 +1381,9 @@ fn on_menu(app: &AppHandle, id: &str) {
             let on = !current(app).this_mac;
             if let Err(e) = set_local(app, on) {
                 tracing::info!(?e, "Run kwant on this Mac unchanged");
+                if e == ToggleRefused::SaveFailed {
+                    say_save_failed_later(app);
+                }
             }
             wake(app);
         }
@@ -2279,7 +2344,8 @@ mod tests {
         places.add_server(origin.clone());
         places.set_this_mac(false);
         let (app, _window, data_dir) = app_with("remove-last", "connect", places);
-        assert!(remove_place(app.handle(), &origin));
+        assert_eq!(unlist(app.handle(), &origin).unwrap(), Some(true), "This Mac comes back");
+        let_go(app.handle(), &origin, true);
         let after = current(app.handle());
         assert!(after.servers.is_empty());
         assert!(after.this_mac);
