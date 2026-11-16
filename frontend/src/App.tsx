@@ -2270,7 +2270,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               streamStore.show({ text: '', thinking: '' });
             }
           }
-          markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot'));
+          markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot', msg.meta));
         }
       }
       return { ok: true, answered: saved.answered };
