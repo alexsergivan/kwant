@@ -39,6 +39,46 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0916" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.16</p>
+      <h2>Answers that show once, and approval options in plain words</h2>
+      <p>Your answer to a bot's question shows once, on its card, and phone chat headers name their buttons.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="answer-once">Your answer shows once, on the question</h3>
+        <p>When you answer a bot's question card, the card itself says <strong>You picked …</strong> or <strong>You answered: …</strong>, with <strong>· via Telegram</strong> when you answered there, instead of a second bubble below. Also tidier: the chats that wait on you are called <strong>Needs you</strong> everywhere, the space settings tab is called <strong>Bots</strong>, and on a phone the chat header's buttons have captions (Team, Pin, Edit, Browser).</p>
+      </div>
+      <div class="frame">{{shot:v0916-answer-once|kwant on desktop, in Ann's direct chat in the Trailhead Outfitters space: two question cards from Ann, each answered inside the card, with no separate answer message. "Which photo should lead the Ridgeline 2P page?" has Pitched by the lake ticked and reads "You picked Pitched by the lake · via Telegram", then Ann replies that the lake photo now leads the gallery. "The new price is $279. Should the page show the old $319 crossed out next to it?" has No, just $279 ticked and reads "You picked No, just $279", then Ann replies that the page shows $279 only.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0916" class="span3"><h3>Smaller changes in 0.9.16</h3><p>The approval options are explained in plain words, the phone's "New" tag no longer covers @, and a team's lead comes first in the Ask: row. The name above a reply that's still being written uses the finished reply's type, so it doesn't change when the reply lands. The desktop island says "Searching files", "Searching the web" or "Starting a helper", never the words a bot searches for. A follow-up never reads a customer's or agent's words as yours, and working ahead starts only from your own message. A task's activity says in words when kwant asked the lead to review a hand-off and when a bot wrote down what done means. After a failed step, a polite closing line no longer shows Blocked, and a reply that asks you to pick still does. Ordinary read tools, like get_release or list_merge_requests, get Allow once again on Telegram and the desktop island; steps that run a command or push code still ask in kwant. A tool call refused in a customer's turn shows once in the refused list, however often the bot retries it. A hand-off never passes a customer's, agent's or bot's message on as your request; their words stay marked as theirs. On a phone, a time never wraps away from its AM/PM, and older Jira and "Pushed" times say the day. Plain reads of mail, files, posts and payments, like listing Gmail threads or getting a payment status, keep Allow once on the desktop island; sending, posting, paying and deleting still need the full card. A bot that uses kwant's own browser can download files: they land in its downloads/ folder, up to 400 MB. The perch shows on a Mac again (it stayed hidden since 0.9.15), and ⌥⌘K opens it with the keyboard ready for Quick ask.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-0915" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.15</p>
+      <h2>The perch at the top of your screen, and steadier dictation</h2>
+      <p>The perch, a small island at the top of your screen, shows what needs you and what your bots are doing, and lets you allow a safe step or ask a bot without opening the app.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="perch">The perch, at the top of your screen</h3>
+        <p>A small island at the top of the screen, around the notch on a Mac, shows the faces of the bots that need you or are working. Click it or press <strong>⌥⌘K</strong> (Ctrl+Alt+K on Windows and Linux) to see what needs you, what each bot is doing now and what just finished, in every place. A low-risk approval gets <strong>Allow once</strong> right there; anything riskier opens the full card in kwant. <strong>Quick ask</strong> sends a bot a message without opening the app. Settings › Perch sets when it shows.</p>
+      </div>
+      <div class="frame">{{shot:v0915-perch-expanded|A Mac desktop with the perch opened under the notch with ⌥⌘K. Needs you · 4: Ann's price approval with Allow once and Deny, and Ben's question "Which photo goes on the Ridgeline 2P page?" with three answer chips. Working now: Cody "Checking stock for 12 tents" and Dana "Sorting 31 support emails". Just finished: Ann "Price check for two-person tents", Checked. Below are an empty Quick ask box addressed to Ann, and Places: This Mac 2 and kwant.example 2.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0915" class="span3"><h3>Smaller changes in 0.9.15</h3><p>In the desktop app, a chip at the top of the sidebar names the place the window is on, badges what waits for you in the others, and opens the place picker. Dictation keeps at most two recordings in memory at once, picks the OpenAI key the same way as memory search, and a slow transcription says "OpenAI didn't answer in time. Try again in a minute." While a reply streams in, only the block still being written redraws; finished paragraphs, lists, tables and code stay put. A finished reply no longer jumps: the live reply has the same avatar, bubble and spacing, and the cursor sits at the end of the line. While a bot double-checks another's work, its live reply and strip say so with Open the task, and activity names each step in plain words. When a customer's message tries a tool nobody allowed, the bot's approvals list keeps one closed record of it; a customer's message never counts as yours. The desktop island says which program a bot is running, like "Running git", never the full command. In the computer pane, "Pointing · 1 picked" fits on one line and never covers Refresh or Restart, on a phone too. After a failed step, a reply that asks you to decide shows as Blocked, and one that only reports the failure and offers help doesn't. On Telegram, a step that pushes code, runs a command or is flagged risky says so and asks you to approve it in kwant, with no Allow once button. Times from another day say which day, like "You allowed this on Nov 12 at 4:16 AM", and times that showed no day now add it. The computer pane's footer reads "Hand back to point" during a takeover, with nothing cut off, and the pick count holds still. On the Claude engine too, a bot whose kwant tool call keeps failing the same way stops after three tries and changes course or says what's blocked. More risky steps, like creating a commit or branch, a delete under an action key or a command hidden in an input field, open the full approval card instead of the island's Allow once.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-0914" class="fgroup">
   <div class="wrap">
     <div class="section-head">
@@ -1446,7 +1486,13 @@ card_art: team
     <div class="row-copy">
       <p class="kicker">Anywhere</p>
       <h2 id="phone-title">Check in from your phone</h2>
-      <p>The web app works on a phone, so you can read the team's summary or approve an action away from your desk.</p>
+      <p>kwant has a phone app, with no app store. Read the team's summary, answer questions and approve actions away from your desk, and get a notification when a bot needs you.</p>
+      <ol class="phone-steps">
+        <li>Scan the QR code in <b>Settings → All spaces → Signed-in devices → Add a phone or browser</b>, or open your kwant server's https address on the phone.</li>
+        <li>iPhone: Safari → <b>Share</b> → <b>Add to Home Screen</b>. Android: Chrome → <b>⋮</b> → <b>Add to Home screen</b>.</li>
+        <li>Open it from the Home Screen and turn on <b>Notify me on this device</b>.</li>
+      </ol>
+      <p><a class="more-link" href="docs/phone.html">How to install it →</a></p>
     </div>
     <div class="phones">
       <div class="phone">{{shot:phone-team-chat|The Product team summary on a phone screen.|240px}}</div>

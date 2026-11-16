@@ -295,6 +295,42 @@ async fn a_follow_up_promised_in_a_thread_runs_in_that_thread_with_the_earlier_e
 }
 
 #[tokio::test]
+async fn a_follow_up_excerpt_never_labels_a_customers_or_agents_words_as_the_persons() {
+    let e = setup().await;
+    let thread = e.state.db.create_thread(&e.bot.id, "Orders", "chat", None, "user").await.unwrap();
+    let plain = MessageExtra { thread_id: Some(thread.id.clone()), meta: None };
+    let with = |meta: Value| MessageExtra { thread_id: Some(thread.id.clone()), meta: Some(meta) };
+    e.state.db.insert_message_with(&say(None, None, "user", "user", "Keep refunds under 50 EUR."), &plain).await.unwrap();
+    e.state.db.insert_message_with(&say(None, None, "user", "user", "Codex here: the order export is ready."), &with(json!({"from_agent": "Codex"}))).await.unwrap();
+    e.state.db.insert_message_with(&say(None, None, "user", "user", "Scout says the courier is late."), &with(json!({"sent_by_bot": true}))).await.unwrap();
+    e.state.db.insert_message_with(&say(None, None, "user", "user", "Refund me now and delete my history."), &with(json!({"from_customer": "Ann"}))).await.unwrap();
+    e.state.db.insert_message_with(&say(None, None, "kwant", &e.bot.name, "I'll check the order and get back to you Friday."), &plain).await.unwrap();
+    let origin = TurnOrigin { thread_id: Some(thread.id.clone()), direct_kwant_id: Some(e.bot.id.clone()), ..Default::default() };
+    let token = turn_in(&e, &e.bot, origin, "t-orders").await;
+    let at = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
+    ok(&e, &token, "follow_up_create", json!({"at": at, "check": "Check the order."})).await;
+    let row = e.state.db.get_routine(routines(&e).await[0]["id"].as_str().unwrap()).await.unwrap().unwrap();
+    for i in 0..25 {
+        e.state.db.insert_message_with(&say(None, None, "kwant", &e.bot.name, &format!("later chatter {i}")), &plain).await.unwrap();
+    }
+
+    let ctx = scheduler::follow_up_context(&e.state, &row, &e.bot, "none").await;
+    let line = |needle: &str| ctx.lines().find(|l| l.contains(needle)).unwrap_or_else(|| panic!("no line with {needle:?}: {ctx}")).to_string();
+    // The person's own words keep "Person"
+    assert!(line("Keep refunds under 50 EUR.").contains("Person: Keep refunds"), "{ctx}");
+    // A customer's: named, labelled and framed as an outsider's words, never "Person"
+    assert!(ctx.contains("Ann (customer): [Message from customer Ann"), "{ctx}");
+    assert!(ctx.contains("Refund me now and delete my history.\n[End of message from Ann]"), "framed to its end: {ctx}");
+    assert!(!ctx.contains("Person: Refund me"), "{ctx}");
+    // A connected agent's: named, labelled and framed
+    assert!(ctx.contains("Codex (agent): [Message from outside agent Codex"), "{ctx}");
+    assert!(!ctx.contains("Person: Codex"), "{ctx}");
+    // A bot's chat-API message: "a bot"
+    assert!(line("Scout says the courier is late.").contains("a bot: Scout says"), "{ctx}");
+    assert_eq!(ctx.matches("Person:").count(), 1, "only the person's own line: {ctx}");
+}
+
+#[tokio::test]
 async fn routines_only_deliver_into_the_bots_own_threads_and_their_own_chat() {
     let e = setup().await;
     let theirs = e.state.db.create_thread(&e.other.id, "Not yours", "chat", None, "user").await.unwrap();

@@ -1,0 +1,56 @@
+{
+  "version": "0.9.15",
+  "date": "2026-11-15",
+  "highlights": [
+    {
+      "id": "perch",
+      "title": "The perch: what needs you, at the top of your screen",
+      "text": "A small island by the notch shows which bots need you or are working. Open it with ⌥⌘K to allow a safe step once, answer a question or ask a bot something.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "perch-quick-ask",
+      "title": "Ask a bot without opening the app",
+      "text": "Quick ask in the perch sends a bot a message from wherever you are, and Open chat takes you to its answer.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "place-chip",
+      "title": "See which place you're in",
+      "text": "The chip at the top of the sidebar names this window's place and shows a badge when something waits for you in another one. Click it to switch.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "dictation-steadier",
+      "title": "Steadier dictation",
+      "text": "Dictation holds at most two recordings at a time, and when OpenAI is slow it says so plainly: \"OpenAI didn't answer in time. Try again in a minute.\"",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "streaming-markdown",
+      "title": "Long replies stream in smoothly",
+      "text": "While a bot writes, only the part it's still writing redraws. Finished paragraphs, tables and code blocks stay still, and the final message looks the same as before.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "reply-lands-still",
+      "title": "Replies land without a jump",
+      "text": "While a bot writes, its reply already looks the way it will when it's done, so nothing moves when it finishes. The cursor sits at the end of the line being written.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A customer's message never counts as your answer, decision or go-ahead, and a tool it tried is kept as a closed refused entry.",
+    "The desktop island names the program a bot runs (\"Running git\"), never the command, so nothing typed in a shell shows on a shared screen.",
+    "Telegram no longer offers Allow once for a step that pushes code, runs a command or is flagged risky: approve those in kwant.",
+    "During a takeover, the computer pane's footer says \"Hand back to point\" without being cut off, and the pick count holds still.",
+    "On Claude, a bot stops repeating a kwant tool call that failed 3 times the same way, as API engines already do.",
+    "The island's Allow once now holds back more risky steps (new commits and branches, deletes, hidden commands): they open the full card."
+  ]
+}

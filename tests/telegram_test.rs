@@ -634,6 +634,148 @@ async fn allow_once_is_taken_back_in_the_db_even_with_nothing_listening() {
     assert!(!a.allow && a.state == "closed", "a new bot");
 }
 
+// --- 18b Allow once never ships code, runs a command or allows a risky step -----------------
+
+fn mcp(server: &str, tool: &str, args: Value) -> Value {
+    json!({"source": "mcp", "server": server, "tool": tool, "arguments": args})
+}
+
+fn flagged(k: &str, v: Value) -> Value {
+    let mut d = mcp("files", "lookup", json!({"q": "x"}));
+    d[k] = v;
+    d
+}
+
+/// The brief's table: what Telegram's Allow once refuses on top of its older floor, with its line.
+fn floor_refused() -> Vec<(&'static str, Value, &'static str)> {
+    vec![
+        ("run_command", mcp("devtools", "run_command", json!({"cmd": "gh  pr merge 12"})), "This runs a command."),
+        ("ssh_exec", mcp("remote", "ssh_exec", json!({"host": "prod"})), "This runs a command."),
+        ("execute_sql", mcp("db", "execute_sql", json!({"statement": "DELETE FROM users"})), "This runs a command."),
+        ("query", mcp("postgres", "query", json!({"sql": "DROP TABLE users"})), "This runs a command."),
+        ("GITHUB_MERGE_A_PULL_REQUEST", mcp("composio", "GITHUB_MERGE_A_PULL_REQUEST", json!({"owner": "o", "repo": "r", "pull_number": 12})), "This pushes code."),
+        ("GITHUB_CREATE_A_RELEASE", mcp("composio", "GITHUB_CREATE_A_RELEASE", json!({"owner": "o", "repo": "r", "tag_name": "v1"})), "This pushes code."),
+        (
+            "create_or_update_file",
+            mcp("github", "create_or_update_file", json!({"owner": "o", "repo": "r", "path": "a.txt", "content": "x", "message": "m", "branch": "main"})),
+            "This pushes code.",
+        ),
+        ("prepush_grant", flagged("prepush_grant", json!({"repo": "o/r"})), "This pushes code."),
+        ("strict_ask", flagged("strict_ask", json!(true)), "This pushes code."),
+        ("smart_reason", flagged("smart_reason", json!("Deletes records")), "kwant flagged this step as risky."),
+        // 20d: still refused once names match as whole words
+        ("run_query", mcp("db", "run_query", json!({"limit": 10})), "This runs a command."),
+        ("evaluate_js", mcp("browser", "evaluate_js", json!({"expression": "1"})), "This runs a command."),
+        ("push_files", mcp("github", "push_files", json!({"owner": "o", "repo": "r", "branch": "main"})), "This pushes code."),
+        ("GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", mcp("composio", "GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", json!({"pull_number": 12})), "This pushes code."),
+    ]
+}
+
+/// What Telegram keeps allowable on purpose (the island's stricter layers stay off it).
+fn floor_allowed() -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "GMAIL_SEND_EMAIL",
+            mcp("composio", "GMAIL_SEND_EMAIL", json!({"recipient_email": "a@example.com", "subject": "Our press release", "body": "The press release is attached."})),
+        ),
+        ("NOTION_SEARCH_NOTION_PAGE", mcp("composio", "NOTION_SEARCH_NOTION_PAGE", json!({"query": "release notes"}))),
+        // 20d: Rigel's #667 finding 2, reads the old part match refused with a wrong line
+        ("GITHUB_GET_A_RELEASE", mcp("composio", "GITHUB_GET_A_RELEASE", json!({"owner": "o", "repo": "r", "release_id": 1}))),
+        ("list_merge_requests", mcp("gitlab", "list_merge_requests", json!({}))),
+        ("truncate_text", mcp("db", "truncate_text", json!({"t": "x"}))),
+        ("get_description", mcp("crm", "get_description", json!({"id": 1}))),
+        ("url_encode", mcp("util", "url_encode", json!({"u": "x"}))),
+        ("geocode", mcp("maps", "geocode", json!({"q": "Paris"}))),
+    ]
+}
+
+#[tokio::test]
+async fn telegram_s_allow_once_refuses_what_ships_or_runs_and_keeps_ordinary_tools() {
+    let env = setup().await;
+    let space = kwnt::db::spaces::SpaceId::default_space();
+    for (name, d, why) in floor_refused() {
+        assert_eq!(kwnt::server::telegram::link_only_in(&env.state, space.as_str(), &d).await, None, "{name}: the older floor let it through");
+        assert_eq!(kwnt::server::telegram::allow_refusal(&env.state, space.as_str(), &d).await, Some(why), "{name}");
+    }
+    for (name, d) in floor_allowed() {
+        assert_eq!(kwnt::server::telegram::allow_refusal(&env.state, space.as_str(), &d).await, None, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn a_call_that_ships_or_runs_is_sent_without_allow_once() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 60).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let mut seen = Vec::new();
+    for (name, d, why) in floor_refused() {
+        // One at a time; rows that share a tool name are told apart by the messages already seen
+        let tool = format!("<code>{}</code>", d["tool"].as_str().unwrap());
+        let (id, _rx) = approval(&env, d).await;
+        let sent = tg.wait_send(&bot, |c| c.text().contains(&tool) && c.body.get("__sent_id").is_some() && !seen.contains(&c.message_id())).await;
+        seen.push(sent.message_id());
+        assert!(sent.callbacks().is_empty(), "{name}: {:?}", sent.buttons());
+        assert!(sent.text().ends_with(&format!("<i>{why} Approve it in kwant.</i>")), "{name}: {}", sent.text());
+        assert!(!env.state.db.telegram_asks_for("approval", &id).await.unwrap()[0].allow, "{name}");
+    }
+    // Never the arguments
+    assert!(tg.calls(&bot).iter().all(|c| !c.body.to_string().contains("gh  pr merge")), "arguments never go to Telegram");
+}
+
+#[tokio::test]
+async fn a_tap_on_an_older_message_now_refused_goes_link_only_and_an_ordinary_one_still_allows() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 61).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // A message sent armed before 18b (same parameters, Allow once on it), whose call the new
+    // rule refuses: the tap re-checks, allows nothing and turns the message link-only
+    let (id, _rx) = approval(&env, mcp("composio", "GITHUB_MERGE_A_PULL_REQUEST", json!({"owner": "o", "repo": "r", "pull_number": 12}))).await;
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>GITHUB_MERGE_A_PULL_REQUEST</code>")).await;
+    let db = &env.state.db;
+    wait_for("its message id", || async { db.telegram_asks_for("approval", &id).await.unwrap()[0].message_id == Some(card.message_id()) }).await;
+    let ask = db.telegram_asks_for("approval", &id).await.unwrap().remove(0);
+    arm(&env, &ask.id).await;
+    let tap = tg.tap(&bot, &PERSON, card.message_id(), &format!("a:{}", ask.id));
+    tg.wait_call(&bot, "answerCallbackQuery", |c| c.body["callback_query_id"] == tap && c.body["text"] == "Approve it in kwant.").await;
+    let edit = tg.wait_edit(&bot, |c| c.message_id() == card.message_id()).await;
+    assert!(edit.callbacks().is_empty(), "{:?}", edit.buttons());
+    assert!(edit.text().ends_with("<i>This pushes code. Approve it in kwant.</i>"), "{}", edit.text());
+    assert_eq!(env.state.db.get_approval(&id).await.unwrap().unwrap().status, "pending", "the tap resolved nothing");
+    let ask = env.state.db.telegram_ask(kwnt::db::spaces::SpaceId::default_space().as_str(), &ask.id).await.unwrap().unwrap();
+    assert!(!ask.allow, "disarmed");
+
+    // An ordinary call (an email that says "press release") still gets Allow once, and the tap
+    // resolves via "telegram"
+    let mut events = env.state.event_sender.subscribe();
+    let (_, d) = floor_allowed().remove(0);
+    let (id, rx) = approval(&env, d).await;
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>GMAIL_SEND_EMAIL</code>")).await;
+    assert_eq!(card.callbacks().len(), 1, "{:?}", card.buttons());
+    tg.tap(&bot, &PERSON, card.message_id(), &card.callbacks()[0]);
+    assert!(matches!(tokio::time::timeout(Duration::from_secs(20), rx).await.unwrap().unwrap(), ApprovalDecision::AllowOnce));
+    assert_eq!(withdrawn(&mut events, &id).await, (Some("telegram".into()), Some("allowed_once".into())));
+    let row = listed(&env, &id).await;
+    assert_eq!((row["answered_via"].as_str(), row["status"].as_str()), (Some("telegram"), Some("allowed_once")), "{row}");
+}
+
+/// Marks a Telegram ask as sent with Allow once, as a message from before a rule change was.
+async fn arm(env: &Env, ask: &str) {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", env.state.config.data_dir.join("kwnt.db").display()))
+        .await
+        .unwrap();
+    let n = sqlx::query("UPDATE telegram_asks SET allow = 1 WHERE id = ?").bind(ask).execute(&pool).await.unwrap().rows_affected();
+    assert_eq!(n, 1);
+    pool.close().await;
+}
+
 async fn sqlx_update_parameters(env: &Env, id: &str, params: Value) {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
