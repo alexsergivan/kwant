@@ -1,0 +1,47 @@
+title: Browser proxy: your bots' browser through a home connection
+description: Send only kwant's bot browser through a SOCKS5 or HTTP proxy with KWNT_BROWSER_PROXY, so sites see a home connection, not a VPS. Check it with kwnt doctor.
+card_title: Browser proxy
+path: docs/browser-proxy.html
+nav: browser-proxy
+card: Send only the bots' browser through a proxy, so sites see a home connection instead of a datacenter.
+card_art: avatar:user
+---
+<p class="kicker">Docs</p>
+<h1>Browser proxy: a home connection for your bots' browser</h1>
+<p class="intro">Sites treat a datacenter address, like a VPS, differently from a home one: more CAPTCHAs and blocked sign-ins. kwant can send the bots' browser, and only the browser, out through a proxy, so sites see the proxy's connection. It's off until you set it.</p>
+
+<h2 id="turn-on">Turn it on</h2>
+<p>Set <code>KWNT_BROWSER_PROXY</code> where kwant runs:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Value</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td><code>socks5://host:port</code></td><td>SOCKS5. The proxy looks up site names, so your own resolver never sees which sites the bots open.</td></tr>
+    <tr><td><code>socks5h://host:port</code></td><td>The same as <code>socks5</code>.</td></tr>
+    <tr><td><code>http://host:port</code>, <code>https://host:port</code></td><td>An HTTP or HTTPS proxy.</td></tr>
+  </tbody>
+</table></div>
+<p><code>KWNT_BROWSER_PROXY_BYPASS</code> adds hosts that skip the proxy, separated by <code>;</code> or <code>,</code>, in Chromium's form: <code>example.com</code>, <code>*.corp</code>, <code>10.9.0.0/16</code>.</p>
+<p>kwant's own services always skip the proxy: <code>laya</code>, <code>kwnt</code>, <code>browser</code>, <code>localhost</code>, <code>127.0.0.0/8</code>, <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, <code>192.168.0.0/16</code> and <code>169.254.0.0/16</code>. So private networks can't be reached through the proxy. List a host in the bypass only if it should go direct.</p>
+
+<h2 id="where">Where kwant runs</h2>
+<ul>
+  <li><strong>Docker compose.</strong> Put the value in <code>.env</code> next to <code>docker-compose.yml</code> (or in the shell), then run <code>docker compose up -d browser kwnt</code>. The browser container and <code>kwnt doctor</code> both read it.</li>
+  <li><strong>kwant starts its own browser container</strong> (VM mode without compose). The setting goes into the container. Changing or removing it replaces the container the next time a bot opens the browser, and open pages close once.</li>
+  <li><strong>Local mode</strong> (Chrome on your own computer). kwant starts its Chrome with the proxy. If that Chrome is still running from an earlier start, close it once so the next start picks the setting up.</li>
+</ul>
+<pre><code>KWNT_BROWSER_PROXY=socks5://172.17.0.1:1080</code></pre>
+<p class="note">From a container, the Docker host is <code>172.17.0.1</code> on the default bridge. A proxy that listens only on the host's <code>127.0.0.1</code> can't be reached from the container: run a relay on <code>172.17.0.1</code>, or use a proxy that listens on the bridge address.</p>
+
+<h2 id="no-credentials">No user names or passwords</h2>
+<p>kwant refuses a value with a user name or password in it, like <code>socks5://user:pass@host:port</code>. Chromium can't sign in to a SOCKS proxy at all, and a password in a command line or a container's settings would leak. Use a proxy that trusts the network it's reached from: a relay on the Docker bridge, or a WireGuard-to-SOCKS helper next to kwant. The refusal never repeats what you typed.</p>
+
+<h2 id="check">Check it</h2>
+<pre><code>docker compose exec kwnt kwnt doctor</code></pre>
+<p>The <strong>Browser proxy</strong> line is OK when the proxy answers and a request through it leaves from a different address than a direct one, and it shows both addresses. It warns when the address is the same (the proxy doesn't go anywhere else) or the test request fails. It fails when the proxy doesn't answer or the value can't be used.</p>
+
+<h2 id="notes">What it doesn't change</h2>
+<ul>
+  <li>Only the browser uses the proxy. The AI accounts' traffic and kwant's own downloads go direct.</li>
+  <li>A reverse proxy hop, WebRTC and the sites' own fingerprinting still exist. A home address helps, but it doesn't make the browser invisible. When a site still asks if you're human, <a href="browser.html#human-check">you solve it in the browser panel</a>.</li>
+</ul>
+<p>More on the browser itself, Local and VM mode and your own Chromium service: <a href="browser.html">AI agent browser</a>.</p>

@@ -1324,6 +1324,7 @@ impl Database {
     // Events
 
     pub async fn log_task_event(&self, task_id: &str, kind: &str, actor: &str, detail: &Value) -> Result<(), DbError> {
+        debug_assert!(super::event_kinds::is_task_event_kind(kind), "task event kind {kind:?} is not in TASK_EVENT_KINDS (src/db/event_kinds.rs)");
         // One statement that writes, so it takes SQLite's write lock up front (waiting on
         // busy_timeout): a transaction that read the mission first failed at once with "database
         // is locked" when another write landed in between, and the event was lost
@@ -1455,6 +1456,7 @@ pub(super) async fn insert_event(
     to: Option<&str>,
     detail: &Value,
 ) -> Result<(), DbError> {
+    debug_assert!(super::event_kinds::is_task_event_kind(kind), "task event kind {kind:?} is not in TASK_EVENT_KINDS (src/db/event_kinds.rs)");
     let mission: Option<String> = match mission_id {
         Some(m) => Some(m.to_string()),
         None => sqlx::query_as::<_, (Option<String>,)>("SELECT mission_id FROM tasks WHERE id = ?")
