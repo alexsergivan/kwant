@@ -310,6 +310,9 @@ async fn a_follow_up_excerpt_never_labels_a_customers_or_agents_words_as_the_per
     let at = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
     ok(&e, &token, "follow_up_create", json!({"at": at, "check": "Check the order."})).await;
     let row = e.state.db.get_routine(routines(&e).await[0]["id"].as_str().unwrap()).await.unwrap().unwrap();
+    // 22q: a bot's chat-API message saved with its sender's name from its turn token (after the
+    // anchor, so the excerpt's 3 messages before it stay as they were)
+    e.state.db.insert_message_with(&say(None, None, "user", "user", "Writer drafted the apology."), &with(json!({"sent_by_bot": true, "sent_by_bot_name": "Writer", "sent_by_kwant_id": "k-writer"}))).await.unwrap();
     for i in 0..25 {
         e.state.db.insert_message_with(&say(None, None, "kwant", &e.bot.name, &format!("later chatter {i}")), &plain).await.unwrap();
     }
@@ -328,6 +331,9 @@ async fn a_follow_up_excerpt_never_labels_a_customers_or_agents_words_as_the_per
     // A bot's chat-API message: "a bot", framed as a bot's (22n), never bare
     assert!(ctx.contains("a bot: [Message from bot unnamed (another assistant)."), "{ctx}");
     assert!(ctx.contains("\nScout says the courier is late.\n[End of message from unnamed]"), "framed to its end: {ctx}");
+    // 22q: one saved with its sender's name (from its turn token) is named and framed as that bot's
+    assert!(ctx.contains("Writer (bot): [Message from bot Writer (another assistant)."), "{ctx}");
+    assert!(ctx.contains("\nWriter drafted the apology.\n[End of message from Writer]"), "framed to its end: {ctx}");
     assert!(!ctx.contains("a bot: Scout says"), "{ctx}");
     assert_eq!(ctx.matches("Person:").count(), 1, "only the person's own line: {ctx}");
 }
