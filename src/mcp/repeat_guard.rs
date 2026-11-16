@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 /// Identical failures after which the same call is no longer sent.
 pub const REPEAT_LIMIT: u32 = 3;
+/// 22t proof only: the constant the new tests name; no behaviour.
+pub const REPEAT_CEILING: u32 = 2 * REPEAT_LIMIT;
 /// Calls the guard remembers per turn; the least recently failed one is dropped first.
 pub const MAX_KEYS: usize = 64;
 /// How much of the repeated error the stop text quotes.

@@ -136,7 +136,7 @@ pub fn on_event(guard: &RepeatGuard, msg: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::repeat_guard::{STOP_PREFIX, REPEAT_LIMIT};
+    use crate::mcp::repeat_guard::{stop_text, REPEAT_CEILING, REPEAT_LIMIT, STOP_PREFIX};
 
     // Shapes recorded from claude 2.1.325 (Nov 15), see autonomy/cli-tools-repeat-guard/impl.md
     fn pre(tool: &str, input: Value) -> Value {
@@ -232,6 +232,143 @@ mod tests {
         for junk in [json!(null), json!({}), json!({"hook_event_name": "PreToolUse"}), json!({"tool_name": "Bash"})] {
             assert_eq!(on_event(&g, &junk), None);
         }
+    }
+
+    // ---- 22t: a stopped call gets its tries again once something changed ----
+
+    const NPM_ERR: &str = "Exit code 1\nFAIL src/sum.test.js\n  expected 3, received 4";
+
+    fn npm(description: &str) -> Value {
+        json!({"command": "npm test", "description": description})
+    }
+
+    /// `npm test` fails the same way 3 times; the 4th is denied.
+    fn npm_fails_three_times(g: &RepeatGuard) {
+        for i in 0..REPEAT_LIMIT {
+            assert_eq!(on_event(g, &pre("Bash", npm("run tests"))), None, "npm test {} runs", i + 1);
+            on_event(g, &failed("Bash", npm("run tests"), NPM_ERR));
+        }
+        assert!(on_event(g, &pre("Bash", npm("again"))).is_some(), "4th npm test denied");
+    }
+
+    #[test]
+    fn a_an_edit_that_worked_lets_the_stopped_test_run_again() {
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        let edit = json!({"file_path": "/w/src/sum.js", "old_string": "a + b + 1", "new_string": "a + b"});
+        assert_eq!(on_event(&g, &pre("Edit", edit.clone())), None);
+        on_event(&g, &worked("Edit", edit));
+        assert_eq!(on_event(&g, &pre("Bash", npm("after the fix"))), None, "the 4th npm test runs after the edit");
+        on_event(&g, &worked("Bash", npm("after the fix")));
+        assert_eq!(on_event(&g, &pre("Bash", npm("once more"))), None);
+        // Write, MultiEdit and NotebookEdit change files too
+        for tool in ["Write", "MultiEdit", "NotebookEdit"] {
+            let g = RepeatGuard::default();
+            npm_fails_three_times(&g);
+            on_event(&g, &worked(tool, json!({"file_path": "/w/x"})));
+            assert_eq!(on_event(&g, &pre("Bash", npm("again"))), None, "{tool} reopens it");
+        }
+        // An edit that failed changed nothing
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        on_event(&g, &failed("Edit", json!({"file_path": "/w/x"}), "String to replace not found in file."));
+        assert!(on_event(&g, &pre("Bash", npm("again"))).is_some());
+    }
+
+    #[test]
+    fn b_a_different_shell_command_that_worked_lets_it_run_again() {
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        let sed = json!({"command": "sed -i 's/a + b + 1/a + b/' src/sum.js", "description": "fix the sum"});
+        assert_eq!(on_event(&g, &pre("Bash", sed.clone())), None);
+        on_event(&g, &worked("Bash", sed));
+        assert_eq!(on_event(&g, &pre("Bash", npm("after sed"))), None, "the 4th npm test runs after sed");
+        // A different shell command that failed changed nothing
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        on_event(&g, &failed("Bash", json!({"command": "sed -i 's/x/y/' nope.js"}), "Exit code 2\nsed: can't read nope.js"));
+        assert!(on_event(&g, &pre("Bash", npm("again"))).is_some());
+    }
+
+    #[test]
+    fn c_a_read_does_not_reopen_it_but_a_later_edit_does() {
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        for (tool, input) in [
+            ("Read", json!({"file_path": "/w/src/sum.js"})),
+            ("Grep", json!({"pattern": "a \\+ b", "path": "/w/src"})),
+            ("Glob", json!({"pattern": "**/*.test.js"})),
+            ("LS", json!({"path": "/w/src"})),
+            ("WebFetch", json!({"url": "https://jestjs.io/docs/expect", "prompt": "toBe"})),
+            ("TodoWrite", json!({"todos": [{"content": "fix sum", "status": "in_progress"}]})),
+        ] {
+            assert_eq!(on_event(&g, &pre(tool, input.clone())), None, "{tool} runs");
+            on_event(&g, &worked(tool, input));
+            let out = on_event(&g, &pre("Bash", npm("again"))).unwrap_or_else(|| panic!("{tool} reopened npm test"));
+            assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(3, NPM_ERR));
+        }
+        // Then the bot really fixes the file
+        on_event(&g, &worked("Edit", json!({"file_path": "/w/src/sum.js", "old_string": "+ 1", "new_string": ""})));
+        assert_eq!(on_event(&g, &pre("Bash", npm("after the fix"))), None);
+    }
+
+    #[test]
+    fn d_with_an_edit_between_every_failure_it_stops_at_the_turn_ceiling() {
+        let g = RepeatGuard::default();
+        for i in 1..=REPEAT_CEILING {
+            assert_eq!(on_event(&g, &pre("Bash", npm(&format!("try {i}")))), None, "npm test {i} runs");
+            on_event(&g, &failed("Bash", npm(&format!("try {i}")), NPM_ERR));
+            on_event(&g, &worked("Edit", json!({"file_path": "/w/src/sum.js", "old_string": format!("v{i}"), "new_string": format!("v{}", i + 1)})));
+        }
+        let out = on_event(&g, &pre("Bash", npm("try 7"))).expect("the 7th npm test is denied");
+        let reason = out["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert_eq!(reason, stop_text(REPEAT_CEILING, NPM_ERR));
+        assert!(reason.contains("already failed 6 times in this turn"), "{reason}");
+        // Neither an edit nor another shell command lifts the ceiling
+        on_event(&g, &worked("Write", json!({"file_path": "/w/src/sum.js"})));
+        on_event(&g, &worked("Bash", json!({"command": "git stash"})));
+        assert!(on_event(&g, &pre("Bash", npm("try 8"))).is_some());
+        // 3 in a row, an edit, 3 in a row: the 6th is the ceiling too
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        on_event(&g, &worked("Edit", json!({"file_path": "/w/a"})));
+        for i in 4..=6 {
+            assert_eq!(on_event(&g, &pre("Bash", npm("t"))), None, "npm test {i} runs");
+            on_event(&g, &failed("Bash", npm("t"), NPM_ERR));
+        }
+        on_event(&g, &worked("Edit", json!({"file_path": "/w/b"})));
+        assert!(on_event(&g, &pre("Bash", npm("t"))).is_some(), "stopped after 6 in the turn");
+    }
+
+    #[test]
+    fn e_a_different_error_still_starts_again_at_1() {
+        let g = RepeatGuard::default();
+        let edit = |i: u32| worked("Edit", json!({"file_path": "/w/src/sum.js", "old_string": format!("v{i}"), "new_string": "x"}));
+        // 5 identical failures with edits between: under the ceiling, so each one ran
+        for i in 1..REPEAT_CEILING {
+            assert_eq!(on_event(&g, &pre("Bash", npm("t"))), None, "npm test {i} runs");
+            on_event(&g, &failed("Bash", npm("t"), NPM_ERR));
+            on_event(&g, &edit(i));
+        }
+        // The fix moved the failure on: a new error counts from 1, for both counts
+        let other = "Exit code 1\nFAIL src/mul.test.js\n  expected 6, received 5";
+        for i in 1..REPEAT_CEILING {
+            assert_eq!(on_event(&g, &pre("Bash", npm("t"))), None, "npm test with the new error {i} runs");
+            on_event(&g, &failed("Bash", npm("t"), other));
+            on_event(&g, &edit(10 + i));
+        }
+        on_event(&g, &failed("Bash", npm("t"), other));
+        let out = on_event(&g, &pre("Bash", npm("t"))).expect("6 of the new error stop it");
+        assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(6, other));
+        // Without edits, the new error still stops at 3, as before
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        on_event(&g, &edit(1));
+        for _ in 0..REPEAT_LIMIT {
+            on_event(&g, &failed("Bash", npm("t"), other));
+        }
+        let out = on_event(&g, &pre("Bash", npm("t"))).expect("3 of the new error in a row");
+        assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(3, other));
     }
 
     #[test]
