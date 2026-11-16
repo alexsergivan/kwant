@@ -670,17 +670,20 @@ pub async fn status(State(state): State<AppState>, req: Request) -> Response {
     let authenticated = !required || has_token;
     // Person-only actions (passwords, approvals) need it from another machine, or with `always`
     let person_required = person_token_needed(&state.api_token, headers, peer);
-    Json(json!({
+    let mut status = json!({
         "auth_required": required,
         "authenticated": authenticated,
         "person_auth_required": person_required,
         "person_authenticated": !person_required || has_token,
         // This server can let a new browser in from a signed-in device (`/api/auth/device`)
         "device_login": true,
-        // Where an app store or host shows this install's token (`KWNT_SIGNIN_HINT`), or null
-        "signin_hint": state.api_token.signin_hint(),
-    }))
-    .into_response()
+    });
+    // Where an app store or host shows this install's token (`KWNT_SIGNIN_HINT`). Left out
+    // when unset, so the reply keeps the shape existing clients already know.
+    if let Some(hint) = state.api_token.signin_hint() {
+        status["signin_hint"] = json!(hint);
+    }
+    Json(status).into_response()
 }
 
 #[derive(Deserialize)]

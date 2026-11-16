@@ -134,7 +134,7 @@ async fn a_store_hint_shows_before_sign_in_and_its_token_signs_in() {
     let (app, mut state, _tmp) = setup(Require::Auto).await;
     let remote = "203.0.113.9:50000";
     let (_, v) = get(&app, remote, "kwnt.example.com", "/api/auth/status", None).await;
-    assert_eq!(v["signin_hint"], Value::Null, "no hint unless the host sets one: {v}");
+    assert!(v.get("signin_hint").is_none(), "no hint field unless the host sets one: {v}");
 
     state.api_token = Arc::new(
         ApiToken::for_tests(TOKEN, Require::Auto, 8799).with_signin_hint("Use the password Umbrel shows for kwnt.\n"),

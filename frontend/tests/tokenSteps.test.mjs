@@ -130,6 +130,7 @@ test('without a hint the screen is unchanged: the box stays folded', () => {
 test('the hint from the status answer: text only, trimmed, null when missing or odd', () => {
   assert.equal(m.signinHintOf({ signin_hint: '  Copy KWNT_API_TOKEN from Render. ' }), 'Copy KWNT_API_TOKEN from Render.');
   assert.equal(m.signinHintOf({ signin_hint: null }), null);
+  assert.equal(m.signinHintOf({}), null, 'a server without a hint leaves the field out');
   assert.equal(m.signinHintOf({}), null);
   assert.equal(m.signinHintOf({ signin_hint: '   ' }), null);
   assert.equal(m.signinHintOf({ signin_hint: 42 }), null);

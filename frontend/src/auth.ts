@@ -61,7 +61,7 @@ export interface AuthStatus {
   person_authenticated?: boolean;
   /** This server can let a new browser in from a signed-in device (newer servers). */
   device_login?: boolean;
-  /** Where an app store or host shows this install's token (`KWNT_SIGNIN_HINT`), plain text. */
+  /** Where an app store or host shows this install's token (`KWNT_SIGNIN_HINT`), plain text; absent when unset. */
   signin_hint?: string | null;
 }
 
