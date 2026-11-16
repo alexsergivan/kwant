@@ -483,9 +483,12 @@ test('empty state: the jar is empty, Try one fills the field without dropping it
 });
 
 test('dropping an idea: POST, then it shows in the jar and the live region says so', async () => {
-  reset();
+  const list = listOf();
+  reset(list);
   const made = { ...FIX.ideas[0], id: 'new-1', text: 'A faster way to find old chats', created_at: '2026-11-05T10:50:59Z' };
-  routes['POST /api/ideas'] = [201, { idea: made }];
+  // The server keeps the drop, as the real one does: the jar refetches 250 ms after it, and a list without new-1 took the
+  // card away again when the test looked late under load (22y).
+  routes['POST /api/ideas'] = () => (list.ideas.unshift(clone(made)), [201, { idea: made }]);
   const host = await jar();
   const input = host.querySelector('[data-quick-add] input');
   await typeInto(input, '  A faster way to find old chats ');
