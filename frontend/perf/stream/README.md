@@ -9,6 +9,8 @@ The streamed reply (~9,000 characters) cycles through prose with a list and a qu
 list and a table. `window.__harness.finish()` lands it as the saved message.
 `window.__harness.stream(count, perSecond)` then sends a turn of `count` text tokens at `perSecond`, the
 way the server's events arrive.
+`?steps=4` gives the turn four finished tool steps, sent by `window.__harness.tools()` before any words, and
+`?page=1` makes the first one a browser visit so the browsed chip shows (18f). The landed reply keeps them.
 
 `run.mjs` serves the build, opens it in headless Chromium, runs the stream and prints one JSON line:
 

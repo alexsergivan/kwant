@@ -575,7 +575,7 @@ fn turn_conversation(state: &AppState, turn_id: &str) -> String {
 
 /// The chat a tracked turn runs in, as `{"thread_id"}`, `{"channel_id"}` or
 /// `{"direct_kwant_id"}`; `None` for a turn kwnt isn't tracking.
-async fn turn_chat(state: &AppState, turn_id: &str) -> Option<Value> {
+pub(super) async fn turn_chat(state: &AppState, turn_id: &str) -> Option<Value> {
     let turn = state.turns.active_turns().into_iter().find(|t| t.turn_id == turn_id)?;
     Some(match turn.thread_id {
         Some(thread) => json!({"thread_id": thread}),
