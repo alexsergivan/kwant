@@ -183,7 +183,7 @@ import { waitLine } from '../waitingChecks';
 const TONES: Record<Tone, string> = {
   emerald: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-  violet: 'border-violet-500/30 bg-violet-500/10 text-violet-200',
+  violet: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
   sky: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   zinc: 'border-zinc-700 bg-zinc-800 text-zinc-300',
@@ -196,7 +196,7 @@ const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-1
 const subtleBtn = `${actionBtn} -ml-3 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 underline underline-offset-2 decoration-zinc-600`;
 const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
 const goodBtn = `${actionBtn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`;
-const reviewBtn = `${actionBtn} bg-violet-500/80 text-white hover:bg-violet-500`;
+const reviewBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
 const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg-rose-500/10`;
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40';
 // Card-sized buttons: compact on desktop, a full 40px tap target on the phone.
@@ -760,7 +760,7 @@ export const TaskCard: React.FC<{
           </span>
         )}
         {status && (
-          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && (approvalHolds(t.checks_summary) || stoppedWaiting(t) > 0)) ? 'text-amber-200' : autofixLive ? 'text-violet-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
+          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && (approvalHolds(t.checks_summary) || stoppedWaiting(t) > 0)) ? 'text-amber-200' : autofixLive ? 'text-sky-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
           </span>
         )}
@@ -809,7 +809,7 @@ export const TaskCard: React.FC<{
             <button
               type="button"
               onClick={() => openReview(t.id, 'board')}
-              className={`${cardBtn} border border-violet-400/40 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25`}
+              className={`${cardBtn} border border-sky-400/40 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25`}
               data-card-review
             >
               <ShieldCheck size={12} aria-hidden="true" />
@@ -1287,7 +1287,7 @@ const statusIcon = (tone: Tone) =>
   ) : tone === 'rose' ? (
     <XCircle size={15} className="text-rose-400" aria-hidden="true" />
   ) : tone === 'violet' ? (
-    <Loader2 size={15} className="text-violet-300 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+    <Loader2 size={15} className="text-info animate-spin motion-reduce:animate-none" aria-hidden="true" />
   ) : tone === 'amber' ? (
     <Hand size={15} className="text-amber-300" aria-hidden="true" />
   ) : (
@@ -1593,7 +1593,7 @@ export const FailureBox: React.FC<{
           </details>
         )}
         {status && (
-          <p className="flex items-start gap-1.5 text-violet-200" data-autofix-status={a!.status}>
+          <p className="flex items-start gap-1.5 text-sky-200" data-autofix-status={a!.status}>
             <RefreshCw size={13} className="mt-px shrink-0" aria-hidden="true" />
             <span>{status}</span>
           </p>
@@ -2420,15 +2420,15 @@ export const TaskDetailBody: React.FC<{
       )}
 
       {t.claim && (
-        <section aria-labelledby="live-h" className="px-3 py-2 rounded-lg border border-violet-500/30 bg-violet-500/10 text-xs" data-live>
-          <h4 id="live-h" className="flex items-center gap-1.5 font-semibold text-violet-100">
+        <section aria-labelledby="live-h" className="px-3 py-2 rounded-lg border border-sky-500/30 bg-sky-500/10 text-xs" data-live>
+          <h4 id="live-h" className="flex items-center gap-1.5 font-semibold text-sky-100">
             <span className="relative flex w-2 h-2" aria-hidden="true">
-              <span className="absolute inline-flex w-full h-full rounded-full bg-violet-400 opacity-75 animate-ping motion-reduce:animate-none" />
-              <span className="relative inline-flex w-2 h-2 rounded-full bg-violet-400" />
+              <span className="absolute inline-flex w-full h-full rounded-full bg-sky-400 opacity-75 animate-ping motion-reduce:animate-none" />
+              <span className="relative inline-flex w-2 h-2 rounded-full bg-sky-400" />
             </span>
             Working now
           </h4>
-          <p className="mt-0.5 text-violet-200">
+          <p className="mt-0.5 text-sky-200">
             {names[t.claim.kwant_id] || owner || 'A bot'} started {ago(t.claim.claimed_at, now)}. If nothing happens, it goes back to Ready {untilText(t.claim.expires_at, now)}.
           </p>
         </section>

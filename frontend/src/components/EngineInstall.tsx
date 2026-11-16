@@ -4,8 +4,8 @@ import { playSfx } from '../audio/chiptune';
 import { SetupApi, SetupItemId, canInstall, runInstall, setupApi } from '../setupInstall';
 
 const primaryBtn =
-  'inline-flex items-center gap-1.5 px-2.5 py-1 min-h-[28px] rounded-md text-[11px] font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300';
-const linkCls = 'inline-flex items-center gap-0.5 text-violet-300 hover:text-violet-200 underline-offset-2 hover:underline';
+  'kw-btn-primary kw-focus px-2.5 py-1 min-h-[28px] rounded-md text-[11px] motion-reduce:transition-none';
+const linkCls = 'inline-flex items-center gap-0.5 text-info hover:text-sky-200 underline-offset-2 hover:underline';
 
 /** How long an install usually takes, for the progress line. */
 const ABOUT: Partial<Record<SetupItemId, string>> = { claude: 'about 15 seconds' };
@@ -94,7 +94,7 @@ export const EngineInstall: React.FC<{
     const about = ABOUT[item];
     return (
       <p role="status" aria-live="polite" data-engine-install="installing" className="flex items-center gap-1.5 text-[11px] text-zinc-300">
-        <Loader2 size={12} className="shrink-0 motion-safe:animate-spin text-violet-300" aria-hidden="true" />
+        <Loader2 size={12} className="shrink-0 motion-safe:animate-spin text-info" aria-hidden="true" />
         Installing {name}…{about ? ` (${about})` : ''}
       </p>
     );

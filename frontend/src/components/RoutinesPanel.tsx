@@ -80,7 +80,7 @@ const StatusBadge: React.FC<{ status: RunStatus }> = ({ status }) => (
 /** On a routine added from one kwant suggested (Automation Discovery). */
 export const SuggestedBadge: React.FC = () => (
   <span
-    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border bg-violet-500/10 text-violet-200 border-violet-500/25"
+    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border bg-sky-500/10 text-sky-200 border-sky-500/25"
     title="You added this from a suggestion, after you asked for it on a regular rhythm."
   >
     <Sparkles size={9} aria-hidden="true" />
@@ -474,7 +474,7 @@ const RunHistory: React.FC<{ routine: Routine; tick: number; onOpenRunResult?: (
                 <button
                   type="button"
                   onClick={() => onOpenRunResult!(t)}
-                  className="kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-violet-300 hover:text-violet-200"
+                  className="kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200"
                   aria-label={`Open the result of the run on ${formatWhen(r.started_at)}`}
                   data-compact
                   data-run-result={r.id}

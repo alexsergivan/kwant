@@ -134,7 +134,7 @@ export function useDoneDetail(item: InboxItem, runItem: InboxItem | null, api: D
 const label = 'text-[11px] font-semibold uppercase tracking-[0.06em] text-zinc-400';
 // F1: data-compact keeps the coarse-pointer 44 px min-height off these inline links; kw-hit's ::before keeps the
 // 44×44 tap area, so the chip and the Why line keep their own height.
-const linkBtn = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded text-meta font-semibold text-violet-300 hover:text-violet-200';
+const linkBtn = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded text-meta font-semibold text-info hover:text-sky-200';
 
 /**
  * "Read only · changed nothing" and "No checks set · Add one". With a done-check box (the item has `checked`),
@@ -164,7 +164,7 @@ export const DoneChips: React.FC<{
               <button
                 type="button"
                 onClick={onAddCheck}
-                className="kw-focus kw-hit rounded font-semibold text-violet-300 hover:text-violet-200"
+                className="kw-focus kw-hit rounded font-semibold text-info hover:text-sky-200"
                 data-compact
                 data-add-check
               >

@@ -59,7 +59,7 @@ test('a failed task AutoFix is handling says so on its card and sits in Needs yo
   assert.equal(m.cardStatus(failed({ autofix: null }), names, NOW), 'A check failed (try 1 of 3)');
   const c = ui.card({ task: failed({ autofix: attempt({ status: 'scheduled' }) }), names, now: NOW, onOpen: noop });
   assert.match(c, /data-autofix-badge[^>]*><span[^>]*>AutoFix</);
-  assert.match(c, /text-violet-200[^>]*>AutoFix retries shortly/);
+  assert.match(c, /text-sky-200[^>]*>AutoFix retries shortly/);
   assert.doesNotMatch(ui.card({ task: failed({ autofix: null }), names, now: NOW, onOpen: noop }), /data-autofix-badge/);
 });
 

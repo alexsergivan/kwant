@@ -53,7 +53,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
   const pending = view.status === 'pending';
   const done = view.status === 'denied' || view.status === 'undone' || gone;
   const evidence = evidenceText(view.evidence, view.requested_by_person);
-  const border = pending ? 'border-violet-500/40' : done ? 'border-zinc-800' : 'border-teal-400/25';
+  const border = pending ? 'border-sky-500/40' : done ? 'border-zinc-800' : 'border-teal-400/25';
   const can = (c: string) => pending && view.choices.includes(c);
   const leadIndex = hireLeadIndex(view);
   const team = isTeamHire(view);
@@ -65,7 +65,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
       <div className={`flex-1 min-w-0 max-w-2xl rounded-2xl rounded-tl-sm border bg-zinc-900/60 shadow-sm ${border}`}>
         <div className="px-4 pt-3 pb-2 space-y-1.5">
           <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-            <UserPlus size={12} className="text-violet-300" aria-hidden="true" />
+            <UserPlus size={12} className="text-info" aria-hidden="true" />
             <span>
               <span className="text-zinc-200">{proposer}</span>
               {team
@@ -130,7 +130,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
                     <p className={`font-medium break-words ${done ? 'text-zinc-400' : 'text-zinc-100'}`}>
                       {m.name}
                       {i === leadIndex && (
-                        <span className="ml-2 rounded-full border border-violet-500/40 bg-violet-500/10 px-1.5 py-px text-[10px] font-medium text-violet-200">Lead</span>
+                        <span className="ml-2 rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-px text-[10px] font-medium text-sky-200">Lead</span>
                       )}
                     </p>
                     {m.role && <p className="text-zinc-400 break-words">{m.role}</p>}
@@ -186,7 +186,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
 
         <div className="px-4 pb-3 pt-0.5 space-y-2">
           <p role="status" aria-live="polite" className="text-[11px]">
-            <span className={`inline-flex items-start gap-1.5 ${state.tone === 'ok' ? 'text-ok' : state.tone === 'wait' ? 'text-violet-200' : 'text-zinc-400'}`}>
+            <span className={`inline-flex items-start gap-1.5 ${state.tone === 'ok' ? 'text-ok' : state.tone === 'wait' ? 'text-sky-200' : 'text-zinc-400'}`}>
               {state.tone === 'ok' ? (
                 <CheckCircle2 size={13} className="mt-px shrink-0" aria-hidden="true" />
               ) : state.tone === 'off' ? (
@@ -206,7 +206,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
                   type="button"
                   onClick={() => decide('accept_once')}
                   disabled={busy !== null}
-                  className={`${btn} bg-violet-500 text-white hover:bg-violet-400 focus-visible:outline-violet-400`}
+                  className={`${btn} bg-sky-600 text-white hover:bg-sky-500 focus-visible:outline-sky-400`}
                 >
                   {busy === 'accept_once' && spin}
                   {busy === 'accept_once' ? 'Hiring…' : team ? `Approve all ${view.members.length}` : 'Accept once'}

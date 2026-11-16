@@ -94,7 +94,7 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center gap-2 p-3 text-left rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
       >
-        <Key size={14} className="text-violet-400" aria-hidden="true" />
+        <Key size={14} className="text-sky-400" aria-hidden="true" />
         <span className="flex-1">
           <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
           <span className="block text-[11px] text-zinc-500">

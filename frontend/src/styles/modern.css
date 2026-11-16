@@ -1044,7 +1044,7 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
 @keyframes kw-prepush-flash { 0% { opacity: 0; } 13.3% { opacity: 1; } 86.7% { opacity: 1; } 100% { opacity: 0; } }
 /* Off by default; on only when motion is allowed, so reduced motion never sees it. */
 @media (prefers-reduced-motion: no-preference) {
-  .kw-prepush-flash::after { display: block; box-shadow: 0 0 0 2px rgb(167 139 250 / 0.6); opacity: 0; animation: kw-prepush-flash 1.2s linear 1 both; }
+  .kw-prepush-flash::after { display: block; box-shadow: 0 0 0 2px rgb(157 143 255 / 0.6); opacity: 0; animation: kw-prepush-flash 1.2s linear 1 both; }
 }
 
 /* H5: a row entering the pinned "Needs you" block (reordering inside it is not animated) */

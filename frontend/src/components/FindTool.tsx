@@ -215,7 +215,7 @@ const activeBar = 'shadow-[inset_2px_0_0_#9d8fff]';
 const Mark: React.FC<{ name: string; slug?: string }> = ({ name, slug }) => (
   <span
     aria-hidden="true"
-    className={`shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-lg border border-violet-400/20 text-[11px] font-semibold ${(slug && TINT[slug]) || 'text-violet-100'}`}
+    className={`shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-lg border border-sky-400/20 text-[11px] font-semibold ${(slug && TINT[slug]) || 'text-sky-100'}`}
     style={{ background: '#231d4b' }}
   >
     {appInitials(name)}

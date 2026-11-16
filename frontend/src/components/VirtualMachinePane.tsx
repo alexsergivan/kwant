@@ -532,7 +532,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           setPointing((p) => !p);
         }}
         className={`${narrow ? 'h-11 flex-1 justify-center' : 'h-8'} px-3 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 border ${
-          pointOn ? 'bg-violet-600 border-violet-400 text-white ring-[3px] ring-violet-500/25' : 'border-[#3f3868] text-zinc-200 hover:bg-white/5'
+          pointOn ? 'bg-sky-600 border-sky-400 text-white ring-[3px] ring-sky-500/25' : 'border-[#3f3868] text-zinc-200 hover:bg-white/5'
         }`}
       >
         <Crosshair size={14} aria-hidden="true" />

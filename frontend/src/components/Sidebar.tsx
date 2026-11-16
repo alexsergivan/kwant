@@ -1133,7 +1133,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ) : readyCount > 0 ? (
               <CheckCircle2 size={13} className="text-ok" aria-hidden="true" />
             ) : (
-              <KeyRound size={13} className="text-violet-300" aria-hidden="true" />
+              <KeyRound size={13} className="text-info" aria-hidden="true" />
             )}
             {/* The prompt wraps, so its fix is never cut off */}
             <span className={readyCount === 0 ? 'text-left' : 'truncate'}>

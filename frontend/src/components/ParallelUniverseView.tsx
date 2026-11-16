@@ -43,7 +43,7 @@ import { dateClock } from '../clock';
 const TONES: Record<Tone, string> = {
   emerald: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-  violet: 'border-violet-500/30 bg-violet-500/10 text-violet-200',
+  violet: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
   sky: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   zinc: 'border-zinc-700 bg-zinc-800 text-zinc-300',

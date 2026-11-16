@@ -52,11 +52,11 @@ const sectionTitle = 'text-xs font-semibold text-zinc-300 uppercase tracking-wid
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
-export const AppMark: React.FC<{ name: string; size?: number; tint?: string }> = ({ name, size = 36, tint = 'text-violet-100' }) => (
+export const AppMark: React.FC<{ name: string; size?: number; tint?: string }> = ({ name, size = 36, tint = 'text-sky-100' }) => (
   <span
     aria-hidden="true"
     data-app-mark-tint={tint}
-    className={`shrink-0 inline-flex items-center justify-center rounded-lg font-semibold ${tint} border border-violet-400/20`}
+    className={`shrink-0 inline-flex items-center justify-center rounded-lg font-semibold ${tint} border border-sky-400/20`}
     style={{ background: TILE_BG, width: size, height: size, fontSize: size * 0.36 }}
   >
     {appInitials(name)}

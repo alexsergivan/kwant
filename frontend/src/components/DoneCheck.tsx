@@ -34,7 +34,7 @@ import {
 } from '../doneCheck';
 import { Sticker } from './Sticker';
 
-const linkBtn = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded text-meta font-semibold text-violet-300 hover:text-violet-200';
+const linkBtn = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded text-meta font-semibold text-info hover:text-sky-200';
 
 const STATE_ICON: Record<CheckState, LucideIcon> = {
   checked: ShieldCheck,

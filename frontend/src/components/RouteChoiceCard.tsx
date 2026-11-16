@@ -80,13 +80,13 @@ export const RouteChoiceCard: React.FC<RouteChoiceCardProps> = ({ meta, messageI
       aria-labelledby={headingId}
       className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`}
     >
-      <div className="w-[34px] h-[34px] flex-shrink-0 rounded-full bg-violet-500/15 border border-violet-500/40 flex items-center justify-center" aria-hidden="true">
-        <Sparkles size={16} className="text-violet-300" />
+      <div className="w-[34px] h-[34px] flex-shrink-0 rounded-full bg-sky-500/15 border border-sky-500/40 flex items-center justify-center" aria-hidden="true">
+        <Sparkles size={16} className="text-info" />
       </div>
-      <div className={`flex-1 min-w-0 max-w-2xl rounded-2xl rounded-tl-sm border bg-zinc-900/60 shadow-sm ${open ? 'border-violet-500/40' : 'border-zinc-800'}`}>
+      <div className={`flex-1 min-w-0 max-w-2xl rounded-2xl rounded-tl-sm border bg-zinc-900/60 shadow-sm ${open ? 'border-sky-500/40' : 'border-zinc-800'}`}>
         <div className="px-4 pt-3 pb-2 space-y-1">
           <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-            <MessagesSquare size={12} className="text-violet-300" aria-hidden="true" />
+            <MessagesSquare size={12} className="text-info" aria-hidden="true" />
             <span className="text-zinc-200">Laya</span> · router
           </span>
           <h3 id={headingId} className="text-sm font-semibold text-zinc-100 leading-snug">
@@ -107,7 +107,7 @@ export const RouteChoiceCard: React.FC<RouteChoiceCardProps> = ({ meta, messageI
                 aria-pressed={chosen}
                 onClick={() => pick(o.key)}
                 onKeyDown={(e) => onKey(e, i)}
-                className={`flex items-start gap-2 min-h-[44px] px-3 py-2 rounded-xl text-left border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                className={`flex items-start gap-2 min-h-[44px] px-3 py-2 rounded-xl text-left border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
                   chosen
                     ? 'bg-teal-400/15 border-teal-400/40 text-teal-100'
                     : open

@@ -196,7 +196,7 @@ const SkillMeta: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, replac
     {shownOf(skill) ? (
       <ShownBadge />
     ) : skill.source === 'agent' ? (
-      <Badge tone="bg-violet-500/10 text-violet-300 border-violet-500/20">
+      <Badge tone="bg-sky-500/10 text-info border-sky-500/20">
         <Bot size={10} aria-hidden="true" /> Proposed
       </Badge>
     ) : (

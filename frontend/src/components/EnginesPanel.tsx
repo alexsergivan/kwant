@@ -109,7 +109,7 @@ export const EngineCard: React.FC<{
                 href={INSTALL_URL[engine.id]}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200 hover:underline underline-offset-2"
+                className="inline-flex items-center gap-1 text-[11px] text-info hover:text-sky-200 hover:underline underline-offset-2"
               >
                 Install {engine.name} <ExternalLink size={10} aria-hidden="true" />
               </a>

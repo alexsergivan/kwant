@@ -92,7 +92,7 @@ export function browserTabDoc(): TabDoc {
             const { cx, cy, r, ring } = dotGeometry(size);
             g.fillStyle = '#120e26';
             g.beginPath(); g.arc(cx, cy, r + ring, 0, Math.PI * 2); g.fill();
-            g.fillStyle = '#a78bfa';
+            g.fillStyle = '#9d8fff';
             g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
             resolve(c.toDataURL('image/png'));
           } catch { resolve(null); }

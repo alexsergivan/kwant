@@ -183,7 +183,7 @@ export const SuggestionCard: React.FC<{
     );
 
   return (
-    <li aria-labelledby={titleId} className="rounded-xl border border-violet-500/25 bg-zinc-950/60 p-3 space-y-2.5" data-testid="suggestion-card">
+    <li aria-labelledby={titleId} className="rounded-xl border border-sky-500/25 bg-zinc-950/60 p-3 space-y-2.5" data-testid="suggestion-card">
       <div className="flex items-start gap-2.5">
         {kwant ? (
           <ModernAvatar role={kwant.avatar_sprite} name={kwant.name} size={28} kwantId={kwant.id} />
@@ -460,9 +460,9 @@ export const SuggestedRoutines: React.FC<{
     <section aria-labelledby={headingId} className="space-y-2" data-testid="suggested-routines">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 id={headingId} className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
-          <Sparkles size={13} className="text-violet-300" aria-hidden="true" />
+          <Sparkles size={13} className="text-info" aria-hidden="true" />
           Suggested routines
-          {offers.length > 0 && <span className="px-1.5 rounded-full bg-violet-500/15 text-violet-200 text-[10px] font-medium">{offers.length}</span>}
+          {offers.length > 0 && <span className="px-1.5 rounded-full bg-sky-500/15 text-sky-200 text-[10px] font-medium">{offers.length}</span>}
         </h3>
         {list && blocked.length === 0 && (
           <div className="flex items-center gap-1.5">

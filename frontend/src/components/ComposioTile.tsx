@@ -391,7 +391,7 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
     body = (
       <div className="space-y-3">
         {open === 'switchKey' && (
-          <p className="flex items-start gap-2 px-3 py-2 rounded-lg border border-violet-400/30 bg-violet-500/10 text-xs text-violet-100" data-composio-switch-needs-key>
+          <p className="flex items-start gap-2 px-3 py-2 rounded-lg border border-sky-400/30 bg-sky-500/10 text-xs text-sky-100" data-composio-switch-needs-key>
             <Info size={14} className="mt-px shrink-0" aria-hidden="true" />
             The one-key setup needs your Composio API key. The apps you already connected stay connected.
           </p>
@@ -403,8 +403,8 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
     body = (
       <div className="space-y-2">
         {urlMode && entry.can_switch && (
-          <div className="px-3 py-2.5 rounded-xl border border-violet-400/30 bg-violet-500/10 space-y-2" data-composio-switch>
-            <p className="flex items-start gap-2 text-xs text-violet-100">
+          <div className="px-3 py-2.5 rounded-xl border border-sky-400/30 bg-sky-500/10 space-y-2" data-composio-switch>
+            <p className="flex items-start gap-2 text-xs text-sky-100">
               <Info size={14} className="mt-px shrink-0" aria-hidden="true" />
               Switch to the one-key setup to connect apps right here. Your bots then find any app by themselves, and the apps you already connected stay connected.
             </p>

@@ -58,7 +58,7 @@ export const HirePolicyPanel: React.FC<{ spaceId: string; spaceName: string }> =
   return (
     <section aria-labelledby={`${name}-title`} className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4 space-y-3">
       <div className="flex items-start gap-2">
-        <UserPlus size={15} className="mt-0.5 text-violet-300 shrink-0" aria-hidden="true" />
+        <UserPlus size={15} className="mt-0.5 text-info shrink-0" aria-hidden="true" />
         <div className="min-w-0">
           <h4 id={`${name}-title`} className="text-sm font-semibold text-zinc-100">
             Hiring new bots
@@ -101,7 +101,7 @@ export const HirePolicyPanel: React.FC<{ spaceId: string; spaceName: string }> =
               <label
                 key={o.id}
                 className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
-                  policy.policy === o.id ? 'border-violet-500/50 bg-violet-500/10' : 'border-zinc-800 hover:border-zinc-700'
+                  policy.policy === o.id ? 'border-sky-500/50 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-700'
                 }`}
               >
                 <input
@@ -110,7 +110,7 @@ export const HirePolicyPanel: React.FC<{ spaceId: string; spaceName: string }> =
                   value={o.id}
                   checked={policy.policy === o.id}
                   onChange={() => save({ policy: o.id }, 'policy')}
-                  className="mt-0.5 accent-violet-500"
+                  className="mt-0.5 accent-sky-500"
                 />
                 <span className="min-w-0">
                   <span className="block text-xs font-medium text-zinc-100">{o.label}</span>

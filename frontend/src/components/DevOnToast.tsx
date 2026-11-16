@@ -211,7 +211,7 @@ export const DevOnToast: React.FC<DevOnToastProps> = ({ state, onOpenDesk, onCon
               onClose();
             }}
             data-dev-on-toast-action={fix.key}
-            className={`min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-meta font-semibold text-[#c9c0ff] hover:bg-violet-500/10 ${focusRing}`}
+            className={`min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-meta font-semibold text-[#c9c0ff] hover:bg-sky-500/10 ${focusRing}`}
           >
             {fix.label}
           </button>
