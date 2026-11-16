@@ -325,16 +325,9 @@ function renderAccessory(c: Creature) {
     case 'sprout':
       return [px(13, 5, 1, 2, '#3ccf6e'), px(14, 4, 2, 1, '#3ccf6e'), px(11, 4, 2, 1, '#1f8f4c')];
     case 'roof':
-      // House (26e): a red roof with a chimney and one still smoke puff, all above the body (y 2–6).
-      return [
-        px(15, 3, 2, 3, '#8f5b4a'), px(15, 3, 2, 1, '#b07a63'),
-        px(17, 2, 1, 1, '#d9d6f0'), px(18, 2, 1, 1, '#8d87b8'),
-        px(12, 2, 2, 1, c.accent), px(11, 3, 4, 1, c.accent),
-        px(10, 4, 6, 1, c.accent), px(9, 5, 8, 1, c.accent),
-        px(7, 6, 12, 1, '#a8323a'),
-        px(14, 3, 1, 1, '#a8323a'), px(15, 4, 1, 1, '#a8323a'), px(16, 5, 1, 1, '#a8323a'),
-        px(12, 2, 1, 1, '#ff8f8f'),
-      ];
+      // House v3 (26e, Mira): only the chimney sits behind the body, on the LEFT slope so a top-right mood badge
+      // never hides it. The gable and squared walls are in renderOverlay.
+      return [px(8, 2, 2, 4, '#9a5a46'), px(8, 2, 2, 1, '#c98a6e')];
     case 'crown':
       return [
         px(10, 5, 6, 2, c.accent), px(10, 4, 1, 1, c.accent), px(12, 3, 2, 2, c.accent), px(15, 4, 1, 1, c.accent),
@@ -418,6 +411,18 @@ function renderOverlay(c: Creature) {
       ];
     case 'tie':
       return [px(12, 16, 2, 1, c.accent), px(12, 17, 2, 1, c.accent), px(12, 18, 2, 1, '#a8323a')];
+    case 'roof':
+      // House v3: a 45° gable in front of the body down to y 8 (the face starts at y 10, so blink and asleep lids
+      // still show), eaves 2 px past each wall, and squared lower corners so the body reads as a box.
+      return [
+        px(7, 16, 1, 1, c.shade), px(18, 16, 1, 1, c.shade), px(7, 17, 2, 1, c.shade), px(17, 17, 2, 1, c.shade),
+        px(12, 2, 2, 1, c.accent), px(11, 3, 4, 1, c.accent), px(10, 4, 6, 1, c.accent),
+        px(9, 5, 8, 1, c.accent), px(8, 6, 10, 1, c.accent), px(7, 7, 12, 1, c.accent),
+        px(5, 8, 16, 1, '#a8323a'),
+        px(13, 2, 1, 1, '#c23a42'), px(14, 3, 1, 1, '#c23a42'), px(15, 4, 1, 1, '#c23a42'),
+        px(16, 5, 1, 1, '#c23a42'), px(17, 6, 1, 1, '#c23a42'), px(18, 7, 1, 1, '#c23a42'),
+        px(12, 2, 1, 1, '#ff8f8f'), px(11, 3, 1, 1, '#ff8f8f'),
+      ];
     default:
       return [];
   }
