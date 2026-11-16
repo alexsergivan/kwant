@@ -30,7 +30,7 @@ test('one image: one file goes, the card gives it to the bot', () => {
 test('three mixed files: counted by kind; a dragged link alongside is not a file; no items hides the count', () => {
   const p = d.previewDrag([file('image/jpeg'), file('image/webp'), file('application/pdf'), str('text/uri-list')]);
   assert.equal(p.count, 3);
-  assert.deepEqual(p.kinds, { image: 2, video: 0, pdf: 1, text: 0, file: 0 });
+  assert.deepEqual(p.kinds, { image: 2, video: 0, audio: 0, pdf: 1, text: 0, file: 0 });
   assert.equal(d.whatLine(p), '3 files · 2 images, 1 PDF');
   const q = d.previewDrag([file('video/mp4'), file('text/markdown'), file('application/json'), file('')]);
   assert.deepEqual([q.kinds.video, q.kinds.text, q.kinds.file], [1, 2, 1]);
@@ -58,6 +58,18 @@ test('headings for every recipient', () => {
   assert.equal(c.announce, 'Drop to share 1 file with the Kitchen team: 1 image.');
 });
 
+test('a team whose name already ends in its own "team" is not called "… team team" (20e)', () => {
+  const mkt = { kind: 'team', name: 'Marketing_Team' };
+  assert.equal(d.headingText(d.dropHeading(mkt, 2)), 'Drop to share with the Marketing_Team');
+  assert.equal(d.headingText(d.dropHeading(mkt, 2, true)), 'Drop here to share with the Marketing_Team');
+  assert.deepEqual(d.dropHeading(mkt, 1), { pre: 'Drop to share with the ', name: 'Marketing_Team', post: '' }, 'the name is drawn as typed');
+  assert.equal(d.dropAnnouncement(1, mkt), '1 file added for the Marketing_Team. Uploading.');
+  const c = d.dropCard({ preview: d.previewDrag([file('image/png')]), recipient: mkt });
+  assert.equal(c.announce, 'Drop to share 1 file with the Marketing_Team: 1 image.');
+  assert.equal(d.headingText(d.dropHeading({ kind: 'team', name: 'SalesTeam' }, 2)), 'Drop to share with the SalesTeam');
+  assert.equal(d.headingText(d.dropHeading({ kind: 'team', name: 'Steam' }, 2)), 'Drop to share with the Steam team');
+});
+
 test('some won\'t go: over the limit, with the tray already holding files, and refused files beside good ones', () => {
   assert.equal(d.MAX_ATTACHMENTS, 10, 'the limit is unchanged');
   const eleven = Array.from({ length: 11 }, () => file('image/png'));
@@ -71,9 +83,9 @@ test('some won\'t go: over the limit, with the tray already holding files, and r
   assert.match(one.wont[0], /1 is already in\.$/);
   const mixed = card([file('image/png'), file('application/zip'), file('application/zip')]);
   assert.equal(mixed.state, 'over');
-  assert.deepEqual(mixed.wont, ["2 ZIPs can't go. Images, videos, PDFs and text or code files work."]);
-  const odd = card([file('image/png'), file('application/zip'), file('audio/mpeg')]);
-  assert.equal(odd.wont[0], "2 files can't go. Images, videos, PDFs and text or code files work.");
+  assert.deepEqual(mixed.wont, ["2 ZIPs can't go. Images, videos, audio, PDFs and text or code files work."]);
+  const odd = card([file('image/png'), file('application/zip'), file('audio/x-aiff')]);
+  assert.equal(odd.wont[0], "2 files can't go. Images, videos, audio, PDFs and text or code files work.");
   // A refused file still takes a slot, as addFiles does.
   const slot = d.previewDrag([file('application/zip'), file('image/png')], 9);
   assert.deepEqual({ go: slot.go, overBy: slot.overBy, refused: slot.refused.length }, { go: 0, overBy: 1, refused: 1 });
@@ -85,12 +97,12 @@ test('all refused: the neutral card, in the design\'s order', () => {
   assert.equal(zip.count, null);
   assert.equal(d.headingText(zip.heading), "This can't go to Frontend");
   assert.equal(zip.refusal.line1, "ZIP files can't be attached.");
-  assert.equal(zip.refusal.line2, 'Images, videos, PDFs and text or code files work. Unzip it and drop the files inside.');
+  assert.equal(zip.refusal.line2, 'Images, videos, audio, PDFs and text or code files work. Unzip it and drop the files inside.');
   assert.equal(zip.announce, "This can't go to Frontend. ZIP files can't be attached.");
-  const two = d.dropCard({ preview: d.previewDrag([file('audio/mpeg'), file('application/msword')]), recipient: team });
+  const two = d.dropCard({ preview: d.previewDrag([file('audio/x-aiff'), file('application/msword')]), recipient: team });
   assert.equal(d.headingText(two.heading), "These can't go to the Kitchen team");
   assert.equal(two.refusal.line1, "These files can't be attached.");
-  assert.equal(two.refusal.line2, 'Images, videos, PDFs and text or code files work.');
+  assert.equal(two.refusal.line2, 'Images, videos, audio, PDFs and text or code files work.');
   const office = card([file('application/vnd.openxmlformats-officedocument.wordprocessingml.document')]);
   assert.equal(office.refusal.line1, "Office files can't be attached.");
   // Idea mode first, then a disabled composer, then a full tray.
@@ -104,7 +116,7 @@ test('all refused: the neutral card, in the design\'s order', () => {
 });
 
 test('the refusal list before the drop matches what the tray refuses after it, and never refuses .ts or SVG', () => {
-  const refused = ['application/zip', 'application/x-zip-compressed', 'application/x-7z-compressed', 'audio/mpeg', 'audio/wav', 'font/woff2', 'image/heic', 'image/heif', 'image/avif', 'image/tiff', 'image/bmp',
+  const refused = ['application/zip', 'application/x-zip-compressed', 'application/x-7z-compressed', 'audio/x-aiff', 'audio/midi', 'audio/x-ms-wma', 'font/woff2', 'image/heic', 'image/heif', 'image/avif', 'image/tiff', 'image/bmp',
     'image/vnd.adobe.photoshop', 'video/x-matroska', 'video/x-msvideo', 'video/mpeg', 'application/msword', 'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.oasis.opendocument.text'];
   for (const t of refused) {
@@ -387,4 +399,17 @@ test('the phone\'s Settings page is not a dialog that keeps the pill away; other
   assert.equal(d.modalOpen(doc({ modal: true, settings: true })), false);
   assert.equal(d.modalOpen(doc({ modal: true })), true);
   assert.equal(d.modalOpen(doc({ role: 'alertdialog' })), true);
+});
+
+test('22l: audio the server takes is never refused before the drop, and counts as audio', () => {
+  for (const t of ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/aac', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg', 'audio/opus', 'audio/flac', 'audio/x-flac']) {
+    assert.equal(d.previewRefusesMime(t), false, t);
+    assert.equal(d.dragKind(t), 'audio', t);
+  }
+  const p = d.previewDrag([file('audio/mpeg'), file('audio/mpeg'), file('image/png')]);
+  assert.deepEqual({ go: p.go, audio: p.kinds.audio, refused: p.refused.length }, { go: 3, audio: 2, refused: 0 });
+  assert.equal(d.whatLine(p), '3 files · 2 audio files, 1 image');
+  // Audio kwant doesn't take keeps its words
+  const aiff = d.dropCard({ preview: d.previewDrag([file('audio/x-aiff')]), recipient: team });
+  assert.equal(aiff.refusal.line1, "Audio files can't be attached.");
 });

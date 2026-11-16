@@ -181,3 +181,41 @@ test('a limit message is never shown as a card summary', () => {
   assert.equal(a.awaySummary({ title: 't', summary: 'Brief' }), 'Brief');
   assert.equal(a.awaySummary({ title: 't', summary: "You've hit your session limit · resets 3am" }), '');
 });
+
+test('22f round 2: a backup refusal (409 needs_backup) keeps the chat card and shows the server reason', async () => {
+  const refusal = (code) => new a.AwayError(409, 'This step needs a fresh backup before it runs.', { status: 'needs_backup', code, error: 'This step needs a fresh backup before it runs.' });
+  for (const code of ['backup_required', undefined]) {
+    const err = refusal(code);
+    assert.equal(a.isBackupRefusal(err), true);
+    const dropped = [];
+    await assert.rejects(a.resolveFromList('a1', (id) => dropped.push(id), () => Promise.reject(err)));
+    assert.deepEqual(dropped, [], `code ${code}: the card is still waiting, so the chat keeps it`);
+    assert.deepEqual(a.failureNotice(err, 'Deploy'), { text: 'This step needs a fresh backup before it runs. (“Deploy”)', error: true });
+  }
+  // A body with no reason falls back to the plain sentence.
+  const bare = new a.AwayError(409, 'Request failed (HTTP 409).', { status: 'needs_backup' });
+  assert.match(a.failureNotice(bare, 'X').text, /^This step needs a backup from the last 10 minutes/);
+  // A plain lapse (409 without needs_backup) and a 404 still drop the card; success drops it too.
+  for (const err of [new a.AwayError(409, 'Already answered', { error: 'Already answered' }), new a.AwayError(404, 'Not found')]) {
+    const dropped = [];
+    await assert.rejects(a.resolveFromList('a1', (id) => dropped.push(id), () => Promise.reject(err)));
+    assert.deepEqual(dropped, ['a1']);
+    assert.equal(a.isBackupRefusal(err), false);
+  }
+  const dropped = [];
+  assert.equal(await a.resolveFromList('a1', (id) => dropped.push(id), async () => 'ok'), 'ok');
+  assert.deepEqual(dropped, ['a1']);
+  assert.deepEqual(a.failureNotice(new a.AwayError(409, 'Already answered'), 'X'), { text: 'This request expired: “X”', error: true });
+});
+
+test('22f round 2: the server body reaches AwayError from a real 409', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ status: 'needs_backup', code: 'backup_required', error: 'Needs one.' }), { status: 409 });
+  try {
+    const err = await a.awayApi.resolve('a1', 'allow_once', true).then(() => null, (e) => e);
+    assert.equal(a.isBackupRefusal(err), true);
+    assert.equal(err.message, 'Needs one.');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
