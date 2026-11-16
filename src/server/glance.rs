@@ -212,12 +212,21 @@ const OUTWARD_VERB_WORDS: &[&str] = &["email", "mail", "drop", "post", "pay", "s
 /// Whole words that add a second action to a read name, so the read verb can't vouch for it:
 /// `find_and_share_file`, `get_then_pay`, `list_or_create_posts` (via `create`), `fetch_and_reply` (21a).
 /// 22h (Rigel's F1 on #692): `change_post_status`, `retry_payment_status`, `MAILCHIMP_SUBSCRIBE_TO_LIST`,
-/// `join_mailing_list`, `MAILCHIMP_ARCHIVE_MEMBER_FROM_LIST`.
+/// `join_mailing_list`, `MAILCHIMP_ARCHIVE_MEMBER_FROM_LIST`. 22u (Rigel's gaps on #716):
+/// `opt_out_mailing_list`, `OPTOUT_EMAIL_LIST`, `resubscribe_mailing_list`, `notify_email_list`.
 const SECOND_ACTION_WORDS: &[&str] = &[
     "and", "then", "create", "update", "add", "set", "put", "write", "edit", "modify", "reply", "save", "schedule", "upsert", "insert",
     // 22h
     "change", "toggle", "retry", "capture", "refund", "subscribe", "unsubscribe", "join", "leave", "archive",
+    // 22u
+    "opt", "optout", "resubscribe", "notify",
 ];
+
+/// Word runs of a tool name ([`words`]) that sign someone up to a list or off it, so they act
+/// outside kwant whatever the list is called and whatever read word the name has (22u, Rigel's
+/// gaps on #716): `resubscribe_list`, `subscribe_to_list`, `opt_out_of_list`, `optInList`. Whole
+/// words, so `list_subscribers`, `get_subscription` and `opt_level` stay out.
+const OUTWARD_LIST_RUNS: &[&[&str]] = &[&["subscribe"], &["unsubscribe"], &["resubscribe"], &["optout"], &["optin"], &["opt", "out"], &["opt", "in"]];
 
 /// Whole words in the value of an `action`, `operation` or `op` argument ([`is_action_key`]) that
 /// change or destroy something (18c, Rigel's H01–H02): the [`WRITE_METHODS`] verbs, plus these.
@@ -319,9 +328,27 @@ const GIT_KEY_WORDS: &[&str] = &["ref", "refs", "branch", "branches", "tag", "ta
 /// `refs/` are checked in [`git_signal`].
 const GIT_SIGNAL_WORDS: &[&str] = &["git", "gh", "origin", "upstream", "remote", "branch", "force"];
 
-/// Whether a value carries a git signal: a [`GIT_SIGNAL_WORDS`] word, `refs/`, or `HEAD`.
+/// Whole words ([`words`]) in a value that name a tool people type before a ship verb, so a push
+/// word with them is a command, not prose (22u, Rigel's F1 on #697): `npm publish`, `docker push`,
+/// `helm push chart.tgz oci://reg`, `kubectl rollout restart deploy/app`. Counted like
+/// [`GIT_SIGNAL_WORDS`], anywhere in the value.
+const SHIP_TOOL_WORDS: &[&str] = &[
+    "docker", "npm", "npx", "yarn", "pnpm", "cargo", "helm", "kubectl", "terraform", "vercel", "wrangler", "firebase", "netlify", "twine", "rsync", "scp",
+];
+
+/// Ship tools whose names are everyday words too, so they count only right before a push word
+/// (22u): `make deploy`, `fly deploy`, `make release`. "Make sure we merge it" and "fly to the
+/// release party" stay prose.
+const SHIP_TOOL_VERB_WORDS: &[&str] = &["make", "fly"];
+
+/// Whether a value carries a git signal: a [`GIT_SIGNAL_WORDS`] or [`SHIP_TOOL_WORDS`] word, a
+/// [`SHIP_TOOL_VERB_WORDS`] word right before a push word, `refs/`, or `HEAD`.
 fn git_signal(s: &str) -> bool {
-    words(s).iter().any(|w| GIT_SIGNAL_WORDS.contains(&w.as_str())) || s.contains("refs/") || s.split(|c: char| !c.is_alphanumeric()).any(|t| t == "HEAD")
+    let w = words(s);
+    w.iter().any(|w| GIT_SIGNAL_WORDS.contains(&w.as_str()) || SHIP_TOOL_WORDS.contains(&w.as_str()))
+        || w.windows(2).any(|p| SHIP_TOOL_VERB_WORDS.contains(&p[0].as_str()) && has_push_word(&p[1]))
+        || s.contains("refs/")
+        || s.split(|c: char| !c.is_alphanumeric()).any(|t| t == "HEAD")
 }
 
 /// Whether a value under this key is an action, a mode, a command or a git thing, so any push word
@@ -385,7 +412,8 @@ fn ships_by_name(tool: &str) -> bool {
 }
 
 /// Whether a tool name acts outside kwant or destroys something ([`inline_refusal`] step 3): a
-/// part of it is one of [`OUTWARD_NAMES`], or it has an outward noun ([`OUTWARD_NOUNS`] as a part,
+/// part of it is one of [`OUTWARD_NAMES`], it signs someone up to a list or off it
+/// ([`OUTWARD_LIST_RUNS`], 22u), or it has an outward noun ([`OUTWARD_NOUNS`] as a part,
 /// [`OUTWARD_NAME_WORDS`] as a whole word) and doesn't only read ([`reads_outward_noun`]).
 fn outward_by_name(tool: &str) -> bool {
     let upper = tool.to_ascii_uppercase();
@@ -393,6 +421,9 @@ fn outward_by_name(tool: &str) -> bool {
         return true;
     }
     let name = words(tool);
+    if OUTWARD_LIST_RUNS.iter().any(|run| name.windows(run.len()).any(|w| w.iter().zip(run.iter()).all(|(a, b)| a == b))) {
+        return true;
+    }
     let noun = OUTWARD_NOUNS.iter().any(|w| upper.contains(w)) || name.iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str()));
     noun && !reads_outward_noun(tool, &name)
 }
@@ -1494,6 +1525,170 @@ mod tests {
         // A Composio prefix moves the verb's place to the second word only in an APP_ACTION name
         assert!(app_prefixed("SLACK_SHARE_GET") && app_prefixed("STRIPE_PAYMENT_STATUS"));
         assert!(!app_prefixed("share_get_x") && !app_prefixed("POST_LIST") && !app_prefixed("GMAILFETCHEMAILS"));
+    }
+
+    /// 22u (Rigel's F1 on #697): ship commands typed as free text, with one row per
+    /// [`SHIP_TOOL_WORDS`] and [`SHIP_TOOL_VERB_WORDS`] word.
+    fn ship_command_rows() -> Vec<&'static str> {
+        vec![
+            // F1, as Rigel probed them
+            "npm publish",
+            "docker push",
+            "yarn publish",
+            "make deploy",
+            "fly deploy",
+            "wrangler deploy",
+            "docker push myorg/app:latest",
+            "cargo publish --allow-dirty",
+            "npm publish --access public",
+            "helm push chart.tgz oci://reg",
+            "vercel deploy --prod",
+            "firebase deploy --only hosting",
+            "kubectl rollout restart deploy/app",
+            "rsync -av dist/ web1:/srv/app and deploy",
+            "docker\u{a0}push",
+            // The other new signal words
+            "npx semantic-release",
+            "pnpm publish --access public",
+            "terraform apply and deploy",
+            "netlify deploy --prod",
+            "twine upload dist/* and tag the release",
+            "scp app.tgz web1:/srv && deploy",
+            "make release",
+            "fly deploy --app web",
+            "please run docker push for me",
+        ]
+    }
+
+    /// 22u: must keep Allow once under a key that isn't strict (a sentence, or a ship word with no
+    /// ship tool right before it).
+    fn ship_prose_rows() -> Vec<&'static str> {
+        vec![
+            "Our press release",
+            "press release",
+            "Release notes for 0.9",
+            "We will merge the two lists",
+            "Publish the launch blog post on Monday",
+            "Tag me when done",
+            "How to merge two spreadsheets",
+            "Meeting: deploy plan review",
+            "Make sure we merge the two lists",
+            "We fly out before the release party",
+            "Make the deploy checklist shorter",
+        ]
+    }
+
+    /// [`push_value_counts`] as #697 and #716 shipped it: [`GIT_SIGNAL_WORDS`], `refs/` and `HEAD`
+    /// were the only signals.
+    fn push_value_counts_at_21b(s: &str, strict: bool) -> bool {
+        let signal = words(s).iter().any(|w| GIT_SIGNAL_WORDS.contains(&w.as_str())) || s.contains("refs/") || s.split(|c: char| !c.is_alphanumeric()).any(|t| t == "HEAD");
+        let toks: Vec<&str> = s.split_whitespace().collect();
+        has_push_word(s) && (strict || toks.len() <= 1 || signal || (toks.len() == 2 && (has_push_word(toks[0]) || toks.iter().any(|t| t.chars().any(|c| c.is_ascii_digit())))))
+    }
+
+    #[test]
+    fn a_ship_command_in_free_text_needs_the_full_card() {
+        let rows = ship_command_rows();
+        assert_eq!(rows.len(), 24);
+        // Rigel's six keys: `input` is a run key (strict before and after), the other five aren't
+        let keys = ["text", "input", "message", "value", "content", "prompt"];
+        let mut flipped = 0;
+        for cmd in &rows {
+            for key in keys {
+                let d = mcp("x", "do_thing", json!({ key: cmd }));
+                let strict = strict_key(key);
+                assert_eq!(strict, key == "input", "{key}");
+                if !push_value_counts_at_21b(cmd, strict) {
+                    flipped += 1;
+                }
+                assert_eq!(inline_refusal(&d), Some(PUSHES), "island: {key}: {cmd}");
+                // Telegram never read push words in arguments, before or after
+                assert_eq!(ships_or_runs(&d), None, "telegram: {key}: {cmd}");
+            }
+        }
+        // Every row was Allow once under the five free-text keys at #716's head
+        assert_eq!(flipped, rows.len() * 5);
+        // A ship command under a run key or in an argv list already refused, and still does
+        assert_eq!(inline_refusal(&mcp("x", "do_thing", json!({"cmd": "npm publish"}))), Some(PUSHES));
+        assert_eq!(inline_refusal(&mcp("x", "do_thing", json!({"items": ["docker", "push"]}))), Some(PUSHES));
+    }
+
+    #[test]
+    fn prose_with_a_ship_word_keeps_allow_once() {
+        for key in ["text", "message", "value", "content", "prompt", "title", "subject"] {
+            for t in ship_prose_rows() {
+                assert!(!push_value_counts_at_21b(t, false), "at 21b: {t}");
+                assert_eq!(inline_refusal(&mcp("x", "do_thing", json!({ key: t }))), None, "island: {key}: {t}");
+            }
+        }
+        // A ship tool alone isn't a push: no push word, nothing to count
+        for t in ["docker build .", "npm install", "cargo test", "kubectl get pods", "make all"] {
+            assert_eq!(inline_refusal(&mcp("x", "do_thing", json!({"text": t}))), None, "{t}");
+        }
+        // The make/fly pair is whole words, side by side, in either case
+        assert!(git_signal("Make Deploy") && git_signal("FLY RELEASE") && git_signal("make_deploy"));
+        assert!(!git_signal("make the deploy") && !git_signal("maker deploy") && !git_signal("deploy make"));
+        // A ship tool counts anywhere, as a whole word only
+        assert!(git_signal("then docker it") && git_signal("NPM") && !git_signal("dockerfile") && !git_signal("helmet"));
+    }
+
+    /// 22u (Rigel's gaps on #716): list sign-ups and notices named like reads.
+    fn list_action_rows() -> Vec<(&'static str, Option<&'static str>)> {
+        vec![
+            // Must refuse: Rigel's names
+            ("opt_out_mailing_list", Some(OUTWARD)),
+            ("resubscribe_list", Some(OUTWARD)),
+            ("notify_email_list", Some(OUTWARD)),
+            ("OPTOUT_EMAIL_LIST", Some(OUTWARD)),
+            // Must refuse: the same words in other shapes
+            ("optOutMailingList", Some(OUTWARD)),
+            ("opt_in_list", Some(OUTWARD)),
+            ("subscribe_to_list", Some(OUTWARD)),
+            ("unsubscribe_from_list", Some(OUTWARD)),
+            ("resubscribe_mailing_list", Some(OUTWARD)),
+            ("NOTIFY_MAIL_LIST", Some(OUTWARD)),
+            ("get_email_list_and_notify", Some(OUTWARD)),
+            // Must allow: reads of subscribers and lists
+            ("list_subscribers", None),
+            ("get_subscription", None),
+            ("MAILCHIMP_LIST_SUBSCRIBERS", None),
+            ("MAILCHIMP_GET_LIST", None),
+            ("get_mailing_list", None),
+            ("list_notifications", None),
+            ("get_options", None),
+            ("opt_level", None),
+        ]
+    }
+
+    #[test]
+    fn list_sign_ups_and_notices_need_the_full_card() {
+        let rows = list_action_rows();
+        assert_eq!(rows.len(), 19);
+        for (tool, want) in rows {
+            let d = mcp("composio", tool, json!({}));
+            assert_eq!(inline_refusal(&d), want, "island: {tool}");
+            assert_eq!(ships_or_runs(&d), None, "telegram: {tool}");
+        }
+        for w in ["opt", "optout", "resubscribe", "notify"] {
+            assert!(SECOND_ACTION_WORDS.contains(&w), "{w}");
+        }
+        assert_eq!(words("opt_out"), ["opt", "out"]);
+        assert_eq!(words("optOut"), ["opt", "out"]);
+        assert_eq!(words("OPTOUT"), ["optout"]);
+    }
+
+    /// 22u changed only the signals and the list words: every older table keeps its verdicts.
+    #[test]
+    fn older_rows_keep_their_verdicts_after_22u() {
+        for (name, d, _before, want) in prose_rows() {
+            assert_eq!(inline_refusal(&d), want, "21b: {name}");
+        }
+        for (name, d, want) in outward_rows() {
+            assert_eq!(inline_refusal(&d), want, "21a: {name}");
+        }
+        for (tool, _, want) in writes_named_like_reads_rows() {
+            assert_eq!(inline_refusal(&mcp("composio", tool, json!({}))), want, "22h: {tool}");
+        }
     }
 
     #[test]
