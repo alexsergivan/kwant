@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- The 8 home-page demo clips on kwant.si are re-recorded against 0.9.18 so they no longer fail the site's media-freshness check ahead of 0.9.20.
+
 ## [Mac 0.9.18] - 2026-11-16
 
 kwant 0.9.18: a team named once, never "… team team", audio files up to 100 MB in the chat, a bot browser preview that never flashes white while a page loads, browser step cards that stop asking for you once they are closed, tidier reply buttons on a phone, a production deploy card that always has a way forward, A refused customer call remembers its chat and A step that keeps failing ends in one Blocked card.
