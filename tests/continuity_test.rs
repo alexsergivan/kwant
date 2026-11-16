@@ -1557,6 +1557,7 @@ async fn messages_load_around_and_before_a_message() {
     for q in [format!("around={foreign}"), format!("before={foreign}"), "around=nope".into()] {
         let (s, v) = req(&app, "GET", &format!("{base}?{q}"), None).await;
         assert_eq!(s, StatusCode::NOT_FOUND, "{q}");
+        assert_eq!(v, json!({ "code": "not_found", "error": "That message isn't in this chat." }), "{q}");
         assert!(!v.to_string().contains("elsewhere"));
     }
     // Bounded, and one mode at a time
@@ -1640,7 +1641,7 @@ async fn thread_messages_load_around_and_before_an_old_notice() {
     for q in [format!("around={foreign}"), format!("before={foreign}"), format!("around={direct}"), "around=nope".into()] {
         let (s, v) = req(&app, "GET", &format!("{base}?{q}"), None).await;
         assert_eq!(s, StatusCode::NOT_FOUND, "{q}");
-        assert_eq!(v, json!({ "error": "That message isn't in this chat." }), "{q}");
+        assert_eq!(v, json!({ "code": "not_found", "error": "That message isn't in this chat." }), "{q}");
     }
     // Bounded, and one mode at a time: the chat route's 400s
     for q in ["limit=0", "limit=201", "limit=-1", &format!("around={}&before={}", ids[1], ids[2])] {
