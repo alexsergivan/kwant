@@ -8,6 +8,10 @@
 //       hover:bg-sky-500 or lighter, or hover:brightness-1xx. White is 3.76:1 on sky-500 and 3.66:1 on the
 //       brightened accent gradient; use bg-sky-600 (5.1:1) with hover:bg-sky-700 (7.0:1), kw-btn-primary, or
 //       kw-hover-deepen on a bg-accent-gradient.
+//   (d) the same in CSS (26g follow-up 2): filter: brightness() above 1 in a :hover rule whose selector, or its
+//       base rule, sets white text (color #fff / white, @apply text-white). Use the deepen gradient instead.
+//   (e) the accent gradient's retired light stop #7a62f0 (4.35:1 under white), in frontend/src and
+//       tailwind.config.js. It is #745bef now. The rgb(122 98 240 / a) tints are a different thing and stay.
 // emerald and violet (Mira's ruling, audit section C, roadmap 26g): emerald is teal / ok and violet is kwant's
 // sky (lavender), so their classes and stock hex fail too. scripts/retint-emerald-violet.mjs does the mapping.
 import assert from 'node:assert/strict';
@@ -95,12 +99,41 @@ export function whiteOnLight(line) {
   return out;
 }
 
+// (d) Flat CSS rules (innermost blocks, so rules inside @media and @layer count too).
+const WHITE_CSS = /(?:^|[;{\s])color\s*:\s*(?:#fff(?:fff)?|white)\b|@apply[^;]*(?<![\w-])text-white(?![\w-])/i;
+const BRIGHT_CSS = /filter\s*:[^;]*brightness\(\s*([\d.]+)(%?)\s*\)/i;
+export function cssBrightHovers(text) {
+  const rules = [];
+  for (const m of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sel = m[1].replace(/\/\*[\s\S]*?\*\//g, '').trim();
+    const line = text.slice(0, m.index + m[1].length).split('\n').length;
+    rules.push({ sels: sel.split(',').map((x) => x.trim()), body: m[2], line });
+  }
+  const whiteSel = new Set(rules.filter((r) => WHITE_CSS.test(r.body)).flatMap((r) => r.sels));
+  const out = [];
+  for (const r of rules) {
+    const b = r.body.match(BRIGHT_CSS);
+    if (!b || (b[2] ? +b[1] / 100 : +b[1]) <= 1) continue;
+    const hover = r.sels.filter((x) => x.includes(':hover'));
+    const base = (x) => x.replace(/:hover/g, '').replace(/:not\([^)]*\)/g, '').trim();
+    if (hover.length && (WHITE_CSS.test(r.body) || hover.some((x) => whiteSel.has(x) || whiteSel.has(base(x)))))
+      out.push({ line: r.line, msg: `${hover[0]} brightens white text on hover (${b[0]}): deepen the gradient instead, background-image: linear-gradient(135deg, theme('colors.sky.600') 0%, theme('colors.sky.700') 100%) (kw-hover-deepen)` });
+  }
+  return out;
+}
+// (e)
+const RETIRED_STOP = /#7a62f0(?![0-9a-f])/gi;
+const retired = (at, line) => [...line.matchAll(RETIRED_STOP)].map((m) => `${at} ${m[0]} is the retired accent light stop (4.35:1 under white): use bg-accent-gradient / var(--accent-gradient), or #745bef`);
+
 export function scan() {
   const out = [];
   for (const p of walk(src)) {
     const file = relative(root, p).split('\\').join('/');
-    readFileSync(p, 'utf8').split('\n').forEach((line, i) => {
+    const text = readFileSync(p, 'utf8');
+    if (file.endsWith('.css')) for (const h of cssBrightHovers(text)) out.push(`${file}:${h.line} ${h.msg}`);
+    text.split('\n').forEach((line, i) => {
       const at = `${file}:${i + 1}`;
+      out.push(...retired(at, line));
       for (const m of line.matchAll(hexRe)) {
         const h = m[0].slice(0, 7).toLowerCase();
         if (HEX.has(h) && !exempt(file, h)) {
@@ -120,6 +153,7 @@ export function scan() {
       if (!file.endsWith('.css') && !WHITE_EXEMPT.some((e) => e.at === at)) for (const msg of whiteOnLight(line)) out.push(`${at} ${msg}`);
     });
   }
+  readFileSync(join(root, 'tailwind.config.js'), 'utf8').split('\n').forEach((line, i) => out.push(...retired(`tailwind.config.js:${i + 1}`, line)));
   return out;
 }
 
@@ -148,4 +182,9 @@ test('the guard itself catches what it should and lets kwant tokens through', ()
   assert.equal(whiteOnLight('bg-sky-500/10 text-white disabled:hover:brightness-100').length, 0, 'tints and a no-op brightness are fine');
   assert.equal(whiteOnLight('bg-sky-500 text-zinc-950 hover:brightness-110').length, 0, 'only white text');
   assert.equal(whiteOnLight('kw-hover-deepen bg-accent-gradient text-white').length, 0);
+  // (d) CSS hovers that brighten white text
+  const css = `.a { color: #fff; background: x; }\n.a:hover { filter: brightness(1.08); }\n.b { color: #fff; }\n.b:hover:not(:disabled) { filter: brightness(108%); }\n.c:hover { filter: brightness(1.1); }\n.d { color: #fff; }\n.d:hover { filter: brightness(1); }\n.e { @apply text-white; }\n.e:hover { filter: saturate(1.2) brightness(1.2); }`;
+  assert.deepEqual(cssBrightHovers(css).map((h) => h.line), [2, 4, 9], 'white base + brightness > 1 only');
+  // (e) the retired stop, any case; the rgb tint is fine
+  assert.equal(retired('x', 'from-[#7A62F0] #7a62f0 #745bef rgb(122 98 240 / 0.2)').length, 2);
 });
