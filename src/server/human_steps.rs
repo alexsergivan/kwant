@@ -937,6 +937,7 @@ mod tests {
             turn_id: Some(format!("turn-{kwant}")),
             workspace: None,
             sandbox_target: Some("team".into()),
+            repeats: Default::default(),
         }
     }
 

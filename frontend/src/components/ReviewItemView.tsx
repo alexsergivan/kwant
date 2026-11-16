@@ -65,6 +65,7 @@ import {
 } from '../reviewItem';
 
 export type { ReviewDone, ReviewEntry } from '../reviewItem';
+import { atClock } from '../clock';
 
 /** The calls the view makes; tests and screenshots pass a fake. */
 export interface ReviewItemApi {
@@ -738,7 +739,7 @@ const HeldBox: React.FC<{
   denyRef?: React.Ref<HTMLButtonElement>;
   onResolve: (d: 'allow_once' | 'deny') => void;
 }> = ({ h, n, bot, st, phone, lock, denyRef, onResolve }) => {
-  const at = clock(st.at);
+  const at = atClock(st.at ?? null);
   const box =
     st.state === 'allowed'
       ? 'border-teal-400/30 bg-teal-400/[0.05]'
@@ -749,10 +750,10 @@ const HeldBox: React.FC<{
     st.state === 'allowed' ? (
       <span className="text-ok">
         <Check size={13} className="inline -mt-0.5 mr-1" aria-hidden="true" />
-        You allowed this{at ? ` at ${at}` : ''}. It ran:
+        You allowed this{at ? ` ${at}` : ''}. It ran:
       </span>
     ) : st.state === 'denied' ? (
-      <span className="text-zinc-300">You denied this{at ? ` at ${at}` : ''}. It didn’t run.</span>
+      <span className="text-zinc-300">You denied this{at ? ` ${at}` : ''}. It didn’t run.</span>
     ) : st.state === 'expired' ? (
       <span className="text-zinc-300">{st.ran || `This request expired. ${bot} will ask again if it still needs it.`}</span>
     ) : (
@@ -875,7 +876,7 @@ const SendBackForm: React.FC<{
 
 const RoundBox: React.FC<{ item: ReviewItem }> = ({ item }) => {
   const p = item.previous_round!;
-  const at = clock(p.sent_back_at);
+  const at = atClock(p.sent_back_at ?? null);
   const mine = [...item.criteria].reverse().find((c) => c.source === 'person_note' && c.round_added === item.round.n) ?? null;
   const word = (s: InboxCriterion['status']) => (
     <strong className={s === 'met' ? 'text-ok' : s === 'not_met' ? 'text-bad' : 'text-zinc-300'}>{CRITERION_WORD[s]}</strong>
@@ -885,7 +886,7 @@ const RoundBox: React.FC<{ item: ReviewItem }> = ({ item }) => {
       <h3 className="flex items-center gap-1.5 text-body font-semibold text-zinc-100">
         <RotateCcw size={14} aria-hidden="true" /> Round {item.round.n} · what changed since round {item.round.n - 1}
       </h3>
-      <p className="text-meta text-zinc-400">You sent it back{at ? ` at ${at}` : ''}:</p>
+      <p className="text-meta text-zinc-400">You sent it back{at ? ` ${at}` : ''}:</p>
       <blockquote className="border-l-2 border-violet-400/60 bg-white/[0.03] px-3 py-2 text-body text-zinc-100 break-words whitespace-pre-wrap">{p.note}</blockquote>
       <ul className="list-disc pl-5 space-y-0.5 text-meta text-zinc-300">
         {mine && (

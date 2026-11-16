@@ -155,12 +155,18 @@ test('streaming 100 tokens re-renders no finished message and the live reply at 
       }
     }
     const finished = renders.filter((r) => isMarkdown(r) && !r.props.isStreaming);
-    const live = renders.filter((r) => isMarkdown(r) && r.props.isStreaming);
+    // 15a: the live reply renders a block at a time. Its open block (the one with the cursor) renders at most
+    // once a frame; a block that finished renders once more without the cursor, and never again.
+    const live = renders.filter((r) => isMarkdown(r) && r.props.isStreaming && r.props.cursor !== false);
+    const closed = renders.filter((r) => isMarkdown(r) && r.props.isStreaming && r.props.cursor === false);
+    const blocks = Number(host.querySelector('[data-stream-blocks]').getAttribute('data-stream-blocks'));
     const chat = renders.filter((r) => r.name === 'ChatView');
     assert.equal(shown, 25);
     assert.equal(finished.length, 0, 'finished messages stay as they are');
     assert.ok(live.length <= shown, `live reply rendered ${live.length} times for ${shown} frames`);
     assert.ok(live.length >= shown - 1, 'and it did render each frame');
+    assert.ok(blocks > 5, `${blocks} blocks`);
+    assert.ok(closed.length <= blocks - 1, `${closed.length} renders of ${blocks - 1} finished blocks`);
     assert.ok(chat.length <= 1, `ChatView rendered ${chat.length} times: only when the reply first has text`);
     assert.match(host.textContent, /w98/, 'the last token is on screen');
   } finally {

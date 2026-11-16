@@ -7,6 +7,7 @@ import { Check, ExternalLink, HelpCircle, Loader2, MessageSquare } from 'lucide-
 import type { AskPosted, AskPreview, Brief, BriefQuestion } from '../../dev/tickets';
 import { mentionParts, openQuestions } from '../../dev/tickets';
 import { clock } from '../../dev/logic';
+import { atClock } from '../../clock';
 import { SourceChip, useSiteLink } from './TicketBrief';
 
 export interface TicketQuestionsProps {
@@ -187,7 +188,7 @@ export const TicketQuestions: React.FC<TicketQuestionsProps> = ({ ticketKey, bri
   const asked = qs.map((q) => q.asked_on_jira).find(Boolean) ?? null;
   const askedTo = asked?.to ?? askTo;
   const askedUrl = useSiteLink(asked?.comment_url ?? null);
-  const askedAt = clock(asked?.at ?? null);
+  const askedAt = atClock(asked?.at ?? null);
 
   const run = async (fn: () => Promise<void> | void) => {
     setBusy(true);
@@ -231,7 +232,7 @@ export const TicketQuestions: React.FC<TicketQuestionsProps> = ({ ticketKey, bri
           {lead}’s questions
         </h4>
         <span className="note" data-asked={asked ? 'yes' : undefined}>
-          {asked ? `Asked ${askedTo ?? 'them'} on Jira${askedAt ? ` at ${askedAt}` : ''}. You can still answer here.` : 'At most 3. Each one blocks the build.'}
+          {asked ? `Asked ${askedTo ?? 'them'} on Jira${askedAt ? ` ${askedAt}` : ''}. You can still answer here.` : 'At most 3. Each one blocks the build.'}
         </span>
       </header>
       <ol>
