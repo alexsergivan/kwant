@@ -579,6 +579,10 @@ test('19d: a rejected token says the day when it was not today; Checked stays a 
   const line = () => r.host.querySelector('[data-jira-status]').textContent;
   assert.equal(line(), `Jira stopped accepting the token ${m.atClock(rejected)}. Nothing new is picked up.`);
   assert.match(line(), /^Jira stopped accepting the token on .+ at \S+/, 'another day: "on <day> at <time>"');
+  // 22c: when the line wraps, the dot sits beside line 1, not between the lines.
+  const status = r.host.querySelector('[data-jira-status]');
+  assert.ok(status.className.includes('items-start') && !status.className.includes('items-center'), status.className);
+  assert.match(status.firstElementChild.className, /mt-\[0\.45em\] shrink-0/);
   r.unmount();
   m.jiraStore._reset();
   const polled = new Date(Date.now() - 3 * 86_400_000).toISOString();
