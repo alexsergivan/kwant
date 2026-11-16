@@ -74,7 +74,7 @@ import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToa
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, HelpCircle, Inbox, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
-import { ChatApproval, OpenChat, addSettled, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { ChatApproval, OpenChat, addSettled, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
@@ -975,6 +975,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
     refreshAwayCount();
     awayApi.approvals('allowed_once').then((rows) => setSettledApprovals((prev) => addSettled(prev, settledFromRecords(rows))), () => undefined);
+    // 22d: a customer's call nobody allowed, as a quiet line in that customer's chat.
+    awayApi.approvals('refused').then((rows) => setSettledApprovals((prev) => addSettled(prev, refusedFromRecords(rows))), () => undefined);
     questionsApi.listOpen().then((list) => {
       // Closed ones seen live stay; open ones come from the server.
       setQuestions((prev) => {
@@ -4519,7 +4521,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               />
             ) : undefined
           }
-          settledApprovals={approvalsForChat(settledApprovals, openChat)}
+          settledApprovals={settledByTime(approvalsForChat(settledApprovals, openChat))}
           home={chatHome}
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}
