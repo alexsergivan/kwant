@@ -257,7 +257,7 @@ export const SpaceApprovalsSetting: React.FC<{
 };
 
 const takeBackCls =
-  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 rounded-lg text-xs font-medium text-zinc-200 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:opacity-50 disabled:cursor-not-allowed';
+  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg text-xs font-medium text-zinc-200 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:opacity-50 disabled:cursor-not-allowed';
 
 const grantKey = (g: Pick<AlwaysAllowed, 'conversation' | 'tool_name'>) => `${g.conversation}\u0000${g.tool_name}`;
 
@@ -308,6 +308,7 @@ export const AlwaysAllowedList: React.FC<{
     if (busy) return;
     const key = one ? grantKey(one) : '*';
     const index = one && rows ? rows.findIndex((r) => grantKey(r) === key) : -1;
+    const n = rows?.length ?? 0;
     setBusy(key);
     setError(null);
     setDone(null);
@@ -317,7 +318,7 @@ export const AlwaysAllowedList: React.FC<{
       setDone(
         one
           ? `Taken back. ${kwantName} asks again before it can ${grantTool(one.tool_name).toLowerCase()} ${grantWhere(one)}.`
-          : `Taken back. ${kwantName} asks again before using any of these.`,
+          : `All ${n} taken back. ${kwantName} asks again before using any of them.`,
       );
       // Keep the keyboard in the list: the next row's Take back, else the heading
       requestAnimationFrame(() => {
@@ -377,7 +378,7 @@ export const AlwaysAllowedList: React.FC<{
         )}
       </div>
       <p className="text-[11px] text-zinc-500">
-        You answered Always allow on these. Each one runs without a card in that conversation only, also after a restart.
+        You answered Always allow on these. Each one runs without a card in that conversation only, also after kwant restarts.
       </p>
       <ul ref={listRef} className="rounded-lg border border-zinc-800 divide-y divide-zinc-800 bg-zinc-950/60">
         {list.map((g) => {
@@ -387,7 +388,7 @@ export const AlwaysAllowedList: React.FC<{
           const when = g.created_at ? relativeTime(g.created_at, now) : '';
           const full = g.created_at && !Number.isNaN(Date.parse(g.created_at)) ? new Date(g.created_at).toLocaleString() : undefined;
           return (
-            <li key={key} className="flex flex-col gap-2 p-2.5 sm:flex-row sm:items-center sm:justify-between" data-always-allowed-row>
+            <li key={key} className="flex items-center justify-between gap-3 p-2.5" data-always-allowed-row>
               <div className="min-w-0">
                 <p className="text-xs font-medium text-zinc-100 break-words" title={g.tool_name}>
                   {tool}
@@ -409,7 +410,7 @@ export const AlwaysAllowedList: React.FC<{
                 onClick={() => takeBack(g)}
                 disabled={!!busy}
                 aria-label={`Take back: ${tool} ${where}`}
-                className={`${takeBackCls} self-start sm:self-auto`}
+                className={takeBackCls}
                 data-take-back
               >
                 {busy === key && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}

@@ -139,7 +139,7 @@ test('Take back all sends {} and leaves only the confirmation, no heading', asyn
   assert.deepEqual(calls.map((c) => [c.method, c.body]), [['DELETE', {}]]);
   assert.equal(rows(host).length, 0);
   assert.ok(!host.textContent.includes('Allowed without asking'));
-  assert.match(host.textContent, /Taken back\. Dev asks again before using any of these\./);
+  assert.match(host.textContent, /All 3 taken back\. Dev asks again before using any of them\./);
 });
 
 test('a failed take-back keeps the row and says why', async () => {
