@@ -196,6 +196,28 @@ pub fn parse_models(body: &serde_json::Value, model: Option<&str>) -> Option<Vec
     Some(models)
 }
 
+/// The check's `GET` of the server's models, built but not sent: the key, and OpenRouter's app
+/// attribution when the server is OpenRouter (see [`super::api::with_attribution`]).
+fn check_request(
+    client: &reqwest::Client,
+    protocol: Protocol,
+    base: &str,
+    key: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let url = models_url(base);
+    let mut req = client.get(&url);
+    if protocol == Protocol::AnthropicMessages {
+        req = req.header("anthropic-version", super::api::ANTHROPIC_VERSION);
+    }
+    if let Some(key) = key {
+        req = match protocol {
+            Protocol::AnthropicMessages => req.header("x-api-key", key),
+            Protocol::OpenaiChat => req.bearer_auth(key),
+        };
+    }
+    super::api::with_attribution(req, &url)
+}
+
 /// Asks the server for its models: ready when it answers, else why not. A server without a
 /// model list (Agent Maestro's OpenAI side) is ready when the account names a model.
 pub async fn check(protocol: Protocol, base: &str, key: Option<&str>, model: Option<&str>) -> CustomCheck {
@@ -206,17 +228,7 @@ pub async fn check(protocol: Protocol, base: &str, key: Option<&str>, model: Opt
     else {
         return CustomCheck::new(CheckStatus::Error, "Couldn't start the check", Vec::new());
     };
-    let mut req = client.get(models_url(base));
-    if protocol == Protocol::AnthropicMessages {
-        req = req.header("anthropic-version", super::api::ANTHROPIC_VERSION);
-    }
-    if let Some(key) = key {
-        req = match protocol {
-            Protocol::AnthropicMessages => req.header("x-api-key", key),
-            Protocol::OpenaiChat => req.bearer_auth(key),
-        };
-    }
-    let resp = match req.send().await {
+    let resp = match check_request(&client, protocol, base, key).send().await {
         Ok(r) => r,
         Err(e) if e.is_timeout() => {
             return CustomCheck::new(
@@ -290,6 +302,37 @@ pub async fn check(protocol: Protocol, base: &str, key: Option<&str>, model: Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_check_names_kwant_only_to_openrouter() {
+        let client = reqwest::Client::new();
+        let get = |protocol, base: &str| {
+            check_request(&client, protocol, base, Some("sk-test")).build().unwrap()
+        };
+        let header = |req: &reqwest::Request, name: &str| {
+            req.headers().get(name).map(|v| v.to_str().unwrap().to_string())
+        };
+
+        let req = get(Protocol::OpenaiChat, "https://openrouter.ai/api/v1");
+        assert_eq!(req.url().as_str(), "https://openrouter.ai/api/v1/models");
+        assert_eq!(header(&req, "HTTP-Referer").as_deref(), Some("https://kwant.si"));
+        assert_eq!(header(&req, "X-OpenRouter-Title").as_deref(), Some("kwant"));
+        assert_eq!(header(&req, "Authorization").as_deref(), Some("Bearer sk-test"));
+
+        for (protocol, base) in [
+            (Protocol::OpenaiChat, "https://api.openai.com/v1"),
+            (Protocol::AnthropicMessages, "https://api.anthropic.com/v1"),
+            (Protocol::OpenaiChat, "http://localhost:1234/v1"),
+            (Protocol::OpenaiChat, "https://openrouter.ai.example.com/v1"),
+            (Protocol::OpenaiChat, "https://example.com/openrouter.ai/v1"),
+            (Protocol::OpenaiChat, "https://notopenrouter.ai/v1"),
+        ] {
+            let req = get(protocol, base);
+            for name in ["HTTP-Referer", "X-OpenRouter-Title", "X-Title"] {
+                assert_eq!(header(&req, name), None, "{name} on {base}");
+            }
+        }
+    }
 
     #[test]
     fn base_urls_normalize_to_the_api_root() {
