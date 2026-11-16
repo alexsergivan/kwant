@@ -689,6 +689,12 @@ async fn reads_of_mail_files_and_payments_keep_allow_once_on_the_island() {
         ("find_and_share_file", mcp("drive", "find_and_share_file", json!({})), false),
         ("pay_invoice", mcp("stripe", "pay_invoice", json!({"id": "in_1"})), false),
         ("get_post with a POST body", mcp("x", "get_post", json!({"url": "https://api.example.com/posts", "method": "POST", "body": {"t": "x"}})), false),
+        // 22h (Rigel's F1/F3 on #692): writes named like reads keep the full card; Stripe's retrieve reads
+        ("STRIPE_RETRIEVE_PAYMENT_INTENT", mcp("composio", "STRIPE_RETRIEVE_PAYMENT_INTENT", json!({"payment_intent": "pi_1"})), true),
+        ("retry_payment_status", mcp("stripe", "retry_payment_status", json!({"id": "pi_1"})), false),
+        ("MASTODON_POST_STATUS", mcp("composio", "MASTODON_POST_STATUS", json!({"status": "hello"})), false),
+        ("post_list", mcp("x", "post_list", json!({})), false),
+        ("MAILCHIMP_SUBSCRIBE_TO_LIST", mcp("composio", "MAILCHIMP_SUBSCRIBE_TO_LIST", json!({"list_id": "l1"})), false),
     ];
     let mut made = Vec::new();
     for (name, details, _) in &rows {
