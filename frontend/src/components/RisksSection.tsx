@@ -13,7 +13,7 @@ import {
   auditStatusText,
   auditTokens,
   riskState,
-  triggerLabel,
+  auditHeaderLine,
   unresolved,
 } from '../auditor';
 import { formatTokens } from '../missions';
@@ -89,7 +89,8 @@ const AuditBlock: React.FC<{
   canResolve: boolean;
   busy: boolean;
   onResolve?: (r: Risk, resolution: RiskResolution) => void;
-}> = ({ a, names, canResolve, busy, onResolve }) => {
+  sourceKind?: string | null;
+}> = ({ a, names, canResolve, busy, onResolve, sourceKind }) => {
   const challenger = names[a.challenger_kwant_id] || 'A bot';
   const owner = names[a.owner_kwant_id] || 'The owner';
   const tokens = auditTokens(a);
@@ -97,12 +98,16 @@ const AuditBlock: React.FC<{
   return (
     <li className="space-y-2" data-audit={a.id} data-audit-status={a.status}>
       <div className="text-[11px] text-zinc-400 break-words">
-        <span className="font-medium text-zinc-200">Audit by {challenger}</span>
-        <span> · {triggerLabel(a.trigger)}</span>
-        {tokens > 0 && <span className="tabular-nums"> · {formatTokens(tokens)} tokens</span>}
-        <span className="block" data-audit-line>
-          {auditStatusText(a, names)}
+        <span className="font-medium text-zinc-200" data-audit-who>
+          {auditHeaderLine(a, names, sourceKind).replace(/\.$/, '')}
         </span>
+        {tokens > 0 && <span className="tabular-nums"> · {formatTokens(tokens)} tokens</span>}
+        {a.status !== 'challenge' && (
+          // While challenging, the heading above already says who is double-checking (14a).
+          <span className="block" data-audit-line>
+            {auditStatusText(a, names)}
+          </span>
+        )}
       </div>
       {chipState(fresh) !== 'R3' && (
         <div className="relative flex flex-wrap gap-1.5">
@@ -130,7 +135,9 @@ export const RisksSection: React.FC<{
   waiting?: AuditWaiting | null;
   onResolve?: (r: Risk, resolution: RiskResolution) => void;
   onOpenWaiting?: (w: AuditWaiting) => void;
-}> = ({ data, names, canResolve = true, busy = false, waiting = null, onResolve, onOpenWaiting }) => {
+  /** The task's source, so the heading can say "routine run" or "hand-off" (14a). */
+  sourceKind?: string | null;
+}> = ({ data, names, canResolve = true, busy = false, waiting = null, onResolve, onOpenWaiting, sourceKind }) => {
   if (!data || data.audits.length === 0) return null;
   const open = data.open_risks;
   return (
@@ -159,7 +166,7 @@ export const RisksSection: React.FC<{
       )}
       <ul className="space-y-3">
         {data.audits.map((a) => (
-          <AuditBlock key={a.id} a={a} names={names} canResolve={canResolve} busy={busy} onResolve={onResolve} />
+          <AuditBlock key={a.id} a={a} names={names} canResolve={canResolve} busy={busy} onResolve={onResolve} sourceKind={sourceKind} />
         ))}
       </ul>
       <p className="text-[11px] text-zinc-500" data-not-a-pass>

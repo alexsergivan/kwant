@@ -4,8 +4,9 @@ The message box's mic button records the person's voice and turns it into text i
 where they read and edit it. Nothing reaches a bot before they press Send, and nothing is stored:
 the recording stays in memory for the one call, with no attachment, file, chat message or memory.
 
-The words come from the space's own OpenAI account, in this order (the same as hybrid recall's
-embeddings, minus Ollama, which has no speech-to-text):
+The words come from the space's own OpenAI account, in this order (hybrid recall's embeddings use
+the same one, from the same code, `src/server/openai_key.rs`; recall then falls back to Ollama,
+which has no speech-to-text):
 
 1. An enabled OpenAI API-key account of the space (an `api_key` profile on Codex) with a key.
 2. The host's OpenAI key (Settings, else `OPENAI_API_KEY`), unless This machine is off for Codex
@@ -55,25 +56,30 @@ Content-Type: audio/webm;codecs=opus
 {"text": "Book a table for four on Friday at seven.", "source": "openai"}
 ```
 
-Only the person can dictate: a bot's turn token gets 403. At most 2 recordings go to OpenAI at a
-time; one more waits up to 30 s for its turn.
+Only the person can dictate: a bot's turn token (its own tools or an MCP session) gets 403.
+
+At most 2 recordings are read and sent to OpenAI at a time; one more waits up to 30 s for its
+turn **before its body is read**, so a waiting recording holds no memory, and one that gets 429
+`busy` is never read. A call keeps one copy of the recording: the upload to OpenAI sends that same
+buffer between the form fields (for the fallback model too), with its `Content-Length`. So at most
+2 × 25 MB of recordings are in memory at once.
 
 Every refusal is `{"error": "<a sentence for the person>", "code": "<code>"}`; 409
 `no_transcriber` also has `why`. In the order they are checked:
 
 | Status | `code` | `error` |
 |---|---|---|
-| 403 | none | `only the person can dictate` |
-| 404 | none | `no such space` |
-| 409 | none | the space is archived |
+| 403 | `forbidden` | `only the person can dictate` |
+| 404 | `not_found` | `no such space` |
+| 409 | `archived` | `this space is archived; restore it first` |
 | 413 | `too_large` | `The recording is over 25 MB. Record a shorter message.` (a declared `Content-Length` over 25 MB, before any byte is read) |
 | 415 | `bad_audio_type` | `Send the recording as audio/webm, audio/mp4, audio/mpeg, audio/wav or audio/ogg.` |
 | 400 | `bad_lang` | `lang must be a two-letter language code such as en.` |
 | 409 | `no_transcriber` | the `why` from GET, also as `why` |
-| 400 | `interrupted` | `The recording was interrupted.` |
+| 429 | `busy` | `Other recordings are being turned into text. Try again in a moment.` (no slot within 30 s; the body isn't read) |
+| 400 | `interrupted` | `The recording was interrupted.` (the upload broke off, or sent nothing for 15 s) |
 | 413 | `too_large` | as above, at the byte that passes 25 MB |
 | 400 | `empty_audio` | `The recording is empty.` |
-| 429 | `busy` | `Other recordings are being turned into text. Try again in a moment.` |
 | 502 | `transcriber_failed` | one of the reasons below |
 
 502 reasons (OpenAI's own error text is never passed on, since its 401 quotes part of the key):
@@ -83,7 +89,8 @@ Every refusal is `{"error": "<a sentence for the person>", "code": "<code>"}`; 4
 - `The recording is too large for OpenAI.` (413)
 - `OpenAI couldn't read this recording.` (400, 404, 415, 422)
 - `OpenAI had a problem. Try again in a minute.` (other statuses)
-- `OpenAI didn't answer within 60 seconds.`
+- `OpenAI didn't answer in time. Try again in a minute.` (60 s per model tried, so up to 2 minutes
+  when the fallback model runs)
 - `OpenAI couldn't be reached.`
 - `OpenAI's answer couldn't be read.`
 

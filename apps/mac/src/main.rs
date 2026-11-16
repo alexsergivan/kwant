@@ -17,10 +17,14 @@ mod nudge_linux;
 mod nudge_mac;
 #[cfg(windows)]
 mod nudge_windows;
+mod perch;
+mod perch_window;
+mod picker;
 mod places;
 mod redact;
 mod remote;
 mod startup;
+mod switcher;
 mod target;
 mod update;
 
@@ -242,10 +246,21 @@ struct Shared {
     last_focused: Mutex<Option<String>>,
     /// Wakes the menu's poll after a change.
     wake: Mutex<Option<mpsc::Sender<()>>>,
+    /// What the menu's last poll said of each place (by key), for the place picker.
+    status: Mutex<HashMap<String, menu::Status>>,
+    /// What waits in the places other than This Mac, as This Mac's page was told last.
+    elsewhere: Mutex<Option<usize>>,
+    /// The place picker's rows and state (`picker.rs`).
+    picker: Mutex<picker::PickerState>,
+    /// The pages' picker asks, at most one a second per window.
+    asks: Mutex<switcher::RateLimit>,
+    /// The perch: its settings, the places' glances and its page (`perch_window.rs`).
+    perch: Mutex<perch_window::PerchState>,
 }
 
 impl Shared {
     fn new(data_dir: PathBuf, config: kwnt::Config, places: Places) -> Shared {
+        let perch = Mutex::new(perch_window::PerchState::new(&data_dir));
         Shared {
             data_dir,
             config,
@@ -259,6 +274,11 @@ impl Shared {
             unreachable: Mutex::new(Default::default()),
             last_focused: Mutex::new(None),
             wake: Mutex::new(None),
+            status: Mutex::new(HashMap::new()),
+            elsewhere: Mutex::new(None),
+            picker: Mutex::new(picker::PickerState::default()),
+            asks: Mutex::new(switcher::RateLimit::default()),
+            perch,
         }
     }
 }
@@ -308,6 +328,13 @@ fn main() {
     // (macOS does this itself: a second click on the app reaches RunEvent::Reopen.)
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_last(app)));
+    // The perch's global shortcut. Not on Wayland, and on Linux only with an X display: the
+    // plugin's setup fails without one, and that would stop the app (perch_window.rs).
+    let builder = if !demo && perch_window::shortcut_plugin_ok() {
+        builder.plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    } else {
+        builder
+    };
     let app = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -334,6 +361,7 @@ fn main() {
                 });
             }
             build_tray(handle)?;
+            perch_window::apply_shortcut(handle);
             if demo {
                 // hidden, so the pill shows (it never covers a focused kwant window); a click on
                 // the pill shows it
@@ -364,6 +392,14 @@ fn main() {
             }
             WindowEvent::Focused(true) if is_place_window(window.label()) => {
                 *window.state::<Shared>().last_focused.lock().unwrap() = Some(window.label().to_string());
+            }
+            // a click outside the place picker closes it
+            WindowEvent::Focused(false) if window.label() == switcher::PICKER_WINDOW => {
+                picker::blurred(window.app_handle());
+            }
+            // a click outside the perch closes what the shortcut or Quick ask opened
+            WindowEvent::Focused(false) if window.label() == perch::WINDOW => {
+                perch_window::blurred(window.app_handle());
             }
             _ => {}
         })
@@ -696,6 +732,11 @@ fn save_open<R: Runtime>(app: &AppHandle<R>) {
 /// What a link in a place's window does (`popup`: it asked for a new window). A link to another
 /// place opens that place's window; a page off every place goes to the browser.
 fn route<R: Runtime>(app: &AppHandle<R>, me: &Place, url: &Url, popup: bool) -> bool {
+    // the place chip (and Ctrl+Shift+O) asking for the place picker: handled, never loaded
+    if url.scheme() == "kwant-app" {
+        picker::on_app_url(app, &me.window_label(), url);
+        return false;
+    }
     // port 0 never matches a link: This Mac's window before its kwant runs
     let mine = home(app, me).unwrap_or(Home::Local { port: 0 });
     let others: Vec<(Place, Home)> = current(app)
@@ -732,7 +773,11 @@ fn make_window<R: Runtime>(app: &AppHandle<R>, place: &Place, goto: Goto, visibl
     let title = places::window_title(place, &current(app));
     let (nav_app, nav_place) = (app.clone(), place.clone());
     let (pop_app, pop_place) = (app.clone(), place.clone());
-    let window = match WebviewWindowBuilder::new(app, place.window_label(), WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, place.window_label(), WebviewUrl::App("index.html".into()));
+    // Ctrl+Shift+O opens the place picker (macOS has the Window menu's ⌘⇧O)
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.initialization_script(switcher::SHORTCUT_SCRIPT);
+    let window = match builder
         .title(title)
         .visible(visible)
         .inner_size(1280.0, 820.0)
@@ -750,6 +795,8 @@ fn make_window<R: Runtime>(app: &AppHandle<R>, place: &Place, goto: Goto, visibl
             route(&pop_app, &pop_place, &url, true);
             NewWindowResponse::Deny
         })
+        // This Mac's page learns what waits elsewhere (no other window does)
+        .on_page_load(|window, payload| picker::page_loaded(&window, payload.url(), payload.event()))
         .build()
     {
         Ok(w) => w,
@@ -1175,6 +1222,9 @@ fn set_window_menu(app: &AppHandle, places: &[Place]) {
         let bar = Menu::default(app)?;
         if let Some(window) = bar.get(tauri::menu::WINDOW_SUBMENU_ID).and_then(|k| k.as_submenu().cloned()) {
             window.append(&PredefinedMenuItem::separator(app)?)?;
+            window.append(&MenuItem::with_id(app, "switch_place", "Switch place…", true, Some("CmdOrCtrl+Shift+O"))?)?;
+            // the perch's own shortcut is global (⌥⌘K), so this item names none
+            window.append(&MenuItem::with_id(app, "perch", "Open the perch", true, None::<&str>)?)?;
             for (i, place) in places.iter().enumerate() {
                 let accel = (i < 9).then(|| format!("CmdOrCtrl+{}", i + 1));
                 let text = match place {
@@ -1195,7 +1245,11 @@ fn set_window_menu(app: &AppHandle, places: &[Place]) {
 /// Every menu click: the tray's and the Window menu's.
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
-        "open" => open_place(app, &Place::ThisMac, Goto::Stay),
+        "open" => picker::switch_from_last(app, &Place::ThisMac),
+        "switch_place" => {
+            let (app, from) = (app.clone(), picker::last_place_window(app));
+            std::thread::spawn(move || picker::open(&app, from, None));
+        }
         "update" => {
             // The window shows the download and the relaunch
             if let Err(e) = kwnt::app_update::UpdateHub::shared().install() {
@@ -1212,6 +1266,10 @@ fn on_menu(app: &AppHandle, id: &str) {
             }
             wake(app);
         }
+        "perch" => {
+            let app = app.clone();
+            std::thread::spawn(move || perch_window::toggle(&app));
+        }
         "add" => show_connect(app),
         "this_mac" => {
             let on = !current(app).this_mac;
@@ -1226,8 +1284,9 @@ fn on_menu(app: &AppHandle, id: &str) {
         }
         _ => {
             if let Some(key) = id.strip_prefix("place:").or_else(|| id.strip_prefix("win:")) {
+                // the tray's rows and ⌘1/⌘2 switch in place
                 if let Some(place) = place_by_key(app, key) {
-                    open_place(app, &place, Goto::Stay);
+                    picker::switch_from_last(app, &place);
                 }
             } else if let Some(origin) = id.strip_prefix("remove:") {
                 confirm_remove(app, origin);
@@ -1276,6 +1335,9 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
         let mut status: HashMap<String, menu::Status> = HashMap::new();
         // what each place said last, so a missed poll doesn't make its items new again
         let mut last: HashMap<String, nudge::Waiting> = HashMap::new();
+        // the perch's view of each place (GET /api/glance), polled only while it is on
+        let mut glances = perch_window::Caches::new();
+        let local_client = remote::client();
         #[cfg(target_os = "macos")]
         let mut window_menu: Option<Vec<String>> = None;
         loop {
@@ -1339,6 +1401,22 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
                     menu::Status::Connecting
                 })
             };
+            *shared.status.lock().unwrap() = status.clone();
+            let counts: Vec<(bool, usize)> = all.iter().map(|p| (*p == Place::ThisMac, status_of(p).count())).collect();
+            picker::set_elsewhere(&app, switcher::waiting_elsewhere(&counts));
+            if perch_window::polling(&app) {
+                let eager = perch_window::eager(&app);
+                let snap = perch_window::snapshot(&all, &mut glances, &last, eager, |place, etag| match place {
+                    Place::ThisMac => match port {
+                        Some(port) if !failed => perch_window::local_glance(&local_client, port, etag),
+                        _ => remote::Glance::Failed,
+                    },
+                    Place::Server(_) => polls.get(&place.key()).map_or(remote::Glance::Failed, |p| p.glance(etag)),
+                });
+                perch_window::on_poll(&app, snap);
+            } else {
+                glances.clear();
+            }
             *shared.unreachable.lock().unwrap() = all
                 .iter()
                 .filter(|p| status_of(p) == menu::Status::Unreachable)
@@ -1430,6 +1508,11 @@ impl RemotePoll {
             _ => None,
         };
         Polled::Ok(collect_waiting(Some(spaces), ok))
+    }
+
+    /// The perch's view of the server, with the same cookie (`poll` reads it).
+    fn glance(&self, etag: Option<&str>) -> remote::Glance {
+        tauri::async_runtime::block_on(remote::get_glance(&self.client, &self.origin, self.token.as_ref(), etag))
     }
 }
 
@@ -1750,6 +1833,285 @@ mod tests {
                 assert!(matches!(&refused, Err(serde_json::Value::String(_))), "{cmd} from {from}: {refused:?}");
             }
         }
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// The place picker is a bundled page in its own window (`places`), which no capability
+    /// lists: it reaches Rust only through `kwant-places://` navigations, never a command.
+    #[test]
+    fn the_place_picker_can_call_no_command() {
+        let (_app, window, data_dir) = app_with("picker-window", switcher::PICKER_WINDOW, Places::default());
+        for from in ["tauri://localhost/places.html", "http://tauri.localhost/places.html"] {
+            for cmd in COMMANDS {
+                let refused = invoke(&window, cmd, from, args());
+                assert!(matches!(&refused, Err(serde_json::Value::String(_))), "{cmd} from {from}: {refused:?}");
+            }
+        }
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    fn server_place() -> (Places, Place) {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        (places, Place::Server(origin))
+    }
+
+    /// A server's page may open the picker (it shows only our own page), but at most once a
+    /// second, and the address is never loaded. An unknown kwant-app ask is refused and doesn't
+    /// use up the second.
+    #[test]
+    fn a_page_opens_the_picker_at_most_once_a_second_and_never_loads_the_address() {
+        let (places, server) = server_place();
+        let label = server.window_label();
+        let (app, _window, data_dir) = app_with("picker-asks", &label, places);
+        let handle = app.handle();
+        let island: Url = "kwant-app://island?mode=off&shortcut=off".parse().unwrap();
+        assert!(!route(handle, &server, &island, false), "never loaded");
+        assert_eq!(picker::on_app_url(handle, &label, &island), None, "not a picker ask");
+        let ask: Url = "kwant-app://places?at=76,44".parse().unwrap();
+        assert_eq!(
+            picker::on_app_url(handle, &label, &ask),
+            Some(switcher::AppAsk::Places { at: Some((76.0, 44.0)) }),
+            "the first ask opens it"
+        );
+        for _ in 0..50 {
+            assert_eq!(picker::on_app_url(handle, &label, &ask), None, "again within a second: ignored");
+            assert!(!route(handle, &server, &ask, false), "and never loaded");
+            assert!(!route(handle, &server, &ask, true), "nor as a popup");
+        }
+        assert!(picker::on_app_url(handle, MAIN, &ask).is_some(), "another window has its own second");
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// Only This Mac's window showing This Mac's kwant learns what waits elsewhere; a server's
+    /// window, the picker and This Mac's loading page never do.
+    #[test]
+    fn only_this_mac_s_page_hears_what_waits_elsewhere() {
+        let (places, server) = server_place();
+        let (app, _window, data_dir) = app_with("elsewhere", MAIN, places);
+        let handle = app.handle();
+        *handle.state::<Shared>().elsewhere.lock().unwrap() = Some(3);
+        let local: Url = "http://127.0.0.1:1/spaces/spc_default".parse().unwrap();
+        let remote: Url = "https://kwant.example.com/".parse().unwrap();
+        let loading: Url = "tauri://localhost/index.html".parse().unwrap();
+        let js = picker::elsewhere_for(handle, MAIN, &local).expect("This Mac's page");
+        assert!(js.contains("__KWANT_ELSEWHERE__=3"), "{js}");
+        for (label, url) in [
+            (server.window_label(), &remote),
+            (server.window_label(), &local),
+            (switcher::PICKER_WINDOW.to_string(), &local),
+            (CONNECT.to_string(), &local),
+            (MAIN.to_string(), &remote),
+            (MAIN.to_string(), &loading),
+        ] {
+            assert_eq!(picker::elsewhere_for(handle, &label, url), None, "{label} at {url}");
+        }
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// Perch settings (`kwant-app://island?…`) are kept only from `main` while it shows This
+    /// Mac's own page. A server's window, the picker, Add a server and the perch itself are
+    /// ignored before they touch the once-a-second budget, and nothing is saved.
+    #[test]
+    fn perch_settings_come_only_from_this_mac_s_own_page() {
+        let (places, server) = server_place();
+        let (app, window, data_dir) = app_with("island-from", MAIN, places);
+        let handle = app.handle();
+        let before = handle.state::<Shared>().perch.lock().unwrap().prefs;
+        let island: Url = "kwant-app://island?mode=off&shortcut=off".parse().unwrap();
+        for label in [server.window_label(), switcher::PICKER_WINDOW.into(), CONNECT.into(), perch::WINDOW.into()] {
+            for _ in 0..3 {
+                assert_eq!(picker::on_app_url(handle, &label, &island), None, "{label}");
+            }
+            assert!(!route(handle, &server, &island, false), "never loaded");
+        }
+        // main showing a server's page (or the loading page) can't change them either
+        for url in ["https://kwant.example.com/settings", "tauri://localhost/index.html", "http://127.0.0.1:1@evil.example/"] {
+            window.navigate(url.parse().unwrap()).unwrap();
+            assert!(!picker::island(handle, switcher::PerchMode::Off, switcher::PerchShortcut::Off), "{url}");
+        }
+        assert_eq!(handle.state::<Shared>().perch.lock().unwrap().prefs, before, "unchanged");
+        assert!(!nudge::prefs_path(&data_dir).exists(), "nothing saved");
+        // This Mac's own Settings page can
+        window.navigate("http://127.0.0.1:1/settings".parse().unwrap()).unwrap();
+        assert!(picker::island(handle, switcher::PerchMode::Always, switcher::PerchShortcut::Space));
+        let now = handle.state::<Shared>().perch.lock().unwrap().prefs;
+        assert_eq!((now.mode, now.shortcut), (switcher::PerchMode::Always, switcher::PerchShortcut::Space));
+        assert_eq!(perch::Prefs::load(&data_dir), now, "saved");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// `main` sends Perch settings at most once a second, on a budget apart from the picker's.
+    #[test]
+    fn perch_settings_are_taken_at_most_once_a_second() {
+        let (app, _window, data_dir) = app("island-rate");
+        let handle = app.handle();
+        let island: Url = "kwant-app://island?mode=busy&shortcut=k".parse().unwrap();
+        assert!(picker::on_app_url(handle, MAIN, &island).is_some(), "the first is taken");
+        for _ in 0..50 {
+            assert_eq!(picker::on_app_url(handle, MAIN, &island), None, "again within a second: ignored");
+        }
+        let ask: Url = "kwant-app://places".parse().unwrap();
+        assert!(picker::on_app_url(handle, MAIN, &ask).is_some(), "the picker has its own second");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// `__KWANT_ISLAND__` goes only to This Mac's page in `main`: never to a server's window,
+    /// the picker, Add a server, the perch, or `main` showing anything else.
+    #[test]
+    fn only_this_mac_s_page_hears_the_perch_settings() {
+        let (places, server) = server_place();
+        let (app, _window, data_dir) = app_with("island-script", MAIN, places);
+        let handle = app.handle();
+        let local: Url = "http://127.0.0.1:1/settings".parse().unwrap();
+        let remote: Url = "https://kwant.example.com/settings".parse().unwrap();
+        let loading: Url = "tauri://localhost/index.html".parse().unwrap();
+        let js = perch_window::island_for(handle, MAIN, &local).expect("This Mac's page");
+        assert!(js.contains("__KWANT_ISLAND__"), "{js}");
+        for (label, url) in [
+            (server.window_label(), &remote),
+            (server.window_label(), &local),
+            (switcher::PICKER_WINDOW.to_string(), &local),
+            (CONNECT.to_string(), &local),
+            (perch::WINDOW.to_string(), &local),
+            (MAIN.to_string(), &remote),
+            (MAIN.to_string(), &loading),
+        ] {
+            assert_eq!(perch_window::island_for(handle, &label, url), None, "{label} at {url}");
+            assert_eq!(picker::elsewhere_for(handle, &label, url), None, "{label} at {url}");
+        }
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// The perch is a bundled page in its own window (`perch`), which no capability lists: it
+    /// reaches Rust only through `kwant-island://` navigations, never a command.
+    #[test]
+    fn the_perch_can_call_no_command() {
+        let (_app, window, data_dir) = app_with("perch-window", perch::WINDOW, Places::default());
+        for from in ["tauri://localhost/perch.html", "http://tauri.localhost/perch.html"] {
+            for cmd in COMMANDS {
+                let refused = invoke(&window, cmd, from, args());
+                assert!(matches!(&refused, Err(serde_json::Value::String(_))), "{cmd} from {from}: {refused:?}");
+            }
+        }
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// What the last poll saw on This Mac: an approval the server lets the perch allow, one it
+    /// doesn't, and a question with two choices.
+    fn perch_snapshot() -> perch::Snapshot {
+        let need = |kind, id: &str, inline| perch::Need {
+            kind,
+            id: id.into(),
+            space_id: "spc_default".into(),
+            space_name: "Default".into(),
+            kwant_name: "Juno".into(),
+            avatar: None,
+            title: "push the branch".into(),
+            since: "2026-11-14T22:00:00Z".into(),
+            path: format!("/s/spc_default/b/k1#{id}"),
+            inline,
+            why_open: String::new(),
+            question: None,
+        };
+        let mut question = need(perch::NeedKind::Question, "q1", false);
+        question.question = Some(perch::Question { choices: vec!["Yes".into(), "No".into()], total: 2, allow_text: false });
+        perch::Snapshot {
+            places: vec![perch::PlaceView {
+                key: places::THIS_MAC.into(),
+                label: "This Mac".into(),
+                this_mac: true,
+                off: false,
+                current: true,
+                glance: perch::Glance {
+                    needs_count: 3,
+                    working_count: 0,
+                    needs: vec![
+                        need(perch::NeedKind::Approval, "apr-inline", true),
+                        need(perch::NeedKind::Approval, "apr-full", false),
+                        question,
+                    ],
+                    working: vec![],
+                    finished: vec![],
+                    ask: vec![],
+                },
+            }],
+        }
+    }
+
+    /// The perch acts only on what its last snapshot shows: Allow once only where the server
+    /// said it may, a chip only among the first choices, an unknown or odd address does
+    /// nothing, and the same item goes at most once a second.
+    #[test]
+    fn the_perch_acts_only_on_what_its_snapshot_shows() {
+        let (app, _window, data_dir) = app("perch-acts");
+        let handle = app.handle();
+        perch_window::set_snapshot(handle, perch_snapshot());
+        let ask = |u: &str| perch_window::handle(handle, &u.parse::<Url>().unwrap());
+        let refused = |op: &'static str, id: &str, code: &'static str| Some((op, id.to_string(), false, code));
+        // never sent: not inline, not there, not ours
+        assert_eq!(ask("kwant-island://allow?p=0&id=apr-full"), refused("allow", "apr-full", "not_inline"));
+        assert_eq!(ask("kwant-island://deny?p=0&id=apr-full"), refused("deny", "apr-full", "not_inline"));
+        assert_eq!(ask("kwant-island://allow?p=0&id=q1"), refused("allow", "q1", "not_inline"));
+        assert_eq!(ask("kwant-island://allow?p=0&id=apr-gone"), refused("allow", "apr-gone", "gone"));
+        assert_eq!(ask("kwant-island://allow?p=1&id=apr-inline"), refused("allow", "apr-inline", "gone"));
+        assert_eq!(ask("kwant-island://answer?p=0&id=q1&c=2"), refused("answer", "q1", "not_inline"));
+        assert_eq!(ask("kwant-island://answer?p=0&id=apr-inline&c=0"), refused("answer", "apr-inline", "not_inline"));
+        assert_eq!(ask("kwant-island://ask?t=0&text=hi&cid=island-abcdef12"), refused("ask", "island-abcdef12", "gone"));
+        for odd in [
+            "kwant-island://allow?p=0",
+            "kwant-island://allow?p=100&id=apr-inline",
+            "kwant-island://allow?p=0&id=../../api",
+            "kwant-island://resolve?p=0&id=apr-inline",
+            "kwant-island://allow?p=x&id=apr-inline",
+            "kwant-app://allow?p=0&id=apr-inline",
+            "https://kwant.example.com/api/approvals/apr-inline/resolve",
+        ] {
+            assert_eq!(ask(odd), None, "{odd}");
+        }
+        assert_eq!(perch_window::probe(handle).1, 0, "nothing in flight");
+        assert!(!perch_window::probe(handle).2, "nothing was sent");
+        // an inline approval is sent (nothing listens on port 1, so it fails and says so)
+        assert_eq!(ask("kwant-island://allow?p=0&id=apr-inline"), Some(("allow", "apr-inline".into(), false, "failed")));
+        let (_, in_flight, acted, _) = perch_window::probe(handle);
+        assert_eq!((in_flight, acted), (0, true));
+        // the same item again within a second: busy, not sent
+        for _ in 0..20 {
+            assert_eq!(ask("kwant-island://deny?p=0&id=apr-inline"), refused("deny", "apr-inline", "busy"));
+        }
+        // a chip among the first choices is its own item
+        assert_eq!(ask("kwant-island://answer?p=0&id=q1&c=1"), Some(("answer", "q1".into(), false, "failed")));
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// A `kwant-island://` address is the perch page's alone: from `main` or a server's window it
+    /// is never loaded and does nothing.
+    #[test]
+    fn a_perch_address_from_any_other_window_does_nothing() {
+        let (places, server) = server_place();
+        let (app, _window, data_dir) = app_with("perch-elsewhere", MAIN, places);
+        let handle = app.handle();
+        perch_window::set_snapshot(handle, perch_snapshot());
+        for u in [
+            "kwant-island://allow?p=0&id=apr-inline",
+            "kwant-island://ready",
+            "kwant-island://focus",
+            "kwant-island://open?what=inbox",
+        ] {
+            let url: Url = u.parse().unwrap();
+            for me in [&Place::ThisMac, &server] {
+                assert!(!route(handle, me, &url, false), "{u} never loaded");
+                assert!(!route(handle, me, &url, true), "{u} nor as a popup");
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(perch_window::probe(handle), (false, 0, false, false), "nothing happened");
         nothing_saved(&data_dir);
         let _ = std::fs::remove_dir_all(data_dir);
     }
