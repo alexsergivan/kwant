@@ -150,6 +150,26 @@ async fn controller(state: &AppState, page: &str) -> BrowserController {
     state.browser_controllers.lock().await.get(page).cloned().unwrap_or_else(|| panic!("no controller for {page}"))
 }
 
+/// How many TCP connections on this host are `ESTABLISHED` to local port `port` (either side):
+/// a page's own DevTools connection, plus one each for its download, site guard and popups tasks,
+/// all to the same container browser port (#753).
+async fn established_connections(port: u16) -> usize {
+    let hex_port = format!("{port:04X}");
+    let mut n = 0;
+    for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let Ok(text) = tokio::fs::read_to_string(path).await else { continue };
+        for line in text.lines().skip(1) {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            let (Some(local), Some(remote), Some(st)) = (cols.get(1), cols.get(2), cols.get(3)) else { continue };
+            let ends_in_port = |addr: &str| addr.rsplit_once(':').is_some_and(|(_, p)| p.eq_ignore_ascii_case(&hex_port));
+            if *st == "01" && (ends_in_port(local) || ends_in_port(remote)) {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 #[tokio::test]
 async fn a_sign_in_on_one_jobs_page_holds_only_that_page_and_the_teams_sign_ins_are_shared() {
     let tmp = tempdir().unwrap();
@@ -447,6 +467,86 @@ async fn jobs_opening_pages_at_once_never_pass_the_cap() {
     assert_eq!(open_pages(&state).await.len(), MAX_JOB_PAGES_PER_TEAM);
     assert_eq!(state.browser_service.job_pages(&team).await.len(), MAX_JOB_PAGES_PER_TEAM);
     assert_eq!(page_targets().await, before + MAX_JOB_PAGES_PER_TEAM, "four job pages in the browser, the others closed");
+}
+
+/// The repro for #753: before the fix, closing a job page never dropped its controller from
+/// [`kwnt::sandbox::service::BrowserService`]'s own cache, so its DevTools, download and popups
+/// connections to the container browser outlived the page and piled up, one finished job at a
+/// time, forever. With the fix, closing a page drops its connections with it.
+#[tokio::test]
+async fn finished_jobs_dont_leave_their_browser_connections_behind() {
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return };
+    let port: u16 = endpoint.rsplit(':').next().unwrap().parse().unwrap();
+    let state = container_state(&tmp, endpoint).await;
+    let team = first_bot(&state).await.id;
+    let base = serve().await;
+
+    get_or_create_browser_controller(&state, &team).await.expect("the team page opens");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let before = established_connections(port).await;
+
+    // Ten jobs, one after another, each opening its own page (its own DevTools connection, plus
+    // a download and a popups connection started the same way a live job's would be) and then
+    // closed the way a finished job's page is: never held, never watched.
+    for i in 0..10 {
+        let chat = format!("c{i}");
+        let ctrl = open_page(&state, &team, &chat).await.expect("a job page opens");
+        ctrl.navigate(&format!("{base}/plain")).await.unwrap();
+        assert_eq!(title_becomes(&ctrl, "plain").await, "plain");
+        browser_pages::close_page(&state, &job_page_key(&team, "k", &chat).unwrap()).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let after = established_connections(port).await;
+    assert!(
+        after <= before + 3,
+        "ten finished jobs left the browser with {after} connections, started with {before}: \
+         closing a page should drop its connections, not add to them forever"
+    );
+}
+
+/// An idle page's connections close; one that's watched (a live view open on it) or held (a step
+/// open for the person) never does, even past the same idle time.
+#[tokio::test]
+async fn an_idle_pages_connections_close_but_never_one_watched_or_held() {
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return };
+    let state = container_state(&tmp, endpoint).await;
+    let team = first_bot(&state).await.id;
+    let key = |c: &str| job_page_key(&team, "k", c).unwrap();
+    open_page(&state, &team, "idle").await.unwrap();
+    open_page(&state, &team, "held").await.unwrap();
+    let watched = open_page(&state, &team, "watched").await.unwrap();
+    hold(&state, &team, &key("held"), "t").await;
+    let _watching = watched.watch();
+
+    assert_eq!(browser_pages::close_idle_connections(&state, Duration::ZERO).await, 1);
+    let cached = state.browser_controllers.lock().await;
+    assert!(!cached.contains_key(&key("idle")), "the idle page's connections are gone");
+    assert!(cached.contains_key(&key("held")), "a page held for the person keeps its connections");
+    assert!(cached.contains_key(&key("watched")), "a watched page keeps its connections");
+}
+
+/// Closing a page's connections keeps the page itself, its place, and its sign-in; the next use
+/// reconnects lazily to the very same page, not a fresh one.
+#[tokio::test]
+async fn closing_a_pages_connections_keeps_its_sign_in_and_reconnects_the_same_page() {
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return };
+    let state = container_state(&tmp, endpoint).await;
+    let team = first_bot(&state).await.id;
+    let key = job_page_key(&team, "k", "c").unwrap();
+    let base = serve().await;
+    let ctrl = open_page(&state, &team, "c").await.unwrap();
+    ctrl.navigate(&format!("{base}/signin")).await.unwrap();
+    assert_eq!(title_becomes(&ctrl, "sign in").await, "sign in");
+
+    assert_eq!(browser_pages::close_idle_connections(&state, Duration::ZERO).await, 1);
+    assert!(!state.browser_controllers.lock().await.contains_key(&key), "its connections are gone from the cache");
+
+    let ctrl2 = open_page(&state, &team, "c").await.expect("its next use reconnects");
+    assert_eq!(eval(&ctrl2, "document.cookie").await, json!("kwnt_session=signed-in"), "its sign-in survived");
+    assert_eq!(eval(&ctrl2, "document.title").await, json!("sign in"), "the same page, not a fresh one");
 }
 
 #[tokio::test]
