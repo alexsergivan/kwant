@@ -128,7 +128,8 @@ Writes and edits outside the folder and unknown tools still ask. Under every mod
 ## "Always this session"
 
 Under `ask` and `smart`, "Always this session" on a claude tool's card allows that tool (e.g. all
-`Bash`) for that bot and conversation until kwnt restarts. Under `smart`, API drivers'
+`Bash`) for that bot and conversation, also after kwnt restarts (table `always_allowed`), until the
+person takes it back (`DELETE /api/kwants/:id/always-allowed`, see [mcp-api.md](mcp-api.md)). Under `smart`, API drivers'
 `execute_shell` is remembered the same way, per conversation; under `ask` it covers that one
 command only. Neither covers a payment, and "Always this session" on a payment's card allows that
 one call.

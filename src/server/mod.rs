@@ -61,6 +61,7 @@ pub mod import_routes;
 pub mod inbox;
 pub mod inbox_done;
 pub mod isolated_folders_routes;
+pub mod always_allowed;
 pub mod approval_modes;
 pub mod passwords;
 pub mod loose_ends_owner;
@@ -193,6 +194,8 @@ impl AppState {
         let api_token = Arc::new(auth::ApiToken::load(&config));
         let browser_service = Arc::new(crate::sandbox::service::BrowserService::new(config.data_dir.clone(), config.browser_cdp_url.clone()));
         let agent_vm = crate::sandbox::agent_vm::AgentVm::new(&config.data_dir, config.agents_in_vm.clone(), db.clone());
+        // "Always allow" answers are kept in this database and come back after a restart (25e)
+        broker.attach_store(db.clone());
         Self {
             config,
             db,
@@ -352,6 +355,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dev/notes/:note_id", patch(dev::line_notes::edit).delete(dev::line_notes::delete))
         .route("/api/dev/notes/:note_id/restore", post(dev::line_notes::restore))
         .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
+        .route("/api/kwants/:id/always-allowed", get(always_allowed::list).delete(always_allowed::revoke))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
         .route("/api/isolated-folders", get(isolated_folders_routes::list))

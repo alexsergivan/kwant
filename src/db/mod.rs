@@ -21,6 +21,7 @@ pub mod hires;
 pub mod imports;
 pub mod team_templates;
 pub mod approval_modes;
+pub mod always_allowed;
 pub mod parked;
 pub mod waiting;
 pub mod decisions;
@@ -305,6 +306,9 @@ impl Database {
         // 0.9.6: the model badge's resting value (add-only). Last, after every step that can
         // rebuild `kwants`
         db.migrate_last_ran_on().await?;
+        // 0.9.21 25e: "Always allow" kept across restarts (add-only, outside exports). After every
+        // step that can rebuild `kwants`, `threads` or `channels`, which would drop its triggers
+        db.migrate_always_allowed().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal

@@ -435,6 +435,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "teams", _] => matches!(*method, Method::DELETE | Method::PUT | Method::PATCH),
         ["", "api", "channels", _] => *method == Method::PATCH,
         ["", "api", "kwants", _] => *method == Method::DELETE,
+        // 25e: what a bot may do without asking, and taking it back, are the person's
+        ["", "api", "kwants", _, "always-allowed"] => true,
         // A bot's lessons (its failures and the person's send-backs): the person reads them; bots
         // never read their own record, any method
         ["", "api", "kwants", _, "lessons", ..] => true,
@@ -982,6 +984,8 @@ mod tests {
         assert!(!person_only(&get, "/api/team-templates"));
         assert!(!person_only(&post, "/api/teams"));
         assert!(!person_only(&get, "/api/teams/t1"));
+        assert!(person_only(&get, "/api/kwants/k1/always-allowed"));
+        assert!(person_only(&del, "/api/kwants/k1/always-allowed/"));
         for (m, p) in [
             (&get, "/api/spaces/s1/dev_mode"),
             (&put, "/api/spaces/s1/dev_mode"),
