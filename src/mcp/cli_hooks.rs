@@ -9,8 +9,8 @@
 //!   kwnt's own tools (18a), so the model reads the same words. Claude runs PreToolUse before its
 //!   permission check, so a stopped call never shows a card.
 //! - `PostToolUse` (claude 2.1.325: a call that worked) clears the call. 22t: when that call
-//!   changed something ([`changes_something`]: an edit, or a shell command that isn't stopped),
-//!   every stopped call gets its tries again ([`RepeatGuard::changed`]), so a fixed test runs.
+//!   changed something ([`changes_something`]: an edit, or a shell command that isn't stopped and
+//!   may write, 23b), every stopped call gets its tries again ([`RepeatGuard::changed`]), so a fixed test runs.
 //! - `PostToolUseFailure` (a call that failed, with its `error` text, e.g. `"Exit code 1\n…"`)
 //!   counts one more identical failure. A call claude or the person denied fires neither event.
 //!
@@ -20,9 +20,10 @@
 
 use super::cli_config::{create_private_dir, ConfigFile};
 use super::repeat_guard::{is_stop_text, RepeatGuard};
+use super::shell_risk;
 use serde_json::{json, Value};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The hook events kwnt asks claude to post.
 pub const HOOK_EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "PostToolUseFailure"];
@@ -102,11 +103,30 @@ pub fn key(tool: &str, input: &Value) -> [u8; 32] {
 pub const WRITE_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
 /// 22t: whether a call that worked may have changed what a stopped call would see: a file write,
-/// or a shell command other than a stopped one (Rigel, #693 QA). A shell command can't be read
-/// for its effect, so any other one counts; [`REPEAT_CEILING`](super::repeat_guard::REPEAT_CEILING)
-/// still ends a loop.
-pub fn changes_something(guard: &RepeatGuard, tool: &str, key: &[u8; 32]) -> bool {
-    WRITE_TOOLS.contains(&tool) || (tool == "Bash" && guard.check(key).is_none())
+/// or a shell command other than a stopped one (Rigel, #693 QA).
+/// [`REPEAT_CEILING`](super::repeat_guard::REPEAT_CEILING) still ends a loop.
+/// 23b: a shell command that only reads inside the turn's folder (`cat a.js`, `git status`,
+/// `ls && grep -n x a.js`, judged by [`shell_risk::reads_only`]) changes nothing either, so
+/// "cat the file, rerun the same failing test" can't loop. With no `command` or no `cwd` (the
+/// payload's working folder) kwnt can't tell, and the call counts as a change, as before.
+pub fn changes_something(guard: &RepeatGuard, tool: &str, key: &[u8; 32], input: &Value, cwd: Option<&str>) -> bool {
+    if WRITE_TOOLS.contains(&tool) {
+        return true;
+    }
+    if tool != "Bash" || guard.check(key).is_some() {
+        return false;
+    }
+    !shell_reads_only(input, cwd)
+}
+
+/// 23b: whether a Bash call's `command` only reads inside `cwd`. `false` when either is missing.
+fn shell_reads_only(input: &Value, cwd: Option<&str>) -> bool {
+    let (Some(command), Some(cwd)) = (input["command"].as_str(), cwd.filter(|c| !c.trim().is_empty())) else {
+        return false;
+    };
+    // reads_only compares real paths: resolve the folder (macOS /var is /private/var)
+    let folder = std::fs::canonicalize(cwd).unwrap_or_else(|_| PathBuf::from(cwd));
+    shell_risk::reads_only(command, &folder)
 }
 
 /// What kwnt does with one hook payload. `Some` is the hook's stdout (a PreToolUse deny);
@@ -131,7 +151,7 @@ pub fn on_event(guard: &RepeatGuard, msg: &Value) -> Option<Value> {
             }))
         }
         "PostToolUse" => {
-            let changed = changes_something(guard, tool, &k);
+            let changed = changes_something(guard, tool, &k, &input, msg["cwd"].as_str());
             guard.after(&k, "ok", "");
             if changed {
                 guard.changed();
@@ -386,6 +406,80 @@ mod tests {
         }
         let out = on_event(&g, &pre("Bash", npm("t"))).expect("3 of the new error in a row");
         assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(3, other));
+    }
+
+    // ---- 23b: a read-only shell command doesn't give a stopped call its tries again ----
+
+    /// The turn's folder, with the file the bot reads (canonical, as reads_only compares real paths).
+    fn ws() -> (tempfile::TempDir, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.js"), "module.exports = (a, b) => a + b + 1;\n").unwrap();
+        let cwd = tmp.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        (tmp, cwd)
+    }
+    /// A shell command that worked, with claude's `cwd`.
+    fn ran(command: &str, cwd: &str) -> Value {
+        let mut m = worked("Bash", json!({"command": command, "description": "look"}));
+        m["cwd"] = json!(cwd);
+        m
+    }
+
+    #[test]
+    fn f_a_shell_command_that_only_reads_does_not_reopen_it() {
+        let (_tmp, cwd) = ws();
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        for cmd in ["cat a.js", "git status", "git diff", "ls -la && grep -n x a.js", "git log --oneline -3", "head -5 a.js | wc -l"] {
+            assert!(shell_risk::reads_only(cmd, Path::new(&cwd)), "{cmd} is a read for reads_only");
+            assert_eq!(on_event(&g, &pre("Bash", json!({"command": cmd, "description": "look"}))), None, "{cmd} runs");
+            on_event(&g, &ran(cmd, &cwd));
+            let out = on_event(&g, &pre("Bash", npm("again"))).unwrap_or_else(|| panic!("{cmd} reopened npm test"));
+            assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(3, NPM_ERR), "after {cmd}");
+        }
+        // Then the bot really changes the file
+        on_event(&g, &ran("sed -i 's/ + 1//' a.js", &cwd));
+        assert_eq!(on_event(&g, &pre("Bash", npm("after the fix"))), None, "sed -i reopens it");
+    }
+
+    #[test]
+    fn g_a_shell_command_that_may_write_reopens_it() {
+        let (_tmp, cwd) = ws();
+        for cmd in [
+            "sed -i 's/ + 1//' a.js",
+            "npm install",
+            "git checkout a.js",
+            "echo x > a.js",
+            "cat a.js > b.js",
+            "ls && rm b.js",
+            // Outside the folder reads_only can't vouch for it: it still counts (conservative)
+            #[cfg(unix)]
+            "cat /etc/hosts",
+        ] {
+            assert!(!shell_risk::reads_only(cmd, Path::new(&cwd)), "{cmd} may write for reads_only");
+            let g = RepeatGuard::default();
+            npm_fails_three_times(&g);
+            on_event(&g, &ran(cmd, &cwd));
+            assert_eq!(on_event(&g, &pre("Bash", npm("again"))), None, "{cmd} reopens npm test");
+        }
+    }
+
+    #[test]
+    fn h_without_a_cwd_or_a_command_any_shell_command_still_reopens_it() {
+        let (_tmp, cwd) = ws();
+        // No cwd (worked() has none) or an empty one
+        for msg in [worked("Bash", json!({"command": "cat a.js"})), ran("cat a.js", ""), ran("cat a.js", "  ")] {
+            let g = RepeatGuard::default();
+            npm_fails_three_times(&g);
+            on_event(&g, &msg);
+            assert_eq!(on_event(&g, &pre("Bash", npm("again"))), None, "{msg} reopens npm test");
+        }
+        // No command at all
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        let mut m = worked("Bash", json!({"description": "?"}));
+        m["cwd"] = json!(cwd);
+        on_event(&g, &m);
+        assert_eq!(on_event(&g, &pre("Bash", npm("again"))), None);
     }
 
     #[test]
