@@ -26,6 +26,10 @@ pub const INHERIT: &str = "inherit";
 /// How long a card that outlived its turn can still be answered to resume the work.
 pub const WAITING_APPROVAL_HOURS: i64 = 24;
 
+/// The status of an approvals record for a customer-turn call nobody allowed (16d): closed from
+/// the start, nothing to answer.
+pub const CUSTOMER_REFUSED: &str = "refused";
+
 /// What `approvals` resolves to for one bot.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ApprovalMode {
@@ -379,6 +383,48 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(id)
+    }
+
+    /// Records a call in a customer's turn that kwnt's tool endpoint refused because nobody allowed
+    /// it (16d), as [`CUSTOMER_REFUSED`]: already closed, so it is never a card, never answered and
+    /// never resumed. It only shows in the bot's approvals list. Its id.
+    ///
+    /// 19e: one row per (turn, bot, tool, arguments). A model that retries the same refused call in
+    /// the same turn gets the first row's id back and adds nothing; other arguments, or the same
+    /// call in a later turn, add a row. Same arguments means the same stored details string. The
+    /// check and the insert are one statement, so two refusals at once can't both add a row.
+    pub async fn save_customer_refused(&self, input: &super::models::NewApproval) -> Result<String, DbError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let parameters = serde_json::to_string(&input.parameters)?;
+        let added = sqlx::query(
+            "INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE NOT EXISTS (SELECT 1 FROM approvals \
+             WHERE turn_id = ?2 AND kwant_id = ?3 AND tool_name = ?4 AND parameters = ?5 AND status = ?6)",
+        )
+        .bind(&id)
+        .bind(&input.turn_id)
+        .bind(&input.kwant_id)
+        .bind(&input.tool_name)
+        .bind(&parameters)
+        .bind(CUSTOMER_REFUSED)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if added > 0 {
+            return Ok(id);
+        }
+        let first: String = sqlx::query_scalar(
+            "SELECT id FROM approvals WHERE turn_id = ? AND kwant_id = ? AND tool_name = ? AND parameters = ? AND status = ? \
+             ORDER BY created_at, rowid LIMIT 1",
+        )
+        .bind(&input.turn_id)
+        .bind(&input.kwant_id)
+        .bind(&input.tool_name)
+        .bind(&parameters)
+        .bind(CUSTOMER_REFUSED)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(first)
     }
 
     /// Records a call that ran without a card because approvals were off (or it was safe under

@@ -18,7 +18,7 @@ const ui = await loadBundled(`
 `);
 
 const noop = () => {};
-const text = (html) => html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ');
+const text = (html) => html.replace(/<[^>]+>/g, '').replace(/[^\S\u00a0]+/g, ' ');
 const routine = (over = {}) => ({
   id: 'r1', kwant_id: 'k1', channel_id: null, name: 'Competitor prices',
   instructions: 'Check Beanline and RoastCo prices and tell me what changed since last week.',
@@ -34,7 +34,7 @@ test('the card says what it does, then when it runs next, then schedule · bot �
   assert.match(h, /title="Check Beanline/);
   assert.match(t, /Next [A-Z][a-z]{2}, Nov 1[56]/);
   assert.match(t, /last ran Mon, Nov 9/);
-  assert.match(t, /Every Monday at 09:00, Kyiv time · Ben · #spring-launch/);
+  assert.match(t, /Every Monday at 9:00\u00a0AM, Kyiv time · Ben · #spring-launch/);
   assert.doesNotMatch(t, /Next run:|\(Europe\/Kyiv\)/);
   // Order: name, first line, next, meta.
   assert.ok(t.indexOf('Competitor prices') < t.indexOf('Check Beanline'));
@@ -56,7 +56,7 @@ test('a paused routine says Paused and mutes its name and first line', () => {
 
 test('a Mon–Fri routine reads "Weekdays at …"', () => {
   const t = text(ui.row(rowProps({ schedule: { type: 'weekly', time: '08:30', weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'], tz: 'Europe/Kyiv' } })));
-  assert.match(t, /Weekdays at 08:30, Kyiv time/);
+  assert.match(t, /Weekdays at 8:30\u00a0AM, Kyiv time/);
 });
 
 test('phone: the four actions sit in a 4-column grid of 44 px buttons; desktop keeps the indented row', () => {

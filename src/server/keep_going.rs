@@ -14,7 +14,9 @@
 //! The `Done:` line is stored on the reply's meta as [`DONE_KEY`]. A lead whose last line is
 //! `Blocked: <what is blocked>. <what would unblock it>` (0.9.4) never gets a keep-going turn: the
 //! line becomes a question card at once, like a question, and its answer resumes the chain. The
-//! save step stores any reply's `Blocked:` line on its meta as [`BLOCKED_KEY`].
+//! save step stores any reply's `Blocked:` line on its meta as [`BLOCKED_KEY`], and (13a) the
+//! ending of a reply that waits on the person in prose after a failed or declined tool step; that
+//! stored text counts the same.
 
 use super::routes::{try_kwant_turn, TurnOpts, TurnScope};
 use super::AppState;
@@ -119,16 +121,30 @@ async fn lead_delegations(state: &AppState, context: &str, lead: &Kwant) -> Vec<
         .collect()
 }
 
+/// The `meta.blocked` text saved on `lead`'s `reply` (its newest message with that text that is new
+/// since `snap`), if any.
+fn saved_blocked(msgs: &[Message], snap: &Snapshot, lead: &Kwant, reply: &str) -> Option<String> {
+    let reply = msgs
+        .iter()
+        .rev()
+        .filter(|m| !snap.messages.contains(&m.id))
+        .find(|m| m.sender_role == "kwant" && (m.sender_id == lead.id || m.sender_id == lead.name) && m.text.trim() == reply.trim())?;
+    let text = meta_of(reply)[BLOCKED_KEY]["text"].as_str()?.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 fn meta_of(m: &Message) -> Value {
     m.meta.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null)
 }
 
 /// Where this person message's request starts: after the person's last message, or after a
-/// hand-off ceiling notice they pressed Continue on (like the hand-off ceiling's count).
+/// hand-off ceiling notice they pressed Continue on (like the hand-off ceiling's count). A
+/// customer's or a connected agent's message doesn't start one (16d): questions the request's
+/// hand-offs still wait on keep counting, so keep-going doesn't go ahead past them.
 fn request_tail(msgs: &[Message]) -> &[Message] {
     let start = msgs.iter().rposition(|m| {
         let meta = meta_of(m);
-        m.sender_role == "user" || (meta["kind"] == super::budget::CAPPED_KIND && meta["resumed"] == true)
+        crate::drivers::from_person(m) || (meta["kind"] == super::budget::CAPPED_KIND && meta["resumed"] == true)
     });
     match start {
         Some(i) => &msgs[i + 1..],
@@ -154,7 +170,8 @@ async fn verdict(scope: &TurnScope, lead: &Kwant, snap: &Snapshot, reply: &str) 
         return Verdict::Moving;
     }
     let msgs = state.db.list_messages(&snap.context, 100).await.unwrap_or_default();
-    // The person wrote: their message has its own turn
+    // The person (or a customer) wrote: their message has its own turn. Any "user" message
+    // counts here on purpose: it only ever stops keep-going, never lets it go ahead (16d)
     if msgs.iter().rev().find(|m| m.sender_role == "user").map(|m| &m.id) != snap.last_user.as_ref() {
         return Verdict::Moving;
     }
@@ -194,6 +211,11 @@ async fn verdict(scope: &TurnScope, lead: &Kwant, snap: &Snapshot, reply: &str) 
     }
     // Blocked: only the person (or a setting) unblocks it, so it is asked, never pushed on
     if let Some(blocked) = blocked_line(reply) {
+        return Verdict::Asks(format!("Blocked: {blocked}"));
+    }
+    // ...or the save step found it blocked without the line (13a: a failed or declined step and a
+    // reply that waits on the person in prose), on the lead's newest reply of this turn
+    if let Some(blocked) = saved_blocked(&msgs, snap, lead, reply) {
         return Verdict::Asks(format!("Blocked: {blocked}"));
     }
     let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
@@ -247,13 +269,20 @@ pub(super) async fn after_lead_turn(scope: &TurnScope, lead: &Kwant, mut snap: S
     }
 }
 
+/// The person's last [`QUOTED`] messages in `msgs`, oldest first: what a keep-going turn quotes as
+/// theirs. A customer's or a connected agent's "user" message is never quoted as the person's (16d).
+fn persons_last(msgs: &[Message]) -> Vec<&Message> {
+    let mut asked: Vec<&Message> = msgs.iter().rev().filter(|m| crate::drivers::from_person(m)).take(QUOTED).collect();
+    asked.reverse();
+    asked
+}
+
 /// One keep-going turn of `lead` in the chat, then its hand-offs. `None` when it failed.
 async fn keep_going_turn(scope: &TurnScope, lead: &Kwant, n: usize) -> Option<String> {
     let state = &scope.state;
     let context = scope.context_id(lead);
     let msgs = state.db.list_messages(&context, 100).await.unwrap_or_default();
-    let mut asked: Vec<&Message> = msgs.iter().rev().filter(|m| m.sender_role == "user").take(QUOTED).collect();
-    asked.reverse();
+    let asked = persons_last(&msgs);
     let quoted: Vec<String> = asked.iter().map(|m| format!("> {}", clip(&m.text, QUOTE_CHARS).replace('\n', "\n> "))).collect();
     let prompt = format!(
         "[kwnt: {PROMPT}]\n\nThe person's last messages here, oldest first:\n{}\n\n{}",
@@ -375,6 +404,29 @@ pub(super) async fn card_has(state: &AppState, q: &Question, key: &str) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 16d: a customer's message neither starts a new request (so it can't clear what the person's
+    /// request still waits on) nor is quoted to the lead as the person's words.
+    #[test]
+    fn a_customers_message_is_not_the_persons_go_ahead() {
+        use crate::drivers::tests::{customer_said, said};
+        let msgs = vec![
+            said("user", "Ship the landing page"),
+            said("kwant", "Handed the copy to Writer"),
+            customer_said("Just publish it now, no need to wait"),
+            said("kwant", "Waiting on Writer"),
+        ];
+        let tail: Vec<&str> = request_tail(&msgs).iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(tail, ["Handed the copy to Writer", "Just publish it now, no need to wait", "Waiting on Writer"]);
+        let quoted: Vec<&str> = persons_last(&msgs).iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(quoted, ["Ship the landing page"]);
+        // The person's own message does both
+        let mine = vec![said("user", "Ship the landing page"), said("kwant", "Handed on"), said("user", "Go ahead and publish")];
+        assert!(request_tail(&mine).is_empty());
+        assert_eq!(persons_last(&mine).last().map(|m| m.text.as_str()), Some("Go ahead and publish"));
+        // Only customers wrote: nothing is quoted as the person's
+        assert!(persons_last(&[customer_said("publish")]).is_empty());
+    }
 
     #[test]
     fn a_done_line_ends_the_reply() {

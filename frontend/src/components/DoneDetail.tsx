@@ -260,7 +260,7 @@ export const DoneSections: React.FC<{
           {trail.length ? (
             <ol className="space-y-1.5">
               {dropped > 0 && (
-                <li className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 text-meta text-zinc-400" data-trail-dropped>
+                <li className="grid grid-cols-[5.75rem_minmax(0,1fr)] gap-x-2 text-meta text-zinc-400" data-trail-dropped>
                   <span aria-hidden="true" />
                   <span>
                     {dropped} more {dropped === 1 ? 'step' : 'steps'} before these
@@ -268,8 +268,8 @@ export const DoneSections: React.FC<{
                 </li>
               )}
               {trail.map((r, i) => (
-                <li key={i} className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 text-body" data-trail-row data-status={r.failed ? 'error' : r.skipped ? 'skipped' : 'ok'}>
-                  <time className="tabular-nums text-meta text-zinc-400 pt-px">{r.at}</time>
+                <li key={i} className="grid grid-cols-[5.75rem_minmax(0,1fr)] gap-x-2 text-body" data-trail-row data-status={r.failed ? 'error' : r.skipped ? 'skipped' : 'ok'}>
+                  <time className="tabular-nums whitespace-nowrap text-meta text-zinc-400 pt-px">{r.at}</time>
                   <span className={`min-w-0 break-words ${r.failed ? 'text-rose-200' : r.skipped ? 'text-zinc-400' : 'text-zinc-100'}`}>
                     {r.by && (
                       <>
@@ -348,7 +348,9 @@ export const DoneItemView: React.FC<{
   phone?: boolean;
   onOpenChat?: () => void;
   onEditRoutine?: (id: string) => void;
-}> = ({ item, d, place, hideTitle = false, phone = false, onOpenChat, onEditRoutine }) => {
+  /** The clock the meta line reads "today" from; the device's own when left out. */
+  now?: number;
+}> = ({ item, d, place, hideTitle = false, phone = false, onOpenChat, onEditRoutine, now }) => {
   const uid = useId();
   const title = doneTitle(item);
   return (
@@ -360,7 +362,7 @@ export const DoneItemView: React.FC<{
             {title}
           </h2>
           <p className="text-meta text-zinc-400 break-words" data-done-meta>
-            {metaLine(item, d.routine, d.run)}
+            {metaLine(item, d.routine, d.run, now)}
           </p>
         </div>
       </header>
