@@ -5,6 +5,8 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, Clock, Copy, ExternalLink, HardDrive, Info, KeyRound, RotateCw, Server, WifiOff } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { NewTag } from './NewTag';
+import { markNewSeen } from '../whatsNew';
 import { TemplateGlyph } from './TeamPreviewSheet';
 import { NewKeyAccountForm } from './EngineAccounts';
 import { useReadyTeams } from './ReadyTeams';
@@ -755,7 +757,8 @@ const KeyPanel: React.FC<{ phone: boolean; onAdded: () => void }> = ({ phone, on
 
 // ------------------------------------------------------------------ step 3: pick a team
 
-const TeamStep: React.FC<{
+/** Step 3 of the first screen; exported for tests. */
+export const TeamStep: React.FC<{
   phone: boolean;
   spaceName: string;
   /** False outside the main space: Keep names this space's own bots, not the main space's starters. */
@@ -824,13 +827,17 @@ const TeamStep: React.FC<{
             <button
               type="button"
               data-template={t.id}
-              onClick={() => rt?.open({ kind: 'template', templateId: t.id }, { onDone: onPicked })}
+              onClick={() => {
+                if (t.id === 'home') markNewSeen('home-team');
+                rt?.open({ kind: 'template', templateId: t.id }, { onDone: onPicked });
+              }}
               aria-label={`${t.label} team: ${t.card_line} ${plural(t.bots.length, 'bot')}. Preview`}
               className={`${tile} flex flex-col gap-1.5 border-zinc-700 bg-zinc-900/80 hover:border-sky-300/45`}
             >
               <span className="flex items-center gap-2.5">
                 <TemplateGlyph icon={t.icon} box="w-8 h-8 rounded-[9px] border border-sky-300/35 bg-sky-500/10 text-sky-300" />
                 <span className="text-sm font-semibold text-zinc-50">{t.label}</span>
+                {t.id === 'home' && <NewTag id="home-team" className="ml-auto" />}
               </span>
               <span className="text-[12.5px] leading-[18px] text-zinc-300">{t.card_line}</span>
               <span className="flex items-center gap-2" aria-hidden="true">

@@ -27,6 +27,8 @@ const m = await loadBundled(`
   export { newKey, isNewThing } from './src/whatsNew';
   export { MCP_PRESETS, searchPresets } from './src/mcp';
   export { matchTool } from './src/toolSearch';
+  export { TeamStep } from './src/components/GetStarted';
+  export { ReadyTeamsProvider } from './src/components/ReadyTeams';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;
@@ -292,4 +294,128 @@ test('sheet, tools door: Connected with zero actions earns no Tested; the house 
   assert.equal(v.host.querySelector('[role="img"][aria-label^="House"]'), null);
   assert.ok(v.host.querySelector('[data-ha-start-team]'), 'Start a Home team is offered from Tools');
   v.unmount();
+});
+
+// ---- Round 4: QA D1 (token out of the page after every save), the "other" next step, D2 (welcome grid tag)
+
+/** Like fakeServer, but keeps the saved Authorization the way kwant does: the mask keeps what is stored. */
+const keepingServer = (testFor, { postStatus = 200 } = {}) => {
+  const calls = [];
+  let stored = null;
+  const fetcher = async (url, init = {}) => {
+    const method = init.method ?? 'GET';
+    const body = init.body ? JSON.parse(init.body) : null;
+    const json = (b, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
+    if (url === '/api/mcp/servers' && method === 'GET') return json(stored ? [{ id: 'srv_ha', name: 'home-assistant', url: stored.url, headers: { Authorization: '********' } }] : []);
+    if (url === '/api/mcp/servers' && method === 'POST') {
+      calls.push({ url, method, auth: body.headers.Authorization });
+      if (postStatus !== 200) return json({ error: 'disk full' }, postStatus);
+      stored = { url: body.url, auth: body.headers.Authorization };
+      return json({ id: 'srv_ha', name: 'home-assistant' });
+    }
+    if (url === '/api/mcp/servers/srv_ha' && method === 'PUT') {
+      const a = body.headers.Authorization;
+      stored = { url: body.url, auth: a === '********' ? stored.auth : a };
+      calls.push({ url, method, auth: a, effective: stored.auth });
+      return json({});
+    }
+    if (/\/test$/.test(url)) {
+      calls.push({ url, method, auth: stored.auth });
+      return json(testFor(stored));
+    }
+    return json({});
+  };
+  return { calls, fetcher, setPost: (s) => (postStatus = s) };
+};
+const click = async (el, n = 60) => {
+  el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle(n);
+};
+
+test('D1: after a 401 the token field is empty, says Saved, and Try again with it empty reuses the saved Bearer', async () => {
+  localStorage.clear();
+  const okTools = { ok: true, tools: [{ name: 'HassTurnOn' }], server_info: { name: 'home-assistant' } };
+  let addressRight = false;
+  const { calls, fetcher } = keepingServer((st) => (addressRight && st.url.includes('192.168.1.20') ? okTools : { ok: false, auth_required: true }));
+  const v = await mount(h(m.HomeAssistantSheet, { req: { door: 'tools' }, onClose() {}, fetcher }));
+  await fillAndConnect(v.host);
+  assert.ok(v.host.querySelector('[data-ha-result="bad_token"]'));
+  const field = v.host.querySelector('[data-ha-token]');
+  assert.equal(field.value, '', 'the field is cleared after the save');
+  assert.equal(field.getAttribute('value') ?? '', '');
+  assert.equal(field.type, 'password');
+  assert.ok(!v.host.innerHTML.includes(FAKE_TOKEN), 'no token anywhere in the page');
+  assert.match(v.host.textContent, /Saved\. Paste a new one to replace it\./);
+  // Fix the address, leave the token empty, Try again.
+  addressRight = true;
+  typeIn(v.host.querySelector('[data-ha-address]'), 'http://192.168.1.20:8123');
+  await settle();
+  const again = v.host.querySelector('[data-ha-connect]');
+  assert.equal(again.disabled, false, 'Try again works with the field empty');
+  assert.match(again.textContent, /Try again/);
+  await click(again);
+  const put = calls.find((c) => c.method === 'PUT');
+  assert.equal(put.auth, '********', 'the token is not re-sent from the page');
+  assert.equal(put.effective, `Bearer ${FAKE_TOKEN}`, 'the saved Bearer is kept');
+  assert.equal(calls.filter((c) => c.url === '/api/mcp/servers' && c.method === 'POST').length, 1, 'same server, no duplicate');
+  assert.equal(calls.at(-1).auth, `Bearer ${FAKE_TOKEN}`, 'the test ran with the saved Bearer');
+  assert.ok(v.host.querySelector('[data-ha-result="ok"]'));
+  v.unmount();
+});
+
+test('D1: if saving fails the field still clears; the token is kept off the page for Try again', async () => {
+  const { calls, fetcher, setPost } = keepingServer(() => ({ ok: true, tools: [{ name: 'HassTurnOn' }], server_info: { name: 'home-assistant' } }), { postStatus: 500 });
+  const v = await mount(h(m.HomeAssistantSheet, { req: { door: 'tools' }, onClose() {}, fetcher }));
+  await fillAndConnect(v.host);
+  assert.ok(v.host.querySelector('[data-ha-result="other"]'));
+  assert.equal(v.host.querySelector('[data-ha-token]').value, '');
+  assert.ok(!v.host.innerHTML.includes(FAKE_TOKEN));
+  assert.match(v.host.textContent, /Kept for the next try\. Paste a new one to replace it\./);
+  setPost(200);
+  await click(v.host.querySelector('[data-ha-connect]'));
+  assert.equal(calls.filter((c) => c.url === '/api/mcp/servers' && c.method === 'POST').at(-1).auth, `Bearer ${FAKE_TOKEN}`, 'the held token is sent once more');
+  assert.ok(v.host.querySelector('[data-ha-result="ok"]'));
+  assert.match(v.host.textContent, /Saved\. Paste a new one/);
+  v.unmount();
+});
+
+test('"other": the plain title, one next step, then the server text as a quiet detail', async () => {
+  const { fetcher } = fakeServer({ ok: false, error: 'invalid response: error decoding response body' });
+  const v = await mount(h(m.HomeAssistantSheet, { req: { door: 'tools' }, onClose() {}, fetcher }));
+  await fillAndConnect(v.host);
+  const box = v.host.querySelector('[data-ha-result="other"]');
+  assert.ok(box);
+  assert.equal(box.getAttribute('role'), 'alert');
+  assert.match(box.textContent, /Couldn’t connect to Home Assistant\./);
+  assert.equal(box.querySelector('[data-ha-next]').textContent, 'Check that the address opens your Home Assistant in a browser, then try again.');
+  assert.equal(box.querySelector('[data-ha-detail]').textContent, 'invalid response: error decoding response body');
+  assert.ok(box.textContent.indexOf('Check that') < box.textContent.indexOf('invalid response'), 'next step before the detail');
+  assert.equal(box.querySelectorAll('.kw-sticker-holo').length, 0);
+  v.unmount();
+});
+
+test('D2: the welcome grid’s Home card has the home-team New tag; picking it clears the tag', async () => {
+  localStorage.clear();
+  const realFetch = g.fetch;
+  g.fetch = g.window.fetch = async (url) =>
+    new Response(JSON.stringify(String(url).startsWith('/api/team-templates?') ? { templates: m.TEMPLATES_WIRE } : {}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  try {
+    const ids = m.TEMPLATES_WIRE.map((t) => t.id);
+    assert.ok(ids.includes('home'));
+    const view = { title: 'Pick a team', intro: 'Pick one.', start: null, templateIds: ids };
+    const v = await mount(
+      h(m.ReadyTeamsProvider, { space: 'spc_demo', bots: [], teams: [], onChanged() {}, onOpenTeam() {} },
+        h(m.TeamStep, { phone: false, spaceName: 'Main', mainSpace: true, botNames: [], onKeep() {}, onPicked() {}, onImported() {}, view })),
+    );
+    const home = v.host.querySelector('[data-template="home"]');
+    assert.ok(home, 'Home card in the grid');
+    assert.ok(home.querySelector('[data-new-tag="home-team"]'), 'New on the Home card');
+    assert.equal(v.host.querySelectorAll('[data-new-tag]').length, 1, 'only on Home');
+    await click(home);
+    assert.equal(m.isNewThing('home-team'), false, 'seen once picked');
+    assert.equal(v.host.querySelector('[data-template="home"] [data-new-tag]:not([data-leaving])'), null);
+    v.unmount();
+  } finally {
+    g.fetch = g.window.fetch = realFetch;
+  }
 });

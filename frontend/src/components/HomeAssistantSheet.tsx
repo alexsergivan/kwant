@@ -107,6 +107,9 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
   const [addrTouched, setAddrTouched] = useState(false);
   const [token, setToken] = useState('');
   const [tokenSaved, setTokenSaved] = useState(false);
+  /** A token whose save failed: kept in memory for Try again, never in the field (QA D1). */
+  const heldToken = useRef('');
+  const [tokenHeld, setTokenHeld] = useState(false);
   const [shown, setShown] = useState(false);
   const [phase, setPhase] = useState<Phase>({ s: 'edit' });
   /** The server this sheet saved (or is fixing); Try again updates it. */
@@ -117,7 +120,7 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
   const testing = phase.s === 'testing';
   const result = phase.s === 'done' ? phase.r : null;
   const ok = result?.kind === 'ok';
-  const canConnect = !!parsed && (token.trim() !== '' || tokenSaved) && !testing;
+  const canConnect = !!parsed && (token.trim() !== '' || tokenSaved || tokenHeld) && !testing;
 
   useEffect(() => markNewSeen('home-assistant'), []);
 
@@ -162,7 +165,13 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
   const connect = async () => {
     if (!parsed || !canConnect) return;
     setPhase({ s: 'testing' });
-    const headers = { Authorization: token.trim() ? `Bearer ${token.trim().replace(/^Bearer\s+/i, '')}` : SECRET_MASK };
+    // A pasted token wins; else one held from a failed save; else the saved one (the mask tells the
+    // server to keep the header it has).
+    const typed = token.trim().replace(/^Bearer\s+/i, '') || heldToken.current;
+    const headers = { Authorization: typed ? `Bearer ${typed}` : SECRET_MASK };
+    // Every save attempt clears the field, so the token never stays in the page (QA D1).
+    setToken('');
+    setShown(false);
     const payload = { transport: 'http', command: null, args: [], url: parsed.url, env: {}, headers, enabled: true, timeout_secs: 30 };
     let id = serverId;
     try {
@@ -184,7 +193,14 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
         createdHere.current = true;
         setServerId(id);
       }
+      heldToken.current = '';
+      setTokenHeld(false);
+      setTokenSaved(true);
     } catch (e) {
+      if (typed) {
+        heldToken.current = typed;
+        setTokenHeld(true);
+      }
       setPhase({ s: 'done', r: { kind: 'other', error: e instanceof Error ? e.message : 'Couldn’t save it in Tools.' } });
       return;
     }
@@ -200,8 +216,6 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
     saveStatuses(statuses);
     const r = mapHaTest(test);
     if (r.kind === 'ok') {
-      setToken('');
-      setTokenSaved(true);
       if (req.door === 'team') await giveToTeam(id!);
     }
     setPhase({ s: 'done', r });
@@ -372,7 +386,9 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
               <p id={`${tokenId}-help`} className="text-[11px] leading-relaxed text-zinc-400">
                 {tokenSaved
                   ? 'Saved. Paste a new one to replace it. Leaving it empty keeps the saved one.'
-                  : 'A long code that lets kwant into your Home Assistant. Make it in your profile › Security › Long-lived access tokens › Create token.'}
+                  : tokenHeld
+                    ? 'Kept for the next try. Paste a new one to replace it.'
+                    : 'A long code that lets kwant into your Home Assistant. Make it in your profile › Security › Long-lived access tokens › Create token.'}
               </p>
             </div>
 
@@ -536,7 +552,12 @@ const ResultBox: React.FC<{ phase: Phase; host?: string; origin?: string; door: 
     default:
       return (
         <Box tone="bad" kind={r.kind} icon={<AlertTriangle size={16} aria-hidden="true" />} title={haResultTitle(r)}>
-          <span className="line-clamp-3 break-words">{r.error}</span>
+          <p data-ha-next>Check that the address opens your Home Assistant in a browser, then try again.</p>
+          {r.error && (
+            <p className="mt-1 font-mono text-[11px] text-rose-200/70 line-clamp-3 break-words" data-ha-detail>
+              {r.error}
+            </p>
+          )}
         </Box>
       );
   }
