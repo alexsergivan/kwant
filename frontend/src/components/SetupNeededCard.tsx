@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, KeyRound, RefreshCw } from 'lucide-react';
 import { parseMetaObject } from '../questions';
 
@@ -14,6 +14,11 @@ export function parseSetupMeta(raw: unknown): SetupMeta | null {
   if (!m || m.kind !== 'setup_needed') return null;
   if (m.reason === 'ollama_down') return { reason: 'ollama_down', url: typeof m.url === 'string' && m.url ? m.url : undefined };
   return { reason: m.reason === 'host_off' ? 'host_off' : 'no_account' };
+}
+
+/** The `ollama_down` detail line; `stillDown` once a Re-check has found Ollama still not answering. */
+export function ollamaDownDetail(url: string | undefined, stillDown: boolean): string {
+  return `Ollama ${stillDown ? 'still ' : ''}isn't answering at ${url ?? 'the address in Settings'}. Start it, then try again.`;
 }
 
 interface Props {
@@ -36,12 +41,19 @@ interface Props {
 export const SetupNeededCard: React.FC<Props> = ({ meta, botName, spaceName, canRun, onOpenAccounts, ollamaReady, onRecheck, rechecking, flash }) => {
   const ollama = meta.reason === 'ollama_down';
   const fixed = ollama ? ollamaReady === true : canRun === true;
+  // A Re-check that ends with Ollama still down says so, or the press looks like it did nothing.
+  const [stillDown, setStillDown] = useState(false);
+  const wasRechecking = useRef(rechecking);
+  useEffect(() => {
+    if (wasRechecking.current && !rechecking && ollamaReady !== true) setStillDown(true);
+    wasRechecking.current = rechecking;
+  }, [rechecking, ollamaReady]);
   const detail = fixed
     ? ollama
       ? 'Ollama is answering now. Send your message again to get a reply.'
       : `An account works in ${spaceName} now. Send your message again to get a reply.`
     : ollama
-      ? `Ollama isn't answering at ${meta.url ?? 'its address in Settings'}. Start it, then try again.`
+      ? ollamaDownDetail(meta.url, stillDown)
       : meta.reason === 'host_off'
         ? `This computer's AI accounts are off in ${spaceName} and no other account is on. Turn one on, or add an account.`
         : `No account can run bots in ${spaceName} yet. Sign in with Claude, ChatGPT or Grok, or add an API key.`;
@@ -72,7 +84,7 @@ export const SetupNeededCard: React.FC<Props> = ({ meta, botName, spaceName, can
             data-setup-recheck
             className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
           >
-            <RefreshCw size={13} aria-hidden="true" className={rechecking ? 'animate-spin' : undefined} />
+            <RefreshCw size={13} aria-hidden="true" className={rechecking ? 'animate-spin motion-reduce:animate-none' : undefined} />
             {rechecking ? 'Checking…' : 'Re-check'}
           </button>
         )}
