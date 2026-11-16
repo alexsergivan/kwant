@@ -156,7 +156,7 @@ import {
 import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
 import { needsYouRows, attentionRows } from './chatsTab';
 import { Space, eventsUrl, getCurrentSpace, pickInitialChat } from './spaces';
-import { canRunNow } from './engines';
+import { canRunNow, isUsable } from './engines';
 import { useEngines } from './useEngines';
 import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
@@ -440,6 +440,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // card and the bots' online dots all read whether anything can run.
   const engines = useEngines(true);
   const canRun = canRunNow(engines.engines);
+  const ollamaReady = engines.engines ? engines.engines.some((e) => e.id === 'ollama' && isUsable(e)) : null;
   const offerClaude = canRun === false && claudeNeedsSignIn(engines.engines);
   // Claude Code isn't here but kwant can install it: "Set up Claude" installs, then signs in, in one go.
   const claudeMissing = canRun === false && !!engines.engines?.some((e) => e.id === 'claude' && e.status === 'not_installed' && e.enabled !== false);
@@ -4456,6 +4457,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (k) openAgentSettings(k, 'profile');
           }}
           canRun={canRun}
+          ollamaReady={ollamaReady}
+          onRecheckEngines={() => void engines.recheck()}
+          recheckingEngines={engines.rechecking}
           titleExtra={
             workingBadge || skillsBadge || approvalsBadge ? (
               <>

@@ -22,6 +22,34 @@ pub const NO_ENGINE_MESSAGE: &str = "No account can run bots here yet. Add one i
 pub const HOST_OFF_MESSAGE: &str =
     "This machine is off in this space and no other account is on. Turn one on in Settings › This space › Accounts.";
 
+/// What a turn pinned to Ollama gets when Ollama still isn't answering after a second look.
+pub fn ollama_down_message(root: &str) -> String {
+    format!("Ollama isn't answering at {}. Start it, then try again.", shown_url(root))
+}
+
+/// The chat message a bot pinned to Ollama leaves when Ollama isn't answering, and its `meta`:
+/// kind `setup_needed`, reason `ollama_down`, so the app offers Re-check instead of "add an account".
+pub fn ollama_down_notice(bot: &str, root: &str) -> (String, Value) {
+    let url = shown_url(root);
+    (
+        format!("⚠️ [{bot}] {}", ollama_down_message(root)),
+        serde_json::json!({ "kind": "setup_needed", "reason": "ollama_down", "url": url }),
+    )
+}
+
+/// `url` as a chat may show it: any user name or password in it is dropped.
+fn shown_url(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut u) if !u.username().is_empty() || u.password().is_some() => {
+            let _ = u.set_username("");
+            let _ = u.set_password(None);
+            u.to_string().trim_end_matches('/').to_string()
+        }
+        Ok(_) => url.to_string(),
+        Err(_) => "the address in Settings".into(),
+    }
+}
+
 /// The chat message `bot` leaves when nothing can run its turn, and its `meta`: kind
 /// `setup_needed`, so the app shows a card with a button to Accounts instead of a reply.
 /// `reason` is `host_off` when This machine is switched off in the space, else `no_account`.
@@ -317,6 +345,9 @@ pub struct ProbeEnv {
     /// Ollama server root (no `/v1`).
     pub ollama_root: String,
     pub ollama_installed: bool,
+    /// The person set Ollama up: its binary is on this host, or Settings or `OLLAMA_URL` name a
+    /// server. Only then does a failed check look again on its own (see [`EngineRegistry::watch_ollama`]).
+    pub ollama_configured: bool,
     pub anthropic_base: String,
     pub openai_base: String,
     pub xai_base: String,
@@ -334,6 +365,9 @@ impl ProbeEnv {
                 .filter(|k| !k.trim().is_empty())
         }
         let ollama_url = db.get_setting("ollama_url").await.ok().flatten();
+        let ollama_installed = super::find_cli_binary("ollama").is_some();
+        let named = |u: Option<String>| u.is_some_and(|u| !u.trim().is_empty());
+        let ollama_configured = ollama_installed || named(ollama_url.clone()) || named(std::env::var("OLLAMA_URL").ok());
         Self {
             claude_bin: super::find_cli_binary("claude"),
             claude_config_dir: None,
@@ -343,7 +377,8 @@ impl ProbeEnv {
             openai_key: key(db, "openai_api_key", "OPENAI_API_KEY").await,
             xai_key: key(db, "xai_api_key", "XAI_API_KEY").await,
             ollama_root: super::ollama_root(ollama_url.as_deref()),
-            ollama_installed: super::find_cli_binary("ollama").is_some(),
+            ollama_installed,
+            ollama_configured,
             anthropic_base: "https://api.anthropic.com".into(),
             openai_base: "https://api.openai.com".into(),
             xai_base: "https://api.x.ai".into(),
@@ -729,7 +764,27 @@ pub struct EngineRegistry {
     /// Turned off in Settings (`engines_disabled`).
     disabled: RwLock<HashSet<EngineId>>,
     running: tokio::sync::Mutex<()>,
+    /// Held by a one-engine check from [`EngineRegistry::recheck_joined`], so turns and the
+    /// Ollama watcher that need the same check at once share one.
+    one: tokio::sync::Mutex<()>,
 }
+
+/// How long the Ollama watcher waits before each look after a failed check: 15 s, 30 s, 60 s,
+/// then every 5 minutes until Ollama answers.
+pub const OLLAMA_BACKOFF: [Duration; 4] = [
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(300),
+];
+
+/// The wait before look number `step` (0-based) after a failed check; the last one repeats.
+pub fn backoff_delay(delays: &[Duration], step: usize) -> Duration {
+    delays.get(step).or(delays.last()).copied().unwrap_or(Duration::from_secs(300))
+}
+
+/// How long a turn about to say nothing can run waits for a second look at Ollama.
+pub const SECOND_LOOK: Duration = Duration::from_secs(3);
 
 /// Settings key holding the ids of engines turned off, as a JSON list.
 pub const DISABLED_SETTING: &str = "engines_disabled";
@@ -827,6 +882,68 @@ impl EngineRegistry {
 
     pub fn status(&self, id: EngineId) -> EngineStatus {
         self.report(id).status
+    }
+
+    /// When the last stored check of `id` ran (marks from turns don't count).
+    fn checked_at(&self, id: EngineId) -> Option<DateTime<Utc>> {
+        self.checked.read().unwrap().get(&id).and_then(|r| r.checked_at)
+    }
+
+    /// Checks `id` again, within `limit`, and returns its status. A check already running (the
+    /// startup check, Re-check, or another caller's look at the same engine) is waited for and
+    /// its result used, instead of starting a second one. Past `limit` the status stays as it was.
+    pub async fn recheck_joined(&self, id: EngineId, env: &ProbeEnv, limit: Duration) -> EngineStatus {
+        if !self.is_enabled(id) {
+            return EngineStatus::Disabled;
+        }
+        let seen = self.checked_at(id);
+        let _ = tokio::time::timeout(limit, async {
+            drop(self.running.lock().await);
+            if self.checked_at(id) != seen {
+                return;
+            }
+            let _one = self.one.lock().await;
+            if self.checked_at(id) != seen {
+                return;
+            }
+            let probe = probe_within(id, env, limit).await;
+            self.store(vec![(id, probe)]);
+        })
+        .await;
+        self.status(id)
+    }
+
+    /// Whether Ollama's last check failed in a way a later look can fix: it errored, or it wasn't
+    /// running though the person set it up. Off, ready, or not checked yet ⇒ no.
+    pub fn ollama_down(&self, configured: bool) -> bool {
+        match self.status(EngineId::Ollama) {
+            EngineStatus::Error => true,
+            EngineStatus::NotInstalled => configured,
+            _ => false,
+        }
+    }
+
+    /// Runs for the life of the server: after a failed Ollama check, looks again on `delays`
+    /// (see [`OLLAMA_BACKOFF`]), so a server that comes up late is ready without anyone pressing
+    /// Re-check. Each look is one `/api/tags` call (plus `/api/version` once it answers); nothing
+    /// runs while Ollama is ready, off, or not set up.
+    pub async fn watch_ollama<F, Fut>(&self, delays: &[Duration], env: F)
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = ProbeEnv>,
+    {
+        let mut step = 0;
+        loop {
+            tokio::time::sleep(backoff_delay(delays, step)).await;
+            let env = env().await;
+            if !self.ollama_down(env.ollama_configured) {
+                step = 0;
+                continue;
+            }
+            let status = self.recheck_joined(EngineId::Ollama, &env, PROBE_TIMEOUT).await;
+            tracing::debug!(?status, step, "Ollama looked at again after a failed check");
+            step = if status == EngineStatus::Ready { 0 } else { step + 1 };
+        }
     }
 
     /// Whether a turn may use the engine. Before the first check finishes, `present` (binary
@@ -1069,6 +1186,45 @@ mod tests {
         assert!(text.contains("Settings › This space › Accounts"));
         assert_eq!(meta["kind"], "setup_needed");
         assert_eq!(meta["reason"], "host_off");
+    }
+
+    #[test]
+    fn ollama_down_notice_names_the_server_not_an_account() {
+        let (text, meta) = ollama_down_notice("House", "http://192.168.1.20:11434");
+        assert_eq!(text, "⚠️ [House] Ollama isn't answering at http://192.168.1.20:11434. Start it, then try again.");
+        assert!(!text.contains("Accounts") && !text.contains("account"), "{text}");
+        assert_eq!(meta, serde_json::json!({ "kind": "setup_needed", "reason": "ollama_down", "url": "http://192.168.1.20:11434" }));
+        // A user name or password in the address never reaches the chat
+        let (text, meta) = ollama_down_notice("House", "http://me:hunter2@ollama.lan:11434");
+        assert!(!text.contains("hunter2") && !text.contains("me:"), "{text}");
+        assert_eq!(meta["url"], "http://ollama.lan:11434");
+        // Something that isn't a URL is never echoed
+        let (text, _) = ollama_down_notice("House", "not a url <script>");
+        assert!(text.contains("at the address in Settings") && !text.contains("<script>"), "{text}");
+    }
+
+    #[test]
+    fn the_ollama_backoff_slows_down_then_repeats_every_five_minutes() {
+        let at = |step| backoff_delay(&OLLAMA_BACKOFF, step).as_secs();
+        assert_eq!([at(0), at(1), at(2), at(3), at(4), at(40)], [15, 30, 60, 300, 300, 300]);
+        assert_eq!(backoff_delay(&[], 0), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn ollama_counts_as_down_only_when_a_later_look_can_fix_it() {
+        let reg = EngineRegistry::default();
+        assert!(!reg.ollama_down(true), "not checked yet: the startup check decides");
+        reg.store(vec![(EngineId::Ollama, Probe::error("Ollama isn't running at x: run `ollama serve`"))]);
+        assert!(reg.ollama_down(false) && reg.ollama_down(true));
+        // Not running and never set up (no binary, no address): nothing to wait for
+        reg.store(vec![(EngineId::Ollama, Probe::not_installed("Ollama isn't running at x"))]);
+        assert!(!reg.ollama_down(false));
+        assert!(reg.ollama_down(true), "an address in Settings means it should come up");
+        reg.set_enabled(EngineId::Ollama, false);
+        assert!(!reg.ollama_down(true), "off in Settings: never looked at");
+        reg.set_enabled(EngineId::Ollama, true);
+        reg.store(vec![(EngineId::Ollama, Probe::ready("1 model(s) pulled", vec![EngineModel::new("m", "m", true, None)]))]);
+        assert!(!reg.ollama_down(true));
     }
 
     #[test]

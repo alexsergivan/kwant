@@ -2840,16 +2840,39 @@ async fn run_kwant_turn_inner(
         let space = SpaceId::new(&target_kwant.space_id);
         let profile_engines = super::profile_turn::profile_engines(state, &space).await;
         let host_off = super::profile_turn::host_off(state, &space).await;
-        let available_models =
+        let mut available_models =
             crate::drivers::detect_available_models(&db, &state.engines, &profile_engines, &host_off).await;
         // A bot pinned to Custom API runs on its account even when that account's last check
         // failed, so the reply says what is wrong with it (no account, server down, key refused)
         let pin = opts.pin.as_deref().unwrap_or(&target_kwant.preferred_model);
-        let pinned_custom = crate::router::parse_pin(pin).family.as_deref()
-            == Some(crate::profiles::Engine::Custom.as_str());
+        let pinned_family = crate::router::parse_pin(pin).family;
+        let pinned_custom = pinned_family.as_deref() == Some(crate::profiles::Engine::Custom.as_str());
+        let pinned_ollama = pinned_family.as_deref() == Some("local_ollama");
+        let mut ollama_root = None;
         if available_models.is_empty() && !pinned_custom {
-            // Say why when it's this space's own switch, so nobody hunts for a broken engine
-            let (text, meta) = crate::drivers::engines::no_engine_notice(&target_kwant.name, !host_off.is_empty());
+            // Ollama may have come up after its last check (a restart): look once more, joining a
+            // check already running, before saying nothing can run (26c)
+            use crate::drivers::engines::{EngineId, EngineStatus, SECOND_LOOK};
+            let env = super::engine_routes::probe_env(state).await;
+            if (pinned_ollama || env.ollama_configured)
+                && !matches!(state.engines.status(EngineId::Ollama), EngineStatus::Ready | EngineStatus::Disabled)
+                && state.engines.recheck_joined(EngineId::Ollama, &env, SECOND_LOOK).await == EngineStatus::Ready
+            {
+                available_models =
+                    crate::drivers::detect_available_models(&db, &state.engines, &profile_engines, &host_off).await;
+            }
+            ollama_root = Some(env.ollama_root);
+        }
+        if available_models.is_empty() && !pinned_custom {
+            // Say why when it's this space's own switch, so nobody hunts for a broken engine; a
+            // bot pinned to Ollama says Ollama isn't answering, never "add an account"
+            let ollama_on = state.engines.is_enabled(crate::drivers::engines::EngineId::Ollama);
+            let (text, meta) = match ollama_root.as_deref() {
+                Some(root) if pinned_ollama && ollama_on => {
+                    crate::drivers::engines::ollama_down_notice(&target_kwant.name, root)
+                }
+                _ => crate::drivers::engines::no_engine_notice(&target_kwant.name, !host_off.is_empty()),
+            };
             event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
             event_broadcast.send(RuntimeEvent::TurnComplete {
                 tokens: 0,

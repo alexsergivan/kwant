@@ -57,3 +57,33 @@ test('canRunNow is unknown while loading or checking, never a false "nothing can
   assert.equal(m.canRunNow([e('claude', 'ready'), e('codex', 'checking')]), true);
   assert.equal(m.canRunNow([e('claude', 'ready', { enabled: false })]), false);
 });
+
+test('a bot pinned to Ollama that cannot reach it gets an Ollama card with Re-check, not Add an account', () => {
+  // What src/drivers/engines.rs ollama_down_notice saves on the message.
+  assert.deepEqual(m.parseSetupMeta({ kind: 'setup_needed', reason: 'ollama_down', url: 'http://127.0.0.1:11434' }), {
+    reason: 'ollama_down',
+    url: 'http://127.0.0.1:11434',
+  });
+  assert.deepEqual(m.parseSetupMeta({ kind: 'setup_needed', reason: 'ollama_down' }), { reason: 'ollama_down', url: undefined });
+  assert.deepEqual(m.parseSetupMeta({ kind: 'setup_needed', reason: 'ollama_down', url: 42 }), { reason: 'ollama_down', url: undefined });
+
+  const meta = { reason: 'ollama_down', url: 'http://127.0.0.1:11434' };
+  const html = card({ meta, onRecheck: () => {}, ollamaReady: false });
+  assert.match(html, /Architect can(’|&#x27;|')t answer yet/);
+  assert.match(html, /Ollama isn(’|&#x27;|')t answering at http:\/\/127\.0\.0\.1:11434\. Start it, then try again\./);
+  assert.match(html, /data-setup-recheck/);
+  assert.match(html, /Re-check<\/button>/);
+  assert.doesNotMatch(html, /Add an account/);
+  // Another account working does not fix a bot pinned to Ollama
+  assert.match(card({ meta, onRecheck: () => {}, ollamaReady: false, canRun: true }), /can(’|&#x27;|')t answer yet/);
+
+  assert.match(card({ meta, onRecheck: () => {}, rechecking: true }), /Checking…/);
+  assert.match(card({ meta: { reason: 'ollama_down' }, onRecheck: () => {} }), /at its address in Settings/);
+  // Without a Re-check handler there is no button at all, never Accounts
+  assert.doesNotMatch(card({ meta }), /<button/);
+
+  const fixed = card({ meta, onRecheck: () => {}, ollamaReady: true });
+  assert.match(fixed, /Architect can answer now/);
+  assert.match(fixed, /Ollama is answering now\. Send your message again/);
+  assert.doesNotMatch(fixed, /<button/);
+});
