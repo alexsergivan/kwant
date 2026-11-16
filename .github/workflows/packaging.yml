@@ -75,12 +75,14 @@ jobs:
         # repository under 30 days old (kwant's was created Oct 22, 2026). Every other problem fails.
         run: |
           set -uo pipefail
-          brew audit --new --strict --online kwnt > audit.log 2>&1
-          status=$?
+          # The step shell is `bash -e`: catch the exit status so the findings are always printed
+          status=0
+          brew audit --new --strict --online kwnt > audit.log 2>&1 || status=$?
+          echo "brew audit exit status: $status"
           cat audit.log
           [ "$status" -eq 0 ] && exit 0
           if [ "$(date -u +%Y%m%d)" -lt 20261122 ]; then
-            other=$(grep -E '^\s*\* ' audit.log | grep -v 'GitHub repository too new' || true)
+            other=$(grep -E '^[[:space:]]*\* ' audit.log | grep -v 'GitHub repository too new' || true)
             if [ -z "$other" ] && grep -q 'GitHub repository too new' audit.log; then
               echo "::warning::brew audit: only 'GitHub repository too new' (allowed until 2026-11-22)"
               exit 0
@@ -104,18 +106,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: WinGet client
+        # The runner image's own winget. The manifests use schema 1.10.0, which it validates and
+        # winget-pkgs accepts, so nothing is installed or upgraded here.
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $ProgressPreference = 'SilentlyContinue'
-          $have = Get-Command winget -ErrorAction SilentlyContinue
-          "winget on the image: $(if ($have) { winget --version } else { 'none' })"
-          # The manifests use schema 1.28, so the newest client validates them, as winget-pkgs does
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Force -AllowClobber
-          Repair-WinGetPackageManager -AllUsers -Latest -Force
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Error "winget isn't on the image"; exit 1 }
           winget --version
           if ($LASTEXITCODE -ne 0) { Write-Error "winget isn't usable"; exit 1 }
+          winget --info
       - name: winget validate
         shell: pwsh
         run: |
