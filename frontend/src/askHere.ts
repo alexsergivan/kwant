@@ -200,6 +200,41 @@ export function openTarget(item: AwayItem, look: OpenLookups = {}): OpenTarget {
   return { ...place, focus: msg, focusKind: msg ? 'message' : null };
 }
 
+/**
+ * 22x: where to load the messages around an ask that is older than the chat's latest page. A thread
+ * has its own route (it answers `around` like the chat route since 22x); a channel or direct chat
+ * uses the chat route. `ctx` is the chat the window belongs to (the open thread's id, or the
+ * channel's or bot's), so it shows only while that chat is on screen.
+ */
+export function askWindowUrl(t: Pick<OpenTarget, 'channel_id' | 'kwant_id' | 'thread_id'>, focus: string): { ctx: string; url: string } {
+  const around = `around=${encodeURIComponent(focus)}`;
+  if (t.thread_id) return { ctx: t.thread_id, url: `/api/threads/${encodeURIComponent(t.thread_id)}/messages?${around}` };
+  const ctx = t.channel_id ?? t.kwant_id;
+  return { ctx, url: `/api/channels/${encodeURIComponent(ctx)}/messages?${around}` };
+}
+
+/**
+ * Loads the window around an ask's message. `null` when it can't be shown: the load failed, the
+ * server said it isn't in that chat, or (an older server's thread route ignores `around`) the
+ * window it sent doesn't hold the message.
+ */
+export async function loadAskWindow<M extends { id: string }>(
+  t: Pick<OpenTarget, 'channel_id' | 'kwant_id' | 'thread_id'>,
+  focus: string,
+  get: (url: string) => Promise<Pick<Response, 'ok' | 'json'>> = (url) => fetch(url),
+): Promise<{ ctx: string; messages: M[] } | null> {
+  const { ctx, url } = askWindowUrl(t, focus);
+  try {
+    const res = await get(url);
+    if (!res.ok) return null;
+    const messages: unknown = await res.json();
+    if (!Array.isArray(messages) || !messages.some((m: M) => m?.id === focus)) return null;
+    return { ctx, messages: messages as M[] };
+  } catch {
+    return null;
+  }
+}
+
 /** Whether an item lives in the chat on screen. */
 export function isHere(item: Pick<AwayItem, 'kwant_id' | 'link'>, here: Here | null): boolean {
   if (!here) return false;

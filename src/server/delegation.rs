@@ -1714,18 +1714,22 @@ pub async fn patch_thread(State(state): State<AppState>, Path(id): Path<String>,
     }
 }
 
-pub async fn thread_messages(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+/// A thread's latest 100 messages, or with `around`/`before` an older window, answered exactly
+/// like the chat route ([`crate::server::routes::messages_page`]). 22x: a Needs-attention row
+/// whose notice is older than the latest page loads the window around it.
+pub async fn thread_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<crate::server::routes::MessagesQuery>,
+) -> Response {
     match state.db.get_thread(&id).await {
         Ok(Some(_)) => {}
         Ok(None) => return error(StatusCode::NOT_FOUND, "thread not found"),
         Err(_) => return internal(),
     }
-    match state.db.list_messages(&id, 100).await {
-        Ok(mut m) => {
-            state.db.attach_chat_fields(&mut m).await;
-            Json(m).into_response()
-        }
-        Err(_) => internal(),
+    match crate::server::routes::messages_page(&state.db, &id, &q).await {
+        Ok(m) => Json(m).into_response(),
+        Err(e) => e.into_response(),
     }
 }
 
