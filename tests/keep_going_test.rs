@@ -338,8 +338,13 @@ async fn a_bots_chat_api_message_is_not_quoted_as_the_persons() {
 
     let kg = env.prompts("kg");
     assert_eq!(kg.len(), 1, "one keep-going turn");
-    assert!(kg[0].contains("Build the level, both parts."), "it quotes the person: {}", kg[0]);
-    assert!(!kg[0].contains("BOTSAYS"), "a bot's message isn't quoted as the person's: {}", kg[0]);
+    // The quote block only: the chat history above it lists every message (that is shared by
+    // every turn, not this one's quote)
+    let start = kg[0].find("The person's last messages here").expect("the quote block");
+    let end = start + kg[0][start..].find("How handing on works").expect("the hand-off rules after it");
+    let quote = &kg[0][start..end];
+    assert!(quote.contains("Build the level, both parts."), "it quotes the person: {quote}");
+    assert!(!quote.contains("BOTSAYS"), "a bot's message isn't quoted as the person's: {quote}");
 }
 
 /// A results turn that ends with `Done: …` ends the chain: the marker is stored, no keep-going turn.
