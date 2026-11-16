@@ -431,12 +431,14 @@ fn persons_last(msgs: &[Message]) -> Vec<&Message> {
     asked
 }
 
-/// The keep-going turn's prompt for the chat's messages `msgs` (oldest first).
+/// The keep-going turn's prompt for the chat's messages `msgs` (oldest first), with no failure
+/// note. Only main's 22b tests call it; the server goes through [`keep_going_prompt_after`].
+#[cfg(test)]
 fn keep_going_prompt(msgs: &[Message]) -> String {
     keep_going_prompt_after(msgs, "")
 }
 
-/// [`keep_going_prompt`] with `failure` (22j: " " + [`failure_note`], or empty) at the end of
+/// The keep-going prompt with `failure` (22j: " " + [`failure_note`], or empty) at the end of
 /// kwant's own line, so a turn after a failed step is told what failed and doesn't run it again.
 fn keep_going_prompt_after(msgs: &[Message], failure: &str) -> String {
     let quoted: Vec<String> = persons_last(msgs).iter().map(|m| format!("> {}", clip(&m.text, QUOTE_CHARS).replace('\n', "\n> "))).collect();
