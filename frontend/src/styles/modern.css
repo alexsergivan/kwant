@@ -165,6 +165,23 @@
    in on them. Only on touch screens below 768px, so desktop and narrow mouse windows keep the
    compact look. Toggle switches, checkboxes and links inside text keep their size; anything else
    that must stay small can opt out with data-compact. */
+/* 19f: a phone reply's smart-result row (Show as text, Copy data, From this reply) sits under the ghost icons.
+   It hides when no block put anything in it, and "From this reply" is quiet text there, not a chip that looks
+   like a button it isn't. Desktop keeps evidenceClass as is. */
+[data-smart-row]:has(> [data-smart-actions]:empty) {
+  display: none;
+}
+@media (max-width: 767px) and (pointer: coarse) {
+  [data-smart-row] [data-evidence] {
+    border-color: transparent;
+    background: transparent;
+    padding-inline: 4px;
+    min-height: 28px; /* when it wraps under Copy data it reads as a caption line, not a 36 px chip row */
+    font-weight: 400;
+    color: rgb(161 161 170); /* zinc-400 */
+  }
+}
+
 @media (max-width: 767px) and (pointer: coarse) {
   :is(button, [role='button'], [role='tab'], [role='menuitem'], [role='option'], select, summary):not([role='switch'], [data-compact], .prose *) {
     min-height: 44px;
@@ -916,6 +933,9 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .dv-sha { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--kw-hairline); background: var(--dv-code-bg);
   font: 500 11px/1 'JetBrains Mono', monospace; color: var(--t3); white-space: nowrap; }
 button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); border-color: var(--kw-hairline-strong); }
+/* The "Pushed · … · branch" meta line keeps the branch whole, cut with … and the full name in title (22c). */
+.dv-sha.dv-sha-whole { display: inline-block; max-width: 100%; height: auto; padding: 1px 5px; line-height: 18px; vertical-align: bottom;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A branch inside a sentence wraps with the text (pre-push one-line cards, Mira ui-check-475 must-fix 1). */
 .dv-sha.dv-sha-wrap { display: inline; height: auto; white-space: normal; overflow-wrap: anywhere;
   padding: 1px 5px; line-height: 20px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }

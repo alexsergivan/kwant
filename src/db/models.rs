@@ -175,6 +175,12 @@ pub struct Approval {
     #[sqlx(default)]
     #[serde(default)]
     pub answered_via: Option<String>,
+    /// The chat the call happened in, `{"thread_id"|"channel_id"|"direct_kwant_id": …}` (a card's,
+    /// or a refused customer call's since 22a); `None` when stored without one. Never serialised:
+    /// `GET /api/approvals` shows it as `link`.
+    #[sqlx(default)]
+    #[serde(skip)]
+    pub resume: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

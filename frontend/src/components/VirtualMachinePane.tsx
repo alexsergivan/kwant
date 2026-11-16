@@ -19,6 +19,7 @@ import {
 import { playSfx } from '../audio/chiptune';
 import { BOT_BUSY_TEXT, HELD_BY_PERSON_TEXT, useBrowserStream } from '../useBrowserStream';
 import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, SignInLine, useComputerMode } from './ComputerModeSwitch';
+import { useSteadyFrame } from '../steadyFrame';
 import { browserFooterLabel, browserOwnerWord, isBlankPage, showsLocalWindow } from '../computerMode';
 import { paneStatus } from '../browserPanel';
 import { ModernAvatar } from './ModernAvatar';
@@ -37,6 +38,7 @@ import { POINT_COPY, footerText } from '../point';
 import { choosePage, noteTitle, pageTeam, pageTitleOf, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
+import { secondsText } from '../clock';
 
 const PHONE_QUERY = '(max-width: 639px)';
 /** 17b: the footer's pointing slot. It shrinks and truncates instead of spilling over the buttons, on one line. */
@@ -266,7 +268,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const pageUrl = stream.location ? stream.location.url : chosenPage ? pageInfo?.url ?? '' : activeUrl;
   // The same for the title: a new page's empty title must not fall back to the previous page's.
   const shownTitle = stream.location ? stream.location.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
-  const currentScreenshot = isBlankPage(pageUrl) ? null : stream.frame?.image || screenshotBase64;
+  // A blank light frame from Chrome (a page committing) waits behind the last good picture: no grey flash
+  const steady = useSteadyFrame(stream.frame, stream.acknowledgeFrame);
+  const currentScreenshot = isBlankPage(pageUrl) ? null : steady.frame?.image || screenshotBase64;
   const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
   const blankFrameId = isBlankPage(pageUrl) ? stream.frame?.id : undefined;
@@ -440,7 +444,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
   // The frame the side pane shows is acknowledged once drawn; one image, its source swapped
   const paneFrameId = useRef<number | null>(null);
-  paneFrameId.current = stream.frame?.id ?? null;
+  // The picture on screen: its <img> load acknowledges it (a held one was acknowledged when it came)
+  paneFrameId.current = steady.frame?.id ?? null;
 
   const loginsOnThisPage = useMemo(() => passwords.logins.filter((l) => loginMatchesPage(l, pageUrl)).length, [passwords.logins, pageUrl]);
 
@@ -960,6 +965,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     </button>
                   )}
                 </>
+              ) : steady.holding && !isBlankPage(pageUrl) ? (
+                /* The first picture of this view is blank or still being checked: the dark pane, not "Browser idle" */
+                <div data-frame-holding="" aria-hidden="true" className="absolute inset-0" />
               ) : (
                 <div className="text-center p-6 text-zinc-500 text-xs">
                   <Globe size={32} className="mx-auto mb-2 opacity-40 text-zinc-500" />
@@ -1045,11 +1053,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             ) : (
               terminalLogs.map((log, index) => (
                 <div key={index} className="p-2 bg-zinc-900/60 border border-zinc-800/80 rounded-lg">
-                  <div className="flex items-center justify-between text-sky-400 font-semibold text-[11px]">
-                    <span>$ {log.command}</span>
+                  <div className="flex items-start justify-between gap-2 text-sky-400 font-semibold text-[11px]" data-terminal-row>
+                    <span className="min-w-0 break-words">$ {log.command}</span>
                     {log.timestamp && (
-                      <span className="text-[9px] text-zinc-500 font-normal">
-                        {log.timestamp.includes('T') ? log.timestamp.split('T')[1].split('.')[0] : log.timestamp}
+                      <span className="shrink-0 whitespace-nowrap text-[9px] leading-4 text-zinc-500 font-normal" data-terminal-time>
+                        {terminalTime(log.timestamp)}
                       </span>
                     )}
                   </div>
@@ -1225,3 +1233,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     </>
   );
 };
+
+/** A terminal log row's time on the device's own clock, with seconds ("4:05:12\u00a0PM" / "16:05:12"), not the
+ *  UTC slice of the ISO string. A timestamp that doesn't parse shows as it came. (One clock everywhere, 22c.) */
+export function terminalTime(ts: string, locale?: string): string {
+  return secondsText(ts, { locale }) ?? ts;
+}
