@@ -12,8 +12,9 @@ use crate::db::models::{Kwant, MessageExtra, NewMessage};
 use crate::db::waiting::{NewWaitingItem, WaitingItem};
 use crate::drivers::events::RuntimeEvent;
 use axum::{
-    extract::State,
-    http::StatusCode,
+    body::Bytes,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -67,7 +68,9 @@ pub(super) async fn turn_ended(scope: &TurnScope, kwant: &Kwant, turn_id: &str, 
                 question: q.question.clone(),
                 due_at,
             };
-            let _ = state.db.add_waiting(&item).await;
+            if let Ok(Some(w)) = state.db.add_waiting(&item).await {
+                opened(state, &w);
+            }
         }
         state.scheduler_wake.notify_one();
         return;
@@ -92,14 +95,81 @@ pub(super) async fn turn_ended(scope: &TurnScope, kwant: &Kwant, turn_id: &str, 
         question: question.chars().take(crate::db::questions::MAX_QUESTION_CHARS).collect(),
         due_at,
     };
-    if matches!(state.db.add_waiting(&item).await, Ok(Some(_))) {
+    if let Ok(Some(w)) = state.db.add_waiting(&item).await {
+        opened(state, &w);
         state.scheduler_wake.notify_one();
     }
 }
 
 /// The person wrote in a chat: nothing there waits on them any more.
 pub async fn person_wrote(state: &AppState, channel_id: Option<&str>, direct_kwant_id: Option<&str>, thread_id: Option<&str>) {
-    let _ = state.db.close_waiting_in_chat(channel_id, direct_kwant_id, thread_id).await;
+    let rows = state.db.close_waiting_in_chat(channel_id, direct_kwant_id, thread_id).await.unwrap_or_default();
+    closed(state, &rows, REASON_PERSON_WROTE);
+}
+
+// ---- 22i: every open and close is said live, with one event ----
+
+/// Why an item left Needs you, as `waiting_updated`'s `item.reason` says it.
+pub const REASON_LATER_REPLY: &str = "later_reply";
+pub const REASON_PERSON_WROTE: &str = "person_wrote";
+pub const REASON_ANSWERED: &str = "answered";
+pub const REASON_REPLACED: &str = "replaced";
+pub const REASON_RESUMED: &str = "resumed";
+pub const REASON_PLACE_GONE: &str = "place_gone";
+pub const REASON_DISMISSED: &str = "dismissed";
+
+/// A waiting item's kind as the event and `GET /api/waiting` name it.
+fn kind_of(w: &WaitingItem) -> &'static str {
+    match (&w.question_id, w.kind.as_deref()) {
+        (Some(_), _) => "question",
+        (None, Some(crate::db::waiting::STOPPED)) => "stopped",
+        _ => "reply",
+    }
+}
+
+/// The `item` of a `waiting_updated` event.
+pub fn event_item(w: &WaitingItem, reason: Option<&str>) -> Value {
+    json!({
+        "id": w.id,
+        "kind": kind_of(w),
+        "status": if w.status == "closed" { "closed" } else { "open" },
+        "reason": reason,
+        "kwant_id": w.kwant_id,
+        "channel_id": w.channel_id,
+        "direct_kwant_id": w.direct_kwant_id,
+        "thread_id": w.thread_id,
+    })
+}
+
+/// A new item waits on the person: clients add it to Needs you now.
+pub fn opened(state: &AppState, w: &WaitingItem) {
+    let _ = state.event_sender.send(RuntimeEvent::WaitingUpdated { item: event_item(w, None) });
+}
+
+/// These items closed (`reason`): clients drop them from Needs you now, with the same event a
+/// new item uses.
+pub fn closed(state: &AppState, rows: &[WaitingItem], reason: &str) {
+    for w in rows {
+        let _ = state.event_sender.send(RuntimeEvent::WaitingUpdated { item: event_item(w, Some(reason)) });
+    }
+}
+
+/// Failed or stuck items (`(kind, id)`: "delegation" or "routine_run") of `kwant_id` closed.
+pub fn closed_failed(state: &AppState, kwant_id: &str, place: (Option<&str>, Option<&str>, Option<&str>), items: &[(String, String)], reason: &str) {
+    let (channel_id, direct_kwant_id, thread_id) = place;
+    for (kind, id) in items {
+        let item = json!({
+            "id": id,
+            "kind": kind,
+            "status": "closed",
+            "reason": reason,
+            "kwant_id": kwant_id,
+            "channel_id": channel_id,
+            "direct_kwant_id": direct_kwant_id,
+            "thread_id": thread_id,
+        });
+        let _ = state.event_sender.send(RuntimeEvent::WaitingUpdated { item });
+    }
 }
 
 /// The reminder's text: one short line quoting what the bot asked.
@@ -131,7 +201,8 @@ async fn remind(state: &AppState, w: &WaitingItem) -> bool {
     if let Some(qid) = &w.question_id {
         let open = state.db.get_question(qid).await.ok().flatten().is_some_and(|q| q.status == "open");
         if !open {
-            let _ = state.db.close_waiting_for_question(qid).await;
+            let rows = state.db.close_waiting_for_question(qid).await.unwrap_or_default();
+            closed(state, &rows, REASON_ANSWERED);
             return false;
         }
     }
@@ -268,6 +339,66 @@ pub async fn list(State(state): State<AppState>, super::spaces::Scope(space): su
         items.insert(0, stop);
     }
     Json(json!({ "items": items, "follow_up_hours": follow_up_hours(&state).await })).into_response()
+}
+
+/// `POST /api/waiting/:id/dismiss`, optional body `{"kind": "<item kind from /api/away>"}`, the
+/// person only (22i): clears one stopped, failed or stuck item from Needs attention without
+/// resuming it. Records why (`attention_closed`, reason `dismissed`) and says so live with the
+/// `waiting_updated` event a new item uses.
+///
+/// 200 `{id, kind, status: "closed", already_closed}`; 400 `bad_kind` / `bad_body`; 403
+/// `person_only` for a bot's token; 404 `not_found`; 409 `use_question_answer`,
+/// `use_approval_decide`, `use_step_decline` or `use_watch_decide` for an item that has its own
+/// answer, which tells the bot.
+pub async fn dismiss(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, body: Bytes) -> Response {
+    if let Err(r) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person can dismiss what needs their attention").await {
+        return r;
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct Body {
+        kind: Option<String>,
+    }
+    let parsed: Body = if body.iter().all(u8::is_ascii_whitespace) {
+        Body::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(b) => b,
+            Err(_) => return dismiss_error(StatusCode::BAD_REQUEST, "bad_body", "The body must be JSON like {\"kind\": \"stopped\"}, or empty."),
+        }
+    };
+    let kind = parsed.kind.as_deref().map(str::trim).filter(|k| !k.is_empty());
+    use crate::db::away::Dismissed;
+    match state.db.dismiss_attention(&id, kind).await {
+        Ok(Dismissed::Closed { kind, kwant_id, waiting }) => {
+            tracing::info!(target: "audit", item_id = %id, kind = %kind, kwant_id = kwant_id.as_deref().unwrap_or(""), "the person dismissed a Needs-attention item");
+            match &waiting {
+                Some(w) => closed(&state, std::slice::from_ref(w.as_ref()), REASON_DISMISSED),
+                None => closed_failed(&state, kwant_id.as_deref().unwrap_or(""), (None, None, None), &[(kind.clone(), id.clone())], REASON_DISMISSED),
+            }
+            Json(json!({"id": id, "kind": kind, "status": "closed", "already_closed": false})).into_response()
+        }
+        Ok(Dismissed::AlreadyClosed { kind }) => Json(json!({"id": id, "kind": kind, "status": "closed", "already_closed": true})).into_response(),
+        Ok(Dismissed::NotFound) => dismiss_error(StatusCode::NOT_FOUND, "not_found", "Nothing in Needs attention has that id."),
+        Ok(Dismissed::Refused(code)) => dismiss_error(StatusCode::CONFLICT, code, refused_text(code)),
+        Ok(Dismissed::BadKind) => dismiss_error(StatusCode::BAD_REQUEST, "bad_kind", "kind must be stopped, reply, delegation or routine_run."),
+        Err(e) => {
+            tracing::warn!(error = %e, "dismiss failed");
+            dismiss_error(StatusCode::INTERNAL_SERVER_ERROR, "internal", "Couldn't dismiss that just now.")
+        }
+    }
+}
+
+fn refused_text(code: &str) -> &'static str {
+    match code {
+        "use_question_answer" => "Answer or cancel the question instead, so the bot knows.",
+        "use_approval_decide" => "Allow or deny the approval instead, so the bot knows.",
+        "use_step_decline" => "Do or decline the browser step instead, so the bot knows.",
+        _ => "Decide it in its own card instead, so the bot knows.",
+    }
+}
+
+fn dismiss_error(status: StatusCode, code: &str, msg: &str) -> Response {
+    (status, Json(json!({"error": msg, "code": code}))).into_response()
 }
 
 #[cfg(test)]
