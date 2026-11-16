@@ -197,7 +197,7 @@ test('captcha card: Solve it is the main button and opens solve mode; auto outco
 
 test('a closed card names the step, quietly: noun heading in zinc-300, the open card keeps its ask (22v)', () => {
   const heading = (html) => html.match(/<h3 id="hs-m1" class="([^"]*)">([^<]*)<\/h3>/);
-  const nouns = { sign_in: 'Sign-in', captcha: 'Human check', two_factor: 'Sign-in code', other: 'A step in the browser' };
+  const nouns = { sign_in: 'Sign-in', captcha: 'Human check', two_factor: 'Sign-in code', other: 'Browser step' };
   const asks = { sign_in: 'Sign in needed', captcha: 'Human check needed', two_factor: 'Sign-in code needed', other: 'Your help is needed' };
   for (const kind of Object.keys(nouns)) {
     // Open: unchanged
@@ -224,9 +224,12 @@ test('a closed card names the step, quietly: noun heading in zinc-300, the open 
   }
 });
 
-test('a late Done or Skip on a closed step says how it ended in words, never the raw status (22v)', () => {
+test('a late Done or Skip on a closed step: nothing where the footer says it, words otherwise, never the raw status (22v)', () => {
   const raw = /timed_out|resolved_auto|left_for_message|declined|cancelled|_/;
-  for (const status of ['done', 'declined', 'cancelled', 'timed_out', 'resolved_auto', 'left_for_message']) {
+  for (const status of ['done', 'declined', 'cancelled', 'timed_out', 'resolved_auto']) {
+    for (const which of ['done', 'decline']) assert.equal(h.closedStepText(status, which, 'Pixel'), null, `${status} ${which}: the footer says it`);
+  }
+  for (const status of ['done', 'declined', 'cancelled', 'timed_out', 'resolved_auto', 'left_for_message', 'paused_for_x']) {
     for (const which of ['done', 'decline']) {
       const t = h.closedStepText(status, which, 'Pixel');
       assert.notEqual(t, undefined, `${status} ${which}: a closed step has an answer`);
@@ -236,9 +239,10 @@ test('a late Done or Skip on a closed step says how it ended in words, never the
       }
     }
   }
-  assert.equal(h.closedStepText('timed_out', 'done', 'Pixel'), 'Nobody finished it in time, so it closed.');
-  assert.equal(h.closedStepText('resolved_auto', 'decline', 'Pixel'), 'It was already solved.');
-  // Open isn't closed, so the real error shows; an unknown future status still reads as a sentence
+  // left_for_message + Done keeps #721's words; Skip lost nothing
+  assert.match(h.closedStepText('left_for_message', 'done', 'Pixel'), /^This closed when you sent a file, so Pixel didn't get your Done\./);
+  assert.equal(h.closedStepText('left_for_message', 'decline', 'Pixel'), null);
+  // Open isn't closed, so the real error shows; an unknown status still reads as a sentence
   assert.equal(h.closedStepText('open', 'done', 'Pixel'), undefined);
   assert.equal(h.closedStepText('paused_for_x', 'done', 'Pixel'), 'This step is already closed.');
 });
