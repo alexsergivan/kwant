@@ -439,8 +439,6 @@ async fn a_delegated_task_carries_the_persons_request_and_files() {
     assert!(!text_of(&r).contains("Files in the chat your task came from"), "{r}");
 }
 
-/// 0.8.0 P4: a shared file is posted as the bot (its name, the id in meta), and the same bytes
-/// shared again in the same chat within a few minutes aren't posted twice.
 /// 20b/16d: a customer's message in the chat a task came from never reaches the specialist as what
 /// the person asked; the person's own message, when there is one, is.
 #[tokio::test]
@@ -493,6 +491,8 @@ async fn a_delegated_task_never_passes_a_customers_message_on_as_the_persons() {
     assert!(!brief.contains("CUSTOMER_TWO"), "{brief}");
 }
 
+/// 0.8.0 P4: a shared file is posted as the bot (its name, the id in meta), and the same bytes
+/// shared again in the same chat within a few minutes aren't posted twice.
 #[tokio::test]
 async fn shared_files_post_as_the_bot_and_repeats_are_skipped() {
     let env = setup().await;
