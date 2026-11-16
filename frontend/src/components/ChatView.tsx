@@ -116,6 +116,7 @@ import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
 import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, useDictation } from './DictationMic';
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
+import type { FloorResolveOpts } from '../dev/types';
 
 export interface ChatMessage {
   id: string;
@@ -249,7 +250,7 @@ export interface ChatViewProps {
   onSendMessage: (text: string, attachments: AttachmentRef[], opts?: SendOptions) => void | Promise<boolean | string | void>;
   /** Saves the person's thumbs on a bot reply; absent hides the thumbs. */
   onReact?: (msg: ChatMessage, reaction: Reaction | null) => Promise<ReactResult> | void;
-  onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
+  onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny', opts?: FloorResolveOpts) => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   /** Prompts offered above an empty chat, made from who is in it; none hides the bar. */
