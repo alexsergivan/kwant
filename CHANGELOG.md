@@ -8,8 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.19] - 2026-11-16
+
+kwant 0.9.19: bot messages that never read as yours, bot messages that name the bot that sent them, a customer's refused call shown in that customer's chat, short Windows file paths in the chat's step titles, a stopped step that gets its tries back once the bot has fixed something, an island Allow once that no longer covers a deploy typed as plain text, a repeat guard that sees through changing timings, ids and ports, a stopped step that a read-only shell command no longer reopens, customer and bot messages that name who wrote them and requests to OpenRouter that name kwant as the app.
+
 ### Fixed
-- The 8 home-page demo clips on kwant.si are re-recorded against 0.9.18 so they no longer fail the site's media-freshness check ahead of 0.9.20.
+- A message a bot sends through the chat API now reads as that bot's in every bot's history (framed as a message from that bot, or from "unnamed" when it gave no name), never as yours. Other bots no longer take it as your instruction, and it no longer counts as your latest words when kwant lists open asks, settles a choice or counts a request's keep-going turns. (#724)
+- A message a bot sends through the chat API now carries that bot's name, taken from its own turn, so other bots' history, hand-offs and follow-ups show who sent it instead of "unnamed". A request can't set or fake the name. (#728)
+- When kwant refuses a call from a customer's message because nobody allowed it, the owner now sees one quiet line in that customer's chat with its time, such as "A customer's message tried to use memory search. It didn't run, because nobody allowed it. · 1:54 AM". It shows only in that chat, never in the bot's direct chat, for refusals from the last day. (#718)
+- A chat step on a Windows file now names it as briefly as on a Mac or Linux: C:\Users\x\clients\acme\contract.md reads …\acme\contract.md, keeping the path's own backslashes, instead of the whole path with every client folder in it. Network paths (\\server\share\…) are shortened the same way, a bare drive like C:\ stays as typed, and Mac and Linux paths read exactly as before. (#735)
+- A step that kwant stopped after it failed the same way 3 times (a failing npm test, say) can run again once the bot has changed something: an edit or write that worked, or a different command that worked, gives it 3 more tries. Reads don't count as a change, and the same failure is still stopped for good after 6 times in one turn, so a real loop still ends. (#738)
+- The desktop island's Allow once no longer covers a command that ships when a bot passes it as plain text to a tool, like docker push, npm publish, make deploy or fly deploy: it now asks with the full card. Tools that sign someone up to a mailing list or off it (subscribe, unsubscribe, opt in, opt out) ask with the full card too. A note that only mentions a release, or names a tool like Vercel without a push word, keeps Allow once. (#736)
+- A step that fails the same way 3 times is now stopped even when only the numbers in its error change, like a duration, a timestamp, a port, a process id, a sha or a uuid. The stop note still quotes the real latest error. An error that differs in a word still counts as a new failure, and a change by the bot still gives the step its tries back. (#743)
+- Once a step is stopped for failing the same way 3 times, a shell command that only reads in the project folder (cat, ls, grep, git status, git diff, git log) no longer gives it 3 more tries. An edit, or a command that may write or reads outside the folder, still does. (#747)
+- A customer's or a bot's message in the chat now names who wrote it, "Ann (customer)" or "Scout (bot)", with their own letter and a menu that says whose message it is, instead of "You" with your own picture. A customer or bot without a name reads "A customer" or "A bot". Your own messages, from Telegram too, still say "You". (#746)
+- Requests to OpenRouter (chat, the model list and the account check of a Custom API account) now name kwant as the app (https://kwant.si), so kwant's usage counts on OpenRouter's app page and rankings. The headers name only kwant, never you or your space; prompts and files go to OpenRouter as before, and no other provider gets them. (#750)
 
 ## [Mac 0.9.18] - 2026-11-16
 
