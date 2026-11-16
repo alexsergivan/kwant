@@ -271,7 +271,7 @@ export const TEMPLATES_WIRE: WireTemplate[] = [
       {
         "id": "home_assistant",
         "label": "Connect Home Assistant",
-        "why": "Your Home Assistant address and an access token, so House can see and control the devices you share with Assist.",
+        "why": "Your Home Assistant address and an access token, so House can see and control your devices.",
         "required": true,
         "opens": "home_assistant"
       },

@@ -395,7 +395,7 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
             <ul className="space-y-1.5 text-[11px] leading-relaxed text-zinc-400" data-ha-notes>
               <li className="flex items-start gap-2">
                 <Eye size={13} className="mt-px shrink-0 text-zinc-500" aria-hidden="true" />
-                <span>Bots see only the devices you share with Assist in Home Assistant (Settings › Voice assistants › Expose).</span>
+                <span>Bots can reach every device unless you limit them in Home Assistant (Model Context Protocol › Configure).</span>
               </li>
               <li className="flex items-start gap-2">
                 <Lock size={13} className="mt-px shrink-0 text-zinc-500" aria-hidden="true" />
@@ -517,7 +517,7 @@ const ResultBox: React.FC<{ phase: Phase; host?: string; origin?: string; door: 
         <Box tone="warn" kind={r.kind} icon={<Plug size={16} aria-hidden="true" />} title={haResultTitle(r)}>
           <p>
             MCP Server is the part of Home Assistant that lets apps like kwant control it. In Home Assistant, open Settings › Devices &amp; services › Add
-            integration, add “Model Context Protocol Server”, then press Try again.
+            integration, add “Model Context Protocol” (“Model Context Protocol Server” before 2026.11), then press Try again.
           </p>
           {origin && (
             <a href={`${origin}/config/integrations/dashboard`} target="_blank" rel="noreferrer" className={`${linkCls} mt-1 text-amber-200 hover:text-amber-100`}>
