@@ -403,7 +403,7 @@ bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHin
    [approvals.md](approvals.md)) always gets a card, with approvals `off` and over an
    `always_allow` for the tool, for chats, routines and the chat API alike. Its `details` carry
    `"home_always_ask": true` (not `always_ask`, which means a turn kwnt started) and
-   `"home_reason": "Locks, doors and alarms always ask."`; the card offers no `always_allow`, and
+   `"home_reason": "Locks, doors, garage doors, gates and alarms always ask. Always allow isn’t offered for them."`; the card offers no `always_allow`, and
    one sent anyway, like `allow_once`, runs that call only and stores nothing.
    With Flight School on (`flight_school`), a bot below `act` for the task it works gets a card for calls
    its tier doesn't allow even with approvals `off` or a smart Allow, with `details.tier_reason`; see

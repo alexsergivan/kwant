@@ -27,7 +27,7 @@ string argument (a name, an area, a `schedule_command` command) with the whole w
 door, garage, gate, alarm or disarm, plurals too, in any case. "Always this session" on such a card,
 and an earlier one for the tool, cover that one call; the lights still run on their grant. Reads
 (tools the server marks read-only, and `GetLiveContext`) never ask for this. The card carries
-`details.home_always_ask: true` and `details.home_reason` ("Locks, doors and alarms always ask.").
+`details.home_always_ask: true` and `details.home_reason` ("Locks, doors, garage doors, gates and alarms always ask. Always allow isn’t offered for them.").
 What the server is comes from what it said on kwnt's own connections, stored at its test
 (`POST /api/mcp/servers/:id/test`) so it holds after a restart, never from its address; a server
 kwnt never heard from asks for these calls.

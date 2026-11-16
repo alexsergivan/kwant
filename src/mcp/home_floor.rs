@@ -21,7 +21,7 @@ use std::sync::{LazyLock, Mutex};
 pub const HOME_ASSISTANT: &str = "home-assistant";
 
 /// The card's one-line reason. Product copy is Mira's.
-pub const REASON: &str = "Locks, doors and alarms always ask.";
+pub const REASON: &str = "Locks, doors, garage doors, gates and alarms always ask. Always allow isn’t offered for them.";
 
 /// Words that make a call sensitive, matched as whole words, case-insensitive, in any string
 /// argument. `_`, `.`, `-` and spaces all split words, so `lock.front_door` matches too.
