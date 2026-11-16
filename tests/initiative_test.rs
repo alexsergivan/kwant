@@ -325,8 +325,10 @@ async fn a_follow_up_excerpt_never_labels_a_customers_or_agents_words_as_the_per
     // A connected agent's: named, labelled and framed
     assert!(ctx.contains("Codex (agent): [Message from outside agent Codex"), "{ctx}");
     assert!(!ctx.contains("Person: Codex"), "{ctx}");
-    // A bot's chat-API message: "a bot"
-    assert!(line("Scout says the courier is late.").contains("a bot: Scout says"), "{ctx}");
+    // A bot's chat-API message: "a bot", framed as a bot's (22n), never bare
+    assert!(ctx.contains("a bot: [Message from bot unnamed (another assistant)."), "{ctx}");
+    assert!(ctx.contains("\nScout says the courier is late.\n[End of message from unnamed]"), "framed to its end: {ctx}");
+    assert!(!ctx.contains("a bot: Scout says"), "{ctx}");
     assert_eq!(ctx.matches("Person:").count(), 1, "only the person's own line: {ctx}");
 }
 
