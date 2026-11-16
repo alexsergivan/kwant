@@ -361,7 +361,8 @@ mod tests {
         // A teammate's folder in the same space
         let other = ws.parent().unwrap().join("bot_b");
         std::fs::create_dir_all(&other).unwrap();
-        std::fs::write(other.join("notes.md"), "B'S NOTES\n").unwrap();
+        let theirs = other.join("notes.md");
+        std::fs::write(&theirs, "B'S NOTES\n").unwrap();
         let bad = [
             "../secret.txt",
             "../../secret.txt",
@@ -369,7 +370,7 @@ mod tests {
             "docs/../../bot_b/notes.md",
             "..",
             secret.to_str().unwrap(),
-            other.join("notes.md").to_str().unwrap(),
+            theirs.to_str().unwrap(),
             "/etc/passwd",
             "/",
         ];
