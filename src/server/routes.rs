@@ -2260,7 +2260,7 @@ pub(super) async fn try_kwant_turn(
 // Set in the meta of a "user" message a bot sent through the chat API (its turn token, not the
 // person's): its words are never read as the person's (see `person_words`). Drivers own it, so
 // the history a bot reads frames such a message too (22n).
-pub(crate) use crate::drivers::SENT_BY_BOT;
+pub(crate) use crate::drivers::{SENT_BY_BOT, SENT_BY_BOT_NAME, SENT_BY_KWANT_ID};
 
 /// The person's own words this turn answers, which the delivery check reads what they expect
 /// from: the saved message the prompt was built from, never the prompt itself (kwnt adds
@@ -4186,7 +4186,7 @@ pub async fn send_chat(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
-    Json(payload): Json<SendChatPayload>,
+    Json(mut payload): Json<SendChatPayload>,
 ) -> axum::response::Response {
     use super::spaces::RowKind;
     // An explicit ?space= must match every row the body names (a thread overrides the others)
@@ -4205,6 +4205,14 @@ pub async fn send_chat(
         return super::reactions::error(status, msg);
     }
     let from_person = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "").await.is_ok();
+    // 22q: a bot's message is saved with the name and id of the bot whose turn token sent it, so
+    // its frame names that bot, not the `sender_id` it passed (often "user"). Both save paths
+    // (`send_chat_routed`, `send_to_thread`) merge `payload.meta`, which no request can set.
+    if !from_person {
+        if let Some((id, name)) = super::mcp_suggest::calling_bot(&state, &headers).await {
+            merge_meta(&mut payload.meta, Some(&json!({ SENT_BY_BOT_NAME: name, SENT_BY_KWANT_ID: id })));
+        }
+    }
     // The composer's `/idea <text>` goes in the idea jar: no message is saved, no bot sees it
     if let Some(text) = super::idea_jar::slash_idea(&payload.prompt) {
         return idea_from_chat(&state, &headers, &payload, text, from_person).await;
