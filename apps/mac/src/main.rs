@@ -1280,6 +1280,18 @@ fn set_window_menu(app: &AppHandle, places: &[Place]) {
     }
 }
 
+/// The tray's Show nudges: turns them on or off and saves that.
+fn toggle_nudges<R: Runtime>(app: &AppHandle<R>) -> Result<bool, ToggleRefused> {
+    let state = app.state::<Nudges>();
+    let on = !state.show.load(Ordering::Relaxed);
+    state.show.store(on, Ordering::Relaxed);
+    if let Err(e) = (nudge::Prefs { show_nudges: on }).save(&state.data_dir) {
+        tracing::warn!(error = %e, "couldn't save Show nudges");
+    }
+    wake(app);
+    Ok(on)
+}
+
 /// Every menu click: the tray's and the Window menu's.
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
@@ -1296,13 +1308,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             show_last(app);
         }
         "nudges" => {
-            let state = app.state::<Nudges>();
-            let on = !state.show.load(Ordering::Relaxed);
-            state.show.store(on, Ordering::Relaxed);
-            if let Err(e) = (nudge::Prefs { show_nudges: on }).save(&state.data_dir) {
-                tracing::warn!(error = %e, "couldn't save Show nudges");
-            }
-            wake(app);
+            let _ = toggle_nudges(app);
         }
         "perch" => {
             let app = app.clone();
@@ -2491,4 +2497,113 @@ mod tests {
         let _ = std::fs::remove_dir_all(data_dir2);
     }
 
+
+    /// The one sentence every setting that couldn't be saved says (connect.rs's set_this_mac).
+    const SAVE_FAILED_WORDS: &str = "kwant couldn't save the change. Check that ~/.kwnt can be written.";
+
+    /// A data dir made read-only (0500), like a ~/.kwnt that a `sudo` run left behind. Made
+    /// writable again and removed on drop, so a failing test cleans up too.
+    #[cfg(unix)]
+    struct ReadOnly(PathBuf);
+
+    #[cfg(unix)]
+    impl ReadOnly {
+        /// `None` when writes still work there (root ignores the mode): the test can't tell.
+        fn new(dir: &std::path::Path) -> Option<ReadOnly> {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+            let guard = ReadOnly(dir.to_path_buf());
+            let probe = dir.join(".write-probe");
+            if std::fs::write(&probe, b"").is_ok() {
+                let _ = std::fs::remove_file(probe);
+                eprintln!("{} is still writable (running as root?): skipped", dir.display());
+                return None;
+            }
+            Some(guard)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReadOnly {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Show nudges with a data dir that can't be written: it stays as it was (in memory, so the
+    /// tray's tick, and in the file) and the toggle says it wasn't saved.
+    #[cfg(unix)]
+    #[test]
+    fn show_nudges_that_can_t_be_saved_stays_as_it_was() {
+        let (app, _window, data_dir) = app("nudges-read-only");
+        let handle = app.handle();
+        nudge::Prefs { show_nudges: true }.save(&data_dir).unwrap();
+        let file = std::fs::read(nudge::prefs_path(&data_dir)).unwrap();
+        let Some(_dir) = ReadOnly::new(&data_dir) else { return };
+        assert_eq!(toggle_nudges(handle), Err(ToggleRefused::SaveFailed));
+        assert!(handle.state::<Nudges>().show.load(Ordering::Relaxed), "still on in memory");
+        assert_eq!(std::fs::read(nudge::prefs_path(&data_dir)).unwrap(), file, "the file as before");
+        assert!(nudge::Prefs::load(&data_dir).show_nudges);
+    }
+
+    /// With a data dir that can be written, Show nudges saves each change as before.
+    #[test]
+    fn show_nudges_saves_each_change() {
+        let (app, _window, data_dir) = app("nudges-writable");
+        let handle = app.handle();
+        assert_eq!(toggle_nudges(handle), Ok(false));
+        assert!(!handle.state::<Nudges>().show.load(Ordering::Relaxed));
+        assert!(!nudge::Prefs::load(&data_dir).show_nudges);
+        assert_eq!(toggle_nudges(handle), Ok(true));
+        assert!(nudge::Prefs::load(&data_dir).show_nudges);
+        assert!(said(&app).is_empty(), "nothing to say");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// Perch settings from This Mac's page with a data dir that can't be written: the old ones
+    /// stay (in memory and in the file), the page is given them again, and the app says so once.
+    #[cfg(unix)]
+    #[test]
+    fn perch_settings_that_can_t_be_saved_stay_as_they_were() {
+        let (app, window, data_dir) = app("island-read-only");
+        let handle = app.handle();
+        window.navigate("http://127.0.0.1:1/settings".parse().unwrap()).unwrap();
+        let before = handle.state::<Shared>().perch.lock().unwrap().prefs;
+        before.save(&data_dir).unwrap();
+        let file = std::fs::read(nudge::prefs_path(&data_dir)).unwrap();
+        let Some(_dir) = ReadOnly::new(&data_dir) else { return };
+        let mode = if before.mode == switcher::PerchMode::Always { switcher::PerchMode::Off } else { switcher::PerchMode::Always };
+        assert!(picker::island(handle, mode, switcher::PerchShortcut::Space), "it came from This Mac's page");
+        assert_eq!(handle.state::<Shared>().perch.lock().unwrap().prefs, before, "unchanged in memory");
+        assert_eq!(std::fs::read(nudge::prefs_path(&data_dir)).unwrap(), file, "the file as before");
+        assert_eq!(said(&app), vec![("kwant".to_string(), SAVE_FAILED_WORDS.to_string())]);
+    }
+
+    /// Remove a server with a data dir that can't be written: the server stays listed (in
+    /// memory and in the file), the page gets save_failed, and the app says so after the confirm.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_can_t_be_unlisted_stays_listed() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, window, data_dir) = app_with("remove-read-only", MAIN, places.clone());
+        places.save(&data_dir).unwrap();
+        let file = std::fs::read(places::places_path(&data_dir)).unwrap();
+        let Some(_dir) = ReadOnly::new(&data_dir) else { return };
+        let page = connect::bundled("index.html").to_string();
+        let answer = invoke(&window, "remove_server", &page, serde_json::json!({ "origin": origin.as_str() }));
+        let refused = answer.expect_err("save_failed");
+        assert_eq!(refused["code"], "save_failed");
+        assert_eq!(refused["message"], SAVE_FAILED_WORDS);
+        assert_eq!(current(app.handle()).servers, vec![origin.clone()], "still listed in memory");
+        assert_eq!(std::fs::read(places::places_path(&data_dir)).unwrap(), file, "the file as before");
+        let said = said(&app);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said[0].0, "Remove kwant.example.com?");
+        assert_eq!(said[1], ("kwant".to_string(), SAVE_FAILED_WORDS.to_string()));
+    }
 }
