@@ -8,6 +8,7 @@ import { statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
 import { Space } from '../spaces';
+import { teamNamed } from '../botHome';
 import { SpaceSwitcher, SpaceTile } from './Spaces';
 import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
@@ -783,7 +784,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onClick={() => onSelectTeam(t)}
         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelectTeam(t)}
         data-team-row={t.id}
-        title={`Open the @${t.name} team chat`}
+        title={`Open the @${teamNamed(t.name)} chat`}
         className={`w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-body font-medium transition-colors text-left group cursor-pointer ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
