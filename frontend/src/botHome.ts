@@ -160,10 +160,21 @@ export function teamChipTitle(teamName: string): string {
   return `Ask the whole ${teamNamed(teamName)}`;
 }
 
-/** "helpers" → "helpers team"; "Booktun.ing Team" stays as it is (no "team team"). */
+/**
+ * The team named once: "helpers" → "helpers team", but a name that already ends in its own "team" stays as it is,
+ * so nothing reads "… team team" (20e).
+ *
+ * A final "team" is the name's own word when it is the whole name ("team", "TEAM"), when it follows anything that
+ * isn't a letter, a combining mark or a digit ("Booktun.ing Team", "Marketing_Team", "Sales-Team", "Ops.Team",
+ * "Ünïcödé 📚 Team", "📚team"), or when it is a capital "Team" or "TEAM" hump ("SalesTeam", "ops2Team", "SALESTEAM").
+ * A lowercase "team" inside a word is not ("steam" → "steam team", "Steam" → "Steam team",
+ * "Dreamteam" → "Dreamteam team").
+ */
 export function teamNamed(name: string): string {
-  return /\bteam$/i.test(name.trim()) ? name.trim() : `${name.trim()} team`;
+  const n = name.trim();
+  return TEAM_OWN_WORD.test(n) ? n : `${n} team`;
 }
+const TEAM_OWN_WORD = /(?:^|[^\p{L}\p{M}\p{Nd}])[Tt][Ee][Aa][Mm]$|T(?:eam|EAM)$/u;
 
 /** "5m ago", "2h ago", "3d ago", else the date: short, for the recent-work cards. */
 export function ago(iso: string, now: number = Date.now()): string {

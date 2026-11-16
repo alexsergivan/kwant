@@ -105,3 +105,20 @@ export const AvatarMood: React.FC<AvatarMoodProps> = ({ mood, size }) => {
     </svg>
   );
 };
+
+/** 19f: the mood mark an avatar of this size gets. The 7×7 plate was drawn for 24–28 px avatars; below 20 px it
+ *  covers the face (the Ask chips are 14 px), so there "needs you" is a 6 px amber dot and other moods show nothing.
+ *  The words stay on the avatar's title and aria text. 20 px and up is the plate, unchanged. */
+export const AvatarMoodMark: React.FC<AvatarMoodProps> = ({ mood, size }) => {
+  if (size >= 20) return <AvatarMood mood={mood} size={size} />;
+  if (mood !== 'needs_you') return null;
+  return (
+    <span
+      className="kw-mood-small pointer-events-none absolute rounded-full"
+      style={{ top: -1, right: -1, width: 6, height: 6, background: MOOD_GLYPHS.needs_you.color, boxShadow: '0 0 0 1.5px var(--kw-avatar-cut, #27272a)' }}
+      aria-hidden="true"
+      data-mood={mood}
+      data-mood-dot=""
+    />
+  );
+};

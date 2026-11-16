@@ -1197,6 +1197,7 @@ mod tests {
     // takes a file that big.
     const _: () = assert!(
         crate::server::attachments::MAX_VIDEO_BYTES < CONTAINER_MAX_DOWNLOAD_BYTES
+            && crate::server::attachments::MAX_AUDIO_BYTES < CONTAINER_MAX_DOWNLOAD_BYTES
             && crate::server::attachments::MAX_ATTACHMENT_BYTES < CONTAINER_MAX_DOWNLOAD_BYTES
             && REMOTE_UPLOAD_CAP_BYTES < CONTAINER_MAX_DOWNLOAD_BYTES
     );
