@@ -58,6 +58,18 @@ test('headings for every recipient', () => {
   assert.equal(c.announce, 'Drop to share 1 file with the Kitchen team: 1 image.');
 });
 
+test('a team whose name already ends in its own "team" is not called "… team team" (20e)', () => {
+  const mkt = { kind: 'team', name: 'Marketing_Team' };
+  assert.equal(d.headingText(d.dropHeading(mkt, 2)), 'Drop to share with the Marketing_Team');
+  assert.equal(d.headingText(d.dropHeading(mkt, 2, true)), 'Drop here to share with the Marketing_Team');
+  assert.deepEqual(d.dropHeading(mkt, 1), { pre: 'Drop to share with the ', name: 'Marketing_Team', post: '' }, 'the name is drawn as typed');
+  assert.equal(d.dropAnnouncement(1, mkt), '1 file added for the Marketing_Team. Uploading.');
+  const c = d.dropCard({ preview: d.previewDrag([file('image/png')]), recipient: mkt });
+  assert.equal(c.announce, 'Drop to share 1 file with the Marketing_Team: 1 image.');
+  assert.equal(d.headingText(d.dropHeading({ kind: 'team', name: 'SalesTeam' }, 2)), 'Drop to share with the SalesTeam');
+  assert.equal(d.headingText(d.dropHeading({ kind: 'team', name: 'Steam' }, 2)), 'Drop to share with the Steam team');
+});
+
 test('some won\'t go: over the limit, with the tray already holding files, and refused files beside good ones', () => {
   assert.equal(d.MAX_ATTACHMENTS, 10, 'the limit is unchanged');
   const eleven = Array.from({ length: 11 }, () => file('image/png'));

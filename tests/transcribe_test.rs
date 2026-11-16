@@ -6,7 +6,7 @@ use axum::{
     body::{to_bytes, Body, Bytes},
     http::{HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use kwnt::{
@@ -17,16 +17,21 @@ use kwnt::{
         spaces::{NewSpace, SpaceId, DEFAULT_SPACE_ID},
         Database,
     },
-    drivers::engines::EngineId,
+    drivers::engines::{EngineId, EngineStatus, ProbeEnv},
     router::LayaRouter,
-    server::{continuity::SelfScope, create_router, transcribe, AppState},
+    mcp::{FixedApprover, McpTurnContext},
+    server::{continuity::SelfScope, create_router, mcp_runtime::PermissionSession, memory_recall, transcribe, AppState},
     tools::ToolRunner,
 };
+use futures::StreamExt;
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tempfile::{tempdir, TempDir};
 
 /// The Default space every fresh database starts with (`spc_default`, not "default").
@@ -37,6 +42,8 @@ use tower::ServiceExt;
 type Call = (String, String, Option<String>, String, usize);
 
 static CALLS: Mutex<Vec<Call>> = Mutex::new(Vec::new());
+/// Uploads that came without a `Content-Length` matching their size (a chunked upload).
+static UNSIZED: AtomicUsize = AtomicUsize::new(0);
 
 /// The stub's log. Tests run in parallel, so a panic in one must not poison it for the rest.
 fn calls() -> std::sync::MutexGuard<'static, Vec<Call>> {
@@ -70,6 +77,10 @@ async fn stub(headers: HeaderMap, body: Bytes) -> Response {
     let model = field(&body, "model").unwrap();
     assert_eq!(field(&body, "response_format").as_deref(), Some("json"));
     let (file, size) = file_part(&body);
+    let declared = headers.get("content-length").and_then(|h| h.to_str().ok()).and_then(|v| v.parse::<usize>().ok());
+    if declared != Some(body.len()) {
+        UNSIZED.fetch_add(1, Ordering::SeqCst);
+    }
     calls().push((key.clone(), model.clone(), field(&body, "language"), file, size));
     match (key.as_str(), model.as_str()) {
         ("sk-bad", _) => (
@@ -87,6 +98,11 @@ async fn stub(headers: HeaderMap, body: Bytes) -> Response {
     }
 }
 
+/// The OpenAI API engine check: lists models for any key.
+async fn models() -> Json<Value> {
+    Json(json!({"data": [{"id": "whisper-1"}]}))
+}
+
 /// Starts the stub once, on its own thread and runtime (each test has its own runtime), and
 /// points kwnt at it.
 fn stub_base() -> &'static str {
@@ -98,7 +114,10 @@ fn stub_base() -> &'static str {
             rt.block_on(async move {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 tx.send(format!("http://{}", listener.local_addr().unwrap())).unwrap();
-                let app = Router::new().route("/v1/audio/transcriptions", post(stub)).layer(axum::extract::DefaultBodyLimit::max(64 << 20));
+                let app = Router::new()
+                    .route("/v1/audio/transcriptions", post(stub))
+                    .route("/v1/models", get(models))
+                    .layer(axum::extract::DefaultBodyLimit::max(64 << 20));
                 axum::serve(listener, app).await.unwrap();
             });
         });
@@ -110,18 +129,25 @@ fn stub_base() -> &'static str {
 }
 
 async fn setup() -> (Router, AppState, TempDir) {
+    setup_with(|_| {}).await
+}
+
+/// [`setup`], with a change to the state before the router is made.
+async fn setup_with(change: impl FnOnce(&mut AppState)) -> (Router, AppState, TempDir) {
+    install_log_capture();
     stub_base();
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
     db.set_setting("mission_board", "false").await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), ..Config::default() };
-    let state = AppState::new(
+    let mut state = AppState::new(
         config.clone(),
         db,
         ToolRunner::new(tmp.path().join("workspace")),
         PermissionBroker::new(),
         LayaRouter::new(config.laya_url.clone()),
     );
+    change(&mut state);
     (create_router(state.clone()), state, tmp)
 }
 
@@ -196,8 +222,8 @@ async fn with_no_key_it_is_unavailable_and_says_why() {
 
     let (code, _) = status(&app, "spc_missing").await;
     assert_eq!(code, StatusCode::NOT_FOUND);
-    let (code, _) = call(&app, audio_post("spc_missing", "", "audio/webm", vec![1; 10])).await;
-    assert_eq!(code, StatusCode::NOT_FOUND);
+    let (code, v) = call(&app, audio_post("spc_missing", "", "audio/webm", vec![1; 10])).await;
+    assert_eq!((code, v["code"].clone()), (StatusCode::NOT_FOUND, json!("not_found")));
 }
 
 #[tokio::test]
@@ -260,30 +286,83 @@ async fn a_refused_key_is_a_502_without_the_key() {
     let (app, state, _tmp) = setup().await;
     space_key(&state, &SpaceId::default_space(), "sk-bad").await;
     // Everything this test's thread logs
-    let log = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let sink = log.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_ansi(false)
-        .with_writer(move || Capture(sink.clone()))
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let (log, _capture) = capture_logs();
+
+    // Another thread reaches the same `dictation failed` line first, as a parallel test can (a
+    // 429 in `other_upstream_failures_and_the_fallback_model`). With a thread-scoped subscriber
+    // that registered the line against the other thread's empty default and this test's log
+    // stayed empty (CI #673, #686). The capture must not depend on which thread logs first.
+    let limited = state
+        .db
+        .create_space(&NewSpace { name: "Elsewhere".into(), icon: "x".into(), color: None, this_machine_enabled: true })
+        .await
+        .unwrap();
+    space_key(&state, &SpaceId::new(&limited.id), "sk-limit").await;
+    let (other, req, rt) = (app.clone(), audio_post(&limited.id, "", "audio/webm", vec![3; 100]), tokio::runtime::Handle::current());
+    let (code, _) = tokio::task::spawn_blocking(move || rt.block_on(call(&other, req))).await.unwrap();
+    assert_eq!(code, StatusCode::BAD_GATEWAY, "the other thread logged `dictation failed` too");
+    let early = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    assert!(!early.contains("dictation failed"), "another thread's log isn't this test's: {early}");
 
     let (code, v) = call(&app, audio_post(DEF, "", "audio/wav", vec![3; 500])).await;
     assert_eq!(code, StatusCode::BAD_GATEWAY);
     assert_eq!(v, json!({"error": "The OpenAI key was refused.", "code": "transcriber_failed"}));
     assert_eq!(calls_with("sk-bad").len(), 1, "a refused key isn't retried with the other model");
     let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
-    assert!(log.contains("dictation failed"), "{log}");
+    assert_eq!(log.matches("dictation failed").count(), 1, "{log}");
     assert!(!log.contains("sk-bad") && !v.to_string().contains("sk-bad"), "{log}");
     assert!(!log.contains("Incorrect API key"), "OpenAI's own text isn't passed on: {log}");
 }
 
-struct Capture(Arc<Mutex<Vec<u8>>>);
+thread_local! {
+    /// Where this thread's log goes while a test captures it ([`capture_logs`]).
+    static CAPTURE: RefCell<Option<Arc<Mutex<Vec<u8>>>>> = const { RefCell::new(None) };
+}
+
+/// One global subscriber for the whole binary, installed by [`setup_with`] before any test can
+/// reach a server log line. It writes only what a capturing thread logs.
+///
+/// Not `tracing::subscriber::set_default` per test: while that is the only dispatcher ever made,
+/// tracing-core (0.1.36) asks the *registering thread's* default whether a log line is wanted. A
+/// line first reached by another test's thread (no subscriber) is cached as "never", and the
+/// capturing test's own event is dropped: an empty log at random. The filter is dynamic for the
+/// same reason: `filter_fn` caches its answer per line too.
+fn install_log_capture() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        use tracing_subscriber::prelude::*;
+        let capturing = tracing_subscriber::filter::dynamic_filter_fn(|_, _| CAPTURE.try_with(|c| c.borrow().is_some()).unwrap_or(false));
+        let layer = tracing_subscriber::fmt::layer().with_ansi(false).with_writer(|| Capture).with_filter(capturing);
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer)).unwrap();
+    });
+}
+
+/// Captures everything this thread logs (at every level) until the guard drops.
+fn capture_logs() -> (Arc<Mutex<Vec<u8>>>, CaptureGuard) {
+    install_log_capture();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    CAPTURE.with(|c| *c.borrow_mut() = Some(log.clone()));
+    (log, CaptureGuard)
+}
+
+struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        let _ = CAPTURE.try_with(|c| *c.borrow_mut() = None);
+    }
+}
+
+/// Writes to the current thread's capture, if any.
+struct Capture;
 
 impl Write for Capture {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
+        let _ = CAPTURE.try_with(|c| {
+            if let Some(log) = c.borrow().as_ref() {
+                log.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(buf);
+            }
+        });
         Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -356,9 +435,226 @@ async fn refusals_come_before_anything_goes_upstream() {
     state.self_tools.lock().await.insert("turn-token".into(), SelfScope::default());
     let mut req = audio_post(DEF, "", "audio/webm", vec![1; 10]);
     req.headers_mut().insert("authorization", "Bearer turn-token".parse().unwrap());
-    let (code, _) = call(&app, req).await;
+    let (code, v) = call(&app, req).await;
     assert_eq!(code, StatusCode::FORBIDDEN);
+    assert_eq!(v, json!({"error": "only the person can dictate", "code": "forbidden"}));
 
     assert_eq!(calls_with("sk-refusals").len(), 1, "only the 25 MB recording went up");
     assert_eq!(calls_with("sk-refusals")[0].4, transcribe::MAX_AUDIO_BYTES as usize);
+}
+
+/// How many rows `table` has, read straight from the database file.
+async fn rows(tmp: &TempDir, table: &str) -> i64 {
+    let url = format!("sqlite://{}?mode=ro", tmp.path().join("kwnt.db").display());
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}")).fetch_one(&pool).await.unwrap();
+    pool.close().await;
+    n
+}
+
+#[tokio::test]
+async fn a_transcription_writes_no_chat_message_and_no_memory() {
+    let (app, state, tmp) = setup().await;
+    space_key(&state, &SpaceId::default_space(), "sk-nowrite").await;
+    let (messages, memories) = (rows(&tmp, "messages").await, rows(&tmp, "kwant_memories").await);
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![5; 4096])).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(calls_with("sk-nowrite").len(), 1);
+    assert_eq!(rows(&tmp, "messages").await, messages, "no chat message");
+    assert_eq!(rows(&tmp, "kwant_memories").await, memories, "no memory");
+}
+
+#[tokio::test]
+async fn an_archived_space_or_the_engine_off_is_refused_before_anything_goes_up() {
+    let (app, state, _tmp) = setup().await;
+    let gone = state
+        .db
+        .create_space(&NewSpace { name: "Gone".into(), icon: "x".into(), color: None, this_machine_enabled: true })
+        .await
+        .unwrap();
+    space_key(&state, &SpaceId::new(&gone.id), "sk-archived").await;
+    state.db.archive_space(&SpaceId::new(&gone.id)).await.unwrap();
+    let (code, v) = call(&app, audio_post(&gone.id, "", "audio/webm", vec![1; 10])).await;
+    assert_eq!(code, StatusCode::CONFLICT);
+    assert_eq!(v["code"], "archived", "{v}");
+
+    // The OpenAI API engine off: the space's own key isn't used either
+    space_key(&state, &SpaceId::default_space(), "sk-engine-off").await;
+    state.engines.set_disabled(HashSet::from([EngineId::OpenaiApi]));
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![1; 10])).await;
+    assert_eq!(code, StatusCode::CONFLICT);
+    assert_eq!(v, json!({"error": transcribe::WHY_ENGINE_OFF, "code": "no_transcriber", "why": transcribe::WHY_ENGINE_OFF}));
+
+    assert!(calls_with("sk-archived").is_empty() && calls_with("sk-engine-off").is_empty());
+}
+
+#[tokio::test]
+async fn an_mcp_session_token_is_refused() {
+    let (app, state, _tmp) = setup().await;
+    space_key(&state, &SpaceId::default_space(), "sk-mcp").await;
+    let ctx = McpTurnContext {
+        servers: vec![],
+        approver: Arc::new(FixedApprover(true)),
+        config_dir: std::env::temp_dir(),
+        permission_url: None,
+        gateway: None,
+        max_tool_iterations: 8,
+        approvals: kwnt::mcp::Approvals::Ask,
+        records: Default::default(),
+        kwnt_only: false,
+    };
+    state.mcp_sessions.lock().await.insert("mcp-turn".into(), PermissionSession::new("k1".into(), "Ada".into(), "t1".into(), ctx, None));
+    let mut req = audio_post(DEF, "", "audio/webm", vec![1; 10]);
+    req.headers_mut().insert("authorization", "Bearer mcp-turn".parse().unwrap());
+    let (code, v) = call(&app, req).await;
+    assert_eq!(code, StatusCode::FORBIDDEN);
+    assert_eq!(v, json!({"error": "only the person can dictate", "code": "forbidden"}));
+    assert!(calls_with("sk-mcp").is_empty());
+}
+
+/// A body that notes when it is first read.
+fn watched_body(read: Arc<AtomicBool>) -> Body {
+    Body::from_stream(futures::stream::once(async move {
+        read.store(true, Ordering::SeqCst);
+        Ok::<_, std::io::Error>(Bytes::from(vec![9u8; 1000]))
+    }))
+}
+
+fn watched_post(read: &Arc<AtomicBool>) -> Request<Body> {
+    Request::post(format!("/api/spaces/{DEF}/transcribe")).header("content-type", "audio/webm").body(watched_body(read.clone())).unwrap()
+}
+
+#[tokio::test]
+async fn while_two_are_held_the_next_waits_unread_then_gets_busy_or_its_turn() {
+    // Its own slots, so the other tests running beside it keep theirs
+    let (app, state, _tmp) = setup_with(|s| s.dictation = Arc::new(transcribe::Slots::with_wait(Duration::from_millis(800)))).await;
+    space_key(&state, &SpaceId::default_space(), "sk-busy").await;
+    let one = state.dictation.at_once.acquire().await.unwrap();
+    let two = state.dictation.at_once.acquire().await.unwrap();
+
+    // Both held past the wait: busy, and not a byte of the body was read
+    let read = Arc::new(AtomicBool::new(false));
+    let (code, v) = call(&app, watched_post(&read)).await;
+    assert_eq!(code, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(v["code"], "busy", "{v}");
+    assert!(!read.load(Ordering::SeqCst), "a busy request's body is never read");
+
+    // While it waits for its turn it hasn't read its body either; once a slot frees, it goes
+    let read = Arc::new(AtomicBool::new(false));
+    let waiting = tokio::spawn({
+        let app = app.clone();
+        let req = watched_post(&read);
+        async move { call(&app, req).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!read.load(Ordering::SeqCst), "a waiting request holds no audio");
+    drop(one);
+    let (code, v) = waiting.await.unwrap();
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert!(read.load(Ordering::SeqCst));
+    assert_eq!(calls_with("sk-busy").len(), 1, "only the one that got its turn went up");
+    drop(two);
+}
+
+#[tokio::test]
+async fn a_stalled_upload_is_interrupted_and_gives_its_slot_back() {
+    // Its own slots, and a short stall instead of 15 s
+    let (app, state, _tmp) = setup_with(|s| {
+        s.dictation = Arc::new(transcribe::Slots { read_stall: Duration::from_secs(1), ..Default::default() })
+    })
+    .await;
+    space_key(&state, &SpaceId::default_space(), "sk-stall").await;
+    // Two uploads send 1 KB, then nothing, and never end: both slots are taken
+    let stalled = || {
+        let body = Body::from_stream(futures::stream::once(async { Ok::<_, std::io::Error>(Bytes::from(vec![1u8; 1000])) }).chain(futures::stream::pending()));
+        Request::post(format!("/api/spaces/{DEF}/transcribe")).header("content-type", "audio/webm").body(body).unwrap()
+    };
+    let held: Vec<_> = (0..2)
+        .map(|_| {
+            let (app, req) = (app.clone(), stalled());
+            tokio::spawn(async move { call(&app, req).await })
+        })
+        .collect();
+    let taken = tokio::time::timeout(Duration::from_secs(5), async {
+        while state.dictation.at_once.available_permits() > 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    });
+    taken.await.expect("both stalled uploads hold a slot while they read");
+
+    // After the stall each one is refused as interrupted, nothing went upstream, and both slots are back
+    for h in held {
+        let (code, v) = tokio::time::timeout(Duration::from_secs(5), h).await.expect("a stalled upload ends").unwrap();
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{v}");
+        assert_eq!(v["code"], "interrupted", "{v}");
+    }
+    assert_eq!(state.dictation.at_once.available_permits(), transcribe::MAX_AT_ONCE);
+    assert!(calls_with("sk-stall").is_empty(), "a stalled upload never goes to OpenAI");
+
+    // A normal recording gets a slot and its text
+    let (code, v) = call(&app, audio_post(DEF, "", "audio/webm", vec![1; 100])).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(calls_with("sk-stall").len(), 1);
+}
+
+#[tokio::test]
+async fn every_upload_declares_its_length() {
+    let (app, state, _tmp) = setup().await;
+    space_key(&state, &SpaceId::default_space(), "sk-sized").await;
+    // No length from the browser; the upload to OpenAI still has one (the stub counts any without)
+    let chunks = (0..3).map(|_| Ok::<_, std::io::Error>(Bytes::from(vec![4u8; 70_000])));
+    let req = Request::post(format!("/api/spaces/{DEF}/transcribe")).header("content-type", "audio/webm").body(Body::from_stream(futures::stream::iter(chunks))).unwrap();
+    let (code, v) = call(&app, req).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(calls_with("sk-sized")[0].4, 210_000);
+    assert_eq!(UNSIZED.load(Ordering::SeqCst), 0, "every upload had a Content-Length matching its size");
+}
+
+/// Hybrid recall's embeddings and dictation read one key order (`server::openai_key`): the same
+/// key in each case, and neither when OpenAI is out.
+#[tokio::test]
+async fn recall_and_dictation_pick_the_same_key() {
+    let (_app, state, _tmp) = setup().await;
+    let new_space = |name: &str, this_machine_enabled: bool| {
+        let db = state.db.clone();
+        let name = name.to_string();
+        async move { SpaceId::new(&db.create_space(&NewSpace { name, icon: "x".into(), color: None, this_machine_enabled }).await.unwrap().id) }
+    };
+    state.db.set_setting("openai_api_key", " sk-order-host ").await.unwrap();
+    let both = new_space("Both", true).await;
+    space_key(&state, &both, "sk-order-space").await;
+    let host = new_space("Host", true).await;
+    let off = new_space("Off", false).await;
+    let off_own = new_space("Off own", false).await;
+    space_key(&state, &off_own, "sk-order-own").await;
+
+    let keys = |state: AppState, space: SpaceId| async move {
+        let recall = match memory_recall::source_for_space(&state, &space).await {
+            Some(memory_recall::EmbedSource::OpenAi { key, .. }) => Some(key),
+            _ => None,
+        };
+        let dictation = match transcribe::transcribe_source_for_space(&state, &space).await {
+            Ok(transcribe::TranscribeSource::OpenAi { key, .. }) => Some(key),
+            Err(_) => None,
+        };
+        (recall, dictation)
+    };
+    let s = |k: &str| Some(k.to_string());
+    // The one difference, on purpose (#630): until the OpenAI API engine's check has passed,
+    // recall leaves the host's key alone (a revoked key isn't retried every minute in the
+    // background); dictation, which the person starts, still tries it. A space's own key is
+    // used by both either way.
+    assert_ne!(state.engines.report(EngineId::OpenaiApi).status, EngineStatus::Ready);
+    assert_eq!(keys(state.clone(), host.clone()).await, (None, s("sk-order-host")), "host key before the check");
+    assert_eq!(keys(state.clone(), both.clone()).await, (s("sk-order-space"), s("sk-order-space")), "space key before the check");
+    let env = ProbeEnv { openai_key: s("sk-order-host"), openai_base: stub_base().to_string(), ..ProbeEnv::default() };
+    state.engines.recheck_one(EngineId::OpenaiApi, &env).await;
+    assert_eq!(state.engines.report(EngineId::OpenaiApi).status, EngineStatus::Ready);
+    for (space, want) in [(&both, s("sk-order-space")), (&host, s("sk-order-host")), (&off, None), (&off_own, s("sk-order-own"))] {
+        assert_eq!(keys(state.clone(), space.clone()).await, (want.clone(), want), "{space}");
+    }
+    state.engines.set_disabled(HashSet::from([EngineId::OpenaiApi]));
+    for space in [&both, &host, &off, &off_own] {
+        assert_eq!(keys(state.clone(), space.clone()).await, (None, None), "engine off: {space}");
+    }
 }

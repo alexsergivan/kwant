@@ -41,7 +41,7 @@ import { SpaceDocsTab } from './SpaceDocsTab';
 
 import type { AppsSection, SettingsScope, SpaceSettingsTab } from '../nav';
 import { AppsAccounts } from './AppsAccounts';
-import { InstallAppButton } from './InstallAppButton';
+import { PhoneAppCard } from './PhoneAppCard';
 import { editorProps, useEscapeLayer } from '../escape';
 import { devTeamRefs } from '../devMode';
 
@@ -50,7 +50,7 @@ export type { SettingsScope, SpaceSettingsTab };
 const TABS: Array<{ id: SpaceSettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <Settings2 size={15} /> },
   { id: 'apps', label: 'Apps & accounts', icon: <LayoutGrid size={15} /> },
-  { id: 'bots', label: 'Kwant bots', icon: <Bot size={15} /> },
+  { id: 'bots', label: 'Bots', icon: <Bot size={15} /> },
   { id: 'teams', label: 'Teams', icon: <Users size={15} /> },
   { id: 'docs', label: 'Documents', icon: <FileText size={15} /> },
   { id: 'skills', label: 'Skills', icon: <Sparkles size={15} /> },
@@ -228,6 +228,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           </div>
           {scope === 'app' ? (
             <>
+              <PhoneAppCard phone={p.isPhone} />
               <div className={`${card} p-4 space-y-3`} data-all-spaces-spaces>
                 <p className="text-xs font-medium text-zinc-200">Spaces</p>
                 <p className="text-[11px] text-zinc-500">Switch spaces on the left rail (Ctrl or ⌘ with 1–9). Archived spaces keep their bots and chats until you restore them.</p>
@@ -235,7 +236,6 @@ export const SpaceSettings: React.FC<Props> = (p) => {
                   <button type="button" onClick={p.onOpenArchived} className={rowBtn}>
                     <Archive size={13} /> Archived spaces
                   </button>
-                  <InstallAppButton className={rowBtn} />
                 </div>
               </div>
               {p.appSettings}
@@ -323,7 +323,7 @@ const ImportTab: React.FC<TabProps> = ({ space, kwants, onOpenImport, onImported
     } catch (err) {
       if (err instanceof ImportError && err.code === 'edited') setConfirm({ record: r, names: err.names });
       else if (err instanceof ImportError && err.code === 'in_use')
-        setNotice(`${err.names.join(', ') || 'Something it made'} has already been used, so this import can’t be undone in one step. Delete those bots yourself in Kwant bots.`);
+        setNotice(`${err.names.join(', ') || 'Something it made'} has already been used, so this import can’t be undone in one step. Delete those bots yourself in Settings › This space › Bots.`);
       else setNotice(importErrorText(err).detail || importErrorText(err).title);
     } finally {
       setUndoing(null);

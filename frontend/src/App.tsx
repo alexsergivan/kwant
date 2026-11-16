@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
@@ -10,6 +11,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { focusPhoneApp } from './components/PhoneAppTip';
 import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
@@ -122,6 +124,7 @@ import {
   turnsIn,
   upsertThread,
 } from './threads';
+import { createStreamText, NO_STREAM } from './streamText';
 import { Profile, profilesApi } from './profiles';
 import { FailoverEvent, createOutageLog, failoverNotice, outageKey } from './failover';
 import type { SwitchNote } from './failoverNotes';
@@ -287,8 +290,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openCtxRef = useRef(openCtx);
   openCtxRef.current = openCtx;
   // What the open chat is streaming; other chats' streams are kept in streamsRef until opened.
-  const [streamingText, setStreamingText] = useState('');
-  const [streamingThinking, setStreamingThinking] = useState('');
+  // The open chat's streaming reply (14b): a store only the live reply subscribes to, not App state, so a
+  // token never re-renders the app or the finished messages. Updates land once per frame, with one blip.
+  // useState, not useMemo: React may drop a memo, and the store must live as long as the app (#642 QA).
+  const [streamStore] = useState(() =>
+    createStreamText({}, { onFrame: (prev, next) => next.text !== prev.text && playSfx('blip') }),
+  );
   const streamsRef = useRef<Record<string, { text: string; thinking: string }>>({});
   // Running turns' live steps by turn id (with the chat they belong to), until the saved reply shows.
   const [activity, setActivity] = useState<Record<string, LiveActivity & { ctx: string }>>({});
@@ -872,8 +879,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       delete liveKwantRef.current[ctx];
     }
     if (ctx === openCtxRef.current) {
-      setStreamingText('');
-      setStreamingThinking('');
+      streamStore.show({ text: '', thinking: '' });
     }
     if (!ctx || !(ctx in liveRef.current)) return;
     const next = { ...liveRef.current };
@@ -1154,8 +1160,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setHistoryWindow((w) => (w && w.ctx !== openCtx ? null : w));
     if (!openCtx) return;
     const b = streamsRef.current[openCtx];
-    setStreamingText(b?.text ?? '');
-    setStreamingThinking(b?.thinking ?? '');
+    streamStore.show({ text: b?.text ?? '', thinking: b?.thinking ?? '' });
     setMessages(messagesCacheRef.current[openCtx] || []);
     setMessagesError(null);
     refreshContext(openCtx).then(() => {
@@ -1232,8 +1237,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       if (turnsIn(turnsRef.current, ctx).length > 0) {
         streamsRef.current[ctx] = { text: '', thinking: '' };
         if (ctx === openCtxRef.current) {
-          setStreamingText('');
-          setStreamingThinking('');
+          streamStore.show({ text: '', thinking: '' });
         }
         return;
       }
@@ -1376,8 +1380,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (d.state === 'deciding') {
               if (streamsRef.current[ctx]) streamsRef.current[ctx] = { text: '', thinking: '' };
               if (ctx === openCtxRef.current) {
-                setStreamingText('');
-                setStreamingThinking('');
+                streamStore.show({ text: '', thinking: '' });
               }
             } else {
               refreshContext(ctx);
@@ -1554,12 +1557,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (event.type === 'TextDelta') buf.text += event.data;
             else buf.thinking = event.data;
             if (!(ctx in liveRef.current)) markLiveKwant(ctx, event.kwant_id);
-            if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) {
-              if (event.type === 'TextDelta') {
-                setStreamingText(buf.text);
-                playSfx('blip');
-              } else setStreamingThinking(buf.thinking);
-            }
+            // At most one update per frame (14b); the blip goes with it (streamStore's onFrame).
+            if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) streamStore.schedule(() => ({ ...buf }));
             break;
           }
           case 'activity':
@@ -1695,8 +1694,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               refreshContext(targetId).then(() => {
                 streamsRef.current[targetId] = { text: '', thinking: '' };
                 if (openCtxRef.current === targetId) {
-                  setStreamingText('');
-                  setStreamingThinking('');
+                  streamStore.show({ text: '', thinking: '' });
                 }
               });
               markLive(targetId, spkName);
@@ -1717,6 +1715,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'TurnComplete': {
             const ctx = streamTarget(event, streamingContextIdRef.current);
+            // The last tokens show now, not a frame later (14b): the stream stays up until the saved reply lands.
+            if (ctx === openCtxRef.current) streamStore.flush();
             if (ctx === openCtxRef.current) {
               playSfx('coin');
               // Live events only (the stream has no replay; history loads via refreshContext).
@@ -1819,6 +1819,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'Error': {
             const ctx = streamTarget(event, streamingContextIdRef.current);
+            if (ctx === openCtxRef.current) streamStore.flush();
             if (ctx && ctx === streamingContextIdRef.current) {
               discussionInProgressRef.current = false;
               setDiscussionState({ inProgress: false });
@@ -1843,6 +1844,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   /** Stop in the composer: the open thread's turn, the direct chat's, or the channel's. */
   const handleCancelDiscussion = async () => {
     const ctx = openCtxRef.current;
+    // What already streamed shows at once (14b), so Stop never leaves the last words a frame behind.
+    streamStore.flush();
     const threadId = openThreadId;
     try {
       if (threadId) {
@@ -1933,8 +1936,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       streamingContextIdRef.current = targetId;
       if (!(targetId in liveRef.current)) {
         streamsRef.current[targetId] = { text: '', thinking: '' };
-        setStreamingText('');
-        setStreamingThinking('');
+        streamStore.show({ text: '', thinking: '' });
       }
       markLive(targetId, speakerName);
     }
@@ -2259,8 +2261,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           if (!(ctx in liveRef.current)) {
             streamsRef.current[ctx] = { text: '', thinking: '' };
             if (ctx === openCtxRef.current) {
-              setStreamingText('');
-              setStreamingThinking('');
+              streamStore.show({ text: '', thinking: '' });
             }
           }
           markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot'));
@@ -3347,8 +3348,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       : []
     : [];
 
+  // 15e: the lead first (the "Ask:" row and the header's faces), the rest in roster order, like the team home.
   const currentTeamMembers = currentTeam
-    ? kwants.filter((k) => currentTeamMemberIds.includes(k.id))
+    ? askOrder(kwants.filter((k) => currentTeamMemberIds.includes(k.id)), currentTeam.lead_kwant_id)
     : [];
   // 0.8.1 F3: whose pre-push lines a team chat or channel shows (membership, like approvalsForChat).
   const pointerMemberIds: string[] = currentTeam ? currentTeamMemberIds : openChat?.kind === 'channel' ? openChat.memberIds.filter((id): id is string => !!id) : [];
@@ -3564,6 +3566,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
   // The open chat's running turn's live steps (the newest, when several reply at once).
   const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
+  // 16b: the open chat's running turn double-checks another bot's work (the challenger's own chat).
+  const auditHere = isCurrentContextStreaming ? Object.values(turns).find((t) => t.context_id === openCtx && t.state === 'running' && t.audit)?.audit ?? null : null;
+  const liveAudit = useMemo(
+    () =>
+      auditHere
+        ? {
+            line: auditTurnLine(auditHere, kwantNames),
+            // The phone strip is narrow: the Live now chip's words, the full line stays as its title.
+            short: auditShortLine(auditHere, kwantNames),
+            onOpenTask: missionBoard && auditHere.task_id
+              ? () => {
+                  setPendingTaskId(auditHere.task_id);
+                  showPage('board');
+                }
+              : undefined,
+          }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [auditHere?.audit_id, auditHere?.stage, auditHere?.task_title, kwantNames, missionBoard],
+  );
   const needsYouByKwant = openStepsByKwant(humanSteps);
   const chatQueue = queuedInChat(turns, openCtx);
   const asQueued = (t: TrackedTurn): QueuedState => ({
@@ -4073,6 +4095,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onSwitchSpace={onSwitchSpace}
       onCreateSpace={onCreateSpace}
       onOpenSpaceSettings={() => openSpaceSettings('general')}
+      onOpenPhoneApp={() => {
+        openAppSettings();
+        focusPhoneApp();
+      }}
       onOpenArchived={onOpenArchived}
       onOpenSearch={() => setIsSearchOpen(true)}
       section={section}
@@ -4284,8 +4310,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           messages={viewingHistory ? historyWindow.messages : messages}
           viewingHistory={viewingHistory}
           onJumpToLatest={() => setHistoryWindow(null)}
-          streamingText={isCurrentContextStreaming ? streamingText : ''}
-          streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
+          stream={isCurrentContextStreaming ? streamStore : NO_STREAM}
           pendingApprovals={approvalsHere}
           prepush={
             devOn && currentKwant && !viewingHistory ? (
@@ -4455,6 +4480,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           awaitingBrowser={awaitingBrowserHere}
           awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
+          liveAudit={liveAudit}
           renderHumanStep={renderHumanStep}
           contextKey={openCtx}
           deciding={decidingHere ? { botName: kwantName(decidingHere.kwantId) ?? chatTitle, consulted: decidingHere.consulted } : null}
