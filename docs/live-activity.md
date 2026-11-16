@@ -319,3 +319,46 @@ the same chat (`resumed: "new_turn"`).
   `take_control` again.
 - If the browser wasn't running when the step opened, only the database check protects it: bot
   tools are refused, and the person takes control as usual.
+
+## 3. Needs attention: what each item asks, and when it closes (22i)
+
+### `GET /api/away` item fields
+
+Every item in `waiting`, `finished` and `failed` carries:
+
+- `action`: `"retry" | "continue" | "ask_again" | "answer" | "decide" | "browser"`, or `null`
+  for finished work (nothing to do but look).
+- `dismissable`: `true` for a stop and for a failed or stuck hand-off or routine run.
+- `link.thread_kwant_id`: present only when the item's thread belongs to another bot. Open the
+  thread under this bot, not the item's `kwant_id`.
+- `task_id`: only on a `failed` or `interrupted` hand-off (`kind: "delegation"`) whose board task
+  is `failed`. Its Retry is `POST /api/tasks/:task_id/retry`, and `action` is `"retry"` only then.
+  Without it (the board is off by default) a failed hand-off has `action: null` and
+  `dismissable: true`: the person opens its thread and asks the bot again there, and that bot's
+  next finished reply closes the row (`later_reply`), or they dismiss it. There is no
+  `/api/waiting/:id/retry`.
+
+### `POST /api/waiting/:id/dismiss` (the person only)
+
+Optional body `{"kind": "<the item's kind>"}`. Clears one item without resuming it, records
+why (`attention_closed`, reason `dismissed`) and sends `waiting_updated`.
+
+| Status | `code` | When |
+|---|---|---|
+| 200 | | `{id, kind, status: "closed", already_closed}` (`kind`: `waiting`, `delegation` or `routine_run`) |
+| 400 | `bad_kind`, `bad_body` | unknown kind, or a body that isn't JSON |
+| 403 | `person_only` | a bot's token |
+| 404 | `not_found` | nothing open or closed with that id |
+| 409 | `use_question_answer`, `use_approval_decide`, `use_step_decline`, `use_watch_decide` | it has its own answer, which tells the bot |
+
+### SSE `waiting_updated` (routed to the item's chat)
+
+Sent when an item opens and every time one closes, whatever closed it.
+
+```json
+{ "type": "waiting_updated", "data": { "item": {
+  "id": "…", "kind": "stopped|reply|question|delegation|routine_run",
+  "status": "open|closed",
+  "reason": null | "later_reply|person_wrote|answered|replaced|resumed|place_gone|dismissed",
+  "kwant_id": "…", "channel_id": null, "direct_kwant_id": "…", "thread_id": null } } }
+```

@@ -67,6 +67,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.16.** Your **answer to a bot's question** shows once, on its card, and phone chat headers name their buttons.
 - **New in 0.9.17.** A card that puts kwant bots on your phone, a team chip that names the team once, steps that fold under a reply instead of pushing it down, "Pick a repo" that always lands in Repo URL, Allow once for notes that mention a release or a merge, Blocked when a reply asks you to pick after a closing line, Claude bots that stop repeating a command or file read that keeps failing, The island names a file, never its folders, dates and times that read one way everywhere, a bot that asks for a missing file in the chat, Keep going never passes a customer's words on as yours and Writes named like reads keep the full card.
 - **New in 0.9.18.** A team named once, never "… team team", audio files up to 100 MB in the chat, a bot browser preview that never flashes white while a page loads, browser step cards that stop asking for you once they are closed, tidier reply buttons on a phone, a production deploy card that always has a way forward, A refused customer call remembers its chat and A step that keeps failing ends in one Blocked card.
+- **New in 0.9.19.** Bot messages that never read as yours, bot messages that name the bot that sent them, a customer's refused call shown in that customer's chat, short Windows file paths in the chat's step titles, a stopped step that gets its tries back once the bot has fixed something, an island Allow once that no longer covers a deploy typed as plain text, a repeat guard that sees through changing timings, ids and ports, a stopped step that a read-only shell command no longer reopens, customer and bot messages that name who wrote them and requests to OpenRouter that name kwant as the app.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 
@@ -280,7 +281,7 @@ One line per platform, each followed by `kwnt doctor`:
 | Linux desktop or server | The same clone and `make build`, then `kwnt setup`, or `sh scripts/install-linux-deps.sh --clis claude` on Debian/Ubuntu | Run `kwnt doctor` |
 | VPS with Docker | [Docker Compose](#vps-in-5-minutes-docker-compose) | Run `docker compose exec kwnt kwnt doctor` |
 
-There's no prebuilt `kwnt` binary or Homebrew formula yet, so the command line needs a clone and a build (Rust and Node).
+On Linux (x86_64 or arm64, glibc 2.35+) you can skip the build: `curl -fsSL https://kwant.si/install.sh | sh` installs the prebuilt `kwnt` from the latest release after checking its `.sha256`, and every release also has `kwnt-linux-x86_64.tar.gz` and `kwnt-linux-aarch64.tar.gz`. There's no prebuilt command-line `kwnt` for macOS yet, so on a Mac the command line needs a clone and a build (Rust and Node).
 
 ---
 

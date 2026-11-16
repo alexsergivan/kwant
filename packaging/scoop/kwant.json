@@ -1,0 +1,35 @@
+{
+    "version": "0.9.17",
+    "description": "A self-hosted team of AI bots: spaces, handoffs between bots, approvals and routines (Windows app, beta)",
+    "homepage": "https://kwant.si",
+    "license": "AGPL-3.0-only",
+    "notes": "kwant keeps its data in $env:USERPROFILE\\.kwnt, so it survives updates and uninstalls.",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.17/kwant_0.9.17_windows_x64_beta_setup.exe#/dl.7z",
+            "hash": "f65fb14bfd2e92eaf038332c30c2c6961fc19a1d14f61abca7101695e22fb895"
+        }
+    },
+    "pre_install": "Remove-Item \"$dir\\`$*\", \"$dir\\uninstall.exe\" -Force -Recurse -ErrorAction SilentlyContinue",
+    "shortcuts": [
+        [
+            "kwant.exe",
+            "kwant"
+        ]
+    ],
+    "checkver": {
+        "url": "https://api.github.com/repos/alexsergivan/kwant/releases/latest",
+        "jsonpath": "$.tag_name",
+        "regex": "mac-v([\\d.]+)"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/alexsergivan/kwant/releases/download/mac-v$version/kwant_$version_windows_x64_beta_setup.exe#/dl.7z",
+                "hash": {
+                    "url": "https://github.com/alexsergivan/kwant/releases/download/mac-v$version/kwant_$version_windows_x64_beta_setup.exe.sha256"
+                }
+            }
+        }
+    }
+}
