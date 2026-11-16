@@ -74,6 +74,7 @@ import {
   withKind,
   withMetric,
 } from '../goals';
+import { atClock } from '../clock';
 
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const btn = `inline-flex items-center justify-center gap-1 min-h-[40px] sm:min-h-[28px] px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed ${focusRing}`;
@@ -369,8 +370,8 @@ export const DecisionCard: React.FC<{
 
 /** What a goal says after the person chose Not now: not a request, so no amber and no counting (D1, D3). */
 export const declinedText = (at: string | null, now: number): string => {
-  const when = clockText(at, now);
-  return `${when ? `You chose Not now at ${when}.` : 'Not now.'} The fix waits; it’s dropped if this recovers.`;
+  const when = atClock(at, now);
+  return `${when ? `You chose Not now ${when}.` : 'Not now.'} The fix waits; it’s dropped if this recovers.`;
 };
 
 /**

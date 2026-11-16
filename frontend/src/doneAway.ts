@@ -10,7 +10,7 @@ import { isReview } from './api/inbox';
 import { type Routine, type RoutineRun, type Schedule, WEEKDAYS, monthDaysText } from './continuity';
 import { parseMetaObject } from './questions';
 import { relativeTime } from './away';
-import { dateText, secondsText, timeText, wallClock } from './clock';
+import { dateText, localClock, secondsText, timeText, wallClock } from './clock';
 
 export const NEEDS_GROUPS: InboxGroup[] = ['waiting_on_you', 'failed_or_stuck'];
 export const DONE_GROUPS: InboxGroup[] = ['to_review', 'finished'];
@@ -185,15 +185,17 @@ export function scheduleShort(s: Schedule | null | undefined): string {
  * "Ben · routine, every Mon 09:00 · ran 22:51 because you pressed Run now". Without the routine it says what
  * the item says ("Ben · finished 22:45"); without the run it leaves the why out rather than guess it.
  */
-export function metaLine(item: InboxItem, routine: Routine | null, run: RoutineRun | null): string {
+export function metaLine(item: InboxItem, routine: Routine | null, run: RoutineRun | null, now: number = Date.now()): string {
   const bot = isTeamJob(item) ? ledLine(item) : item.kwant_name;
+  // Done items stay a week, so a time from another day says the day (18d): "finished Nov 10, 5:51 PM".
+  const day = (ts: string | null | undefined) => localClock(ts ?? null, now) ?? '';
   if (!isRoutineItem(item)) {
-    const at = hm(item.timestamp);
+    const at = day(item.timestamp);
     return at ? `${bot} · finished ${at}` : bot;
   }
   const sched = routine ? scheduleShort(routine.schedule) : '';
   const parts = [bot, sched ? `routine, ${sched}` : 'routine'];
-  const ranAt = hm(run?.started_at ?? null) || hm(item.timestamp);
+  const ranAt = day(run?.started_at) || day(item.timestamp);
   if (ranAt) parts.push(`ran ${ranAt}${triggerWords(run?.trigger ?? servedTrigger(item))}`);
   return parts.join(' · ');
 }

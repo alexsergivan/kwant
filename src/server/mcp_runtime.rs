@@ -49,11 +49,24 @@ pub struct PermissionSession {
     gateway: Arc<Mutex<Option<Arc<McpToolSession>>>>,
     /// Cancelled when the turn ends: calls still waiting (for a card) give up.
     ended: CancellationToken,
+    /// 21d: the turn's repeat guard for claude's own tools (Bash, Read…), fed by its hooks
+    /// ([`permission_hook_endpoint`]). Separate from 18a's guard for kwnt's own tools; it goes
+    /// when `finish_turn` drops the session.
+    pub repeats: Arc<crate::mcp::repeat_guard::RepeatGuard>,
 }
 
 impl PermissionSession {
     pub fn new(kwant_id: String, kwant_name: String, turn_id: String, ctx: McpTurnContext, cwd: Option<PathBuf>) -> Self {
-        Self { kwant_id, kwant_name, turn_id, ctx, cwd, gateway: Default::default(), ended: CancellationToken::new() }
+        Self {
+            kwant_id,
+            kwant_name,
+            turn_id,
+            ctx,
+            cwd,
+            gateway: Default::default(),
+            ended: CancellationToken::new(),
+            repeats: Default::default(),
+        }
     }
 
     fn caller(&self) -> Caller {
@@ -1048,7 +1061,9 @@ pub async fn prepare_turn_with_opts(
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
-    if let (true, Some(scope)) = (self_tools, self_scope) {
+    if let (true, Some(mut scope)) = (self_tools, self_scope) {
+        // 18a: one repeat guard per turn token, fresh even when the caller's scope was cloned before
+        scope.repeats = Default::default();
         state.self_tools.lock().await.insert(token.clone(), scope);
     }
     Some((ctx, token))
@@ -1341,6 +1356,24 @@ pub async fn permission_endpoint(
     }
 }
 
+/// `POST /api/mcp/permission/:token/hook`: claude's PreToolUse, PostToolUse and
+/// PostToolUseFailure hooks for this turn's built-in tools ([`mcp::cli_hooks`]). Answers a
+/// PreToolUse deny when the same call already failed 3 times the same way, and nothing otherwise
+/// (204). An unknown token is a 404, which the hook's `curl -f` turns into no output: the call runs.
+pub async fn permission_hook_endpoint(State(state): State<AppState>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
+    let session = state.mcp_sessions.lock().await.get(&token).cloned();
+    let Some(session) = session else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match mcp::cli_hooks::on_event(&session.repeats, &msg) {
+        Some(out) => {
+            tracing::info!(kwant = %session.kwant_id, turn = %session.turn_id, "repeat guard: a claude tool call was denied");
+            Json(out).into_response()
+        }
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
@@ -1420,7 +1453,9 @@ async fn gateway_rpc(
                 }
             };
             // The chat's failure line (0.9.5): codex and grok calls are reported here, by their real server
-            if let Some(w) = super::tool_failures::TurnWatch::find(&session.turn_id) {
+            // A call the repeat guard (15c) didn't send isn't new news about the connection
+            let sent = outcome.record.get("repeat_stopped").is_none();
+            if let Some(w) = super::tool_failures::TurnWatch::find(&session.turn_id).filter(|_| sent) {
                 match outcome.status {
                     "ok" => w.call_done(&tool_name, &arguments, None).await,
                     "error" => w.call_done(&tool_name, &arguments, Some(&outcome.text)).await,

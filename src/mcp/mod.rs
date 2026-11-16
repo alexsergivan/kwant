@@ -3,6 +3,7 @@
 
 pub mod builtin_tools;
 pub mod cli_config;
+pub mod cli_hooks;
 pub mod client;
 pub mod composio;
 pub mod echo_server;
@@ -13,6 +14,7 @@ pub mod prod_floor;
 pub mod oauth_mock;
 pub mod directory;
 pub mod registry;
+pub mod repeat_guard;
 pub mod session;
 pub mod shell_risk;
 
