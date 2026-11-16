@@ -6,6 +6,7 @@ import { Loader2, Pencil, Power, RefreshCw, Ticket as TicketIcon } from 'lucide-
 import type { DevTeamRef } from '../devMode';
 import { JIRA_CHANGED_EVENT, JIRA_COPY, JiraState, hhmm, jiraApi, jiraHint, jiraHost, jiraStore, ticketSummary, tokenLine } from '../dev/jiraSetup';
 import { storeApi } from '../passwordStore';
+import { atClock } from '../clock';
 import { TeamFaces } from './TeamFaces';
 import { openJiraSetup } from './JiraSetup';
 
@@ -224,7 +225,7 @@ export const JiraSettings: React.FC<{
       </p>
       <p className={`flex items-center gap-2 text-[11px] ${rejected ? 'text-rose-300' : 'text-zinc-400'}`} data-jira-status>
         <span className={`w-1.5 h-1.5 rounded-full ${rejected ? 'bg-rose-400' : 'bg-teal-300'}`} aria-hidden="true" />
-        {rejected ? `Jira stopped accepting the token at ${hhmm(rejected)}. Nothing new is picked up.` : `${site.polled_at ? `Checked ${hhmm(site.polled_at)} · ` : ''}${ticketSummary(jira.tickets)}`}
+        {rejected ? `Jira stopped accepting the token ${atClock(rejected)}. Nothing new is picked up.` : `${site.polled_at ? `Checked ${hhmm(site.polled_at)} · ` : ''}${ticketSummary(jira.tickets)}`}
       </p>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
         {kv.map(([k, v]) => (
