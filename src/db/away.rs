@@ -75,7 +75,8 @@ const ROUTINE_RUNS_ENDED: &str = "
 const FINISHED_DELEGATIONS: &str = "d.status = 'completed'";
 const FAILED_DELEGATIONS: &str = "d.status IN ('failed', 'interrupted')";
 const FINISHED_RUNS: &str = "r.status = 'ok'";
-const FAILED_RUNS: &str = "r.status = 'error'";
+/// 26b: a run whose step waits on the person (`needs_you`) or failed (`incomplete`) didn't finish.
+const FAILED_RUNS: &str = "r.status IN ('error', 'incomplete', 'needs_you')";
 
 impl Database {
     /// Additive: partial indexes so the away queries never scan delegations or routine runs.

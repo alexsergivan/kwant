@@ -557,17 +557,30 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
     if let Some(note) = note {
         let _ = state.db.set_routine_run_note(&run.id, note).await;
     }
+    // 26b: "Run now" counts as the routine's last run too. Only `last_run_at`: the next scheduled
+    // run stays where the schedule put it
+    if trigger == "manual" {
+        let _ = state
+            .db
+            .set_routine_last_run(&routine.id, run.started_at)
+            .await;
+    }
     send_run_event(state, &run);
     let state = state.clone();
     let run_id = run.id.clone();
     tokio::spawn(async move {
-        let result = execute(&state, &routine).await;
-        let (status, err, message_id) = match &result {
-            Ok(message_id) => ("ok", None, message_id.clone()),
+        let result = execute(&state, &routine, &run_id).await;
+        let (status, err, message_id) = match result {
+            // A reply alone isn't "ok": what its steps did decides (26b)
+            Ok(ran) => {
+                let (status, why) = ran.outcome;
+                (status, why, ran.reply_id)
+            }
             // The stop came down while the run was starting: a skip, like one caught above
-            Err(e) if super::spend_stop::is_stop_error(e) => ("skipped", Some(e.as_str()), None),
-            Err(e) => ("error", Some(e.as_str()), None),
+            Err(e) if super::spend_stop::is_stop_error(&e) => ("skipped", Some(e), None),
+            Err(e) => ("error", Some(e), None),
         };
+        let err = err.as_deref();
         if let Err(e) = state
             .db
             .finish_routine_run(&run_id, status, err, message_id.as_deref())
@@ -580,8 +593,11 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
             routine_id: routine.id.clone(),
             run_id,
             status: status.into(),
+            waiting: false,
+            approval_id: None,
         });
-        if status == "error" {
+        // A run that needs the person already has its card in the Inbox: no second notice
+        if matches!(status, "error" | "incomplete") {
             let kwant_name = state
                 .db
                 .get_kwant(&routine.kwant_id)
@@ -628,11 +644,193 @@ fn send_run_event(state: &AppState, run: &RoutineRun) {
         routine_id: run.routine_id.clone(),
         run_id: run.id.clone(),
         status: run.status.clone(),
+        waiting: false,
+        approval_id: None,
     });
 }
 
+/// A routine run's error when a step waits on an approval card nobody answered (status
+/// `needs_you`, 26b).
+pub const NEEDS_YOU_ERROR: &str = "A step is waiting for your approval, so it didn't run";
+
+/// What a routine's turn did, once it replied.
+struct Ran {
+    reply_id: Option<String>,
+    /// The run's status and error (see [`run_outcome`]).
+    outcome: (&'static str, Option<String>),
+}
+
+/// One tool call or step of a run's turn, as [`run_outcome`] reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepSeen {
+    pub tool: String,
+    /// "ok", "failed", "unanswered", or anything else (ignored).
+    pub status: &'static str,
+    pub reason: Option<String>,
+}
+
+/// The run's status from what its turn's steps did, in order (26b; P1: never "ok" when nothing
+/// ran):
+/// - any call `unanswered` (its card is still open) → `needs_you`, [`NEEDS_YOU_ERROR`];
+/// - a call that failed (error, denied, cancelled) with no later "ok" call of the same tool →
+///   `incomplete`, with the first such call's reason on one line;
+/// - otherwise `ok`.
+pub fn run_outcome(steps: &[StepSeen]) -> (&'static str, Option<String>) {
+    if steps.iter().any(|s| s.status == "unanswered") {
+        return ("needs_you", Some(NEEDS_YOU_ERROR.to_string()));
+    }
+    let unfixed = steps.iter().enumerate().find(|(i, s)| {
+        s.status == "failed"
+            && !steps[i + 1..]
+                .iter()
+                .any(|later| later.status == "ok" && later.tool == s.tool)
+    });
+    match unfixed {
+        Some((_, s)) => {
+            let why = s
+                .reason
+                .as_deref()
+                .map(super::stopped::short_line)
+                .filter(|w| !w.trim().is_empty());
+            (
+                "incomplete",
+                Some(why.unwrap_or_else(|| format!("{} failed", s.tool))),
+            )
+        }
+        None => ("ok", None),
+    }
+}
+
+/// The steps a reply's saved tool calls (`tool_calls`) and activity (`meta.activity`) show. The
+/// two are read separately, each in its own order: kwnt's tool calls record every engine's
+/// approvals, and the activity has the claude CLI's own tool results.
+pub fn steps_seen(
+    tool_calls: Option<&serde_json::Value>,
+    meta: Option<&serde_json::Value>,
+) -> Vec<StepSeen> {
+    let text = |v: &serde_json::Value| v.as_str().map(str::to_string);
+    let mut seen = Vec::new();
+    for c in tool_calls.and_then(|v| v.as_array()).into_iter().flatten() {
+        let status = match c["status"].as_str().unwrap_or("") {
+            "ok" => "ok",
+            "unanswered" => "unanswered",
+            s if crate::mcp::missed_status(s) => "failed",
+            _ => continue,
+        };
+        let tool = text(&c["name"]).unwrap_or_default();
+        let reason = text(&c["error"]).or_else(|| text(&c["result"]));
+        // A refusal's reason is what kwnt told the bot, not news; say what it was instead
+        let reason = match c["status"].as_str() {
+            Some("denied") => Some(format!("{tool} was denied")),
+            _ => reason.map(|r| {
+                r.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
+                    .trim()
+                    .to_string()
+            }),
+        };
+        seen.push(StepSeen {
+            tool,
+            status,
+            reason,
+        });
+    }
+    for step in meta
+        .and_then(|m| m["activity"].as_array())
+        .into_iter()
+        .flatten()
+    {
+        let status = match (step["kind"].as_str(), step["status"].as_str()) {
+            (_, Some("unanswered")) => "unanswered",
+            (Some("tool"), Some("ok")) => "ok",
+            (Some("tool"), Some("failed")) => "failed",
+            _ => continue,
+        };
+        seen.push(StepSeen {
+            tool: text(&step["tool"]).unwrap_or_default(),
+            status,
+            reason: text(&step["detail"]),
+        });
+    }
+    seen
+}
+
+/// Every step the bot's replies after the routine's message (`prompt_id`) show: the turn, its
+/// automatic continuation and busy retries.
+async fn turn_steps(
+    state: &AppState,
+    chat: &str,
+    bot_name: &str,
+    prompt_id: &str,
+) -> Vec<StepSeen> {
+    let messages = state.db.list_messages(chat, 40).await.unwrap_or_default();
+    let Some(start) = messages.iter().position(|m| m.id == prompt_id) else {
+        return Vec::new();
+    };
+    let parse = |s: &Option<String>| {
+        s.as_deref()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+    };
+    messages[start + 1..]
+        .iter()
+        .filter(|m| m.sender_role == "kwant" && m.sender_id == bot_name)
+        .flat_map(|m| steps_seen(parse(&m.tool_calls).as_ref(), parse(&m.meta).as_ref()))
+        .collect()
+}
+
+/// 26b: routine runs whose turn is going, by bot and chat (one reply per bot per chat at a time),
+/// so an approval card the turn opens can mark its run as waiting.
+static RUNS_IN_CHATS: std::sync::LazyLock<std::sync::Mutex<RunsInChats>> = std::sync::LazyLock::new(Default::default);
+
+/// (bot id, chat key) → (routine id, run id).
+type RunsInChats = std::collections::HashMap<(String, String), (String, String)>;
+
+/// Holds a run's place in [`RUNS_IN_CHATS`] while its turn runs.
+struct RunInChat((String, String));
+
+impl RunInChat {
+    fn new(kwant_id: &str, chat: &str, routine_id: &str, run_id: &str) -> Self {
+        let key = (kwant_id.to_string(), chat.to_string());
+        if let Ok(mut runs) = RUNS_IN_CHATS.lock() {
+            runs.insert(key.clone(), (routine_id.to_string(), run_id.to_string()));
+        }
+        RunInChat(key)
+    }
+}
+
+impl Drop for RunInChat {
+    fn drop(&mut self) {
+        if let Ok(mut runs) = RUNS_IN_CHATS.lock() {
+            runs.remove(&self.0);
+        }
+    }
+}
+
+/// An approval card of `kwant_id`'s turn in `chat` opened (`Some(id)`) or closed (`None`): when
+/// that turn is a routine run's, its `running` event says so (`waiting`, `approval_id`). `chat` is
+/// the thread, channel or direct-chat bot id, as the run's message was posted.
+pub fn approval_wait(
+    events: &tokio::sync::broadcast::Sender<RuntimeEvent>,
+    kwant_id: &str,
+    chat: &str,
+    approval_id: Option<&str>,
+) {
+    let run = RUNS_IN_CHATS
+        .lock()
+        .ok()
+        .and_then(|runs| runs.get(&(kwant_id.to_string(), chat.to_string())).cloned());
+    if let Some((routine_id, run_id)) = run {
+        let _ = events.send(RuntimeEvent::RoutineRun {
+            routine_id,
+            run_id,
+            status: "running".into(),
+            waiting: approval_id.is_some(),
+            approval_id: approval_id.map(str::to_string),
+        });
+    }
+}
+
 /// Posts the routine's instructions as a message from "Routine: <name>" and runs the kwant's turn.
-async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String>, String> {
+async fn execute(state: &AppState, routine: &RoutineRow, run_id: &str) -> Result<Ran, String> {
     let kwant = state
         .db
         .get_kwant(&routine.kwant_id)
@@ -692,8 +890,25 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
     let prompt = routine.instructions.clone()
         + &follow_up_context(state, routine, &kwant, &saved.id).await
         + &last_run_context(state, routine, &kwant).await;
-    super::routes::run_routine_turn(state, &kwant, routine.channel_id.clone(), routine.thread_id.clone(), prompt, &routine.name)
-        .await
+    let chat = delivery_chat(
+        routine.thread_id.as_deref(),
+        routine.channel_id.as_deref(),
+        &kwant.id,
+    )
+    .to_string();
+    let in_chat = RunInChat::new(&kwant.id, &chat, &routine.id, run_id);
+    let reply_id = super::routes::run_routine_turn(
+        state,
+        &kwant,
+        routine.channel_id.clone(),
+        routine.thread_id.clone(),
+        prompt,
+        &routine.name,
+    )
+    .await?;
+    drop(in_chat);
+    let outcome = run_outcome(&turn_steps(state, &chat, &kwant.name, &saved.id).await);
+    Ok(Ran { reply_id, outcome })
 }
 
 /// The chat id a routine delivers to: its thread, its channel, or its bot's direct chat.
@@ -920,5 +1135,141 @@ mod no_silent_stop_tests {
         assert_eq!(failed_body("D", Some("  \n ")), failed_body("D", None));
         let long = failed_body("D", Some(&"x".repeat(500)));
         assert!(long.contains(&format!("{}…", "x".repeat(160))) && !long.contains(&"x".repeat(161)), "{long}");
+    }
+}
+
+#[cfg(test)]
+mod run_outcome_tests {
+    use super::*;
+
+    fn step(tool: &str, status: &'static str, reason: Option<&str>) -> StepSeen {
+        StepSeen {
+            tool: tool.into(),
+            status,
+            reason: reason.map(str::to_string),
+        }
+    }
+
+    /// 26b: a run whose only call nobody approved needs the person, whatever the reply says.
+    #[test]
+    fn an_unanswered_call_needs_you() {
+        assert_eq!(
+            run_outcome(&[step("ha", "unanswered", None)]),
+            ("needs_you", Some(NEEDS_YOU_ERROR.into()))
+        );
+        // even after other calls worked
+        assert_eq!(
+            run_outcome(&[step("a", "ok", None), step("ha", "unanswered", None)]).0,
+            "needs_you"
+        );
+    }
+
+    #[test]
+    fn a_failure_fixed_by_a_later_call_of_the_same_tool_is_ok() {
+        assert_eq!(
+            run_outcome(&[
+                step("web", "failed", Some("timeout")),
+                step("web", "ok", None)
+            ]),
+            ("ok", None)
+        );
+        assert_eq!(run_outcome(&[]), ("ok", None));
+    }
+
+    #[test]
+    fn a_failure_with_no_later_success_is_incomplete_with_its_reason() {
+        let steps = [
+            step("web", "ok", None),
+            step("web", "failed", Some("⚠️ 502 from the site\nstack…")),
+            step("mail", "ok", None),
+        ];
+        assert_eq!(
+            run_outcome(&steps),
+            ("incomplete", Some("502 from the site".into()))
+        );
+        // another tool's success doesn't fix it; no reason names the tool
+        assert_eq!(
+            run_outcome(&[step("web", "failed", None), step("mail", "ok", None)]),
+            ("incomplete", Some("web failed".into()))
+        );
+    }
+
+    /// The saved tool calls (every engine's approvals, kwnt's own tools) and the activity (the
+    /// claude CLI's own tool results) are both read; the reminder to the model is left out.
+    #[test]
+    fn steps_come_from_tool_calls_and_activity() {
+        let calls = json!([
+            {"name": "ha__turn_on", "status": "unanswered"},
+            {"name": "web__get", "status": "error", "result": crate::mcp::with_no_false_claims("502")},
+            {"name": "mail__send", "status": "denied", "result": crate::mcp::DENIED_TEXT},
+            {"name": "x", "status": "allowed"},
+            {"name": "y", "status": "rehearsed"},
+        ]);
+        let meta = json!({"activity": [
+            {"kind": "thinking", "status": "ok"},
+            {"kind": "approval", "status": "unanswered", "tool": "Bash"},
+            {"kind": "tool", "status": "failed", "tool": "Bash", "detail": "exit 1"},
+            {"kind": "tool", "status": "ok", "tool": "Bash"},
+        ]});
+        let seen = steps_seen(Some(&calls), Some(&meta));
+        assert_eq!(
+            seen,
+            vec![
+                step("ha__turn_on", "unanswered", None),
+                step("web__get", "failed", Some("502")),
+                step("mail__send", "failed", Some("mail__send was denied")),
+                step("Bash", "unanswered", None),
+                step("Bash", "failed", Some("exit 1")),
+                step("Bash", "ok", None),
+            ]
+        );
+        assert_eq!(
+            run_outcome(&steps_seen(Some(&json!([calls[1].clone()])), None)),
+            ("incomplete", Some("502".into()))
+        );
+        assert_eq!(run_outcome(&steps_seen(None, None)), ("ok", None));
+    }
+
+    /// The waiting flag goes only to the routine run whose bot and chat the card belongs to, and
+    /// stops when the run's turn is over.
+    #[test]
+    fn a_card_marks_only_its_own_run_as_waiting() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+        let held = RunInChat::new("bot_w1", "chat_w1", "routine_w1", "run_w1");
+        approval_wait(&tx, "bot_w1", "chat_w1", Some("apr_1"));
+        approval_wait(&tx, "bot_other", "chat_w1", Some("apr_2"));
+        approval_wait(&tx, "bot_w1", "chat_w1", None);
+        drop(held);
+        approval_wait(&tx, "bot_w1", "chat_w1", Some("apr_3"));
+        let got: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert_eq!(
+            got,
+            vec![
+                RuntimeEvent::RoutineRun {
+                    routine_id: "routine_w1".into(),
+                    run_id: "run_w1".into(),
+                    status: "running".into(),
+                    waiting: true,
+                    approval_id: Some("apr_1".into()),
+                },
+                RuntimeEvent::RoutineRun {
+                    routine_id: "routine_w1".into(),
+                    run_id: "run_w1".into(),
+                    status: "running".into(),
+                    waiting: false,
+                    approval_id: None,
+                },
+            ]
+        );
+        // Old clients: the new fields are optional both ways
+        let old: RuntimeEvent = serde_json::from_value(json!({"type": "routine_run", "data": {"routine_id": "r", "run_id": "x", "status": "ok"}})).unwrap();
+        assert!(matches!(
+            old,
+            RuntimeEvent::RoutineRun {
+                waiting: false,
+                approval_id: None,
+                ..
+            }
+        ));
     }
 }

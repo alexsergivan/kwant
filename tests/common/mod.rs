@@ -189,7 +189,8 @@ if m and "--mcp-config" in args:
         if verdict.get("behavior") == "allow":
             call_args = verdict.get("updatedInput", call_args)
         else:
-            reply.append("TOOLDENIED")
+            # what kwnt told the bot, in brackets, so tests can read it
+            reply.append("TOOLDENIED[" + verdict.get("message", "") + "]")
             m = None
 if m and "--mcp-config" in args:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",

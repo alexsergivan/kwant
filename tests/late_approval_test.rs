@@ -286,3 +286,67 @@ async fn an_expired_card_says_so_once_and_retry_asks_again() {
     assert_eq!(s.as_u16(), 409);
     assert_eq!(env.state.db.get_approval(&fresh).await.unwrap().unwrap().status, "waiting");
 }
+
+/// 26b: a real turn whose call nobody answered saves that step as `unanswered` (not ok, not
+/// stopped) and tells the bot once not to claim it worked; the card stays open for a late answer.
+#[tokio::test]
+async fn an_unanswered_call_is_saved_as_unanswered_in_the_chat() {
+    let env = setup().await;
+    env.state
+        .db
+        .set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask")
+        .await
+        .unwrap();
+    env.state
+        .approval_wait_ms
+        .store(300, std::sync::atomic::Ordering::Relaxed);
+    let marker = call_tool_marker("memory_save", json!({"text": "late26b"}));
+    send_direct(
+        &env,
+        &env.a,
+        &format!("Save this {marker} ASKFIRST REPLYTAG:late26b"),
+        json!({}),
+    )
+    .await;
+    let reply = wait_reply(&env, &env.a, "answer late26b").await;
+
+    let meta: Value = reply
+        .meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(Value::Null);
+    let steps = meta["activity"]["steps"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let step = steps
+        .iter()
+        .find(|s| s["kind"] == "approval")
+        .unwrap_or_else(|| panic!("{meta}"));
+    assert_eq!(step["status"], "unanswered", "{step}");
+    assert_eq!(step["detail"], kwnt::mcp::UNANSWERED_STEP_DETAIL, "{step}");
+    assert!(
+        reply
+            .text
+            .contains(UNANSWERED_TEXT.split(". ").next().unwrap()),
+        "{}",
+        reply.text
+    );
+    assert_eq!(
+        reply.text.matches(kwnt::mcp::NO_FALSE_CLAIMS_TEXT).count(),
+        1,
+        "{}",
+        reply.text
+    );
+    let waiting = env
+        .state
+        .db
+        .list_approvals(
+            &kwnt::db::spaces::SpaceId::default_space(),
+            Some("waiting"),
+            Some(&env.a),
+        )
+        .await
+        .unwrap();
+    assert_eq!(waiting.len(), 1, "the card stays open");
+}

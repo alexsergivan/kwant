@@ -1407,7 +1407,7 @@ impl ApiDriver {
                         ),
                     })
                     .await;
-                results.push(&mut messages, id, name, outcome.text, outcome.status == "ok");
+                results.push(&mut messages, id, name, outcome.model_text(), outcome.status == "ok");
             }
         }
         Err(ApiError {
