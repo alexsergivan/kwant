@@ -482,6 +482,13 @@ pub fn missed_status(status: &str) -> bool {
     )
 }
 
+/// Whether a call that ended with record `status` gets the once-per-turn
+/// [`NO_FALSE_CLAIMS_TEXT`] reminder (26b): a failed or unanswered result. A plain denial
+/// doesn't: the person said no and the bot is already told so ([`DENIED_TEXT`]).
+pub fn reminds(status: &str) -> bool {
+    missed_status(status) && status != "denied"
+}
+
 /// `text` with [`NO_FALSE_CLAIMS_TEXT`] after it, on its own line.
 pub fn with_no_false_claims(text: &str) -> String {
     format!("{}\n\n{NO_FALSE_CLAIMS_TEXT}", text.trim_end())
@@ -604,14 +611,14 @@ impl McpTurnContext {
         }
     }
 
-    /// Whether a call this turn already failed or didn't run (see [`missed_status`]): the
+    /// Whether a call this turn already failed or went unanswered (see [`reminds`]): the
     /// [`NO_FALSE_CLAIMS_TEXT`] reminder went with that one, so it isn't said again.
     pub fn had_miss(&self) -> bool {
         self.records
             .lock()
             .map(|r| {
                 r.iter()
-                    .any(|c| c["status"].as_str().is_some_and(missed_status))
+                    .any(|c| c["status"].as_str().is_some_and(reminds))
             })
             .unwrap_or(true)
     }
@@ -767,5 +774,19 @@ mod tests {
         assert_eq!(split_tool_name("Bash"), None);
         assert_eq!(namespaced_tool_name("gh", "x"), "mcp__gh__x");
         assert_eq!(truncate_text("héllo", 2), "hé… [truncated]");
+    }
+
+    /// 26b: the reminder goes with a failed or unanswered result, never a plain denial (the bot
+    /// is told it was denied) or a call that ran or was a dry run. `had_miss` reads the same rule,
+    /// so a denial alone doesn't use up the turn's one reminder.
+    #[test]
+    fn the_reminder_goes_with_failed_or_unanswered_calls_only() {
+        for status in ["error", "failed", "cancelled", "unanswered"] {
+            assert!(reminds(status), "{status}");
+        }
+        for status in ["denied", "ok", "rehearsed", "allowed", ""] {
+            assert!(!reminds(status), "{status}");
+        }
+        assert!(missed_status("denied"), "a denial still didn't run");
     }
 }

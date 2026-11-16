@@ -1294,9 +1294,10 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool, grant: O
             return json!({"behavior": "deny", "message": "The turn ended before the user answered."});
         }
     };
-    // 26b: the turn's first refused or unanswered call carries the one reminder
+    // 26b: the turn's first unanswered (or otherwise failed) call carries the one reminder; a
+    // plain denial doesn't
     let remind = !outcome.allowed()
-        && mcp::missed_status(outcome.record_status())
+        && mcp::reminds(outcome.record_status())
         && !session.ctx.had_miss();
     session.ctx.record(json!({
         "id": tool_use_id,

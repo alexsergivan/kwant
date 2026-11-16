@@ -79,11 +79,15 @@ async fn a_routine_whose_only_call_nobody_answers_needs_you() {
         .await
         .unwrap();
     env.state.approval_wait_ms.store(400, Ordering::Relaxed);
-    let marker = call_tool_marker("memory_save", json!({"text": "the lights were checked"}));
+    // A shell command always asks (kwnt's own tools don't); the fake CLI asks for it as Bash
+    let marker = call_tool_marker(
+        "bash",
+        json!({"command": "touch LIGHTS26B_MARK", "description": "check the lights"}),
+    );
     let id = routine(
         &env,
         "Lights",
-        &format!("Check the lights {marker} ASKFIRST REPLYTAG:lights26b"),
+        &format!("Check the lights {marker} ASKFIRST ASKAS:Bash REPLYTAG:lights26b"),
     )
     .await;
     let before = routine_row(&env, &id).await;

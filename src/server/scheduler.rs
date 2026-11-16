@@ -735,7 +735,7 @@ pub fn steps_seen(
         });
     }
     for step in meta
-        .and_then(|m| m["activity"].as_array())
+        .and_then(|m| m["activity"]["steps"].as_array())
         .into_iter()
         .flatten()
     {
@@ -1205,12 +1205,13 @@ mod run_outcome_tests {
             {"name": "x", "status": "allowed"},
             {"name": "y", "status": "rehearsed"},
         ]);
-        let meta = json!({"activity": [
+        // As the reply saves it (`ActivityLog::to_json`): the steps under `steps`
+        let meta = json!({"activity": {"steps": [
             {"kind": "thinking", "status": "ok"},
             {"kind": "approval", "status": "unanswered", "tool": "Bash"},
             {"kind": "tool", "status": "failed", "tool": "Bash", "detail": "exit 1"},
             {"kind": "tool", "status": "ok", "tool": "Bash"},
-        ]});
+        ]}});
         let seen = steps_seen(Some(&calls), Some(&meta));
         assert_eq!(
             seen,

@@ -300,11 +300,16 @@ async fn an_unanswered_call_is_saved_as_unanswered_in_the_chat() {
     env.state
         .approval_wait_ms
         .store(300, std::sync::atomic::Ordering::Relaxed);
-    let marker = call_tool_marker("memory_save", json!({"text": "late26b"}));
+    // A shell command always asks (kwnt's own tools never get a card in a person's turn); the fake
+    // CLI asks for it as Bash and shows claude's own tool_use / tool_result lines
+    let marker = call_tool_marker(
+        "bash",
+        json!({"command": "touch LATE26B_MARK", "description": "make a file"}),
+    );
     send_direct(
         &env,
         &env.a,
-        &format!("Save this {marker} ASKFIRST REPLYTAG:late26b"),
+        &format!("Save this {marker} ASKFIRST ASKAS:Bash REPLYTAG:late26b"),
         json!({}),
     )
     .await;
@@ -325,6 +330,13 @@ async fn an_unanswered_call_is_saved_as_unanswered_in_the_chat() {
         .unwrap_or_else(|| panic!("{meta}"));
     assert_eq!(step["status"], "unanswered", "{step}");
     assert_eq!(step["detail"], kwnt::mcp::UNANSWERED_STEP_DETAIL, "{step}");
+    // claude's own step for the call reads the same, not "failed" and never the reminder
+    let tool = steps
+        .iter()
+        .find(|s| s["kind"] == "tool" && s["tool"] == "Bash")
+        .unwrap_or_else(|| panic!("{meta}"));
+    assert_eq!(tool["status"], "unanswered", "{tool}");
+    assert_eq!(tool["detail"], kwnt::mcp::UNANSWERED_STEP_DETAIL, "{tool}");
     assert!(
         reply
             .text

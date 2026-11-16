@@ -321,8 +321,8 @@ impl McpToolSession {
         if status == "ok" && offered.is_some_and(|t| !t.tool.read_only) && !crate::server::restart_resume::read_only(name) {
             self.repeats.changed();
         }
-        // 26b: the turn's first call that failed or didn't run carries the one reminder
-        let remind = super::missed_status(status) && !self.ctx.had_miss();
+        // 26b: the turn's first call that failed or went unanswered carries the one reminder
+        let remind = super::reminds(status) && !self.ctx.had_miss();
         let (server, tool) = super::split_tool_name(name).unwrap_or(("", name));
         let mut record = json!({
             "id": call_id,
