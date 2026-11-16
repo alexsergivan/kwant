@@ -126,12 +126,74 @@ jobs:
           winget validate --manifest $dirs[0].FullName --disable-interactivity
           if ($LASTEXITCODE -ne 0) { Write-Error "winget validate exited with $LASTEXITCODE"; exit 1 }
       - name: winget install --manifest (silent), the Apps and features entry, uninstall
+        # Its own limit, so a hang fails here in minutes with the details printed, not at the job's limit.
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           winget settings --enable LocalManifestFiles
-          winget install --manifest $env:MANIFEST --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE -ne 0) { Write-Error "winget install exited with $LASTEXITCODE"; exit 1 }
+          $winget = (Get-Command winget).Source
+          function Get-Tree([int]$Root) {
+            $all = @(Get-CimInstance Win32_Process)
+            $ids = [System.Collections.Generic.List[int]]::new(); $ids.Add($Root)
+            for ($i = 0; $i -lt $ids.Count; $i++) {
+              $all | Where-Object { $_.ParentProcessId -eq $ids[$i] -and $_.ProcessId -ne $ids[$i] } | ForEach-Object { $ids.Add([int]$_.ProcessId) }
+            }
+            $all | Where-Object { $ids.Contains([int]$_.ProcessId) }
+          }
+          # What a hung install is waiting on: its processes, any window on the desktop (a prompt nobody
+          # can click), the downloaded installer's zone (Mark of the Web) and winget's own log
+          function Show-Hang([int]$Root) {
+            "--- processes under winget (pid $Root)"
+            Get-Tree $Root | Format-Table -AutoSize -Wrap ProcessId, ParentProcessId, Name, CommandLine | Out-String -Width 400
+            "--- windows open on the desktop"
+            Get-Process | Where-Object { $_.MainWindowTitle } | Format-Table -AutoSize Id, ProcessName, MainWindowTitle | Out-String -Width 400
+            "--- installers winget downloaded, with their zone"
+            Get-ChildItem (Join-Path $env:TEMP 'WinGet') -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+              $z = Get-Content -LiteralPath $_.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue
+              "$($_.FullName)  $($_.Length) bytes  zone: $(if ($z) { $z -join ' ' } else { 'none' })"
+            }
+            "--- winget log (last 80 lines)"
+            $logs = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+            Get-ChildItem $logs -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 |
+              ForEach-Object { Get-Content $_.FullName -Tail 80 }
+            Get-Tree $Root | Sort-Object ProcessId -Descending | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+          # Runs winget install; returns its exit code, or $null (after printing Show-Hang) if it hasn't returned in time
+          function Install-WithDeadline([int]$Minutes, [string]$Label) {
+            $out = Join-Path $env:RUNNER_TEMP "winget-$Label.out"
+            $p = Start-Process -FilePath $winget -NoNewWindow -PassThru -RedirectStandardOutput $out -ArgumentList @(
+              'install', '--manifest', "`"$env:MANIFEST`"", '--silent', '--verbose-logs',
+              '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+            $null = $p.Handle
+            $done = $p.WaitForExit($Minutes * 60000)
+            # the output without winget's spinner and progress bars
+            (Get-Content -Raw $out -ErrorAction SilentlyContinue) -split "[`r`n]+" |
+              Where-Object { $_.Trim() -notmatch '^[-\\|/]?$' -and $_ -notmatch '[\u2588\u2592]' } | Out-Host
+            if (-not $done) {
+              Write-Host "winget install ($Label) hadn't returned after $Minutes minutes"
+              Show-Hang $p.Id | Out-Host
+              return $null
+            }
+            $p.WaitForExit()
+            return $p.ExitCode
+          }
+          $code = Install-WithDeadline 4 'as-downloaded'
+          if ($null -eq $code) {
+            # winget marks the installer it downloads as from the internet and starts it through the shell,
+            # so Windows asks before running our unsigned installer, and on a runner nobody answers. People
+            # who install kwant with winget see that prompt and answer it. CI only: stop zone-marking downloads
+            # and treat .exe as low risk for this user, then install again.
+            $attach = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments'
+            $assoc = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Associations'
+            New-Item -Force $attach, $assoc | Out-Null
+            Set-ItemProperty $attach -Name SaveZoneInformation -Value 1 -Type DWord
+            Set-ItemProperty $assoc -Name LowRiskFileTypes -Value '.exe' -Type String
+            $code = Install-WithDeadline 8 'no-zone'
+            if ($null -eq $code) { Write-Error "winget install hung again without the zone prompt; see above"; exit 1 }
+            "The first install hung and the second, without zone-marking, returned $code"
+          }
+          if ($code -ne 0) { Write-Error "winget install exited with $code"; exit 1 }
           $app = Join-Path $env:LOCALAPPDATA 'kwant\kwant.exe'
           if (-not (Test-Path $app)) { Write-Error "kwant.exe isn't at $app"; exit 1 }
           $fv = (Get-Item $app).VersionInfo
@@ -149,15 +211,18 @@ jobs:
           if ($arp.Publisher -ne $publisher) { Write-Error "Apps and features publisher is '$($arp.Publisher)', the manifest's '$publisher'"; exit 1 }
           if ($arp.DisplayVersion -ne $env:VERSION) { Write-Error "Apps and features version is '$($arp.DisplayVersion)', not $env:VERSION"; exit 1 }
           Get-Process kwant -ErrorAction SilentlyContinue | Stop-Process -Force
-          $u = Start-Process -FilePath (Join-Path $env:LOCALAPPDATA 'kwant\uninstall.exe') -ArgumentList '/S' -Wait -PassThru
+          $u = Start-Process -FilePath (Join-Path $env:LOCALAPPDATA 'kwant\uninstall.exe') -ArgumentList '/S' -PassThru
+          if (-not $u.WaitForExit(120000)) { Write-Error "the uninstaller hadn't finished after 2 minutes"; exit 1 }
           "uninstall exit code: $($u.ExitCode)"
       - name: Scoop
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           Invoke-Expression "& {$(Invoke-RestMethod -Uri https://get.scoop.sh)} -RunAsAdmin"
           Join-Path $env:USERPROFILE 'scoop\shims' >> $env:GITHUB_PATH
       - name: scoop install from the manifest, start it, /api/health
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -195,6 +260,7 @@ jobs:
           Start-Sleep -Seconds 2
           scoop uninstall kwant
       - name: scoop checkver, and an autoupdate dry run to an older release
+        timeout-minutes: 10
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
