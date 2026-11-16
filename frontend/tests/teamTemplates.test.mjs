@@ -76,6 +76,14 @@ const mount = async (el) => {
   await settle();
   return { host, root, rerender: async (e) => (root.render(e), await settle()), unmount: () => (root.unmount(), host.remove()) };
 };
+// Waits (polling, with a deadline) for focus to land, instead of a fixed number of ticks that load can outrun.
+const focusOn = async (ok, what, ms = 2000) => {
+  const end = Date.now() + ms;
+  while (!ok()) {
+    if (Date.now() > end) assert.fail(`focus never reached ${what}; it is on ${document.activeElement?.outerHTML?.slice(0, 120)}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
 const byText = (root, sel, re) => [...root.querySelectorAll(sel)].find((el) => re.test(el.textContent ?? ''));
 const primary = (root) => byText(root, 'button', /^(Create team|Add \d|Add bots|Try again|Pick another folder|Creating)/);
 const use = (opts) => {
@@ -510,16 +518,33 @@ test('A8 "Pick a repo": Manage team opens on Team Workspace; Git Repo + repo URL
   };
   const kwants = [{ id: 'kw_a', name: 'Ada', avatar_sprite: 'architect' }];
   const base = { isOpen: true, kwants, onClose() {}, onUpdateTeam: async () => {}, onDeleteTeam: async () => {}, focusWorkspace: true };
-  let v = await mount(h(m.ManageTeamModal, { ...base, team: { id: 'team_x', name: 'x', lead_kwant_id: 'kw_a', member_kwants: ['kw_a'] } }));
-  await settle(30);
-  assert.deepEqual(scrolled.at(-1), [true, 'center']);
-  assert.equal(document.activeElement?.getAttribute('aria-label'), 'Repo URL');
-  v.unmount();
-  v = await mount(h(m.ManageTeamModal, { ...base, team: { id: 'team_y', name: 'y', workspace_path: '~/projects/y', lead_kwant_id: 'kw_a', member_kwants: ['kw_a'] } }));
-  await settle(30);
-  assert.equal(document.activeElement?.value, '~/projects/y');
-  v.unmount();
-  window.HTMLElement.prototype.scrollIntoView = orig;
+  const origRaf = [window.requestAnimationFrame, globalThis.requestAnimationFrame];
+  const label = () => document.activeElement?.getAttribute('aria-label');
+  try {
+    const teamX = { id: 'team_x', name: 'x', lead_kwant_id: 'kw_a', member_kwants: ['kw_a'] };
+    let v = await mount(h(m.ManageTeamModal, { ...base, team: teamX }));
+    await focusOn(() => label() === 'Repo URL', 'Repo URL');
+    assert.deepEqual(scrolled.at(-1), [true, 'center']);
+    // Once per opening: picking Local Folder by hand, then Git Repo again, doesn't pull focus back to the input.
+    await click(byText(document.body, 'button', /Local Folder/));
+    await click(byText(document.body, 'button', /Git Repo/));
+    assert.notEqual(label(), 'Repo URL');
+    const scrolls = scrolled.length;
+    await v.rerender(h(m.ManageTeamModal, { ...base, team: { ...teamX } }));
+    assert.equal(scrolled.length, scrolls, 'a refreshed team object is the same opening');
+    v.unmount();
+    v = await mount(h(m.ManageTeamModal, { ...base, team: { id: 'team_y', name: 'y', workspace_path: '~/projects/y', lead_kwant_id: 'kw_a', member_kwants: ['kw_a'] } }));
+    await focusOn(() => document.activeElement?.value === '~/projects/y', 'the folder input');
+    v.unmount();
+    // 21f: a frame that fires before the seeded tab renders (what load did in CI) still ends in Repo URL.
+    window.requestAnimationFrame = globalThis.requestAnimationFrame = (cb) => (cb(0), 0);
+    v = await mount(h(m.ManageTeamModal, { ...base, team: { id: 'team_z', name: 'z', lead_kwant_id: 'kw_a', member_kwants: ['kw_a'] } }));
+    await focusOn(() => label() === 'Repo URL', 'Repo URL with an early frame');
+    v.unmount();
+  } finally {
+    [window.requestAnimationFrame, globalThis.requestAnimationFrame] = origRaf;
+    window.HTMLElement.prototype.scrollIntoView = orig;
+  }
 });
 
 test('the sheet closes on Esc and from Close, and not while creating', async () => {

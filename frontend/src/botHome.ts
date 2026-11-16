@@ -150,6 +150,16 @@ export function teamAnswerLine(teamName?: string): string {
   return `${teamName ? `The ${teamNamed(teamName)}` : 'The team'} answers. Type\u00a0@ and a name to ask one member.`;
 }
 
+/** 18e: the Ask row's team chip says the name once ("@Booktun.ing Team"); the Users icon already says "team". */
+export function teamChipLabel(teamName: string): string {
+  return `@${teamName.trim()}`;
+}
+
+/** 18e: the team chip's title and accessible name, without "team team": "Ask the whole Booktun.ing Team". */
+export function teamChipTitle(teamName: string): string {
+  return `Ask the whole ${teamNamed(teamName)}`;
+}
+
 /**
  * The team named once: "helpers" → "helpers team", but a name that already ends in its own "team" stays as it is,
  * so nothing reads "… team team" (20e).
