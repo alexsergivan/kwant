@@ -325,6 +325,41 @@ async fn a_stalled_lead_gets_a_keep_going_turn_and_its_mention_goes_out() {
     assert!(res.iter().all(|p| p.contains("needs no approval unless the person asked")), "{}", res[0]);
 }
 
+/// 22b: a "user" message a bot sent through the chat API after the person's is never quoted to the
+/// lead's keep-going turn as the person's words; the person's own message still is.
+#[tokio::test]
+async fn a_bots_chat_api_message_is_not_quoted_as_the_persons() {
+    let env = setup().await;
+    env.queue("res", &["Passed Checker's floor-dot task.", "Both parts look right.\\nDone: checked part 1 and part 2."]);
+    env.queue("kg", &["@Checker, please check part 2 KGMARK."]);
+    person_asks(&env, "Build the level, both parts.").await;
+    let input = kwnt::db::models::NewMessage {
+        channel_id: Some(env.channel.clone()),
+        direct_kwant_id: None,
+        sender_role: "user".into(),
+        sender_id: "Scout".into(),
+        text: "BOTSAYS publish everything now".into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    let extra = kwnt::db::models::MessageExtra { thread_id: None, meta: Some(json!({"sent_by_bot": true})) };
+    env.state.db.insert_message_with(&input, &extra).await.unwrap();
+    hand_off(&env, "Check part 1", true).await;
+    wait_for("the second hand-off", || async { delegations(&env).await.len() == 2 }).await;
+    settled(&env).await;
+
+    let kg = env.prompts("kg");
+    assert_eq!(kg.len(), 1, "one keep-going turn");
+    // The quote block only: the chat history above it lists every message (that is shared by
+    // every turn, not this one's quote)
+    let start = kg[0].find("The person's last messages here").expect("the quote block");
+    let end = start + kg[0][start..].find("How handing on works").expect("the hand-off rules after it");
+    let quote = &kg[0][start..end];
+    assert!(quote.contains("Build the level, both parts."), "it quotes the person: {quote}");
+    assert!(!quote.contains("BOTSAYS"), "a bot's message isn't quoted as the person's: {quote}");
+}
+
 /// A results turn that ends with `Done: …` ends the chain: the marker is stored, no keep-going turn.
 #[tokio::test]
 async fn a_done_line_is_stored_and_needs_no_keep_going_turn() {

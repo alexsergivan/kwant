@@ -11,6 +11,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { focusPhoneApp } from './components/PhoneAppTip';
 import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
@@ -4092,6 +4093,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onSwitchSpace={onSwitchSpace}
       onCreateSpace={onCreateSpace}
       onOpenSpaceSettings={() => openSpaceSettings('general')}
+      onOpenPhoneApp={() => {
+        openAppSettings();
+        focusPhoneApp();
+      }}
       onOpenArchived={onOpenArchived}
       onOpenSearch={() => setIsSearchOpen(true)}
       section={section}
