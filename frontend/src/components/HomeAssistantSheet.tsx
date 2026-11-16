@@ -279,7 +279,7 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
               <h3 id={titleId} className="text-[15px] font-semibold text-zinc-50 leading-8">
                 Connect Home Assistant
               </h3>
-              <p className="text-xs text-zinc-400 leading-relaxed">Your bots can then see and control the devices you share.</p>
+              <p className="text-xs text-zinc-400 leading-relaxed">Your bots can then see and control your devices.</p>
             </div>
             <button
               type="button"
