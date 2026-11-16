@@ -49,11 +49,24 @@ pub struct PermissionSession {
     gateway: Arc<Mutex<Option<Arc<McpToolSession>>>>,
     /// Cancelled when the turn ends: calls still waiting (for a card) give up.
     ended: CancellationToken,
+    /// 21d: the turn's repeat guard for claude's own tools (Bash, Read…), fed by its hooks
+    /// ([`permission_hook_endpoint`]). Separate from 18a's guard for kwnt's own tools; it goes
+    /// when `finish_turn` drops the session.
+    pub repeats: Arc<crate::mcp::repeat_guard::RepeatGuard>,
 }
 
 impl PermissionSession {
     pub fn new(kwant_id: String, kwant_name: String, turn_id: String, ctx: McpTurnContext, cwd: Option<PathBuf>) -> Self {
-        Self { kwant_id, kwant_name, turn_id, ctx, cwd, gateway: Default::default(), ended: CancellationToken::new() }
+        Self {
+            kwant_id,
+            kwant_name,
+            turn_id,
+            ctx,
+            cwd,
+            gateway: Default::default(),
+            ended: CancellationToken::new(),
+            repeats: Default::default(),
+        }
     }
 
     fn caller(&self) -> Caller {
@@ -179,6 +192,9 @@ impl ToolApprover for BrokerApprover {
         let noted = req.clone();
         let (outcome, decision, ticket) = self.classified(req).await;
         self.note(&noted, decision, ticket.as_deref()).await;
+        if outcome.allowed() {
+            grant_every_call_pass(&noted);
+        }
         outcome
     }
 
@@ -191,6 +207,10 @@ impl ToolApprover for BrokerApprover {
     }
 
     async fn tier_gate(&self, req: &ToolApprovalRequest) -> Option<String> {
+        // A customer's turn: every call goes to the approver and asks, whatever else says it may run
+        if every_call(&req.turn_id) {
+            return Some(EVERY_CALL_REASON.to_string());
+        }
         // Boxed: keeps this future (and every caller's) small
         Box::pin(super::missions::flight_school::tier_gate(&self.db, &self.data_dir, req)).await
     }
@@ -208,6 +228,68 @@ impl ToolApprover for BrokerApprover {
             None => self.decide(req).await,
         }
     }
+}
+
+/// Turns where every tool call asks the person, whatever the bot's approvals say: a business
+/// customer's Telegram turn (customer chats). Marked by [`prepare_turn_with_opts`], cleared by
+/// [`finish_turn`].
+static EVERY_CALL_TURNS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// What a card in an [`every_call`] turn says. Product copy is Mira's.
+pub const EVERY_CALL_REASON: &str = "A customer's message started this turn, so every step asks you first.";
+
+/// Whether every call in turn `turn_id` must ask the person (see [`EVERY_CALL_TURNS`]).
+pub fn every_call(turn_id: &str) -> bool {
+    EVERY_CALL_TURNS.lock().unwrap_or_else(|e| e.into_inner()).contains(turn_id)
+}
+
+fn mark_every_call(turn_id: &str, on: bool) {
+    let mut m = EVERY_CALL_TURNS.lock().unwrap_or_else(|e| e.into_inner());
+    if on {
+        m.insert(turn_id.to_string());
+    } else {
+        m.remove(turn_id);
+        EVERY_CALL_PASSES.lock().unwrap_or_else(|e| e.into_inner()).remove(turn_id);
+    }
+}
+
+/// One-time passes for kwnt's own tools in an [`every_call`] turn: (tool, input) the approver
+/// allowed, by turn. kwnt's tool endpoint runs a call in such a turn only on a matching pass, so
+/// a CLI's own allow rules can't skip the card (see `continuity::self_endpoint`). Cleared with
+/// the turn's mark.
+static EVERY_CALL_PASSES: std::sync::LazyLock<std::sync::Mutex<EveryCallPasses>> = std::sync::LazyLock::new(Default::default);
+
+/// Turn id → the (tool, input) pairs allowed and not yet run.
+type EveryCallPasses = std::collections::HashMap<String, Vec<(String, Value)>>;
+
+/// What kwnt's tool endpoint answers a call in an [`every_call`] turn that the approver never allowed.
+pub const EVERY_CALL_REFUSED: &str = "This step needs the person's OK first.";
+
+/// Records a pass for an allowed call to kwnt's own tools in an [`every_call`] turn.
+fn grant_every_call_pass(req: &ToolApprovalRequest) {
+    if req.server != mcp::SELF_SERVER_NAME || !every_call(&req.turn_id) {
+        return;
+    }
+    let mut m = EVERY_CALL_PASSES.lock().unwrap_or_else(|e| e.into_inner());
+    m.entry(req.turn_id.clone()).or_default().push((req.tool.clone(), req.arguments.clone()));
+}
+
+/// Whether kwnt's own tool `tool` may run with `args` in turn `turn_id`: always outside an
+/// [`every_call`] turn; inside one only on a pass the approver granted, used up here.
+pub fn take_every_call_pass(turn_id: &str, tool: &str, args: &Value) -> bool {
+    if !every_call(turn_id) {
+        return true;
+    }
+    let mut m = EVERY_CALL_PASSES.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(passes) = m.get_mut(turn_id) else {
+        return false;
+    };
+    let Some(i) = passes.iter().position(|(t, a)| t == tool && a == args) else {
+        return false;
+    };
+    passes.swap_remove(i);
+    true
 }
 
 /// One of claude's plain read tools (Read, Glob, Grep).
@@ -337,6 +419,9 @@ impl BrokerApprover {
         // own rather than from the person's message.
         if super::missions::truth_ledger::is_tainted(&req.turn_id) {
             details["tainted"] = json!(true);
+        }
+        if every_call(&req.turn_id) {
+            details["customer_chat"] = json!(true);
         }
         if self.always_ask {
             details["always_ask"] = json!(true);
@@ -571,7 +656,11 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     let target = kwant.clone();
     let (broker, tool_name) = (state.broker.clone(), approval.tool_name.clone());
     // The same agent and effort as the turn that asked, not what Laya makes of this prompt
-    let opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    let mut opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    // A customer's turn goes on as one: the person allowed this call, not the ones after it
+    if chat["purpose"].as_str() == Some(super::telegram::customers::PURPOSE) {
+        super::telegram::customers::customer_opts(&mut opts);
+    }
     tokio::spawn(async move {
         let _job = job;
         let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
@@ -684,7 +773,11 @@ pub async fn retry_expired(state: &AppState, ticket_id: &str) -> Option<Value> {
     };
     let prompt = expired_retry_prompt(&approval.tool_name, &arguments);
     let target = kwant.clone();
-    let opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    let mut opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    // A customer's turn goes on as one: the person allowed this call, not the ones after it
+    if chat["purpose"].as_str() == Some(super::telegram::customers::PURPOSE) {
+        super::telegram::customers::customer_opts(&mut opts);
+    }
     tokio::spawn(async move {
         let _job = job;
         let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
@@ -765,6 +858,9 @@ pub struct TurnApprovalOpts {
     /// The turn's purpose (`TurnOpts::purpose`), kept on its cards as `purpose`: a late answer to
     /// a card of a hidden audit turn is closed, never resumed (see [`resume_late_approval`]).
     pub purpose: Option<String>,
+    /// Every tool call asks the person, approvals off, "Ask only when risky", "always allow" and
+    /// the bot's own free tools included: a business customer's turn (see [`every_call`]).
+    pub every_call: bool,
 }
 
 /// The "would have…" lines of a replay turn.
@@ -876,6 +972,11 @@ pub async fn prepare_turn_with_opts(
             Vec::new()
         }
     };
+    // B1: a customer's message starts this turn, so none of the bot's other servers (mail,
+    // calendar...) is even started: the agent CLI would run them under its own allow rules
+    if opts.every_call {
+        servers.clear();
+    }
     let token = uuid::Uuid::new_v4().simple().to_string();
     isolate_stdio_servers(state, &mut servers, cwd.as_deref(), &token).await;
     if servers.is_empty() && self_scope.is_none() {
@@ -894,6 +995,9 @@ pub async fn prepare_turn_with_opts(
     // The memory tools look the turn's taint up by this id
     if let Some(scope) = self_scope.as_mut() {
         scope.turn_id.get_or_insert_with(|| turn_id.clone());
+    }
+    if opts.every_call {
+        mark_every_call(&turn_id, true);
     }
     // A turn that always asks reads outside text from the start (contract §2.4)
     if opts.always_ask {
@@ -942,7 +1046,7 @@ pub async fn prepare_turn_with_opts(
         max_tool_iterations: max_tool_iterations(setting),
         approvals: {
             let mode = state.db.kwant_approvals(&kwant.id).await.map(|m| Approvals::from_mode(&m.effective)).unwrap_or_default();
-            if (opts.always_ask && opts.strict_ask) || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
+            if opts.every_call || (opts.always_ask && opts.strict_ask) || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
                 // A strict turn asks whatever the setting says, and a Dev mode brief only reads: never tell either to just go ahead
                 Approvals::Ask
             } else if opts.always_ask && mode != Approvals::Off {
@@ -953,10 +1057,13 @@ pub async fn prepare_turn_with_opts(
             }
         },
         records: Default::default(),
+        kwnt_only: opts.every_call,
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
-    if let (true, Some(scope)) = (self_tools, self_scope) {
+    if let (true, Some(mut scope)) = (self_tools, self_scope) {
+        // 18a: one repeat guard per turn token, fresh even when the caller's scope was cloned before
+        scope.repeats = Default::default();
         state.self_tools.lock().await.insert(token.clone(), scope);
     }
     Some((ctx, token))
@@ -966,6 +1073,7 @@ pub async fn finish_turn(state: &AppState, token: &str) {
     state.self_tools.lock().await.remove(token);
     let session = state.mcp_sessions.lock().await.remove(token);
     if let Some(session) = session {
+        mark_every_call(&session.turn_id, false);
         super::missions::truth_ledger::end_turn(&session.turn_id);
         session.close().await;
     }
@@ -1248,6 +1356,24 @@ pub async fn permission_endpoint(
     }
 }
 
+/// `POST /api/mcp/permission/:token/hook`: claude's PreToolUse, PostToolUse and
+/// PostToolUseFailure hooks for this turn's built-in tools ([`mcp::cli_hooks`]). Answers a
+/// PreToolUse deny when the same call already failed 3 times the same way, and nothing otherwise
+/// (204). An unknown token is a 404, which the hook's `curl -f` turns into no output: the call runs.
+pub async fn permission_hook_endpoint(State(state): State<AppState>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
+    let session = state.mcp_sessions.lock().await.get(&token).cloned();
+    let Some(session) = session else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match mcp::cli_hooks::on_event(&session.repeats, &msg) {
+        Some(out) => {
+            tracing::info!(kwant = %session.kwant_id, turn = %session.turn_id, "repeat guard: a claude tool call was denied");
+            Json(out).into_response()
+        }
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
@@ -1327,7 +1453,9 @@ async fn gateway_rpc(
                 }
             };
             // The chat's failure line (0.9.5): codex and grok calls are reported here, by their real server
-            if let Some(w) = super::tool_failures::TurnWatch::find(&session.turn_id) {
+            // A call the repeat guard (15c) didn't send isn't new news about the connection
+            let sent = outcome.record.get("repeat_stopped").is_none();
+            if let Some(w) = super::tool_failures::TurnWatch::find(&session.turn_id).filter(|_| sent) {
                 match outcome.status {
                     "ok" => w.call_done(&tool_name, &arguments, None).await,
                     "error" => w.call_done(&tool_name, &arguments, Some(&outcome.text)).await,

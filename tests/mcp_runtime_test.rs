@@ -55,6 +55,7 @@ fn ctx(dir: &std::path::Path, approver: Arc<dyn ToolApprover>) -> McpTurnContext
         max_tool_iterations: 8,
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
+        kwnt_only: false,
     }
 }
 
@@ -276,6 +277,79 @@ async fn permission_endpoint_answers_claude_prompts_over_http() {
 
     // Unknown or finished turns are not reachable
     assert!(McpClient::connect(&http_server(format!("{base}/api/mcp/permission/gone")), None).await.is_err());
+}
+
+/// 21d: claude's hooks for its own tools, through the real route and the real hook command
+/// (`sh -c "curl … || true"` with the payload on stdin, as claude runs it): 3 identical failures
+/// deny the 4th call with the stop text, a different error starts again, an ok clears the call,
+/// and an unreachable kwnt or a finished turn lets every call through (no output, exit 0).
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_hooks_stop_the_fourth_identical_failing_call() {
+    let (state, tmp) = state().await;
+    let base = serve(state.clone()).await;
+    let c = ctx(tmp.path(), Arc::new(FixedApprover(true)));
+    state.mcp_sessions.lock().await.insert("hook-tok".into(), PermissionSession::new("k1".into(), "Ada".into(), "t1".into(), c, None));
+    let curl = kwnt::mcp::cli_hooks::write_curl_config(&tmp.path().join("mcp"), &format!("{base}/api/mcp/permission/hook-tok")).unwrap();
+    let cmd = kwnt::mcp::cli_hooks::hook_command(&curl.path);
+    let hook = |payload: Value| {
+        let cmd = cmd.clone();
+        async move {
+            tokio::task::spawn_blocking(move || {
+                use std::io::Write;
+                let mut child = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
+                let out = child.wait_with_output().unwrap();
+                assert_eq!(out.status.code(), Some(0), "the hook never blocks a call on its own: {cmd}");
+                String::from_utf8(out.stdout).unwrap()
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let input = json!({"command": "cat /tmp/missing-a.txt", "description": "Print missing-a.txt"});
+    let pre = |input: &Value| json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": input, "tool_use_id": "toolu_1"});
+    let failed = |input: &Value, error: &str| {
+        json!({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "tool_input": input, "tool_use_id": "toolu_1", "error": error, "is_interrupt": false})
+    };
+    let worked = |input: &Value| json!({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": input, "tool_response": {"stdout": "x"}});
+    let err = "Exit code 1\ncat: /tmp/missing-a.txt: No such file or directory";
+
+    for _ in 0..3 {
+        assert_eq!(hook(pre(&input)).await, "", "runs");
+        assert_eq!(hook(failed(&input, err)).await, "");
+    }
+    let out: Value = serde_json::from_str(&hook(pre(&input)).await).expect("a deny on the 4th call");
+    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], kwnt::mcp::repeat_guard::stop_text(3, err));
+    // A new description for the same command is the same call
+    let mut again = input.clone();
+    again["description"] = json!("Try once more");
+    assert!(hook(pre(&again)).await.contains("\"deny\""));
+
+    // A different error starts again at 1
+    hook(failed(&input, "Exit code 1\ncat: /tmp/missing-a.txt: Permission denied")).await;
+    assert_eq!(hook(pre(&input)).await, "");
+    hook(failed(&input, "Exit code 1\ncat: /tmp/missing-a.txt: Permission denied")).await;
+    hook(failed(&input, "Exit code 1\ncat: /tmp/missing-a.txt: Permission denied")).await;
+    assert!(hook(pre(&input)).await.contains("\"deny\""), "3 of the new error");
+    // An ok clears it
+    hook(worked(&input)).await;
+    assert_eq!(hook(pre(&input)).await, "");
+
+    // A finished turn (404) and an unreachable kwnt let the call through
+    state.mcp_sessions.lock().await.remove("hook-tok");
+    assert_eq!(hook(pre(&input)).await, "");
+    let gone = kwnt::mcp::cli_hooks::write_curl_config(&tmp.path().join("mcp2"), "http://127.0.0.1:1/api/mcp/permission/x").unwrap();
+    let down = kwnt::mcp::cli_hooks::hook_command(&gone.path);
+    let out = std::process::Command::new("sh").arg("-c").arg(format!("echo '{{}}' | {down}")).output().unwrap();
+    assert_eq!((out.status.code(), out.stdout.len()), (Some(0), 0));
 }
 
 fn turn(mcp: Option<McpTurnContext>) -> TurnInput {

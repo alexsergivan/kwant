@@ -30,6 +30,18 @@ export function lastSentences(text: string, n = 2): string {
   return parts.slice(-n).join(' ');
 }
 
+/**
+ * True when a reply's meta rules out the Approve / Change… row: a question or a card of its own (`question_id`, `kind`),
+ * or a Blocked reply (`blocked`), which shows as Blocked instead. Except a failed step's Blocked (`from: "failed_step"`,
+ * 13a): it ends asking in the bot's own words ("If you approve it, I'll run it"), so the one-tap OK stays (Ada, Nov 14).
+ */
+export function metaHidesApprove(meta: Record<string, unknown> | null | undefined): boolean {
+  if (!meta) return false;
+  if (meta.question_id || meta.kind) return true;
+  const blocked = meta.blocked as { from?: unknown } | null | undefined;
+  return !!blocked && blocked.from !== 'failed_step';
+}
+
 /** True when the reply's last two sentences ask the person for an OK and nothing there says it's settled. */
 export function asksApproval(text: string | null | undefined): boolean {
   if (!text) return false;
@@ -45,3 +57,13 @@ export const APPROVE_TEXT = 'Approved, go ahead.';
 export const changePlaceholder = (name: string): string => `What should ${name} change?`;
 /** The row's caption and group name. */
 export const waitingCaption = (name: string): string => `${name} is waiting for your OK`;
+
+/**
+ * 18e: after Approve settles, put focus back in the composer on desktop when the person's focus was lost with the
+ * row (it unmounts when the reply lands, leaving focus on <body>) or still sits in the row (a failed send).
+ * Never on a phone (it would open the keyboard) and never when they already moved focus somewhere else.
+ */
+export function refocusAfterApprove(o: { phone: boolean; focusLost: boolean; inRow: boolean }): boolean {
+  if (o.phone) return false;
+  return o.focusLost || o.inRow;
+}

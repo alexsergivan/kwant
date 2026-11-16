@@ -10,7 +10,7 @@ const load = async (path) => {
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 };
 
-const profiles = await load('../src/profiles.ts');
+const profiles = await loadBundled("export * from './src/profiles.ts';") // imports clock.ts, so it's bundled;
 // auth.ts imports spaces.ts, so it's bundled.
 const auth = await loadBundled("export * from './src/auth.ts';");
 const activity = await load('../src/kwantActivity.ts');
@@ -128,7 +128,7 @@ test('a kwant works until every turn it started has ended, whatever the outcome'
 // ---- account-usage: 5-hour and weekly limits on Claude/Codex sign-ins (design.md §3) ----
 
 const at = (d, h, m = 0) => new Date(2026, 10, d, h, m); // local time, Nov 2026 (13th is a Friday)
-const clock = (d) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const clock = (d) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }).replace(/[\u202f ](AM|PM)/, '\u00a0$1');
 const wd = (d) => d.toLocaleDateString(undefined, { weekday: 'short' });
 const usage = (fiveUsed, weekUsed, over = {}) => ({
   checked_at: at(13, 20, 31).toISOString(),

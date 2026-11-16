@@ -230,6 +230,7 @@ async fn the_glance_lists_what_needs_you_works_and_finished_and_leaks_nothing() 
         state: "running".into(),
         since: Utc::now(),
         purpose: None,
+        audit: None,
     });
     // The hidden decide-first round and a queued turn aren't working
     for (id, st, purpose) in [("turn-decide", "running", Some("decide".to_string())), ("turn-queued", "queued", None)] {
@@ -241,6 +242,7 @@ async fn the_glance_lists_what_needs_you_works_and_finished_and_leaks_nothing() 
             state: st.into(),
             since: Utc::now(),
             purpose,
+            audit: None,
         });
     }
 
@@ -313,6 +315,9 @@ async fn the_glance_lists_what_needs_you_works_and_finished_and_leaks_nothing() 
     assert_eq!(w["space_id"], "spc_default");
     assert_eq!(w["path"], format!("/s/spc_default/b/{}", spec.id));
     assert!(w["step"].as_str().is_some_and(|s| !s.is_empty()), "{w}");
+    // 17a: a shell step names its program, never the command text
+    assert_eq!(w["step"], "Running export", "{w}");
+    assert!(!w["step"].as_str().unwrap().contains('`'), "{w}");
     assert!(w["started_at"].as_str().is_some());
 
     // Finished: unseen, linked to its result

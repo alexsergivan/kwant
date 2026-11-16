@@ -90,10 +90,11 @@ test('after the wait ran out the card stays answerable', () => {
 test('answered and dismissed cards are closed', () => {
   const answered = ui.render(props({ live: rec({ status: 'answered', answer: 'US' }) }));
   assert.match(answered, /aria-pressed="true"/);
-  assert.match(answered, /Answered/);
+  assert.match(answered, /You picked US/, '14c: the card says what you picked');
   assert.doesNotMatch(answered, /Send answer|Skip question/);
   const typed = ui.render(props({ live: rec({ status: 'answered', answer: 'Both, EU first' }) }));
-  assert.match(typed, /Both, EU first/, 'a typed answer is shown');
+  assert.match(typed, /You answered:<\/b>.*Both, EU first/, '14c: a typed answer is in the closed line');
+  assert.equal((typed.match(/Both, EU first/g) || []).length, 1, 'and shown once');
   const dismissed = ui.render(props({ meta: q.parseQuestionMeta(metaJson({ status: 'cancelled' })) }));
   assert.match(dismissed, /Dismissed/);
   assert.equal((dismissed.match(/disabled=""/g) || []).length, 2, 'every choice disabled');

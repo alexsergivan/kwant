@@ -85,6 +85,9 @@ test('approval card on a phone: header, one sentence, two key facts, details clo
   // title comes before repo in the spec's order; body/head/base stay in the details.
   assert.deepEqual(m.keyFacts(pr().details.arguments), [['title', 'Behind the seat: timed checkout'], ['repo', 'acme/site']]);
   assert.match(html, /data-approval-facts/);
+  // #593: an array of strings (browser_upload's `files`) joins into one line instead of hiding.
+  assert.deepEqual(m.keyFacts({ files: ['downloads/Self-checkout.mp4'] }), [['files', 'downloads/Self-checkout.mp4']]);
+  assert.deepEqual(m.keyFacts({ files: ['a.txt', 'b.txt'] }), [['files', 'a.txt, b.txt']]);
   // Details start closed: the JSON is not in the markup, the toggle says so.
   assert.doesNotMatch(html, /data-approval-details=""/);
   assert.doesNotMatch(html, /&quot;head&quot;/);
@@ -344,11 +347,11 @@ test('Ask chips on a phone: 28 px to look at, 44 px to tap; desktop chips unchan
   const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   const start = src.indexOf('aria-label="Ask a member"');
   const block = src.slice(src.lastIndexOf('<ScrollRow', start), src.indexOf('</ScrollRow>', start));
-  // The exact desktop classes from before 0.7.5, row and both chip kinds.
+  // The exact desktop classes from before 0.7.5, row and both chip kinds (18e: the team chip gains a 14rem cap).
   for (const desk of [
     "'kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none'",
     "'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
-    "'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
+    "'shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
   ])
     assert.ok(block.includes(desk), desk);
   const phoneChips = [...block.matchAll(/\? '(kws-hit[^']*)'/g)].map((x) => x[1]);

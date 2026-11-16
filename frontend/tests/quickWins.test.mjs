@@ -30,15 +30,15 @@ const m = await loadBundled(`
 const NOW = Date.parse('2026-11-02T12:00:00Z');
 
 test('localClock: the time today, the date on another day, the year in another year', () => {
-  assert.equal(m.localClock('2026-11-02T20:15:00Z', NOW, 'en-US'), '8:15 PM');
-  assert.equal(m.localClock('2026-11-03T08:01:00Z', NOW, 'en-US'), 'Nov 3, 8:01 AM');
-  assert.equal(m.localClock('2027-01-05T09:00:00Z', NOW, 'en-US'), 'Jan 5, 2027, 9:00 AM');
+  assert.equal(m.localClock('2026-11-02T20:15:00Z', NOW, 'en-US'), '8:15\u00a0PM');
+  assert.equal(m.localClock('2026-11-03T08:01:00Z', NOW, 'en-US'), 'Nov 3, 8:01\u00a0AM');
+  assert.equal(m.localClock('2027-01-05T09:00:00Z', NOW, 'en-US'), 'Jan 5, 2027, 9:00\u00a0AM');
   assert.equal(m.localClock(null, NOW), null);
   assert.equal(m.localClock('not a time', NOW), null);
 });
 
 test('quotaLine: "Out of quota until …" while the limit lasts, the server words otherwise', () => {
-  assert.equal(m.quotaLine('Out of quota', '2026-11-02T20:15:00Z', NOW, 'en-US'), 'Out of quota until 8:15 PM');
+  assert.equal(m.quotaLine('Out of quota', '2026-11-02T20:15:00Z', NOW, 'en-US'), 'Out of quota until 8:15\u00a0PM');
   assert.equal(m.quotaLine('Out of quota', '2026-11-02T10:00:00Z', NOW, 'en-US'), 'Out of quota');
   assert.equal(m.quotaLine('Not checked yet', null, NOW, 'en-US'), 'Not checked yet');
   assert.equal(m.quotaLine(null, undefined, NOW), null);
