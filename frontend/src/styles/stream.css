@@ -261,6 +261,28 @@
   text-overflow: ellipsis;
 }
 .kw-wa-name { color: var(--kw-wa-name); font-weight: 500; }
+/* 16b: an audit turn says whose work it double-checks. The line wraps (it is a sentence, not a name),
+   so the scene grows past 62 px instead of cutting it off, and "Open the task" sits under it. */
+.kw-wa[data-audit] { height: auto; min-height: 62px; }
+.kw-wa-audit { white-space: normal; overflow: visible; }
+.kw-wa-audit p { margin: 0; overflow-wrap: anywhere; }
+.kw-wa-open {
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: #b8adff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.kw-wa-open:hover { color: #d6d0ff; }
+.kw-wa-open:focus-visible { outline: 2px solid #b8adff; outline-offset: 2px; }
+[data-theme="light"] .kw-wa-open { color: #5b4bc4; }
 .kw-wa-dots { display: inline-block; width: 1.1em; }
 
 /* The first words fade in over the place the scene held. */

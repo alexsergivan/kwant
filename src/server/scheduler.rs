@@ -753,8 +753,12 @@ pub async fn follow_up_context(state: &AppState, routine: &RoutineRow, kwant: &c
         .filter(|m| m.id != run_message_id && m.sender_role != "system")
         .map(|m| {
             let when = m.created_at.map(|t| t.format("%Y-%m-%d %H:%M UTC ").to_string()).unwrap_or_default();
-            let who = if m.sender_role == "user" { "Person" } else { m.sender_id.as_str() };
-            format!("- {when}{who}: {}", super::routes::truncate_chars(m.text.trim(), FOLLOW_UP_CHARS_EACH))
+            // "Person" only for the person's own words: a customer's or a connected agent's keep
+            // their name and their frame (truncated first, so the frame's end marker survives)
+            let who = super::delivery_plan::sender_label(m, "Person");
+            let text = super::routes::truncate_chars(m.text.trim(), FOLLOW_UP_CHARS_EACH).to_string();
+            let text = crate::drivers::user_history_text(&crate::db::models::Message { text, ..m.clone() });
+            format!("- {when}{who}: {text}")
         })
         .collect();
     if lines.is_empty() {

@@ -30,6 +30,7 @@ pub mod work_ahead;
 pub mod api_context;
 pub mod usage;
 pub mod missions;
+pub mod event_kinds;
 pub mod mission_graph;
 pub mod checkpoints;
 pub mod autofix;

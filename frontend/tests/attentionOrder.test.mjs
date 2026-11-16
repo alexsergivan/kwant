@@ -15,7 +15,7 @@ const m = await loadBundled(`
   export { default as React } from 'react';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { Sidebar, PINNED_MAX } from './src/components/Sidebar';
-  export { needsYouRows, attentionRows, attentionRank, attentionSort, rollupLabel, stuckLine } from './src/chatsTab';
+  export { needsYouRows, attentionRows, attentionRank, attentionSort, rollupLabel, stuckLine, NEEDS_YOU_LABEL } from './src/chatsTab';
   export { AWAY_SECTIONS, AWAY_SORT_HINT, sortAwaySection } from './src/away';
   export { AwayView } from './src/components/AwayView';
 `);
@@ -88,12 +88,12 @@ const render = (over = {}) => m.renderToStaticMarkup(React.createElement(m.Sideb
 }));
 const doc = (html) => new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
 
-test('desktop: pinned "Needs attention · 4" above Channels, copies with "Also listed in @core"', () => {
+test('desktop: pinned "Needs you · 4" above Channels, copies with "Also listed in @core"', () => {
   const d = doc(render());
   const block = d.querySelector('[data-needs-attention]');
   assert.ok(block);
-  assert.equal(block.querySelector('h2').getAttribute('aria-label'), 'Needs attention, 4');
-  assert.match(block.querySelector('h2').textContent, /Needs attention · 4/);
+  assert.equal(block.querySelector('h2').getAttribute('aria-label'), 'Needs you, 4');
+  assert.match(block.querySelector('h2').textContent, /Needs you · 4/);
   assert.match(block.querySelector('h2').getAttribute('class'), /text-amber-300/);
   const pins = [...block.querySelectorAll('[data-pin-row]')];
   assert.deepEqual(pins.map((p) => p.getAttribute('data-pin-row')), ['lin', 'pix', 'jun', 'iri']);
@@ -123,7 +123,7 @@ test('desktop: more than 5 shows 5 rows and "and n more in Inbox"; none, or befo
   const d = doc(render({ attention: rows({ needs: m.needsYouRows(many, {}, new Set(kwants.map((k) => k.id))) }) }));
   assert.equal(d.querySelectorAll('[data-pin-row]').length, m.PINNED_MAX);
   assert.equal(d.querySelector('[data-needs-attention-more]').textContent, 'and 3 more in Inbox');
-  assert.equal(d.querySelector('[data-needs-attention] h2').getAttribute('aria-label'), 'Needs attention, 8');
+  assert.equal(d.querySelector('[data-needs-attention] h2').getAttribute('aria-label'), 'Needs you, 8');
   const calm = rows({ needs: [], failed: [], finished: [] });
   assert.equal(doc(render({ attention: calm })).querySelector('[data-needs-attention]'), null);
   assert.equal(doc(render({ attention: undefined })).querySelector('[data-needs-attention]'), null);
@@ -175,4 +175,14 @@ test('Inbox: Waiting on you, Failed or stuck, Finished; oldest first, finished u
   assert.match(hint('finished').getAttribute('class'), /hidden md:inline/, 'desktop only');
   assert.equal(hint('failed'), null, 'no hint on an empty section');
   assert.ok(html.indexOf('id="away-waiting"') < html.indexOf('id="away-failed"') && html.indexOf('id="away-failed"') < html.indexOf('id="away-finished"'));
+});
+
+test('14c one name: the desktop block and the phone section both say NEEDS_YOU_LABEL; "To review" only means review', () => {
+  assert.equal(m.NEEDS_YOU_LABEL, 'Needs you');
+  const desk = doc(render());
+  assert.match(desk.querySelector('[data-needs-attention] h2').textContent, new RegExp(`^${m.NEEDS_YOU_LABEL} · `));
+  assert.doesNotMatch(desk.body.textContent, /Needs attention/);
+  const phone = doc(render({ phone: true, section: 'chats' }));
+  assert.doesNotMatch(phone.body.textContent, /Needs attention/);
+  assert.match(phone.querySelector('#chats-needs-head').textContent, new RegExp(`^${m.NEEDS_YOU_LABEL} · `));
 });
