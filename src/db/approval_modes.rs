@@ -393,12 +393,20 @@ impl Database {
     /// the same turn gets the first row's id back and adds nothing; other arguments, or the same
     /// call in a later turn, add a row. Same arguments means the same stored details string. The
     /// check and the insert are one statement, so two refusals at once can't both add a row.
-    pub async fn save_customer_refused(&self, input: &super::models::NewApproval) -> Result<String, DbError> {
+    ///
+    /// 22a: `chat` is the chat the call happened in, stored in `resume` in a card's shape
+    /// (`{"thread_id"|"channel_id"|"direct_kwant_id": …}`). It only names the place: the row stays
+    /// closed, and the chat is not part of "the same call" (a retry keeps the first row as it is).
+    pub async fn save_customer_refused(
+        &self,
+        input: &super::models::NewApproval,
+        chat: Option<&serde_json::Value>,
+    ) -> Result<String, DbError> {
         let id = uuid::Uuid::new_v4().to_string();
         let parameters = serde_json::to_string(&input.parameters)?;
         let added = sqlx::query(
-            "INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status) \
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE NOT EXISTS (SELECT 1 FROM approvals \
+            "INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status, resume) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE NOT EXISTS (SELECT 1 FROM approvals \
              WHERE turn_id = ?2 AND kwant_id = ?3 AND tool_name = ?4 AND parameters = ?5 AND status = ?6)",
         )
         .bind(&id)
@@ -407,6 +415,7 @@ impl Database {
         .bind(&input.tool_name)
         .bind(&parameters)
         .bind(CUSTOMER_REFUSED)
+        .bind(chat.map(|c| c.to_string()))
         .execute(&self.pool)
         .await?
         .rows_affected();

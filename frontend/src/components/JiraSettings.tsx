@@ -223,8 +223,8 @@ export const JiraSettings: React.FC<{
         <TicketIcon size={14} className="text-[#b4a9ff]" aria-hidden="true" /> Work from Jira
         <span className={`kw-chip ${site.on ? 'kw-chip-ok' : ''}`}>{site.on ? 'On' : 'Paused'}</span>
       </p>
-      <p className={`flex items-center gap-2 text-[11px] ${rejected ? 'text-rose-300' : 'text-zinc-400'}`} data-jira-status>
-        <span className={`w-1.5 h-1.5 rounded-full ${rejected ? 'bg-rose-400' : 'bg-teal-300'}`} aria-hidden="true" />
+      <p className={`flex items-start gap-2 text-[11px] ${rejected ? 'text-rose-300' : 'text-zinc-400'}`} data-jira-status>
+        <span className={`w-1.5 h-1.5 mt-[0.45em] shrink-0 rounded-full ${rejected ? 'bg-rose-400' : 'bg-teal-300'}`} aria-hidden="true" />
         {rejected ? `Jira stopped accepting the token ${atClock(rejected)}. Nothing new is picked up.` : `${site.polled_at ? `Checked ${hhmm(site.polled_at)} · ` : ''}${ticketSummary(jira.tickets)}`}
       </p>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
