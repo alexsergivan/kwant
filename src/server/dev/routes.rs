@@ -384,7 +384,7 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
         Some(Some(c)) => {
             let c = c.trim().to_string();
             if c.chars().count() > BACKUP_COMMAND_CHARS || c.contains('\0') {
-                return coded(StatusCode::BAD_REQUEST, "backup_too_long", format!("the backup command must be at most {BACKUP_COMMAND_CHARS} characters"));
+                return coded(StatusCode::BAD_REQUEST, "backup_too_long", "That command is too long. Keep it to 2,000 characters.");
             }
             (!c.is_empty()).then_some(c)
         }
@@ -1356,6 +1356,17 @@ pub async fn release_notes(State(state): State<AppState>, headers: HeaderMap, Pa
     tokio::spawn(super::generate(state.clone(), row.id.clone()));
     debug_assert_eq!(row.status, PENDING);
     (StatusCode::ACCEPTED, Json(card_json(&row))).into_response()
+}
+
+/// `GET /api/spaces/:id/dev/backup`: the space's backup state now, the same object as a floor
+/// card's `prod_floor.backup` (22f), so an open card can refresh after the person sets a backup
+/// command or takes a backup elsewhere. Person-only, like every Dev mode route.
+pub async fn backup_state(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+    let space = match guard(&state, &headers, &id).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    Json(super::floor::backup_state(&state.db, space.as_str()).await).into_response()
 }
 
 pub async fn take_backup(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
