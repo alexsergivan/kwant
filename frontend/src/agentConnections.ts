@@ -4,6 +4,8 @@
 
 export type BotScope = 'all' | string[];
 import { dateText, timeText } from './clock';
+import { botOf } from './sharedFiles';
+import type { BotRef } from './sharedFiles';
 
 export interface AgentConnection {
   id: string;
@@ -251,6 +253,56 @@ export function callTime(iso: string, now = new Date(), locale?: string): string
   if (Number.isNaN(d.getTime())) return '';
   const time = timeText(d, { locale })!;
   return d.toDateString() === now.toDateString() ? time : `${dateText(d, { locale })}, ${time}`;
+}
+
+// 23c (autonomy/others-messages-never-you/brief.md): a "user" message someone else wrote never reads "You".
+// The server marks who: a Telegram customer (customers.rs, meta `from_customer`, source `telegram-customer`)
+// and a bot posting through the chat API (routes.rs, meta `sent_by_bot`, plus `sent_by_bot_name` and
+// `sent_by_kwant_id` from 0.9.18). The check is on these markers, never on the text.
+
+const CUSTOMER_SOURCE = 'telegram-customer';
+/** Sender ids the app itself sends for the person; never shown as a bot's name. */
+const PERSON_IDS = new Set(['playerhero', 'user', 'me', 'you']);
+const looksLikeId = (s: string) => s.length > 20 && !/\s/.test(s);
+const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/**
+ * Who wrote a "user" message when it isn't the person: "Ann (customer)" or "A customer" for a Telegram
+ * customer; "Scout (bot)" for a bot's chat-API message (its kwant id's current name, else the name it sent,
+ * else a short sender id, else "A bot"). Null for the person's own messages, a coding agent's included.
+ */
+export function otherSenderLabel(meta: string | null | undefined, knownBots: ReadonlyArray<BotRef> = [], senderId?: string | null): string | null {
+  if (!meta) return null;
+  let m: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(meta) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    m = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if ('from_customer' in m || m.source === CUSTOMER_SOURCE) {
+    const name = str(m.from_customer);
+    return name ? `${name} (customer)` : 'A customer';
+  }
+  if (m.sent_by_bot === true) {
+    const byId = botOf(str(m.sent_by_kwant_id) || null, knownBots)?.name;
+    const sent = str(m.sent_by_bot_name);
+    const id = str(senderId);
+    const bySender = id ? botOf(id, knownBots)?.name ?? (!looksLikeId(id) && !PERSON_IDS.has(id.toLowerCase()) ? id : '') : '';
+    const name = byId || sent || bySender;
+    return name ? `${name} (bot)` : 'A bot';
+  }
+  return null;
+}
+
+/** "<name>'s message" for the message menu; "your message" for the person's own. */
+export const messageAbout = (other: string | null): string => (other ? `${other}'s message` : 'your message');
+
+/** The letter an other sender's avatar shows: the name's first letter, or '' for "A customer" and "A bot". */
+export function senderLetter(other: string): string {
+  if (other === 'A customer' || other === 'A bot') return '';
+  return Array.from(other.trim())[0]?.toUpperCase() ?? '';
 }
 
 /** "Claude Code (coding agent)" for a message a coding agent sent, else null (the person's own). */
