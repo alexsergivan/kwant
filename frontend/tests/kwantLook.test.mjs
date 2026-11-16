@@ -3,7 +3,11 @@
 // and the wrong blue here, and the status colours each mean one thing (teal ok, amber warn, rose bad,
 // lavender info). This walks frontend/src (*.ts, *.tsx, *.css, skipping generated/) and fails on:
 //   (a) a stock Tailwind zinc/sky hex or rgb() (the list is the mockup kit's lint.py STOCK), and
-//   (b) a colour class or theme() from a Tailwind family kwant doesn't use.
+//   (b) a colour class or theme() from a Tailwind family kwant doesn't use, and
+//   (c) white text on a light lavender (26g follow-up): text-white in the same class list as bg-sky-500 or lighter,
+//       hover:bg-sky-500 or lighter, or hover:brightness-1xx. White is 3.76:1 on sky-500 and 3.66:1 on the
+//       brightened accent gradient; use bg-sky-600 (5.1:1) with hover:bg-sky-700 (7.0:1), kw-btn-primary, or
+//       kw-hover-deepen on a bg-accent-gradient.
 // emerald and violet (Mira's ruling, audit section C, roadmap 26g): emerald is teal / ok and violet is kwant's
 // sky (lavender), so their classes and stock hex fail too. scripts/retint-emerald-violet.mjs does the mapping.
 import assert from 'node:assert/strict';
@@ -71,6 +75,26 @@ function* walk(dir) {
   }
 }
 
+// (c) One class list is one line here: the app writes each className, or each branch of a ternary, on one line.
+const whiteRe = /(?<![\w-])text-white(?![\w-])/;
+const lightSkyRe = /(?<![\w-])((?:[\w-]+:)*)bg-sky-(50|100|200|300|400|500)(?![\w/-])/g;
+const brightRe = /(?<![\w-])((?:[\w-]+:)*hover:)brightness-(\d+)(?![\w-])/g;
+const WHITE_EXEMPT = [
+  // None. List a real exemption here as { at: 'src/x.tsx:12', why: '...' }.
+];
+export function whiteOnLight(line) {
+  if (!whiteRe.test(line)) return [];
+  const out = [];
+  for (const m of line.matchAll(lightSkyRe)) {
+    const hover = /hover:/.test(m[1]);
+    out.push(`${m[0]} under text-white is ${m[2] === '500' ? '3.76' : 'under 3.8'}:1: use ${hover ? `${m[1]}bg-sky-700` : `${m[1]}bg-sky-600`} (bg-sky-600 rests at 5.1:1, hover:bg-sky-700 is 7.0:1)`);
+  }
+  for (const m of line.matchAll(brightRe)) {
+    if (+m[2] > 100) out.push(`${m[0]} next to text-white lightens the fill under white text (3.66:1 on the accent gradient): use kw-hover-deepen (or hover:bg-sky-700 on a flat bg-sky-600)`);
+  }
+  return out;
+}
+
 export function scan() {
   const out = [];
   for (const p of walk(src)) {
@@ -93,12 +117,13 @@ export function scan() {
         const fam = m[1] ?? m[3];
         if (!exempt(file, m[0])) out.push(`${at} ${m[0]} is outside kwant's palette: use ${OFF[fam]}`);
       }
+      if (!file.endsWith('.css') && !WHITE_EXEMPT.some((e) => e.at === at)) for (const msg of whiteOnLight(line)) out.push(`${at} ${msg}`);
     });
   }
   return out;
 }
 
-test('frontend/src stays in the kwant palette (no stock zinc/sky hex, no off-theme colour families)', () => {
+test('frontend/src stays in the kwant palette (no stock zinc/sky hex, no off-theme colour families, no white on light lavender)', () => {
   const hits = scan();
   assert.deepEqual(hits, [], `${hits.length} place(s) bypass kwant's look:\n  ${hits.join('\n  ')}\n`);
 });
@@ -115,4 +140,12 @@ test('the guard itself catches what it should and lets kwant tokens through', ()
   assert.ok(!'#1d1840 #6c58e0 #9d8fff'.match(hexRe).some((h) => HEX.has(h)), 'kwant retinted values are fine');
   assert.ok(exempt('src/spaces.ts', '#0EA5E9') && !exempt('src/components/Sidebar.tsx', '#0ea5e9'));
   assert.ok(exempt('src/spaces.ts', '#10b981') && exempt('src/styles/tickets.css', '#c4b5fd') && !exempt('src/styles/tickets.css', '#a78bfa'));
+  // (c) white text on a light lavender
+  assert.equal(whiteOnLight("'bg-sky-500 text-white border-sky-400'").length, 1);
+  assert.equal(whiteOnLight('bg-sky-500 hover:bg-sky-400 text-white').length, 2);
+  assert.equal(whiteOnLight('bg-accent-gradient text-white hover:brightness-110').length, 1);
+  assert.equal(whiteOnLight('bg-sky-600 text-white hover:bg-sky-700').length, 0);
+  assert.equal(whiteOnLight('bg-sky-500/10 text-white disabled:hover:brightness-100').length, 0, 'tints and a no-op brightness are fine');
+  assert.equal(whiteOnLight('bg-sky-500 text-zinc-950 hover:brightness-110').length, 0, 'only white text');
+  assert.equal(whiteOnLight('kw-hover-deepen bg-accent-gradient text-white').length, 0);
 });
