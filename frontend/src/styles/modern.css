@@ -755,7 +755,9 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 14px; border-radius: 10px;
   background: linear-gradient(135deg, #745bef, #5b47d6); color: #fff; font-size: 14px; font-weight: 600;
 }
-.kw-dvx-primary:hover { filter: brightness(1.08); }
+/* Hover deepens like kw-btn-primary (26g): brightness(1.08) put white text near 3.9:1. The longhand beats the base
+   rule's background shorthand by specificity (.kw-dvx-primary:hover is 0,2,0). */
+.kw-dvx-primary:hover { background-image: linear-gradient(135deg, theme('colors.sky.600') 0%, theme('colors.sky.700') 100%); }
 .kw-dvx-guide { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; font-weight: 600; color: theme('colors.sky.300'); border-radius: 6px; }
 .kw-dvx-guide:hover { color: theme('colors.sky.200'); }
 .kw-dvx-owner { font-size: 12px; line-height: 18px; color: theme('colors.zinc.400'); }

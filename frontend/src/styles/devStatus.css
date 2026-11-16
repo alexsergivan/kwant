@@ -32,7 +32,10 @@
 .kw-dv-status-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .kw-dv-status-btn[aria-expanded='true'] { background: rgb(255 255 255 / 0.1); }
 .kw-dv-status-btn-primary { color: #fff; border-color: transparent; background-image: linear-gradient(135deg, #745bef 0%, #5b47d6 100%); }
-.kw-dv-status-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+/* Hover deepens like kw-btn-primary (26g), never brightness under white text. It must come after the
+   .kw-dv-status-btn hover above: that rule's background shorthand has the same specificity and would
+   otherwise drop the gradient on hover. */
+.kw-dv-status-btn-primary:hover:not(:disabled) { background-image: linear-gradient(135deg, theme('colors.sky.600') 0%, theme('colors.sky.700') 100%); }
 
 .kw-dv-picker-input {
   min-width: 0;
