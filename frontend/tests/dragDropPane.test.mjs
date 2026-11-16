@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
+import { holdTimers } from './heldTimers.mjs';
 import { readFileSync } from 'node:fs';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
@@ -162,9 +163,17 @@ test('a file drag over the header or the message list lights up the chat; off th
     await fire(side, 'dragenter', two());
     await fire(list, 'dragleave', two());
     assert.equal(phase(v.host), 'armed');
-    // Out of the window: the layer fades and goes.
-    await fire(side, 'dragleave', two(), OUT);
-    assert.equal(phase(v.host), 'leaving');
+    // Out of the window: the layer fades and goes. The fade's timer is held until the test has seen it,
+    // so a slow tick() can't end it first (22e).
+    const fade = holdTimers((ms) => ms === 100 || ms === 120);
+    try {
+      await fire(side, 'dragleave', two(), OUT);
+      assert.equal(phase(v.host), 'leaving');
+      assert.ok(fade.pending().length > 0 && fade.pending().every((ms) => ms < 150), 'the fade is timed to end by 150 ms');
+    } finally {
+      fade.run();
+      fade.restore();
+    }
     await wait(150);
     assert.equal(layer(v.host), null);
   } finally {
@@ -182,7 +191,14 @@ test('a drop on the message list lands in the tray, the cursor goes to the field
     const files = [mkFile('one.png'), mkFile('two.pdf', 'application/pdf'), mkFile('three.md', 'text/markdown')];
     await fire(list, 'dragenter', dataTransfer(files));
     assert.equal(v.host.querySelector('[data-drop-summary]')?.textContent, '3 files · 1 image, 1 PDF, 1 text file');
-    const drop = await fire(layer(v.host), 'drop', dataTransfer(files));
+    // The landing's 160 ms timer is held until the test has seen the landing phase (22e).
+    const landing = holdTimers((ms) => ms === 160);
+    let drop;
+    try {
+      drop = await fire(layer(v.host), 'drop', dataTransfer(files));
+    } finally {
+      landing.restore();
+    }
     assert.equal(drop.defaultPrevented, true, 'the browser does not open the file');
     assert.equal(chips(v.host), 3, 'three files in the tray');
     assert.equal(sent.length, 3, 'all three upload as with the paperclip');
@@ -192,6 +208,8 @@ test('a drop on the message list lands in the tray, the cursor goes to the field
     assert.equal(v.host.querySelectorAll('li[data-fresh]').length, 3, 'the new chips come in tinted');
     const delays = [...v.host.querySelectorAll('li[data-fresh]')].map((li) => li.style.getPropertyValue('--kw-chip-delay'));
     assert.deepEqual(delays, ['40ms', '70ms', '100ms']);
+    assert.deepEqual(landing.pending(), [160], 'the landing is timed to end by 160 ms');
+    landing.run();
     await wait(200);
     assert.equal(layer(v.host), null, 'gone by 160 ms');
     await wait(700);

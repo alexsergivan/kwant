@@ -41,7 +41,7 @@ import { SpaceDocsTab } from './SpaceDocsTab';
 
 import type { AppsSection, SettingsScope, SpaceSettingsTab } from '../nav';
 import { AppsAccounts } from './AppsAccounts';
-import { InstallAppButton } from './InstallAppButton';
+import { PhoneAppCard } from './PhoneAppCard';
 import { editorProps, useEscapeLayer } from '../escape';
 import { devTeamRefs } from '../devMode';
 
@@ -228,6 +228,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           </div>
           {scope === 'app' ? (
             <>
+              <PhoneAppCard phone={p.isPhone} />
               <div className={`${card} p-4 space-y-3`} data-all-spaces-spaces>
                 <p className="text-xs font-medium text-zinc-200">Spaces</p>
                 <p className="text-[11px] text-zinc-500">Switch spaces on the left rail (Ctrl or ⌘ with 1–9). Archived spaces keep their bots and chats until you restore them.</p>
@@ -235,7 +236,6 @@ export const SpaceSettings: React.FC<Props> = (p) => {
                   <button type="button" onClick={p.onOpenArchived} className={rowBtn}>
                     <Archive size={13} /> Archived spaces
                   </button>
-                  <InstallAppButton className={rowBtn} />
                 </div>
               </div>
               {p.appSettings}
