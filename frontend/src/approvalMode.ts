@@ -40,11 +40,11 @@ export function parseBotApprovals(raw: unknown): BotApprovalsState | null {
 }
 
 export const SPACE_OPTIONS: Array<{ value: SpaceApprovals; label: string; hint: string }> = [
-  { value: 'ask', label: 'Ask before running commands', hint: 'A card asks you before a bot runs a command, writes a file or uses a tool.' },
+  { value: 'ask', label: 'Ask before running commands', hint: 'A card asks you before a bot runs a program, changes a file or uses one of its tools.' },
   {
     value: 'smart',
     label: 'Ask only when risky',
-    hint: 'Ordinary work in the bot’s folder runs on its own; a card asks before network calls, git fetch and push, adding a new package, publishing, anything outside the folder or anything unclear. Not a sandbox: scripts, make and a plain npm install inside the folder run without a card, and can do anything you can.',
+    hint: 'Everyday work in the bot’s own folder runs on its own. A card asks you before it goes online, installs something new, publishes, touches anything outside its folder, or does anything that isn’t clearly safe. It isn’t a locked box: a program the bot runs inside its folder can still do anything you can.',
   },
   { value: 'off', label: 'Don’t ask', hint: 'Bots act without asking, including sending, deleting, publishing and signing in. Payments still ask you.' },
 ];

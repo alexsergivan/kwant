@@ -361,6 +361,11 @@ fn window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
         .focused(false)
         .accept_first_mouse(true)
         .visible(false)
+        // It is made hidden and stays hidden until the page reports its size (`place`), and in
+        // Busy mode it is hidden most of the time. WebKit throttles a hidden page's timers and
+        // may suspend it after a few minutes (macOS 14+), and then the page never measures, so
+        // the window never shows. The page is small and mostly idle.
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .on_navigation(move |url| {
             if url.scheme() == "kwant-island" {
                 on_perch_url(&nav_app, url);
@@ -634,23 +639,31 @@ fn place<R: Runtime>(app: &AppHandle<R>, state: PageState, content: (f64, f64)) 
     let Some(w) = app.get_webview_window(perch::WINDOW) else {
         return;
     };
-    let wants = {
+    let (wants, by_key) = {
         let shared = app.state::<Shared>();
         let st = shared.perch.lock().unwrap();
-        perch::wants_window(&st.prefs, st.available, &st.snap, st.open_by_key)
+        (perch::wants_window(&st.prefs, st.available, &st.snap, st.open_by_key), st.open_by_key)
     };
     if state == PageState::Hidden || !wants {
         let _ = w.hide();
         return;
     }
     let Some(screen) = screen(app, &w) else {
+        tracing::warn!("the perch found no screen to hang on");
         return;
     };
     let (x, y, fw, fh) = perch::frame(screen.shape, screen.w, screen.notch_left, screen.top, state, content);
     let _ = w.set_size(LogicalSize::new(fw, fh));
     let _ = w.set_position(LogicalPosition::new(screen.x + x, screen.y + y));
+    let was_visible = w.is_visible().unwrap_or(true);
     // shown, not focused: the person keeps typing where they were
     let _ = w.show();
+    // ...except when the shortcut opened it: `toggle` asked for the keyboard before the window
+    // was on screen, and AppKit gives a hidden window none
+    if by_key && !was_visible && state == PageState::Expanded {
+        let _ = w.set_focusable(true);
+        let _ = w.set_focus();
+    }
 }
 
 /// The screen the perch hangs on, in logical points from the primary screen's top-left.
@@ -774,6 +787,138 @@ mod mac {
                 Screen { shape: Shape::Float, x, y, w: f.size.width, notch_left: 0.0, top: menu_h }
             }
         })
+    }
+}
+
+/// `--demo-perch` (CI, `.github/workflows/mac.yml`): the perch on (Always) with a made-up glance
+/// for This Mac, opened the way ⌥⌘K opens it (`toggle`), and the window's state printed as
+/// `demo-perch: …` lines. The job checks the `result` line's numbers itself: the window is
+/// visible, has a size, and sits inside the screen at its top.
+pub mod demo {
+    use super::toggle;
+    use crate::perch::{self, PageState};
+    use crate::{remote, Shared};
+    use std::time::{Duration, Instant};
+    use tauri::{AppHandle, Manager, Runtime};
+
+    /// One bot working, one approval waiting (the `/api/glance` shape `perch::parse_glance` reads).
+    const GLANCE: &str = r#"{
+        "counts": { "needs_you": 1, "working": 1, "finished_unseen": 0 },
+        "needs_you": [
+            { "kind": "approval", "id": "demo-a1", "space_id": "spc_default", "space_name": "My space",
+              "kwant_id": "bot-juno", "kwant_name": "Juno", "avatar": null, "title": "Use Bash (deploy the site)",
+              "since": "2026-11-15T22:00:00Z", "path": "/s/spc_default/b/bot-juno?card=demo-a1",
+              "approval": { "risk": "medium", "can_allow_inline": false, "why_open": null }, "question": null }
+        ],
+        "working": [
+            { "turn_id": "demo-t1", "kwant_name": "Mira", "avatar": null, "space_id": "spc_default",
+              "step": "Reading design.md", "step_started_at": "2026-11-15T22:01:00Z",
+              "started_at": "2026-11-15T22:00:00Z", "path": "/s/spc_default/b/bot-mira" }
+        ],
+        "finished": [],
+        "ask_targets": []
+    }"#;
+
+    /// This Mac's glance in the demo, every poll.
+    pub fn glance() -> remote::Glance {
+        remote::Glance::Fresh { etag: None, body: GLANCE.to_string() }
+    }
+
+    /// The perch window as the window server has it (physical pixels, from the primary screen's
+    /// top-left), and what the page last said.
+    pub struct Seen {
+        pub exists: bool,
+        pub ready: bool,
+        pub page: PageState,
+        pub visible: bool,
+        pub frame: (i64, i64, i64, i64),
+        pub screen: (i64, i64, i64, i64),
+        pub scale: f64,
+    }
+
+    impl Seen {
+        /// Visible, with a size, inside the screen, and its top edge at most 80 points below
+        /// the screen's top (under the menu bar, or around the notch).
+        pub fn ok(&self) -> bool {
+            let (x, y, w, h) = self.frame;
+            let (sx, sy, sw, sh) = self.screen;
+            let top_band = (80.0 * self.scale).round() as i64;
+            self.exists
+                && self.visible
+                && w > 0
+                && h > 0
+                && sw > 0
+                && sh > 0
+                && x >= sx
+                && x + w <= sx + sw
+                && y >= sy
+                && y + h <= sy + sh
+                && y - sy <= top_band
+        }
+
+        pub fn line(&self) -> String {
+            let (x, y, w, h) = self.frame;
+            let (sx, sy, sw, sh) = self.screen;
+            let page = format!("{:?}", self.page).to_lowercase();
+            format!(
+                "exists={} ready={} page={page} visible={} frame={x},{y},{w}x{h} screen={sx},{sy},{sw}x{sh} scale={}",
+                self.exists, self.ready, self.visible, self.scale
+            )
+        }
+    }
+
+    pub fn seen<R: Runtime>(app: &AppHandle<R>) -> Seen {
+        let (ready, page) = {
+            let shared = app.state::<Shared>();
+            let st = shared.perch.lock().unwrap();
+            (st.ready, st.page.0)
+        };
+        let Some(w) = app.get_webview_window(perch::WINDOW) else {
+            return Seen { exists: false, ready, page, visible: false, frame: (0, 0, 0, 0), screen: (0, 0, 0, 0), scale: 1.0 };
+        };
+        let visible = w.is_visible().unwrap_or(false);
+        let (x, y) = w.outer_position().map(|p| (p.x as i64, p.y as i64)).unwrap_or((0, 0));
+        let (fw, fh) = w.outer_size().map(|s| (s.width as i64, s.height as i64)).unwrap_or((0, 0));
+        let monitor = w.current_monitor().ok().flatten().or_else(|| w.primary_monitor().ok().flatten());
+        let (screen, scale) = monitor.map_or(((0, 0, 0, 0), 1.0), |m| {
+            let (p, s) = (m.position(), m.size());
+            ((p.x as i64, p.y as i64, s.width as i64, s.height as i64), m.scale_factor())
+        });
+        Seen { exists: true, ready, page, visible, frame: (x, y, fw, fh), screen, scale }
+    }
+
+    /// Waits for the page to come to rest after its first peek (at most 15 s: on main it never
+    /// reported a size), presses the shortcut once, reports for 5 s, then quits.
+    pub fn run<R: Runtime>(app: &AppHandle<R>) {
+        let start = Instant::now();
+        let say = |what: &str, s: &Seen| println!("demo-perch: {what}: ok={} {}", s.ok(), s.line());
+        let mut last = String::new();
+        while start.elapsed() < Duration::from_secs(15) {
+            std::thread::sleep(Duration::from_millis(500));
+            let s = seen(app);
+            if s.line() != last {
+                last = s.line();
+                say(&format!("before {:.1}s", start.elapsed().as_secs_f64()), &s);
+            }
+            if s.ready && s.page == PageState::Rest {
+                break;
+            }
+        }
+        say("before toggle", &seen(app));
+        println!("demo-perch: toggle (as the shortcut) at {:.1}s", start.elapsed().as_secs_f64());
+        toggle(app);
+        let by_key = app.state::<Shared>().perch.lock().unwrap().open_by_key;
+        println!("demo-perch: toggled open_by_key={by_key}");
+        for i in 1..=10 {
+            std::thread::sleep(Duration::from_millis(500));
+            say(&format!("after +{:.1}s", f64::from(i) * 0.5), &seen(app));
+        }
+        let s = seen(app);
+        println!("demo-perch: result ok={} {}", s.ok(), s.line());
+        // CI screenshots the screen meanwhile
+        std::thread::sleep(Duration::from_secs(8));
+        println!("demo-perch: done");
+        app.exit(0);
     }
 }
 
