@@ -190,9 +190,10 @@ fn step_now(steps: &[Step]) -> Option<(String, String)> {
     steps.iter().rev().find(|s| s.kind != "thinking").map(|s| (island_title(s), s.started_at.clone()))
 }
 
-/// A step's title as the island shows it (17a, 19a). A shell step names only its program
-/// ("Running git"), never the command, and a search or helper step only its kind ("Searching the
-/// web"), never the query or brief: the island sits on the person's screen above every app, shared
+/// A step's title as the island shows it (17a, 19a, 21c). A shell step names only its program
+/// ("Running git"), never the command, a search or helper step only its kind ("Searching the
+/// web"), never the query or brief, and a read, edit or write step only the file's name ("Reading
+/// contract.md"), never its folders: the island sits on the person's screen above every app, shared
 /// screens and calls included, and redaction only catches known secret shapes. The chat's activity
 /// list keeps the full titles. Every other step keeps its title.
 fn island_title(s: &Step) -> String {
@@ -202,6 +203,9 @@ fn island_title(s: &Step) -> String {
     };
     if let Some(bare) = crate::drivers::activity::island_kind_title(tool) {
         return bare.to_string();
+    }
+    if let Some(title) = crate::drivers::activity::island_file_title(tool, &s.title) {
+        return title;
     }
     if !crate::drivers::activity::is_shell_tool(tool) {
         return s.title.clone();
@@ -307,12 +311,12 @@ mod tests {
         turn.observe(&RuntimeEvent::ToolCallCompleted { id: "1".into(), result: json!({"status": "error", "error": "Permission denied (publickey)"}) });
         assert_eq!(current_step("turn-island-failed").unwrap().0, "Running git");
 
-        // A Reading step and a thinking step read as they do today; an approval keeps its title
+        // A Reading step names its file (21c) and a thinking step reads as it does today; an approval keeps its title
         let tag = TurnTag { turn_id: "turn-island-other".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
         let turn = TurnActivity::start(tx, tag);
         let read = json!({"file_path": "/tmp/notes.md"});
         turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Read".into(), args: read.clone() });
-        assert_eq!(current_step("turn-island-other").unwrap().0, crate::drivers::activity::summarize("Read", &read).0);
+        assert_eq!(current_step("turn-island-other").unwrap().0, "Reading notes.md");
         turn.observe(&RuntimeEvent::ToolCallCompleted { id: "1".into(), result: json!({"status": "ok"}) });
         turn.observe(&RuntimeEvent::ThinkingDelta("the key is in ~/.env".into()));
         assert_eq!(current_step("turn-island-other").unwrap().0, "Thinking");
@@ -353,7 +357,7 @@ mod tests {
             assert!(!title.contains("acme") && !title.contains("4471"), "{title}");
         }
 
-        // An approval for a search keeps its (already bare) title; a Reading step keeps its path
+        // An approval for a search keeps its (already bare) title; a Reading step names its file (21c)
         let tag = TurnTag { turn_id: "turn-island-words-other".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
         let turn = TurnActivity::start(tx, tag);
         approval_waiting("turn-island-words-other", "ap", "WebSearch");
@@ -361,7 +365,43 @@ mod tests {
         approval_settled("turn-island-words-other", "ap", "ok");
         let read = json!({"file_path": "/tmp/acme.md"});
         turn.observe(&RuntimeEvent::ToolCallPending { id: "2".into(), name: "Read".into(), args: read.clone() });
-        assert_eq!(current_step("turn-island-words-other").unwrap().0, crate::drivers::activity::summarize("Read", &read).0);
+        assert_eq!(current_step("turn-island-words-other").unwrap().0, "Reading acme.md");
+    }
+
+    /// 21c: the island names a read, edit or write step's file, never its folders; the chat's
+    /// activity list keeps "…/folder/file".
+    #[test]
+    fn current_step_names_a_file_never_its_folders() {
+        let cases: Vec<(&str, Value, &str)> = vec![
+            ("Read", json!({"file_path": "/srv/clients/acme-layoffs/contract.md"}), "Reading contract.md"),
+            ("Edit", json!({"file_path": "/tmp/acme-layoffs/acme.md", "old_string": "a", "new_string": "b"}), "Editing acme.md"),
+            ("MultiEdit", json!({"file_path": "/srv/acme-layoffs/src/main.rs", "edits": []}), "Editing main.rs"),
+            ("Write", json!({"file_path": "/srv/acme-layoffs/notes.txt", "content": "x"}), "Writing notes.txt"),
+            ("NotebookEdit", json!({"notebook_path": "/srv/acme-layoffs/model.ipynb"}), "Editing model.ipynb"),
+            ("Read", json!({"file_path": "C:\\clients\\acme-layoffs\\a.md"}), "Reading a.md"),
+            ("Read", json!({"file_path": "/srv/clients/acme-layoffs/"}), "Reading acme-layoffs"),
+            ("Read", json!({"file_path": "contract.md"}), "Reading contract.md"),
+            ("Read", Value::Null, "Reading a file"),
+        ];
+        let (tx, _rx) = broadcast::channel(64);
+        for (n, (tool, args, want)) in cases.into_iter().enumerate() {
+            let id = format!("turn-island-file-{n}");
+            let tag = TurnTag { turn_id: id.clone(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+            let turn = TurnActivity::start(tx.clone(), tag);
+            turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: tool.into(), args: args.clone() });
+            assert_eq!(current_step(&id).unwrap().0, want, "{tool} {args}");
+            // The chat's activity list keeps its "…/folder/file" title, byte for byte
+            let chat = turn.with_log(|log| log.steps()[0].clone());
+            assert_eq!(chat.title, crate::drivers::activity::summarize(tool, &args).0);
+            // Between steps, the finished step still names only its file
+            turn.observe(&RuntimeEvent::ToolCallCompleted { id: "1".into(), result: json!({"status": "ok"}) });
+            let (title, _) = current_step(&id).unwrap();
+            assert_eq!(title, want);
+            assert!(!title.contains('/') && !title.contains('\\') && !title.contains("clients"), "{title}");
+            if want != "Reading acme-layoffs" {
+                assert!(!title.contains("acme-layoffs"), "{title}");
+            }
+        }
     }
 
     #[test]

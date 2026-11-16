@@ -78,6 +78,15 @@ export function dateClock(at: When, opts: ClockOpts & { year?: boolean } = {}): 
   return `${dateText(d, opts)}, ${timeText(d, opts)}`;
 }
 
+/** A record's date and time, always with the day (18d): "Nov 3, 8:15 PM" / "3 Nov, 20:15", and the year when it
+ *  isn't this year. For lists and tooltips that stamp when something happened (Import history, a verification's
+ *  time, a goal's check square). Null for a missing or unreadable time. (One clock everywhere, roadmap 22c.) */
+export function stampClock(at: When, now: number = Date.now(), locale?: string): string | null {
+  const d = toDate(at);
+  if (!d) return null;
+  return dateClock(d, { locale, year: d.getFullYear() !== new Date(now).getFullYear() });
+}
+
 /** "8:15 PM" when `at` is today, else the date too. Null for a missing or unreadable time. */
 export function localClock(at: When, now: number = Date.now(), locale?: string): string | null {
   const d = toDate(at);
