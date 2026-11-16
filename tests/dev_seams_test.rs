@@ -31,16 +31,16 @@ async fn the_clock_seam_ages_a_backup_past_ten_minutes() {
     })
     .await
     .unwrap();
-    assert_eq!(floor::allow_refusal(&db, &card).await, None, "a backup taken just now is fresh");
+    assert_eq!(floor::allow_refusal(&db, &card, false).await, None, "a backup taken just now is fresh");
 
     dev::set_clock_skew(9 * 60);
-    assert_eq!(floor::allow_refusal(&db, &card).await, None, "9 minutes on, still fresh");
+    assert_eq!(floor::allow_refusal(&db, &card, false).await, None, "9 minutes on, still fresh");
     dev::set_clock_skew(11 * 60);
     assert!((dev::now() - Utc::now() - Duration::minutes(11)).num_seconds().abs() <= 1);
-    let refusal = floor::allow_refusal(&db, &card).await.expect("11 minutes on, Allow is refused");
+    let refusal = floor::allow_refusal(&db, &card, false).await.expect("11 minutes on, Allow is refused");
     assert_eq!(refusal["backup"]["state"], "old", "{refusal}");
     dev::set_clock_skew(0);
-    assert_eq!(floor::allow_refusal(&db, &card).await, None);
+    assert_eq!(floor::allow_refusal(&db, &card, false).await, None);
 }
 
 #[tokio::test]
