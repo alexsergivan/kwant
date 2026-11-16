@@ -452,7 +452,7 @@ test('18d: "You allowed / denied / sent it back" say the day when it was not tod
   const denied = { ...FX.heldDenied, held_actions: FX.heldDenied.held_actions.map((h) => ({ ...h, resolved_at: daysAgo(2) })) };
   r = await mount(denied, fakeApi().api);
   assert.match(r.qa('[data-held]')[0].textContent.replace(/\s+/g, ' '), new RegExp(`You denied this ${ON_DAY}\\. It didn’t run\\.`));
-  assert.doesNotMatch(r.qa('[data-held]')[0].textContent, / at (?:[A-Z][a-z]{2} \d|\d{1,2} [A-Z][a-z]{2}),/, 'never "at Nov 10, 9:40 AM"');
+  assert.doesNotMatch(r.qa('[data-held]')[0].textContent, / at (?:[A-Z][a-z]{2} \d|\d{1,2} [A-Z][a-z]{2}),/, 'never "at Nov 10, 9:40\u00a0AM"');
   const back = { ...FX.failRoundLimit, previous_round: { ...FX.failRoundLimit.previous_round, sent_back_at: daysAgo(4) } };
   r = await mount(back, fakeApi().api);
   assert.match(r.q('[data-round-box]').textContent.replace(/\s+/g, ' '), new RegExp(`You sent it back ${ON_DAY}:`));
@@ -469,11 +469,11 @@ test('18d: the checker line says the day when the check was not today', () => {
   const item = (checked_at) => ({ ...FX.heldAllowed, verdict: { ...FX.heldAllowed.verdict, result: 'pass', checker: { engine: 'Codex' }, checked_at } });
   const before = m.checkerMeta(item(at955(5)));
   assert.match(before, /^Checked by fresh eyes on Codex on (?:[A-Z][a-z]{2} \d{1,2}|\d{1,2} [A-Z][a-z]{2})(?:,? \d{4})? at (?:9:55\s?AM|09:55)/);
-  assert.doesNotMatch(before, / at (?:[A-Z][a-z]{2} \d|\d{1,2} [A-Z][a-z]{2}),/, 'never "at Nov 10, 9:55 AM"');
+  assert.doesNotMatch(before, / at (?:[A-Z][a-z]{2} \d|\d{1,2} [A-Z][a-z]{2}),/, 'never "at Nov 10, 9:55\u00a0AM"');
   if (Intl.DateTimeFormat().resolvedOptions().locale === 'en-US') {
     const d = new Date(at955(5));
     const day = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== t.getFullYear() ? { year: 'numeric' } : {}) });
-    assert.ok(before.startsWith(`Checked by fresh eyes on Codex on ${day} at 9:55 AM`), before);
+    assert.ok(before.startsWith(`Checked by fresh eyes on Codex on ${day} at 9:55\u00a0AM`), before);
   }
   assert.match(m.checkerMeta(item(at955(0))), /^Checked by fresh eyes on Codex at (?:9:55\s?AM|09:55)(?: ·|$)/);
   assert.equal(m.checkerMeta(item(null)).startsWith('Checked by fresh eyes on Codex'), true);

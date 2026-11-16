@@ -1,6 +1,7 @@
 //! One browser service per installation; isolated CDP contexts per bot/team.
 //! The private CDP endpoint is used only by the server, never by the web client.
 use super::browser::{outage, BrowserController, BrowserError, Outage};
+use super::browser_downloads::DownloadHome;
 use super::chrome_download::{self, ChromeSetup};
 use super::browser_proxy::{BrowserProxy, ENV_BYPASS, ENV_PROXY};
 use super::computer::{self, ComputerMode};
@@ -294,7 +295,7 @@ impl BrowserService {
         })
     }
 
-    async fn docker(args: &[&str], seconds: u64) -> Result<String, BrowserError> {
+    pub(crate) async fn docker(args: &[&str], seconds: u64) -> Result<String, BrowserError> {
         let out = timeout(Duration::from_secs(seconds), Command::new("docker")
             .args(args).kill_on_drop(true).output()).await
             .map_err(|_| BrowserError::Timeout)?
@@ -673,7 +674,8 @@ impl BrowserService {
         // download staging, outside any bot's workspace (see `browser_downloads.rs`'s doc).
         let download_staging = self.root.join("attachments").join("download-tmp");
         let context_id = (!session.context.is_empty()).then_some(session.context.clone());
-        ctrl.configure_downloads(workspace.to_path_buf(), local, context_id, download_staging).await;
+        let home = download_home(local, self.endpoint.is_some(), &self.root);
+        ctrl.configure_downloads(workspace.to_path_buf(), home, context_id, download_staging).await;
         Ok(ctrl)
     }
 
@@ -854,6 +856,19 @@ pub fn managed_run_args(name: &str, root: &Path, proxy: Option<&BrowserProxy>) -
     args
 }
 
+/// Where a session's browser keeps its downloads: Chrome on this computer, kwant's own browser
+/// container (vm mode with no `KWNT_BROWSER_CDP_URL`), or a browser on another computer that
+/// kwant only reaches over DevTools.
+pub fn download_home(local: bool, external_endpoint: bool, root: &Path) -> DownloadHome {
+    if local {
+        DownloadHome::Local
+    } else if external_endpoint {
+        DownloadHome::Elsewhere
+    } else {
+        DownloadHome::Container(managed_container_name(root))
+    }
+}
+
 /// The VM browser container of the kwant whose data folder is `root`: one name per installation
 /// avoids collisions between local kwant instances.
 pub fn managed_container_name(root: &Path) -> String {
@@ -869,6 +884,17 @@ mod reaper_tests {
 
     const LIMIT: Duration = Duration::from_secs(30 * 60);
     const MIN: Duration = Duration::from_secs(60);
+
+    // 20g: only a browser kwant runs itself in Docker gets its downloads copied out; a browser
+    // the person pointed kwant at elsewhere keeps refusing, and local mode wins over both.
+    #[test]
+    fn downloads_come_home_from_the_managed_container_only() {
+        let root = Path::new("/srv/kwnt-data");
+        assert_eq!(download_home(true, false, root), DownloadHome::Local);
+        assert_eq!(download_home(true, true, root), DownloadHome::Local);
+        assert_eq!(download_home(false, true, root), DownloadHome::Elsewhere);
+        assert_eq!(download_home(false, false, root), DownloadHome::Container(managed_container_name(root)));
+    }
 
     #[test]
     fn a_container_whose_data_folder_is_gone_is_removed_running_or_not() {
