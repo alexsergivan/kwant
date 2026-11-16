@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
+import { holdTimers } from './heldTimers.mjs';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/s/spc_demo', pretendToBeVisual: true });
 const g = globalThis;
@@ -431,23 +432,32 @@ test('F3 DOM: the toast goes after its time, paused while focus is inside; on a 
   document.body.appendChild(form);
   Object.defineProperty(window, 'innerHeight', { value: 844, configurable: true });
   let closed = 0;
-  const st = m.parseDevMode(server.state);
-  const host = document.createElement('div');
-  document.body.appendChild(host);
-  const root = createRoot(host);
-  root.render(h(m.DevOnToast, { state: st, phone: true, onOpenDesk: noop, onTypeRepo: noop, onUndo: async () => {}, onClose: () => closed++, timeout: 40 }));
-  await settle();
-  const wrap = document.querySelector('[data-dev-on-toast]');
-  assert.equal(wrap.style.bottom, '152px', '844 − 700 + 8: above the chat box, never over Send');
-  const undo = wrap.querySelector('[data-dev-on-toast-undo]');
-  undo.focus();
-  await new Promise((r) => setTimeout(r, 120));
-  assert.equal(closed, 0, 'held while focus is inside');
-  undo.blur();
-  await new Promise((r) => setTimeout(r, 120));
-  assert.equal(closed, 1, 'closes once its time is up');
-  root.unmount();
-  form.remove();
+  // The toast's 40 ms timer is held and fired by the test, so a slow settle() can't close it before focus
+  // is inside (22e). Its time being up is clock.run().
+  const clock = holdTimers((ms) => ms === 40);
+  try {
+    const st = m.parseDevMode(server.state);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    root.render(h(m.DevOnToast, { state: st, phone: true, onOpenDesk: noop, onTypeRepo: noop, onUndo: async () => {}, onClose: () => closed++, timeout: 40 }));
+    await settle();
+    const wrap = document.querySelector('[data-dev-on-toast]');
+    assert.equal(wrap.style.bottom, '152px', '844 − 700 + 8: above the chat box, never over Send');
+    const undo = wrap.querySelector('[data-dev-on-toast-undo]');
+    undo.focus();
+    await settle();
+    clock.run();
+    assert.equal(closed, 0, 'held while focus is inside');
+    undo.blur();
+    await settle();
+    clock.run();
+    assert.equal(closed, 1, 'closes once its time is up');
+    root.unmount();
+  } finally {
+    clock.restore();
+    form.remove();
+  }
 });
 
 test('F8 DOM: the off note’s Turn back on turns Dev mode on in one press and closes the note', async () => {
@@ -786,19 +796,28 @@ test('K1 DOM: Tab from the switch goes straight to the toast; Shift+Tab goes bac
 
 test('K1 DOM: the toast stays while keyboard focus or the pointer is on the switch, and goes after its time once they leave', async () => {
   let closed = 0;
-  const { root, sw } = await withSwitch({ onClose: () => closed++, timeout: 40 });
-  sw.focus();
-  sw.dispatchEvent(new window.FocusEvent('focus'));
-  await new Promise((r) => setTimeout(r, 120));
-  assert.equal(closed, 0, 'held while focus is on the switch');
-  sw.blur();
-  sw.dispatchEvent(new window.Event('pointerenter'));
-  await new Promise((r) => setTimeout(r, 120));
-  assert.equal(closed, 0, 'held while the pointer is over the switch');
-  sw.dispatchEvent(new window.Event('pointerleave'));
-  await new Promise((r) => setTimeout(r, 120));
-  assert.equal(closed, 1);
-  root.unmount();
+  // Same as F3: the 40 ms timer is held, so withSwitch()'s settle() can't outlast it under load (22e).
+  const clock = holdTimers((ms) => ms === 40);
+  try {
+    const { root, sw } = await withSwitch({ onClose: () => closed++, timeout: 40 });
+    sw.focus();
+    sw.dispatchEvent(new window.FocusEvent('focus'));
+    await settle();
+    clock.run();
+    assert.equal(closed, 0, 'held while focus is on the switch');
+    sw.blur();
+    sw.dispatchEvent(new window.Event('pointerenter'));
+    await settle();
+    clock.run();
+    assert.equal(closed, 0, 'held while the pointer is over the switch');
+    sw.dispatchEvent(new window.Event('pointerleave'));
+    await settle();
+    clock.run();
+    assert.equal(closed, 1);
+    root.unmount();
+  } finally {
+    clock.restore();
+  }
 });
 
 test('K1 DOM: Dismiss from the keyboard puts focus back on the switch', async () => {

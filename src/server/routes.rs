@@ -1205,7 +1205,7 @@ pub(super) fn run_handoffs_boxed<'a>(
 /// person's `user` message. `from` already took the person's ask, so the teammate builds on what
 /// it did or decided and never reverses it (2026-11-09 10:24: Growth built the mockup the person
 /// asked for while Frontend, handed the same message, answered "build nothing").
-fn handoff_prompt(from: &str, user: &str, from_text: &str) -> String {
+pub(super) fn handoff_prompt(from: &str, user: &str, from_text: &str) -> String {
     format!(
         "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{text}\n\n\
         {rule}\n\n\
