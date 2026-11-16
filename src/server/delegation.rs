@@ -76,12 +76,18 @@ fn as_asked(m: &Message, text: String) -> String {
     crate::drivers::user_history_text(&Message { text, ..m.clone() })
 }
 
+/// What was asked among `msgs` (oldest first), as a hand-off's "the user's original request"
+/// passes it on (20b): see [`asked_in`] and [`as_asked`]; `None` when there is no "user" message.
+/// A lead's keep-going hand-off uses it too (22b).
+pub(super) fn asked_text(msgs: &[Message]) -> Option<String> {
+    asked_in(msgs, |_| true).map(|m| as_asked(m, m.text.clone()))
+}
+
 /// What was asked in chat `context`, for a hand-off's "the user's original request" (20b): see
-/// [`asked_in`] and [`as_asked`]; `fallback` (the delegation's task) when the chat has no "user"
-/// message.
+/// [`asked_text`]; `fallback` (the delegation's task) when the chat has no "user" message.
 async fn request_text(state: &AppState, context: &str, fallback: &str) -> String {
     let msgs = state.db.list_messages(context, 100).await.unwrap_or_default();
-    asked_in(&msgs, |_| true).map(|m| as_asked(m, m.text.clone())).unwrap_or_else(|| fallback.to_string())
+    asked_text(&msgs).unwrap_or_else(|| fallback.to_string())
 }
 
 /// A specialist's reply as posted to the origin chat: clipped, saying where the rest is.

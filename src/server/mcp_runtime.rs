@@ -49,11 +49,24 @@ pub struct PermissionSession {
     gateway: Arc<Mutex<Option<Arc<McpToolSession>>>>,
     /// Cancelled when the turn ends: calls still waiting (for a card) give up.
     ended: CancellationToken,
+    /// 21d: the turn's repeat guard for claude's own tools (Bash, Read…), fed by its hooks
+    /// ([`permission_hook_endpoint`]). Separate from 18a's guard for kwnt's own tools; it goes
+    /// when `finish_turn` drops the session.
+    pub repeats: Arc<crate::mcp::repeat_guard::RepeatGuard>,
 }
 
 impl PermissionSession {
     pub fn new(kwant_id: String, kwant_name: String, turn_id: String, ctx: McpTurnContext, cwd: Option<PathBuf>) -> Self {
-        Self { kwant_id, kwant_name, turn_id, ctx, cwd, gateway: Default::default(), ended: CancellationToken::new() }
+        Self {
+            kwant_id,
+            kwant_name,
+            turn_id,
+            ctx,
+            cwd,
+            gateway: Default::default(),
+            ended: CancellationToken::new(),
+            repeats: Default::default(),
+        }
     }
 
     fn caller(&self) -> Caller {
@@ -562,7 +575,7 @@ fn turn_conversation(state: &AppState, turn_id: &str) -> String {
 
 /// The chat a tracked turn runs in, as `{"thread_id"}`, `{"channel_id"}` or
 /// `{"direct_kwant_id"}`; `None` for a turn kwnt isn't tracking.
-async fn turn_chat(state: &AppState, turn_id: &str) -> Option<Value> {
+pub(super) async fn turn_chat(state: &AppState, turn_id: &str) -> Option<Value> {
     let turn = state.turns.active_turns().into_iter().find(|t| t.turn_id == turn_id)?;
     Some(match turn.thread_id {
         Some(thread) => json!({"thread_id": thread}),
@@ -1340,6 +1353,24 @@ pub async fn permission_endpoint(
         }
         "tools/call" => rpc_error(id, -32602, "unknown tool"),
         _ => rpc_error(id, -32601, "method not found"),
+    }
+}
+
+/// `POST /api/mcp/permission/:token/hook`: claude's PreToolUse, PostToolUse and
+/// PostToolUseFailure hooks for this turn's built-in tools ([`mcp::cli_hooks`]). Answers a
+/// PreToolUse deny when the same call already failed 3 times the same way, and nothing otherwise
+/// (204). An unknown token is a 404, which the hook's `curl -f` turns into no output: the call runs.
+pub async fn permission_hook_endpoint(State(state): State<AppState>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
+    let session = state.mcp_sessions.lock().await.get(&token).cloned();
+    let Some(session) = session else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match mcp::cli_hooks::on_event(&session.repeats, &msg) {
+        Some(out) => {
+            tracing::info!(kwant = %session.kwant_id, turn = %session.turn_id, "repeat guard: a claude tool call was denied");
+            Json(out).into_response()
+        }
+        None => StatusCode::NO_CONTENT.into_response(),
     }
 }
 

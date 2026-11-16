@@ -105,19 +105,20 @@ export function viewAfterSpaceSwitch(view: SpaceView | null | undefined): SpaceV
   return view?.kind === 'settings' ? view : null;
 }
 
-const INSTALL_TIP_KEY = 'kwnt.installTip.dismissed';
+const PHONE_TIP_KEY = 'kwnt.phoneTip.dismissed';
 
-/** The desktop "Install app" tip shows until it is dismissed or the app is installed. */
-export function installTipDismissed(): boolean {
+/** The desktop sidebar's one-time "Tip: use kwant bots on your phone" shows until it is dismissed
+ *  or clicked. A new key on purpose: people who dismissed the old install tip see this once. */
+export function phoneTipDismissed(): boolean {
   try {
-    return localStorage.getItem(INSTALL_TIP_KEY) === '1';
+    return localStorage.getItem(PHONE_TIP_KEY) === '1';
   } catch {
     return false;
   }
 }
-export function dismissInstallTip() {
+export function dismissPhoneTip() {
   try {
-    localStorage.setItem(INSTALL_TIP_KEY, '1');
+    localStorage.setItem(PHONE_TIP_KEY, '1');
   } catch {
     // private mode: it comes back next load
   }
