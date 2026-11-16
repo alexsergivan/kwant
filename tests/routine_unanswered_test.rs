@@ -128,9 +128,13 @@ async fn a_routine_whose_only_call_nobody_answers_needs_you() {
         .iter()
         .position(|(s, w, a)| s == "running" && *w && a.as_deref() == Some(card.as_str()));
     let open = open.unwrap_or_else(|| panic!("a waiting event with the card: {seen:?}"));
+    // Search only after the waiting event: the run's first "running" event
+    // (before any card) also has the flag off.
     let closed = seen
         .iter()
-        .position(|(s, w, a)| s == "running" && !*w && a.is_none());
+        .skip(open + 1)
+        .position(|(s, w, a)| s == "running" && !*w && a.is_none())
+        .map(|i| i + open + 1);
     assert!(
         closed.is_some_and(|c| c > open),
         "the flag clears when the wait ends: {seen:?}"
