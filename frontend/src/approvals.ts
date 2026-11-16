@@ -9,6 +9,8 @@ import type { AwayItem, AwayLink } from './away';
 export interface ChatApproval extends PendingApproval {
   kwant_id: string | null;
   link: AwayLink | null;
+  /** 22d: a customer's call nobody allowed (a closed `refused` row), drawn as a quiet line, never a card. */
+  refused?: true;
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
@@ -135,6 +137,8 @@ export interface ApprovalRecord {
   answered_via?: string | null;
   created_at?: string | null;
   details?: unknown;
+  /** 22a: the chat the call happened in, in a card's shape; null when the server didn't store one. */
+  link?: AwayLink | null;
 }
 
 /** How long after it was asked a Telegram-allowed approval is still drawn after a reload. */
@@ -157,6 +161,43 @@ export function settledFromRecords(rows: unknown, now = Date.now()): ChatApprova
     out.push({ id: r.id, tool_name: str(r.tool_name) ?? 'tool', details, kwant_id: kwantId, link: null, asked_at: r.created_at as string });
   }
   return out.reverse(); // the server sends newest first; the chat reads oldest first
+}
+
+/** A row's chat when it names exactly one; anything else (missing, empty, malformed) is no chat. */
+function recordLink(v: unknown): AwayLink | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const l = v as Record<string, unknown>;
+  const link: AwayLink = { thread_id: str(l.thread_id), channel_id: str(l.channel_id), direct_kwant_id: str(l.direct_kwant_id) };
+  return [link.thread_id, link.channel_id, link.direct_kwant_id].filter(Boolean).length === 1 ? link : null;
+}
+
+/**
+ * 22d: `GET /api/approvals?status=refused` rows from the last day: a customer's call that didn't run
+ * because nobody allowed it. Each is drawn only in the chat it happened in, so a row without a chat
+ * (stored before 22a) is drawn nowhere, never in "every chat with this bot".
+ */
+export function refusedFromRecords(rows: unknown, now = Date.now()): ChatApproval[] {
+  if (!Array.isArray(rows)) return [];
+  const out: ChatApproval[] = [];
+  for (const r of rows as ApprovalRecord[]) {
+    if (!r || typeof r.id !== 'string' || r.status !== 'refused') continue;
+    const link = recordLink(r.link);
+    if (!link) continue;
+    const at = str(r.created_at) ? Date.parse(r.created_at as string) : NaN;
+    if (!Number.isFinite(at) || now - at > SETTLED_KEEP_MS) continue;
+    const details = r.details && typeof r.details === 'object' && !Array.isArray(r.details) ? (r.details as Record<string, unknown>) : {};
+    out.push({ id: r.id, tool_name: str(r.tool_name) ?? 'tool', details, kwant_id: str(r.kwant_id) ?? str(details.kwant_id), link, asked_at: r.created_at as string, refused: true });
+  }
+  return out.reverse();
+}
+
+/** Settled lines oldest first by when they were asked; a line with no time keeps its place after the timed ones. */
+export function settledByTime(list: ChatApproval[]): ChatApproval[] {
+  const t = (a: ChatApproval) => {
+    const v = a.asked_at ? Date.parse(a.asked_at) : NaN;
+    return Number.isFinite(v) ? v : Infinity;
+  };
+  return list.map((a, i) => [a, i] as const).sort((x, y) => t(x[0]) - t(y[0]) || x[1] - y[1]).map(([a]) => a);
 }
 
 /** Adds settled cards once each, keeping the order they came in. */

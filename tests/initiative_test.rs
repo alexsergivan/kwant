@@ -325,8 +325,43 @@ async fn a_follow_up_excerpt_never_labels_a_customers_or_agents_words_as_the_per
     // A connected agent's: named, labelled and framed
     assert!(ctx.contains("Codex (agent): [Message from outside agent Codex"), "{ctx}");
     assert!(!ctx.contains("Person: Codex"), "{ctx}");
-    // A bot's chat-API message: "a bot"
-    assert!(line("Scout says the courier is late.").contains("a bot: Scout says"), "{ctx}");
+    // A bot's chat-API message: "a bot", framed as a bot's (22n), never bare
+    assert!(ctx.contains("a bot: [Message from bot unnamed (another assistant)."), "{ctx}");
+    assert!(ctx.contains("\nScout says the courier is late.\n[End of message from unnamed]"), "framed to its end: {ctx}");
+    assert!(!ctx.contains("a bot: Scout says"), "{ctx}");
+    assert_eq!(ctx.matches("Person:").count(), 1, "only the person's own line: {ctx}");
+}
+
+/// 22q: a bot's chat-API message saved with its sender's name (from its turn token) is named and
+/// framed as that bot's in a follow-up excerpt, never "a bot" / "unnamed" and never the person's.
+/// Its own test: the excerpt holds 3 messages before the anchor (the last user-role message), so
+/// the one above can't fit a fifth user-role line without pushing the person's out.
+#[tokio::test]
+async fn a_follow_up_excerpt_names_a_bots_message_by_the_name_saved_from_its_token() {
+    let e = setup().await;
+    let thread = e.state.db.create_thread(&e.bot.id, "Apology", "chat", None, "user").await.unwrap();
+    let plain = MessageExtra { thread_id: Some(thread.id.clone()), meta: None };
+    let named = MessageExtra {
+        thread_id: Some(thread.id.clone()),
+        meta: Some(json!({"sent_by_bot": true, "sent_by_bot_name": "Writer", "sent_by_kwant_id": "k-writer"})),
+    };
+    e.state.db.insert_message_with(&say(None, None, "user", "user", "Keep refunds under 50 EUR."), &plain).await.unwrap();
+    e.state.db.insert_message_with(&say(None, None, "user", "user", "Writer drafted the apology."), &named).await.unwrap();
+    e.state.db.insert_message_with(&say(None, None, "kwant", &e.bot.name, "I'll send it Friday."), &plain).await.unwrap();
+    let origin = TurnOrigin { thread_id: Some(thread.id.clone()), direct_kwant_id: Some(e.bot.id.clone()), ..Default::default() };
+    let token = turn_in(&e, &e.bot, origin, "t-apology").await;
+    let at = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
+    ok(&e, &token, "follow_up_create", json!({"at": at, "check": "Send the apology."})).await;
+    let row = e.state.db.get_routine(routines(&e).await[0]["id"].as_str().unwrap()).await.unwrap().unwrap();
+    for i in 0..25 {
+        e.state.db.insert_message_with(&say(None, None, "kwant", &e.bot.name, &format!("later chatter {i}")), &plain).await.unwrap();
+    }
+
+    let ctx = scheduler::follow_up_context(&e.state, &row, &e.bot, "none").await;
+    assert!(ctx.contains("Person: Keep refunds under 50 EUR."), "{ctx}");
+    assert!(ctx.contains("Writer (bot): [Message from bot Writer (another assistant)."), "{ctx}");
+    assert!(ctx.contains("\nWriter drafted the apology.\n[End of message from Writer]"), "framed to its end: {ctx}");
+    assert!(!ctx.contains("a bot:") && !ctx.contains("unnamed"), "{ctx}");
     assert_eq!(ctx.matches("Person:").count(), 1, "only the person's own line: {ctx}");
 }
 
