@@ -365,7 +365,7 @@ async fn allow_once(state: &AppState, runner: &Runner, link: &TelegramLink, ask:
         let _ = runner.client.answer_callback(cb_id, Some(copy::ALREADY_ANSWERED)).await;
         return;
     }
-    let why = super::link_only_in(state, &runner.space, &details).await;
+    let why = super::allow_refusal(state, &runner.space, &details).await;
     if !(ask.allow && link.allow_approvals && why.is_none() && same) {
         let _ = state.db.telegram_ask_link_only(&ask.id).await;
         let _ = runner.client.answer_callback(cb_id, Some(copy::APPROVE_IN_KWANT)).await;
@@ -509,7 +509,7 @@ async fn on_approval(state: &AppState, id: &str, tool_name: &str, details: &Valu
         body.push_str(&format!(" on <code>{}</code>", text::escape(&clip(server, 60))));
     }
     body.push('.');
-    let why = super::link_only_in(state, &space, details).await;
+    let why = super::allow_refusal(state, &space, details).await;
     let allow = link.allow_approvals && why.is_none();
     let ask_id = new_ask_id();
     let mut rows = Vec::new();
@@ -692,7 +692,7 @@ async fn approval_details(state: &AppState, ask: &TelegramAsk) -> Value {
 
 async fn link_only(state: &AppState, r: &Runner, ask: &TelegramAsk, details: &Value) {
     let Ok(Some(link)) = state.db.telegram_link(&ask.space_id).await else { return };
-    let why = super::link_only_in(state, &ask.space_id, details).await;
+    let why = super::allow_refusal(state, &ask.space_id, details).await;
     let html = format!("{}\n\n<i>{}</i>", ask.text, text::escape(&excluded_reason(why, link.allow_approvals)));
     let kwant = details["kwant_id"].as_str();
     edit(state, r, ask, html, open_markup(state, &link, &ask.space_id, kwant).await);

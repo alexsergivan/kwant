@@ -153,8 +153,11 @@ async fn a_browser_that_stays_stalled_is_reported_busy_and_retryable() {
 
 #[tokio::test]
 async fn a_browser_that_is_not_there_gets_the_docker_text_at_once() {
-    // a port nothing listens on: connection refused
-    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+    // a port nothing listens on: connection refused. The socket stays bound (never listening) for
+    // the whole test, so no parallel test's server is given this port; a freed port could go to a
+    // stalled mock browser, which turned "not there" into "overloaded" after 40 s (#649 CI)
+    let refusing = refusing_port();
+    let closed = refusing.local_addr().unwrap().port();
     let tmp = tempfile::tempdir().unwrap();
     let (_state, id, port, app_task) = server(format!("http://127.0.0.1:{closed}"), &tmp).await;
 
@@ -168,6 +171,27 @@ async fn a_browser_that_is_not_there_gets_the_docker_text_at_once() {
     assert!(started.elapsed() < Duration::from_secs(5), "a refused connection isn't retried for 45 s");
 
     app_task.abort();
+    drop(refusing);
+}
+
+/// A loopback port that refuses every connection for as long as the socket lives: bound, never
+/// listening, and without SO_REUSEADDR so no other socket can bind it meanwhile.
+fn refusing_port() -> tokio::net::TcpSocket {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_reuseaddr(false).unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    socket
+}
+
+#[tokio::test]
+async fn a_held_refusing_port_refuses_and_cannot_be_taken() {
+    let refusing = refusing_port();
+    let addr = refusing.local_addr().unwrap();
+    let err = tokio::net::TcpStream::connect(addr).await.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
+    // a server binding the same port (tokio's TcpListener sets SO_REUSEADDR) is refused
+    assert!(TcpListener::bind(addr).await.is_err(), "the port is held for the whole test");
+    drop(refusing);
 }
 
 #[tokio::test]
