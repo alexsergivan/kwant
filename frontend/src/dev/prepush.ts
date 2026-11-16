@@ -535,7 +535,7 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
     const at = c.status === 'pushed' ? (usedAt(c) ?? c.updated_at) : null;
     // One source for the override's first line: the card renders it as the lead (Mira FIX 2).
     const lead = overriddenLine(c, bot);
-    if (at !== null || c.status === 'pushed') return { step: 'pushed', lead, now: pushedLine(at), next: null, at, approval: null };
+    if (at !== null || c.status === 'pushed') return { step: 'pushed', lead, now: pushedLine(at, now), next: null, at, approval: null };
     const exp = c.grant?.expires_at ?? null;
     if (c.grant && c.grant.used_at === null && exp !== null && now >= exp)
       // Ada (Nov 13), Mira's FIX 7 rule: in an expired step the lead drops its promise.
@@ -551,7 +551,7 @@ export function storyOf(c: PrepushCard, cards: PrepushCard[], bot: string, appro
   const next = followUp(c, cards);
   const at = usedAt(next, c);
   const base = { lead, next, approval: null, at: null };
-  if (at !== null) return { ...base, step: 'pushed', now: pushedLine(at), at };
+  if (at !== null) return { ...base, step: 'pushed', now: pushedLine(at, now), at };
   // The lead says only what the person did once its promise no longer holds (Mira FIX 7, Ada round 3).
   const plain = `You asked ${bot} to fix this and push again.`;
   const exp = c.grant?.expires_at ?? null;
@@ -606,7 +606,11 @@ export function liveCard(c: PrepushCard, cards: PrepushCard[]): PrepushCard {
   return cur;
 }
 
-export const pushedLine = (at: number | null): string => (hhmm(at) ? `Pushed · ${hhmm(at)}` : 'Pushed');
+/** "Pushed · 8:15 PM" today, "Pushed · Nov 10, 8:15 PM" on another day (roadmap 19d). */
+export const pushedLine = (at: number | null, now: number = Date.now()): string => {
+  const t = at === null ? null : localClock(at, now);
+  return t ? `Pushed · ${t}` : 'Pushed';
+};
 /** Mira FIX 3: "still" and "always ask" say the press covered the usual OK, not this kind. */
 export const asksLine = (bot: string, a: PushApproval): string =>
   a.reason ? `${bot}'s push still needs your OK. ${a.reason.charAt(0).toUpperCase()}${a.reason.slice(1)}. Pushes like this always ask, every time.` : `${bot}'s push still needs your OK. Pushes like this always ask, every time.`;

@@ -16,7 +16,7 @@ import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
-import { type AttentionRow, type NeedsYouRow, PINNED_RANK, workingIds, directIds, rollupLabel } from '../chatsTab';
+import { type AttentionRow, type NeedsYouRow, PINNED_RANK, NEEDS_YOU_LABEL, workingIds, directIds, rollupLabel } from '../chatsTab';
 import type { InboxItem } from '../api/inbox';
 import { useDevMode } from './DevModeSwitch';
 import { MovedPointer, SpaceSubline } from './FirstScreenBits';
@@ -158,7 +158,7 @@ export interface SidebarProps {
   inboxCount?: number;
   inboxActive?: boolean;
   onOpenInbox?: () => void;
-  /** Parallel Universe, behind "More". */
+  /** Parallel Universe, a plain row (14c: the one-item "More" menu is gone). */
   parallelActive?: boolean;
   onOpenParallel?: () => void;
   /** Shows the Mission board row; the server's mission_board setting decides. */
@@ -230,80 +230,11 @@ export function botGroups(teams: Team[], kwants: Kwant[]): Array<{ team: Team | 
   return groups;
 }
 
-/** "More": the places used less often, in a small menu. */
-const MoreMenu: React.FC<{
-  className: string;
-  active: boolean;
-  items: Array<{ label: string; icon: React.ReactNode; active?: boolean; onClick: () => void }>;
-}> = ({ className, active, items }) => {
-  const [open, setOpen] = useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-  const menuId = React.useId();
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      setOpen(false);
-      ref.current?.querySelector<HTMLElement>('button')?.focus();
-    };
-    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('mousedown', onDown);
-    ref.current?.querySelector<HTMLElement>('[role=menuitem]')?.focus();
-    return () => {
-      window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('mousedown', onDown);
-    };
-  }, [open]);
-  return (
-    <div ref={ref} className="relative" data-more-menu>
-      <button
-        type="button"
-        onClick={() => {
-          playSfx('click');
-          setOpen((v) => !v);
-        }}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        className={className}
-      >
-        <MoreHorizontal size={15} className={active ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
-        <span className="truncate flex-1">More</span>
-        <ChevronDown size={12} className={`shrink-0 text-zinc-500 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
-      </button>
-      {open && (
-        <div id={menuId} role="menu" aria-label="More" className="absolute left-0 right-0 top-full mt-1 z-30 rounded-lg border border-zinc-700/70 bg-zinc-900 p-1 shadow-xl">
-          {items.map((it) => (
-            <button
-              key={it.label}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                it.onClick();
-              }}
-              aria-current={it.active ? 'page' : undefined}
-              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-                it.active ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
-              }`}
-            >
-              <span className={it.active ? 'text-sky-400' : 'text-zinc-500'}>{it.icon}</span>
-              {it.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
 /** H5: the most rows the desktop's pinned block shows before "and n more in Inbox". */
 export const PINNED_MAX = 5;
 
 /**
- * H5 desktop: "Needs attention · n", ranks 1–4 above Channels. Gone when empty. The count is announced
+ * H5 desktop: "Needs you · n" (14c: the phone's name too), ranks 1–4 above Channels. Gone when empty. The count is announced
  * politely, at most once per 10 s, from a live region holding only the heading's words.
  */
 const NeedsAttention: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<Kwant>) => React.ReactNode; onOpenInbox?: () => void }> = ({ rows, row, onOpenInbox }) => {
@@ -322,12 +253,12 @@ const NeedsAttention: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: Attention
   const more = n - PINNED_MAX;
   return (
     <section data-needs-attention aria-labelledby="needs-attention-head" className="rounded-xl border border-hairline bg-white/[0.015] my-1.5 pb-1.5">
-      <h2 id="needs-attention-head" className="px-2 pt-1.5 pb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-amber-300" aria-label={`Needs attention, ${n}`}>
+      <h2 id="needs-attention-head" className="px-2 pt-1.5 pb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-amber-300" aria-label={`${NEEDS_YOU_LABEL}, ${n}`}>
         <Hand size={12} aria-hidden="true" />
-        <span aria-hidden="true">Needs attention · {n}</span>
+        <span aria-hidden="true">{NEEDS_YOU_LABEL} · {n}</span>
       </h2>
       <span className="sr-only" aria-live="polite" data-needs-attention-live>
-        {said !== n || lastSaid.current ? `Needs attention, ${said}` : ''}
+        {said !== n || lastSaid.current ? `${NEEDS_YOU_LABEL}, ${said}` : ''}
       </span>
       <div className="space-y-0.5 px-0.5">
         {rows.slice(0, PINNED_MAX).map((a) => (
@@ -465,7 +396,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const byRank = (r: number) => (chatsTab && attention ? attention.filter((a) => a.rank === r) : []);
   const phoneSections = chatsTab && attention
     ? ([
-        { key: 'needs', head: 'Needs you', tone: '!text-[11px] !leading-4 !tracking-[0.06em] !text-warn', rows: byRank(1) },
+        { key: 'needs', head: NEEDS_YOU_LABEL, tone: '!text-[11px] !leading-4 !tracking-[0.06em] !text-warn', rows: byRank(1) },
         { key: 'stuck', head: 'Stuck', tone: '!text-rose-300', rows: byRank(2) },
         { key: 'review', head: 'To review', tone: '!text-sky-300', rows: byRank(3) },
         { key: 'finished', head: 'Finished', tone: '', rows: byRank(4) },
@@ -1029,11 +960,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <IdeaJarRow active={ideaJarActive} count={ideaJarCount} onOpen={onOpenIdeaJar} onDrop={onDropIdea} className={navRow(ideaJarActive)} />
           )}
           {onOpenParallel && (
-            <MoreMenu
-              className={navRow(parallelActive)}
-              active={parallelActive}
-              items={[{ label: 'Parallel Universe', icon: <Split size={15} aria-hidden="true" />, active: parallelActive, onClick: onOpenParallel }]}
-            />
+            // 14c: "More" held only this one place, so it is a plain row, like Routines.
+            <button type="button" onClick={onOpenParallel} aria-current={parallelActive ? 'page' : undefined} className={navRow(parallelActive)} data-parallel-row>
+              <Split size={15} className={parallelActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
+              <span className="truncate flex-1">Parallel Universe</span>
+            </button>
           )}
         </div>
         )}
@@ -1054,7 +985,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {!attOn && needsRows.length > 0 && (
           <section data-chats-section="needs" aria-labelledby="chats-needs-head">
             <h2 id="chats-needs-head" className={`${sectionHead} !text-[11px] !leading-4 !tracking-[0.06em] !text-warn`}>
-              Needs you · {needsRows.length}
+              {NEEDS_YOU_LABEL} · {needsRows.length}
             </h2>
             <div className="mt-1 space-y-0.5">
               {needsRows.map((r) => botRow(kwants.find((k) => k.id === r.kwant_id)!, undefined, { needs: r }))}
