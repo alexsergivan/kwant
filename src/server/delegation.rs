@@ -2000,6 +2000,9 @@ mod request_tests {
         assert!(text.starts_with("[Message from bot Scout (another assistant)") && text.ends_with("[End of message from Scout]"), "{text}");
         let anon = msg("user", "user", "Do it.", Some(json!({"sent_by_bot": true})));
         assert!(asked(&[anon]).unwrap().starts_with("[Message from bot unnamed"));
+        // 22q: the name saved from the bot's turn token names it, not the sender id it passed
+        let named = msg("user", "user", "Do it.", Some(json!({"sent_by_bot": true, "sent_by_bot_name": "Scout", "sent_by_kwant_id": "k1"})));
+        assert_eq!(asked(&[named]).unwrap(), crate::drivers::peer_message("Scout", "Do it."));
     }
 
     #[test]
