@@ -64,7 +64,7 @@ export const DeviceWaitView: React.FC<{ state: WaitState; now?: number; onStart:
             </button>
           </>
         ) : (
-          <p className="flex items-center justify-center gap-2 text-xs text-emerald-300">
+          <p className="flex items-center justify-center gap-2 text-xs text-ok">
             <ShieldCheck size={14} aria-hidden="true" /> Approved. Signing you in…
           </p>
         )}
@@ -463,8 +463,8 @@ export const AddDeviceView: React.FC<{
 
   if (state.kind === 'signed_in')
     return (
-      <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4" role="status" aria-live="polite">
-        <p className="flex items-center gap-2 text-xs font-medium text-emerald-200">
+      <div className="space-y-3 rounded-xl border border-teal-400/30 bg-teal-400/5 p-4" role="status" aria-live="polite">
+        <p className="flex items-center gap-2 text-xs font-medium text-teal-200">
           <Check size={14} aria-hidden="true" /> Signed in
         </p>
         <p className="text-[11px] text-zinc-400 leading-relaxed">

@@ -58,7 +58,7 @@ export const RouteChoiceCard: React.FC<RouteChoiceCardProps> = ({ meta, messageI
   };
 
   const status = outcome ? (
-    <span className="inline-flex items-center gap-1.5 text-emerald-300">
+    <span className="inline-flex items-center gap-1.5 text-ok">
       <CheckCircle2 size={13} aria-hidden="true" /> {outcome}
     </span>
   ) : sent === 'already' ? (
@@ -66,7 +66,7 @@ export const RouteChoiceCard: React.FC<RouteChoiceCardProps> = ({ meta, messageI
       <CheckCircle2 size={13} aria-hidden="true" /> Already answered.
     </span>
   ) : sent !== null ? (
-    <span className="inline-flex items-center gap-1.5 text-emerald-300">
+    <span className="inline-flex items-center gap-1.5 text-ok">
       <CheckCircle2 size={13} aria-hidden="true" /> {sent === 'general' ? 'Sent. A general answer is coming.' : `Sent. ${options.find((o) => o.key === sent)?.label ?? 'The bot'} is answering.`}
     </span>
   ) : (
@@ -109,7 +109,7 @@ export const RouteChoiceCard: React.FC<RouteChoiceCardProps> = ({ meta, messageI
                 onKeyDown={(e) => onKey(e, i)}
                 className={`flex items-start gap-2 min-h-[44px] px-3 py-2 rounded-xl text-left border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
                   chosen
-                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-100'
+                    ? 'bg-teal-400/15 border-teal-400/40 text-teal-100'
                     : open
                       ? 'bg-zinc-800/80 border-zinc-700 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600 active:scale-[0.98] disabled:opacity-60'
                       : 'bg-zinc-900 border-zinc-800 text-zinc-500'
@@ -120,7 +120,7 @@ export const RouteChoiceCard: React.FC<RouteChoiceCardProps> = ({ meta, messageI
                 </span>
                 <span className="min-w-0">
                   <span className="block text-sm font-medium break-words">{o.label}</span>
-                  {o.sub && <span className={`block text-[11px] break-words ${chosen ? 'text-emerald-200/80' : 'text-zinc-400'}`}>{o.sub}</span>}
+                  {o.sub && <span className={`block text-[11px] break-words ${chosen ? 'text-teal-200/80' : 'text-zinc-400'}`}>{o.sub}</span>}
                 </span>
               </button>
             );

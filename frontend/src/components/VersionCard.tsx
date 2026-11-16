@@ -117,7 +117,7 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
         return (
           <>
             <span className="inline-flex items-center gap-1.5 font-medium text-zinc-100">
-              <CheckCircle2 size={15} className="shrink-0 text-emerald-400" aria-hidden="true" />
+              <CheckCircle2 size={15} className="shrink-0 text-ok" aria-hidden="true" />
               You’re on the latest version
             </span>
             <button type="button" onClick={onCheck} className={quiet}>
@@ -218,7 +218,7 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
       case 'updated':
         return (
           <span className="inline-flex items-center gap-1.5 font-medium text-zinc-100">
-            <CheckCircle2 size={15} className="shrink-0 text-emerald-400" aria-hidden="true" />
+            <CheckCircle2 size={15} className="shrink-0 text-ok" aria-hidden="true" />
             Updated to kwant bots {line.version}
           </span>
         );

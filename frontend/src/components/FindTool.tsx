@@ -885,7 +885,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
           <span className="text-zinc-300">Waiting for you to finish signing in, in the new tab.</span>
         ) : status ? (
           <span className={status.ok ? 'text-zinc-300' : 'text-amber-300'} data-in-use>
-            {status.ok && <Check size={13} className="inline-block align-[-2px] mr-1 text-emerald-300" aria-hidden="true" />}
+            {status.ok && <Check size={13} className="inline-block align-[-2px] mr-1 text-ok" aria-hidden="true" />}
             {status.text}
           </span>
         ) : (
@@ -1079,7 +1079,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
     if (r.app.connected)
       return (
         <span className={`flex items-center gap-3 ${phone ? 'w-full' : ''}`}>
-          <span className="inline-flex items-center gap-1 text-xs text-emerald-300 whitespace-nowrap">
+          <span className="inline-flex items-center gap-1 text-xs text-ok whitespace-nowrap">
             <Check size={12} aria-hidden="true" /> Connected
           </span>
           {main('Choose bots', () => run(o), { primary: !composioUsers().length })}

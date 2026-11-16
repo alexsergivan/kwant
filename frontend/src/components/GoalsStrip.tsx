@@ -80,7 +80,7 @@ const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:o
 const btn = `inline-flex items-center justify-center gap-1 min-h-[40px] sm:min-h-[28px] px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed ${focusRing}`;
 const plainBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700`;
 const quietBtn = `${btn} text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800`;
-const goodBtn = `${btn} bg-emerald-600/90 text-white hover:bg-emerald-500`;
+const goodBtn = `${btn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`;
 const mainBtn = `${btn} bg-sky-600 text-white hover:bg-sky-500`;
 const dangerBtn = `${btn} border border-rose-500/40 text-rose-200 hover:bg-rose-500/10`;
 const linkBtn = `inline-flex items-center min-h-[40px] sm:min-h-0 rounded text-sky-300 underline underline-offset-2 hover:text-sky-200 ${focusRing}`;
@@ -91,7 +91,7 @@ const heading = 'text-[11px] font-medium uppercase tracking-wide text-zinc-500';
 const wrap = 'break-words [overflow-wrap:anywhere]';
 
 const PILL: Record<StatusLook['icon'], string> = {
-  met: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+  met: 'border-teal-400/40 bg-teal-400/10 text-teal-200',
   not_met: 'border-rose-500/40 bg-rose-500/10 text-rose-200',
   fixing: 'border-violet-500/40 bg-violet-500/10 text-violet-200',
   // Can't check: grey and dashed, so it can't be read as OK at a glance.
@@ -119,7 +119,7 @@ const CARD_EDGE: Record<string, string> = {
   draft: 'border-sky-500/30',
 };
 const TEXT: Record<Tone, string> = {
-  emerald: 'text-emerald-300',
+  emerald: 'text-ok',
   rose: 'text-rose-300',
   amber: 'text-amber-300',
   violet: 'text-violet-300',
@@ -1060,7 +1060,7 @@ export const GoalPanel: React.FC<{ title: string; onClose: () => void; children:
 };
 
 const DOT: Record<ReturnType<typeof goalEventTone>, string> = {
-  good: 'bg-emerald-400',
+  good: 'bg-teal-300',
   bad: 'bg-rose-400',
   warn: 'bg-amber-400',
   plain: 'bg-zinc-500',
@@ -1318,7 +1318,7 @@ export const KeepTrueBox: React.FC<{
   };
   if (made)
     return (
-      <p role="status" className={`flex flex-wrap items-center gap-x-2 text-[11px] text-emerald-300 ${wrap}`} data-keep-true-done>
+      <p role="status" className={`flex flex-wrap items-center gap-x-2 text-[11px] text-ok ${wrap}`} data-keep-true-done>
         <CheckCircle2 size={13} aria-hidden="true" />{' '}
         {already ? `Already kept true: “${made.title}”.` : `Goal added: “${made.title}”. It’s checked every ${intervalLabel(made.interval_minutes)}.`}
         <button type="button" onClick={() => onOpenGoal(made.id)} className={linkBtn} data-keep-true-open>
@@ -1919,7 +1919,7 @@ export const GoalsStrip: React.FC<{
         </button>
         {draftingLine && <div className="basis-full">{draftingLine}</div>}
         {notice && (
-          <p role="status" className={`basis-full text-emerald-300 ${wrap}`} data-goals-notice>
+          <p role="status" className={`basis-full text-ok ${wrap}`} data-goals-notice>
             {notice}
           </p>
         )}
@@ -1976,7 +1976,7 @@ export const GoalsStrip: React.FC<{
       {draftingLine}
       {firstMet && !firstDone && <FirstMomentLine kind="goal_met" onDone={() => setFirstDone(true)} />}
       {notice && (
-        <p role="status" className={`text-[11px] text-emerald-300 ${wrap}`} data-goals-notice>
+        <p role="status" className={`text-[11px] text-ok ${wrap}`} data-goals-notice>
           {notice}
         </p>
       )}

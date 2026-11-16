@@ -15,7 +15,7 @@ export function shortList(text: string): string[] | null {
   return parts.length >= 2 ? parts : null;
 }
 
-const ROLE_TINT: Partial<Record<ColumnRole, string>> = { pros: 'text-emerald-300', cons: 'text-rose-300' };
+const ROLE_TINT: Partial<Record<ColumnRole, string>> = { pros: 'text-ok', cons: 'text-rose-300' };
 
 /** S2: the small holo Pick sticker (spec §1, tilt +3), the same in the table and on the phone card. Not interactive. */
 const PickSticker: React.FC<{ reason: string | null }> = ({ reason }) => (

@@ -31,7 +31,7 @@ export const APP_TILES: AppTile[] = [
   { slug: 'googlecalendar', tint: 'text-sky-300', name: 'Google Calendar', blurb: 'See and add events', can: ['See your calendar', 'Find free time'], acts: 'Add or move events' },
   { slug: 'slack', tint: 'text-amber-200', name: 'Slack', blurb: 'Read and post messages', can: ['Read channels and threads', 'Search messages'], acts: 'Post messages' },
   { slug: 'notion', tint: 'text-zinc-200', name: 'Notion', blurb: 'Read and edit pages', can: ['Read and search your pages', 'Draft new pages'], acts: 'Change or delete pages' },
-  { slug: 'shopify', tint: 'text-emerald-300', name: 'Shopify', blurb: 'Orders and products', can: ['See orders, products and customers', 'Look up stock'], acts: 'Change orders or products' },
+  { slug: 'shopify', tint: 'text-ok', name: 'Shopify', blurb: 'Orders and products', can: ['See orders, products and customers', 'Look up stock'], acts: 'Change orders or products' },
   { slug: 'github', tint: 'text-violet-200', name: 'GitHub', blurb: 'Issues and pull requests', can: ['Read repositories, issues and pull requests', 'Draft issues and comments'], acts: 'Post, merge or close' },
 ];
 

@@ -159,7 +159,7 @@ const StatusPill: React.FC<{ server: McpServer; status?: StoredStatus; testing: 
     icon = <PauseCircle size={11} />;
     label = 'Paused';
   } else if (kind === 'ok' && status) {
-    cls = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
+    cls = 'bg-teal-400/10 text-ok border-teal-400/20';
     icon = <CheckCircle2 size={11} />;
     label = `Working · ${status.tools.length} ${status.tools.length === 1 ? 'tool' : 'tools'}`;
   } else if (kind === 'needs_sign_in') {
@@ -806,7 +806,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
               {server.transport === 'stdio' ? 'Runs a command on this machine' : 'Connects to a URL'}
               {secretCount > 0 && <span> · {secretCount} hidden {secretCount === 1 ? 'secret' : 'secrets'}</span>}
               {signedIn && (
-                <span className="text-emerald-300/80">
+                <span className="text-teal-300/80">
                   {' · '}
                   <ShieldCheck size={11} className="inline -mt-px mr-0.5" aria-hidden="true" />
                   Signed in

@@ -360,7 +360,7 @@ test('pros and cons columns: tinted headers, and short lists in the stacked card
   const { reply, results } = m.FIXTURES.comparison;
   const v = await mount(h(m.MarkdownRenderer, { content: reply, results, messageId: 'mc' }));
   assert.ok(v.host.querySelector('[data-smart-result="comparison"]'), 'the fixture renders');
-  assert.match(header(v.host, 'Pros').querySelector('button').className, /text-emerald-300/);
+  assert.match(header(v.host, 'Pros').querySelector('button').className, /text-ok/);
   assert.match(header(v.host, 'Cons').querySelector('button').className, /text-rose-300/);
   const card = v.host.querySelectorAll('[data-smart-result="comparison"] > div.sm\\:hidden > ul > li')[1];
   assert.deepEqual([...card.querySelectorAll('dd ul li')].map((li) => li.textContent), ['Preview builds', 'EU region', 'chat support']);

@@ -162,7 +162,7 @@ export const HirePolicyPanel: React.FC<{ spaceId: string; spaceName: string }> =
             </p>
           )}
           {notice && !error && (
-            <p role="status" className="text-[11px] text-emerald-300">
+            <p role="status" className="text-[11px] text-ok">
               {notice}
             </p>
           )}

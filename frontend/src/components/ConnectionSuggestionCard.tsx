@@ -45,7 +45,7 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
   const { phase } = state;
   const where = mac ? 'your browser' : 'the new tab';
   const border =
-    phase === 'connected' ? 'border-emerald-500/30' : phase === 'error' ? 'border-rose-500/40' : phase === 'missing' ? 'border-amber-500/30' : 'border-sky-500/35';
+    phase === 'connected' ? 'border-teal-400/30' : phase === 'error' ? 'border-rose-500/40' : phase === 'missing' ? 'border-amber-500/30' : 'border-sky-500/35';
   const again = (
     <button type="button" onClick={onConnect} className={quietBtn} data-connect-again>
       <Link2 size={13} aria-hidden="true" /> Open the sign-in again
@@ -79,7 +79,7 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
 
         <div className="px-4 pb-3 space-y-2 text-sm" aria-live="polite">
           {phase === 'connected' ? (
-            <p className="flex items-start gap-1.5 text-emerald-200" data-connected>
+            <p className="flex items-start gap-1.5 text-teal-200" data-connected>
               <CheckCircle2 size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
               <span>
                 <span className="font-medium">Connected.</span> {kwantName} can use {meta.name} from its next turn.

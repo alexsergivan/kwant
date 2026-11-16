@@ -726,7 +726,7 @@ export const ConnectedCard: React.FC<ConnectedCardProps> = ({ status, api, onSta
               Telegram
             </h4>
             {status.state === 'paired' ? (
-              <span className="px-1.5 py-px rounded border text-[11px] border-emerald-500/30 bg-emerald-500/10 text-emerald-200">On</span>
+              <span className="px-1.5 py-px rounded border text-[11px] border-teal-400/30 bg-teal-400/10 text-teal-200">On</span>
             ) : (
               <span className="px-1.5 py-px rounded border text-[11px] border-zinc-700 bg-zinc-800 text-zinc-300">Not paired</span>
             )}

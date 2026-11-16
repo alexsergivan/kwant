@@ -50,7 +50,7 @@ export const ScorecardView: React.FC<{ card: Partial<Scorecard>; compact?: boole
         </dl>
       )}
       {status && (
-        <p className={`text-[11px] ${status.ready ? 'text-emerald-300' : 'text-zinc-400'}`} data-scorecard-status={status.ready ? 'ready' : 'not-yet'}>
+        <p className={`text-[11px] ${status.ready ? 'text-ok' : 'text-zinc-400'}`} data-scorecard-status={status.ready ? 'ready' : 'not-yet'}>
           {status.text}
         </p>
       )}
@@ -136,7 +136,7 @@ export const ProposalCard: React.FC<{
       )}
 
       {!open ? (
-        <p className={`text-[11px] ${p.status === 'granted' ? 'text-emerald-300' : 'text-zinc-400'}`} data-outcome={p.status}>
+        <p className={`text-[11px] ${p.status === 'granted' ? 'text-ok' : 'text-zinc-400'}`} data-outcome={p.status}>
           {proposalOutcome(p, bot)}
         </p>
       ) : declining ? (
@@ -163,7 +163,7 @@ export const ProposalCard: React.FC<{
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label={`Decide: ${proposalTitle(p, bot)}`}>
-          <button type="button" disabled={busy} onClick={() => onGrant(p)} className={`${btn} bg-emerald-600/90 text-white hover:bg-emerald-500`} data-grant>
+          <button type="button" disabled={busy} onClick={() => onGrant(p)} className={`${btn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`} data-grant>
             {busy ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={12} aria-hidden="true" />}
             Grant {p.to_tier === 'act' ? 'Act' : p.to_tier === 'sandbox' ? 'Sandbox' : 'Observe'}
           </button>

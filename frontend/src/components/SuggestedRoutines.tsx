@@ -242,7 +242,7 @@ export const SuggestionCard: React.FC<{
 
         {p && (
           <div className="flex items-start gap-1.5" data-testid="permissions-preview">
-            <ShieldCheck size={12} className="mt-0.5 shrink-0 text-emerald-300/80" aria-hidden="true" />
+            <ShieldCheck size={12} className="mt-0.5 shrink-0 text-teal-300/80" aria-hidden="true" />
             <p>
               <span className="text-zinc-300">{p.flight_school ? p.tier_label : 'Works as this bot does today'}.</span> {approvalText(p.approval_mode)}. Payments always ask you.{' '}
               {pastText(p.past)}
@@ -538,7 +538,7 @@ export const SuggestedRoutines: React.FC<{
               key={d.id}
               ref={i === done.length - 1 ? doneRef : undefined}
               tabIndex={-1}
-              className="flex items-start gap-1.5 text-[11px] text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/50"
+              className="flex items-start gap-1.5 text-[11px] text-teal-200 bg-teal-400/10 border border-teal-400/20 rounded-lg px-3 py-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-teal-400/50"
             >
               <Check size={12} className="mt-0.5 shrink-0" aria-hidden="true" /> {d.text}
             </p>

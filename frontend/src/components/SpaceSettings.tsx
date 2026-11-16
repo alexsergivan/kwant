@@ -486,7 +486,7 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
         )}
         <div className="flex justify-end items-center gap-2">
           {saved && (
-            <span className="flex items-center gap-1 text-xs text-emerald-400" role="status">
+            <span className="flex items-center gap-1 text-xs text-ok" role="status">
               <Check size={13} /> Saved
             </span>
           )}

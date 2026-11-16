@@ -178,7 +178,7 @@ export const PromptStep: React.FC<{
     <div className={`${card} p-3 space-y-2`}>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-medium text-zinc-300" id="import-prompt-label">Message for your bot</p>
-        <button type="button" onClick={onCopy} className={copied ? `${btn} text-emerald-300` : btn}>
+        <button type="button" onClick={onCopy} className={copied ? `${btn} text-ok` : btn}>
           {copied ? <Check size={13} /> : <ClipboardCopy size={13} />} {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
@@ -473,7 +473,7 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
     <div className="space-y-3">
       <div role="status" className="space-y-1">
         <p className="flex items-center gap-2 text-sm text-zinc-100">
-          <Check size={16} className="text-emerald-400" /> Imported {skillsOnly ? plural(c.skills.length, 'skill') : plural(names.length, 'bot')}
+          <Check size={16} className="text-ok" /> Imported {skillsOnly ? plural(c.skills.length, 'skill') : plural(names.length, 'bot')}
         </p>
         {github && (
           <p className="text-[11px] text-zinc-400 break-words" data-github-done>

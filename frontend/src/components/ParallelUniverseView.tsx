@@ -41,7 +41,7 @@ import {
 import { dateClock } from '../clock';
 
 const TONES: Record<Tone, string> = {
-  emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  emerald: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
   violet: 'border-violet-500/30 bg-violet-500/10 text-violet-200',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
@@ -75,7 +75,7 @@ export const KindBadge: React.FC<{ tag: string }> = ({ tag }) => {
 
 /** Calm notices: amber for things to know, emerald for done. */
 const Notice: React.FC<{ text: string; error?: boolean }> = ({ text, error = false }) => (
-  <p className={`px-3 py-2 rounded-lg border text-xs ${error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'}`}>{text}</p>
+  <p className={`px-3 py-2 rounded-lg border text-xs ${error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-200'}`}>{text}</p>
 );
 
 // ---------- Scenario list ----------

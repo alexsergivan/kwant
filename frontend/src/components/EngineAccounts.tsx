@@ -36,7 +36,7 @@ const quietBtn = `${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-200 ho
 const primaryBtn = `${smallBtn} border-sky-500/40 bg-sky-600 text-white hover:bg-sky-500`;
 
 const PILL: Record<Tone, string> = {
-  ok: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  ok: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   warn: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
   error: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
   muted: 'border-zinc-700 bg-zinc-800/60 text-zinc-400',
@@ -44,7 +44,7 @@ const PILL: Record<Tone, string> = {
   info: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
 };
 const PILL_DOT: Record<Tone, string> = {
-  ok: 'bg-emerald-400',
+  ok: 'bg-teal-300',
   warn: 'bg-amber-400',
   error: 'bg-rose-400',
   muted: 'bg-zinc-500',
@@ -726,7 +726,7 @@ const AccountRow: React.FC<{
       data-state={status.label}
       aria-labelledby={nameId}
       className={`rounded-lg border px-3 py-2.5 space-y-2 transition-colors ${
-        inUse ? 'border-emerald-500/35 bg-emerald-500/[0.05]' : off ? 'border-zinc-800/70 bg-zinc-950/30' : 'border-zinc-800 bg-zinc-950/50'
+        inUse ? 'border-teal-400/35 bg-teal-400/[0.05]' : off ? 'border-zinc-800/70 bg-zinc-950/30' : 'border-zinc-800 bg-zinc-950/50'
       }`}
     >
       <div className="flex items-start gap-2">
@@ -778,7 +778,7 @@ const AccountRow: React.FC<{
                 <Star size={9} aria-hidden="true" /> Default
               </span>
             )}
-            {inUse && <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-[10px] font-medium text-emerald-200">In use</span>}
+            {inUse && <span className="px-1.5 py-0.5 rounded-md bg-teal-400/15 text-[10px] font-medium text-teal-200">In use</span>}
           </div>
           <p className="text-[11px] leading-snug text-zinc-400 break-words">
             {status.detail && <span className={isCustom ? statusText : status.tone === 'warn' || status.tone === 'error' ? 'text-amber-200' : status.tone === 'ok' ? 'text-zinc-200' : ''}>{status.detail}</span>}

@@ -208,7 +208,7 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
     </span>
   ) : entry.added ? (
     <span
-      className={`px-1.5 py-px rounded-md border text-[11px] ${entry.enabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-zinc-700 text-zinc-300'}`}
+      className={`px-1.5 py-px rounded-md border text-[11px] ${entry.enabled ? 'border-teal-400/30 bg-teal-400/10 text-teal-200' : 'border-zinc-700 text-zinc-300'}`}
       data-composio-chip={entry.enabled ? 'on' : 'off'}
     >
       {entry.enabled ? 'Added · on' : 'Added · off'}
@@ -464,7 +464,7 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
       )}
 
       {notice && (
-        <p role="status" className="px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-100" data-composio-notice>
+        <p role="status" className="px-3 py-2 rounded-lg border border-teal-400/30 bg-teal-400/10 text-xs text-teal-100" data-composio-notice>
           {notice}
         </p>
       )}

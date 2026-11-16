@@ -133,7 +133,7 @@ const btnApprove = `${btnBase} bg-accent-gradient text-white aria-disabled:opaci
 const btnQuiet = `${btnBase} border border-hairline-strong bg-white/[0.03] text-zinc-200 hover:bg-white/[0.08] disabled:opacity-50`;
 const btnRose = `${btnBase} border border-rose-400/40 bg-rose-500/[0.06] text-rose-200 hover:bg-rose-500/[0.12] disabled:opacity-50`;
 const btnRoseFill = `${btnBase} bg-rose-600 text-white hover:bg-rose-500 disabled:opacity-50`;
-const btnAllow = `${btnBase} bg-[#059669] text-white hover:bg-emerald-500 disabled:opacity-50`;
+const btnAllow = `${btnBase} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200 disabled:opacity-50`;
 const spin = 'motion-safe:animate-spin';
 
 // ---- Folds: open or closed per section for the session (Mira §3.5), not per item ----

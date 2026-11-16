@@ -1131,7 +1131,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {readyCount === null ? (
               <Loader2 size={13} className="text-sky-400 animate-spin motion-reduce:animate-none" aria-hidden="true" />
             ) : readyCount > 0 ? (
-              <CheckCircle2 size={13} className="text-emerald-400" aria-hidden="true" />
+              <CheckCircle2 size={13} className="text-ok" aria-hidden="true" />
             ) : (
               <KeyRound size={13} className="text-violet-300" aria-hidden="true" />
             )}

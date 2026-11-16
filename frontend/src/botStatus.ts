@@ -65,7 +65,7 @@ export const STATUS_DOT: Record<BotStatus, string> = {
   working: 'bg-[#9d8fff] animate-pulse motion-reduce:animate-none',
   queued: 'bg-zinc-950 border-2 border-zinc-400',
   cant_run: 'bg-zinc-600',
-  available: 'bg-emerald-400',
+  available: 'bg-teal-300',
 };
 
 /**

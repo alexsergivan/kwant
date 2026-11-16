@@ -55,7 +55,7 @@ export const CopyButton: React.FC<{ text: string; label: string }> = ({ text, la
       }}
       className={`${quiet} shrink-0`}
     >
-      {copied ? <Check size={13} className="text-emerald-400" aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
+      {copied ? <Check size={13} className="text-ok" aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
       {copied ? 'Copied' : 'Copy'}
     </button>
   );

@@ -48,13 +48,13 @@ export const DecisionChips: React.FC<DecisionChipsProps> = ({ messageId, decisio
         const panelId = `dec-${messageId}-${d.index}`;
         const changed = d.status === 'changed';
         return (
-          <div key={d.index} className={`relative overflow-hidden rounded-xl border border-zinc-700/60 bg-zinc-900/60 py-2.5 pl-4 pr-3 shadow-[var(--kws-shadow)] before:absolute before:inset-y-0 before:left-0 before:w-1 ${changed ? 'before:bg-sky-400' : 'before:bg-emerald-400'}`}>
+          <div key={d.index} className={`relative overflow-hidden rounded-xl border border-zinc-700/60 bg-zinc-900/60 py-2.5 pl-4 pr-3 shadow-[var(--kws-shadow)] before:absolute before:inset-y-0 before:left-0 before:w-1 ${changed ? 'before:bg-sky-400' : 'before:bg-teal-300'}`}>
             <div className="flex items-start gap-2 min-w-0">
               <div className="flex flex-1 flex-wrap items-center gap-x-2 gap-y-1.5 min-w-0">
                 {d.question && <span className="text-xs text-zinc-300 break-words min-w-0">{d.question}</span>}
                 <span
                   className={`inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-full border text-xs font-semibold ${
-                    changed ? 'border-sky-500/40 bg-sky-500/10 text-sky-200' : 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
+                    changed ? 'border-sky-500/40 bg-sky-500/10 text-sky-200' : 'border-teal-400/35 bg-teal-400/10 text-teal-200'
                   }`}
                 >
                   <CheckCircle2 size={12} className="shrink-0" aria-hidden="true" />

@@ -1204,7 +1204,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           )}
 
           {saveSuccess && (
-            <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-2 rounded-lg text-xs flex items-center gap-2">
+            <div className="bg-teal-400/10 border border-teal-400/20 text-ok px-3 py-2 rounded-lg text-xs flex items-center gap-2">
               <Check size={14} />
               <span>Saved for every space</span>
             </div>

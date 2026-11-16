@@ -151,7 +151,7 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
             )}
             <div className="flex items-center justify-end gap-2">
               {saved && (
-                <span role="status" className="flex items-center gap-1 text-xs text-emerald-400">
+                <span role="status" className="flex items-center gap-1 text-xs text-ok">
                   <Check size={13} /> Saved for every space
                 </span>
               )}

@@ -223,7 +223,7 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
             </button>
             <span className="flex-1" />
             {saved && !dirty && (
-              <span className="flex items-center gap-1 text-xs text-emerald-400" role="status">
+              <span className="flex items-center gap-1 text-xs text-ok" role="status">
                 <Check size={13} aria-hidden="true" /> Saved
               </span>
             )}

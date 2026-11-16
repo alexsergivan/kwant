@@ -53,7 +53,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
   const pending = view.status === 'pending';
   const done = view.status === 'denied' || view.status === 'undone' || gone;
   const evidence = evidenceText(view.evidence, view.requested_by_person);
-  const border = pending ? 'border-violet-500/40' : done ? 'border-zinc-800' : 'border-emerald-500/25';
+  const border = pending ? 'border-violet-500/40' : done ? 'border-zinc-800' : 'border-teal-400/25';
   const can = (c: string) => pending && view.choices.includes(c);
   const leadIndex = hireLeadIndex(view);
   const team = isTeamHire(view);
@@ -186,7 +186,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
 
         <div className="px-4 pb-3 pt-0.5 space-y-2">
           <p role="status" aria-live="polite" className="text-[11px]">
-            <span className={`inline-flex items-start gap-1.5 ${state.tone === 'ok' ? 'text-emerald-300' : state.tone === 'wait' ? 'text-violet-200' : 'text-zinc-400'}`}>
+            <span className={`inline-flex items-start gap-1.5 ${state.tone === 'ok' ? 'text-ok' : state.tone === 'wait' ? 'text-violet-200' : 'text-zinc-400'}`}>
               {state.tone === 'ok' ? (
                 <CheckCircle2 size={13} className="mt-px shrink-0" aria-hidden="true" />
               ) : state.tone === 'off' ? (

@@ -45,7 +45,7 @@ export const layaPill = (status: LayaStatus | null) => {
   switch (status?.state) {
     case 'online':
     case 'external':
-      return { dot: 'bg-emerald-400', label: ready };
+      return { dot: 'bg-teal-300', label: ready };
     case 'installing':
       return { dot: 'bg-amber-400 animate-pulse', label: 'Laya is installing · picking by keywords meanwhile' };
     case 'starting':

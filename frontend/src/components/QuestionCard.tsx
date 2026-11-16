@@ -93,7 +93,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
     ) : !open ? (
       // 14c: the card says what you answered, so the answer isn't drawn again as a "You" bubble.
       // Answered in Telegram (G4): the record also says where the decision came from.
-      <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-emerald-300" data-answered-line="" data-answered-via={view.answered_via === 'telegram' ? 'telegram' : undefined}>
+      <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-ok" data-answered-line="" data-answered-via={view.answered_via === 'telegram' ? 'telegram' : undefined}>
         <CheckCircle2 size={13} className="self-center shrink-0" aria-hidden="true" />
         <b className="font-semibold">{line.lead}</b>
         {line.text && <span className="min-w-0 text-sm text-zinc-100 whitespace-pre-wrap break-words" data-answer-text="">{line.text}</span>}
@@ -161,7 +161,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
                 onKeyDown={(e) => onChoiceKey(e, i)}
                 className={`w-full sm:w-auto inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[48px] max-sm:!min-h-[48px] sm:min-h-[44px] px-3 py-1.5 rounded-xl text-base leading-[22px] sm:text-sm sm:leading-normal text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
                   chosen
-                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-100'
+                    ? 'bg-teal-400/15 border-teal-400/40 text-teal-100'
                     : open
                       ? 'bg-zinc-800/80 border-zinc-700 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600 active:scale-[0.98] disabled:opacity-60'
                       : 'bg-zinc-900 border-zinc-800 text-zinc-500'

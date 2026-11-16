@@ -65,7 +65,7 @@ export interface RoutineFocus {
 
 const STATUS: Record<RunStatus, { label: string; cls: string }> = {
   running: { label: 'Running', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/20' },
-  ok: { label: 'OK', cls: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' },
+  ok: { label: 'OK', cls: 'bg-teal-400/10 text-ok border-teal-400/20' },
   error: { label: 'Failed', cls: 'bg-rose-500/10 text-rose-300 border-rose-500/20' },
   skipped: { label: 'Skipped', cls: 'bg-zinc-700/30 text-zinc-400 border-zinc-700' },
 };

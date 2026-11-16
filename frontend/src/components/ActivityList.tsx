@@ -42,7 +42,7 @@ const StatusIcon: React.FC<{ step: ActivityStep }> = ({ step }) => {
         return step.kind === 'approval' ? <ShieldQuestion size={13} className="text-amber-300" /> : <Hand size={13} className="text-amber-300" />;
       case 'ok':
       case 'done':
-        return step.kind === 'thinking' ? <Brain size={13} className="text-violet-300/80" /> : <Check size={13} className="text-emerald-300" />;
+        return step.kind === 'thinking' ? <Brain size={13} className="text-violet-300/80" /> : <Check size={13} className="text-ok" />;
       case 'failed':
         return <X size={13} className="text-rose-300" />;
       case 'declined':

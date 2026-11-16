@@ -186,7 +186,7 @@ const Tiles: React.FC<{
               on
                 ? 'border-sky-400/70 bg-sky-500/10'
                 : st === 'signed_in'
-                  ? 'border-emerald-400/45 bg-zinc-900/80 hover:bg-zinc-800/80'
+                  ? 'border-teal-400/45 bg-zinc-900/80 hover:bg-zinc-800/80'
                   : 'border-zinc-700 bg-zinc-900/80 hover:border-zinc-600 hover:bg-zinc-800/80'
             } ${FOCUS}`}
           >
@@ -1105,7 +1105,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
         <p className="mt-1 text-sm text-zinc-400">{hero.sub}</p>
         {host ? (
           <span className="mt-3 inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-white/[.14] bg-white/[.04] text-xs text-zinc-200" data-host-chip>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" aria-hidden="true" />
+            <span className="w-1.5 h-1.5 rounded-full bg-teal-300" aria-hidden="true" />
             <Server size={12} className="text-zinc-400" aria-hidden="true" />
             Setting up on {host}
           </span>

@@ -255,7 +255,7 @@ export const BudgetNeedsYou: React.FC<{ onRaise?: (kwantId: string) => void; sen
                 <div className="min-w-0 flex-1 basis-56">
                   {done ? (
                     <p id={id} className="flex items-start gap-2 text-sm text-zinc-300 break-words">
-                      <Check size={15} className="mt-0.5 shrink-0 text-emerald-400" aria-hidden="true" />
+                      <Check size={15} className="mt-0.5 shrink-0 text-ok" aria-hidden="true" />
                       <span className="min-w-0">{`${b.kwant_name} can start new work again.`}</span>
                     </p>
                   ) : (
@@ -510,7 +510,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
                   Clear limits
                 </button>
               )}
-              <span role="status" aria-live="polite" className="text-[11px] text-emerald-300">
+              <span role="status" aria-live="polite" className="text-[11px] text-ok">
                 {saved}
               </span>
             </div>

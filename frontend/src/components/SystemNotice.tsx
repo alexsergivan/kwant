@@ -214,7 +214,7 @@ export const HandoffCappedNotice: React.FC<HandoffCappedNoticeProps> = ({ messag
         <div className="min-w-0 flex-1 basis-56">
           <p id={headingId} className={`flex items-start gap-2 text-sm break-words ${done ? 'text-zinc-400' : 'text-sky-100'}`}>
             {done ? (
-              <Check size={15} className="mt-0.5 shrink-0 text-emerald-400" aria-hidden="true" />
+              <Check size={15} className="mt-0.5 shrink-0 text-ok" aria-hidden="true" />
             ) : (
               <PauseCircle size={15} className="mt-0.5 shrink-0 text-sky-400" aria-hidden="true" />
             )}

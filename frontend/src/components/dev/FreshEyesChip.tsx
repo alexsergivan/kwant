@@ -108,7 +108,7 @@ export const FreshEyesChip: React.FC<FreshEyesChipProps> = ({ label, reviewer, a
             {lines.map((l) => (
               <li key={l.text} className={`flex items-start gap-1.5 [overflow-wrap:anywhere] ${l.ok ? 'text-zinc-300' : 'text-zinc-400'}`}>
                 {l.ok ? (
-                  <Check size={12} className="mt-[3px] shrink-0 text-emerald-300" aria-hidden="true" />
+                  <Check size={12} className="mt-[3px] shrink-0 text-ok" aria-hidden="true" />
                 ) : (
                   <X size={12} className="mt-[3px] shrink-0 text-zinc-500" aria-hidden="true" />
                 )}

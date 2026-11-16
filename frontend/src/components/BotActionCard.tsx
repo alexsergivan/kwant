@@ -54,7 +54,7 @@ export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, k
   const reason = view.status === 'pending' && typeof view.details.reason === 'string' ? view.details.reason : '';
   const isRoutine = view.target_kind === 'routine';
   const resolved = view.status === 'undone' || view.status === 'declined';
-  const border = view.status === 'pending' ? 'border-amber-500/40' : resolved || gone ? 'border-zinc-800' : 'border-emerald-500/25';
+  const border = view.status === 'pending' ? 'border-amber-500/40' : resolved || gone ? 'border-zinc-800' : 'border-teal-400/25';
   const Icon = view.status === 'pending' ? ShieldQuestion : isRoutine ? CalendarClock : Wrench;
 
   return (
@@ -94,7 +94,7 @@ export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, k
         <div className="px-4 pb-3 pt-0.5 space-y-2">
           <p role="status" aria-live="polite" className="text-[11px]">
             <span
-              className={`inline-flex items-center gap-1.5 ${state.tone === 'ok' ? 'text-emerald-300' : state.tone === 'wait' ? 'text-amber-200' : 'text-zinc-400'}`}
+              className={`inline-flex items-center gap-1.5 ${state.tone === 'ok' ? 'text-ok' : state.tone === 'wait' ? 'text-amber-200' : 'text-zinc-400'}`}
             >
               {state.tone === 'ok' ? (
                 <CheckCircle2 size={13} aria-hidden="true" />

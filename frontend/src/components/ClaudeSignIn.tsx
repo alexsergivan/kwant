@@ -275,7 +275,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
       )}
 
       {state === 'done' && (
-        <p className="flex items-center gap-1.5 text-[11px] text-emerald-300" role="status">
+        <p className="flex items-center gap-1.5 text-[11px] text-ok" role="status">
           <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Signed in. Updating…
         </p>
       )}

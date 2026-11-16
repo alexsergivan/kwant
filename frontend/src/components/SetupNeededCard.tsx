@@ -35,11 +35,11 @@ export const SetupNeededCard: React.FC<Props> = ({ meta, botName, spaceName, can
     <div className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`} data-setup-card={meta.reason}>
       <div
         className={`w-[34px] h-[34px] flex-shrink-0 rounded-full flex items-center justify-center border ${
-          fixed ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-amber-500/10 border-amber-500/40'
+          fixed ? 'bg-teal-400/10 border-teal-400/40' : 'bg-amber-500/10 border-amber-500/40'
         }`}
         aria-hidden="true"
       >
-        {fixed ? <CheckCircle2 size={16} className="text-emerald-300" /> : <AlertTriangle size={16} className="text-amber-300" />}
+        {fixed ? <CheckCircle2 size={16} className="text-ok" /> : <AlertTriangle size={16} className="text-amber-300" />}
       </div>
       <div
         role="status"

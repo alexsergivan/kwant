@@ -67,7 +67,7 @@ test('F3: a needs-you line is brighter, its button amber, and a screen reader he
 test('F4: a resolved line ends in a green "It works again." with a plugged icon, never amber', () => {
   const fixed = ui.line({ meta: m.parseToolFailureMeta(meta({ resolved_at: '2026-11-12T18:00:00Z' })), onFix: () => {} });
   assert.match(fixed, /^<div[^>]*text-zinc-400/);
-  assert.match(fixed, /<span class="text-emerald-400"> It works again\.<\/span>/);
+  assert.match(fixed, /<span class="text-ok"> It works again\.<\/span>/);
   assert.match(fixed, /lucide-plug[^-]/);
   assert.doesNotMatch(fixed, /lucide-unplug/);
   assert.match(fixed, /<svg[^>]*text-zinc-500/);

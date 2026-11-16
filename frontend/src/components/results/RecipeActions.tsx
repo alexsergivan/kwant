@@ -48,8 +48,8 @@ export const RecipeActions: React.FC<{ block: RecipeBlock; messageId: string }> 
         onClick={() => recipe.copy(recipeMarkdown(block, shown), 'Copied', `Copied the recipe${forServes}`)}
         className={actionClass}
       >
-        {recipe.said?.ok ? <Check size={14} className="text-emerald-400" aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
-        <span className={recipe.said?.ok ? 'font-medium text-emerald-400' : recipe.said ? 'text-rose-300' : ''}>{recipe.said?.shown ?? 'Copy recipe'}</span>
+        {recipe.said?.ok ? <Check size={14} className="text-ok" aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+        <span className={recipe.said?.ok ? 'font-medium text-ok' : recipe.said ? 'text-rose-300' : ''}>{recipe.said?.shown ?? 'Copy recipe'}</span>
       </button>
       <button
         type="button"
@@ -60,9 +60,9 @@ export const RecipeActions: React.FC<{ block: RecipeBlock; messageId: string }> 
         onClick={() => !none && list.copy(shoppingListText(block, state.have, shown), `Copied ${items(left)}`, `Copied ${items(left)}${forServes}`)}
         className={`${actionClass} ${none ? 'cursor-not-allowed opacity-45' : ''}`}
       >
-        {list.said?.ok ? <Check size={14} className="text-emerald-400" aria-hidden="true" /> : <ShoppingBasket size={14} aria-hidden="true" />}
+        {list.said?.ok ? <Check size={14} className="text-ok" aria-hidden="true" /> : <ShoppingBasket size={14} aria-hidden="true" />}
         {list.said ? (
-          <span className={list.said.ok ? 'font-medium text-emerald-400' : 'text-rose-300'}>{list.said.shown}</span>
+          <span className={list.said.ok ? 'font-medium text-ok' : 'text-rose-300'}>{list.said.shown}</span>
         ) : (
           <>
             <span className="max-sm:hidden">Copy shopping list</span>

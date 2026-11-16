@@ -2288,7 +2288,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {workspacePath ? (
                 <Folder size={12} className="text-amber-400 flex-shrink-0" />
               ) : (
-                <GitBranch size={12} className="text-emerald-400 flex-shrink-0" />
+                <GitBranch size={12} className="text-ok flex-shrink-0" />
               )}
               <span className="truncate">
                 {workspacePath

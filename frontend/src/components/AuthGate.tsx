@@ -265,7 +265,7 @@ const Command: React.FC<{ children: string }> = ({ children }) => {
         aria-label={copied ? 'Copied' : `Copy: ${children}`}
         className="shrink-0 p-1.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
       >
-        {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+        {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
       </button>
     </div>
   );
