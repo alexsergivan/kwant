@@ -37,10 +37,11 @@ import { POINT_COPY, footerText } from '../point';
 import { choosePage, noteTitle, pageTeam, pageTitleOf, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
+import { secondsText } from '../clock';
 
 const PHONE_QUERY = '(max-width: 639px)';
 /** 17b: the footer's pointing slot. It shrinks and truncates instead of spilling over the buttons, on one line. */
-export const POINT_FOOTER_SLOT = 'min-w-0 flex-[0_1_auto] truncate whitespace-nowrap text-center';
+export const POINT_FOOTER_SLOT = 'min-w-0 flex-[0_1_auto] truncate whitespace-nowrap text-center tabular-nums';
 
 /** While the bot finishes a step, taking over is retried this often, for this long (no backend change). */
 export const TAKEOVER_RETRY_MS = 1000;
@@ -1045,11 +1046,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             ) : (
               terminalLogs.map((log, index) => (
                 <div key={index} className="p-2 bg-zinc-900/60 border border-zinc-800/80 rounded-lg">
-                  <div className="flex items-center justify-between text-sky-400 font-semibold text-[11px]">
-                    <span>$ {log.command}</span>
+                  <div className="flex items-start justify-between gap-2 text-sky-400 font-semibold text-[11px]" data-terminal-row>
+                    <span className="min-w-0 break-words">$ {log.command}</span>
                     {log.timestamp && (
-                      <span className="text-[9px] text-zinc-500 font-normal">
-                        {log.timestamp.includes('T') ? log.timestamp.split('T')[1].split('.')[0] : log.timestamp}
+                      <span className="shrink-0 whitespace-nowrap text-[9px] leading-4 text-zinc-500 font-normal" data-terminal-time>
+                        {terminalTime(log.timestamp)}
                       </span>
                     )}
                   </div>
@@ -1225,3 +1226,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     </>
   );
 };
+
+/** A terminal log row's time on the device's own clock, with seconds ("4:05:12\u00a0PM" / "16:05:12"), not the
+ *  UTC slice of the ISO string. A timestamp that doesn't parse shows as it came. (One clock everywhere, 22c.) */
+export function terminalTime(ts: string, locale?: string): string {
+  return secondsText(ts, { locale }) ?? ts;
+}

@@ -146,25 +146,47 @@ test('checkpoint_pruned is quiet', () => {
   assert.equal(m.isQuietEvent({ kind: 'audit_fresh_eyes' }), true);
 });
 
-// --- 3. The guard: every task event kind the server emits (grep of src/**/*.rs, Nov 15 2026: insert_event,
-// log_task_event, task_event, auditor/verifier event(), TaskChange kinds and literal INSERTs). Add a kind here
-// when the server starts emitting one.
-const SERVER_KINDS = [
-  'audit_challenge', 'audit_done', 'audit_fresh_eyes', 'audit_rebuttal', 'audit_skipped', 'audit_started',
-  'autofix_finished', 'autofix_held', 'autofix_scheduled', 'autofix_started',
-  'check_added', 'check_result', 'check_started', 'check_wait_more',
-  'checkpoint', 'checkpoint_failed', 'checkpoint_pruned',
-  'claimed', 'class_changed', 'contract_updated', 'created', 'edited', 'evidence', 'failure',
-  'flag_resolved', 'flagged', 'forked', 'handoff_ended', 'held', 'lease_expired',
-  'lessons_held_out', 'lessons_shown', 'note', 'released', 'restored', 'review', 'risk_resolved',
-  'self_checked', 'skill_drafted_from', 'skipped', 'state', 'tier_stepped_down',
-  'verdict_overturned', 'verifier_done', 'verifier_skipped', 'verifier_started', 'verifier_turn', 'watch',
-  'workflow_change_applied', 'workflow_change_decided', 'workflow_change_proposed',
-];
+// --- 3. The guard: every task event kind the server emits. The server owns the list (TASK_EVENT_KINDS in
+// src/db/event_kinds.rs, 17d); tests/task_event_kinds_test.rs keeps this checked-in copy equal to it and fails
+// when an emitter writes a kind that isn't on it.
+const SERVER_KINDS = JSON.parse(read('src/generated/taskEventKinds.json'));
+
+// Server kinds that still have no plain words. Each one is shown as "Kwant: <raw kind>" until eventText words it;
+// then remove it here, and the guard below covers it. Empty since 19c; keep it so the next new kind lands here.
+const NEEDS_COPY = [];
+
+test('lead_review_asked: kwant asked the lead, by name when known', () => {
+  const names = { lead1: 'Ada' };
+  assert.equal(m.eventText(ev('lead_review_asked', { delegation_id: 'd1', lead_kwant_id: 'lead1' }), names), 'Kwant asked Ada to review the hand-off');
+  assert.equal(m.eventText(ev('lead_review_asked', { lead_kwant_id: 'gone' }), names), 'Kwant asked the lead to review the hand-off');
+  assert.equal(m.eventText(ev('lead_review_asked', {})), 'Kwant asked the lead to review the hand-off');
+  assert.equal(m.eventText({ ...ev('lead_review_asked'), detail: null }), 'Kwant asked the lead to review the hand-off');
+});
+
+test('spec: the bot wrote down what done means, with a count of points', () => {
+  const bot = (detail) => ({ ...ev('spec', detail), actor: 'k1', actor_name: 'Lin' });
+  assert.equal(m.eventText(bot({ lines: ['a', 'b', 'c'] })), 'Lin wrote down what done means (3 points)');
+  assert.equal(m.eventText(bot({ lines: ['a'] })), 'Lin wrote down what done means (1 point)');
+  assert.equal(m.eventText(bot({ lines: [] })), 'Lin wrote down what done means');
+  assert.equal(m.eventText(bot({ lines: 'not a list' })), 'Lin wrote down what done means');
+  assert.equal(m.eventText({ ...bot({}), detail: null }), 'Lin wrote down what done means');
+  assert.equal(m.isQuietEvent({ kind: 'spec' }), false);
+});
+
+test('the server list is the checked-in JSON, and the kinds waiting for copy are on it and still raw', () => {
+  assert.ok(Array.isArray(SERVER_KINDS) && SERVER_KINDS.length > 50, 'the list loaded');
+  assert.deepEqual([...SERVER_KINDS].sort(), SERVER_KINDS, 'sorted');
+  for (const kind of NEEDS_COPY) {
+    assert.ok(SERVER_KINDS.includes(kind), `${kind} is a server kind`);
+    const text = m.eventText(ev(kind, {}));
+    assert.ok(new RegExp(`^Kwant: ${kind.replace(/_/g, ' ')}$`, 'i').test(text), `${kind} has words now (${JSON.stringify(text)}): remove it from NEEDS_COPY`);
+  }
+});
 
 test('guard: no kind the server emits renders as "Kwant: <raw kind>"', () => {
   const raw = [];
   for (const kind of SERVER_KINDS) {
+    if (NEEDS_COPY.includes(kind)) continue;
     const e = ev(kind, {}, { to_state: 'ready' });
     if (m.isQuietEvent(e)) continue;
     const text = m.eventText(e);

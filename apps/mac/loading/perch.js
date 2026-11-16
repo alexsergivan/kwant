@@ -428,7 +428,14 @@
     stage.replaceChildren(root);
     lastRendered = st;
     if (active) { var again = document.getElementById('ask'); if (again) { again.focus(); try { again.setSelectionRange(caret[0], caret[1]); } catch (e) { /* not a text field any more */ } } }
-    requestAnimationFrame(function () { measure(st, root); });
+    // The window shows only once Rust has this size (perch_window.rs place), and WKWebView runs no
+    // animation frames in a window that isn't on screen, so a frame alone never came while the
+    // window was still hidden. Measure on the first frame or the first timer, whichever comes
+    // first (offsetWidth lays out either way).
+    var measured = false;
+    function measureOnce() { if (measured) return; measured = true; measure(st, root); }
+    requestAnimationFrame(measureOnce);
+    setTimeout(measureOnce, 0);
   }
   var compact = false;
   function measure(st, root) {

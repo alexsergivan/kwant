@@ -312,7 +312,9 @@ const OFFERS: &[&str] = &[
 /// file to use". A part with one of these isn't an offer even with an [`OFFERS`] word in it. Next to
 /// "when you're ready" it is a go-ahead like a bare "tell me" ("Open it when you're ready and tell me
 /// what to change"), so it doesn't ask there. "Let me know whether you…", "Let me know if you want…" and
-/// "Let me know how it goes" stay offers, and so does "let me know what you think" (see [`courtesy`]).
+/// "Let me know how it goes" stay offers. Only "whether to" asks on its own: after "which" or "what" the
+/// part must name the pick ([`decides`]), so "Let me know what else you need" and "let me know what you
+/// think" stay closers (19b).
 const ASKS_DECISION: &[&str] = &["let me know whether to", "let me know which", "let me know what", "tell me which", "tell me what"];
 /// How a part opens when it asks the person for something (17e): an [`ASKS_PERSON`] or
 /// [`ASKS_DECISION`] phrase, or one of these. Used for a part that comes before an offer in the same
@@ -341,8 +343,8 @@ const WAIT_CHARS: usize = 300;
 
 /// The reply's ending when it waits on the person in prose (13a): its last paragraph has a sentence
 /// that waits ("If you approve it, I'll run it", "once you…", "until you…") or asks plainly ("Send me
-/// the correct URL", "paste the output", "sign in"), and it isn't a `Done:` or `Blocked:` line or a
-/// question (a question is asked on its own path). Returns that paragraph, markdown aside, cut to
+/// the correct URL", "paste the output", "sign in") or names a pick after ", or " ([`or_names_pick`]),
+/// and it isn't a `Done:` or `Blocked:` line or a question (a question is asked on its own path). Returns that paragraph, markdown aside, cut to
 /// about [`WAIT_CHARS`] at a word boundary.
 pub fn waits_on_person(reply: &str) -> Option<String> {
     if super::keep_going::done_line(reply).is_some() || super::keep_going::blocked_line(reply).is_some() {
@@ -354,12 +356,15 @@ pub fn waits_on_person(reply: &str) -> Option<String> {
     if lower.trim_end_matches(['*', '_', '`', ')', ' ']).ends_with('?') {
         return None;
     }
-    let waits = sentence_spans(&lower).into_iter().flat_map(|(at, end)| asks_in(&lower[at..end])).any(|(part, before)| part_waits(part, before));
+    let waits = sentence_spans(&lower).into_iter().any(|(at, end)| {
+        let sentence = &lower[at..end];
+        asks_in(sentence).into_iter().any(|(part, before)| part_waits(part, before)) || or_names_pick(sentence)
+    });
     waits.then(|| cut_at_word(&bare, WAIT_CHARS))
 }
 
 /// Whether one part from [`asks_in`] waits on the person: it holds a [`NOT_A_PROMISE`] word, or it
-/// asks ([`ASKS_PERSON`], [`ASKS_DECISION`]) and doesn't open with the bot's own plan. A "when you're
+/// asks ([`ASKS_PERSON`], or a decision: [`decides`]) and doesn't open with the bot's own plan. A "when you're
 /// ready" in it is the ask's timing: it is left out first, and then a bare "tell me" is a go-ahead, not
 /// an ask. A part `before_offer` (it comes before an offer in the same sentence) asks only when it opens
 /// like an ask ([`opens_with_ask`]), not with an ask word anywhere in it (17e).
@@ -375,7 +380,7 @@ fn part_waits(part: &str, before_offer: bool) -> bool {
         opens_with_ask(s, ready)
     } else {
         (!planned && ASKS_PERSON.iter().filter(|w| !(ready && **w == "tell me")).any(|w| has_words(s, w)))
-            || (!ready && ASKS_DECISION.iter().any(|d| has_words(s, d) && !courtesy(s)))
+            || (!ready && decides(s))
     };
     NOT_A_PROMISE.iter().any(|w| s.contains(w)) || asks
 }
@@ -395,21 +400,101 @@ fn opens_with_ask(part: &str, ready: bool) -> bool {
                 return false;
             }
             let next = rest.trim_start_matches([' ', ',']).split([' ', ',', '.', ';']).next().unwrap_or("");
-            !NOT_AFTER_OPENER.contains(&next) && !(ASKS_DECISION.contains(o) && courtesy(c))
+            !NOT_AFTER_OPENER.contains(&next) && !(ASKS_DECISION.contains(o) && !decides(c))
         })
     })
 }
 
-/// "Let me know what you think" and "tell me what you think": feedback the bot doesn't wait on, not a
-/// decision (17e).
-fn courtesy(part: &str) -> bool {
-    part.contains("what you think")
+/// Whether `part` asks the person to decide (19b): it has an [`ASKS_DECISION`] phrase as whole words,
+/// and that phrase is "whether to" or names the pick after it ([`picks`]): "Let me know which file to
+/// use", "tell me what to do with it", "which one should I use", "which of these two you want", "Let me
+/// know which: retry or skip". A closing courtesy after a failed step names no pick and waits on
+/// nothing: "Let me know what else you need", "what happens", "what you find", "what you think",
+/// "which parts you liked", "which one you'd like to see next". "What you think" never asks, even
+/// with an " or " after it ("Let me know what you think or feel").
+fn decides(part: &str) -> bool {
+    !part.contains("what you think") && ASKS_DECISION.iter().any(|d| {
+        part.match_indices(d).any(|(at, m)| {
+            let rest = &part[at + m.len()..];
+            let whole = !part[..at].ends_with(|c: char| c.is_ascii_alphanumeric()) && !rest.starts_with(|c: char| c.is_ascii_alphanumeric());
+            whole && (d.ends_with(" to") || picks(rest))
+        })
+    })
+}
+
+/// Words that, right after "to", make it a place or an object, not a verb (19b): "what happens to the
+/// file" isn't "what to do".
+const NOT_A_VERB: &[&str] = &[
+    "the", "a", "an", "your", "my", "our", "their", "his", "her", "its", "it", "this", "that", "these", "those", "you", "me", "us",
+    "them", "him",
+];
+/// How a "which|what …" names the person's choice (19b): "which option you prefer", "which of these two
+/// you want", "what you want me to do". After it, "to" counts only before [`CHOOSE_TO`] ("what you'd
+/// like to do", "which way you'd like to proceed", "which one you want to keep") and "me to" only before
+/// [`CHOOSE_ME_TO`] ("which option you'd like me to go with"); otherwise it offers more ("which one you'd
+/// like to see next", "what you'd like to try next",
+/// "which of these you'd like me to expand on", "you'd like to hear more about").
+const CHOOSES: &[&str] = &["you want", "you prefer", "you'd like", "you'd prefer", "you would like", "you would prefer"];
+/// Verbs after "[`CHOOSES`] to" that hand the person the next step (19b round 2) or name what they pick
+/// (21e: "which one you want to keep", "which file you'd like to use"). Not "try": "what you'd like to
+/// try next" offers more. Past "do" and "proceed", the verb must end the part or be followed only by
+/// "with" (21e round 2): "what you'd like to keep an eye on", "which parts you'd like to go over next"
+/// and "what you'd like to take away from this" are closing courtesies.
+const CHOOSE_TO: &[&str] = &["do", "proceed", "keep", "use", "pick", "choose", "go", "take", "run"];
+/// Verbs after "[`CHOOSES`] me to" that ask the person to pick what the bot does (19b round 2).
+const CHOOSE_ME_TO: &[&str] = &["do", "take", "use", "go", "pick", "choose", "keep", "retry", "try", "run"];
+/// How `rest` starts when its " or " joins a closer's own words, not options (19b round 2): "what else
+/// you need or want", "what happens with the build or the deploy", "which parts worked or didn't".
+const OR_IN_CLOSER: &[&str] = &["else", "happens", "you need", "you think", "you find", "parts"];
+
+/// Whether what follows "which" or "what" (`rest`) names a pick (19b): within the wh-word's own word
+/// or the one after it (its noun), "to <verb>" ("what to do", "which file to use"), "should" ("which
+/// one should I use") or "works" ("what time works"); a [`CHOOSES`] phrase within its first four words,
+/// not after "else"; an " or " alternative that isn't an offer's "or if/when" ("which mirror, the US
+/// or the EU one") and isn't in a closer ([`OR_IN_CLOSER`]); or a colon that opens the options ("Let me know which: retry or skip", where the
+/// sentence ends at the colon).
+fn picks(rest: &str) -> bool {
+    let words: Vec<&str> = rest.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '\'')).collect();
+    let list = rest.trim_end().ends_with(':') && words.len() <= 2;
+    let lead = words.iter().take(2).copied().collect::<Vec<_>>().join(" ");
+    let closer = OR_IN_CLOSER.iter().any(|c| lead == *c || lead.starts_with(&format!("{c} ")));
+    let or = !closer && rest.match_indices(" or ").any(|(at, m)| !["if ", "when "].iter().any(|t| rest[at + m.len()..].starts_with(t)));
+    let near = (0..2).any(|i| match words.get(i).copied() {
+        Some("to") => words.get(i + 1).is_some_and(|v| !v.is_empty() && !NOT_A_VERB.contains(v)),
+        Some("should") | Some("works") => true,
+        _ => false,
+    });
+    let chooses = words.first() != Some(&"else")
+        && (0..4).any(|i| {
+            CHOOSES.iter().any(|c| {
+                let n = c.split(' ').count();
+                i + n <= words.len()
+                    && words[i..i + n].join(" ") == *c
+                    && match words.get(i + n).copied() {
+                        Some("to") => words.get(i + n + 1).is_some_and(|v| {
+                            // 21e round 2: past "do" and "proceed", a verb names the pick only when the
+                            // part ends there or with "with" ("which one you want to keep", "…to go
+                            // with"); "what you'd like to keep an eye on" or "to go over next" offers more.
+                            let tail = &words[i + n + 2..];
+                            CHOOSE_TO.contains(v)
+                                && (["do", "proceed"].contains(v)
+                                    || tail.iter().all(|w| w.is_empty())
+                                    || (tail.first() == Some(&"with") && tail[1..].iter().all(|w| w.is_empty())))
+                        }),
+                        Some("me") => {
+                            words.get(i + n + 1) == Some(&"to") && words.get(i + n + 2).is_some_and(|v| CHOOSE_ME_TO.contains(v))
+                        }
+                        _ => true,
+                    }
+            })
+        });
+    list || or || near || chooses
 }
 
 /// The parts of one lowercased `sentence` that may wait on the person: the pieces between its
 /// [`PART_BREAKS`] (", or ", ", and ", ", then "), without the ones that hold an offer ([`OFFERS`]),
-/// each with whether it comes before an offer in the sentence (17e, see [`part_waits`]). A part with
-/// an [`ASKS_DECISION`] phrase isn't an offer: "Let me know whether to retry or skip" asks (17e).
+/// each with whether it comes before an offer in the sentence (17e, see [`part_waits`]). A part that
+/// asks for a decision ([`decides`]) isn't an offer: "Let me know whether to retry or skip" asks (17e).
 /// The whole part goes, not just the offer's words, so "Let me know once you've merged it" doesn't
 /// leave "once you…" behind. A part after a break is its own ask: "Tell me if you want me to run it,
 /// or paste the output" still asks for the output, and so does "Paste the output, and let me know if
@@ -421,8 +506,7 @@ fn asks_in(sentence: &str) -> Vec<(&str, bool)> {
     let mut after_offer = false;
     for part in split_parts(sentence) {
         let part = part.trim_start();
-        let decides = ASKS_DECISION.iter().any(|d| has_words(part, d)) && !courtesy(part);
-        let offer = !decides && OFFERS.iter().any(|o| has_words(part, o));
+        let offer = !decides(part) && OFFERS.iter().any(|o| has_words(part, o));
         let tail = after_offer
             && OFFER_TAILS.iter().any(|t| part.starts_with(t))
             && !ASKS_PERSON.iter().any(|w| has_words(part, w));
@@ -436,6 +520,26 @@ fn asks_in(sentence: &str) -> Vec<(&str, bool)> {
         .filter(|(_, (_, dropped))| !dropped)
         .map(|(i, (part, _))| (part, last_offer.is_some_and(|l| i < l)))
         .collect()
+}
+
+/// How a sentence opens when what follows hands the person the pick (21e), for [`or_names_pick`].
+const DECISION_OPENERS: &[&str] = &["let me know", "tell me"];
+
+/// Whether a lowercased `sentence` that opens with a [`DECISION_OPENERS`] phrase names a pick in a part
+/// after ", or " (21e): "Let me know what else you need, or which file to use" asks, though its first
+/// part is a closer that [`asks_in`] drops as an offer. A part that opens with "which" or "what" is read
+/// as "let me know <part>" by [`decides`], so a closer there still names no pick ("…, or what else you
+/// need", "…, or what you think"), and a closer alone stays no. Next to "when you're ready" it is a
+/// go-ahead, as in [`part_waits`].
+fn or_names_pick(sentence: &str) -> bool {
+    let s = strip_leads(sentence.trim_start());
+    let opens = DECISION_OPENERS.iter().any(|o| s.strip_prefix(o).is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric())));
+    opens
+        && !WHEN_READY.iter().any(|r| sentence.contains(r))
+        && s.split(", or ").skip(1).any(|after| {
+            let part = split_parts(after)[0].trim_start();
+            (part.starts_with("which ") || part.starts_with("what ")) && decides(&format!("let me know {part}"))
+        })
 }
 
 /// `sentence` split at each of [`PART_BREAKS`], in order.
@@ -1410,6 +1514,88 @@ mod tests {
             let reply = format!("The download failed.\n\n{sentence}");
             assert_eq!(waits_on_person(&reply).is_some(), *waits, "{sentence}");
         }
+    }
+
+    #[test]
+    fn a_closing_courtesy_is_not_a_decision_and_a_named_pick_is() {
+        let table: &[(&str, bool)] = &[
+            // 19b: closers after a failed step name no pick, so no Blocked (Rigel's F1: R1-R4, R6, R10, R32, R42)
+            ("Let me know what else I can help with.", false),
+            ("Let me know what else you need.", false),
+            ("Let me know what happens.", false),
+            ("Let me know what you find.", false),
+            ("Let me know which of these you'd like me to expand on.", false),
+            ("I fixed it, and let me know which parts you liked.", false),
+            ("Let me know what went wrong on your side, if anything.", false),
+            ("Done. Let me know which one you'd like to see next.", false),
+            ("Let me know what happens to the file.", false),
+            ("Let me know what else you want.", false),
+            ("Let me know what you need to proceed.", false),
+            ("Let me know what happens, or if it fails again.", false),
+            ("Let me know what you find or if anything else breaks.", false),
+            // F4 and other named picks still say Blocked
+            ("Let me know whether to retry or skip.", true),
+            ("Let me know whether to retry or skip it.", true),
+            ("Let me know which file to use.", true),
+            ("Let me know what to do with the broken file.", true),
+            ("Let me know whether to retry, or if you'd rather skip it.", true),
+            ("Tell me which mirror to use.", true),
+            ("Let me know which one should I use.", true),
+            ("Let me know which: retry or skip.", true),
+            ("Let me know which you'd prefer, the US or the EU mirror.", true),
+            ("Let me know which of these two you want.", true),
+            ("Let me know which option you prefer, and I'll retry.", true),
+            ("Let me know what you want me to do.", true),
+            ("Let me know what time works and I'll schedule it.", true),
+            // Round 2 (Rigel's qa-runs/mine.txt): "you'd like (me) to <next step>" is a pick (D1, D4, D17) ...
+            ("Let me know what you'd like to do.", true),
+            ("Let me know which approach you'd like me to take.", true),
+            ("Let me know which way you'd like to proceed.", true),
+            ("Let me know which one you'd like me to retry.", true),
+            ("Let me know what you want me to try next.", true),
+            ("Let me know which ones you'd like to hear more about.", false),
+            // ... "what you think" never asks (C2), and an " or " inside a closer isn't options (C1, C4)
+            ("Let me know what you think or feel.", false),
+            ("Let me know what else you need or want.", false),
+            ("Let me know which parts worked or didn't.", false),
+            ("Let me know what happens with the build or the deploy.", false),
+            // 21e (Rigel's #679 QA): a plain pick after a closer, and "you want to keep", say Blocked ...
+            ("Let me know what else you need, or which file to use.", true),
+            ("Let me know which one you want to keep.", true),
+            ("Tell me what went wrong on your side, or which mirror to use.", true),
+            ("Let me know which file you'd like to use.", true),
+            ("Let me know which way you want to go.", true),
+            ("Let me know which version you want to go with.", true),
+            // ... the three arguable ones stay no, and so does a closer after ", or "
+            ("Let me know what you need or want me to do.", false),
+            ("Let me know what you'd like to try next.", false),
+            ("Let me know which parts you think need work or which you'd like me to redo.", false),
+            ("Let me know what happens, or what else you need.", false),
+            ("Let me know how it goes, or what you think.", false),
+            ("Let me know what else you need, or which ones you'd like to see next.", false),
+            ("When you're ready, let me know what else you need, or which file to use.", false),
+            ("I can retry, or which file to use.", false),
+            // ... and so does a new verb with more words after it (21e round 2, Rigel's #699 QA)
+            ("Let me know what you'd like to keep an eye on.", false),
+            ("Let me know which parts you'd like to go over next.", false),
+            ("Let me know what else you need, or what you'd like to take away from this.", false),
+        ];
+        for (sentence, waits) in table {
+            let reply = format!("The download failed.\n\n{sentence}");
+            assert_eq!(waits_on_person(&reply).is_some(), *waits, "{sentence}");
+        }
+        // The shape on its own: what follows "which" or "what"
+        assert!(picks(" file to use") && picks(" to do") && picks(" one should i use") && picks(":"));
+        assert!(!picks(" happens to the file") && !picks(" else you want") && !picks(" happens or if it fails") && !picks(""));
+        assert!(picks(" you'd like to do") && picks(" option you'd like me to go with") && picks(" mirror, the us or the eu one"));
+        assert!(!picks(" you'd like to see next") && !picks(" you'd like me to expand on") && !picks(" parts worked or didn't"));
+        assert!(decides("let me know whether to retry") && !decides("let me know whatever you need") && !decides("tell me what you think"));
+        // 21e: the part after ", or " is read on its own, only after an opener
+        assert!(or_names_pick("let me know what else you need, or which file to use.") && or_names_pick("so tell me what you saw, or which one to keep"));
+        assert!(!or_names_pick("let me know what else you need.") && !or_names_pick("i can retry, or which file to use"));
+        assert!(!or_names_pick("let me know what happens, or what else you need") && !or_names_pick("let me know, or whatever you need"));
+        assert!(picks(" one you want to keep") && !picks(" you'd like to try next"));
+        assert!(picks(" branch you want to go with") && picks(" you'd like to do next") && !picks(" you'd like to keep an eye on"));
     }
 
     #[test]

@@ -112,6 +112,38 @@ const isTaskItem = (n: HastNode | undefined) => hasClass(n, 'task-list-item');
 
 const checkClass = 'mt-[5px] h-3.5 w-3.5 shrink-0 rounded-sm accent-sky-500';
 
+// The typing cursor (16a): at the end of the last line of text, so the reply doesn't lose a line when it lands.
+const cursorClass = ['inline-block', 'w-1.5', 'h-4', 'ml-0.5', 'align-middle', 'bg-sky-400', 'animate-pulse', 'motion-reduce:animate-none', 'rounded-sm'];
+const INLINE_END = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+const lastElement = (n: HastNode) => {
+  const kids = n.children ?? [];
+  for (let i = kids.length - 1; i >= 0; i--) {
+    const k = kids[i];
+    if (k.type === 'element') return k;
+    if (k.type !== 'text' || (k.value ?? '').trim()) return null; // text after the last element: it ends there
+  }
+  return null;
+};
+/** The node to end with the cursor: the last paragraph or heading, or the last list item's last line. */
+function cursorHost(block: HastNode | null): HastNode | null {
+  if (!block) return null;
+  if (INLINE_END.has(block.tagName ?? '')) return block;
+  if (block.tagName === 'ul' || block.tagName === 'ol') return cursorHost(lastElement(block));
+  if (block.tagName !== 'li') return null;
+  const last = lastElement(block);
+  if (!last) return block; // a tight item: its text is the last line
+  if (last.tagName === 'p' || last.tagName === 'ul' || last.tagName === 'ol') return cursorHost(last);
+  // A task item's box, or inline markup (a link, bold) closing the line
+  if (!['pre', 'table', 'blockquote', 'hr', 'div'].includes(last.tagName ?? '')) return block;
+  return null;
+}
+/** Appends the cursor inside the last text block; after a code block, table or quote it keeps its own line. */
+const rehypeCursor = () => (tree: HastNode) => {
+  const cursor: HastNode = { type: 'element', tagName: 'span', properties: { className: cursorClass, ariaHidden: 'true' }, children: [] };
+  const host = cursorHost(lastElement(tree)) ?? tree;
+  (host.children ??= []).push(cursor);
+};
+
 /** A task item's content without its checkbox or the space after it. */
 function taskContent(children: React.ReactNode): React.ReactNode[] {
   const out = React.Children.toArray(children).filter((c) => !(React.isValidElement(c) && tagOf(c as MdElement) === 'input'));
@@ -191,7 +223,13 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         urlTransform={urlTransform}
-        rehypePlugins={smart ? [rehypeSmartIndex as never, ...(section ? [rehypeSmartSection(content, results) as never] : [])] : undefined}
+        rehypePlugins={
+          smart
+            ? [rehypeSmartIndex as never, ...(section ? [rehypeSmartSection(content, results) as never] : [])]
+            : cursor
+              ? [rehypeCursor as never]
+              : undefined
+        }
         components={{
           // Pre element pass-through to let CodeBlock handle layout
           pre: ({ children }) => <>{children}</>,
@@ -323,10 +361,10 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
             );
             return listView(node as HastNode | undefined, children, plain);
           },
-          ol: ({ node, children }) => {
+          ol: ({ node, children, start }) => {
             const task = hasClass(node as HastNode | undefined, 'contains-task-list');
             const plain = (
-              <ol className={`${task ? 'list-none pl-1' : 'list-decimal list-outside pl-5'} my-2.5 space-y-1 text-zinc-300`}>
+              <ol start={start} className={`${task ? 'list-none pl-1' : 'list-decimal list-outside pl-5'} my-2.5 space-y-1 text-zinc-300`}>
                 {children}
               </ol>
             );
@@ -386,9 +424,6 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
         />
       )}
 
-      {cursor && (
-        <span className="inline-block w-1.5 h-4 ml-0.5 align-middle bg-sky-400 animate-pulse rounded-sm" />
-      )}
     </div>
     </ReplyText.Provider>
   );

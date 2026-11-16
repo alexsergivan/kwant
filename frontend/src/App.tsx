@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
@@ -10,6 +11,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { focusPhoneApp } from './components/PhoneAppTip';
 import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
@@ -290,9 +292,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // What the open chat is streaming; other chats' streams are kept in streamsRef until opened.
   // The open chat's streaming reply (14b): a store only the live reply subscribes to, not App state, so a
   // token never re-renders the app or the finished messages. Updates land once per frame, with one blip.
-  const streamStore = useMemo(
-    () => createStreamText({}, { onFrame: (prev, next) => next.text !== prev.text && playSfx('blip') }),
-    [],
+  // useState, not useMemo: React may drop a memo, and the store must live as long as the app (#642 QA).
+  const [streamStore] = useState(() =>
+    createStreamText({}, { onFrame: (prev, next) => next.text !== prev.text && playSfx('blip') }),
   );
   const streamsRef = useRef<Record<string, { text: string; thinking: string }>>({});
   // Running turns' live steps by turn id (with the chat they belong to), until the saved reply shows.
@@ -3344,8 +3346,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       : []
     : [];
 
+  // 15e: the lead first (the "Ask:" row and the header's faces), the rest in roster order, like the team home.
   const currentTeamMembers = currentTeam
-    ? kwants.filter((k) => currentTeamMemberIds.includes(k.id))
+    ? askOrder(kwants.filter((k) => currentTeamMemberIds.includes(k.id)), currentTeam.lead_kwant_id)
     : [];
   // 0.8.1 F3: whose pre-push lines a team chat or channel shows (membership, like approvalsForChat).
   const pointerMemberIds: string[] = currentTeam ? currentTeamMemberIds : openChat?.kind === 'channel' ? openChat.memberIds.filter((id): id is string => !!id) : [];
@@ -4090,6 +4093,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onSwitchSpace={onSwitchSpace}
       onCreateSpace={onCreateSpace}
       onOpenSpaceSettings={() => openSpaceSettings('general')}
+      onOpenPhoneApp={() => {
+        openAppSettings();
+        focusPhoneApp();
+      }}
       onOpenArchived={onOpenArchived}
       onOpenSearch={() => setIsSearchOpen(true)}
       section={section}

@@ -4,6 +4,7 @@ import type { HeartDot, HeartWord } from '../signature';
 import { heartbeatCount, heartbeatText, heartbeatWord } from '../signature';
 import { Sticker } from './Sticker';
 import { CheckBurst } from './CheckBurst';
+import { stampClock } from '../clock';
 
 /**
  * "Verified · 3/3" (or "First verified") as Pixel's holo sticker, tilted −2° (S1) or −3° for the
@@ -52,11 +53,8 @@ const WORD_TONE: Record<HeartWord, string> = {
   'Can’t check': 'text-muted',
 };
 
-const when = (at?: string): string | undefined => {
-  if (!at) return undefined;
-  const d = new Date(at);
-  return Number.isNaN(d.getTime()) ? undefined : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-};
+/** A check square's tooltip time on the one clock (22c): "Nov 3, 8:15 PM" / "3 Nov, 20:15"; nothing when unreadable. */
+export const beatWhen = (at?: string, now: number = Date.now(), locale?: string): string | undefined => stampClock(at, now, locale) ?? undefined;
 
 /**
  * The goal's last checks as 6×6 squares, oldest left, newest outlined (spec §3), then "5/7 ok" and a word.
@@ -68,7 +66,7 @@ export const GoalHeartbeat: React.FC<{ dots: HeartDot[]; status: string; fixing?
   const phone = dots.slice(-5);
   const word = heartbeatWord(status, dots, fixing);
   const square = (d: HeartDot, i: number, newest: boolean, extra = '') => (
-    <span key={i} className={`kws-beat kws-beat-${d.tone} ${newest ? 'kws-beat-newest' : ''} ${extra}`} title={[d.label, when(d.at)].filter(Boolean).join(' · ')} data-dot={d.tone} />
+    <span key={i} className={`kws-beat kws-beat-${d.tone} ${newest ? 'kws-beat-newest' : ''} ${extra}`} title={[d.label, beatWhen(d.at)].filter(Boolean).join(' · ')} data-dot={d.tone} />
   );
   const older = dots.length - phone.length;
   return (
