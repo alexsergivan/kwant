@@ -45,7 +45,7 @@ const readError = async (res: Response) => {
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3.5 py-1 rounded-lg text-[13px] font-medium whitespace-nowrap transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 motion-reduce:transition-none';
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-500 disabled:hover:bg-sky-600`;
+const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-700 disabled:hover:bg-sky-600`;
 const linkCls =
   'inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 aria-disabled:text-zinc-500 aria-disabled:no-underline aria-disabled:pointer-events-none';
 const inputCls = (phone: boolean, bad: boolean) =>
@@ -460,7 +460,7 @@ const Box: React.FC<{ tone: 'info' | 'ok' | 'bad' | 'warn'; icon: React.ReactNod
 }) => {
   const cls = {
     info: 'border-sky-400/30 bg-sky-400/10 text-sky-200',
-    ok: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+    ok: 'border-teal-400/30 bg-teal-400/10 text-ok',
     bad: 'border-rose-500/40 bg-rose-500/10 text-rose-200',
     warn: 'border-amber-500/40 bg-amber-500/10 text-amber-200',
   }[tone];
