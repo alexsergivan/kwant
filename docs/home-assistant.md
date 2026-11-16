@@ -35,17 +35,20 @@ The same **Connect Home Assistant** sheet opens from two places:
 
 - **The Home team.** Its chat shows what the team needs; press **Connect** on
   **Connect Home Assistant** (or **Fix** after a failed check).
-- **Tools.** **Settings › This space › Apps & accounts › Advanced › Manage tools › Add server**,
-  then **Home Assistant** under **Home** (or search for "Home Assistant" or "hass").
+- **Tools.** Open **Settings › This space › Apps & accounts › Advanced › Manage tools › Add
+  server**, then **Home Assistant** under **Home** (or search for "Home Assistant" or "hass"). With
+  no tool server yet, there is no **Manage tools**: use **+ Add connection › Tool server (MCP)**
+  instead.
 
 The sheet has two fields:
 
 | Field | What to put there |
 |---|---|
 | **Address** | Where you open Home Assistant. With no `http://` or `https://`, kwant uses `http://`; plain `http` with no port gets Home Assistant's `8123`. Any path is replaced: kwant connects to `<address>/api/mcp`. |
-| **Access token** | The long-lived access token. **Make one in Home Assistant** next to the label opens your profile's Security page. kwant sends it as `Authorization: Bearer <token>` and stores it masked, like every header (see [mcp-api.md](mcp-api.md)). |
+| **Access token** | The long-lived access token. Once the address is in, **Make one in Home Assistant** next to the label opens your profile's Security page. kwant sends it as `Authorization: Bearer <token>` and stores it masked, like every header (see [mcp-api.md](mcp-api.md)). |
 
-Press **Connect**. kwant saves the server in Tools (named `home-assistant`), checks it, and shows
+Press **Connect**. kwant saves the server in Tools (named `home-assistant`, or `home-assistant-2` and so on if that name is
+taken), checks it, and shows
 **Connected · N actions** when Home Assistant answers and lists what it can do. From the Home team,
 kwant gives it to the team's bots, so House can use it at once. From Tools, it is saved in Tools:
 start a Home team (**Start a Home team**, shown while you have none), or turn it on for any bot in
@@ -53,16 +56,18 @@ that bot's settings.
 
 The token field empties as soon as you press Connect. If the check fails after the save, leaving
 the field empty on **Try again** keeps the saved token, so you can fix only the address.
+Closing the sheet after a failed check removes the server it just saved, so nothing broken stays
+in Tools.
 
 When the check fails, the sheet says what happened and what to do:
 
 | The sheet says | What to do |
 |---|---|
-| Home Assistant didn't accept this access token. | Make a new token in Home Assistant and paste all of it. With **Require an administrator account** on, the token must be an administrator's. |
+| Home Assistant didn’t accept this access token. | Make a new token in Home Assistant and paste all of it. With **Require an administrator account** on, the token must be an administrator's. |
 | Home Assistant answered, but its MCP Server is off. | Add the Model Context Protocol integration in Home Assistant (**Open integrations in Home Assistant**), then **Try again**. |
-| kwant can't reach `<host>`. | Check that Home Assistant is on and the address is right. If kwant runs on another computer or in Docker, `homeassistant.local` may not resolve there: use Home Assistant's IP address, like `http://192.168.1.20:8123`. |
-| This address answered, but it isn't Home Assistant. | The server answered under another name. Use the address you open Home Assistant at. |
-| Couldn't connect to Home Assistant. | Check that the address opens your Home Assistant in a browser, then try again. The server's own message is shown under it. |
+| kwant can’t reach `<host>`. | Check that Home Assistant is on and the address is right. If kwant runs on another computer or in Docker, `homeassistant.local` may not resolve there: use Home Assistant's IP address, like `http://192.168.1.20:8123` |
+| This address answered, but it isn’t Home Assistant. | The server answered under another name. Use the address you open Home Assistant at. |
+| Couldn’t connect to Home Assistant. | Check that the address opens your Home Assistant in a browser, then try again. The server's own message is shown under it. |
 
 ## The Home team
 
@@ -85,15 +90,15 @@ Home Assistant's tools follow the bot's [approvals](approvals.md), with one rule
 - **Reads.** Under **Ask only when risky**, tools Home Assistant marks read-only (its
   `readOnlyHint`), like looking at the live state of the home, run without a card. Under
   **Ask before running commands**, they ask like every tool.
-- **Switching things** (lights, heating, covers, media) asks or runs as your approvals mode says.
+- **Switching things** (lights, heating, blinds, media) asks or runs as your approvals mode says.
   **Always allow** on such a card lets that bot run that tool without a card in that conversation
   only, and it still holds after kwant restarts. **Bot settings › Approvals › Allowed without
-  asking** lists these, with **Take back** on each and **Take back all**.
+  asking** lists these, with **Take back** on each, and **Take back all** when there are two or more.
 - **Locks, doors, garage doors, gates and alarms always ask**, in every mode, approvals off
   included. A call counts when its arguments name the `lock` or `alarm_control_panel` domain, a
   `cover` that is a garage, door or gate (or doesn't say), or contain the word lock, unlock, door,
   garage, gate, alarm or disarm. The card says "Locks, doors, garage doors, gates and alarms always
-  ask. Always allow isn't offered for them." Allowing it covers that one call. kwant applies this
+  ask. Always allow isn’t offered for them." Allowing it covers that one call. kwant applies this
   to any server that calls itself `home-assistant` when it connects, and to a server it has not
   heard from yet; see [approvals.md](approvals.md).
 

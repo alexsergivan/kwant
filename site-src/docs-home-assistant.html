@@ -26,17 +26,17 @@ card_art: avatar:devops
 <p>The same <strong>Connect Home Assistant</strong> sheet opens from two places:</p>
 <ul>
   <li><strong>The Home team.</strong> Its chat shows what the team needs. Press <strong>Connect</strong> on <strong>Connect Home Assistant</strong>, or <strong>Fix</strong> after a failed check.</li>
-  <li><strong>Tools.</strong> <strong>Settings › This space › Apps &amp; accounts › Advanced › Manage tools › Add server</strong>, then <strong>Home Assistant</strong> under <strong>Home</strong>. Searching for "Home Assistant" or "hass" finds it too.</li>
+  <li><strong>Tools.</strong> Open <strong>Settings › This space › Apps &amp; accounts › Advanced › Manage tools › Add server</strong>, then <strong>Home Assistant</strong> under <strong>Home</strong>. With no tool server yet, there is no <strong>Manage tools</strong>: use <strong>+ Add connection › Tool server (MCP)</strong> instead. Searching for "Home Assistant" or "hass" finds it too.</li>
 </ul>
 <div class="table-wrap"><table>
   <thead><tr><th>Field</th><th>What to put there</th></tr></thead>
   <tbody>
     <tr><td><strong>Address</strong></td><td>Where you open Home Assistant. With no <code>http://</code> or <code>https://</code>, kwant uses <code>http://</code>, and plain <code>http</code> with no port gets Home Assistant's <code>8123</code>. Any path is replaced: kwant connects to <code>&lt;address&gt;/api/mcp</code>.</td></tr>
-    <tr><td><strong>Access token</strong></td><td>The long-lived access token. <strong>Make one in Home Assistant</strong> next to the label opens your profile's Security page. kwant sends it as <code>Authorization: Bearer &lt;token&gt;</code> and keeps it masked, like every <a href="mcp.html#secrets">tool server secret</a>.</td></tr>
+    <tr><td><strong>Access token</strong></td><td>The long-lived access token. Once the address is in, <strong>Make one in Home Assistant</strong> next to the label opens your profile's Security page. kwant sends it as <code>Authorization: Bearer &lt;token&gt;</code> and keeps it masked, like every <a href="mcp.html#secrets">tool server secret</a>.</td></tr>
   </tbody>
 </table></div>
-<p>Press <strong>Connect</strong>. kwant saves the server in Tools (named <code>home-assistant</code>), checks it, and shows <strong>Connected · N actions</strong> when Home Assistant answers and lists what it can do. From the Home team, kwant gives it to the team's bots, so House can use it at once. From Tools, it's saved in Tools: start a Home team (<strong>Start a Home team</strong>, shown while you have none), or turn it on for any bot in that bot's settings.</p>
-<p>The token field empties as soon as you press Connect. If the check fails after the save, leaving the field empty on <strong>Try again</strong> keeps the saved token, so you can fix only the address.</p>
+<p>Press <strong>Connect</strong>. kwant saves the server in Tools (named <code>home-assistant</code>, or <code>home-assistant-2</code> and so on if that name is taken), checks it, and shows <strong>Connected · N actions</strong> when Home Assistant answers and lists what it can do. From the Home team, kwant gives it to the team's bots, so House can use it at once. From Tools, it's saved in Tools: start a Home team (<strong>Start a Home team</strong>, shown while you have none), or turn it on for any bot in that bot's settings.</p>
+<p>The token field empties as soon as you press Connect. If the check fails after the save, leaving the field empty on <strong>Try again</strong> keeps the saved token, so you can fix only the address. Closing the sheet after a failed check removes the server it just saved, so nothing broken stays in Tools.</p>
 
 <h2 id="errors">When the check fails</h2>
 <div class="table-wrap"><table>
@@ -44,7 +44,7 @@ card_art: avatar:devops
   <tbody>
     <tr><td>Home Assistant didn’t accept this access token.</td><td>Make a new token in Home Assistant and paste all of it. With <strong>Require an administrator account</strong> on, the token must be an administrator's.</td></tr>
     <tr><td>Home Assistant answered, but its MCP Server is off.</td><td>Add the Model Context Protocol integration in Home Assistant (<strong>Open integrations in Home Assistant</strong>), then press <strong>Try again</strong>.</td></tr>
-    <tr><td>kwant can’t reach <em>host</em>.</td><td>Check that Home Assistant is on and the address is right. If kwant runs on another computer or in Docker, <code>homeassistant.local</code> may not work there: use Home Assistant's IP address, like <code>http://192.168.1.20:8123</code>.</td></tr>
+    <tr><td>kwant can’t reach <code>&lt;host&gt;</code>.</td><td>Check that Home Assistant is on and the address is right. If kwant runs on another computer or in Docker, <code>homeassistant.local</code> may not work there: use Home Assistant's IP address, like <code>http://192.168.1.20:8123</code></td></tr>
     <tr><td>This address answered, but it isn’t Home Assistant.</td><td>The server answered under another name. Use the address you open Home Assistant at.</td></tr>
     <tr><td>Couldn’t connect to Home Assistant.</td><td>Check that the address opens your Home Assistant in a browser, then try again. The server's own message is shown under it.</td></tr>
   </tbody>
@@ -63,7 +63,7 @@ card_art: avatar:devops
 <p>Home Assistant's tools follow the bot's <a href="approvals.html#modes">approval mode</a>, with one rule on top:</p>
 <ul>
   <li><strong>Reads.</strong> Under <strong>Ask only when risky</strong>, tools Home Assistant marks read-only, like looking at the live state of your home, run without a card. Under <strong>Ask before running commands</strong>, they ask like every tool.</li>
-  <li><strong>Switching things</strong> (lights, heating, covers, media) asks or runs as your approval mode says. <strong>Always allow</strong> on such a card lets that bot run that tool without a card in that conversation only, and it still holds after kwant restarts. <strong>Bot settings › Approvals › Allowed without asking</strong> lists these, with <strong>Take back</strong> on each and <strong>Take back all</strong>.</li>
+  <li><strong>Switching things</strong> (lights, heating, blinds, media) asks or runs as your approval mode says. <strong>Always allow</strong> on such a card lets that bot run that tool without a card in that conversation only, and it still holds after kwant restarts. <strong>Bot settings › Approvals › Allowed without asking</strong> lists these, with <strong>Take back</strong> on each, and <strong>Take back all</strong> when there are two or more.</li>
   <li><strong>Locks, doors, garage doors, gates and alarms always ask</strong>, in every mode, approvals off included. A call counts when its arguments name the <code>lock</code> or <code>alarm_control_panel</code> domain or a <code>cover</code> that is a garage, door or gate (or doesn't say), or contain the word lock, unlock, door, garage, gate, alarm or disarm. The card says "Locks, doors, garage doors, gates and alarms always ask. Always allow isn’t offered for them." Allowing it covers that one call.</li>
 </ul>
 <div class="note">kwant applies the lock rule to any server that calls itself <code>home-assistant</code> when it connects, and to a server it hasn't heard from yet, never by its address.</div>
