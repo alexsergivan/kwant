@@ -48,10 +48,12 @@ The container never restarts on its own (`--restart no`); kwant starts it on the
 
 The browser profile lives on the container's tmpfs, so stopping or removing it loses only the open pages; each bot's cookies are kept in `<data folder>/browser-cookies/`. A container made by an older kwant (no labels, `--restart unless-stopped`) is replaced the next time that kwant opens the browser. Containers from data folders no kwant will open again need a manual `docker rm`.
 
+To send the browser's traffic through a home or other proxy, see [Browser proxy](browser-proxy.md).
+
 Prebuild images to avoid first-use latency:
 
 ```bash
-docker build -t kwnt-browser:v3 -f docker/browser.Dockerfile docker
+docker build -t kwnt-browser:v4 -f docker/browser.Dockerfile docker
 docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker
 ./target/release/kwnt serve --host 127.0.0.1 --port 8799
 ```

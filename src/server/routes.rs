@@ -1205,7 +1205,7 @@ pub(super) fn run_handoffs_boxed<'a>(
 /// person's `user` message. `from` already took the person's ask, so the teammate builds on what
 /// it did or decided and never reverses it (2026-11-09 10:24: Growth built the mockup the person
 /// asked for while Frontend, handed the same message, answered "build nothing").
-fn handoff_prompt(from: &str, user: &str, from_text: &str) -> String {
+pub(super) fn handoff_prompt(from: &str, user: &str, from_text: &str) -> String {
     format!(
         "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{text}\n\n\
         {rule}\n\n\
@@ -3013,6 +3013,7 @@ async fn run_kwant_turn_inner(
             turn_id: Some(tag.turn_id.clone()),
             workspace: workspace_dir.clone(),
             sandbox_target: Some(sandbox_target.clone()),
+            repeats: Default::default(),
         };
         // A replay works in its own scratch browser and asks nobody
         let _turn_on_browser = opts.rehearse.is_none().then(|| state.human_steps.track_turn(&sandbox_target, turn_scope.clone()));

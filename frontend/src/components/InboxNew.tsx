@@ -619,7 +619,9 @@ const ItemPane: React.FC<{
   placeName?: (channelId: string | null) => string | null;
   api?: DoneApi;
   initial?: DoneDetailData;
-}> = ({ item, runItem, entry, onDone, onHeldResolved, onOpenItemChat, onOpenMessage, onEditRoutine, placeName, api, initial }) => {
+  /** The Inbox's clock, so the meta line says the day for an item from another day. */
+  now?: number;
+}> = ({ item, runItem, entry, onDone, onHeldResolved, onOpenItemChat, onOpenMessage, onEditRoutine, placeName, api, initial, now }) => {
   const phone = usePhoneLayout();
   const d = useDoneDetail(item, runItem, api ?? defaultDoneApi, initial);
   const doneLayout = isDoneGroup(item.group) && (!isReview(item) || isRoutineItem(item));
@@ -635,7 +637,7 @@ const ItemPane: React.FC<{
   const place = placeId ? (placeName?.(placeId) ?? null) : null;
   const routineId = d.routine?.id;
   const edit = onEditRoutine && routineId ? () => onEditRoutine(routineId) : undefined;
-  if (!isReview(item)) return <DoneItemView item={item} d={d} place={place} phone={phone} onOpenChat={openChat} onEditRoutine={onEditRoutine} />;
+  if (!isReview(item)) return <DoneItemView item={item} d={d} place={place} phone={phone} now={now} onOpenChat={openChat} onEditRoutine={onEditRoutine} />;
   return (
     <ReviewItemView
       item={item}
@@ -644,7 +646,7 @@ const ItemPane: React.FC<{
       onHeldResolved={onHeldResolved}
       done={{
         title: doneTitle(item),
-        meta: metaLine(item, d.routine, d.run),
+        meta: metaLine(item, d.routine, d.run, now),
         chips: <DoneChipsAndCheck item={item} d={d} onAddCheck={edit} />,
         body: <DoneSections item={item} d={d} place={place} onOpenChat={openChat} onEditRoutine={onEditRoutine} />,
         changed: changedState(item, d.message),
@@ -1021,6 +1023,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
         placeName={placeName}
         api={doneApi}
         initial={doneDetails?.[selItem.id]}
+        now={now}
       />
     ) : empty ? (
       <div className="h-full grid place-items-center text-center" data-pane-empty>

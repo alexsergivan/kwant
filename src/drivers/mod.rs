@@ -209,6 +209,13 @@ pub fn from_outsider(msg: &crate::db::models::Message) -> bool {
     from_agent(msg).is_some() || from_customer(msg).is_some()
 }
 
+/// Whether `msg` is the person's own message: a "user" message that no outsider (a connected
+/// agent or a business customer) wrote. Sites that look for "what the person said" use this, so a
+/// customer's words are never taken as the person's answer, decision, request or go-ahead (16d).
+pub fn from_person(msg: &crate::db::models::Message) -> bool {
+    msg.sender_role == "user" && !from_outsider(msg)
+}
+
 /// A "user" history message as a bot reads it: the person's own words as they are, a connected
 /// agent's framed with [`agent_message`], a customer's with [`customer_message`].
 pub fn user_history_text(msg: &crate::db::models::Message) -> String {
@@ -481,6 +488,18 @@ pub const BROWSER_SPEED: &str = "\n[Browser speed]\n\
     For the bot browser, act on the page state you already have and use the fewest browser calls: don't explore the \
     filesystem or read kwant's source code to figure out how the browser works.";
 
+/// Bot Browser, both variants (22k): a file the bot can't get itself comes from the person through
+/// the chat, and the bot answers the page's picker with it. A container bot once told the person
+/// "my browser can't download or attach files" and handed them the whole page job.
+/// The chat takes only some kinds and sizes (see [`crate::server::attachments`]), so the line says
+/// which: an MP3 or a 500 MB file would be refused at the person's end.
+pub const ASK_FOR_THE_FILE: &str = "If you can't get a file yourself (a download was refused or stopped, or only the person \
+    has it), ask the person to drop it into this chat, then click the page's upload button and answer its picker with \
+    browser_upload (the upload above) using that attachment's id. Never tell them you can't attach files, and never hand \
+    them the page's upload: all they do is hand over the file. The chat takes images, videos, PDFs and text files, up to \
+    20 MB (videos up to 100 MB); for any other file, say in your Blocked: line which file the page needs and that the chat \
+    can't take it.";
+
 /// Every turn that can read something: look before proposing, retry before giving up, check
 /// before saying done.
 pub const LOOK_FIRST: &str = "\n\n[Look first, then finish]\n\
@@ -656,11 +675,13 @@ impl TurnInput {
                 - `browser_screenshot` (optional width, e.g. 390 phone / 1280 desktop; share: true also posts it in the chat as you): see the page as a picture, for layout, colours and spacing. When the person asks to see something (a mockup, a page, a change), share the picture: describing it isn't enough.\n\
                 - `browser_cite` (text: the exact words from the page, or block: an id from `browser_page` with blocks): checks the quote is on the page word for word and once, and returns {{quote, url, link}}; the link opens the page with the quote highlighted. When you answer facts you read on the web, back each with its cite link. If a quote is refused, quote the page exactly or quote more; never quote from memory.\n\
                 - `browser_upload` (files: one or more, each a path in your own folder, e.g. downloads/clip.mp4, or a chat attachment's id): answer a file picker the page has open. Refused if no picker is open. After you click the page's upload button, its result (or your next `browser_page`) has a note starting \"A file picker opened\"; then call browser_upload.\n\
+                - {ask_for_file}\n\
                 A download goes only into your own folder, under downloads/, never into the person's Downloads folder. Use the file only after the page state says \"Downloaded …\". \
                 Every call returns the updated page and what changed, so you rarely need a separate read. If it says nothing changed or tells you to stop, don't repeat the action: try something else. \
                 The current page state and its clickable list are usually already in the request; act on them directly.\n\
                 {control_rules}",
                 tools = crate::mcp::SELF_SERVER_NAME,
+                ask_for_file = ASK_FOR_THE_FILE,
             ),
             BrowserAccess::Shell => format!(
                 "\n\n[Bot Browser]\n\
@@ -676,11 +697,13 @@ impl TurnInput {
                 - Scroll: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"scroll\",\"delta_y\":600}}'\n\
                 - Cite what you read: curl -sS -X POST '{api}/cite' -H 'Content-Type: application/json' -d '{{\"text\":\"<the exact words from the page>\"}}' (or {{\"block\":\"b3-9f2a41c0\"}}, an id from '{api}/page?blocks=1'). It checks the quote is on the page word for word and once, and returns quote, url and a link that opens the page with it highlighted; when you answer facts you read on the web, back each with its link. If it refuses, quote the page exactly or quote more; never quote from memory.\n\
                 - Answer a file picker the page has open: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"upload\",\"files\":[\"downloads/clip.mp4\"]}}' (each a path in your own folder or a chat attachment's id). Refused if no picker is open.\n\
+                - {ask_for_file}\n\
                 A download goes only into your own folder, under downloads/, never into the person's Downloads folder. Use the file only after the page state says \"Downloaded …\". \
                 Every /act call returns the updated page (url, title, text, clickable) and what changed, so you rarely need a separate read. If it says nothing changed or tells you to stop, don't repeat the action: try something else. \
                 The current page state and its clickable list are usually already in the request; act on them directly.\n\
                 {control_rules}",
                 api = api,
+                ask_for_file = ASK_FOR_THE_FILE,
             ),
             BrowserAccess::Unavailable => "\n\n[Bot Browser]\n\
                 You have no way to use the browser in the user's side panel this turn. If the user asks you to browse, say so plainly and \
@@ -1040,6 +1063,20 @@ pub(crate) mod tests {
         }
     }
 
+    /// A "user" message a business customer wrote from Telegram (as `telegram::customers` saves it).
+    pub(crate) fn customer_said(text: &str) -> crate::db::models::Message {
+        let mut m = said("user", text);
+        m.meta = Some(serde_json::json!({"source": "telegram_customer", "from_customer": "Ann", "customer_chat_id": 7}).to_string());
+        m
+    }
+
+    #[test]
+    fn only_the_persons_own_message_is_from_the_person() {
+        assert!(from_person(&said("user", "hi")));
+        assert!(!from_person(&customer_said("hi")));
+        assert!(!from_person(&said("kwant", "hi")));
+    }
+
     #[test]
     fn own_text_drops_only_the_blocks_kwant_adds() {
         assert_eq!(own_text("Fix differences!\n\n[Attached files]\nThe user attached these files.\n- a.png"), "Fix differences!");
@@ -1358,6 +1395,48 @@ pub(crate) mod tests {
         }
         let prompt = input().format_system_prompt_with(BrowserAccess::Unavailable);
         assert!(prompt.contains("never try to solve or bypass it: tell the person which page asked for the check"), "{prompt}");
+    }
+
+    /// 22k (Oleks, Nov 15): a container bot whose download was refused told the person "my browser
+    /// can't download or attach files" and handed them the page's upload. Both browser variants now
+    /// say to ask for the file in the chat and answer the picker with it, once, on every engine and
+    /// in the part that stays the same between turns; a turn without the browser isn't told.
+    #[test]
+    fn a_browser_bot_asks_for_a_missing_file_in_the_chat_and_uploads_it_itself() {
+        for access in ACCESSES {
+            let has_browser = access != BrowserAccess::Unavailable;
+            for (engine, prompt) in engine_prompts(&input(), access) {
+                assert_eq!(prompt.matches(ASK_FOR_THE_FILE).count(), usize::from(has_browser), "{engine} {access:?}");
+            }
+            if !has_browser {
+                continue;
+            }
+            let tail = input().system_prompt_parts(access).tail;
+            assert!(tail.contains(ASK_FOR_THE_FILE), "{access:?}");
+            // Right after the picker line it relies on, inside the Bot Browser block
+            let upload = tail.find("chat attachment's id").unwrap_or_else(|| panic!("{access:?}"));
+            let ask = tail.find(ASK_FOR_THE_FILE).unwrap();
+            assert!(upload < ask && ask < tail.find("A download goes only into your own folder").unwrap(), "{access:?}");
+            assert!(tail[..ask].ends_with("- "), "{access:?}: a bullet of its own");
+        }
+        for part in ["drop it into this chat", "browser_upload", "that attachment's id", "Never tell them you can't attach files", "never hand them the page's upload"] {
+            assert!(ASK_FOR_THE_FILE.contains(part), "{part}");
+        }
+        // The kinds and sizes it names are the ones the chat really takes
+        use crate::server::attachments::{MAX_ATTACHMENT_BYTES, MAX_VIDEO_BYTES};
+        let mb = |b: u64| format!("{} MB", b / (1024 * 1024));
+        assert!(ASK_FOR_THE_FILE.contains(&format!("up to {}", mb(MAX_ATTACHMENT_BYTES))), "{ASK_FOR_THE_FILE}");
+        assert!(ASK_FOR_THE_FILE.contains(&format!("videos up to {}", mb(MAX_VIDEO_BYTES))), "{ASK_FOR_THE_FILE}");
+        let kinds: [(&str, &[u8], bool); 3] = [
+            ("a.png", b"\x89PNG\r\n\x1a\n\0\0\0\0\0\0\0\0", true),
+            ("a.pdf", b"%PDF-1.7\n0000000", true),
+            ("ep.mp3", b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0", false),
+        ];
+        for (name, head, takes) in kinds {
+            assert_eq!(crate::server::attachments::sniff(head, false, name).is_some(), takes, "{name}");
+        }
+        assert!(ASK_FOR_THE_FILE.contains("images, videos, PDFs and text files"));
+        assert!(ASK_FOR_THE_FILE.contains("say in your Blocked: line which file the page needs and that the chat can't take it"));
     }
 
     /// Plan §A.4: one line asks for structure the Smart Results selectors can read, once per turn.

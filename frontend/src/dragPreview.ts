@@ -2,6 +2,7 @@
 // carries, read while it is still in the air; the words the drop card shows; what a drop brought; and
 // the window-level watch that knows a file drag is over the window at all.
 import { MAX_ATTACHMENTS, isArchiveMime, previewRefusesMime } from './attachments';
+import { teamNamed } from './botHome';
 
 /** One dragged item as the browser shows it before the drop: its kind and MIME type, never its name. */
 export interface DragItemLike {
@@ -135,12 +136,13 @@ export function dropHeading(r: DropRecipient, count: number | null, armed = fals
   const here = armed ? 'Drop here to ' : 'Drop to ';
   if (r.kind === 'bot') return { pre: `${here}give `, name: r.name, post: count === null ? ' your files' : count === 1 ? ' this file' : ' these files' };
   if (r.kind === 'general') return { pre: `${here}share in `, name: r.name, post: '' };
-  if (r.kind === 'team') return { pre: `${here}share with the `, name: r.name, post: ' team' };
+  // A name that already ends in its own "team" ("Marketing_Team") isn't followed by another one.
+  if (r.kind === 'team') return { pre: `${here}share with the `, name: r.name, post: teamNamed(r.name) === r.name.trim() ? '' : ' team' };
   return { pre: `${here}share with `, name: r.name, post: '' };
 }
 
-/** The recipient inside a sentence: "Frontend", "General", "the Kitchen team". */
-const nameIn = (r: DropRecipient) => (r.kind === 'team' ? `the ${r.name} team` : r.name);
+/** The recipient inside a sentence: "Frontend", "General", "the Kitchen team", "the Marketing_Team". */
+const nameIn = (r: DropRecipient) => (r.kind === 'team' ? `the ${teamNamed(r.name)}` : r.name);
 
 const WORKS = 'Images, videos, PDFs and text or code files work.';
 
