@@ -145,7 +145,7 @@ type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
-  | 'partyhat' | 'hardhat' | 'flower' | 'roof' | 'none';
+  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'none';
 
 export interface Creature {
   body: string;
@@ -239,7 +239,7 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   party: ['peach', 'partyhat'],
   builder: ['steel', 'hardhat'],
   zen: ['blossom', 'flower'],
-  home: ['gold', 'roof'],
+  home: ['gold', 'house'],
 };
 
 /** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
@@ -280,7 +280,6 @@ function pickCreature(role: string, name: string): Creature {
     [['diy', 'builder', 'handy'], 'steel', 'hardhat'],
     [['wellbeing', 'mindful', 'zen'], 'blossom', 'flower'],
     [['coach', 'mentor'], 'amber', 'cap'],
-    [['home', 'house'], 'gold', 'roof'],
   ];
   for (const [keys, palette, accessory] of rules) {
     if (keys.some((k) => norm.includes(k))) return { ...PALETTES[palette], accessory };
@@ -324,10 +323,6 @@ function renderAccessory(c: Creature) {
       return [px(8, 5, 1, 2, c.accent), px(9, 6, 1, 1, c.accent), px(17, 5, 1, 2, c.accent), px(16, 6, 1, 1, c.accent)];
     case 'sprout':
       return [px(13, 5, 1, 2, '#3ccf6e'), px(14, 4, 2, 1, '#3ccf6e'), px(11, 4, 2, 1, '#1f8f4c')];
-    case 'roof':
-      // House v3 (26e, Mira): only the chimney sits behind the body, on the LEFT slope so a top-right mood badge
-      // never hides it. The gable and squared walls are in renderOverlay.
-      return [px(8, 2, 2, 4, '#9a5a46'), px(8, 2, 2, 1, '#c98a6e')];
     case 'crown':
       return [
         px(10, 5, 6, 2, c.accent), px(10, 4, 1, 1, c.accent), px(12, 3, 2, 2, c.accent), px(15, 4, 1, 1, c.accent),
@@ -411,24 +406,68 @@ function renderOverlay(c: Creature) {
       ];
     case 'tie':
       return [px(12, 16, 2, 1, c.accent), px(12, 17, 2, 1, c.accent), px(12, 18, 2, 1, '#a8323a')];
-    case 'roof':
-      // House v3: a 45° gable in front of the body down to y 8 (the face starts at y 10, so blink and asleep lids
-      // still show), eaves 2 px past each wall, and squared lower corners so the body reads as a box.
-      return [
-        px(7, 16, 1, 1, c.shade), px(18, 16, 1, 1, c.shade), px(7, 17, 2, 1, c.shade), px(17, 17, 2, 1, c.shade),
-        px(12, 2, 2, 1, c.accent), px(11, 3, 4, 1, c.accent), px(10, 4, 6, 1, c.accent),
-        px(9, 5, 8, 1, c.accent), px(8, 6, 10, 1, c.accent), px(7, 7, 12, 1, c.accent),
-        px(5, 8, 16, 1, '#a8323a'),
-        px(13, 2, 1, 1, '#c23a42'), px(14, 3, 1, 1, '#c23a42'), px(15, 4, 1, 1, '#c23a42'),
-        px(16, 5, 1, 1, '#c23a42'), px(17, 6, 1, 1, '#c23a42'), px(18, 7, 1, 1, '#c23a42'),
-        px(12, 2, 1, 1, '#ff8f8f'), px(11, 3, 1, 1, '#ff8f8f'),
-      ];
     default:
       return [];
   }
 }
 
+/** House (26e): the body IS a little house. Roof wider than the walls, square walls, the eyes are its windows,
+ *  a door at the bottom centre. Eyes sit on the same cells as every creature, so blink and asleep still work. */
+function renderHouse(c: Creature) {
+  return [
+    // Ground shadow (only drawn at 48 px and up, like every creature)
+    px(6, 20, 14, 1, '#261d4a', 'shadow'),
+    // Chimney (left slope, so the mood badge never hides it)
+    px(8, 2, 2, 4, c.shade, 'c1'),
+    px(8, 2, 2, 1, c.body, 'c2'),
+    // Roof, 45 degree slopes
+    px(12, 2, 2, 1, c.accent, 'r1'),
+    px(11, 3, 4, 1, c.accent, 'r2'),
+    px(10, 4, 6, 1, c.accent, 'r3'),
+    px(9, 5, 8, 1, c.accent, 'r4'),
+    px(8, 6, 10, 1, c.accent, 'r5'),
+    px(7, 7, 12, 1, c.accent, 'r6'),
+    px(6, 8, 14, 1, c.accent, 'r7'),
+    // Eave: the widest row, 2 px past each wall
+    px(5, 9, 16, 1, c.accent, 'r8'),
+    // Right slope in shade
+    px(13, 2, 1, 1, '#a8323a', 'rs1'),
+    px(14, 3, 1, 1, '#a8323a', 'rs2'),
+    px(15, 4, 1, 1, '#a8323a', 'rs3'),
+    px(16, 5, 1, 1, '#a8323a', 'rs4'),
+    px(17, 6, 1, 1, '#a8323a', 'rs5'),
+    px(18, 7, 1, 1, '#a8323a', 'rs6'),
+    px(19, 8, 1, 1, '#a8323a', 'rs7'),
+    px(20, 9, 1, 1, '#a8323a', 'rs8'),
+    // Ridge highlight
+    px(12, 2, 1, 1, '#ff8f8f', 'rh1'),
+    px(11, 3, 1, 1, '#ff8f8f', 'rh2'),
+    // Walls
+    px(7, 10, 12, 10, c.body, 'w1'),
+    // Right wall in shade
+    px(18, 10, 1, 10, c.shade, 'w2'),
+    // Ground line
+    px(7, 19, 11, 1, c.shade, 'w3'),
+    // Highlight under the left eave
+    px(8, 10, 1, 2, c.light, 'w4'),
+    // Eyes, which are also the windows (same cells as every creature)
+    px(10, 10, 2, 3, INK, 'e1'),
+    px(14, 10, 2, 3, INK, 'e2'),
+    px(10, 10, 1, 1, '#f5f2ff', 'e3'),
+    px(14, 10, 1, 1, '#f5f2ff', 'e4'),
+    // Blush
+    px(8, 13, 2, 1, BLUSH, 'k1'),
+    px(16, 13, 2, 1, BLUSH, 'k2'),
+    // Door, bottom centre, round top
+    px(12, 15, 2, 1, '#8f5b4a', 'd1'),
+    px(11, 16, 4, 4, '#8f5b4a', 'd2'),
+    // Door knob
+    px(13, 17, 1, 1, '#ffe066', 'd3'),
+  ];
+}
+
 function renderCreature(c: Creature) {
+  if (c.accessory === 'house') return renderHouse(c);
   return [
     // Ground shadow
     px(7, 20, 12, 1, '#261d4a', 'shadow'),
