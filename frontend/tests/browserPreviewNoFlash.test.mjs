@@ -81,6 +81,33 @@ test('the live view keeps the last good picture while a blank one is in, and ack
   m.flushSync(() => root.unmount());
 });
 
+// QA on #726: a sparse white page (a line of text, a light input) is blank-light on every frame, so typing
+// in it showed only every 1.5 s. Once a blank-light picture is on screen, the next one shows at once.
+test('a sparse white page: after the first picture, typing frames show at once', async () => {
+  const probe = async (image) => image.startsWith('W');
+  let out;
+  function Pane({ frame }) { out = m.useSteadyFrame(frame, () => {}, probe); return null; }
+  const root = m.createRoot(document.createElement('div'));
+  const show = async (frame) => { m.flushSync(() => root.render(m.React.createElement(Pane, { frame }))); await settle(); };
+  const f = (id, image) => ({ id, image, width: 1280, height: 800 });
+
+  await show(f(1, 'DARK'));
+  await show(f(2, 'W0'));
+  assert.equal(out.frame?.image, 'DARK', 'the blank commit frame after a dark page is held');
+  await new Promise((r) => setTimeout(r, m.HOLD_LIGHT_MS + 100));
+  await settle();
+  assert.equal(out.frame?.image, 'W0', 'after 1.5 s the white page shows');
+  await show(f(3, 'W1'));
+  assert.equal(out.frame?.image, 'W1', 'the next sparse-white frame shows at once');
+  await show(f(4, 'W2'));
+  assert.equal(out.frame?.image, 'W2');
+  await show(f(5, 'DARK2'));
+  assert.equal(out.frame?.image, 'DARK2');
+  await show(f(6, 'W3'));
+  assert.equal(out.frame?.image, 'DARK2', 'a blank frame after a dark page is held again');
+  m.flushSync(() => root.unmount());
+});
+
 test('every browser view gets its picture through the steady frame, on the dark surface', () => {
   const src = readFileSync(new URL('../src/components/VirtualMachinePane.tsx', import.meta.url), 'utf8');
   assert.match(src, /const steady = useSteadyFrame\(stream\.frame, stream\.acknowledgeFrame\)/);

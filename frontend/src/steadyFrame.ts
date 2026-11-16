@@ -67,6 +67,7 @@ export function useSteadyFrame(
   const [shown, setShown] = useState<BrowserFrame | null>(null);
   const heldSince = useRef<number | null>(null);
   const onScreen = useRef<BrowserFrame | null>(null);
+  const shownLight = useRef(false);
   // A frame with the picture already on screen leaves <img src> unchanged, so no load acknowledges it
   const put = (f: BrowserFrame | null) => {
     if (f && onScreen.current && f.id !== onScreen.current.id && f.image === onScreen.current.image) acknowledge(f.id);
@@ -78,14 +79,16 @@ export function useSteadyFrame(
   useEffect(() => {
     if (passThrough) {
       heldSince.current = null;
+      shownLight.current = false;
       put(frame);
       return;
     }
     const f = frame as BrowserFrame;
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const show = () => {
+    const show = (light = false) => {
       heldSince.current = null;
+      shownLight.current = light;
       put(f);
     };
     (probe as Probe)(f.image).then(
@@ -93,9 +96,10 @@ export function useSteadyFrame(
         if (!live) return;
         const now = Date.now();
         if (light && heldSince.current === null) heldSince.current = now;
-        if (steadyDecision(light, heldSince.current, now) === 'show') return show();
+        if (light && shownLight.current) return show(true);
+        if (steadyDecision(light, heldSince.current, now) === 'show') return show(light);
         acknowledge(f.id);
-        timer = setTimeout(() => { if (live) show(); }, HOLD_LIGHT_MS - (now - (heldSince.current ?? now)));
+        timer = setTimeout(() => { if (live) show(true); }, HOLD_LIGHT_MS - (now - (heldSince.current ?? now)));
       },
       () => { if (live) show(); },
     );
