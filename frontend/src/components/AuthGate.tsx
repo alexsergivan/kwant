@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, Copy, KeyRound, Loader2, RefreshCw, Terminal, X } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { DeviceRequestPrompt, DeviceWait } from './DeviceSignIn';
@@ -16,18 +16,9 @@ import {
   redeemSignIn,
 } from '../auth';
 import { fillTimeZone } from '../continuity';
+import { AuthContext, useAuth } from '../authContext';
 
-interface AuthContextValue {
-  /** True when this browser needs the API token (Docker, a VPS reached directly). */
-  authRequired: boolean;
-  /** This server lets new browsers in from a signed-in one, and lists signed-in browsers. */
-  deviceLogin: boolean;
-  signOut: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextValue>({ authRequired: false, deviceLogin: false, signOut: async () => undefined });
-
-export const useAuth = () => useContext(AuthContext);
+export { useAuth };
 
 type GateState =
   | { kind: 'checking' }

@@ -374,7 +374,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({
             return (
               <span data-pushed>
                 {/* Mira FIX 4: keyed on the grant, so it reads the same when the pressed card is out of view. */}
-                <span className="font-medium text-emerald-300">{pushedLine(used)}</span> · <code className="dv-sha dv-sha-wrap">{p.branch}</code>
+                <span className="font-medium text-emerald-300">{pushedLine(used)}</span> · <code className="dv-sha dv-sha-whole" title={p.branch} data-pushed-branch>{p.branch}</code>
                 {card.grant?.kind === 'override'
                   ? " · your Push anyway was the OK, so it didn't ask again."
                   : " · your retry was the OK, so it didn't ask again."}

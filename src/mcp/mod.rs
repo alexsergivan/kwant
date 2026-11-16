@@ -3,6 +3,7 @@
 
 pub mod builtin_tools;
 pub mod cli_config;
+pub mod cli_hooks;
 pub mod client;
 pub mod composio;
 pub mod echo_server;
