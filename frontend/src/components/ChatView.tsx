@@ -11,8 +11,8 @@ import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
 import { onContinuity } from '../continuity';
 import { TrialWaitsCard } from './SkillsPanel';
-import { agentSenderLabel } from '../agentConnections';
-import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
+import { agentSenderLabel, messageAbout, otherSenderLabel, senderLetter } from '../agentConnections';
+import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, User, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
@@ -37,6 +37,7 @@ import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, foldedAnswerIds, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
 import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
+import { RefusedCustomerCall } from './RefusedCustomerCall';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
@@ -116,6 +117,7 @@ import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
 import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, useDictation } from './DictationMic';
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
+import type { FloorResolveOpts } from '../dev/types';
 
 export interface ChatMessage {
   id: string;
@@ -208,6 +210,20 @@ export interface RoutingState {
 // One reply row geometry, shared by the live row and the finished one (16a), so a reply lands without a shift:
 // a 36 px avatar column from sm up, a 20 px avatar in the name line on phones, and the same bubble padding.
 const REPLY_AVATAR = 36;
+
+/** 23c: someone else's "user" message (a customer, a bot's chat-API post) gets their letter, never the person's avatar. */
+function SenderLetter({ name }: { name: string }) {
+  const letter = senderLetter(name);
+  return (
+    <span
+      aria-hidden="true"
+      data-sender-letter={letter}
+      className="w-9 h-9 shrink-0 rounded-full bg-zinc-800 border border-zinc-700/60 text-zinc-200 text-sm font-semibold inline-flex items-center justify-center select-none"
+    >
+      {letter || <User size={16} className="text-zinc-400" />}
+    </span>
+  );
+}
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
@@ -239,8 +255,8 @@ export interface ChatViewProps {
   pendingApprovals: PendingApproval[];
   /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
   prepush?: React.ReactNode;
-  /** Approvals answered in Telegram while this chat was open (G4): kept as a resolved row. */
-  settledApprovals?: PendingApproval[];
+  /** Approvals answered in Telegram (G4), kept as a resolved row; `refused` marks a customer's call nobody allowed (22d). */
+  settledApprovals?: (PendingApproval & { refused?: true })[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -249,7 +265,7 @@ export interface ChatViewProps {
   onSendMessage: (text: string, attachments: AttachmentRef[], opts?: SendOptions) => void | Promise<boolean | string | void>;
   /** Saves the person's thumbs on a bot reply; absent hides the thumbs. */
   onReact?: (msg: ChatMessage, reaction: Reaction | null) => Promise<ReactResult> | void;
-  onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
+  onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny', opts?: FloorResolveOpts) => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   /** Prompts offered above an empty chat, made from who is in it; none hides the bar. */
@@ -1757,7 +1773,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ? emptyTrialReplyLine(parsePick(activeKwants.find((k) => k.id === msg.sender_id || k.name === msg.sender_id)?.preferred_model).family)
         : null;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
-    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
+    // 23c: a customer's or a bot's "user" message says who wrote it; the person (Telegram too) and a coding agent as before
+    const otherSender = isUser ? otherSenderLabel(msg.meta, knownBots, msg.sender_id) : null;
+    const displayName = isUser ? otherSender ?? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
     // P4: a share that now sits under its bot's reply reads as part of it, without a second header.
     const underReply = !isUser && filesOnly && (arranged.attached.has(msg.id) || liveShareIds.has(msg.id));
     const olderCopies = filesOnly ? arranged.earlier.get(msg.id) : undefined;
@@ -1788,13 +1806,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <span className="hidden sm:contents">
           {/* Laya hand-off: a reply she just routed brings the chosen bot's avatar up into the header */}
           <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
-            <ModernAvatar
-              role={isUser ? 'user' : title}
-              name={displayName}
-              size={REPLY_AVATAR}
-              kwantId={replyKwantId}
-              modelBadge={false}
-            />
+            {otherSender ? (
+              <SenderLetter name={otherSender} />
+            ) : (
+              <ModernAvatar
+                role={isUser ? 'user' : title}
+                name={displayName}
+                size={REPLY_AVATAR}
+                kwantId={replyKwantId}
+                modelBadge={false}
+              />
+            )}
           </span>
         </span>
         )}
@@ -1803,8 +1825,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {underReply ? (
             <span className="sr-only">Shared by {displayName}</span>
           ) : isUser ? (
-            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
-              <span className="text-zinc-200 shrink-0">{displayName}</span>
+            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap" data-sender={otherSender ? 'other' : undefined}>
+              <span className={otherSender ? 'text-zinc-200 min-w-0 truncate' : 'text-zinc-200 shrink-0'}>{displayName}</span>
               {fromTelegram(parseMetaObject(msg.meta)) && <ViaTelegram />}
             </div>
           ) : (
@@ -1887,7 +1909,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <div className={isUser ? 'relative w-full max-w-2xl' : 'contents'}>
           {isUser && (() => {
             // The person's message: the overflow sits in the empty gutter left of the bubble, bottom-aligned, no row
-            const more = continueMenu(msg, 'your message', 'end', 'hover');
+            const more = continueMenu(msg, messageAbout(otherSender), 'end', 'hover');
             return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
           })()}
           <div
@@ -1972,13 +1994,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Action row (reply-chrome part 3): Reply, the thumbs, then Copy as a quiet icon; smart-result actions portal in after Copy */}
           {/* 0.9.8: on a phone the browsed chip gets its own 44 px row above the action row (it would wrap) */}
-          {!isUser && !filesOnly && phone && savedActivity && (
-            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0">
+          {/* 19f: only when the reply opened pages; BrowsedChip draws nothing otherwise, and the 44 px row was an empty gap */}
+          {!isUser && !filesOnly && phone && savedActivity && pagesOfReply(savedActivity.steps).length > 0 && (
+            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0" data-phone-browsed-row="">
               <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} phone onOpen={() => openBrowserFor(msg.id)} />
             </div>
           )}
           {!isUser && !filesOnly && (
-            <div className="mt-2 flex flex-wrap items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0">
+            <>
+            {/* 19f: on a phone the ghost icons keep one row (no wrap) and the smart-result actions get their own row below */}
+            <div
+              className={`mt-2 flex ${phone ? 'flex-nowrap' : 'flex-wrap'} items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0`}
+              data-reply-actions={phone ? 'phone' : 'desktop'}
+            >
               {!phone && savedActivity && (
                 <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} onOpen={() => openBrowserFor(msg.id)} />
               )}
@@ -1997,8 +2025,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
               <CopyGhost copied={copiedId === msg.id} tipId={`copy-tip-${msg.id}`} onCopy={() => handleCopy(text, msg.id)} />
               {continueMenu(msg, `${displayName}'s reply`, 'start')}
-              {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
+              {!phone && msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
+            {phone && msg.results != null && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-zinc-400 text-xs max-w-full min-w-0 empty:hidden" data-smart-row="">
+                <SmartActionsSlot messageId={msg.id} />
+              </div>
+            )}
+            </>
           )}
           {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={isUser ? 'end' : 'start'} />}
         </div>
@@ -2603,10 +2637,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* P4: the running bot's shares, already in the place its saved reply will give them */}
         {liveRowShown && arranged.live.map((m) => renderMessage(m))}
 
-        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
-        {settledApprovals.map((approval) => (
-          <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
-        ))}
+        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload;
+            22d: a customer's call nobody allowed, in that customer's chat */}
+        {settledApprovals.map((approval) =>
+          approval.refused ? (
+            <RefusedCustomerCall key={approval.id} approval={approval} />
+          ) : (
+            <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
+          ),
+        )}
 
         {/* 0.8.0 B3: checks before this bot pushes */}
         {prepush}

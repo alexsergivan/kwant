@@ -113,14 +113,12 @@ async fn videos_are_known_by_their_bytes_and_play_inline() {
         assert_eq!(h["content-range"], format!("bytes 100-199/{}", bytes.len()));
     }
 
-    // Not videos, whatever the name: a zip, an iPhone photo, an M4A voice memo
+    // Not videos, whatever the name: a zip, an iPhone photo (an M4A voice memo is audio since 22l)
     let mut zip = b"PK\x03\x04\x14\0\0\0\x08\0".to_vec();
     zip.resize(4096, 7);
     let mut heic = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic".to_vec();
     heic.resize(4096, 0);
-    let mut m4a = b"\0\0\0\x1cftypM4A \0\0\0\0M4A isom".to_vec();
-    m4a.resize(4096, 0);
-    for (name, bytes) in [("holiday.mp4", zip), ("IMG_0001.mov", heic), ("memo.mp4", m4a)] {
+    for (name, bytes) in [("holiday.mp4", zip), ("IMG_0001.mov", heic)] {
         let (s, v) = upload(&env, name, bytes).await;
         assert_eq!(s, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{name}");
         assert_eq!(v["code"], "unsupported_type");
@@ -138,7 +136,7 @@ async fn videos_may_be_100_mb_and_everything_else_20() {
 
     let (s, v) = upload(&env, "big.txt", vec![b'a'; 25 * 1024 * 1024]).await;
     assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(v, json!({"error": "Files can be at most 20 MB (videos up to 100 MB).", "code": "too_large", "max_bytes": 20971520}));
+    assert_eq!(v, json!({"error": "Files can be at most 20 MB (videos and audio up to 100 MB).", "code": "too_large", "max_bytes": 20971520}));
 
     let (s, v) = upload(&env, "huge.mp4", fake_mp4(100 * 1024 * 1024 + 1)).await;
     assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
@@ -150,7 +148,7 @@ async fn videos_may_be_100_mb_and_everything_else_20() {
     let (s, v) = upload_body(&env, "x.mp4", Body::from(fake_mp4(64)), Some(100 * 1024 * 1024 + 1)).await;
     assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(v["max_bytes"], 104857600);
-    assert_eq!(v["error"], "Files can be at most 100 MB for videos and 20 MB for everything else.");
+    assert_eq!(v["error"], "Files can be at most 100 MB for videos and audio and 20 MB for everything else.");
     assert_eq!(tmp_files(&env), 0, "refused uploads leave no temp file");
 }
 
@@ -206,7 +204,7 @@ async fn agents_share_videos_and_see_them_as_frames() {
     let r = self_call(&env, "tok-ws", "share_file", json!({"path": "big.mp4", "name": "big.mp4"})).await;
     assert_eq!((r["isError"].as_bool(), text_of(&r).as_str()), (Some(true), "The video is larger than 100 MB."));
     let r = self_call(&env, "tok-ws", "share_file", json!({"path": "big.bin.txt", "name": "big.txt"})).await;
-    assert_eq!((r["isError"].as_bool(), text_of(&r).as_str()), (Some(true), "The file is larger than 20 MB (videos up to 100 MB)."));
+    assert_eq!((r["isError"].as_bool(), text_of(&r).as_str()), (Some(true), "The file is larger than 20 MB (videos and audio up to 100 MB)."));
 
     let r = self_call(&env, "tok-ws", "read_attachment", json!({"id": id})).await;
     if kwnt::server::video::tools().is_none() {
@@ -253,4 +251,101 @@ async fn a_damaged_video_reads_as_a_clear_error() {
     let r = self_call(&env, "tok", "read_attachment", json!({"id": id})).await;
     assert_eq!(r["isError"], true);
     assert_eq!(text_of(&r), "Couldn't look inside cut.mp4 (video/mp4, 4 KB): ffmpeg can't read it (it may be cut off or damaged).");
+}
+
+/// `head` padded with zeros to `len` bytes.
+fn padded(head: &[u8], len: usize) -> Vec<u8> {
+    let mut v = head.to_vec();
+    v.resize(len, 0);
+    v
+}
+
+/// An MP3 that opens with an ID3v2.4 tag, as most do.
+const MP3_HEAD: &[u8] = b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0";
+
+/// 22l: the chat takes audio (MP3, M4A/AAC, WAV, OGG/Opus, FLAC) by its bytes, never its name,
+/// up to 100 MB like a video. It downloads (no inline player: no new UI).
+#[tokio::test]
+async fn audio_is_known_by_its_bytes_and_may_be_100_mb() {
+    let env = setup().await;
+    // Names that lie on purpose for some: the bytes decide
+    let cases: [(&str, &[u8], &str); 10] = [
+        ("song.mp3", MP3_HEAD, "audio/mpeg"),
+        ("episode.mp3", &[0xFF, 0xFB, 0x90, 0x64][..], "audio/mpeg"),
+        ("memo.m4a", b"\0\0\0\x1cftypM4A \0\0\0\0M4A isom", "audio/mp4"),
+        ("memo.mp4", b"\0\0\0\x1cftypM4A \0\0\0\0M4A isom", "audio/mp4"),
+        ("book.m4b", b"\0\0\0\x1cftypM4B \0\0\0\0M4B isom", "audio/mp4"),
+        ("raw.aac", &[0xFF, 0xF1, 0x50, 0x80][..], "audio/aac"),
+        ("take.wav", b"RIFF\x24\x08\0\0WAVEfmt ", "audio/wav"),
+        ("voice.opus", b"OggS\0\x02\0\0\0\0\0\0\0\0", "audio/ogg"),
+        ("album.flac", b"fLaC\0\0\0\x22", "audio/flac"),
+        ("notes.txt", MP3_HEAD, "audio/mpeg"),
+    ];
+    for (name, head, mime) in cases {
+        let (s, a) = upload(&env, name, padded(head, 4096)).await;
+        assert_eq!(s, StatusCode::CREATED, "{name}: {a}");
+        assert_eq!(a["mime"], mime, "{name}");
+        let id = a["id"].as_str().unwrap();
+        let (s, h, _) = fetch(&env, &format!("/api/attachments/{id}/content"), &[]).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(h["content-type"], mime);
+        assert!(h["content-disposition"].to_str().unwrap().starts_with("attachment;"), "{name}: audio downloads");
+        assert_eq!(h["x-content-type-options"], "nosniff");
+    }
+
+    // A renamed binary stays refused, right after its first bytes: an .exe, a zip, plain text and
+    // UTF-16 text (whose FF FE mark must not pass for an MPEG frame) called song.mp3
+    let mut utf16 = vec![0xFF, 0xFE];
+    "Hello there, a song".encode_utf16().for_each(|u| utf16.extend_from_slice(&u.to_le_bytes()));
+    for (name, bytes) in [
+        ("song.mp3", padded(b"MZ\x90\0\x03\0\0\0\x04\0\0\0\xff\xff\0\0", 4096)),
+        ("song.mp3", padded(b"PK\x03\x04\x14\0\0\0\x08\0", 4096)),
+        ("song.mp3", b"just some text pretending to be a song".to_vec()),
+        ("song.mp3", utf16),
+        ("song.wav", padded(b"RIFF\x24\x08\0\0AVI LIST", 4096)),
+    ] {
+        let (s, v) = upload(&env, name, bytes).await;
+        assert_eq!(s, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{name}: {v}");
+        assert_eq!(v["code"], "unsupported_type");
+        assert!(v["error"].as_str().unwrap().contains("audio (MP3, M4A, AAC, WAV, OGG, Opus, FLAC)"), "{v}");
+    }
+
+    // Past 20 MB is fine for audio; past 100 MB isn't
+    let (s, a) = upload(&env, "episode.mp3", padded(MP3_HEAD, 25 * 1024 * 1024)).await;
+    assert_eq!((s, a["mime"].as_str()), (StatusCode::CREATED, Some("audio/mpeg")), "{a}");
+    let (s, v) = upload(&env, "long.mp3", padded(MP3_HEAD, 100 * 1024 * 1024 + 1)).await;
+    assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(v, json!({"error": "Audio files can be at most 100 MB.", "code": "too_large", "max_bytes": 104857600}));
+    assert_eq!(tmp_files(&env), 0, "refused uploads leave no temp file");
+}
+
+/// 22l: a bot gets audio as a file (its id, then a path from read_attachment), never as model
+/// content, and can share audio back up to 100 MB.
+#[tokio::test]
+async fn agents_share_audio_and_read_it_as_a_file() {
+    let env = setup().await;
+    let ws = env.tmp.path().join("audio-ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("ep.mp3"), padded(MP3_HEAD, 4096)).unwrap();
+    std::fs::write(ws.join("long.mp3"), padded(MP3_HEAD, 100 * 1024 * 1024 + 1)).unwrap();
+    direct_turn(&env, "tok-au", &env.a, Some(ws.clone())).await;
+
+    let r = self_call(&env, "tok-au", "share_file", json!({"path": "ep.mp3", "name": "ep.mp3"})).await;
+    assert_eq!(r["isError"], false, "{r}");
+    let card = messages(&env, &env.a).await.into_iter().find(|m| m.text == "Shared a file: ep.mp3").unwrap();
+    let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["attachments"][0]["mime"], "audio/mpeg");
+    let id = meta["attachments"][0]["id"].as_str().unwrap().to_string();
+
+    let r = self_call(&env, "tok-au", "share_file", json!({"path": "long.mp3", "name": "long.mp3"})).await;
+    assert_eq!((r["isError"].as_bool(), text_of(&r).as_str()), (Some(true), "The audio file is larger than 100 MB."));
+
+    let r = self_call(&env, "tok-au", "read_attachment", json!({"id": id})).await;
+    assert_eq!(r["isError"], false, "{r}");
+    let blocks = r["content"].as_array().unwrap();
+    assert_eq!(blocks.len(), 1, "one text block, no inline media: {r}");
+    assert_eq!(blocks[0]["type"], "text");
+    let text = blocks[0]["text"].as_str().unwrap();
+    assert!(text.starts_with("ep.mp3 is a audio/mpeg file (4 KB). A read-only copy is at "), "{text}");
+    assert!(text.ends_with("open it with your own file tools."), "{text}");
 }

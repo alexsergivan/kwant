@@ -5,12 +5,14 @@ import { PointMeta, PointPick, parsePointMeta, pointMetaOf } from './point';
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 /** Videos (mp4, mov, webm) may be bigger; the server enforces the same caps by the file's bytes. */
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+/** Audio (mp3, m4a, aac, wav, ogg, opus, flac) may be as big as a video (22l); the server checks the bytes. */
+export const MAX_AUDIO_BYTES = MAX_VIDEO_BYTES;
 /** Whole megabytes, as the limits are shown ("20 MB"). */
 const wholeMb = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 /** The drop card's limits line, built from the caps so it can't drift from them (#478 L2). */
-export const LIMITS_LINE = `Up to ${wholeMb(MAX_ATTACHMENT_BYTES)} each · videos ${wholeMb(MAX_VIDEO_BYTES)}`;
+export const LIMITS_LINE = `Up to ${wholeMb(MAX_ATTACHMENT_BYTES)} each · videos and audio ${wholeMb(MAX_VIDEO_BYTES)}`;
 /** The paperclip's tooltip, from the same caps. */
-export const ATTACH_TITLE = `Attach files (or drop / paste them here). Max ${wholeMb(MAX_ATTACHMENT_BYTES)} each, videos ${wholeMb(MAX_VIDEO_BYTES)}.`;
+export const ATTACH_TITLE = `Attach files (or drop / paste them here). Max ${wholeMb(MAX_ATTACHMENT_BYTES)} each, videos and audio ${wholeMb(MAX_VIDEO_BYTES)}.`;
 export const MAX_ATTACHMENTS = 10;
 
 /** What a message's `meta.attachments` holds. */
@@ -42,6 +44,9 @@ export const isInlineImage = (mime: string) => INLINE_IMAGES.has(mime.toLowerCas
 /** Sent videos the chat tries to play (P2); a browser that can't falls back to the file card. */
 export const isVideo = (mime: string | undefined) => VIDEO_MIMES.has((mime || '').toLowerCase().split(';')[0].trim());
 
+/** Audio the chat takes (22l). It shows as a file tile and downloads: no player. */
+export const isAudio = (mime: string | undefined) => AUDIO_MIMES.has((mime || '').toLowerCase().split(';')[0].trim());
+
 export const attachmentUrl = (id: string, download = false) =>
   `/api/attachments/${encodeURIComponent(id)}/content${download ? '?download=1' : ''}`;
 
@@ -60,6 +65,12 @@ export function fileKind(mime: string, name: string): string {
   if (m === 'video/quicktime') return 'MOV';
   if (m === 'video/mp4') return 'MP4';
   if (m === 'video/webm') return 'WebM';
+  if (m === 'audio/mpeg' || m === 'audio/mp3') return 'MP3';
+  if (m === 'audio/mp4' || m === 'audio/x-m4a') return /\.m4b$/i.test(name) ? 'M4B' : 'M4A';
+  if (m === 'audio/aac') return 'AAC';
+  if (m === 'audio/wav' || m === 'audio/x-wav' || m === 'audio/wave') return 'WAV';
+  if (m === 'audio/ogg' || m === 'audio/opus') return /\.opus$/i.test(name) ? 'Opus' : 'OGG';
+  if (m === 'audio/flac' || m === 'audio/x-flac') return 'FLAC';
   if (m === 'application/json') return 'JSON';
   if (m === 'text/csv') return 'CSV';
   if (m === 'text/markdown') return 'Markdown';
@@ -92,6 +103,11 @@ const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/gif'
 const VIDEO_MIMES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 const VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'webm']);
+/** Audio the server takes by its bytes (22l): MP3, M4A/M4B/AAC, WAV, OGG/Opus, FLAC. AIFF, WMA and MIDI aren't. */
+const AUDIO_MIMES = new Set(
+  'audio/mpeg audio/mp3 audio/mp4 audio/x-m4a audio/aac audio/wav audio/x-wav audio/wave audio/ogg audio/opus audio/flac audio/x-flac'.split(' '),
+);
+const AUDIO_EXTS = new Set(['mp3', 'm4a', 'm4b', 'aac', 'wav', 'ogg', 'oga', 'opus', 'flac']);
 /** Text and code: the server keeps these when the bytes are UTF-8. */
 const TEXT_EXTS = new Set(
   (
@@ -108,7 +124,7 @@ const TEXT_EXTS = new Set(
 const BINARY_EXTS = new Set(
   (
     'zip 7z rar gz tgz bz2 xz zst tar iso dmg pkg exe msi dll so dylib apk ipa jar class wasm bin ' +
-    'heic heif avif tif tiff bmp ico psd mp3 wav m4a aac flac ogg opus aiff mkv avi wmv flv mpg mpeg 3gp ' +
+    'heic heif avif tif tiff bmp ico psd aiff aif wma mid midi mkv avi wmv flv mpg mpeg 3gp ' +
     'doc docx xls xlsx ppt pptx odt ods odp pages numbers sqlite woff woff2 ttf otf eot'
   ).split(' '),
 );
@@ -125,7 +141,7 @@ const isBinaryMime = (mime: string) => BINARY_MIMES.has(mime) || BINARY_MIME_PRE
 
 const extOf = (name: string) => /\.([a-z0-9]{1,12})$/i.exec(name)?.[1]?.toLowerCase() ?? '';
 
-export type AttachKind = 'image' | 'pdf' | 'text' | 'video';
+export type AttachKind = 'image' | 'pdf' | 'text' | 'video' | 'audio';
 
 /**
  * What kind of file this is, or null when kwant surely can't take it. Extension first: browsers call
@@ -138,10 +154,12 @@ export function attachKind(f: { name: string; type?: string }): AttachKind | nul
   if (TEXT_EXTS.has(ext)) return 'text';
   if (IMAGE_EXTS.has(ext)) return 'image';
   if (VIDEO_EXTS.has(ext)) return 'video';
+  if (AUDIO_EXTS.has(ext)) return 'audio';
   if (ext === 'pdf') return 'pdf';
   if (BINARY_EXTS.has(ext)) return null;
   if (IMAGE_MIMES.has(mime)) return 'image';
   if (VIDEO_MIMES.has(mime)) return 'video';
+  if (AUDIO_MIMES.has(mime)) return 'audio';
   if (mime === 'application/pdf') return 'pdf';
   if (mime.startsWith('text/') || mime === 'application/json') return 'text';
   if (isBinaryMime(mime)) return null;
@@ -166,7 +184,7 @@ const PREVIEW_REFUSED_PREFIXES = ['audio/', 'font/', 'application/vnd.ms-', 'app
  */
 export function previewRefusesMime(type: string): boolean {
   const mime = (type || '').toLowerCase().split(';')[0].trim();
-  if (!mime) return false;
+  if (!mime || AUDIO_MIMES.has(mime)) return false;
   return BINARY_MIMES.has(mime) || PREVIEW_REFUSED_EXACT.has(mime) || PREVIEW_REFUSED_PREFIXES.some((p) => mime.startsWith(p));
 }
 
@@ -177,9 +195,9 @@ export function isArchiveMime(type: string): boolean {
 }
 
 /** The one line shown when a file's type can't be attached. */
-export const SUPPORTED_TYPES_TEXT = 'Images, videos (MP4, MOV, WebM), PDFs and text or code files work.';
+export const SUPPORTED_TYPES_TEXT = 'Images, videos (MP4, MOV, WebM), audio (MP3, M4A, WAV, OGG, FLAC), PDFs and text or code files work.';
 
-export const capFor = (kind: AttachKind | null) => (kind === 'video' ? MAX_VIDEO_BYTES : MAX_ATTACHMENT_BYTES);
+export const capFor = (kind: AttachKind | null) => (kind === 'video' ? MAX_VIDEO_BYTES : kind === 'audio' ? MAX_AUDIO_BYTES : MAX_ATTACHMENT_BYTES);
 
 /** Checked before uploading, so an unsupported or too-big file never leaves the browser. */
 export function preflightFile(f: { name: string; size: number; type?: string }): string | null {
@@ -190,7 +208,9 @@ export function preflightFile(f: { name: string; size: number; type?: string }):
   const cap = capFor(kind);
   if (f.size > cap) {
     const mb = (f.size / (1024 * 1024)).toFixed(1);
-    return kind === 'video' ? `${label} is too big (${mb} MB). Videos can be up to 100 MB.` : `${label} is too big (${mb} MB). Max 20 MB (videos 100 MB).`;
+    if (kind === 'video') return `${label} is too big (${mb} MB). Videos can be up to ${wholeMb(MAX_VIDEO_BYTES)}.`;
+    if (kind === 'audio') return `${label} is too big (${mb} MB). Audio files can be up to ${wholeMb(MAX_AUDIO_BYTES)}.`;
+    return `${label} is too big (${mb} MB). Max ${wholeMb(MAX_ATTACHMENT_BYTES)} (videos and audio ${wholeMb(MAX_VIDEO_BYTES)}).`;
   }
   return null;
 }
@@ -199,7 +219,7 @@ export function preflightFile(f: { name: string; size: number; type?: string }):
 export function uploadErrorText(status: number, serverMessage?: string): string {
   switch (status) {
     case 413:
-      return serverMessage || 'Too big. Max 20 MB, videos 100 MB.';
+      return serverMessage || 'Too big. Max 20 MB, videos and audio 100 MB.';
     case 415:
       return `That file type isn't supported. ${SUPPORTED_TYPES_TEXT}`;
     case 400:

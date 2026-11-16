@@ -74,7 +74,7 @@ import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToa
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, HelpCircle, Inbox, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
-import { ChatApproval, OpenChat, addSettled, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { ChatApproval, OpenChat, addSettled, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
@@ -186,6 +186,7 @@ import { ModernAvatar } from './components/ModernAvatar';
 import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
+import type { FloorResolveOpts } from './dev/types';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -955,6 +956,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
     refreshAwayCount();
     awayApi.approvals('allowed_once').then((rows) => setSettledApprovals((prev) => addSettled(prev, settledFromRecords(rows))), () => undefined);
+    // 22d: a customer's call nobody allowed, as a quiet line in that customer's chat.
+    awayApi.approvals('refused').then((rows) => setSettledApprovals((prev) => addSettled(prev, refusedFromRecords(rows))), () => undefined);
     questionsApi.listOpen().then((list) => {
       // Closed ones seen live stay; open ones come from the server.
       setQuestions((prev) => {
@@ -2050,21 +2053,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const handleResolveApproval = async (
     ticketId: string,
-    decision: 'allow_once' | 'always_allow' | 'deny'
+    decision: 'allow_once' | 'always_allow' | 'deny',
+    opts?: FloorResolveOpts
   ) => {
     haptic('tap');
     try {
       const res = await fetch(`/api/approvals/${ticketId}/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision }),
+        // 22f: the person's own "Allow without a backup" on a deploy kwant only guessed changes the database.
+        body: JSON.stringify(opts?.withoutBackup && decision === 'allow_once' ? { decision, without_backup: true } : { decision }),
       });
       // Production floor (Dev mode): Allow without a fresh backup is refused and the card stays waiting.
       if (res.status === 409) {
         const body = await res.clone().json().catch(() => null);
         if (body && typeof body === 'object' && (body as { status?: unknown }).status === 'needs_backup') {
           haptic('warning');
-          pushToast('Back up first', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
+          const b = body as { code?: unknown; error?: unknown };
+          // 22f: `without_backup` refused (a destructive step, a known database change, or a card from before 22f).
+          if (b.code === 'backup_required' && typeof b.error === 'string' && b.error) pushToast('Needs a fresh backup', b.error);
+          else pushToast('Needs a fresh backup', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
           return;
         }
       }
@@ -2262,7 +2270,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               streamStore.show({ text: '', thinking: '' });
             }
           }
-          markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot'));
+          markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot', msg.meta));
         }
       }
       return { ok: true, answered: saved.answered };
@@ -4334,7 +4342,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               />
             ) : undefined
           }
-          settledApprovals={approvalsForChat(settledApprovals, openChat)}
+          settledApprovals={settledByTime(approvalsForChat(settledApprovals, openChat))}
           home={chatHome}
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}

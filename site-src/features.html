@@ -39,6 +39,30 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0919" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.19</p>
+      <h2>Bot messages never read as yours, and Bot messages name their bot</h2>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0919" class="span3"><h3>Smaller changes in 0.9.19</h3><p>A message a bot sends through the chat API reads as that bot's in every bot's history, never as yours, so other bots don't take it as your instruction and it can't settle a choice for you. A message a bot sends through the chat API now names the bot that sent it, so other bots see who it came from in their history, hand-offs and follow-ups instead of "unnamed". A customer's refused call shows as one quiet line in that customer's chat, with its time, and never in the bot's direct chat. Chat steps shorten Windows file paths the way they shorten Mac ones, so a long client path reads …\acme\contract.md. A step kwant stopped after 3 identical failures runs again once the bot has changed something, up to 6 tries in a turn. A ship command like docker push or npm publish hidden in a tool's text, or a mailing-list sign-up, now opens the full card instead of the island's Allow once. A bot that keeps rerunning the same failing command now stops after 3 tries even when only the timings, ids or ports in its error change. A shell command that only reads (cat, ls, grep, git status) no longer gives a stopped step 3 more tries; an edit still does. A Telegram customer's message reads "Ann (customer)" and a bot's reads "Scout (bot)", each with its own letter, instead of "You" with your picture. Requests to OpenRouter now name kwant as the app (https://kwant.si), so kwant's use shows on OpenRouter's app page and rankings.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-0918" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.18</p>
+      <h2>A team is named once, never "… team team", and Audio files up to 100 MB in the chat</h2>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0918" class="span3"><h3>Smaller changes in 0.9.18</h3><p>A team named like "Marketing_Team" or "SalesTeam" reads "@Marketing_Team" in the sidebar, team home, message box and drop heading, never "… team team". You can drop MP3, M4A, AAC, WAV, OGG/Opus and FLAC files up to 100 MB into a chat, and a bot can upload them on a page for you. The bot browser's live preview no longer flashes white or grey while a page loads; it keeps the last picture until the new page shows. A browser step card that is done, skipped or timed out stops saying the bot needs you; it reads "<name> asked for you in the browser" in grey, so only open cards ask. On a phone, a reply's buttons line up on one row, result buttons get their own row, the empty gap is gone, and the Ask: row shows a neat dot when a bot needs you. A production deploy card that can't tell whether the database changes offers Set backup command, and Allow without a backup after a confirm, instead of only Deny. A customer's refused call now remembers the chat it happened in, and the approvals list links each one to that chat, so it can show in the right conversation. A bot whose step keeps failing stops once with a Blocked card naming the step and its error, instead of repeating the same reply and asking Keep going?</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-0917" class="fgroup">
   <div class="wrap">
     <div class="section-head">

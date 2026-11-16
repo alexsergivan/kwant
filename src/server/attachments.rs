@@ -7,9 +7,11 @@
 //! served only through the auth guard with `nosniff`, a sandbox CSP and (except raster images and
 //! videos) `Content-Disposition: attachment`.
 //!
-//! Videos (MP4, MOV, WebM by their bytes) may be up to 100 MB; everything else up to 20 MB. A
-//! file the bytes already rule out is refused after its first 16 bytes, not after the last one
-//! (video-drop-073). `read_attachment` looks inside videos with ffmpeg ([`super::video`]).
+//! Videos (MP4, MOV, WebM by their bytes) and audio (MP3, M4A/AAC, WAV, OGG/Opus, FLAC by their
+//! bytes, 22l) may be up to 100 MB; everything else up to 20 MB. A file the bytes already rule out
+//! is refused after its first 16 bytes, not after the last one (video-drop-073). `read_attachment`
+//! looks inside videos with ffmpeg ([`super::video`]); audio reaches the bot as a file, by its
+//! path, like any other non-text file.
 
 use super::continuity::SelfScope;
 use super::AppState;
@@ -32,10 +34,12 @@ use std::path::{Path as FsPath, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
-/// Largest file a user can upload or an agent can share, unless it is a video.
+/// Largest file a user can upload or an agent can share, unless it is a video or audio.
 pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 /// Largest video (MP4, MOV, WebM by its bytes).
 pub const MAX_VIDEO_BYTES: u64 = 100 * 1024 * 1024;
+/// Largest audio file (MP3, M4A/AAC, WAV, OGG/Opus, FLAC by its bytes): the same as a video.
+pub const MAX_AUDIO_BYTES: u64 = MAX_VIDEO_BYTES;
 /// Bytes of a file's start kept for sniffing; the type is known (or ruled out) once they are in.
 const HEAD_BYTES: usize = 16;
 /// After an early 413/415 the rest of the body is read and dropped, so the browser gets the
@@ -66,6 +70,14 @@ pub fn is_video_mime(mime: &str) -> bool {
     INLINE_VIDEO_TYPES.contains(&mime)
 }
 
+/// Audio the chat takes (22l), each proven by its bytes in [`sniff_magic`]. Served as a download,
+/// never inline, and never put into a model's input: a bot gets it as a file.
+pub(crate) const AUDIO_TYPES: [&str; 6] = ["audio/mpeg", "audio/mp4", "audio/aac", "audio/wav", "audio/ogg", "audio/flac"];
+
+pub fn is_audio_mime(mime: &str) -> bool {
+    AUDIO_TYPES.contains(&mime)
+}
+
 pub fn root(state: &AppState) -> PathBuf {
     state.config.data_dir.join("attachments")
 }
@@ -93,6 +105,8 @@ pub fn clean_name(raw: &str) -> String {
 
 /// ISO-BMFF major brands that are video (MP4 and its relatives). Other `ftyp` files (HEIC/AVIF
 /// photos, M4A audio, camera raw) are not videos a browser plays, so they aren't taken as one.
+/// M4A/M4B audio is taken as audio ([`audio_brand`]); an audio-only file whose major brand is a
+/// video one (`mp42`, `isom`) stays a video/mp4, which a `<video>` plays as sound.
 fn video_brand(brand: &[u8]) -> Option<&'static str> {
     let b = std::str::from_utf8(brand).ok()?;
     if b == "qt  " {
@@ -105,8 +119,31 @@ fn video_brand(brand: &[u8]) -> Option<&'static str> {
     mp4.then_some("video/mp4")
 }
 
-/// The type a file's magic bytes prove: an image, a PDF or a video. `None` for text and for
-/// anything that isn't accepted.
+/// ISO-BMFF major brands that are audio: iTunes AAC/ALAC (`M4A `) and audiobooks (`M4B `).
+fn audio_brand(brand: &[u8]) -> Option<&'static str> {
+    matches!(brand, b"M4A " | b"M4B ").then_some("audio/mp4")
+}
+
+/// An MPEG audio frame header at the start (an MP3 without an ID3 tag, or an MP2), or an ADTS
+/// header (raw AAC). Strict enough that a UTF-16 byte-order mark (`FF FE`) or a run of `FF`
+/// bytes isn't taken: MPEG layer I is left out, as are the reserved version, bitrate and
+/// sampling-rate values.
+fn mpeg_audio(head: &[u8]) -> Option<&'static str> {
+    let [0xFF, b1, b2, ..] = *head else { return None };
+    if (b1 & 0xF6) == 0xF0 {
+        // ADTS: 12 sync bits, layer 00; sampling-frequency index 0..=12
+        return (((b2 >> 2) & 0x0F) <= 12).then_some("audio/aac");
+    }
+    let sync = (b1 & 0xE0) == 0xE0;
+    let version_ok = (b1 >> 3) & 0b11 != 0b01;
+    let layer_2_or_3 = matches!((b1 >> 1) & 0b11, 0b01 | 0b10);
+    let bitrate_ok = !matches!(b2 >> 4, 0x0 | 0xF);
+    let rate_ok = (b2 >> 2) & 0b11 != 0b11;
+    (sync && version_ok && layer_2_or_3 && bitrate_ok && rate_ok).then_some("audio/mpeg")
+}
+
+/// The type a file's magic bytes prove: an image, a PDF, a video or audio. `None` for text and
+/// for anything that isn't accepted.
 pub fn sniff_magic(head: &[u8]) -> Option<&'static str> {
     if head.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some("image/png");
@@ -120,18 +157,31 @@ pub fn sniff_magic(head: &[u8]) -> Option<&'static str> {
     if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
         return Some("image/webp");
     }
+    if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WAVE" {
+        return Some("audio/wav");
+    }
     if head.starts_with(b"%PDF-") {
         return Some("application/pdf");
     }
     // ISO-BMFF: a box size, then `ftyp` and the major brand (MP4, MOV)
     if head.len() >= 12 && &head[4..8] == b"ftyp" {
-        return video_brand(&head[8..12]);
+        return video_brand(&head[8..12]).or_else(|| audio_brand(&head[8..12]));
     }
     // EBML: WebM (and Matroska, which browsers play the same way)
     if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
         return Some("video/webm");
     }
-    None
+    // An ID3v2 tag (v2.2 to v2.4) opens most MP3s
+    if head.len() >= 4 && head.starts_with(b"ID3") && matches!(head[3], 2..=4) {
+        return Some("audio/mpeg");
+    }
+    if head.starts_with(b"OggS") {
+        return Some("audio/ogg");
+    }
+    if head.starts_with(b"fLaC") {
+        return Some("audio/flac");
+    }
+    mpeg_audio(head)
 }
 
 /// Extensions that are never text, so a file named so is refused as soon as its first bytes
@@ -217,6 +267,8 @@ impl Utf8Check {
 pub enum Cap {
     /// A video passed 100 MB.
     Video,
+    /// An audio file passed 100 MB.
+    Audio,
     /// Anything else passed 20 MB.
     Other,
     /// The declared length passed 100 MB before the type was known.
@@ -244,8 +296,9 @@ fn store_error(e: StoreError) -> Response {
         StoreError::TooLarge(cap) => {
             let (text, max) = match cap {
                 Cap::Video => ("Videos can be at most 100 MB.", MAX_VIDEO_BYTES),
-                Cap::Other => ("Files can be at most 20 MB (videos up to 100 MB).", MAX_ATTACHMENT_BYTES),
-                Cap::Either => ("Files can be at most 100 MB for videos and 20 MB for everything else.", MAX_VIDEO_BYTES),
+                Cap::Audio => ("Audio files can be at most 100 MB.", MAX_AUDIO_BYTES),
+                Cap::Other => ("Files can be at most 20 MB (videos and audio up to 100 MB).", MAX_ATTACHMENT_BYTES),
+                Cap::Either => ("Files can be at most 100 MB for videos and audio and 20 MB for everything else.", MAX_VIDEO_BYTES),
             };
             coded(StatusCode::PAYLOAD_TOO_LARGE, "too_large", text, json!({"max_bytes": max}))
         }
@@ -253,7 +306,7 @@ fn store_error(e: StoreError) -> Response {
         StoreError::Unsupported => coded(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "unsupported_type",
-            "Only images (PNG, JPEG, GIF, WebP), videos (MP4, MOV, WebM), PDFs and text files (UTF-8: txt, md, csv, json, code) can be attached.",
+            "Only images (PNG, JPEG, GIF, WebP), videos (MP4, MOV, WebM), audio (MP3, M4A, AAC, WAV, OGG, Opus, FLAC), PDFs and text files (UTF-8: txt, md, csv, json, code) can be attached.",
             json!({}),
         ),
         StoreError::Io => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -301,18 +354,23 @@ impl Sink {
     }
 
     /// Takes the next chunk. Refuses as soon as the file is over its cap (100 MB once the head
-    /// sniffed as video, else 20 MB) or its bytes rule it out ([`ruled_out_early`]).
+    /// sniffed as video or audio, else 20 MB) or its bytes rule it out ([`ruled_out_early`]).
     async fn push(&mut self, chunk: &[u8]) -> Result<(), StoreError> {
         if self.head.len() < HEAD_BYTES {
             let take = (HEAD_BYTES - self.head.len()).min(chunk.len());
             self.head.extend_from_slice(&chunk[..take]);
         }
         self.size += chunk.len() as u64;
-        let video = sniff_magic(&self.head).is_some_and(is_video_mime);
+        let magic = sniff_magic(&self.head);
+        let video = magic.is_some_and(is_video_mime);
+        let audio = magic.is_some_and(is_audio_mime);
         if video && self.size > MAX_VIDEO_BYTES {
             return Err(StoreError::TooLarge(Cap::Video));
         }
-        if !video && self.size > MAX_ATTACHMENT_BYTES {
+        if audio && self.size > MAX_AUDIO_BYTES {
+            return Err(StoreError::TooLarge(Cap::Audio));
+        }
+        if !video && !audio && self.size > MAX_ATTACHMENT_BYTES {
             return Err(StoreError::TooLarge(Cap::Other));
         }
         self.utf8.feed(chunk);
@@ -766,7 +824,7 @@ pub fn tools() -> Vec<Value> {
             "name": "share_file",
             "description": "Give the user a file as a download card in this chat, posted as you. Either `path` (a file in your workspace) \
                 or `content` (text you write, e.g. a CSV or markdown report). Images, PDFs and text files up to 20 MB; \
-                videos (MP4, MOV, WebM) up to 100 MB. When the person asks to see something (a mockup, a page, a chart), \
+                videos (MP4, MOV, WebM) and audio (MP3, M4A, AAC, WAV, OGG, Opus, FLAC) up to 100 MB. When the person asks to see something (a mockup, a page, a chart), \
                 share it as an image: describing it isn't enough. Sharing the same file again within a few minutes posts nothing new.",
             "inputSchema": {
                 "type": "object",
@@ -1012,10 +1070,11 @@ pub async fn tool_share(state: &AppState, scope: &SelfScope, args: &Value) -> (S
     let stored = match stored {
         Ok(s) => s,
         Err(StoreError::TooLarge(Cap::Video)) => return ("The video is larger than 100 MB.".into(), true),
-        Err(StoreError::TooLarge(_)) => return ("The file is larger than 20 MB (videos up to 100 MB).".into(), true),
+        Err(StoreError::TooLarge(Cap::Audio)) => return ("The audio file is larger than 100 MB.".into(), true),
+        Err(StoreError::TooLarge(_)) => return ("The file is larger than 20 MB (videos and audio up to 100 MB).".into(), true),
         Err(StoreError::Empty) => return ("The file is empty.".into(), true),
         Err(StoreError::Unsupported) => {
-            return ("Only images, videos (MP4, MOV, WebM), PDFs and UTF-8 text files can be shared.".into(), true)
+            return ("Only images, videos (MP4, MOV, WebM), audio (MP3, M4A, AAC, WAV, OGG, Opus, FLAC), PDFs and UTF-8 text files can be shared.".into(), true)
         }
         Err(StoreError::Io) => return ("Could not read or store the file.".into(), true),
     };
@@ -1226,8 +1285,8 @@ mod tests {
         assert_eq!(sniff(&ftyp(b"3gp5"), false, "x"), Some("video/mp4"));
         assert_eq!(sniff(&ftyp(b"qt  "), false, "clip.mp4"), Some("video/quicktime"));
         assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01webm", false, "clip.mov"), Some("video/webm"));
-        // ftyp files that aren't videos a browser plays: an iPhone photo, a voice memo
-        for b in [b"heic", b"mif1", b"avif", b"M4A ", b"crx "] {
+        // ftyp files that aren't videos a browser plays: an iPhone photo, camera raw (a voice memo is audio)
+        for b in [b"heic", b"mif1", b"avif", b"crx "] {
             assert_eq!(sniff(&ftyp(b), false, "x.mp4"), None, "{}", String::from_utf8_lossy(b));
         }
         assert_eq!(sniff(b"\0\0\0\x20ftyp", false, "x.mp4"), None, "no brand yet");
@@ -1235,10 +1294,60 @@ mod tests {
     }
 
     #[test]
+    fn audio_is_sniffed_from_bytes() {
+        let id3 = b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0";
+        assert_eq!(sniff(id3, false, "song.mp3"), Some("audio/mpeg"));
+        assert_eq!(sniff(id3, false, "x.txt"), Some("audio/mpeg"), "the bytes decide, not the name");
+        // MPEG-1 layer III, 128 kbit/s, 44.1 kHz (no tag); MPEG-2 layer III; MPEG-1 layer II
+        assert_eq!(sniff(&[0xFF, 0xFB, 0x90, 0x64], false, "x"), Some("audio/mpeg"));
+        assert_eq!(sniff(&[0xFF, 0xF3, 0x84, 0xC4], false, "x"), Some("audio/mpeg"));
+        assert_eq!(sniff(&[0xFF, 0xFD, 0x94, 0x00], false, "x"), Some("audio/mpeg"));
+        // ADTS AAC (MPEG-4 and MPEG-2)
+        assert_eq!(sniff(&[0xFF, 0xF1, 0x50, 0x80], false, "x.aac"), Some("audio/aac"));
+        assert_eq!(sniff(&[0xFF, 0xF9, 0x50, 0x80], false, "x.aac"), Some("audio/aac"));
+        assert_eq!(sniff(&ftyp(b"M4A "), false, "memo.m4a"), Some("audio/mp4"));
+        assert_eq!(sniff(&ftyp(b"M4B "), false, "book.m4b"), Some("audio/mp4"));
+        // An audio-only mp42 file stays what video_brand says: a video/mp4 (a <video> plays sound)
+        assert_eq!(sniff(&ftyp(b"mp42"), false, "x.m4a"), Some("video/mp4"));
+        assert_eq!(sniff(b"RIFF\x24\x08\0\0WAVEfmt ", false, "x.wav"), Some("audio/wav"));
+        assert_eq!(sniff(b"OggS\0\x02\0\0", false, "x.opus"), Some("audio/ogg"));
+        assert_eq!(sniff(b"fLaC\0\0\0\x22", false, "x.flac"), Some("audio/flac"));
+        // Not audio: JPEG still wins its FF D8; a UTF-16 mark, FF runs, layer I, reserved values,
+        // another RIFF (AVI), an ID3 that isn't v2.2-2.4
+        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0], false, "x.mp3"), Some("image/jpeg"));
+        let bad: [&[u8]; 12] = [
+            &[0xFF, 0xFE, 0x48, 0x00],
+            &[0xFF, 0xFF, 0xFF, 0xFF],
+            &[0xFF, 0xFF, 0x90, 0x64],
+            &[0xFF, 0xEB, 0x90, 0x64],
+            &[0xFF, 0xF9, 0x3C, 0x80],
+            &[0xFF, 0xFB, 0xF0, 0x64],
+            &[0xFF, 0xFB, 0x00, 0x64],
+            &[0xFF, 0xFB, 0x9C, 0x64],
+            &[0xFF, 0xFB],
+            b"RIFF\x24\x08\0\0AVI LIST",
+            b"ID3\x09\0\0",
+            b"ID3",
+        ];
+        for bad in bad {
+            assert_eq!(sniff(bad, false, "song.mp3"), None, "{bad:02X?}");
+        }
+        for m in AUDIO_TYPES {
+            assert!(is_audio_mime(m) && !is_video_mime(m), "{m}");
+        }
+        assert!(!is_audio_mime("audio/x-aiff") && !is_audio_mime("video/mp4"));
+        assert_eq!(MAX_AUDIO_BYTES, MAX_VIDEO_BYTES);
+    }
+
+    #[test]
     fn first_bytes_rule_out_what_cannot_be_accepted() {
         let zip = b"PK\x03\x04\x14\0\0\0\x08\0\0\0\0\0\0\0";
         assert!(ruled_out_early(zip, false, "holiday.mp4"), "a zip renamed .mp4");
-        assert!(ruled_out_early(b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0", false, "song.mp3"));
+        // 22l: a real MP3 is taken; an .exe or a zip called song.mp3 isn't
+        assert!(!ruled_out_early(b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0", false, "song.mp3"));
+        assert!(ruled_out_early(b"MZ\x90\0\x03\0\0\0\x04\0\0\0\xff\xff\0\0", false, "song.mp3"));
+        assert!(ruled_out_early(&zip[..], false, "song.mp3"));
+        assert!(ruled_out_early(b"just ascii bytes here", true, "song.mp3"));
         // Text-looking bytes under a binary extension can't become text/plain
         assert!(ruled_out_early(b"just ascii bytes here", true, "clip.mp4"));
         assert!(ruled_out_early(&ftyp(b"heic"), false, "IMG_1.HEIC"));

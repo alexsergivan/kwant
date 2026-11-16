@@ -488,7 +488,7 @@ export function FileChooserModal({
         {!error && phase === 'picking' && (
           <p className="mt-1 text-[13px] text-zinc-400">
             From this device<span className="[@media(pointer:coarse)]:hidden">, or drop it here</span>.{' '}
-            {kind === 'video' ? 'Up to 100 MB.' : 'Up to 20 MB (videos 100 MB).'}
+            {kind === 'video' ? 'Up to 100 MB.' : 'Up to 20 MB (videos and audio 100 MB).'}
           </p>
         )}
 
