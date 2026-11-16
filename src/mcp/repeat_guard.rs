@@ -11,6 +11,10 @@
 //! failures may be stale, so [`RepeatGuard::changed`] gives every call its [`REPEAT_LIMIT`] tries
 //! again: a test run that failed 3 times can run once the file is fixed. The turn still stops the
 //! call after [`REPEAT_CEILING`] identical failures, whatever changed in between.
+//!
+//! 23a: "the same error" ignores the error's numbers (durations, timestamps, PIDs, ports, counts)
+//! and long hex ids (shas, uuids), so a test run that prints "finished in 3.21s" each time is
+//! still the same failure. The stop text quotes the latest real error.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -28,7 +32,10 @@ const QUOTE_MAX_CHARS: usize = 200;
 
 struct Entry {
     key: [u8; 32],
+    /// The latest real error text: what the stop text quotes.
     error: String,
+    /// 23a: the error's [`shape`]: what "the same error" compares.
+    shape: String,
     /// Identical failures since the last change ([`RepeatGuard::changed`] sets it to 0).
     count: u32,
     /// Identical failures in the turn: only an `ok` or a different error resets it.
@@ -92,9 +99,10 @@ impl RepeatGuard {
         }
     }
 
-    /// Records a call's outcome: `error` with the same (redacted) text as last time counts one
-    /// more, a different text starts again at 1, `ok` forgets the call; anything else (denied,
-    /// unanswered, rehearsed) leaves the count as it is.
+    /// Records a call's outcome: `error` with the same (redacted) text as last time, apart from
+    /// its numbers and hex ids ([`shape`]), counts one more, a different text starts again at 1,
+    /// `ok` forgets the call; anything else (denied, unanswered, rehearsed) leaves the count as it
+    /// is. The entry keeps the latest text for the stop text.
     pub fn after(&self, key: &[u8; 32], status: &str, text: &str) {
         let mut entries = self.lock();
         let at = entries.iter().position(|e| &e.key == key);
@@ -106,18 +114,20 @@ impl RepeatGuard {
             }
             "error" => {
                 let text = text.trim();
+                let now = shape(text);
                 let mut entry = match at {
                     Some(i) => entries.remove(i),
-                    None => Entry { key: *key, error: String::new(), count: 0, turn: 0 },
+                    None => Entry { key: *key, error: String::new(), shape: String::new(), count: 0, turn: 0 },
                 };
-                if entry.turn > 0 && entry.error == text {
+                if entry.turn > 0 && entry.shape == now {
                     entry.count += 1;
                     entry.turn += 1;
                 } else {
-                    entry.error = text.to_string();
+                    entry.shape = now;
                     entry.count = 1;
                     entry.turn = 1;
                 }
+                entry.error = text.to_string();
                 if entries.len() >= MAX_KEYS {
                     entries.remove(0);
                 }
@@ -131,6 +141,61 @@ impl RepeatGuard {
     fn len(&self) -> usize {
         self.lock().len()
     }
+}
+
+/// 23a: an error text with its changing parts made the same. First each run of 7 or more hex
+/// characters that has a digit (a sha, a short hash, a temp name) becomes one `#`; hex groups of
+/// 4 or more joined by single hyphens count as one run, so a uuid is one `#` too. Then each run of
+/// ASCII digits (a duration, a timestamp, a PID, a port, a count) becomes one `#`. Words,
+/// punctuation and case stay, so an error that differs in a word has a different shape.
+fn shape(text: &str) -> String {
+    let c: Vec<char> = text.chars().collect();
+    let hex_end = |from: usize| (from..c.len()).find(|&j| !c[j].is_ascii_hexdigit()).unwrap_or(c.len());
+    let has_digit = |from: usize, to: usize| c[from..to].iter().any(char::is_ascii_digit);
+    let mut hexed = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < c.len() {
+        if !c[i].is_ascii_hexdigit() {
+            hexed.push(c[i]);
+            i += 1;
+            continue;
+        }
+        let first = hex_end(i);
+        let mut end = first;
+        if first - i >= 4 {
+            while end + 1 < c.len() && c[end] == '-' && c[end + 1].is_ascii_hexdigit() {
+                let next = hex_end(end + 1);
+                if next - (end + 1) < 4 {
+                    break;
+                }
+                end = next;
+            }
+            if !has_digit(i, end) {
+                end = first;
+            }
+        }
+        let hex = c[i..end].iter().filter(|ch| ch.is_ascii_hexdigit()).count();
+        if hex >= 7 && has_digit(i, end) {
+            hexed.push('#');
+        } else {
+            hexed.extend(&c[i..end]);
+        }
+        i = end;
+    }
+    let mut out = String::with_capacity(hexed.len());
+    let mut in_digits = false;
+    for ch in hexed.chars() {
+        if ch.is_ascii_digit() {
+            if !in_digits {
+                out.push('#');
+            }
+            in_digits = true;
+        } else {
+            out.push(ch);
+            in_digits = false;
+        }
+    }
+    out
 }
 
 /// How every stop text starts. A result that carries it is a call the guard didn't send (18a: the
@@ -310,6 +375,117 @@ mod tests {
         assert_eq!(g.check(&k).map(|s| s.count), Some(3));
         g.after(&k, "ok", "");
         assert!(g.check(&k).is_none());
+    }
+
+    // 23a: the same failure whose error changes only in its numbers or hex ids still repeats.
+
+    fn same_failure_three_times(errors: [&str; 3]) -> Stopped {
+        let g = RepeatGuard::default();
+        let k = RepeatGuard::key("Bash", &json!({"command": "npm test"}));
+        for e in errors {
+            assert!(g.check(&k).is_none(), "stopped too early, before {e:?}");
+            g.after(&k, "error", e);
+        }
+        g.check(&k).expect("the 4th try is stopped")
+    }
+
+    #[test]
+    fn a_failure_that_differs_only_in_its_duration_is_stopped_on_the_fourth_try() {
+        let run = |t: &str| {
+            format!(
+                "test tests::adds ... FAILED\n\ntest result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; \
+                 0 filtered out; finished in {t}s"
+            )
+        };
+        let s = same_failure_three_times([&run("1.23"), &run("4.56"), &run("7.89")]);
+        assert_eq!(s.count, 3);
+        // The stop text quotes the latest real error, never the shape
+        assert_eq!(s.text, stop_text(3, &run("7.89")));
+        assert!(!s.text.contains('#'), "{}", s.text);
+    }
+
+    #[test]
+    fn a_failure_with_a_new_timestamp_pid_and_port_each_time_is_stopped() {
+        let s = same_failure_three_times([
+            "2026-11-16T09:10:11.123Z ERROR kwnt[4242]: listen on 127.0.0.1:38211 failed: Address already in use (os error 98)",
+            "2026-11-16T09:10:42.907Z ERROR kwnt[4311]: listen on 127.0.0.1:41877 failed: Address already in use (os error 98)",
+            "2026-11-16T09:11:05.015Z ERROR kwnt[4390]: listen on 127.0.0.1:39020 failed: Address already in use (os error 98)",
+        ]);
+        assert_eq!(s.count, 3);
+        assert!(s.text.contains("\"2026-11-16T09:11:05.015Z ERROR kwnt[4390]: listen on 127.0.0.1:39020 failed"), "{}", s.text);
+        assert!(!s.text.contains('#'), "{}", s.text);
+    }
+
+    #[test]
+    fn a_failure_with_a_new_sha_or_uuid_each_time_is_stopped() {
+        let s = same_failure_three_times([
+            "fatal: reference is not a tree: 3f786850e387550fdab836ed7e6dc881de23001b",
+            "fatal: reference is not a tree: 89e6c98d92887913cadf06b2adb97f26cde4849b",
+            "fatal: reference is not a tree: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3",
+        ]);
+        assert!(s.text.contains("a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"), "{}", s.text);
+        let s = same_failure_three_times([
+            "session f47ac10b-58cc-4372-a567-0e02b2c3d479 not found (request 1731750611)",
+            "session 9b2d4e6a-1c3f-4a8b-bd2e-7f1a3c5e9d04 not found (request 1731750642)",
+            "session c0ffee12-ab34-4cd5-8ef6-0123456789ab not found (request 1731750665)",
+        ]);
+        assert_eq!(s.text, stop_text(3, "session c0ffee12-ab34-4cd5-8ef6-0123456789ab not found (request 1731750665)"));
+    }
+
+    #[test]
+    fn numbers_only_failures_count_on_to_the_ceiling_after_a_change() {
+        let g = RepeatGuard::default();
+        let k = RepeatGuard::key("Bash", &json!({"command": "cargo test"}));
+        let run = |i: u32| format!("test a ... FAILED (pid {}, finished in 0.{i}s)", 4000 + i);
+        for i in 1..=REPEAT_CEILING {
+            assert!(g.check(&k).is_none(), "try {i} runs");
+            g.after(&k, "error", &run(i));
+            g.changed();
+        }
+        let s = g.check(&k).expect("stopped at the ceiling");
+        assert_eq!(s.count, REPEAT_CEILING);
+        assert_eq!(s.text, stop_text(REPEAT_CEILING, &run(REPEAT_CEILING)));
+    }
+
+    #[test]
+    fn an_error_that_differs_in_a_word_still_starts_again() {
+        let g = RepeatGuard::default();
+        let k = RepeatGuard::key("Bash", &json!({"command": "cargo test"}));
+        fail(&g, &k, 2, "test parse_dates ... FAILED (finished in 0.41s)");
+        // Another test fails now: a different failure, counted from 1
+        g.after(&k, "error", "test parse_times ... FAILED (finished in 0.52s)");
+        assert!(g.check(&k).is_none());
+        g.after(&k, "error", "test parse_times ... FAILED (finished in 0.63s)");
+        assert!(g.check(&k).is_none());
+        g.after(&k, "error", "test parse_times ... FAILED (finished in 0.74s)");
+        assert_eq!(g.check(&k).map(|s| s.count), Some(3));
+        // Case is a difference too
+        let g = RepeatGuard::default();
+        fail(&g, &k, 2, "Error: not found");
+        g.after(&k, "error", "error: not found");
+        assert!(g.check(&k).is_none());
+    }
+
+    // end of 23a behaviour tests
+
+    #[test]
+    fn shape_makes_numbers_and_long_hex_ids_one_hash_and_keeps_the_words() {
+        assert_eq!(shape("finished in 12.34s"), "finished in #.#s");
+        assert_eq!(shape("Time: 2.3 s, pid 4242, port :38211"), "Time: #.# s, pid #, port :#");
+        assert_eq!(shape("2026-11-16T09:10:11.123Z"), "#-#-#T#:#:#.#Z");
+        assert_eq!(shape("at 3f786850e387550fdab836ed7e6dc881de23001b"), "at #");
+        assert_eq!(shape("short 3f78685 and 3f7868"), "short # and #f#");
+        assert_eq!(shape("id f47ac10b-58cc-4372-a567-0e02b2c3d479."), "id #.");
+        assert_eq!(shape("/tmp/kwnt-1a2b3c4d/out"), "/tmp/kwnt-#/out");
+        // Hex words without a digit, short hex groups and words next to a hyphen stay
+        assert_eq!(shape("deadbeef cafe-face Failed"), "deadbeef cafe-face Failed");
+        assert_eq!(shape("a-1234567 abcd-12"), "a-# abcd-#");
+        assert_eq!(shape("0x1a2b3c4d"), "#x#");
+        assert_eq!(shape("Ошибка 42 ✗"), "Ошибка # ✗");
+        assert_eq!(shape(""), "");
+        // The accepted tradeoff: counts are numbers too
+        assert_eq!(shape("3 failed"), shape("2 failed"));
+        assert_ne!(shape("test parse_dates failed"), shape("test parse_times failed"));
     }
 
     #[test]
