@@ -4,7 +4,7 @@ import { isKwantWorking, lastRunOf, liveRunOf, subscribeKwant } from '../kwantAc
 import { badgeUsageFor, modelBadgeFor, modelBadgeSize, type ModelBadge } from '../engines';
 import { badgeBotOf, badgeEngines, badgeProfiles, subscribeBadgeData } from '../modelBadgeData';
 import { EngineMark } from './EngineMark';
-import { AvatarMood, useKwantMood, useKwantNotices } from './AvatarMood';
+import { AvatarMoodMark, useKwantMood, useKwantNotices } from './AvatarMood';
 import { moodLabel, restingUntilOf } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
 import { avatarStyleFor, botLooksRev, subscribeBotLooks } from '../botLooks';
@@ -520,7 +520,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
           </g>
         </g>
       </svg>
-      <AvatarMood mood={mood} size={size} />
+      <AvatarMoodMark mood={mood} size={size} />
       {hat && <HardHat />}
       {modelBadge && kwantId && modelBadgeSize(size) !== null && <AvatarModelBadge kwantId={kwantId} size={size} />}
       {shown && (

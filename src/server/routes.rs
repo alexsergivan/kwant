@@ -3970,7 +3970,7 @@ async fn run_kwant_turn_inner(
                 } else {
                     super::delivery_check::Verdict::default()
                 };
-                let text = super::delivery_check::apply(text, &verdict);
+                let text = super::delivery_check::apply(text, &verdict, &target_kwant.name);
                 if opts.discussion.is_none() {
                     reply_text = text.clone();
                 }
@@ -4026,13 +4026,21 @@ async fn run_kwant_turn_inner(
                 // link didn't open and it ran no tool) and whose reply ends waiting on the person in
                 // prose is blocked too, in the bot's own words. Not while kwnt sends the turn one more
                 // try (a continuation): that reply isn't the last word. A decided reply counts what
-                // its held turn left too
+                // its held turn left too. 22j: a continuation that got the kwant line is blocked on
+                // its failed step
                 let before = super::delivery_check::FailedBefore { failed: page_failed || opts.failed_before.failed, ..opts.failed_before };
                 let blocked = super::keep_going::blocked_line(&asst_msg.text)
                     .map(|text| serde_json::json!({ "text": text }))
                     .or_else(|| {
                         let text = super::delivery_check::failed_step_blocked(&asst_msg.text, activity.as_ref(), before).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
                         Some(serde_json::json!({ "text": text, "from": "failed_step" }))
+                    })
+                    // 22j: the one continuation still ended on a promise after the step failed again
+                    // (it gets the kwant line): blocked in kwant's own words, the step and its error,
+                    // so the lead's chain asks the person once instead of looping keep-going turns
+                    .or_else(|| {
+                        let step = verdict.stuck_on.as_ref()?;
+                        Some(serde_json::json!({ "text": super::delivery_check::blocked_text(&target_kwant.name, step), "from": "follow_through" }))
                     });
                 // ...and if this reply is held, its decided reply (a new turn) counts what this one left
                 let failed_before = super::delivery_check::FailedBefore::of_turn(activity.as_ref(), before);
