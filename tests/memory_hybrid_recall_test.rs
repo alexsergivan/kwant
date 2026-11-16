@@ -223,6 +223,19 @@ async fn memory_search(app: &Router, state: &AppState, k: &Kwant, query: &str) -
     v["result"]["content"][0]["text"].as_str().unwrap().to_string()
 }
 
+/// Waits up to 5 s until `memory_id` has a `model` vector for its current text: a background
+/// fill is done when it has saved the vector, not when the fake got its HTTP call.
+async fn wait_for_fresh_vector(state: &AppState, kwant_id: &str, memory_id: &str, model: &str) -> bool {
+    for _ in 0..100 {
+        let rows = state.db.memory_vector_rows(kwant_id).await.unwrap();
+        if rows.iter().any(|r| r.id == memory_id && r.fresh_vector(model, &memory_recall::text_hash(&r.text)).is_some()) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
 const VEHICLE: &str = "Oleks parks the vehicle in the garage on Elm street";
 const MONEY_BACK: &str = "Money-back policy: clients get their money returned within 30 days";
 
@@ -328,6 +341,12 @@ async fn stale_vectors_are_refilled_and_deleted_with_their_memory() {
     }
     // 5 notes + 1 query + the 1 edited note, filled in the background
     assert_eq!(fake.embedded_texts.load(Ordering::SeqCst), 7);
+    // The fake counts a text when the request arrives; the fill saves the vector only after the
+    // reply, so search once that vector is in the database
+    assert!(
+        wait_for_fresh_vector(&state, &k.id, &money_back, "ollama/mxbai-embed-large").await,
+        "the background fill saved the edited note's new vector"
+    );
     let hits = memory_recall::search(&state, &k.id, "reimburse", 10).await.unwrap();
     assert_eq!(hits.first().map(|m| m.id.as_str()), Some(money_back.as_str()));
 
