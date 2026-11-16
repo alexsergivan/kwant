@@ -2,7 +2,7 @@
 
 PackageIdentifier: alexsergivan.kwant
 PackageVersion: 0.9.17
-InstallerType: nsis
+InstallerType: nullsoft
 Scope: user
 InstallModes:
 - interactive
