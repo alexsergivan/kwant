@@ -38,7 +38,7 @@ import { QuestionMeta, foldedAnswerIds, parseMetaObject, parseQuestionMeta } fro
 import { fromTelegram, sentToTelegram } from '../telegram';
 import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
-import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
+import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
@@ -2208,6 +2208,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
     requestAnimationFrame(() => checkMention(next, next.length));
   };
 
+  // 18f: once the reply has words the steps fold (desktop: the saved reply's row; phone: the compact row as is) and
+  // move below the bubble, into the landed action row's place, so landing moves nothing above the words.
+  const stepsBelow = !!liveActivity && foldLiveSteps({ writing, steps: liveActivity.steps });
+  const liveStepsList = liveActivity ? (
+    <LiveActivityList
+      live={liveActivity}
+      idBase={`live-${liveActivity.turnId}`}
+      compact={phone}
+      folded={stepsBelow}
+      lead={
+        livePages.length > 0 ? (
+          <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
+        ) : undefined
+      }
+    />
+  ) : null;
+
   // 14c: on a phone the header's icon buttons carry a small caption under the icon (no hover there,
   // so a title alone was never seen); from sm up they keep their inline word.
   const headLabel = (wide: string, short: string = wide) => (
@@ -2544,18 +2561,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && (
-                <LiveActivityList
-                  live={liveActivity}
-                  idBase={`live-${liveActivity.turnId}`}
-                  compact={phone}
-                  lead={
-                    livePages.length > 0 ? (
-                      <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
-                    ) : undefined
-                  }
-                />
-              )}
+              {liveActivity && !stepsBelow && liveStepsList}
 
               {thinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
@@ -2597,6 +2603,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 )}
               </div>
               )}
+
+              {/* 18f: once words stream, the steps row sits below the bubble, where the landed action row goes */}
+              {liveActivity && stepsBelow && liveStepsList}
 
               {!queued && <QueuedBeside items={queuedBeside} />}
             </div>
