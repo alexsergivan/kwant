@@ -289,7 +289,7 @@ One line per platform, each followed by `kwnt doctor`:
 | Linux desktop or server | The same clone and `make build`, then `kwnt setup`, or `sh scripts/install-linux-deps.sh --clis claude` on Debian/Ubuntu | Run `kwnt doctor` |
 | VPS with Docker | [Docker Compose](#vps-in-5-minutes-docker-compose) | Run `docker compose exec kwnt kwnt doctor` |
 
-There's no prebuilt `kwnt` binary or Homebrew formula yet, so the command line needs a clone and a build (Rust and Node).
+On Linux (x86_64 or arm64, glibc 2.35+) you can skip the build: `curl -fsSL https://kwant.si/install.sh | sh` installs the prebuilt `kwnt` from the latest release after checking its `.sha256`, and every release also has `kwnt-linux-x86_64.tar.gz` and `kwnt-linux-aarch64.tar.gz`. There's no prebuilt command-line `kwnt` for macOS yet, so on a Mac the command line needs a clone and a build (Rust and Node).
 
 ---
 

@@ -401,6 +401,9 @@ pub(super) async fn purge_kwant(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, id
         "DELETE FROM messages WHERE direct_kwant_id = ?1 OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
         "DELETE FROM delegations WHERE lead_kwant_id = ?1 OR specialist_kwant_id = ?1 \
             OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
+        // 22i: what this bot waited on the person for can never be seen or resumed again
+        "UPDATE waiting_on_person SET status = 'closed' WHERE status != 'closed' AND (kwant_id = ?1 OR direct_kwant_id = ?1 \
+            OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1))",
         "DELETE FROM threads WHERE kwant_id = ?1",
         "DELETE FROM questions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
         "DELETE FROM approvals WHERE kwant_id = ?1",
