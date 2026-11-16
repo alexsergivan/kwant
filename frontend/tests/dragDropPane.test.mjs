@@ -108,6 +108,15 @@ const phase = (host) => layer(host)?.getAttribute('data-phase') ?? null;
 const heading = (host) => host.querySelector('[data-drop-heading]')?.textContent ?? null;
 const said = (host) => host.querySelector('[data-drop-announce]')?.textContent ?? '';
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// Every drop-layer phase the host shows from now on, in order. The leave fade lasts only leaveMs (100 ms),
+// so on a loaded machine the layer can be gone before a plain read after tick(); this sees it anyway.
+const watchPhases = (host) => {
+  const seen = [];
+  const note = () => { const p = phase(host); if (p && seen[seen.length - 1] !== p) seen.push(p); };
+  const mo = new MutationObserver(note);
+  mo.observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-phase'] });
+  return { seen, stop: () => { note(); mo.disconnect(); } };
+};
 // Somewhere in the window that isn't the chat (the sidebar).
 const elsewhere = () => {
   const el = document.createElement('nav');
@@ -163,8 +172,10 @@ test('a file drag over the header or the message list lights up the chat; off th
     await fire(list, 'dragleave', two());
     assert.equal(phase(v.host), 'armed');
     // Out of the window: the layer fades and goes.
+    const phases = watchPhases(v.host);
     await fire(side, 'dragleave', two(), OUT);
-    assert.equal(phase(v.host), 'leaving');
+    phases.stop();
+    assert.ok(phases.seen.includes('leaving'), `it fades out rather than vanishing (saw ${phases.seen.join(' > ') || 'nothing'})`);
     await wait(150);
     assert.equal(layer(v.host), null);
   } finally {
