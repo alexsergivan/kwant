@@ -334,6 +334,10 @@ export const selectForRetry = (el: Pick<HTMLInputElement, 'focus' | 'select'> | 
 export const WRONG_TOKEN = "That token isn't right. It has to come from the machine running kwant bots, as the user running it.";
 /** Only shown with the wrong-token error, not up front. */
 export const OWN_TOKEN_HINT = "Each install has its own token, so one copied from another computer won't work here.";
+/** With a store hint the person has no shell, so the wrong-token error points back to the hint instead. */
+export const HINT_WRONG_TOKEN = "That isn't this install's token. Copy it again from the place named above.";
+/** The error for a refused token: with a store hint, back to the hint; without, where it has to come from. */
+export const wrongTokenError = (signinHint: string | null) => (signinHint ? HINT_WRONG_TOKEN : WRONG_TOKEN);
 
 export const TokenForm: React.FC<{
   notice: string | null;
@@ -377,7 +381,7 @@ export const TokenForm: React.FC<{
         onSignedIn();
         return;
       }
-      setError(result === 'link_used_or_expired' ? LINK_SPENT : WRONG_TOKEN);
+      setError(result === 'link_used_or_expired' ? LINK_SPENT : wrongTokenError(signinHint));
     } catch (err) {
       setError(err instanceof Error && err.message !== 'Failed to fetch' ? err.message : 'Could not reach the server.');
     } finally {
@@ -401,13 +405,13 @@ export const TokenForm: React.FC<{
           onChange={(e) => setToken(e.target.value)}
           aria-invalid={!!error}
           aria-describedby={error ? 'kwnt-token-error' : undefined}
-          className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+          className="flex-1 min-w-0 min-h-[44px] sm:min-h-0 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
           placeholder="Link or token"
         />
         <button
           type="submit"
           disabled={busy || !token.trim()}
-          className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50"
+          className="shrink-0 flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50"
         >
           {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
         </button>
@@ -419,6 +423,19 @@ export const TokenForm: React.FC<{
         </p>
       )}
     </div>
+  );
+
+  const deviceWays = (open: string) => (
+    <>
+      {deviceLogin && <DeviceWait onSignedIn={onSignedIn} />}
+      <div className="space-y-1.5">
+        <p className="text-xs text-zinc-400 leading-relaxed">
+          {open} the one-time sign-in link kwant bots printed when it started, or scan its QR code with your phone. Used or lost
+          it? Make a new one on the machine running kwant bots:
+        </p>
+        <Command>{docker ? DOCKER_LINK_COMMAND : LINK_COMMAND}</Command>
+      </div>
+    </>
   );
 
   return (
@@ -447,16 +464,11 @@ export const TokenForm: React.FC<{
           {tokenBox}
         </div>
       )}
-      {deviceLogin && <DeviceWait onSignedIn={onSignedIn} />}
-      <div className="space-y-1.5">
-        <p className="text-xs text-zinc-400 leading-relaxed">
-          {deviceLogin || signinHint ? 'Or open' : 'Open'} the one-time sign-in link kwant bots printed when it started, or scan its QR code with your phone. Used or lost
-          it? Make a new one on the machine running kwant bots:
-        </p>
-        <Command>{docker ? DOCKER_LINK_COMMAND : LINK_COMMAND}</Command>
-      </div>
+      {/* Without a hint: the device code and the link lead, the token box is the fallback. With one,
+          a fresh store install has no other device and no shell, so they move into the fold. */}
+      {!signinHint && deviceWays(deviceLogin ? 'Or open' : 'Open')}
       <OtherSetups loc={loc} docker={docker} open={othersOpen} onToggle={setOthersOpen}>
-        {!signinHint && tokenBox}
+        {signinHint ? deviceWays('Open') : tokenBox}
       </OtherSetups>
       <p className="text-[11px] text-zinc-500">Stays signed in for a year. Anyone with a sign-in link or the token controls this server.</p>
       {onCancel && (

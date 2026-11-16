@@ -221,7 +221,7 @@ docker compose exec kwnt kwnt token --raw             <span class="c"># the toke
 <p>The button reads <a href="https://github.com/alexsergivan/kwant/blob/main/render.yaml"><code>render.yaml</code></a>: one web service from the released image, with a 1 GB disk on <code>/data</code>. <strong>Render keeps files only on a disk, and disks need a paid instance</strong> (Starter or up), so the free plan won't work. Render makes the sign-in token: copy <code>KWNT_API_TOKEN</code> from the service's <strong>Environment</strong> page and paste it on the sign-in screen.</p>
 <p>For a home server, the repo's <a href="https://github.com/alexsergivan/kwant/tree/main/deploy"><code>deploy/</code></a> folder has a listing for each store, pinned to the release:</p>
 <ul>
-<li><strong>CasaOS:</strong> sign in with the token that <code>kwnt token --raw</code> prints in the app's <strong>Terminal</strong> (kwnt's menu on the dashboard). Until the store lists kwant, import the file under <strong>Custom Install</strong>.</li>
+<li><strong>CasaOS:</strong> sign in with the token that <code>kwnt token --raw</code> prints in the app's <strong>Terminal</strong> (kwant's menu on the dashboard). Until the store lists kwant, import the file under <strong>Custom Install</strong>.</li>
 <li><strong>Umbrel:</strong> sign in with the password Umbrel shows for kwant. Umbrel's own login stays in front of it.</li>
 <li><strong>Coolify:</strong> sign in with <code>SERVICE_PASSWORD_64_KWNT</code> from the service's environment variables. Until it is a Coolify template, run the file as a <strong>Docker Compose</strong> resource.</li>
 </ul>
