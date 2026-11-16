@@ -1339,6 +1339,11 @@ pub async fn self_endpoint(
                 (json!([{"type": "text", "text": text}]), is_error)
             };
             scope.repeats.after(&repeat_key, if is_error { "error" } else { "ok" }, &content_text(&content));
+            // 22t: an own tool that worked and doesn't only read (READ_ONLY_SELF_TOOLS, a browser
+            // look) gives the stopped calls their tries again
+            if !is_error && !super::restart_resume::read_only(name) {
+                scope.repeats.changed();
+            }
             rpc_result(id, json!({"content": content, "isError": is_error}))
         }
         _ => Json(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "method not found"}})).into_response(),

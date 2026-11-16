@@ -6,6 +6,11 @@
 //! times the same way, so the turn tries another way instead of spending its call cap on it.
 //! Successful calls (polling a status) and calls whose error changes never stop. Only `ok` and
 //! `error` outcomes count: a denied, unanswered or rehearsed call was the person's decision.
+//!
+//! 22t: when another call changed something (an edit, another shell command), the earlier
+//! failures may be stale, so [`RepeatGuard::changed`] gives every call its [`REPEAT_LIMIT`] tries
+//! again: a test run that failed 3 times can run once the file is fixed. The turn still stops the
+//! call after [`REPEAT_CEILING`] identical failures, whatever changed in between.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -13,6 +18,9 @@ use std::sync::Mutex;
 
 /// Identical failures after which the same call is no longer sent.
 pub const REPEAT_LIMIT: u32 = 3;
+/// 22t: identical failures in one turn after which the call stops even when something changed in
+/// between ([`RepeatGuard::changed`] doesn't lower this count), so edit/retry can't loop forever.
+pub const REPEAT_CEILING: u32 = 2 * REPEAT_LIMIT;
 /// Calls the guard remembers per turn; the least recently failed one is dropped first.
 pub const MAX_KEYS: usize = 64;
 /// How much of the repeated error the stop text quotes.
@@ -21,7 +29,10 @@ const QUOTE_MAX_CHARS: usize = 200;
 struct Entry {
     key: [u8; 32],
     error: String,
+    /// Identical failures since the last change ([`RepeatGuard::changed`] sets it to 0).
     count: u32,
+    /// Identical failures in the turn: only an `ok` or a different error resets it.
+    turn: u32,
 }
 
 /// One turn's failing calls, oldest first. Interior mutability: calls may run concurrently.
@@ -62,12 +73,23 @@ impl RepeatGuard {
         self.entries.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// `Some` when this call already failed [`REPEAT_LIMIT`] times in a row with the same error:
-    /// don't send it.
+    /// `Some` when this call already failed [`REPEAT_LIMIT`] times in a row with the same error
+    /// since the last change, or [`REPEAT_CEILING`] times in the turn: don't send it. The count
+    /// (and the stop text's number) is the turn's.
     pub fn check(&self, key: &[u8; 32]) -> Option<Stopped> {
         let entries = self.lock();
         let e = entries.iter().find(|e| &e.key == key)?;
-        (e.count >= REPEAT_LIMIT).then(|| Stopped { text: stop_text(e.count, &e.error), count: e.count })
+        (e.count >= REPEAT_LIMIT || e.turn >= REPEAT_CEILING).then(|| Stopped { text: stop_text(e.turn, &e.error), count: e.turn })
+    }
+
+    /// 22t: another call changed something (a file edit, a different shell command, a tool that
+    /// isn't read-only), so every call that failed gets its [`REPEAT_LIMIT`] tries again. The
+    /// error text and the turn's count stay: the same error after this counts on toward
+    /// [`REPEAT_CEILING`].
+    pub fn changed(&self) {
+        for e in self.lock().iter_mut() {
+            e.count = 0;
+        }
     }
 
     /// Records a call's outcome: `error` with the same (redacted) text as last time counts one
@@ -86,13 +108,15 @@ impl RepeatGuard {
                 let text = text.trim();
                 let mut entry = match at {
                     Some(i) => entries.remove(i),
-                    None => Entry { key: *key, error: String::new(), count: 0 },
+                    None => Entry { key: *key, error: String::new(), count: 0, turn: 0 },
                 };
-                if entry.count > 0 && entry.error == text {
+                if entry.turn > 0 && entry.error == text {
                     entry.count += 1;
+                    entry.turn += 1;
                 } else {
                     entry.error = text.to_string();
                     entry.count = 1;
+                    entry.turn = 1;
                 }
                 if entries.len() >= MAX_KEYS {
                     entries.remove(0);
@@ -246,6 +270,46 @@ mod tests {
         fail(&g, &keys[64], 2, "boom");
         assert!(g.check(&keys[64]).is_some());
         assert_eq!(g.len(), MAX_KEYS);
+    }
+
+    #[test]
+    fn a_change_gives_a_stopped_call_its_tries_again_up_to_the_ceiling() {
+        let g = RepeatGuard::default();
+        let k = RepeatGuard::key("Bash", &json!({"command": "npm test"}));
+        let other = RepeatGuard::key("Read", &json!({"file_path": "/a"}));
+        fail(&g, &k, 3, "1 failing");
+        g.after(&other, "error", "nope");
+        assert!(g.check(&k).is_some());
+        g.changed();
+        // 3 more tries, then the turn's 6th identical failure stops it for good
+        fail(&g, &k, 3, "1 failing");
+        let s = g.check(&k).expect("stopped at the ceiling");
+        assert_eq!(s.count, REPEAT_CEILING);
+        assert_eq!(s.text, stop_text(6, "1 failing"));
+        g.changed();
+        assert!(g.check(&k).is_some(), "a change doesn't lift the ceiling");
+        // Other entries got their tries back too, and a change with nothing stopped is harmless
+        assert!(g.check(&other).is_none());
+        RepeatGuard::default().changed();
+    }
+
+    #[test]
+    fn a_change_between_every_failure_stops_at_the_ceiling() {
+        let g = RepeatGuard::default();
+        let k = RepeatGuard::key("Bash", &json!({"command": "cargo test"}));
+        for i in 1..=REPEAT_CEILING {
+            assert!(g.check(&k).is_none(), "try {i} runs");
+            g.after(&k, "error", "test a ... FAILED");
+            g.changed();
+        }
+        assert_eq!(g.check(&k).map(|s| s.count), Some(REPEAT_CEILING));
+        // A different error starts both counts again; an ok forgets the call
+        g.after(&k, "error", "test b ... FAILED");
+        assert!(g.check(&k).is_none());
+        fail(&g, &k, 2, "test b ... FAILED");
+        assert_eq!(g.check(&k).map(|s| s.count), Some(3));
+        g.after(&k, "ok", "");
+        assert!(g.check(&k).is_none());
     }
 
     #[test]
