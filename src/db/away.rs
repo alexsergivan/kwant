@@ -13,6 +13,20 @@ use sqlx::FromRow;
 /// keys: only `POST /api/away/seen` writes it.
 pub const LAST_SEEN_KEY: &str = "away_last_seen";
 
+/// 22i: what [`Database::dismiss_attention`] did.
+#[derive(Debug)]
+pub enum Dismissed {
+    /// Closed now. `kind` is "waiting", "delegation" or "routine_run"; `waiting` the closed row.
+    Closed { kind: String, kwant_id: Option<String>, waiting: Option<Box<super::waiting::WaitingItem>> },
+    /// It had already left Needs attention (a second Dismiss, or it closed by itself first).
+    AlreadyClosed { kind: String },
+    NotFound,
+    /// It isn't the person's to dismiss: the code names what to use instead.
+    Refused(&'static str),
+    /// `kind` is none of the kinds `/api/away` lists.
+    BadKind,
+}
+
 /// A row behind one item, before its summary is cleaned. Every query selects these columns.
 #[derive(Debug, Clone, FromRow)]
 pub struct AwayRow {
@@ -57,7 +71,10 @@ const DELEGATIONS_STUCK: &str = "
            NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices
     FROM delegations d LEFT JOIN kwants k ON k.id = d.specialist_kwant_id
     WHERE d.status = 'running' AND d.started_at < ?1
-      AND COALESCE(k.space_id, 'spc_default') = ?3";
+      AND COALESCE(k.space_id, 'spc_default') = ?3
+      AND k.id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM threads t WHERE t.id = d.thread_id)
+      AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'delegation' AND x.ref_id = d.id)";
 
 /// `?1` = since. A routine posts in its channel, or the kwant's direct chat when it has none.
 const ROUTINE_RUNS_ENDED: &str = "
@@ -73,9 +90,29 @@ const ROUTINE_RUNS_ENDED: &str = "
       AND COALESCE(k.space_id, 'spc_default') = ?3";
 
 const FINISHED_DELEGATIONS: &str = "d.status = 'completed'";
-const FAILED_DELEGATIONS: &str = "d.status IN ('failed', 'interrupted')";
+/// 22i close rules for a failed hand-off (each one drops it from Needs attention, the Inbox and
+/// the badge): its bot or thread is gone, a later hand-off to the same bot in that thread started
+/// (a retry), or it is in `attention_closed` (a later reply of the bot there finished, or the
+/// person dismissed it).
+const FAILED_DELEGATIONS: &str = "d.status IN ('failed', 'interrupted')
+      AND k.id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM threads t WHERE t.id = d.thread_id)
+      AND NOT EXISTS (SELECT 1 FROM delegations d2 WHERE d2.specialist_kwant_id = d.specialist_kwant_id
+                      AND d2.thread_id = d.thread_id AND d2.created_at > d.created_at AND d2.status != 'cancelled')
+      AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'delegation' AND x.ref_id = d.id)";
 const FINISHED_RUNS: &str = "r.status = 'ok'";
-const FAILED_RUNS: &str = "r.status = 'error'";
+/// 22i close rules for a failed routine run: its bot or channel is gone, a later run of the same
+/// routine started (Run now or the next schedule), or it is in `attention_closed`.
+const FAILED_RUNS: &str = "r.status = 'error'
+      AND k.id IS NOT NULL
+      AND (rt.channel_id IS NULL OR EXISTS (SELECT 1 FROM channels c WHERE c.id = rt.channel_id))
+      AND NOT EXISTS (SELECT 1 FROM routine_runs r2 WHERE r2.routine_id = r.routine_id
+                      AND r2.started_at > r.started_at AND r2.status != 'skipped')
+      AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'routine_run' AND x.ref_id = r.id)";
+
+/// Why a failed or stuck item left Needs attention (`attention_closed.reason`).
+pub const CLOSED_LATER_REPLY: &str = "later_reply";
+pub const CLOSED_DISMISSED: &str = "dismissed";
 
 impl Database {
     /// Additive: partial indexes so the away queries never scan delegations or routine runs.
@@ -88,6 +125,18 @@ impl Database {
             // 0.9.5 B: a lead's reply that ended with `Done: …` (keep_going's `chain_done` meta), so
             // team jobs are found without scanning messages
             "CREATE INDEX IF NOT EXISTS messages_chain_done ON messages (created_at) WHERE instr(meta, '\"chain_done\"') > 0",
+            // 22i: failed or stuck items that left Needs attention without their row changing (a
+            // later reply of the bot in that chat, or the person's Dismiss); also the Dismiss audit
+            // trail for waiting items (`kind` 'waiting'). Additive: an old binary ignores it.
+            "CREATE TABLE IF NOT EXISTS attention_closed (
+                kind TEXT NOT NULL,
+                ref_id TEXT NOT NULL,
+                kwant_id TEXT,
+                reason TEXT NOT NULL,
+                closed_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (kind, ref_id)
+            )",
+            "CREATE INDEX IF NOT EXISTS delegations_by_specialist_thread ON delegations (specialist_kwant_id, thread_id, created_at)",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
@@ -208,6 +257,147 @@ impl Database {
             .bind(space.as_str())
             .fetch_one(&self.pool)
             .await?)
+    }
+
+    /// 22i: records that a failed or stuck item (`kind` "delegation" or "routine_run", or
+    /// "waiting" for the Dismiss audit of a waiting item) left Needs attention, and why. `false`
+    /// when it already had.
+    pub async fn close_attention(&self, kind: &str, ref_id: &str, kwant_id: Option<&str>, reason: &str) -> Result<bool, DbError> {
+        let res = sqlx::query("INSERT OR IGNORE INTO attention_closed (kind, ref_id, kwant_id, reason, closed_at) VALUES (?, ?, ?, ?, ?)")
+            .bind(kind)
+            .bind(ref_id)
+            .bind(kwant_id)
+            .bind(reason)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Why `(kind, ref_id)` left Needs attention, if it did through [`Self::close_attention`].
+    pub async fn attention_closed_reason(&self, kind: &str, ref_id: &str) -> Result<Option<String>, DbError> {
+        Ok(sqlx::query_scalar("SELECT reason FROM attention_closed WHERE kind = ? AND ref_id = ?")
+            .bind(kind)
+            .bind(ref_id)
+            .fetch_optional(&self.pool)
+            .await?)
+    }
+
+    /// The bot behind a failed or stuck item the person can dismiss: a hand-off's specialist, a
+    /// routine run's bot. `None` when there is no such item.
+    pub async fn attention_item_owner(&self, kind: &str, ref_id: &str) -> Result<Option<String>, DbError> {
+        let sql = match kind {
+            "delegation" => "SELECT specialist_kwant_id FROM delegations WHERE id = ? AND status IN ('failed', 'interrupted', 'running')",
+            "routine_run" => "SELECT rt.kwant_id FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id WHERE r.id = ? AND r.status = 'error'",
+            _ => return Ok(None),
+        };
+        Ok(sqlx::query_scalar(sql).bind(ref_id).fetch_optional(&self.pool).await?)
+    }
+
+    /// 22i: the board task a failed hand-off's Retry can rerun (`POST /api/tasks/:id/retry`, which
+    /// moves only a `failed` task). `None` when the board has no such task (it is off by default)
+    /// or the task isn't failed: the row then offers no Retry, only its thread and Dismiss.
+    pub async fn retryable_hand_off_task(&self, delegation_id: &str) -> Result<Option<String>, DbError> {
+        Ok(sqlx::query_scalar(
+            "SELECT id FROM tasks WHERE source_kind = 'delegation' AND source_id = ? AND state = 'failed' ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(delegation_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// 22i: the person's Dismiss (`POST /api/waiting/:id/dismiss`) of one Needs-attention item.
+    /// `kind` is the item's `kind` from `/api/away` (`stopped`, `reply`, `delegation`,
+    /// `routine_run`, …); without it, `id` is looked up as a waiting item, then a hand-off, then a
+    /// routine run. Each dismiss is recorded in `attention_closed` (reason `dismissed`).
+    pub async fn dismiss_attention(&self, id: &str, kind: Option<&str>) -> Result<Dismissed, DbError> {
+        match kind {
+            Some("question") => return Ok(Dismissed::Refused("use_question_answer")),
+            Some("approval") => return Ok(Dismissed::Refused("use_approval_decide")),
+            Some("human_step" | "browser") => return Ok(Dismissed::Refused("use_step_decline")),
+            Some("watch") => return Ok(Dismissed::Refused("use_watch_decide")),
+            Some(k @ ("delegation" | "routine_run")) => return self.dismiss_failed(k, id).await,
+            None | Some("stopped" | "reply" | "waiting") => {}
+            Some(_) => return Ok(Dismissed::BadKind),
+        }
+        if let Some(w) = self.get_waiting(id).await? {
+            // Its question has an answer or a cancel that tells the bot; a dismiss would not
+            if w.question_id.is_some() {
+                return Ok(Dismissed::Refused("use_question_answer"));
+            }
+            let Some(closed) = self.claim_waiting(id).await? else {
+                return Ok(Dismissed::AlreadyClosed { kind: "waiting".into() });
+            };
+            self.close_attention("waiting", id, Some(&closed.kwant_id), CLOSED_DISMISSED).await?;
+            return Ok(Dismissed::Closed { kind: "waiting".into(), kwant_id: Some(closed.kwant_id.clone()), waiting: Some(Box::new(closed)) });
+        }
+        if kind.is_none() {
+            for k in ["delegation", "routine_run"] {
+                let r = self.dismiss_failed(k, id).await?;
+                if !matches!(r, Dismissed::NotFound) {
+                    return Ok(r);
+                }
+            }
+        }
+        Ok(Dismissed::NotFound)
+    }
+
+    async fn dismiss_failed(&self, kind: &str, id: &str) -> Result<Dismissed, DbError> {
+        if self.attention_closed_reason(kind, id).await?.is_some() {
+            return Ok(Dismissed::AlreadyClosed { kind: kind.into() });
+        }
+        let Some(owner) = self.attention_item_owner(kind, id).await? else {
+            return Ok(Dismissed::NotFound);
+        };
+        if !self.close_attention(kind, id, Some(&owner), CLOSED_DISMISSED).await? {
+            return Ok(Dismissed::AlreadyClosed { kind: kind.into() });
+        }
+        Ok(Dismissed::Closed { kind: kind.into(), kwant_id: Some(owner), waiting: None })
+    }
+
+    /// 22i: a reply of `kwant_id` finished in this chat, so its failed items there are over: a
+    /// failed hand-off in this thread, a failed run of its routine that posts here. Records each
+    /// in `attention_closed` and returns them as `(kind, id)`.
+    pub async fn close_failed_in_chat(
+        &self,
+        kwant_id: &str,
+        channel_id: Option<&str>,
+        direct_kwant_id: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> Result<Vec<(String, String)>, DbError> {
+        let mut found: Vec<(String, String)> = Vec::new();
+        if let Some(t) = thread_id {
+            let ids: Vec<String> = sqlx::query_scalar(
+                "SELECT d.id FROM delegations d WHERE d.specialist_kwant_id = ? AND d.thread_id = ? AND d.status IN ('failed', 'interrupted')
+                   AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'delegation' AND x.ref_id = d.id)",
+            )
+            .bind(kwant_id)
+            .bind(t)
+            .fetch_all(&self.pool)
+            .await?;
+            found.extend(ids.into_iter().map(|id| ("delegation".to_string(), id)));
+        } else {
+            // A routine posts in its channel's main chat, or its bot's direct chat when it has none
+            let ids: Vec<String> = sqlx::query_scalar(
+                "SELECT r.id FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id
+                 WHERE rt.kwant_id = ?1 AND r.status = 'error'
+                   AND ((?2 IS NOT NULL AND rt.channel_id = ?2) OR (?2 IS NULL AND rt.channel_id IS NULL AND ?3 = ?1))
+                   AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'routine_run' AND x.ref_id = r.id)",
+            )
+            .bind(kwant_id)
+            .bind(channel_id)
+            .bind(direct_kwant_id)
+            .fetch_all(&self.pool)
+            .await?;
+            found.extend(ids.into_iter().map(|id| ("routine_run".to_string(), id)));
+        }
+        let mut closed = Vec::new();
+        for (kind, id) in found {
+            if self.close_attention(&kind, &id, Some(kwant_id), CLOSED_LATER_REPLY).await? {
+                closed.push((kind, id));
+            }
+        }
+        Ok(closed)
     }
 
     async fn ended(
@@ -463,5 +653,257 @@ mod tests {
             assert!(!detail.iter().any(|d| d.starts_with("SCAN")), "full scan: {detail:?}\n{sql}");
             assert!(detail.iter().any(|d| d.contains(idx)), "{idx} unused: {detail:?}\n{sql}");
         }
+    }
+
+    async fn bot(db: &Database, id: &str) {
+        sqlx::query("INSERT INTO kwants (id, name, title, persona_prompt, avatar_sprite, space_id) VALUES (?, ?, 't', 'p', 'a', 'spc_default')")
+            .bind(id)
+            .bind(format!("Bot {id}"))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+
+    async fn hand_off(db: &Database, id: &str, thread: &str, specialist: &str, status: &str, mins_ago: i64) {
+        let at = Utc::now() - chrono::Duration::minutes(mins_ago);
+        let ended = (status != "running" && status != "queued").then_some(at + chrono::Duration::seconds(1));
+        sqlx::query(
+            "INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, task, title, status, created_at, started_at, ended_at) \
+             VALUES (?, ?, 'lead', ?, 'task', ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(thread)
+        .bind(specialist)
+        .bind(format!("job {id}"))
+        .bind(status)
+        .bind(at)
+        .bind(at)
+        .bind(ended)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    async fn run(db: &Database, id: &str, routine: &str, status: &str, mins_ago: i64) {
+        let at = Utc::now() - chrono::Duration::minutes(mins_ago);
+        sqlx::query("INSERT INTO routine_runs (id, routine_id, trigger, started_at, ended_at, status, error) VALUES (?, ?, 'schedule', ?, ?, ?, 'boom')")
+            .bind(id)
+            .bind(routine)
+            .bind(at)
+            .bind(at + chrono::Duration::seconds(1))
+            .bind(status)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+
+    async fn failed_ids(db: &Database) -> Vec<String> {
+        let space = SpaceId::default_space();
+        let since = Utc::now() - chrono::Duration::days(7);
+        let stuck_before = Utc::now() - chrono::Duration::minutes(30);
+        let mut ids: Vec<String> = db.away_failed(&space, since, stuck_before, 50).await.unwrap().into_iter().map(|r| r.id).collect();
+        ids.sort();
+        let (_, counted) = db.away_counts(&space, since, stuck_before).await.unwrap();
+        assert_eq!(counted as usize, ids.len(), "the badge counts what is listed");
+        ids
+    }
+
+    /// 22i close rules for a failed hand-off: a later reply of the bot in that thread, a retry
+    /// there, the person's Dismiss, or its thread or bot gone.
+    #[tokio::test]
+    async fn a_failed_hand_off_closes_on_a_later_reply_a_retry_dismiss_or_a_gone_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        bot(&db, "k1").await;
+        bot(&db, "k2").await;
+        let mut t = Vec::new();
+        for i in 0..5 {
+            t.push(db.create_thread("lead", &format!("t{i}"), "delegation", None, "lead").await.unwrap().id);
+        }
+        hand_off(&db, "d1", &t[0], "k1", "failed", 60).await;
+        hand_off(&db, "d2", &t[1], "k1", "interrupted", 60).await;
+        hand_off(&db, "d4", &t[2], "k1", "failed", 60).await;
+        hand_off(&db, "d5", &t[3], "k1", "failed", 60).await;
+        hand_off(&db, "d6", &t[4], "k2", "failed", 60).await;
+        assert_eq!(failed_ids(&db).await, vec!["d1", "d2", "d4", "d5", "d6"]);
+        // A later reply of k1 in t0 finished: d1 is over (only there, only k1's)
+        let closed = db.close_failed_in_chat("k1", None, None, Some(&t[0])).await.unwrap();
+        assert_eq!(closed, vec![("delegation".to_string(), "d1".to_string())]);
+        assert!(db.close_failed_in_chat("k1", None, None, Some(&t[0])).await.unwrap().is_empty(), "closes once");
+        assert_eq!(db.attention_closed_reason("delegation", "d1").await.unwrap().as_deref(), Some(CLOSED_LATER_REPLY));
+        // Retried: a later hand-off to k1 in t1
+        hand_off(&db, "d3", &t[1], "k1", "queued", 1).await;
+        // Dismissed by the person
+        assert_eq!(db.attention_item_owner("delegation", "d4").await.unwrap().as_deref(), Some("k1"));
+        assert!(db.close_attention("delegation", "d4", Some("k1"), CLOSED_DISMISSED).await.unwrap());
+        assert!(!db.close_attention("delegation", "d4", Some("k1"), CLOSED_DISMISSED).await.unwrap());
+        // Its thread was deleted; its bot was deleted
+        sqlx::query("DELETE FROM threads WHERE id = ?").bind(&t[3]).execute(&db.pool).await.unwrap();
+        sqlx::query("DELETE FROM kwants WHERE id = 'k2'").execute(&db.pool).await.unwrap();
+        assert!(failed_ids(&db).await.is_empty());
+    }
+
+    /// 22i close rules for a failed routine run: a later reply of its bot in the routine's chat,
+    /// a later run of the routine, the person's Dismiss, or its bot gone.
+    #[tokio::test]
+    async fn a_failed_routine_run_closes_on_a_later_reply_a_rerun_dismiss_or_a_gone_bot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        bot(&db, "k1").await;
+        bot(&db, "k2").await;
+        for (id, kwant) in [("rt1", "k1"), ("rt2", "k1"), ("rt3", "k1"), ("rt4", "k2")] {
+            sqlx::query("INSERT INTO routines (id, kwant_id, name, instructions, schedule, space_id) VALUES (?, ?, ?, 'do it', '0 9 * * *', 'spc_default')")
+                .bind(id)
+                .bind(kwant)
+                .bind(format!("routine {id}"))
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        run(&db, "r1", "rt1", "error", 60).await;
+        run(&db, "r2", "rt2", "error", 60).await;
+        run(&db, "r3", "rt3", "error", 60).await;
+        run(&db, "r4", "rt4", "error", 60).await;
+        assert_eq!(failed_ids(&db).await, vec!["r1", "r2", "r3", "r4"]);
+        // A reply in another chat closes nothing; one in the routines' chat (k1's direct) closes k1's
+        assert!(db.close_failed_in_chat("k1", Some("c-other"), None, None).await.unwrap().is_empty());
+        let closed = db.close_failed_in_chat("k1", None, Some("k1"), None).await.unwrap();
+        assert_eq!(closed.len(), 3);
+        sqlx::query("DELETE FROM attention_closed WHERE ref_id IN ('r2', 'r3')").execute(&db.pool).await.unwrap();
+        assert_eq!(failed_ids(&db).await, vec!["r2", "r3", "r4"]);
+        // Run again (any later run that wasn't skipped)
+        run(&db, "r2b", "rt2", "ok", 1).await;
+        // Dismissed
+        assert_eq!(db.attention_item_owner("routine_run", "r3").await.unwrap().as_deref(), Some("k1"));
+        db.close_attention("routine_run", "r3", Some("k1"), CLOSED_DISMISSED).await.unwrap();
+        // Its bot is gone
+        sqlx::query("DELETE FROM kwants WHERE id = 'k2'").execute(&db.pool).await.unwrap();
+        assert!(failed_ids(&db).await.is_empty());
+        assert_eq!(db.attention_item_owner("routine_run", "r2b").await.unwrap(), None, "only a failed run is dismissable");
+    }
+
+    /// 22i: a hand-off still running past the stuck threshold closes when it ends (as before) or
+    /// when the person dismisses it.
+    #[tokio::test]
+    async fn a_stuck_hand_off_closes_when_it_ends_or_is_dismissed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        bot(&db, "k1").await;
+        let t = db.create_thread("lead", "t", "delegation", None, "lead").await.unwrap().id;
+        let t2 = db.create_thread("lead", "t2", "delegation", None, "lead").await.unwrap().id;
+        hand_off(&db, "s1", &t, "k1", "running", 120).await;
+        hand_off(&db, "s2", &t2, "k1", "running", 120).await;
+        assert_eq!(failed_ids(&db).await, vec!["s1", "s2"]);
+        db.close_attention("delegation", "s1", Some("k1"), CLOSED_DISMISSED).await.unwrap();
+        sqlx::query("UPDATE delegations SET status = 'completed', ended_at = ? WHERE id = 's2'").bind(Utc::now()).execute(&db.pool).await.unwrap();
+        assert!(failed_ids(&db).await.is_empty());
+    }
+
+    /// 22i: the person's Dismiss closes a stop or a failed hand-off once, says so on a second try,
+    /// refuses what has its own answer and knows nothing of an unknown id.
+    #[tokio::test]
+    async fn dismiss_closes_a_stop_or_failed_item_once_and_refuses_what_has_its_own_answer() {
+        use crate::db::waiting::NewWaitingItem;
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        bot(&db, "k1").await;
+        let (stop, _) = db.add_stopped("k1", None, Some("k1"), None, Some("m1"), "The model sent nothing for 120 s", None).await.unwrap();
+        let ask = NewWaitingItem {
+            kwant_id: "k1".into(),
+            channel_id: None,
+            direct_kwant_id: Some("k1".into()),
+            thread_id: None,
+            question_id: Some("q1".into()),
+            message_id: None,
+            question: "Which city?".into(),
+            due_at: None,
+        };
+        let asked = db.add_waiting(&ask).await.unwrap().unwrap();
+        let t = db.create_thread("lead", "t", "delegation", None, "lead").await.unwrap().id;
+        hand_off(&db, "d1", &t, "k1", "failed", 5).await;
+        assert_eq!(failed_ids(&db).await, vec!["d1"]);
+
+        match db.dismiss_attention(&stop.id, None).await.unwrap() {
+            Dismissed::Closed { kind, kwant_id, waiting } => {
+                assert_eq!((kind.as_str(), kwant_id.as_deref()), ("waiting", Some("k1")));
+                assert_eq!(waiting.unwrap().status, "closed");
+            }
+            other => panic!("expected Closed, got {other:?}"),
+        }
+        assert_eq!(db.get_waiting(&stop.id).await.unwrap().unwrap().status, "closed");
+        assert_eq!(db.attention_closed_reason("waiting", &stop.id).await.unwrap().as_deref(), Some(CLOSED_DISMISSED), "the audit row");
+        assert!(matches!(db.dismiss_attention(&stop.id, Some("stopped")).await.unwrap(), Dismissed::AlreadyClosed { .. }));
+
+        // A failed hand-off, found by id alone or with its kind
+        assert!(matches!(db.dismiss_attention("d1", None).await.unwrap(), Dismissed::Closed { ref kind, .. } if kind == "delegation"));
+        assert!(failed_ids(&db).await.is_empty());
+        assert!(matches!(db.dismiss_attention("d1", Some("delegation")).await.unwrap(), Dismissed::AlreadyClosed { .. }));
+
+        // A question's entry, a question, an approval: answered in their own card, so the bot hears
+        assert!(matches!(db.dismiss_attention(&asked.id, None).await.unwrap(), Dismissed::Refused("use_question_answer")));
+        assert_eq!(db.get_waiting(&asked.id).await.unwrap().unwrap().status, "open");
+        assert!(matches!(db.dismiss_attention("a1", Some("approval")).await.unwrap(), Dismissed::Refused("use_approval_decide")));
+        assert!(matches!(db.dismiss_attention("h1", Some("human_step")).await.unwrap(), Dismissed::Refused("use_step_decline")));
+        assert!(matches!(db.dismiss_attention("x", Some("nonsense")).await.unwrap(), Dismissed::BadKind));
+        assert!(matches!(db.dismiss_attention("nope", None).await.unwrap(), Dismissed::NotFound));
+        // A finished hand-off isn't in Needs attention: nothing to dismiss
+        hand_off(&db, "d2", &t, "k1", "completed", 5).await;
+        assert!(matches!(db.dismiss_attention("d2", Some("delegation")).await.unwrap(), Dismissed::NotFound));
+    }
+
+    /// 22i close rules for the sources that close by their own answer: a question leaves Needs you
+    /// when answered or cancelled, an approval once it isn't pending (allowed, denied, withdrawn or
+    /// expired), a browser step when done or declined; and a deleted bot takes its questions along.
+    #[tokio::test]
+    async fn a_question_approval_or_browser_step_closes_by_its_own_answer() {
+        use crate::db::human_steps::HumanStepPlace;
+        use crate::db::questions::QuestionPlace;
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let space = SpaceId::default_space();
+        bot(&db, "k1").await;
+        bot(&db, "k2").await;
+        let place = |k: &str| QuestionPlace { kwant_id: k.into(), channel_id: None, direct_kwant_id: Some(k.into()), thread_id: None, turn_id: None };
+        let q1 = db.create_question(&place("k1"), "Which city?", &[]).await.unwrap();
+        let q2 = db.create_question(&place("k1"), "Which day?", &[]).await.unwrap();
+        let q3 = db.create_question(&place("k2"), "Which colour?", &[]).await.unwrap();
+        let open = |rows: Vec<AwayRow>| rows.into_iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(open(db.away_open_questions(&space, 50).await.unwrap()).len(), 3);
+        db.close_question(&q1.id, "answered", Some("Paris")).await.unwrap();
+        db.close_question(&q2.id, "cancelled", None).await.unwrap();
+        assert_eq!(open(db.away_open_questions(&space, 50).await.unwrap()), vec![q3.id.clone()]);
+        assert_eq!(db.away_count_open_questions(&space).await.unwrap(), 1);
+        db.delete_kwant_and_history("k2", "k1").await.unwrap();
+        assert!(db.away_open_questions(&space, 50).await.unwrap().is_empty());
+
+        // An approval: listed only while pending (and live in the broker: the caller's ids)
+        for (id, status) in [("a1", "pending"), ("a2", "approved"), ("a3", "denied")] {
+            sqlx::query("INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status) VALUES (?, 't', 'k1', 'shell', '{}', ?)")
+                .bind(id)
+                .bind(status)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        let ids: Vec<String> = ["a1", "a2", "a3"].map(String::from).to_vec();
+        assert_eq!(open(db.away_pending_approvals(&ids).await.unwrap()), vec!["a1"]);
+        sqlx::query("UPDATE approvals SET status = 'expired' WHERE id = 'a1'").execute(&db.pool).await.unwrap();
+        assert!(db.away_pending_approvals(&ids).await.unwrap().is_empty());
+
+        // A browser step: open until done or declined
+        let step_place = HumanStepPlace {
+            kwant_id: "k1".into(),
+            channel_id: None,
+            direct_kwant_id: Some("k1".into()),
+            thread_id: None,
+            turn_id: None,
+            sandbox_target: None,
+            page_key: None,
+        };
+        db.create_human_step_with_card(&step_place, "captcha", "Solve the CAPTCHA", None, None, "auto", |_| None).await.unwrap();
+        let steps = db.list_human_steps(Some("open"), None, Some(&space)).await.unwrap();
+        assert_eq!(steps.len(), 1);
+        assert!(db.close_human_step(&steps[0].id, "declined").await.unwrap());
+        assert!(db.list_human_steps(Some("open"), None, Some(&space)).await.unwrap().is_empty());
     }
 }

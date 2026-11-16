@@ -155,7 +155,8 @@ async fn resume(state: &AppState, notice_id: &str) -> Result<(), (StatusCode, &'
         return Err((StatusCode::CONFLICT, "this chain was already continued"));
     }
     // Its Needs-you item is answered either way
-    let _ = state.db.close_waiting_for_message(notice_id).await;
+    let rows = state.db.close_waiting_for_message(notice_id).await.unwrap_or_default();
+    super::waiting::closed(state, &rows, super::waiting::REASON_RESUMED);
     let channel_id = notice.channel_id.clone().ok_or((StatusCode::BAD_REQUEST, "not a channel message"))?;
     if meta["kind"] == CAPPED_KIND {
         return resume_capped(state, notice_id, meta, channel_id).await;
