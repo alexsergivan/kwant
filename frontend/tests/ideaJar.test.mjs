@@ -832,17 +832,32 @@ test('M5: Undo of a deleted take: no New chip, no arrival announcement, it comes
   assert.ok(!calls.some((c) => c.method === 'DELETE'));
 });
 
+// A Look the fake server keeps, as the real one does: the 202, and from then on GET /api/ideas lists the idea as peeking.
+// The jar refetches the list 250 ms after a Look (its own idea-updated event); with a server that forgets, that refetch
+// put the card back in Takes ready / the jar, and under load the test could look only after that (22y).
+const lookKept = (id) => {
+  const list = listOf();
+  const ex = FIX._examples['POST /api/ideas/:id/look 202'];
+  routes['GET /api/ideas'] = () => [200, clone(list)];
+  routes[`POST /api/ideas/${id}/look`] = () => {
+    Object.assign(list.ideas.find((i) => i.id === id), { status: 'peeking', kwant_id: ex.kwant_id, peeked_at: new Date().toISOString(), take: null, error: null });
+    return [202, ex];
+  };
+};
+
 for (const [name, id, label] of [
   ['Look again on the open take', ID.ready, 'Look again'],
   ['Look now on a failed slip', ID.failed, 'Look now'],
 ]) {
   test(`M6: ${name}: when it succeeds, focus is not dropped to body`, async () => {
     reset();
-    routes[`POST /api/ideas/${id}/look`] = [202, FIX._examples['POST /api/ideas/:id/look 202']];
+    lookKept(id);
     const host = await jar();
     const look = button(card(host, id), label);
     await focusOn(look);
     await click(look);
+    // The 202 → render chain is real work; wait for it, not a fixed tick count (22y, as 22e did for Look now).
+    await until(() => sectionOfCard(host, id) === 'peeking');
     await settle();
     assert.equal(sectionOfCard(host, id), 'peeking', 'it moved to Being peeked at');
     assert.ok(document.activeElement && document.activeElement !== document.body, `focus is on ${document.activeElement?.outerHTML?.slice(0, 80)}`);
@@ -853,14 +868,17 @@ for (const [name, id, label] of [
 test('M6: phone take screen: Look again that succeeds keeps focus off body', async () => {
   phoneQuery = true;
   reset();
-  routes[`POST /api/ideas/${ID.ready}/look`] = [202, FIX._examples['POST /api/ideas/:id/look 202']];
+  lookKept(ID.ready);
   const host = await jar();
   await click(card(host, ID.ready).querySelector('button'));
   assert.ok(host.querySelector('[data-take-screen]'), 'take screen open');
   const look = button(host.querySelector('[data-take-screen]'), 'Look again');
   await focusOn(look);
   await click(look);
+  // Wait for the 202 to land, so the focus check runs after the move rather than before it (22y).
+  await until(() => sectionOfCard(host, ID.ready) === 'peeking');
   await settle();
+  assert.equal(sectionOfCard(host, ID.ready), 'peeking', 'it moved to Being peeked at');
   assert.ok(document.activeElement && document.activeElement !== document.body, 'focus is not body');
   assert.ok(host.contains(document.activeElement));
 });
