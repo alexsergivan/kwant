@@ -480,7 +480,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // reads as working's filled, pulsing lavender dot.
     const attLine = att && (att.rank === 2 || att.rank === 3 || att.rank === 4 || (att.rank === 1 && att.review)) ? att.line : undefined;
     const attTone = !att ? '' : att.rank === 1 ? 'text-warn' : att.rank === 2 ? 'text-rose-300' : att.rank === 3 ? 'text-info' : 'text-zinc-200';
-    const attDot = !att ? '' : att.rank === 1 ? 'kw-status-warn' : att.rank === 2 ? 'bg-rose-400' : att.rank === 3 ? 'border-[1.5px] border-sky-300 bg-transparent' : 'bg-teal-400';
+    const attDot = !att ? '' : att.rank === 1 ? 'kw-status-warn' : att.rank === 2 ? 'bg-rose-400' : att.rank === 3 ? 'border-[1.5px] border-sky-300 bg-transparent' : 'kw-status-ok';
     // Pinned to an engine that can't run, with failover off: its turn would fail, so no green dot
     const pinnedTip = pinnedCantRun(k, engines.engines);
     const status = asked ? 'needs_you' : statusOf(k.id, botStatus, pinnedTip ? false : canRun);
@@ -690,7 +690,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       else if (r === 5) c.working++;
     }
     const dots: Array<[number, string]> = c.needs || c.stuck || c.review || c.finished
-      ? ([[c.needs, 'bg-amber-400'], [c.stuck, 'bg-rose-400'], [c.review, 'border-[1.5px] border-sky-300 bg-transparent'], [c.finished, 'bg-teal-400']] as Array<[number, string]>).filter(([n]) => n > 0)
+      ? ([[c.needs, 'bg-amber-400'], [c.stuck, 'bg-rose-400'], [c.review, 'border-[1.5px] border-sky-300 bg-transparent'], [c.finished, 'kw-status-ok']] as Array<[number, string]>).filter(([n]) => n > 0)
       : c.working
         ? [[c.working, 'bg-[#9d8fff]']]
         : [];
