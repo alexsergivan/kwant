@@ -20,6 +20,7 @@ import {
   trapFocusTarget,
 } from '../imports';
 import { useEscapeLayer } from '../escape';
+import { stampClock } from '../clock';
 import { pickProblem, uploadFor } from '../importZip';
 import {
   type FolderPlan,
@@ -1005,7 +1006,7 @@ export const RecentImports: React.FC<{ records: ImportRecord[]; onUndo: (r: Impo
             <div className="flex-1 min-w-0">
               <p className="text-xs text-zinc-200 truncate">{names.length ? names.join(', ') : 'Skills only'}</p>
               <p className="text-[11px] text-zinc-500">
-                {new Date(r.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                {stampClock(r.created_at) ?? r.created_at}
                 {r.status === 'undone' ? ' · undone' : ''}
               </p>
             </div>

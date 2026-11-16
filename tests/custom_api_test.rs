@@ -139,10 +139,14 @@ async fn fake_server(lists: bool) -> (String, Seen) {
     (root, seen)
 }
 
-/// A port nothing listens on.
-async fn closed_port() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    listener.local_addr().unwrap().port()
+/// A port nothing listens on, held for as long as the socket lives: bound, never listening and
+/// without SO_REUSEADDR, so a parallel test's server can't be given it the way a freed port can.
+fn closed_port() -> (tokio::net::TcpSocket, u16) {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_reuseaddr(false).unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let port = socket.local_addr().unwrap().port();
+    (socket, port)
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -506,7 +510,7 @@ async fn a_rejected_key_is_shown_on_the_account_and_refuses_the_turn() {
 #[tokio::test]
 async fn a_server_that_is_not_running_says_so() {
     let env = setup().await;
-    let port = closed_port().await;
+    let (_closed, port) = closed_port();
     let space = env.space("Offline").await;
     let (s, acct) = env
         .account(

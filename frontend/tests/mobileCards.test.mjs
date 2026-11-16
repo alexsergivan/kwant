@@ -347,11 +347,11 @@ test('Ask chips on a phone: 28 px to look at, 44 px to tap; desktop chips unchan
   const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   const start = src.indexOf('aria-label="Ask a member"');
   const block = src.slice(src.lastIndexOf('<ScrollRow', start), src.indexOf('</ScrollRow>', start));
-  // The exact desktop classes from before 0.7.5, row and both chip kinds.
+  // The exact desktop classes from before 0.7.5, row and both chip kinds (18e: the team chip gains a 14rem cap).
   for (const desk of [
     "'kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none'",
     "'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
-    "'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
+    "'shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
   ])
     assert.ok(block.includes(desk), desk);
   const phoneChips = [...block.matchAll(/\? '(kws-hit[^']*)'/g)].map((x) => x[1]);

@@ -74,6 +74,15 @@ export function parseActivityMeta(raw: unknown): SavedActivity | null {
 
 export const isOpenStep = (s: ActivityStep) => s.status === 'running' || s.status === 'waiting';
 
+/**
+ * Whether the live steps card folds to one row (18f): once the reply has words, the row moves below the bubble,
+ * into the landed action row's place, so landing moves nothing above the words. A step waiting for the person
+ * keeps the full card open above the bubble: an ask never hides.
+ */
+export function foldLiveSteps({ writing, steps }: { writing: boolean; steps: readonly ActivityStep[] }): boolean {
+  return writing && !steps.some((s) => s.status === 'waiting');
+}
+
 /** An `activity` event: replaces the step with the same id, else appends it. A new turn starts over. */
 export function applyActivity(prev: LiveActivity | undefined, turnId: string, step: ActivityStep): LiveActivity {
   const base = prev && prev.turnId === turnId ? prev : { turnId, steps: [], thinking: {} };

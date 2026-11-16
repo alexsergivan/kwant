@@ -303,6 +303,9 @@ enum Goto {
 /// Set (to its start) when the app runs as `--demo-nudge`.
 static DEMO: OnceLock<Instant> = OnceLock::new();
 
+/// Set (to its start) when the app runs as `--demo-perch` (`perch_window::demo`).
+static DEMO_PERCH: OnceLock<Instant> = OnceLock::new();
+
 /// The demo's last step plays as under Reduce Motion, which CI can't switch on.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn demo_reduce_motion() -> bool {
@@ -319,7 +322,14 @@ fn main() {
     }
 
     let demo = std::env::args().any(|a| a == "--demo-nudge");
-    let (config, places) = if demo { demo_start() } else { normal_start() };
+    let demo_perch = !demo && std::env::args().any(|a| a == "--demo-perch");
+    let (config, places) = if demo {
+        demo_start()
+    } else if demo_perch {
+        demo_perch_start()
+    } else {
+        normal_start()
+    };
     let data_dir = config.data_dir.clone();
     let show = nudge::Prefs::load(&data_dir).show_nudges;
 
@@ -362,7 +372,12 @@ fn main() {
             }
             build_tray(handle)?;
             perch_window::apply_shortcut(handle);
-            if demo {
+            if demo_perch {
+                // a place window, hidden as in the nudge demo; the perch is what CI looks at
+                make_window(handle, &Place::ThisMac, Goto::Stay, false);
+                let h = handle.clone();
+                std::thread::spawn(move || perch_window::demo::run(&h));
+            } else if demo {
                 // hidden, so the pill shows (it never covers a focused kwant window); a click on
                 // the pill shows it
                 make_window(handle, &Place::ThisMac, Goto::Stay, false);
@@ -412,7 +427,7 @@ fn main() {
         RunEvent::ExitRequested { .. } => save_open(handle),
         RunEvent::Exit => {
             stop_server(handle);
-            if DEMO.get().is_some() {
+            if DEMO.get().is_some() || DEMO_PERCH.get().is_some() {
                 let _ = std::fs::remove_dir_all(&handle.state::<Nudges>().data_dir);
             }
         }
@@ -447,6 +462,29 @@ fn demo_start() -> (kwnt::Config, Places) {
     let data_dir = std::env::temp_dir().join(format!("kwant-demo-nudge-{}", std::process::id()));
     let port = startup::free_port().unwrap_or_else(|e| fatal(&format!("kwant --demo-nudge: no free port: {e}")));
     println!("demo-nudge: port {port}");
+    let config = kwnt::Config {
+        data_dir,
+        host: "127.0.0.1".to_string(),
+        port,
+        laya_managed: false,
+        ..Default::default()
+    };
+    (config, Places::default())
+}
+
+/// `--demo-perch`: kwant on a free port with a throwaway data dir, the perch on (Always) and a
+/// made-up glance for This Mac (`perch_window::demo`: one bot working, one need). It opens the
+/// perch the way ⌥⌘K does, prints where its window is, and quits on its own.
+fn demo_perch_start() -> (kwnt::Config, Places) {
+    let _ = DEMO_PERCH.set(Instant::now());
+    tracing_subscriber::fmt().with_env_filter("info").init();
+    let data_dir = std::env::temp_dir().join(format!("kwant-demo-perch-{}", std::process::id()));
+    let port = startup::free_port().unwrap_or_else(|e| fatal(&format!("kwant --demo-perch: no free port: {e}")));
+    println!("demo-perch: port {port}");
+    let prefs = perch::Prefs { mode: switcher::PerchMode::Always, shortcut: switcher::PerchShortcut::K };
+    if let Err(e) = prefs.save(&data_dir) {
+        fatal(&format!("kwant --demo-perch: couldn't save the perch settings: {e}"));
+    }
     let config = kwnt::Config {
         data_dir,
         host: "127.0.0.1".to_string(),
@@ -512,7 +550,7 @@ fn start_server(config: kwnt::Config) -> Server {
 
 /// The kwant on this Mac: started by this app, or the one already running here.
 fn start_local(config: &kwnt::Config) -> Local {
-    if DEMO.get().is_some() {
+    if DEMO.get().is_some() || DEMO_PERCH.get().is_some() {
         return Local { port: Some(config.port), server: Some(start_server(config.clone())), failed: false };
     }
     match startup::choose_port(config.port) {
@@ -573,7 +611,7 @@ fn start_updates<R: Runtime>(app: &AppHandle<R>) {
 
 /// True for the first caller only, and never on Windows or in the demo.
 fn claim_updates(shared: &Shared) -> bool {
-    !cfg!(windows) && DEMO.get().is_none() && !shared.updates.swap(true, Ordering::SeqCst)
+    !cfg!(windows) && DEMO.get().is_none() && DEMO_PERCH.get().is_none() && !shared.updates.swap(true, Ordering::SeqCst)
 }
 
 /// Stops the kwant this app started before the app exits. An attached kwant keeps running.
@@ -707,7 +745,7 @@ fn refresh_titles<R: Runtime>(app: &AppHandle<R>) {
 
 /// Remembers which windows show, for the next launch.
 fn save_open<R: Runtime>(app: &AppHandle<R>) {
-    if DEMO.get().is_some() {
+    if DEMO.get().is_some() || DEMO_PERCH.get().is_some() {
         return;
     }
     let shown: Vec<Place> = current(app)
@@ -1407,6 +1445,7 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
             if perch_window::polling(&app) {
                 let eager = perch_window::eager(&app);
                 let snap = perch_window::snapshot(&all, &mut glances, &last, eager, |place, etag| match place {
+                    Place::ThisMac if DEMO_PERCH.get().is_some() => perch_window::demo::glance(),
                     Place::ThisMac => match port {
                         Some(port) if !failed => perch_window::local_glance(&local_client, port, etag),
                         _ => remote::Glance::Failed,
@@ -1456,7 +1495,8 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
                 start_updates(&app);
             }
             // the demo moves on a timeline CI screenshots, so it looks every second
-            let _ = wake_rx.recv_timeout(Duration::from_secs(if demo.is_some() { 1 } else { 5 }));
+            let quick = demo.is_some() || DEMO_PERCH.get().is_some();
+            let _ = wake_rx.recv_timeout(Duration::from_secs(if quick { 1 } else { 5 }));
             while wake_rx.try_recv().is_ok() {}
         }
     });
