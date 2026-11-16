@@ -99,6 +99,11 @@ as any other user it fails with an error, because it can't find or read the toke
 systemd unit, `sudo cat /var/lib/kwnt/api-token`). Each
 install has its own token, so a token from another computer won't work either. The
 sign-in screen asks where kwant runs (a server, Docker, or this computer) and shows the matching steps.
+`KWNT_SIGNIN_HINT` puts one line of your own at the top of the sign-in screen, before anyone signs
+in, with the token box right under it. App-store listings use it to say where their generated
+password is, e.g. "Use the password Umbrel shows for kwant". It is shown as plain text (no HTML),
+cut to one line of at most 300 characters, and left out entirely if it contains the API token.
+`GET /api/auth/status` returns it as `signin_hint`.
 
 Person-only routes (sign-in links, saved passwords and the vault, answering approval cards, the approvals switch,
 deleting a bot or team, undo, Loose ends, Parallel Universe, letters) refuse a bot's turn token, or

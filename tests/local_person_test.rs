@@ -125,3 +125,44 @@ async fn require_always_asks_for_the_token_locally_too() {
     let (s, v) = get(&app, "127.0.0.1:50000", "127.0.0.1:8799", &pw, Some(TOKEN)).await;
     assert_eq!(s, StatusCode::OK, "with the API token: {v}");
 }
+
+/// 24f: an app store sets the token (`KWNT_API_TOKEN`) and says where it shows it
+/// (`KWNT_SIGNIN_HINT`). A fresh server tells a browser on another machine that hint before
+/// anyone signs in, and the store's token typed into the box starts a session.
+#[tokio::test]
+async fn a_store_hint_shows_before_sign_in_and_its_token_signs_in() {
+    let (app, mut state, _tmp) = setup(Require::Auto).await;
+    let remote = "203.0.113.9:50000";
+    let (_, v) = get(&app, remote, "kwnt.example.com", "/api/auth/status", None).await;
+    assert_eq!(v["signin_hint"], Value::Null, "no hint unless the host sets one: {v}");
+
+    state.api_token = Arc::new(
+        ApiToken::for_tests(TOKEN, Require::Auto, 8799).with_signin_hint("Use the password Umbrel shows for kwnt.\n"),
+    );
+    let app = create_router(state);
+    let (s, v) = get(&app, remote, "kwnt.example.com", "/api/auth/status", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["auth_required"], true, "{v}");
+    assert_eq!(v["authenticated"], false, "{v}");
+    assert_eq!(v["signin_hint"], "Use the password Umbrel shows for kwnt.", "{v}");
+
+    let post = |token: &str| {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/auth/session")
+            .header("host", "kwnt.example.com")
+            .header("origin", "http://kwnt.example.com")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({ "token": token }).to_string()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(remote.parse::<SocketAddr>().unwrap()));
+        app.clone().oneshot(req)
+    };
+    let wrong = post("not-the-store-password").await.unwrap();
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    let ok = post(TOKEN).await.unwrap();
+    assert_eq!(ok.status(), StatusCode::NO_CONTENT);
+    let cookie = ok.headers().get("set-cookie").and_then(|c| c.to_str().ok()).unwrap_or_default().to_string();
+    assert!(cookie.starts_with("kwnt_token=") && cookie.contains("HttpOnly"), "{cookie}");
+    assert!(!cookie.contains(TOKEN), "the cookie holds a session, never the token");
+}

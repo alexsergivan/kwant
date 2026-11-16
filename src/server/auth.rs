@@ -42,6 +42,8 @@ pub struct ApiToken {
     port: u16,
     /// Sessions and one-time sign-in links.
     pub signin: signin::SignIn,
+    /// `KWNT_SIGNIN_HINT`: where this install's token is, as an app store or host words it.
+    signin_hint: Option<String>,
 }
 
 impl std::fmt::Debug for ApiToken {
@@ -71,12 +73,18 @@ impl ApiToken {
             .filter(|o| !o.is_empty())
             .collect();
         let token = env_token().unwrap_or_else(|| load_or_create(&config.data_dir));
+        let raw_hint = std::env::var("KWNT_SIGNIN_HINT").ok();
+        let signin_hint = signin_hint_from(raw_hint.as_deref(), &token);
+        if raw_hint.is_some_and(|h| !h.trim().is_empty()) && signin_hint.is_none() {
+            tracing::warn!("KWNT_SIGNIN_HINT contains the API token, so the sign-in screen leaves it out");
+        }
         Self {
             token,
             require,
             extra_origins,
             port: config.port,
             signin: signin::SignIn::load(&config.data_dir),
+            signin_hint,
         }
     }
 
@@ -87,7 +95,20 @@ impl ApiToken {
             extra_origins: Vec::new(),
             port,
             signin: signin::SignIn::in_memory(),
+            signin_hint: None,
         }
+    }
+
+    /// A test server whose sign-in screen shows `hint` (as `KWNT_SIGNIN_HINT` would).
+    pub fn with_signin_hint(mut self, hint: &str) -> Self {
+        self.signin_hint = signin_hint_from(Some(hint), &self.token);
+        self
+    }
+
+    /// The store's or host's words for where the token is, for the sign-in screen. Public: it is
+    /// shown before anyone signs in.
+    pub fn signin_hint(&self) -> Option<&str> {
+        self.signin_hint.as_deref()
     }
 
     /// kwnt's public address: the first `KWNT_ALLOWED_ORIGINS` entry (the HTTPS address in front
@@ -129,6 +150,24 @@ pub fn env_token() -> Option<String> {
         .ok()
         .map(|t| t.trim().to_string())
         .filter(|t| t.len() >= 16)
+}
+
+/// Longest `KWNT_SIGNIN_HINT` the sign-in screen shows, in characters.
+pub const SIGNIN_HINT_MAX: usize = 300;
+
+/// `KWNT_SIGNIN_HINT` as the sign-in screen shows it: one line of plain text (line breaks and other
+/// control characters become spaces, runs of spaces one), at most [`SIGNIN_HINT_MAX`] characters.
+/// None when it is empty, or when it holds the API token itself: the hint is public, so a store
+/// that pasted the token into it would show the token to anyone who opens the page.
+pub fn signin_hint_from(raw: Option<&str>, token: &str) -> Option<String> {
+    let raw = raw?;
+    if !token.is_empty() && raw.contains(token) {
+        return None;
+    }
+    let spaced: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let line = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
+    let hint: String = line.chars().take(SIGNIN_HINT_MAX).collect();
+    (!hint.is_empty()).then_some(hint)
 }
 
 /// Why the token file could not be read. `kwnt token` reports these instead of writing a new
@@ -638,6 +677,8 @@ pub async fn status(State(state): State<AppState>, req: Request) -> Response {
         "person_authenticated": !person_required || has_token,
         // This server can let a new browser in from a signed-in device (`/api/auth/device`)
         "device_login": true,
+        // Where an app store or host shows this install's token (`KWNT_SIGNIN_HINT`), or null
+        "signin_hint": state.api_token.signin_hint(),
     }))
     .into_response()
 }
@@ -904,6 +945,32 @@ mod tests {
             &headers(&[("host", "127.0.0.1.evil.example")]),
             lo
         ));
+    }
+
+    #[test]
+    fn signin_hint_is_one_short_line_and_never_the_token() {
+        let token = "abcdefghijklmnopqrstuvwxyz012345";
+        assert_eq!(signin_hint_from(None, token), None);
+        assert_eq!(signin_hint_from(Some("  \n\t "), token), None);
+        assert_eq!(
+            signin_hint_from(Some("  Use the password\r\nUmbrel shows\tfor kwnt. "), token).as_deref(),
+            Some("Use the password Umbrel shows for kwnt.")
+        );
+        // Plain text stays as typed: the UI renders it as text, not HTML
+        assert_eq!(
+            signin_hint_from(Some("Files → AppData/kwnt/data/api-token <b>"), token).as_deref(),
+            Some("Files → AppData/kwnt/data/api-token <b>")
+        );
+        let long = "é".repeat(SIGNIN_HINT_MAX + 50);
+        let cut = signin_hint_from(Some(&long), token).unwrap();
+        assert_eq!(cut.chars().count(), SIGNIN_HINT_MAX);
+        // A hint holding the token would publish it
+        assert_eq!(signin_hint_from(Some(&format!("Your token is {token}")), token), None);
+        let api = ApiToken::for_tests(token, Require::Auto, 3000);
+        assert_eq!(api.signin_hint(), None);
+        let api = api.with_signin_hint(" Copy the KWNT_API_TOKEN value from Render. ");
+        assert_eq!(api.signin_hint(), Some("Copy the KWNT_API_TOKEN value from Render."));
+        assert!(!format!("{api:?}").contains("Render"), "Debug stays short");
     }
 
     #[test]

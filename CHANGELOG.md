@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **kwant on Render, CasaOS, Umbrel and Coolify.** A **Deploy to Render** button (README and kwant.si/docs/install) sets up kwnt with a disk on `/data`; Render disks need a paid instance. `deploy/` has a listing for CasaOS, Umbrel and Coolify, pinned to the release, and `KWNT_SIGNIN_HINT` puts one line on the sign-in screen saying where each store's password is, so the first sign-in needs only the browser. See docs/self-host-stores.md.
+
 ## [Mac 0.9.18] - 2026-11-16
 
 kwant 0.9.18: a team named once, never "… team team", audio files up to 100 MB in the chat, a bot browser preview that never flashes white while a page loads, browser step cards that stop asking for you once they are closed, tidier reply buttons on a phone, a production deploy card that always has a way forward, A refused customer call remembers its chat and A step that keeps failing ends in one Blocked card.
