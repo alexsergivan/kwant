@@ -97,10 +97,12 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
       <ModernAvatar role={kwantName} name={kwantName} size={34} kwantId={kwantId} />
       <div className={`flex-1 min-w-0 max-w-2xl rounded-2xl rounded-tl-sm border bg-zinc-900/60 shadow-sm ${open ? 'border-amber-500/40' : 'border-zinc-800'}`}>
         <div className="px-4 pt-3 pb-2 space-y-1">
-          {/* One run of text, so on a phone it wraps like a sentence instead of into columns. */}
-          <p data-hs-meta="" className="text-[11px] font-medium text-zinc-400 leading-snug break-words">
-            <Hand size={12} className="shrink-0 inline-block align-[-2px] mr-1.5 text-amber-300" aria-hidden="true" />
-            <span className="text-zinc-200">{kwantName}</span> needs you in the browser
+          {/* One run of text, so on a phone it wraps like a sentence instead of into columns.
+              Once the step is closed it says what was asked, quietly, and the footer says what happened. */}
+          <p data-hs-meta="" className={`text-[11px] font-medium leading-snug break-words ${open ? 'text-zinc-400' : 'text-zinc-500'}`}>
+            <Hand size={12} className={`shrink-0 inline-block align-[-2px] mr-1.5 ${open ? 'text-amber-300' : 'text-zinc-500'}`} aria-hidden="true" />
+            <span className={open ? 'text-zinc-200' : 'text-zinc-400'}>{kwantName}</span>
+            {open ? ' needs you in the browser' : ' asked for you in the browser'}
             {view.source === 'auto' && ' · spotted automatically'}
           </p>
           <h3 id={headingId} className="text-sm font-semibold text-zinc-100">
