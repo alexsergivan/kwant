@@ -6,7 +6,9 @@ const a = await loadBundled(`export * from './src/activity';`);
 const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
-  import { LiveActivityList, SavedActivityList } from './src/components/ActivityList';
+  import { LiveActivityList, SavedActivityList, STEPS_ROW_BUTTON, STEPS_ROW_LIST } from './src/components/ActivityList';
+  export { STEPS_ROW_BUTTON, STEPS_ROW_LIST };
+  export const el = (t, p, c) => React.createElement(t, p, c);
   export const live = (props) => renderToStaticMarkup(React.createElement(LiveActivityList, props));
   export const saved = (props) => renderToStaticMarkup(React.createElement(SavedActivityList, props));
 `);
@@ -119,4 +121,36 @@ test('a page opened mid-turn seeds the open step from /api/turns (ticket 4)', as
   assert.equal(a.seedActivity(undefined, 't1', undefined), null);
   assert.equal(a.seedActivity(undefined, 't1', { steps: [] }), null);
   assert.equal(a.seedActivity(undefined, 't1', 'nope'), null);
+});
+
+test('18f: the live card folds once the reply has words, unless a step waits for the person', () => {
+  const ok = [step({ status: 'ok' }), step({ id: 's2', status: 'running' })];
+  assert.equal(a.foldLiveSteps({ writing: false, steps: ok }), false, 'tool phase: full card');
+  assert.equal(a.foldLiveSteps({ writing: true, steps: ok }), true, 'text streams: one row');
+  assert.equal(a.foldLiveSteps({ writing: true, steps: [...ok, step({ id: 'ap', kind: 'approval', status: 'waiting', title: 'Approve' })] }), false, 'an ask never hides');
+  assert.equal(a.foldLiveSteps({ writing: true, steps: [] }), true);
+});
+
+test('18f: the folded row is the saved row: same button classes, same wrapper, no time, list opens to 22rem', () => {
+  const steps = [step({ status: 'ok', duration_ms: 900 }), step({ id: 's2', status: 'ok' }), step({ id: 's3', status: 'running', title: 'Reading `a.ts`' })];
+  const html = ui.live({ live: { turnId: 't', steps, thinking: {} }, idBase: 'x', folded: true, lead: ui.el('span', { 'data-chip': '' }, 'chip') });
+  const saved = ui.saved({ activity: { steps, dropped: 0 }, idBase: 'm1' });
+  const btn = (h) => h.match(/<button[^>]*class="([^"]+)"/)[1];
+  assert.equal(btn(html), ui.STEPS_ROW_BUTTON);
+  assert.equal(btn(saved), ui.STEPS_ROW_BUTTON);
+  assert.match(html, /^<section aria-label="What the bot is doing" data-steps-folded="" class="mt-2 max-w-full">/, 'below the bubble, the landed action row\'s gap');
+  assert.match(saved, /^<div class="mb-2 max-w-full">/);
+  assert.match(html, />Working · 3 steps</);
+  assert.doesNotMatch(html, /\d:\d\d/, 'no time while live');
+  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /a\.ts/, 'steps hidden until opened');
+  assert.match(html, /<\/button><div class="min-w-0 shrink"><span data-chip="">chip<\/span><\/div>/, 'browsed chip inline after the button');
+  assert.match(html, /role="status"/, 'the announcer stays');
+  assert.match(ui.STEPS_ROW_LIST, /mt-1\.5/);
+  // Folded with one step says "1 step"; not folded is the card as before.
+  assert.match(ui.live({ live: { turnId: 't', steps: [steps[0]], thinking: {} }, idBase: 'x', folded: true }), />Working · 1 step</);
+  assert.doesNotMatch(ui.live({ live: { turnId: 't', steps, thinking: {} }, idBase: 'x' }), /data-steps-folded/);
+  // Phone: the compact row keeps its look; folded it sits below the bubble with the landed chip row's mt-1.
+  assert.match(ui.live({ live: { turnId: 't', steps, thinking: {} }, idBase: 'x', compact: true, folded: true }), /^<section aria-label="What the bot is doing" data-steps-compact="" class="mt-1 w-full max-w-2xl/);
+  assert.match(ui.live({ live: { turnId: 't', steps, thinking: {} }, idBase: 'x', compact: true }), /^<section aria-label="What the bot is doing" data-steps-compact="" class="mb-2 w-full max-w-2xl/);
 });

@@ -1215,9 +1215,33 @@ async fn record_customer_refusal(state: &AppState, scope: &SelfScope, turn: &str
             "refused": "nobody_allowed",
         }),
     };
-    if let Err(e) = state.db.save_customer_refused(&record).await {
+    let chat = refused_call_chat(state, scope, turn).await;
+    if let Err(e) = state.db.save_customer_refused(&record, chat.as_ref()).await {
         tracing::warn!(error = %e, kwant = %scope.kwant_id, "could not record a refused customer-turn call");
     }
+}
+
+/// 22a: the chat a refused customer call happened in, in a card's `resume` shape: the turn's
+/// thread, else its channel, else its bot's direct chat. From the turn's origin, else from the
+/// running turn as a card's chat is found; `None` when neither knows.
+async fn refused_call_chat(state: &AppState, scope: &SelfScope, turn: &str) -> Option<Value> {
+    match scope.origin.as_ref().and_then(chat_of_origin) {
+        Some(chat) => Some(chat),
+        None => super::mcp_runtime::turn_chat(state, turn).await,
+    }
+}
+
+/// A turn's origin as `{"thread_id"}`, `{"channel_id"}` or `{"direct_kwant_id"}`, the first one
+/// it has in that order; `None` when it has none.
+fn chat_of_origin(origin: &TurnOrigin) -> Option<Value> {
+    let some = |v: &Option<String>| v.as_deref().filter(|s| !s.is_empty()).map(str::to_string);
+    if let Some(t) = some(&origin.thread_id) {
+        return Some(json!({"thread_id": t}));
+    }
+    if let Some(c) = some(&origin.channel_id) {
+        return Some(json!({"channel_id": c}));
+    }
+    some(&origin.direct_kwant_id).map(|k| json!({"direct_kwant_id": k}))
 }
 
 /// `POST /api/mcp/self`: the agents' own tools as a streamable-HTTP MCP server (JSON responses).
@@ -2234,6 +2258,23 @@ fn place_of_chat(chat: Option<&serde_json::Value>) -> (Option<String>, Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_call_names_its_turns_chat_thread_first() {
+        use serde_json::json;
+        let o = |c: Option<&str>, d: Option<&str>, t: Option<&str>| TurnOrigin {
+            channel_id: c.map(Into::into),
+            direct_kwant_id: d.map(Into::into),
+            thread_id: t.map(Into::into),
+            ..Default::default()
+        };
+        assert_eq!(chat_of_origin(&o(None, Some("k1"), Some("t1"))), Some(json!({"thread_id": "t1"})));
+        assert_eq!(chat_of_origin(&o(Some("c1"), None, Some("t1"))), Some(json!({"thread_id": "t1"})));
+        assert_eq!(chat_of_origin(&o(Some("c1"), None, None)), Some(json!({"channel_id": "c1"})));
+        assert_eq!(chat_of_origin(&o(None, Some("k1"), None)), Some(json!({"direct_kwant_id": "k1"})));
+        assert_eq!(chat_of_origin(&o(Some(""), Some("k1"), Some(""))), Some(json!({"direct_kwant_id": "k1"})));
+        assert_eq!(chat_of_origin(&o(None, None, None)), None);
+    }
 
     #[test]
     fn approval_chat_names_the_place() {

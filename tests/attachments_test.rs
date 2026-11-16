@@ -182,6 +182,23 @@ async fn names_and_ids_cannot_traverse() {
     assert_eq!(s, StatusCode::BAD_REQUEST, "context_id is required");
 }
 
+/// 22l: a song sent in the chat reaches the bot as a file: its name, type, size and id on the
+/// "[Attached files]" line, never its bytes in the prompt.
+#[tokio::test]
+async fn a_sent_song_reaches_the_agent_as_a_file_by_id() {
+    let env = setup().await;
+    let mut mp3 = b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0SONG_BYTES_NEVER_IN_PROMPT".to_vec();
+    mp3.resize(4096, 0);
+    let (s, song) = upload(&env, "song.mp3", mp3).await;
+    assert_eq!((s, song["mime"].as_str()), (StatusCode::CREATED, Some("audio/mpeg")), "{song}");
+    let id = song["id"].as_str().unwrap();
+    send_direct(&env, &env.a, "listen REPLYTAG:au1", json!({"attachment_ids": [id]})).await;
+    wait_reply(&env, &env.a, "answer au1").await;
+    let args = invocations_with("REPLYTAG:au1").pop().unwrap();
+    assert!(args.contains("[Attached files]") && args.contains(&format!("song.mp3 (audio/mpeg, 4 KB) id {id}")), "{args}");
+    assert!(!args.contains("SONG_BYTES_NEVER_IN_PROMPT"), "audio is never inlined");
+}
+
 #[tokio::test]
 async fn sent_files_reach_the_agent_and_only_its_chat() {
     let env = setup().await;
@@ -439,8 +456,6 @@ async fn a_delegated_task_carries_the_persons_request_and_files() {
     assert!(!text_of(&r).contains("Files in the chat your task came from"), "{r}");
 }
 
-/// 0.8.0 P4: a shared file is posted as the bot (its name, the id in meta), and the same bytes
-/// shared again in the same chat within a few minutes aren't posted twice.
 /// 20b/16d: a customer's message in the chat a task came from never reaches the specialist as what
 /// the person asked; the person's own message, when there is one, is.
 #[tokio::test]
@@ -493,6 +508,8 @@ async fn a_delegated_task_never_passes_a_customers_message_on_as_the_persons() {
     assert!(!brief.contains("CUSTOMER_TWO"), "{brief}");
 }
 
+/// 0.8.0 P4: a shared file is posted as the bot (its name, the id in meta), and the same bytes
+/// shared again in the same chat within a few minutes aren't posted twice.
 #[tokio::test]
 async fn shared_files_post_as_the_bot_and_repeats_are_skipped() {
     let env = setup().await;

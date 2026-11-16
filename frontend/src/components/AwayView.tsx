@@ -8,13 +8,13 @@ import {
   AWAY_SORT_HINT,
   sortAwaySection,
   ApprovalDecision,
-  AwayError,
   AwayItem,
   AwayResponse,
   AwayNotice,
   AwaySection,
   Tone,
-  actionFailureNotice,
+  failureNotice,
+  resolveFromList,
   awaySummary,
   awayApi,
   isAwayEmpty,
@@ -52,7 +52,7 @@ export interface AwayViewProps {
   onBack?: () => void;
   onOpen: (item: AwayItem) => void;
   onAnswer: (item: AwayItem, choice: number) => void;
-  onResolve: (item: AwayItem, decision: ApprovalDecision) => void;
+  onResolve: (item: AwayItem, decision: ApprovalDecision, withoutBackup?: boolean) => void;
   /** Above the lists: what holds every bot (today's spending stop), not one bot's item. */
   top?: React.ReactNode;
 }
@@ -115,7 +115,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
 
         {item.kind === 'approval' && (
           <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
-            <ModernApprovalCard approval={approvalFromAway(item)} disabled={disabled} onResolve={(_, decision) => onResolve(item, decision)} />
+            <ModernApprovalCard approval={approvalFromAway(item)} disabled={disabled} onResolve={(_, decision, opts) => onResolve(item, decision as ApprovalDecision, opts?.withoutBackup)} />
           </div>
         )}
 
@@ -305,8 +305,7 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
       setNotice({ text: `${done} “${awayTitle(item)}”`, error: false });
     } catch (err) {
-      const status = err instanceof AwayError ? err.status : 0;
-      setNotice(actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', awayTitle(item)));
+      setNotice(failureNotice(err, awayTitle(item)));
     } finally {
       setBusy(null);
     }
@@ -326,18 +325,9 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       top={top}
       onOpen={onOpen}
       onAnswer={(item, choice) => act(item, () => awayApi.answer(item.id, choice))}
-      onResolve={(item, decision) =>
-        act(item, async () => {
-          try {
-            const res = await awayApi.resolve(item.id, decision);
-            onApprovalResolved?.(item.id);
-            return res;
-          } catch (err) {
-            // Lapsed meanwhile: the chat's card is stale too.
-            if (err instanceof AwayError && (err.status === 409 || err.status === 404)) onApprovalResolved?.(item.id);
-            throw err;
-          }
-        }, decision === 'deny')
+      onResolve={(item, decision, withoutBackup) =>
+        // Lapsed meanwhile: the chat's card is stale too (but not on a backup refusal: it is still waiting).
+        act(item, () => resolveFromList(item.id, onApprovalResolved, () => awayApi.resolve(item.id, decision, withoutBackup)), decision === 'deny')
       }
     />
   );

@@ -1,0 +1,38 @@
+{
+  "version": "0.9.17",
+  "date": "2026-11-16",
+  "highlights": [
+    {
+      "id": "phone-app",
+      "title": "kwant bots on your phone, no app store",
+      "text": "Settings › All spaces now starts with a card: scan its QR code with your phone, add kwant bots to the Home Screen, and turn on notifications.",
+      "image": "phone-app.webp",
+      "open": null
+    },
+    {
+      "id": "team-chips-plain",
+      "title": "Team chips that name the team once",
+      "text": "The Ask: row's team chip reads \"@Booktun.ing Team\" without \"(Team)\", a long team name stays inside its pill on a phone too, and after Approve your keyboard lands back in the message box.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "steps-fold-on-reply",
+      "title": "A reply stays put when it lands",
+      "text": "Once a bot starts writing, the steps it took fold into one row under the reply, so the words don't jump when it finishes. Open the row to see every step.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "In Manage team, \"Pick a repo\" always puts the cursor in Repo URL, even when kwant is busy.",
+    "The island's Allow once works for drafts and notes that mention a release or merge; commands and branches still need the card.",
+    "After a failed step, \"Let me know which one you want to keep\" or \"…, or which file to use\" now shows Blocked.",
+    "On Claude, a bot stops repeating a Bash or Read call that failed 3 times the same way, as it already does for kwant's tools.",
+    "The island says \"Reading contract.md\", never the folders around the file; the chat keeps its short path.",
+    "Import history, check times and goal tooltips read dates one way (\"Nov 15, 3:42 PM\"), and terminal log times stay on one line.",
+    "A bot that can't get a file itself asks you to drop it into the chat and uploads it on the page, instead of handing you the page.",
+    "Keep going quotes only your own messages, never a bot's or a customer's, and passes their words on marked as theirs.",
+    "Writes named like reads, such as retrying a payment or posting a status, keep the island's full card; plain reads keep Allow once."
+  ]
+}
