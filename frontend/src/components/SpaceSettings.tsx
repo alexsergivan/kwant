@@ -50,7 +50,7 @@ export type { SettingsScope, SpaceSettingsTab };
 const TABS: Array<{ id: SpaceSettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <Settings2 size={15} /> },
   { id: 'apps', label: 'Apps & accounts', icon: <LayoutGrid size={15} /> },
-  { id: 'bots', label: 'Kwant bots', icon: <Bot size={15} /> },
+  { id: 'bots', label: 'Bots', icon: <Bot size={15} /> },
   { id: 'teams', label: 'Teams', icon: <Users size={15} /> },
   { id: 'docs', label: 'Documents', icon: <FileText size={15} /> },
   { id: 'skills', label: 'Skills', icon: <Sparkles size={15} /> },
@@ -323,7 +323,7 @@ const ImportTab: React.FC<TabProps> = ({ space, kwants, onOpenImport, onImported
     } catch (err) {
       if (err instanceof ImportError && err.code === 'edited') setConfirm({ record: r, names: err.names });
       else if (err instanceof ImportError && err.code === 'in_use')
-        setNotice(`${err.names.join(', ') || 'Something it made'} has already been used, so this import can’t be undone in one step. Delete those bots yourself in Kwant bots.`);
+        setNotice(`${err.names.join(', ') || 'Something it made'} has already been used, so this import can’t be undone in one step. Delete those bots yourself in Settings › This space › Bots.`);
       else setNotice(importErrorText(err).detail || importErrorText(err).title);
     } finally {
       setUndoing(null);

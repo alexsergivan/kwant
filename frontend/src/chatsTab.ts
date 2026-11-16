@@ -79,8 +79,15 @@ export const directIds = <K extends { id: string; name: string }>(kwants: K[], s
  */
 export type AttentionRank = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-/** The ranks pinned in "Needs attention" on desktop, and given a dot on team rollups. */
+/** The ranks pinned in "Needs you" on desktop, and given a dot on team rollups. */
 export const PINNED_RANK = 4;
+
+/**
+ * 14c: the one name for what waits on the person, on every screen: the desktop's pinned block and the
+ * phone's first Chats section say the same words, like the Inbox's "Waiting on you". "To review" stays only
+ * for real reviews (the Inbox group and rank 3).
+ */
+export const NEEDS_YOU_LABEL = 'Needs you';
 
 export interface AttentionRow<K> {
   kwant: K;
