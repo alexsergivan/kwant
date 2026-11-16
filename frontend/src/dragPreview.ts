@@ -1,7 +1,7 @@
 // 0.8.0 drag and drop into chats (Mira's design, release-080/drag-drop/design.md). What a file drag
 // carries, read while it is still in the air; the words the drop card shows; what a drop brought; and
 // the window-level watch that knows a file drag is over the window at all.
-import { MAX_ATTACHMENTS, isArchiveMime, previewRefusesMime } from './attachments';
+import { MAX_ATTACHMENTS, isArchiveMime, isAudio, previewRefusesMime } from './attachments';
 import { teamNamed } from './botHome';
 
 /** One dragged item as the browser shows it before the drop: its kind and MIME type, never its name. */
@@ -10,7 +10,7 @@ export interface DragItemLike {
   type: string;
 }
 
-export type DragKind = 'image' | 'video' | 'pdf' | 'text' | 'file' | 'refused';
+export type DragKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'file' | 'refused';
 
 const IMAGE = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp']);
 const VIDEO = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
@@ -27,6 +27,7 @@ export function dragKind(type: string): DragKind {
   if (previewRefusesMime(mime)) return 'refused';
   if (IMAGE.has(mime)) return 'image';
   if (VIDEO.has(mime)) return 'video';
+  if (isAudio(mime)) return 'audio';
   if (mime === 'application/pdf') return 'pdf';
   if (mime.startsWith('text/') || mime === 'application/json') return 'text';
   return 'file';
@@ -67,7 +68,7 @@ export const dragItemsOf = (items: ArrayLike<DragItemLike> | null | undefined): 
 export function previewDrag(items: ArrayLike<DragItemLike> | null | undefined, inTray = 0): DragPreview {
   const list = dragItemsOf(items);
   const slotsLeft = Math.max(0, MAX_ATTACHMENTS - inTray);
-  const kinds = { image: 0, video: 0, pdf: 0, text: 0, file: 0 };
+  const kinds = { image: 0, video: 0, audio: 0, pdf: 0, text: 0, file: 0 };
   const refused: string[] = [];
   let go = 0;
   let overBy = 0;
@@ -87,6 +88,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 const KIND_WORDS: Record<Exclude<DragKind, 'refused'>, [string, string]> = {
   image: ['image', 'images'],
   video: ['video', 'videos'],
+  audio: ['audio file', 'audio files'],
   pdf: ['PDF', 'PDFs'],
   text: ['text file', 'text files'],
   file: ['file', 'files'],
@@ -99,7 +101,7 @@ export interface KindPart {
 
 /** The kinds for the what line: at most 3, biggest first; the rest fold into "{n} other". */
 export function kindParts(p: DragPreview): KindPart[] {
-  const order: Array<Exclude<DragKind, 'refused'>> = ['image', 'video', 'pdf', 'text', 'file'];
+  const order: Array<Exclude<DragKind, 'refused'>> = ['image', 'video', 'audio', 'pdf', 'text', 'file'];
   const groups = order.filter((k) => p.kinds[k] > 0).sort((a, b) => p.kinds[b] - p.kinds[a]);
   const shown = groups.slice(0, 3).map((k) => ({ kind: k, label: plural(p.kinds[k], ...KIND_WORDS[k]) }));
   const rest = groups.slice(3).reduce((n, k) => n + p.kinds[k], 0);
@@ -144,7 +146,7 @@ export function dropHeading(r: DropRecipient, count: number | null, armed = fals
 /** The recipient inside a sentence: "Frontend", "General", "the Kitchen team", "the Marketing_Team". */
 const nameIn = (r: DropRecipient) => (r.kind === 'team' ? `the ${teamNamed(r.name)}` : r.name);
 
-const WORKS = 'Images, videos, PDFs and text or code files work.';
+const WORKS = 'Images, videos, audio, PDFs and text or code files work.';
 
 /** How a refused MIME is named when all refused files share it. */
 function refusedWords(mime: string): { one: string; many: string; group: string } | null {
