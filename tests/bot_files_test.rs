@@ -204,17 +204,21 @@ async fn the_endpoint_keeps_a_bot_inside_its_own_folder() {
     assert!(!err && text.contains("notes.md (5 bytes)"), "{text}");
 
     let b_dir = theirs.file_name().unwrap().to_str().unwrap().to_string();
-    let mut bad = vec![
+    let mut bad: Vec<String> = vec![
         format!("../{b_dir}/secret.md"),
         format!("../{b_dir}"),
         theirs.join("secret.md").to_string_lossy().into_owned(),
         "../../../../etc/passwd".into(),
         "/etc/passwd".into(),
     ];
+    // Symlinks are unix-only here; `cfg!` (not `#[cfg]`) keeps `bad` mutated on
+    // every target, so Windows clippy sees no unused `mut`.
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&theirs, mine.join("teammate")).unwrap();
         std::os::unix::fs::symlink(theirs.join("secret.md"), mine.join("their.md")).unwrap();
+    }
+    if cfg!(unix) {
         bad.extend(["teammate/secret.md".into(), "teammate".into(), "their.md".into()]);
     }
     for path in &bad {
