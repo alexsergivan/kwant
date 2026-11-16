@@ -266,6 +266,7 @@ async fn two_runs_in_one_chat_each_read_only_their_own_steps() {
         assert!(reply.text.contains(tag), "{run}: {}", reply.text);
         assert_eq!(reply_of(&env, run).await["routine_run"], run["id"], "{run}");
     }
+}
 
 #[tokio::test]
 async fn a_second_run_while_one_is_going_is_still_skipped() {
