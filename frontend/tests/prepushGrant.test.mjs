@@ -66,7 +66,7 @@ const mount = async (C, props) => {
   mounted.add(u);
   return { host, rerender: async (p) => { root.render(h(C, p)); await settle(); } };
 };
-const text = (el) => el.textContent.replace(/\s+/g, ' ').trim();
+const text = (el) => el.textContent.replace(/[^\S\u00a0]+/g, ' ').trim();
 const button = (host, t) => [...host.querySelectorAll('button')].find((b) => text(b).startsWith(t));
 const click = async (el) => {
   el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
@@ -82,7 +82,7 @@ const type = async (el, value) => {
 // ---------------------------------------------------------------------------------------------------
 // 0.9.7 prepush-grant (autonomy/prepush-retry/brief.md, Frontend): the press is the approval.
 
-const HM = (ms) => new Date(ms).toLocaleTimeString(undefined, { timeStyle: 'short' }).replace(/\u202f/g, ' ');
+const HM = (ms) => new Date(ms).toLocaleTimeString(undefined, { timeStyle: 'short' }).replace(/[\u202f ](AM|PM)/, '\u00a0$1');
 const all = (...ks) => ks.map((k) => card(fx[k]));
 
 test('grant and superseded parse; pushed is a known status now; a junk grant is dropped', () => {
@@ -466,14 +466,14 @@ test('18d: prepush sentences with "at" say the day when it was not today', () =>
   const NEXT = Date.UTC(2026, 10, 10, 9, 0);
   const NEXT_YEAR = Date.UTC(2027, 0, 4, 9, 0);
   const over = m.parsePrepush(m.fx.PP_OVERRIDDEN);
-  assert.equal(m.overriddenHead(over, SAME), 'You let this push go at 2:09 PM with 1 finding open.');
-  assert.equal(m.overriddenHead(over, NEXT), 'You let this push go on Nov 9 at 2:09 PM with 1 finding open.');
-  assert.equal(m.overriddenHead(over, NEXT_YEAR), 'You let this push go on Nov 9, 2026 at 2:09 PM with 1 finding open.');
+  assert.equal(m.overriddenHead(over, SAME), 'You let this push go at 2:09\u00a0PM with 1 finding open.');
+  assert.equal(m.overriddenHead(over, NEXT), 'You let this push go on Nov 9 at 2:09\u00a0PM with 1 finding open.');
+  assert.equal(m.overriddenHead(over, NEXT_YEAR), 'You let this push go on Nov 9, 2026 at 2:09\u00a0PM with 1 finding open.');
   const next = m.parsePrepush(m.fx.PP_NEXT_CHECKING);
-  assert.equal(m.afterRetryLine(next, SAME), 'After you asked for a fix at 2:10 PM.');
-  assert.equal(m.afterRetryLine(next, NEXT), 'After you asked for a fix on Nov 9 at 2:10 PM.');
+  assert.equal(m.afterRetryLine(next, SAME), 'After you asked for a fix at 2:10\u00a0PM.');
+  assert.equal(m.afterRetryLine(next, NEXT), 'After you asked for a fix on Nov 9 at 2:10\u00a0PM.');
   const clear = m.parsePrepush(m.fx.PP_CLEAR);
-  assert.equal(m.clearedParts(clear, SAME).after, ' after 5 checks passed · 2:02 PM');
-  assert.equal(m.clearedParts(clear, NEXT).after, ' after 5 checks passed · Nov 9, 2:02 PM');
+  assert.equal(m.clearedParts(clear, SAME).after, ' after 5 checks passed · 2:02\u00a0PM');
+  assert.equal(m.clearedParts(clear, NEXT).after, ' after 5 checks passed · Nov 9, 2:02\u00a0PM');
   assert.equal(m.overriddenHead({ ...over, override: null }, NEXT), 'You let this push go with 1 finding open.');
 });

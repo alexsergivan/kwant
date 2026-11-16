@@ -1573,6 +1573,16 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       return `A check ${str(d.status) === 'passed' ? 'passed' : str(d.status) === 'error' ? 'couldn’t run' : 'failed'}`;
     case 'review':
       return `${Who} reviewed it: ${str(d.verdict) === 'pass' ? 'pass' : 'fail'}${note ? `. ${note}` : ''}`;
+    case 'lead_review_asked': {
+      // listener.rs REVIEW_ASKED: kwant asks the team lead to look at a hand-off card (at most twice).
+      const lead = str(d.lead_kwant_id);
+      return `${Who} asked ${(lead && names[lead]) || 'the lead'} to review the hand-off`;
+    }
+    case 'spec': {
+      // auditor.rs SPEC_EVENT: the bot's own "what done means" lines, written before a high-impact task starts.
+      const n = Array.isArray(d.lines) ? d.lines.length : 0;
+      return `${Who} wrote down what done means${n ? ` (${n} ${n === 1 ? 'point' : 'points'})` : ''}`;
+    }
     case 'budget':
       return 'It reached its token limit';
     case 'edited':
