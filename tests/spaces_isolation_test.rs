@@ -325,6 +325,7 @@ async fn delegation_without_a_member_list_stays_in_the_leads_space() {
         turn_id: None,
         workspace: None,
         sandbox_target: None,
+        repeats: Default::default(),
     };
     let (text, is_error) = delegation::tool_delegate(&env.state, &scope, &json!({"to": "Remy", "task": "help"})).await;
     assert!(is_error, "{text}");
@@ -500,6 +501,7 @@ async fn the_search_tool_only_finds_messages_in_the_agents_space() {
             turn_id: None,
             workspace: None,
             sandbox_target: None,
+            repeats: Default::default(),
         },
     );
     let resp = env

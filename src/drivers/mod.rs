@@ -209,6 +209,13 @@ pub fn from_outsider(msg: &crate::db::models::Message) -> bool {
     from_agent(msg).is_some() || from_customer(msg).is_some()
 }
 
+/// Whether `msg` is the person's own message: a "user" message that no outsider (a connected
+/// agent or a business customer) wrote. Sites that look for "what the person said" use this, so a
+/// customer's words are never taken as the person's answer, decision, request or go-ahead (16d).
+pub fn from_person(msg: &crate::db::models::Message) -> bool {
+    msg.sender_role == "user" && !from_outsider(msg)
+}
+
 /// A "user" history message as a bot reads it: the person's own words as they are, a connected
 /// agent's framed with [`agent_message`], a customer's with [`customer_message`].
 pub fn user_history_text(msg: &crate::db::models::Message) -> String {
@@ -1054,6 +1061,20 @@ pub(crate) mod tests {
             reaction: None,
             reply_to: None,
         }
+    }
+
+    /// A "user" message a business customer wrote from Telegram (as `telegram::customers` saves it).
+    pub(crate) fn customer_said(text: &str) -> crate::db::models::Message {
+        let mut m = said("user", text);
+        m.meta = Some(serde_json::json!({"source": "telegram_customer", "from_customer": "Ann", "customer_chat_id": 7}).to_string());
+        m
+    }
+
+    #[test]
+    fn only_the_persons_own_message_is_from_the_person() {
+        assert!(from_person(&said("user", "hi")));
+        assert!(!from_person(&customer_said("hi")));
+        assert!(!from_person(&said("kwant", "hi")));
     }
 
     #[test]
