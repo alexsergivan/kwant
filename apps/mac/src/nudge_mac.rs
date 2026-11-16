@@ -105,7 +105,7 @@ impl Nudger {
             }
         }
         let _ = self.icon.send(if show && change.play { Icon::Play } else { Icon::Rest(change.count > 0) });
-        let cmd = if !show || change.count == 0 || crate::kwant_focused(handle) {
+        let cmd = if !show || change.count == 0 || crate::kwant_focused(handle) || crate::perch_window::pill_off(handle) {
             PillCmd::Quiet
         } else {
             PillCmd::Update { arrived: change.arrived.clone(), live: change.live.clone() }

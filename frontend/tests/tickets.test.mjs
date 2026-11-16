@@ -1,6 +1,11 @@
 // 0.7.6 "Work from Jira" (Iris): the ticket card in every state, the brief, the questions with the
 // Ask on Jira preview, Matches the ticket on the Review card, the parsers' fallbacks, and Off = no tab.
 process.env.TZ = 'UTC';
+// 18d: a time from another day says its day ("on Nov 10 at 9:40 AM"). These fixtures are read late on their own
+// day, so the copy below stays time only; the clock still ticks. The other-day copy has its own test.
+const realNow = Date.now.bind(Date);
+const fixtureShift = realNow() - Date.parse('2026-11-07T23:00:00Z');
+Date.now = () => realNow() - fixtureShift;
 
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
@@ -391,7 +396,7 @@ test('picking a choice answers that question', async () => {
 
 test('once asked, the card says it waits for the answer on Jira and offers See the comment', () => {
   const out = html(m.TicketCard, { ...N, ticket: T('needs_answer'), brief: B(fx.BRIEF_ASKED), onAskPreview: async () => fx.ASK_PREVIEW });
-  assert.match(out, /Asked Dana Park on Jira at 10:04\. You can still answer here\./);
+  assert.match(out, /Asked Dana Park on Jira at 10:04\u00a0AM\. You can still answer here\./);
   assert.match(out, /Ann checks the Jira comment every 5 minutes\. The first answer wins, here or there\./);
   assert.doesNotMatch(out, /data-ask=/);
 });
@@ -672,4 +677,22 @@ test('D6: an engine_refused card shows the server’s sentence word for word, wi
   // Any code the card doesn't know still shows its message as is.
   const other = m.parseTicket(fx.ticket('failed', { error: { code: 'something_new', message: 'A sentence kwant wrote.' } }));
   assert.match(html(m.TicketCard, { ...N, ticket: other }), /A sentence kwant wrote\./);
+});
+
+// 18d (clock says day): read the next day, a ticket card's times say their day. "…at" sentences read
+// "on Nov 7 at 10:12 AM"; the landed footer reads "merged Nov 7, 11:20 AM".
+test('18d: ticket cards say the day when a time was not today', () => {
+  const now = Date.now;
+  Date.now = () => Date.parse('2026-11-08T09:00:00Z');
+  try {
+    const back = html(m.TicketCard, { ...N, ticket: T('taken_back'), onCloseCard: () => {} });
+    assert.match(back, / on Nov 7 at 10:12\u00a0AM\. Work paused; nothing was thrown away\./);
+    assert.doesNotMatch(back, / at Nov 7, /);
+    const landed = html(m.TicketCard, { ...N, ticket: T('landed'), brief: B(fx.BRIEF_ANSWERED) });
+    assert.match(landed, /merged Nov 7, 11:20\u00a0AM/);
+    const asked = html(m.TicketCard, { ...N, ticket: T('needs_answer'), brief: B(fx.BRIEF_ASKED), onAskPreview: async () => fx.ASK_PREVIEW });
+    assert.match(asked, /Asked Dana Park on Jira on Nov 7 at 10:04\u00a0AM\. You can still answer here\./);
+  } finally {
+    Date.now = now;
+  }
 });

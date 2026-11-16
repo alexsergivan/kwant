@@ -18,7 +18,7 @@
   <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb"><img src="https://img.shields.io/badge/Download-Linux_.deb-5c3fd0?style=for-the-badge&logo=linux&logoColor=white&labelColor=160c3a" alt="Download kwant for Linux (.deb)"></a>
   <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage"><img src="https://img.shields.io/badge/Download-Linux_AppImage-5c3fd0?style=for-the-badge&logo=linux&logoColor=white&labelColor=160c3a" alt="Download kwant for Linux (AppImage)"></a>
   <br>
-  <sub>macOS: one app for Apple silicon and Intel · Linux x86_64 (beta): .deb or AppImage · A server: <a href="#self-hosting-on-a-vps">binary or Docker</a> · <a href="https://github.com/alexsergivan/kwant/releases/latest">All downloads</a></sub>
+  <sub>macOS: one app for Apple silicon and Intel · Linux x86_64 (beta): .deb or AppImage · A server: <a href="#self-hosting-on-a-vps">binary or Docker</a> · Phone: <a href="#on-your-phone-iphone-and-android">add it to your Home Screen</a> · <a href="https://github.com/alexsergivan/kwant/releases/latest">All downloads</a></sub>
 </p>
 
 <p align="center">
@@ -61,6 +61,10 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.10.** Each Claude or Codex sign-in on **Apps & accounts** shows how much of its **5-hour and weekly limit** is left, with **Check now**. A job's last reply shows **Done** (or what checked it), and a reply that asks for your OK has **Approve** under it. The **Another app** search lists Composio apps and tool servers in one list, one row per app.
 - **New in 0.9.11.** **Fix it** and line notes on a PR card go to the bot you pick, like **Goes to Ana · lead of Edge**. **Settings › This space › Documents** adds and removes the files bots quote, and a quote's chip opens the passage on its page. Done cards check each part of your request, in your words, and say **Partly checked** when a part has no check.
 - **New in 0.9.12.** **Dev mode** is first in Space settings › General and says when it finds your team's repo, with a strip in #general that opens it.
+- **New in 0.9.13.** Bots open **hover-only menus**, save **downloads** in their own folder and **upload** a file to a page's file picker (under Ask, each upload asks you first). A **mic** between @ and Send turns what you say into text in the message box (with an OpenAI key), and nothing is sent until you press Send. Done cards list each part of your request, in your words, as **Passed**, **Not met** or **No check**. Empty team chats open on a **team home** with the members, the lead and three things to ask. **Double-checks** run on a routine's first run, after a change and then weekly, and show who is checking which task and why.
+- **New in 0.9.14.** **⋯ › Continue in a new chat from here** starts a new chat with the same bot and the conversation up to that message.
+- **New in 0.9.15.** **The perch**, a small island at the top of your screen, shows what needs you and what your bots are doing, and lets you allow a safe step once or ask a bot without opening the app.
+- **New in 0.9.16.** Your **answer to a bot's question** shows once, on its card, and phone chat headers name their buttons.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 
@@ -145,6 +149,16 @@ Updates arrive in the app, which checks each one's signature before it installs 
 
 Download `kwant_X.Y.Z_windows_x64_beta_setup.exe` from the [latest release](https://github.com/alexsergivan/kwant/releases/latest) (its SHA-256 is next to it) and run it. It's for 64-bit Windows, installs for your user only with no admin rights, and runs kwant on your PC with the same `.kwnt` data folder in your user folder as `kwnt serve`. The installer isn't code-signed yet, so the first time Windows SmartScreen warns about an unrecognized app: click **More info**, then **Run anyway**. In the beta, the app doesn't update itself (a new version is a new installer), and Grok, the VM and looking inside videos aren't available on Windows yet. In a folder OneDrive syncs with Files On-Demand, Dev mode asks before every push.
 
+### On your phone: iPhone and Android
+
+kwant has a phone app with no app store: you install it from the phone's browser, and it opens full screen from its own Home Screen icon. You need a kwant server your phone can reach over **https** (a [VPS or Docker](#self-hosting-on-a-vps) behind an HTTPS reverse proxy). The desktop apps run kwant at `127.0.0.1`, which a phone can't reach.
+
+1. **Open kwant on the phone.** On a computer signed in to your kwant at its https address, open **Settings → All spaces → Signed-in devices → Add a phone or browser** and scan the QR code with the phone's camera. It opens your kwant and signs the phone in once. Or open your server's address on the phone, tap **Sign in from another device**, and approve the code it shows from a signed-in device.
+2. **Add it to the Home Screen.** iPhone and iPad: in Safari, tap **Share → Add to Home Screen**. Android: in Chrome, tap **⋮ → Add to Home screen** (or **Install app**).
+3. **Open "kwant bots" from the Home Screen** and turn on **Settings → All spaces → Notifications → Notify me on this device**, so approvals and questions reach you with the app closed.
+
+It loads from your server, so it updates when the server does. Step by step, with fixes for when it won't install: [kwant on your phone](https://kwant.si/docs/phone).
+
 ### Run from a fresh clone
 
 ```bash
@@ -168,11 +182,11 @@ make build                 # web app + cargo build --release
 
 ### Install the web app
 
-In Chrome or Edge, click **Install app** in **Settings → All spaces** (the sidebar also offers it once, as a tip); in Safari on a Mac, **File → Add to Dock**; on a phone, kwant shows how. Browsers only install pages served over https or from `127.0.0.1`.
+In Chrome or Edge, click **Install app** in **Settings → All spaces** (the sidebar also offers it once, as a tip); in Safari on a Mac, **File → Add to Dock**; on a phone, see [On your phone](#on-your-phone-iphone-and-android). Browsers only install pages served over https or from `127.0.0.1`.
 
 To get notifications on your phone with kwant closed, install it (on an iPhone, add it to the Home Screen first) and turn on **Settings → All spaces → Notifications → Notify me on this device**. kwant then sends a Web Push notification for each kind you've ticked there, such as an approval or a question. It goes through your browser's push service (Google's for Chrome on Android, Apple's on an iPhone), encrypted so that service can't read it. Signing a browser out under **Signed-in devices** stops its notifications.
 
-More in the [quickstart](https://kwant.si/docs/quickstart) and [install](https://kwant.si/docs/install) docs.
+More in the [quickstart](https://kwant.si/docs/quickstart), [install](https://kwant.si/docs/install) and [phone](https://kwant.si/docs/phone) docs.
 
 ---
 
@@ -323,6 +337,7 @@ The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwa
   - [Parallel Universe](docs/parallel-universe.md)
   - [Dev mode](docs/dev-mode.md)
   - [Idea jar](docs/idea-jar.md)
+  - [Dictation](docs/dictation.md): `GET /api/spaces/:id/transcribe` says whether the mic button works in a space; `POST /api/spaces/:id/transcribe` turns a recording into text
 
 ---
 

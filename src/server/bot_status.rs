@@ -1055,6 +1055,7 @@ mod tests {
                 state: "running".into(),
                 since,
                 purpose: None,
+                audit: None,
             },
             signals: TurnSignals { engine: Some("Claude"), live_steps: Some(true), ..Default::default() },
             wait: None,

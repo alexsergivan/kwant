@@ -10,14 +10,10 @@ import { READ_LABEL, READ_STEPS, closedWhy, earnsMatches, onSite, openQuestions,
 import { clock } from '../../dev/logic';
 import { SiteOrigins, TicketBrief } from './TicketBrief';
 import { TicketQuestions } from './TicketQuestions';
+import { atClock, dateText, localClock } from '../../clock';
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-/** "Nov 5" in the viewer's zone, or null. */
-export const shortDay = (iso: string | null): string | null => {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : `${MONTHS[d.getMonth()]} ${d.getDate()}`;
-};
+/** "Nov 5" / "5 Nov" in the viewer's zone and date order, or null. */
+export const shortDay = (iso: string | null): string | null => dateText(iso);
 
 const initials = (name: string) =>
   name
@@ -384,8 +380,8 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
           : t.handed_over_by === 'assignee'
             ? 'Assigned it to someone else'
             : 'It left the ticket search';
-      const at = clock(t.taken_back_at);
-      line = `${how}${at ? ` at ${at}` : ''}. Work paused; nothing was thrown away. It carries on if the ticket comes back.`;
+      const at = atClock(t.taken_back_at);
+      line = `${how}${at ? ` ${at}` : ''}. Work paused; nothing was thrown away. It carries on if the ticket comes back.`;
       acts = (
         <>
           <Btn k={t.key} onClick={props.onCloseCard}>Close card</Btn>
@@ -566,7 +562,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
 
 /** Landed's footer (item 7): "#61 merged 11:20 · Brief · Built by Ann and Ben · reviewed by Cody". */
 const LandedFoot: React.FC<{ w: ReturnType<typeof workView>; brief: React.ReactNode }> = ({ w, brief }) => {
-  const at = clock(w.mergedAt);
+  const at = localClock(w.mergedAt);
   const builders = w.builders.length ? w.builders : w.lead ? [w.lead] : [];
   const bits: React.ReactNode[] = [];
   if (w.pr)
