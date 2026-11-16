@@ -351,7 +351,9 @@
     @apply inline-flex items-center justify-center gap-1.5 rounded-xl bg-accent-gradient px-3.5 py-1.5 text-body font-semibold text-white shadow-card;
     transition: transform 140ms var(--kw-ease), filter 140ms var(--kw-ease), box-shadow 140ms var(--kw-ease);
   }
-  .kw-btn-primary:hover:not(:disabled) { filter: brightness(1.12); box-shadow: theme('boxShadow.glow'); }
+  /* Hover deepens the gradient (sky-600 to sky-700) instead of brightening it: brightness(1.12) put white text at
+     3.66:1 on the light stop. Now 5.1:1 or more on hover (26g). */
+  .kw-btn-primary:hover:not(:disabled) { background-image: linear-gradient(135deg, theme('colors.sky.600') 0%, theme('colors.sky.700') 100%); box-shadow: theme('boxShadow.glow'); }
   .kw-btn-primary:active:not(:disabled) { transform: scale(0.97); }
   .kw-btn-primary:disabled { @apply cursor-not-allowed; background-image: none; background-color: var(--kw-surface-overlay); color: theme('colors.zinc.400'); box-shadow: none; }
   .kw-btn-ghost {
