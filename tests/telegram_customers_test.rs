@@ -316,6 +316,7 @@ async fn a_tool_call_waits_for_the_person_even_with_approvals_off() {
 
 #[tokio::test]
 async fn kwants_tools_refuse_a_customer_turns_call_nobody_allowed() {
+    use kwnt::db::approval_modes::CUSTOMER_REFUSED;
     use kwnt::server::mcp_runtime::EVERY_CALL_REFUSED;
     let env = setup().await;
     let tg = mock_telegram::shared();
@@ -334,7 +335,37 @@ async fn kwants_tools_refuse_a_customer_turns_call_nobody_allowed() {
     let reply = tg.wait_send(&bot, |c| c.text().contains("answer tool41")).await;
     assert_eq!(reply.chat(), ANN.id);
     assert!(reply.text().contains(&format!("TOOL[{EVERY_CALL_REFUSED}]")) && reply.text().contains("TOOLERROR"), "refused: {}", reply.text());
-    assert!(all(&env).await.is_empty(), "the call never reached the approver, so it ran nowhere");
+    // 16d: the owner sees what the customer's message tried: one closed "refused" entry, no card
+    let list = all(&env).await;
+    assert_eq!(list.len(), 1, "one trace for one refused call: {list:?}");
+    let refused = &list[0];
+    assert_eq!(refused.status, CUSTOMER_REFUSED);
+    assert!(refused.tool_name.contains("memory_search"), "{}", refused.tool_name);
+    let details: Value = serde_json::from_str(&refused.parameters).unwrap();
+    assert_eq!(details["customer_chat"], true, "{details}");
+    assert_eq!(details["refused"], "nobody_allowed", "{details}");
+    assert_eq!(details["tool"], "memory_search", "{details}");
+    assert_eq!(details["arguments"]["query"], "delivery times", "{details}");
+    for open in ["pending", "waiting"] {
+        assert!(env.state.db.list_approvals(&SpaceId::default_space(), Some(open), Some(&env.a)).await.unwrap().is_empty(), "no {open} card");
+    }
+    assert!(!env.state.db.turn_has_waiting_approval(&refused.turn_id).await.unwrap());
+    // The list route shows it, arguments masked as on a card
+    let (s, v) = call(&env.app, "GET", &format!("/api/approvals?status={CUSTOMER_REFUSED}&kwant_id={}", env.a), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!(rows[0]["status"], CUSTOMER_REFUSED);
+    assert_eq!(rows[0]["details"]["customer_chat"], true, "{v}");
+    // 22a: ... linked to Ann's customer thread, where it happened
+    let ann_thread = chat_row(&env, &ANN).await.thread_id;
+    assert_eq!(rows[0]["link"], json!({"thread_id": ann_thread, "channel_id": null, "direct_kwant_id": null}), "{v}");
+    // Nothing to answer: Allow on it never runs or resumes anything
+    let (s, v) = call(&env.app, "POST", &format!("/api/approvals/{}/resolve", refused.id), Some(json!({"decision": "allow_once"}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(env.state.db.get_approval(&refused.id).await.unwrap().unwrap().status, CUSTOMER_REFUSED, "it stays closed");
+    // The customer was sent nothing besides the bot's reply
+    assert_eq!(tg.sent(&bot).iter().filter(|c| c.chat() == ANN.id).count(), 1, "{:?}", tg.sent(&bot));
 
     // Asked first and allowed: one card, and the allowed call runs once
     let marker = call_tool_marker("memory_search", json!({"query": "return policy"}));
@@ -358,7 +389,11 @@ async fn kwants_tools_refuse_a_customer_turns_call_nobody_allowed() {
     let reply = tg.wait_send(&bot, |c| c.text().contains("answer tool42")).await;
     assert_eq!(reply.chat(), BEN.id);
     assert!(reply.text().contains("TOOL[") && !reply.text().contains(EVERY_CALL_REFUSED) && !reply.text().contains("TOOLERROR"), "ran: {}", reply.text());
-    assert_eq!(all(&env).await.len(), 1, "one card for one call");
+    let list = all(&env).await;
+    let cards: Vec<_> = list.iter().filter(|a| a.status != CUSTOMER_REFUSED).collect();
+    assert_eq!(cards.len(), 1, "one card for one call: {list:?}");
+    assert_eq!(cards[0].id, card.id);
+    assert_eq!(list.iter().filter(|a| a.status == CUSTOMER_REFUSED).count(), 1, "the allowed call adds no refused entry: {list:?}");
 }
 
 /// B1: claude's own allow rules (here for Bash and a mail server the bot has) never run a tool in

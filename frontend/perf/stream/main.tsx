@@ -30,6 +30,9 @@ const prose = (i: number) =>
   `**Step ${i}.** I read the notes and the two files you sent. Three things stand out:\n\n1. The *rates cache* is read before it is filled.\n2. The receipts list is sorted twice.\n3. The period ends one day early, see [the spec](https://example.com/spec).\n\n> Keep the old order for exports.\n\nI changed the first two and left the third for you to decide.`;
 const list = (i: number) =>
   `Checked ${i} items:\n\n- [x] invoices match\n- [x] totals add up\n- [ ] the March receipt is missing\n\nEverything else is in place.`;
+// Streamed only (15a): a table, so the live reply carries a list, a table and a code block.
+const table = (i: number) =>
+  `Totals for run ${i}:\n\n| Month | Invoices | Total |\n|---|---:|---:|\n| January | 14 | 2,310.00 |\n| February | 11 | 1,980.50 |\n| March | 9 | 1,402.75 |\n\nMarch is short one receipt.`;
 const messages: unknown[] = [];
 for (let i = 0; i < N; i++) {
   if (i % 2 === 0) {
@@ -80,7 +83,7 @@ const emit = (ev: Record<string, unknown>) => streams.forEach((s) => s.readyStat
 // ---- the reply that streams: ~2,000 tokens of mixed markdown, cut into 1-6 character tokens ----
 const replyText = (() => {
   let s = '';
-  for (let i = 0; s.length < 9000; i++) s += `${[prose, code, list][i % 3](1000 + i)}\n\n`;
+  for (let i = 0; s.length < 9000; i++) s += `${[prose, code, list, table][i % 4](1000 + i)}\n\n`;
   return s;
 })();
 const tokens: string[] = [];
@@ -92,18 +95,62 @@ for (let i = 0, k = 0; i < replyText.length; k++) {
 
 declare global {
   interface Window {
-    __harness: { ready: () => boolean; stream: (count: number, perSecond: number) => Promise<{ sent: number; ms: number }>; tokens: number; streamed: () => string };
+    __harness: {
+      ready: () => boolean;
+      stream: (count: number, perSecond: number) => Promise<{ sent: number; ms: number }>;
+      tokens: number;
+      streamed: () => string;
+      finish: () => void;
+      tools: () => Promise<number>;
+    };
   }
 }
 let streamed = '';
+// 18f: ?steps=4 gives the turn that many finished tool steps before its words (`tools()`), and ?page=1 makes
+// the first one a browser visit, so the browsed chip shows. The landed reply keeps them in meta.activity.
+const STEPS = Number(q.get('steps') ?? 0);
+const PAGE = q.get('page') === '1';
+const turnSteps = Array.from({ length: STEPS }, (_, i) => ({
+  id: `st${i}`,
+  kind: 'tool',
+  status: 'ok',
+  title: PAGE && i === 0 ? 'Opening example.org' : `Reading \`src/file${i}.ts\``,
+  tool: PAGE && i === 0 ? 'browser_open' : 'read_file',
+  detail: PAGE && i === 0 ? 'https://example.org/pricing' : `src/file${i}.ts`,
+  page_title: PAGE && i === 0 ? 'Pricing' : undefined,
+  started_at: at(N + i),
+  ended_at: at(N + i),
+  duration_ms: 1200 + i * 300,
+}));
+let started = false;
+const startTurn = () => {
+  if (started) return;
+  started = true;
+  emit({ type: 'turn_started', kwant_id: 'k1', context_id: CTX, data: { turn_id: 't1', kwant_id: 'k1', context_id: CTX } });
+};
 window.__harness = {
   tokens: tokens.length,
   ready: () => document.querySelectorAll('[data-message-id]').length >= Math.min(N, 20),
   streamed: () => streamed,
+  // The reply lands (15a shots): the saved message joins the history and the turn completes.
+  finish: () => {
+    const meta = STEPS ? { activity: { steps: turnSteps, dropped: 0 } } : undefined;
+    messages.push({ id: 'm-final', sender_role: 'kwant', sender_id: 'Ada', text: streamed, results: null, channel_id: CTX, created_at: at(N), tokens_used: 400, ...(meta ? { meta } : {}) });
+    emit({ type: 'TurnComplete', kwant_id: 'k1', context_id: CTX, turn_id: 't1', data: { tokens: 400 } });
+  },
+  // The turn's ?steps= tool steps, one per 50 ms, before any words (18f). Resolves to how many were sent.
+  tools: async () => {
+    startTurn();
+    for (const step of turnSteps) {
+      emit({ type: 'activity', kwant_id: 'k1', context_id: CTX, turn_id: 't1', data: { step } });
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return turnSteps.length;
+  },
   // Sends `count` tokens at `perSecond`, on a timer, the way the server's events arrive.
   stream: (count, perSecond) =>
     new Promise((done) => {
-      emit({ type: 'turn_started', kwant_id: 'k1', context_id: CTX, data: { turn_id: 't1', kwant_id: 'k1', context_id: CTX } });
+      startTurn();
       const t0 = performance.now();
       let sent = 0;
       const tick = () => {

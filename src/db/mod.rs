@@ -30,6 +30,7 @@ pub mod work_ahead;
 pub mod api_context;
 pub mod usage;
 pub mod missions;
+pub mod event_kinds;
 pub mod mission_graph;
 pub mod checkpoints;
 pub mod autofix;
@@ -700,6 +701,12 @@ impl Database {
             .fetch_optional(&self.pool)
             .await?;
         Ok(row)
+    }
+
+    /// Rewrites a card's details (its JSON `parameters`), e.g. to record how it was answered.
+    pub async fn update_approval_parameters(&self, id: &str, parameters: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE approvals SET parameters = ? WHERE id = ?").bind(parameters).bind(id).execute(&self.pool).await?;
+        Ok(())
     }
 
     pub async fn update_approval_status(&self, id: &str, status: &str) -> Result<(), DbError> {

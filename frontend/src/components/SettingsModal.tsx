@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { PerchSettingsCard } from './PlaceChip';
 import { AuditorSettings, DAILY_CAPS, SETTING_HINT as AUDITOR_HINT, isAuditorModelError, MODEL_ERROR_TEXT as AUDITOR_MODEL_ERROR, parseAuditorSettings } from '../auditor';
 import { AuditorModelSetting } from './AuditorModelSetting';
 import { Key, X, Settings, Check, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare, BellRing } from 'lucide-react';
@@ -673,6 +674,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
         <VersionCard />
         <StarAskSettingsLink />
+        <PerchSettingsCard />
 
         {computer.state.settings && (
           <div data-computer-card tabIndex={-1} className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3 focus:outline-none">

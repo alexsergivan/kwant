@@ -48,12 +48,16 @@ test('Live now: the row fades while it can scroll, not at the end, and not when 
 
   size(row, { scrollWidth: 1000, clientWidth: 390, scrollLeft: 0 });
   assert.equal(row.dataset.atEnd, 'false', 'more to the right: fade');
+  assert.equal(row.dataset.atStart, 'true', 'at the start: no left fade');
   size(row, { scrollWidth: 1000, clientWidth: 390, scrollLeft: 300 });
   assert.equal(row.dataset.atEnd, 'false', 'part way: still fades');
+  assert.equal(row.dataset.atStart, 'false', '14c: part way, the left edge fades too');
   size(row, { scrollWidth: 1000, clientWidth: 390, scrollLeft: 610 });
   assert.equal(row.dataset.atEnd, 'true', 'scrolled to the end: no fade');
+  assert.equal(row.dataset.atStart, 'false', 'at the end: only the left edge fades');
   size(row, { scrollWidth: 390, clientWidth: 390, scrollLeft: 0 });
   assert.equal(row.dataset.atEnd, 'true', 'everything fits: no fade');
+  assert.equal(row.dataset.atStart, 'true', 'everything fits: no fade');
   root.unmount();
 });
 
@@ -67,8 +71,12 @@ test('Live now: no row (and so no fade) when nobody is working', async () => {
   root.unmount();
 });
 
-test('the fade itself: a 24 px trailing mask on phones, only while data-at-end is false', () => {
+test('the fade itself (14c): 32 px on each side that can still scroll, phones only', () => {
   const css = readFileSync(new URL('../src/styles/modern.css', import.meta.url), 'utf8');
   const phone = css.slice(css.indexOf('@media (max-width: 767px)'));
-  assert.match(phone, /\.kw-scroll-row\[data-at-end='false'\]\s*\{[^}]*mask-image: linear-gradient\(to right, #000 calc\(100% - 24px\), transparent\)/);
+  assert.match(phone, /\.kw-scroll-row\[data-at-start='false'\]\s*\{\s*--kw-fade-l: 32px;/);
+  assert.match(phone, /\.kw-scroll-row\[data-at-end='false'\]\s*\{\s*--kw-fade-r: 32px;/);
+  assert.match(phone, /\.kw-scroll-row:is\(\[data-at-start='false'\], \[data-at-end='false'\]\)\s*\{[^}]*mask-image: linear-gradient\(to right, transparent, #000 var\(--kw-fade-l\), #000 calc\(100% - var\(--kw-fade-r\)\), transparent\)/);
+  // Nothing masks a row that fits (both sides "true")
+  assert.doesNotMatch(phone.slice(0, phone.indexOf(':is(')), /\.kw-scroll-row \{[^}]*mask-image/);
 });

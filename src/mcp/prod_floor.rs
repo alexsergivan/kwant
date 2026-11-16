@@ -46,6 +46,19 @@ impl FloorKind {
     }
 }
 
+/// Whether a [`FloorKind::DeployMigration`] step is known to change the database (`yes`: it runs
+/// migrations, or the caller knows the code does) or only counts as one because kwant can't tell
+/// (`guess`). Only a guess may be allowed without a backup, and only by the person (22f).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Migration {
+    Yes,
+    Guess,
+}
+
+/// The Database row of a deploy kwant can't tell about.
+const GUESS_ROW: &str = "Might change it. The app can't tell from the command.";
+
 /// Why a call hits the floor, with the blast-radius rows the card shows (only what's known).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Floor {
@@ -58,11 +71,17 @@ pub struct Floor {
     /// If it fails. Serialised as `[label, value]` pairs.
     pub blast: Vec<(String, String)>,
     pub needs_backup: bool,
+    /// Only on a [`FloorKind::DeployMigration`]: whether the migration is known or a guess.
+    /// Serialised as `"migration": "yes" | "guess"`, absent on every other kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub migration: Option<Migration>,
 }
 
 impl Floor {
+    /// A migration deploy made here is a known one; only [`DevCtx::deploy`] makes a guess.
     fn new(kind: FloorKind, why: impl Into<String>) -> Self {
-        Floor { kind, why: why.into(), blast: Vec::new(), needs_backup: kind.needs_backup() }
+        let migration = (kind == FloorKind::DeployMigration).then_some(Migration::Yes);
+        Floor { kind, why: why.into(), blast: Vec::new(), needs_backup: kind.needs_backup(), migration }
     }
 
     fn row(mut self, label: &str, value: impl Into<String>) -> Self {
@@ -74,14 +93,23 @@ impl Floor {
     }
 
     /// The stronger of two findings; rows of both are kept.
+    /// A migration deploy stays a guess only when every migration in it is one: a known one wins,
+    /// with its own Database row.
     fn merge(self, other: Floor) -> Floor {
         let (mut keep, extra) = if other.kind.rank() > self.kind.rank() { (other, self) } else { (self, other) };
+        if keep.migration == Some(Migration::Guess) && extra.migration == Some(Migration::Yes) {
+            keep.migration = Some(Migration::Yes);
+            keep.blast.retain(|(l, _)| l != "Database");
+        }
         for (l, v) in extra.blast {
             if !keep.blast.iter().any(|(k, _)| *k == l) {
                 keep.blast.push((l, v));
             }
         }
         keep.needs_backup = keep.kind.needs_backup();
+        if keep.kind != FloorKind::DeployMigration {
+            keep.migration = None;
+        }
         keep
     }
 }
@@ -122,11 +150,11 @@ impl DevCtx {
         let migration = !self.no_data() && self.migration != Some(false);
         if migration {
             let known = self.migration == Some(true);
-            Floor::new(FloorKind::DeployMigration, why).row(
-                "Migration",
-                if known { "This deploy changes the database." } else { "kwant can't tell whether this deploy changes the database, so it counts as one." },
-            )
-            .row("If it fails", "The app goes back on its own. The database goes back only from a backup.")
+            let mut f = Floor::new(FloorKind::DeployMigration, why).row("Database", if known { "This deploy changes it." } else { GUESS_ROW });
+            if !known {
+                f.migration = Some(Migration::Guess);
+            }
+            f.row("If it fails", "The app goes back on its own. The database goes back only from a backup.")
         } else {
             let f = Floor::new(FloorKind::Deploy, why);
             if self.no_data() {
@@ -513,6 +541,9 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize, over_ssh: bool) ->
         }
     }
     let mut ssh_host: Option<String> = None;
+    // `R=root@1.2.3.4; ssh $R …`: plain assignments made in this command, so Where can name the
+    // server (22f). `None` marks a name whose value can't be told.
+    let mut vars: Vec<(String, Option<String>)> = Vec::new();
     // A `git checkout`/`git switch` earlier in the chain changes what a bare `git push` pushes
     let mut cur = ctx.clone();
     // `ssh host 'cd /srv && docker compose up -d'`: the quoted remote command spans segments;
@@ -534,15 +565,26 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize, over_ssh: bool) ->
         // Env assignments, and wrappers that run the rest of the line (with their own flags)
         let mut i = 0;
         let mut env_prod = false;
+        let mut assigned: Vec<&str> = Vec::new();
         while i < words.len() {
             let w = words[i].as_str();
             if w.contains('=') && !w.starts_with('-') {
                 env_prod |= prod_env(w);
+                assigned.push(w);
                 i += 1;
             } else if let Some(n) = wrapper_len(w.trim_start_matches('\\'), &words[i + 1..]) {
                 i = (i + n).min(words.len());
             } else {
                 break;
+            }
+        }
+        // A bare `R=…` (or `export R=…`) sets R for the rest of this command; `R=… cmd` only for
+        // cmd. Assignments in the remote half of `ssh host '…'` are the server's, not ours.
+        let export = words.get(i).is_some_and(|w| w == "export" || w == "declare" || w == "local" || w == "readonly");
+        if !remote && (i == words.len() || export) {
+            let more = if export { &words[i + 1..] } else { &[][..] };
+            for w in assigned.iter().copied().chain(more.iter().map(String::as_str).filter(|w| !w.starts_with('-'))) {
+                set_var(&mut vars, w);
             }
         }
         let Some((program, args)) = words[i..].split_first() else { continue };
@@ -555,6 +597,7 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize, over_ssh: bool) ->
         match program.as_str() {
             "ssh" => {
                 if let Some((host, rest)) = ssh_target(&a) {
+                    let host = where_host(&host, &vars);
                     ssh_host = Some(host.clone());
                     ssh_quote = ['\'', '"'].into_iter().find(|q| segment.matches(*q).count() % 2 == 1);
                     if !rest.is_empty() {
@@ -720,7 +763,64 @@ fn remote_url(v: &str) -> bool {
     }
 }
 
-/// `ssh [options] host [command…]` → host and command words.
+/// Records `NAME=value` in `vars` (a later one wins). A value that names a variable kwant can't
+/// tell, or runs a command, makes the name unknown.
+fn set_var(vars: &mut Vec<(String, Option<String>)>, assign: &str) {
+    let Some((name, value)) = assign.split_once('=') else { return };
+    if !var_name(name) {
+        return;
+    }
+    let value = value.trim_matches(|c| c == '\'' || c == '"');
+    let known = if value.contains("$(") || value.contains('`') { None } else { expand(value, vars) };
+    vars.retain(|(n, _)| n != name);
+    vars.push((name.to_string(), known));
+}
+
+fn var_name(name: &str) -> bool {
+    let mut cs = name.chars();
+    cs.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// `text` with `$NAME` and `${NAME}` replaced from `vars`, or `None` when one can't be told.
+fn expand(text: &str, vars: &[(String, Option<String>)]) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('$') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let (name, used) = match after.strip_prefix('{') {
+            Some(b) => {
+                let end = b.find('}')?;
+                (&b[..end], end + 2)
+            }
+            None => {
+                let end = after.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(after.len());
+                (&after[..end], end)
+            }
+        };
+        if !var_name(name) {
+            return None;
+        }
+        out.push_str(vars.iter().rev().find(|(n, _)| n == name)?.1.as_deref()?);
+        rest = &after[used..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// The ssh target as Where shows it: `$R` resolved from the command's own `R=…`, or, when it
+/// can't be, a sentence that says so (never a bare `$R`).
+fn where_host(host: &str, vars: &[(String, Option<String>)]) -> String {
+    if !host.contains('$') {
+        return host.to_string();
+    }
+    match expand(host, vars) {
+        Some(h) if !h.trim().is_empty() => h,
+        _ => format!("a server named by {host} in the command"),
+    }
+}
+
+/// `ssh [options] [user@]host [command…]` → the target as written and the command words.
 fn ssh_target<'a>(args: &[&'a str]) -> Option<(String, Vec<&'a str>)> {
     let mut i = 0;
     while i < args.len() {
@@ -731,8 +831,7 @@ fn ssh_target<'a>(args: &[&'a str]) -> Option<(String, Vec<&'a str>)> {
             i += if takes { 2 } else { 1 };
             continue;
         }
-        let host = a.rsplit('@').next().unwrap_or(a).to_string();
-        return Some((host, args[i + 1..].to_vec()));
+        return Some((a.to_string(), args[i + 1..].to_vec()));
     }
     None
 }
@@ -880,7 +979,7 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool, over_
         "redis-cli" => a.iter().any(|x| x.eq_ignore_ascii_case("flushall") || x.eq_ignore_ascii_case("flushdb")).then(|| destroy("redis-cli empties the store".into())),
         // Migrations run against production
         _ if migrate_cmd(program, a) => (env_prod || a.iter().any(|x| is_prod_flag(x) || prod_env(x)) || flag_value(a, &["--settings"]).is_some_and(prod_settings))
-            .then(|| Floor::new(FloorKind::DeployMigration, format!("{program} migrates a production database")).row("Migration", "Runs database migrations on production.")),
+            .then(|| Floor::new(FloorKind::DeployMigration, format!("{program} migrates a production database")).row("Database", "This command changes it on production.")),
         _ => None,
     }
 }
@@ -1333,7 +1432,7 @@ mod tests {
         assert!(!f.needs_backup);
         let unknown = shell_reason("fly deploy", &ctx()).unwrap();
         assert!(unknown.needs_backup);
-        assert!(unknown.blast.iter().any(|(l, v)| l == "Migration" && v.contains("can't tell")));
+        assert!(unknown.blast.iter().any(|(l, v)| l == "Database" && v.contains("can't tell")));
     }
 
     #[test]
@@ -1398,7 +1497,74 @@ mod tests {
         assert!(f.blast.iter().any(|(l, v)| l == "Where" && v == "Fly app demo-app"));
         assert!(f.blast.iter().any(|(l, _)| l == "What changes"));
         let f = shell_reason("ssh deploy@kwant.example.com docker compose up -d", &ctx()).unwrap();
-        assert!(f.blast.iter().any(|(l, v)| l == "Where" && v == "kwant.example.com"), "{:?}", f.blast);
+        assert!(f.blast.iter().any(|(l, v)| l == "Where" && v == "deploy@kwant.example.com"), "{:?}", f.blast);
+    }
+
+    /// Oleks's deploy on Nov 15 (22f), verbatim from his card: `ssh $R` names
+    /// `R=root@164.90.207.66` set earlier in the same command.
+    const OLEKS_DEPLOY: &str = r#"set -e; R=root@164.90.207.66; D=/opt/tradebot; timeout 120 ssh -o BatchMode=yes -o ConnectTimeout=15 $R "cd $D && cp -p catalyst-linux [redacted] && sha256sum [redacted] timeout 300 scp -o BatchMode=yes /tmp/builder-deploy/catalyst-linux $R:$D/catalyst-linux.new; timeout 120 ssh -o BatchMode=yes -o ConnectTimeout=15 $R "cd $D && chmod +x catalyst-linux.new && sha256sum catalyst-linux.new && mv catalyst-linux.new catalyst-linux && sha256sum catalyst-linux && docker compose up -d --no-deps --force-recreate catalyst 2>&1 && sleep 20 && docker compose ps catalyst && echo '--- env flag names:' && docker exec tradebot-catalyst-1 env | grep -c '^TREND_MAKER_FIRST=' || true && docker compose logs --tail 25 catalyst | cut -c1-260"; echo "exit=$?""#;
+
+    fn where_of(f: &Floor) -> Option<&str> {
+        f.blast.iter().find(|(l, _)| l == "Where").map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn where_names_the_server_a_variable_holds() {
+        let f = shell_reason(OLEKS_DEPLOY, &ctx()).expect("a deploy");
+        assert_eq!(f.kind, FloorKind::DeployMigration);
+        assert_eq!(where_of(&f), Some("root@164.90.207.66"), "{:?}", f.blast);
+        assert_eq!(f.migration, Some(Migration::Guess));
+        for (cmd, want) in [
+            ("R=root@1.2.3.4; ssh $R 'docker compose up -d'", "root@1.2.3.4"),
+            ("R=root@1.2.3.4 && ssh \"$R\" 'docker compose up -d'", "root@1.2.3.4"),
+            ("R=root@1.2.3.4; ssh ${R} 'docker compose up -d'", "root@1.2.3.4"),
+            ("export R=\"deploy@app.example.com\"; ssh -p 2222 $R docker compose up -d", "deploy@app.example.com"),
+            ("H=1.2.3.4; R=root@$H; ssh $R docker compose up -d", "root@1.2.3.4"),
+            ("U=deploy; ssh $U@app.example.com docker compose up -d", "deploy@app.example.com"),
+            // A later assignment wins
+            ("R=a.example.com; R=b.example.com; ssh $R docker compose up -d", "b.example.com"),
+            // Never resolved: set elsewhere, set only for one command, or by a command's output
+            ("ssh $R 'docker compose up -d'", "a server named by $R in the command"),
+            ("R=x.example.com ssh $R docker compose up -d", "a server named by $R in the command"),
+            ("R=$(cat host.txt); ssh $R docker compose up -d", "a server named by $R in the command"),
+            ("R=$HOST; ssh $R docker compose up -d", "a server named by $R in the command"),
+            // An assignment on the server doesn't name it
+            ("ssh $R 'R=evil.example.com; docker compose up -d'", "a server named by $R in the command"),
+            ("ssh deploy@app.example.com docker compose up -d", "deploy@app.example.com"),
+        ] {
+            let f = shell_reason(cmd, &ctx()).unwrap_or_else(|| panic!("no floor for {cmd}"));
+            assert_eq!(where_of(&f), Some(want), "{cmd}: {:?}", f.blast);
+        }
+    }
+
+    #[test]
+    fn a_migration_says_whether_it_is_known_or_a_guess() {
+        let c = ctx();
+        let json = |cmd: &str, c: &DevCtx| serde_json::to_value(shell_reason(cmd, c).unwrap()).unwrap();
+        // kwant can't tell: a guess
+        let v = json("docker compose up -d", &c);
+        assert_eq!((v["kind"].as_str(), v["migration"].as_str()), (Some("deploy_migration"), Some("guess")));
+        // Known: the caller knows the code changes the database, or the command runs migrations
+        let v = json("docker compose up -d", &DevCtx { migration: Some(true), ..ctx() });
+        assert_eq!(v["migration"], "yes");
+        let v = json("RAILS_ENV=production bin/rails db:migrate", &c);
+        assert_eq!((v["kind"].as_str(), v["migration"].as_str()), (Some("deploy_migration"), Some("yes")), "{v}");
+        // A deploy plus a known migration is a known one, with the known row
+        let f = shell_reason("docker compose up -d && RAILS_ENV=production bin/rails db:migrate", &c).unwrap();
+        assert_eq!(f.migration, Some(Migration::Yes));
+        assert!(!f.blast.iter().any(|(_, v)| v == GUESS_ROW), "{:?}", f.blast);
+        let f = shell_reason("RAILS_ENV=production bin/rails db:migrate && docker compose up -d", &c).unwrap();
+        assert_eq!(f.migration, Some(Migration::Yes));
+        // No migration field on any other kind, even when a guessed deploy is in the command
+        for cmd in ["rm -rf /srv/app/data", "docker compose up -d && rm -rf /srv/app/data", "ssh $R 'docker compose up -d; rm -rf /srv/app/data'", "git push origin main"] {
+            let v = json(cmd, &c);
+            assert_ne!(v["kind"], "deploy_migration", "{cmd}");
+            assert!(v.get("migration").is_none(), "{cmd}: {v}");
+        }
+        // No data, or known not to change it: a plain deploy
+        let v = json("docker compose up -d", &DevCtx { migration: Some(false), ..ctx() });
+        assert_eq!(v["kind"], "deploy");
+        assert!(v.get("migration").is_none());
     }
 
     #[test]

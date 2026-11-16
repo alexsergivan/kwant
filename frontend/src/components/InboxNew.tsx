@@ -32,7 +32,7 @@ import { knownChecked, listsCriteria } from '../doneCheck';
 import { CheckMarker, DoneCheck } from './DoneCheck';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
-import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
+import { ApprovalDecision, AwayItem, awayApi, failureNotice, resolveFromList, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
 import { InboxGroup, InboxItem, ReviewItem, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
 import {
   BatchRow,
@@ -212,7 +212,7 @@ interface RowProps {
   busy: string | null;
   onPick: (i: InboxItem) => void;
   onAnswer: (i: InboxItem, choice: number) => void;
-  onResolve: (i: InboxItem, d: ApprovalDecision) => void;
+  onResolve: (i: InboxItem, d: ApprovalDecision, withoutBackup?: boolean) => void;
   /** 0.9.5: Retry on a stopped item whose approval expired unanswered. */
   onRetry?: (i: InboxItem, approvalId: string) => void;
   /** A routine's review task in Done: its run's first line, as the run's own row would show it. */
@@ -354,7 +354,7 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
 
       {item.kind === 'approval' && (
         <div className="px-3 pb-1 pl-[54px] [&>div]:my-0 [&>div]:mb-2">
-          <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} onResolve={(_, d) => onResolve(item, d)} />
+          <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} onResolve={(_, d, opts) => onResolve(item, d as ApprovalDecision, opts?.withoutBackup)} />
         </div>
       )}
 
@@ -619,7 +619,9 @@ const ItemPane: React.FC<{
   placeName?: (channelId: string | null) => string | null;
   api?: DoneApi;
   initial?: DoneDetailData;
-}> = ({ item, runItem, entry, onDone, onHeldResolved, onOpenItemChat, onOpenMessage, onEditRoutine, placeName, api, initial }) => {
+  /** The Inbox's clock, so the meta line says the day for an item from another day. */
+  now?: number;
+}> = ({ item, runItem, entry, onDone, onHeldResolved, onOpenItemChat, onOpenMessage, onEditRoutine, placeName, api, initial, now }) => {
   const phone = usePhoneLayout();
   const d = useDoneDetail(item, runItem, api ?? defaultDoneApi, initial);
   const doneLayout = isDoneGroup(item.group) && (!isReview(item) || isRoutineItem(item));
@@ -635,7 +637,7 @@ const ItemPane: React.FC<{
   const place = placeId ? (placeName?.(placeId) ?? null) : null;
   const routineId = d.routine?.id;
   const edit = onEditRoutine && routineId ? () => onEditRoutine(routineId) : undefined;
-  if (!isReview(item)) return <DoneItemView item={item} d={d} place={place} phone={phone} onOpenChat={openChat} onEditRoutine={onEditRoutine} />;
+  if (!isReview(item)) return <DoneItemView item={item} d={d} place={place} phone={phone} now={now} onOpenChat={openChat} onEditRoutine={onEditRoutine} />;
   return (
     <ReviewItemView
       item={item}
@@ -644,7 +646,7 @@ const ItemPane: React.FC<{
       onHeldResolved={onHeldResolved}
       done={{
         title: doneTitle(item),
-        meta: metaLine(item, d.routine, d.run),
+        meta: metaLine(item, d.routine, d.run, now),
         chips: <DoneChipsAndCheck item={item} d={d} onAddCheck={edit} />,
         body: <DoneSections item={item} d={d} place={place} onOpenChat={openChat} onEditRoutine={onEditRoutine} />,
         changed: changedState(item, d.message),
@@ -811,8 +813,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
       inboxStore.patch({ busy: null, notice: { text: `${done} “${title}”`, tone: 'ok' } });
     } catch (err) {
-      const status = err instanceof AwayError ? err.status : 0;
-      const n = actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', title);
+      const n = failureNotice(err, title);
       inboxStore.patch({ busy: null, notice: { text: n.text, tone: n.error ? 'error' : 'info' } });
     }
     const next = await loadInbox();
@@ -821,19 +822,10 @@ export const InboxNew: React.FC<InboxNewProps> = ({
 
   const onAnswer = (item: InboxItem, choice: number) => act(item, () => awayApi.answer(item.id, choice));
   const onRetry = (item: InboxItem, approvalId: string) => act(item, () => awayApi.retryApproval(approvalId));
-  const onResolve = (item: InboxItem, decision: ApprovalDecision) =>
+  const onResolve = (item: InboxItem, decision: ApprovalDecision, withoutBackup?: boolean) =>
     act(
       item,
-      async () => {
-        try {
-          const r = await awayApi.resolve(item.id, decision);
-          onApprovalResolved?.(item.id);
-          return r;
-        } catch (err) {
-          if (err instanceof AwayError && (err.status === 409 || err.status === 404)) onApprovalResolved?.(item.id);
-          throw err;
-        }
-      },
+      () => resolveFromList(item.id, onApprovalResolved, () => awayApi.resolve(item.id, decision, withoutBackup)),
       decision === 'deny',
     );
 
@@ -1031,6 +1023,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
         placeName={placeName}
         api={doneApi}
         initial={doneDetails?.[selItem.id]}
+        now={now}
       />
     ) : empty ? (
       <div className="h-full grid place-items-center text-center" data-pane-empty>

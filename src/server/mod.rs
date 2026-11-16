@@ -50,6 +50,7 @@ pub mod mcp_suggest;
 pub mod page_source;
 pub mod tool_failures;
 pub mod tool_notes;
+pub mod openai_key;
 pub mod transcribe;
 pub mod connection_suggest;
 pub mod bot_actions;
@@ -172,6 +173,8 @@ pub struct AppState {
     pub spend: Arc<spend_stop::Clock>,
     /// Claude replies run inside the VM ("Run Claude inside the VM", Linux only, off by default)
     pub agent_vm: Arc<crate::sandbox::agent_vm::AgentVm>,
+    /// Dictation's 2-at-once slots and the wait for one (a test shortens the wait).
+    pub dictation: Arc<transcribe::Slots>,
 }
 
 impl AppState {
@@ -228,6 +231,7 @@ impl AppState {
             mission_runs: Arc::default(),
             spend: Arc::default(),
             agent_vm,
+            dictation: Arc::default(),
         }
     }
 
@@ -327,7 +331,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/dev/landed/seen", post(dev::routes::seen))
         .route("/api/spaces/:id/dev/reviews", get(dev::routes::reviews))
         .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
-        .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
+        .route("/api/spaces/:id/dev/backup", get(dev::routes::backup_state).post(dev::routes::take_backup))
         .route("/api/spaces/:id/dev/worktrees", get(dev::worktrees::list).post(dev::worktrees::create_route))
         .route("/api/dev/worktrees/:id", delete(dev::worktrees::remove_route))
         .route("/api/dev/worktrees/:id/done", post(dev::worktrees::done_route))
@@ -452,6 +456,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/oauth/client.json", get(mcp_oauth::client_document))
         .route("/api/kwants/:id/mcp-servers", get(mcp_routes::get_kwant_servers).put(mcp_routes::set_kwant_servers))
         .route("/api/mcp/permission/:token", post(mcp_runtime::permission_endpoint))
+        .route("/api/mcp/permission/:token/hook", post(mcp_runtime::permission_hook_endpoint))
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
         .route("/api/mcp/self", post(continuity::self_endpoint))

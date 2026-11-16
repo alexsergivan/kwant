@@ -71,6 +71,32 @@ export function parseQuestionMeta(raw: unknown): QuestionMeta | null {
   };
 }
 
+/**
+ * 14c: an answer shows once. Answering on a card saves the answer as the person's message with
+ * `meta = {kind: "question_answer", question_id}` (kept for the bots' history). When that question's
+ * card is among `messages`, the card already says "You answered: …", so the message isn't drawn as
+ * its own bubble. When the card isn't loaded (an older page), the bubble stays; a message typed in
+ * the composer carries no such meta and always stays.
+ */
+export function foldedAnswerIds(messages: ReadonlyArray<{ id: string; meta?: unknown }>): Set<string> {
+  const cards = new Set<string>();
+  const answers: Array<[string, string]> = [];
+  for (const m of messages) {
+    const meta = m.meta ? parseMetaObject(m.meta) : null;
+    if (!meta || typeof meta.question_id !== 'string') continue;
+    if (meta.kind === 'ask_user') cards.add(meta.question_id);
+    else if (meta.kind === 'question_answer') answers.push([m.id, meta.question_id]);
+  }
+  return new Set(answers.filter(([, q]) => cards.has(q)).map(([id]) => id));
+}
+
+/** The closed card's line: "You picked <choice>" for a choice, "You answered:" before typed words. */
+export function answeredLine(answer: string | null | undefined, choices: readonly string[]): { lead: string; text: string | null } {
+  if (!answer) return { lead: 'Answered', text: null };
+  if (choices.includes(answer)) return { lead: `You picked ${answer}`, text: null };
+  return { lead: 'You answered:', text: answer };
+}
+
 /** The chat a question lives in: the thread, else the channel, else the agent's direct chat. */
 export const questionContextId = (q: Pick<Question, 'thread_id' | 'channel_id' | 'direct_kwant_id'>) =>
   q.thread_id || q.channel_id || q.direct_kwant_id || null;

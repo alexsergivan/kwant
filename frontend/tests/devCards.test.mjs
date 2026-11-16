@@ -164,7 +164,7 @@ test('B1: a direct commit (pr null) parses and draws as a normal landed card nam
   assert.match(out, /class="kw-chip">Direct push</);
   assert.match(out, /<a href="https:\/\/github\.com\/alexsergivan\/kwant\/commit\/c0ffee1"/);
   assert.doesNotMatch(out, /PR #/);
-  assert.match(out, /Committed 7:02 PM/);
+  assert.match(out, /Committed 7:02\u00a0PM/);
   assert.doesNotMatch(out, />Verified</);
   assert.doesNotMatch(out, /data-verified/);
   assert.doesNotMatch(out, /text-warn|kw-chip-warn|amber/, 'no warning tone: like an old merge with no reviewer');
@@ -203,7 +203,7 @@ test('the landed card: plain words, the details fold, a failed card and day sepa
   assert.match(c, /What changes for you/);
   assert.match(c, /<details/);
   assert.match(c, /Under the hood<\/span><span aria-hidden="true">·<\/span><span class="font-mono[^"]*">4 files<\/span><span role="img" aria-label="249 lines added, 15 removed"/);
-  assert.match(c, /Merged 6:48 PM by/);
+  assert.match(c, /Merged 6:48\u00a0PM by/);
   assert.match(c, /Pixel<\/span><\/span><span>\(bot · Claude Sonnet\)/);
   const f = html(m.LandedCard, { card: landed(fx.LANDED_NO_TEXT) });
   assert.match(f, /Bump vite to 6\.4\.4/);
@@ -231,7 +231,7 @@ test('roll-up: title, needs-you tiles, +N more, the empty state, no routine link
   assert.match(html(m.Rollup, { ...base, rollup: fx.ROLLUP_MANY }), /\+4 more areas/);
   assert.match(html(m.Rollup, { ...base, rollup: fx.ROLLUP_MANY }), /main is red/);
   const e = html(m.Rollup, { ...base, rollup: fx.ROLLUP_EMPTY, last_merge: { pr: 290, merged_at: '2026-11-04T19:26:00Z' } });
-  assert.match(e, /Nothing landed since you last looked\. Last merge: #290, 7:26 PM\./);
+  assert.match(e, /Nothing landed since you last looked\. Last merge: #290, 7:26\u00a0PM\./);
   assert.deepEqual(m.needsYouAreas(fx.LANDED_ROUTE.cards.map((c) => m.parseLanded(c))), ['Chat', 'Live activity']);
 
   const { branch: _b, ...noBranch } = base;
@@ -275,8 +275,9 @@ test('backup case 3: just taken via Back up first, then it ages and goes old aft
   ui = m.floorReducer(ui, { type: 'backup_done', result: { id: 'b', ok: true, path: '/x/b.tgz', bytes: 412_000_000, taken_at: null, error: null }, now: NOW });
   let v = m.floorView(f, ui, NOW + 3000, NOW);
   assert.equal(v.case, 'just_taken');
-  assert.equal(v.lead, 'Backup taken 3 s ago');
+  assert.equal(v.lead, 'Backup taken just now', 'under 5 s reads "just now", not "0 s ago"');
   assert.equal(v.main, 'allow');
+  assert.equal(m.floorView(f, ui, NOW + 6000, NOW).lead, 'Backup taken 6 s ago');
   v = m.floorView(f, ui, NOW + 11 * 60_000, NOW);
   assert.equal(v.case, 'blocked', 'stale again after 10 minutes');
   assert.equal(v.main, 'backup');
@@ -304,7 +305,8 @@ test('backup case 5: destructive or migration with no fresh backup replaces Allo
   assert.equal(never.lead, 'No backup yet.');
   const nc = viewOf(fx.FLOOR_NO_COMMAND);
   assert.equal(nc.case, 'no_command');
-  assert.equal(nc.main, 'none', 'nothing to run, so no main button');
+  assert.equal(nc.main, 'set_command', 'no command yet: set one in the card (22f)');
+  assert.equal(nc.skip, false, 'a destructive command is never allowed without a backup');
 });
 
 test('backup case 6: taking disables every button and shows a percent only when the server sends one', () => {
@@ -350,6 +352,23 @@ test('the floor card never offers "always allow", in any case', () => {
   assert.match(mig, /wants to deploy a database change/);
   assert.doesNotMatch(mig, /Allow this deploy/, 'blocked: Allow is replaced');
   assert.match(mig, /Back up first/);
+  assert.match(mig, /<dt[^>]*>Database<\/dt>/, '22f round 2: the row is "Database", not "Migration"');
+});
+
+test('22f round 2: a guessed migration deploy says "deploy to production"; a known one keeps "a database change"', () => {
+  assert.equal(m.floorWho(floorOf(fx.FLOOR_GUESS_NO_COMMAND), 'Builder'), 'Builder wants to deploy to production');
+  assert.equal(m.floorWho(floorOf(fx.FLOOR_MIGRATION), 'Vega'), 'Vega wants to deploy a database change');
+  const out = html(m.ModernApprovalCard, { approval: fx.FLOOR_GUESS_NO_COMMAND, onResolve() {} });
+  assert.equal(heading(out), 'Production floor: Builder wants to deploy to production');
+  assert.match(out, /Might change it\. The app can(&#x27;|')t tell from the command\./);
+});
+
+test('22f round 2: a backup taken in the last 5 s reads "just now"', () => {
+  const f = floorOf(fx.FLOOR_DEPLOY_FRESH);
+  const ui = m.initialFloorUi(f);
+  const b = { ...f, backup: { ...f.backup, age_s: 2 } };
+  assert.equal(m.floorView(b, ui, NOW, NOW).lead, 'Backup taken just now');
+  assert.equal(m.floorView({ ...f, backup: { ...f.backup, age_s: 5 } }, ui, NOW, NOW).lead, 'Backup taken 5 s ago');
 });
 
 /** The floor card's <h3> as text (tags stripped). */
@@ -541,7 +560,7 @@ test('Fix it sends the finding and offers Undo for 10 s', async () => {
   });
   await click(button(host.querySelector('[data-finding="f1"]'), 'Fix it'));
   const row = host.querySelector('[data-finding="f1"]');
-  assert.match(row.textContent, /Sent to Pixel as a task · 1:00 AM/);
+  assert.match(row.textContent, /Sent to Pixel as a task · 1:00\u00a0AM/);
   assert.match(button(row, 'Undo').textContent, /8 s/);
   await click(button(row, 'Undo'));
   assert.deepEqual(actions, [['f1', 'fix'], ['f1', 'undo_fix']]);
@@ -722,5 +741,204 @@ test('the floor card shows why as its own sentence, never "This is runs …" (0.
   assert.doesNotMatch(html(m.ModernApprovalCard, { approval: ap(''), onResolve() {} }), /<p class="text-zinc-300 \[overflow-wrap:anywhere\]">/, 'no empty line');
   for (const f of [fx.FLOOR_DEPLOY_FRESH, fx.FLOOR_DESTRUCTIVE, fx.FLOOR_MIGRATION, fx.FLOOR_PAGES, fx.FLOOR_NO_COMMAND]) {
     assert.doesNotMatch(html(m.ModernApprovalCard, { approval: f, onResolve() {} }), /This is /);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// 22f: a production-floor card is never a dead end (Oleks, Nov 15)
+
+const typeInto = async (el, v) => {
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(el, v);
+  el.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle();
+};
+const NONE = { state: 'none', age_s: null, bytes: null, path: null, error: null };
+
+test('22f: the parser keeps migration "yes" | "guess" and drops anything else', () => {
+  assert.equal(floorOf(fx.FLOOR_GUESS_NO_COMMAND).migration, 'guess');
+  assert.equal(floorOf(fx.FLOOR_MIGRATION).migration, 'yes');
+  assert.equal(floorOf(fx.FLOOR_DESTRUCTIVE).migration, null);
+  assert.equal(m.parseProdFloor({ prod_floor: { kind: 'deploy_migration', migration: 'maybe', backup: {} } }).migration, null);
+  assert.deepEqual(m.parseBackupState({ backup: { state: 'fresh', age_s: 3 } }).state, 'fresh', 'wrapped');
+  assert.equal(m.parseBackupState({ state: 'none' }).state, 'none', 'bare');
+  assert.equal(m.parseBackupState({ state: 'weird' }), null);
+  assert.equal(m.parseBackupState(null), null);
+});
+
+test('22f: Allow without a backup only for a guessed deploy, in no_command, blocked and failed', () => {
+  const g = viewOf(fx.FLOOR_GUESS_NO_COMMAND);
+  assert.equal(g.case, 'no_command');
+  assert.equal(g.main, 'set_command');
+  assert.equal(g.skip, true);
+  assert.equal(g.note, 'Or allow it if this deploy doesn’t touch the database.');
+  const old = viewOf(fx.FLOOR_GUESS_OLD);
+  assert.equal(old.case, 'blocked');
+  assert.equal(old.main, 'backup');
+  assert.equal(old.skip, true);
+  const f = floorOf(fx.FLOOR_GUESS_OLD);
+  let ui = m.floorReducer(m.initialFloorUi(f), { type: 'backup_start' });
+  assert.equal(m.floorView(f, ui, NOW, NOW).skip, false, 'not while a backup runs');
+  ui = m.floorReducer(ui, { type: 'backup_error', error: 'exit 1' });
+  assert.equal(m.floorView(f, ui, NOW, NOW).case, 'failed');
+  assert.equal(m.floorView(f, ui, NOW, NOW).skip, true, 'a failed backup still leaves a way forward');
+  ui = m.floorReducer(m.floorReducer(m.initialFloorUi(f), { type: 'backup_start' }), { type: 'backup_done', result: { id: 'b', ok: true, path: null, bytes: 1, taken_at: null, error: null }, now: NOW });
+  assert.equal(m.floorView(f, ui, NOW, NOW).skip, false, 'backed up: plain Allow, no override');
+  for (const ap of [fx.FLOOR_MIGRATION, fx.FLOOR_DESTRUCTIVE, fx.FLOOR_NO_COMMAND, fx.FLOOR_FAILED, fx.FLOOR_DEPLOY_OLD, fx.FLOOR_DEPLOY_FRESH, fx.FLOOR_PAGES]) {
+    assert.equal(viewOf(ap).skip, false, `${ap.id}: never for a known migration, a destructive command or a plain deploy`);
+  }
+  assert.equal(m.canSkipBackup({ ...floorOf(fx.FLOOR_DESTRUCTIVE), migration: 'guess' }), false, 'destructive never, even if a payload says guess');
+});
+
+test('22f: a guessed deploy says the app can’t tell, not that it changes the database', () => {
+  assert.match(m.floorSubline(floorOf(fx.FLOOR_GUESS_NO_COMMAND)), /^The app can’t tell if this deploy changes the database/);
+  assert.match(m.floorSubline(floorOf(fx.FLOOR_MIGRATION)), /^This deploy changes the database/);
+});
+
+test('22f: the live backup state replaces the snapshot; a fresh one elsewhere arms Allow with the 500 ms guard', () => {
+  const f = floorOf(fx.FLOOR_GUESS_NO_COMMAND);
+  let ui = m.floorReducer(m.initialFloorUi(f), { type: 'live', backup: NONE, now: NOW });
+  let v = m.floorView(f, ui, NOW, NOW);
+  assert.equal(v.case, 'blocked');
+  assert.equal(v.main, 'backup', 'a command now: Back up first');
+  ui = m.floorReducer(ui, { type: 'live', backup: { state: 'fresh', age_s: 20, bytes: 9, path: '/srv/b.sql', error: null }, now: NOW });
+  v = m.floorView(f, ui, NOW + 1000, NOW);
+  assert.equal(v.case, 'fresh');
+  assert.equal(v.main, 'allow');
+  assert.equal(v.lead, 'Backup taken 21 s ago', 'ages from when it arrived');
+  assert.equal(m.allowReady(ui, NOW + 300), false);
+  assert.equal(m.allowReady(ui, NOW + 500), true);
+  // A backup that failed on the card stops counting once a fresh one arrives from elsewhere.
+  let failed = m.floorReducer(m.floorReducer(m.initialFloorUi(f), { type: 'backup_start' }), { type: 'backup_error', error: 'x' });
+  failed = m.floorReducer(failed, { type: 'live', backup: { state: 'fresh', age_s: 5, bytes: 1, path: null, error: null }, now: NOW });
+  assert.equal(m.floorView(f, failed, NOW, NOW).case, 'fresh');
+  // A running backup owns the card.
+  const taking = m.floorReducer(m.floorReducer(m.initialFloorUi(f), { type: 'backup_start' }), { type: 'live', backup: NONE, now: NOW });
+  assert.equal(taking.phase, 'taking');
+});
+
+test('22f (a): a guessed deploy with no backup command is allowed without a backup after one confirm', async () => {
+  const calls = [];
+  const host = await mount(m.ModernApprovalCard, { approval: fx.FLOOR_GUESS_NO_COMMAND, onResolve: (...a) => calls.push(a), onLoadBackup: async () => null });
+  assert.ok(!host.querySelector('[data-floor-skip]'), 'the confirm is closed at first');
+  await click(host.querySelector('[data-floor-skip-open]'));
+  const box = host.querySelector('[data-floor-skip] input[type=checkbox]');
+  assert.equal(document.activeElement, box, 'focus goes to the checkbox');
+  assert.match(host.querySelector('[data-floor-skip]').textContent, /This deploy doesn’t change the database/);
+  const go = host.querySelector('[data-floor-skip-allow]');
+  assert.equal(go.getAttribute('aria-disabled'), 'true');
+  await click(go);
+  assert.deepEqual(calls, [], 'nothing until the box is ticked');
+  await click(box);
+  assert.equal(box.checked, true);
+  assert.equal(go.hasAttribute('aria-disabled'), false);
+  await click(go);
+  assert.deepEqual(calls, [['ap_8', 'allow_once', { withoutBackup: true }]]);
+});
+
+test('22f: Cancel and Escape close the confirm and give focus back to its button', async () => {
+  const host = await mount(m.ModernApprovalCard, { approval: fx.FLOOR_GUESS_OLD, onResolve() {}, onLoadBackup: async () => null });
+  await click(host.querySelector('[data-floor-skip-open]'));
+  const box = host.querySelector('[data-floor-skip] input');
+  box.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await settle();
+  assert.ok(!host.querySelector('[data-floor-skip]'));
+  assert.equal(document.activeElement, host.querySelector('[data-floor-skip-open]'));
+});
+
+test('22f (b): set a command inline, back up and allow, without leaving the card', async () => {
+  const realNow = Date.now;
+  let clock = NOW;
+  Date.now = () => clock;
+  try {
+    const calls = [];
+    const saved = [];
+    let server = { state: 'no_command', age_s: null, bytes: null, path: null, error: null };
+    const host = await mount(m.ModernApprovalCard, {
+      approval: fx.FLOOR_GUESS_NO_COMMAND,
+      onResolve: (...a) => calls.push(a),
+      onSetCommand: async (space, c) => {
+        saved.push([space, c]);
+        server = NONE;
+      },
+      onLoadBackup: async () => server,
+      onBackup: async () => {
+        server = { state: 'fresh', age_s: 0, bytes: 18_400_000, path: '/srv/b.sql', error: null };
+        return { id: 'b1', ok: true, path: '/srv/b.sql', bytes: 18_400_000, taken_at: null, error: null };
+      },
+    });
+    const main = host.querySelector('[data-floor-main]');
+    assert.equal(main.textContent.trim(), 'Set backup command');
+    await click(main);
+    const input = host.querySelector('[data-floor-command] input');
+    assert.equal(document.activeElement, input, 'focus goes to the field');
+    assert.equal(input.maxLength, 2000);
+    assert.match(host.querySelector('[data-floor-command]').textContent, /It should print the backup file’s path/);
+    assert.ok(!host.querySelector('[data-floor-main]'), 'Save replaces the main button while the field is open');
+    await click(host.querySelector('[data-floor-command-save]'));
+    assert.match(host.querySelector('[data-floor-command] [role=alert]').textContent, /Type the command/);
+    assert.deepEqual(saved, []);
+    await typeInto(input, "  ssh root@164.90.207.66 'pg_dump app > /srv/b.sql && echo /srv/b.sql'  ");
+    await click(host.querySelector('[data-floor-command-save]'));
+    assert.deepEqual(saved, [['s_kwant', "ssh root@164.90.207.66 'pg_dump app > /srv/b.sql && echo /srv/b.sql'"]]);
+    assert.ok(!host.querySelector('[data-floor-command]'), 'the field closes');
+    const backup = host.querySelector('[data-floor-main]');
+    assert.equal(backup.dataset.floorMain, 'backup');
+    assert.equal(document.activeElement, backup, 'focus is on Back up first');
+    assert.equal(host.querySelector('[data-backup-row]').dataset.backupRow, 'blocked');
+    await click(backup);
+    assert.equal(host.querySelector('[data-floor-main]').dataset.floorMain, 'allow');
+    assert.ok(!host.querySelector('[data-floor-skip-open]'), 'backed up: no override any more');
+    clock += 600;
+    await click(host.querySelector('[data-floor-main]'));
+    assert.deepEqual(calls, [['ap_8', 'allow_once', undefined]], 'a plain Allow, not without_backup');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('22f: a refused save keeps the field open with the server’s reason; an older server still moves on', async () => {
+  const host = await mount(m.ModernApprovalCard, {
+    approval: fx.FLOOR_NO_COMMAND,
+    onResolve() {},
+    onSetCommand: async () => {
+      throw new Error('the backup command must be at most 2000 characters');
+    },
+    onLoadBackup: async () => null,
+  });
+  await click(host.querySelector('[data-floor-main]'));
+  await typeInto(host.querySelector('[data-floor-command] input'), 'x');
+  await click(host.querySelector('[data-floor-command-save]'));
+  assert.match(host.querySelector('[data-floor-command] [role=alert]').textContent, /at most 2000 characters/);
+  assert.equal(host.querySelector('[data-floor-command] input').getAttribute('aria-invalid'), 'true');
+  assert.ok(!host.querySelector('[data-floor-skip-open]'), 'destructive: no Allow without a backup, ever');
+
+  const host2 = await mount(m.ModernApprovalCard, { approval: fx.FLOOR_NO_COMMAND, onResolve() {}, onSetCommand: async () => {}, onLoadBackup: async () => null });
+  await click(host2.querySelector('[data-floor-main]'));
+  await typeInto(host2.querySelector('[data-floor-command] input'), './backup.sh');
+  await click(host2.querySelector('[data-floor-command-save]'));
+  assert.equal(host2.querySelector('[data-floor-main]').dataset.floorMain, 'backup', 'no GET route: saved means no backup yet');
+});
+
+test('22f: the card re-reads the backup state when the window gets focus', async () => {
+  let reads = 0;
+  const host = await mount(m.ModernApprovalCard, {
+    approval: fx.FLOOR_GUESS_OLD,
+    onResolve() {},
+    onLoadBackup: async () => {
+      reads++;
+      return { state: 'fresh', age_s: 30, bytes: 1, path: '/srv/b.sql', error: null };
+    },
+  });
+  assert.equal(host.querySelector('[data-floor-main]').dataset.floorMain, 'backup');
+  window.dispatchEvent(new window.Event('focus'));
+  await settle();
+  assert.equal(reads, 1);
+  assert.equal(host.querySelector('[data-floor-main]').dataset.floorMain, 'allow', 'a backup taken elsewhere counts');
+});
+
+test('22f: a Destructive card renders no Allow of any kind without a fresh backup', () => {
+  for (const ap of [fx.FLOOR_DESTRUCTIVE, fx.FLOOR_NO_COMMAND, fx.FLOOR_FAILED]) {
+    const out = html(m.ModernApprovalCard, { approval: ap, onResolve() {} });
+    assert.doesNotMatch(out, /Allow/, `${ap.id}`);
   }
 });

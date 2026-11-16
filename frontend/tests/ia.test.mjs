@@ -112,12 +112,15 @@ const base = {
   onSummonKwant: noop, onCreateTeam: noop, onOpenInbox: noop, onOpenParallel: noop, onOpenMissions: noop, missionBoard: true,
 };
 
-test('the top rows are Search, Inbox, Mission board and More, nothing else', () => {
+test('the top rows are Search, Inbox, Mission board and Parallel Universe, nothing else', () => {
   const html = ui.sidebar(base);
   const rows = html.match(/data-utility-rows[\s\S]*?<\/nav>|data-utility-rows[\s\S]*$/)[0];
-  for (const t of ['Search', 'Inbox', 'Mission board', 'More']) assert.match(rows, new RegExp(t), t);
+  for (const t of ['Search', 'Inbox', 'Mission board', 'Parallel Universe']) assert.match(rows, new RegExp(t), t);
   for (const gone of ['While you were away', 'Loose ends', 'Connections', 'Routines']) assert.doesNotMatch(html, new RegExp(gone), `${gone} is not a sidebar row`);
-  assert.doesNotMatch(html, /Parallel Universe/, 'Parallel Universe sits behind More, closed by default');
+  // 14c: a "More" menu with one item is gone; its one place is a plain row
+  assert.doesNotMatch(html, /data-more-menu|aria-haspopup="menu"[^>]*>(?:(?!<\/button>)[\s\S])*More</, 'no one-item More menu');
+  assert.match(html, /data-parallel-row/);
+  assert.doesNotMatch(ui.sidebar({ ...base, onOpenParallel: undefined }), /Parallel Universe/, 'no row without the page');
 });
 
 test('the Inbox row keeps the unseen badge and marks the open page', () => {
@@ -126,14 +129,18 @@ test('the Inbox row keeps the unseen badge and marks the open page', () => {
   assert.match(ui.sidebar({ ...base, inboxActive: true }), /aria-current="page"[^>]*>(?:(?!<\/button>)[\s\S])*>Inbox</);
 });
 
-test('Install is a tip that can be dismissed, and stays in Settings › All spaces', () => {
-  const tip = src('components/InstallAppButton.tsx');
-  assert.match(tip, /dismissInstallTip\(\)/);
-  assert.match(tip, /Install any time from Settings › All spaces/);
-  assert.match(src('components/SpaceSettings.tsx'), /<InstallAppButton/);
-  assert.equal(nav.installTipDismissed(), false);
-  nav.dismissInstallTip();
-  assert.equal(nav.installTipDismissed(), true);
+test('the sidebar tip points to the phone card, can be dismissed, and Install moved into that card', () => {
+  const card = src('components/PhoneAppCard.tsx') + src('components/PhoneAppTip.tsx');
+  assert.match(card, /Tip: use kwant bots on your phone/);
+  assert.match(card, /dismissPhoneTip\(\)/);
+  assert.match(card, /Find it any time in Settings › All spaces/);
+  assert.match(card, /<InstallAppButton className=\{rowBtn\} label="Install on this computer"/);
+  assert.match(src('components/Sidebar.tsx'), /<PhoneAppTip /);
+  assert.doesNotMatch(src('components/Sidebar.tsx'), /<InstallAppButton/);
+  assert.match(src('components/SpaceSettings.tsx'), /<PhoneAppCard /);
+  assert.equal(nav.phoneTipDismissed(), false);
+  nav.dismissPhoneTip();
+  assert.equal(nav.phoneTipDismissed(), true);
 });
 
 // ---------------------------------------------------------------------------
