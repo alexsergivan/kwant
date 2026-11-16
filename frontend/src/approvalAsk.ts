@@ -51,6 +51,21 @@ export function asksApproval(text: string | null | undefined): boolean {
   return ASKS.some((r) => r.test(tail));
 }
 
+/**
+ * The reply that gets Approve / Change…: the newest message, when it's a saved bot reply asking for an OK, nothing
+ * else is open (`busy`: a reply running, a question card, an approval card) and the person hasn't already answered
+ * it with a 👍 (`answered`, kept by id, so a turn-end reload with fresh copies of the messages doesn't bring it back, 22r).
+ */
+export function approveRowId(
+  last: { id: string; sender_role?: string | null; text?: string | null } | undefined,
+  meta: Record<string, unknown> | null | undefined,
+  o: { busy: boolean; answered: ReadonlySet<string> },
+): string | null {
+  if (!last || last.sender_role !== 'kwant' || last.id.startsWith('temp-') || o.busy || o.answered.has(last.id)) return null;
+  if (metaHidesApprove(meta)) return null;
+  return asksApproval(last.text) ? last.id : null;
+}
+
 /** What Approve sends, as an ordinary reply to that message. */
 export const APPROVE_TEXT = 'Approved, go ahead.';
 /** The composer's placeholder after Change…. */

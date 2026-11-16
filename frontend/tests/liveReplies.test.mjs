@@ -51,6 +51,8 @@ test('a slow load that finishes last never hides the reply a newer load showed',
 test('App reloads on turn_ended through reloadOnTurnEnd and guards loads with ChatLoads', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /reloadOnTurnEnd\(/, 'turn_ended asks reloadOnTurnEnd');
-  assert.match(app, /chatLoads(Ref)?\.current\.isLatest\(|chatLoads\.isLatest\(/, 'refreshContext drops stale loads');
+  // 22r: through ChatLoads.run, whose load gets isLatest() and whose promise waits for the newest load
+  assert.match(app, /chatLoadsRef\.current\.run\(ctx, async \(isLatest\)/, 'refreshContext drops stale loads');
+  assert.match(app, /if \(!isLatest\(\)\) return;/, 'a replaced load never lands');
   assert.doesNotMatch(app, /completed\.delete\(d\.turn_id\)\) settle\(ctx\)/, 'turn_ended no longer skips the reload');
 });
