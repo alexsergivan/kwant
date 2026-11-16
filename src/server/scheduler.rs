@@ -754,27 +754,47 @@ pub fn steps_seen(
     seen
 }
 
-/// Every step the bot's replies after the routine's message (`prompt_id`) show: the turn, its
-/// automatic continuation and busy retries.
-async fn turn_steps(
+/// The meta key of a routine run's id on each reply of its turn (see `run_routine_turn`).
+pub(super) const ROUTINE_RUN_KEY: &str = "routine_run";
+
+/// What a run's own replies show: their steps, and the id of the last one.
+struct OwnReplies {
+    steps: Vec<StepSeen>,
+    last_id: Option<String>,
+}
+
+/// The bot's replies after the routine's message (`prompt_id`) that belong to run `run_id` (its
+/// turn, busy retries and automatic continuation; [`ROUTINE_RUN_KEY`] in their meta), and every
+/// step they show. 26b D1: another routine's run, or the person's own turn, in the same chat at
+/// the same time never counts.
+async fn own_replies(
     state: &AppState,
     chat: &str,
     bot_name: &str,
     prompt_id: &str,
-) -> Vec<StepSeen> {
+    run_id: &str,
+) -> OwnReplies {
     let messages = state.db.list_messages(chat, 40).await.unwrap_or_default();
+    let mut own = OwnReplies { steps: Vec::new(), last_id: None };
     let Some(start) = messages.iter().position(|m| m.id == prompt_id) else {
-        return Vec::new();
+        return own;
     };
     let parse = |s: &Option<String>| {
         s.as_deref()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
     };
-    messages[start + 1..]
+    for m in messages[start + 1..]
         .iter()
         .filter(|m| m.sender_role == "kwant" && m.sender_id == bot_name)
-        .flat_map(|m| steps_seen(parse(&m.tool_calls).as_ref(), parse(&m.meta).as_ref()))
-        .collect()
+    {
+        let meta = parse(&m.meta);
+        if meta.as_ref().map(|v| &v[ROUTINE_RUN_KEY]).and_then(|v| v.as_str()) != Some(run_id) {
+            continue;
+        }
+        own.steps.extend(steps_seen(parse(&m.tool_calls).as_ref(), meta.as_ref()));
+        own.last_id = Some(m.id.clone());
+    }
+    own
 }
 
 /// 26b: routine runs whose turn is going, by bot and chat (one reply per bot per chat at a time),
@@ -904,11 +924,14 @@ async fn execute(state: &AppState, routine: &RoutineRow, run_id: &str) -> Result
         routine.thread_id.clone(),
         prompt,
         &routine.name,
+        run_id,
     )
     .await?;
     drop(in_chat);
-    let outcome = run_outcome(&turn_steps(state, &chat, &kwant.name, &saved.id).await);
-    Ok(Ran { reply_id, outcome })
+    let own = own_replies(state, &chat, &kwant.name, &saved.id, run_id).await;
+    // The run's own last reply; the turn's answer is the chat's latest reply by the bot, which
+    // can be another run's when two share the chat
+    Ok(Ran { reply_id: own.last_id.or(reply_id), outcome: run_outcome(&own.steps) })
 }
 
 /// The chat id a routine delivers to: its thread, its channel, or its bot's direct chat.

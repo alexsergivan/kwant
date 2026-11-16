@@ -1,7 +1,8 @@
 //! 26b: an approval nobody answered is never "ok". A routine run whose only call waits on a card
 //! nobody answers ends `needs_you` (its run event says `waiting` while the card is open), its
 //! activity step is `unanswered`; a step that failed with no later success ends `incomplete`; a
-//! failure fixed by a later call of the same tool stays `ok`; "Run now" sets `last_run_at`.
+//! failure fixed by a later call of the same tool stays `ok`; "Run now" sets `last_run_at`; two
+//! runs in one chat each read only their own replies (D1).
 
 mod common;
 
@@ -219,6 +220,52 @@ async fn a_step_that_failed_for_good_is_incomplete_and_one_fixed_later_is_ok() {
     assert_eq!(run["status"], "ok", "{run}");
     assert!(run["error"].is_null(), "{run}");
 }
+
+/// 26b D1 (Rigel, QA at 6923ad4b): two routines of one bot deliver to the same chat at the same
+/// time. The one whose step failed ends `incomplete`; the plain one, whose turn ran no tool,
+/// ends `ok`: a run reads only its own replies, never the other run's.
+#[tokio::test]
+async fn two_runs_in_one_chat_each_read_only_their_own_steps() {
+    let env = setup().await;
+    let failed = stream_lines_marker(&[
+        json!({"type": "assistant", "message": {"id": "msg_s1", "content": [
+        {"type": "tool_use", "id": "toolu_s1", "name": "Bash", "input": {"command": "fetch.sh", "description": "fetch the report"}}]}}),
+        json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_s1", "is_error": true, "content": "exit 7: the report server said 502"}]}}),
+    ]);
+    // The failing one is slow, so the plain one's message is posted while its turn still runs
+    let fails = routine(
+        &env,
+        "Sibling fails",
+        &format!("Fetch the report {failed} SLEEPONCE:sib26b:2000 REPLYTAG:sibfail26b"),
+    )
+    .await;
+    let plain = routine(
+        &env,
+        "Sibling plain",
+        "Say hi, no tools. REPLYTAG:sibplain26b",
+    )
+    .await;
+    let (fails_run, plain_run) = tokio::join!(run_now(&env, &fails), async {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        run_now(&env, &plain).await
+    });
+
+    assert_eq!(fails_run["status"], "incomplete", "{fails_run}");
+    assert_eq!(fails_run["error"], "exit 7: the report server said 502");
+    assert_eq!(plain_run["status"], "ok", "{plain_run}");
+    assert!(plain_run["error"].is_null(), "{plain_run}");
+
+    // Each run's reply is its own, and says which run it is
+    for (run, tag) in [
+        (&fails_run, "answer sibfail26b"),
+        (&plain_run, "answer sibplain26b"),
+    ] {
+        let id = run["message_id"].as_str().expect("the run saved a reply");
+        let reply = env.state.db.get_message(id).await.unwrap().unwrap();
+        assert!(reply.text.contains(tag), "{run}: {}", reply.text);
+        assert_eq!(reply_of(&env, run).await["routine_run"], run["id"], "{run}");
+    }
 
 #[tokio::test]
 async fn a_second_run_while_one_is_going_is_still_skipped() {
