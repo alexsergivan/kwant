@@ -69,6 +69,7 @@ class Gaps(unittest.TestCase):
         (root / "CHANGELOG.md").write_text(CHANGELOG)
         (root / "site-src" / "features.html").write_text('<section id="new-072" class="fgroup"></section>')
         (root / "site-src" / "index.html").write_text('<a href="features.html#new-072">New</a>')
+        (root / "site-src" / "media-versions.json").write_text(json.dumps({"clip-a": "0.7.2", "reel": "0.1.0"}))
         if readme_text is not None:
             (root / "README.md").write_text(readme_text)
         return root
@@ -162,6 +163,60 @@ class WhatsNew(unittest.TestCase):
         for f in sorted((gate.ROOT / "frontend" / "src" / "whatsnew").glob("*.json")):
             with self.subTest(file=f.name):
                 self.assertEqual(gate.whatsnew_gaps(f.stem, gate.ROOT), [])
+
+
+class MediaFreshness(unittest.TestCase):
+    """Check 7: site-src/media-versions.json must not fall behind the newest release."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Gaps.tree(self, readme("## New in 0.7\n\n- **A** (0.7.2).\n"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, versions):
+        (self.root / "site-src" / "media-versions.json").write_text(json.dumps(versions))
+
+    def test_current_version_passes(self):
+        self.write({"clip-a": "0.7.2"})
+        self.assertEqual(gate.media_freshness_gaps("0.7.2", self.root), [])
+
+    def test_up_to_3_patches_behind_passes(self):
+        self.write({"clip-a": "0.7.2"})
+        self.assertEqual(gate.media_freshness_gaps("0.7.5", self.root), [])
+
+    def test_more_than_3_patches_behind_is_a_gap(self):
+        self.write({"clip-a": "0.7.2"})
+        found = gate.media_freshness_gaps("0.7.6", self.root)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("clip-a was recorded on 0.7.2", found[0])
+        self.assertIn("shoot.sh", found[0])
+        self.assertIn("keeping the name clip-a", found[0])
+
+    def test_older_minor_is_a_gap_even_with_patch_0(self):
+        self.write({"clip-a": "0.6.9"})
+        found = gate.media_freshness_gaps("0.7.0", self.root)
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("clip-a was recorded on 0.6.9", found[0])
+
+    def test_reel_is_never_checked(self):
+        self.write({"reel": "0.1.0"})
+        self.assertEqual(gate.media_freshness_gaps("0.9.11", self.root), [])
+
+    def test_missing_file_is_a_gap(self):
+        (self.root / "site-src" / "media-versions.json").unlink()
+        found = gate.media_freshness_gaps("0.7.2", self.root)
+        self.assertEqual(len(found), 1, found)
+        self.assertTrue(found[0].startswith("site-src/media-versions.json is missing"))
+
+    def test_bad_json_is_a_gap(self):
+        (self.root / "site-src" / "media-versions.json").write_text("{nope")
+        self.assertIn("isn't valid JSON", gate.media_freshness_gaps("0.7.2", self.root)[0])
+
+    def test_bad_version_string_is_a_gap(self):
+        self.write({"clip-a": "not-a-version"})
+        self.assertIn("should be a \"X.Y.Z\" version", gate.media_freshness_gaps("0.7.2", self.root)[0])
 
 
 if __name__ == "__main__":

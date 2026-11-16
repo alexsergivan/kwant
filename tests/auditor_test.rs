@@ -1,5 +1,6 @@
 //! The Swarm Auditor (Phase D2): which tasks get audited, who challenges, the caps, the two tool
-//! calls, and that an audit never verifies, fails or moves a task. Off by default.
+//! calls, and that an audit never verifies, fails or moves a task. On by default; a routine run with
+//! no check of its own earns its audit (14a).
 //! Contract: docs/mission-control.md §18.
 
 use axum::{
@@ -1224,4 +1225,195 @@ async fn a_spec_comes_first_and_the_challenger_checks_against_it() {
         json!({"checked": true, "saw": ["spec", "result"], "spec_source": "written", "reviewer_kwant_id": a.challenger_kwant_id})
     );
     assert_ne!(a.challenger_kwant_id, owner.id);
+}
+
+// 14a: a routine run with no check of its own earns its audit.
+
+async fn routine(e: &Env, owner: &Kwant, name: &str) -> kwnt::db::continuity::RoutineRow {
+    e.state.db.create_routine(&routine_input(owner, name, "Post the digest", None)).await.unwrap()
+}
+
+fn routine_input(owner: &Kwant, name: &str, instructions: &str, acceptance: Option<&str>) -> kwnt::db::continuity::NewRoutine {
+    kwnt::db::continuity::NewRoutine {
+        kwant_id: owner.id.clone(),
+        channel_id: None,
+        name: name.into(),
+        instructions: instructions.into(),
+        schedule: json!({"kind": "daily", "time": "09:00"}).to_string(),
+        enabled: false,
+        next_run_at: None,
+        thread_id: None,
+        context_message_id: None,
+        origin: None,
+        suggestion_id: None,
+        task_class: None,
+        acceptance: acceptance.map(String::from),
+        checks: None,
+    }
+}
+
+/// One run of `r` that reached review, as the routine listener makes it (owned, no checks).
+async fn run_in_review(e: &Env, r: &kwnt::db::continuity::RoutineRow, priority: i64) -> Task {
+    let run = e.state.db.start_routine_run(&r.id, "schedule", "ok", None).await.unwrap();
+    let t = NewTask {
+        title: format!("Routine: {}", r.name),
+        acceptance: r.acceptance.clone().unwrap_or_else(|| r.instructions.clone()),
+        state: "review".into(),
+        priority,
+        owner_kwant_id: Some(r.kwant_id.clone()),
+        budget_tokens: 0,
+        max_attempts: 3,
+        source_kind: "routine".into(),
+        source_id: Some(run.id),
+        created_by: "kwant".into(),
+        ..Default::default()
+    };
+    e.state.db.create_task(&SpaceId::default_space(), &t).await.unwrap()
+}
+
+async fn last_event(e: &Env, tid: &str, kind: &str) -> Value {
+    let evs = e.state.db.task_events(tid, 200).await.unwrap();
+    evs.into_iter().rev().find(|ev| ev.kind == kind).map(|ev| ev.detail_value()).unwrap_or(Value::Null)
+}
+
+/// Audits `t` the way a move to review does, without driving the turns: `Some(trigger)` when it
+/// started.
+async fn review(e: &Env, t: &Task) -> Option<&'static str> {
+    let trigger = auditor::review_trigger(&e.state, t).await?;
+    auditor::start(&e.state, t, trigger).await.ok().map(|_| trigger)
+}
+
+#[tokio::test]
+async fn a_routine_run_is_audited_first_then_at_most_weekly() {
+    let e = setup().await;
+    let (owner, _other) = (bot(&e, "Ann").await, bot(&e, "Ben").await);
+    auditor_on(&e, 50).await;
+    let r = routine(&e, &owner, "Daily digest").await;
+
+    // First run: audited, and the audit records what the routine said
+    let first = run_in_review(&e, &r, 1).await;
+    assert_eq!(review(&e, &first).await, Some("low_confidence"));
+    let started = last_event(&e, &first.id, "audit_started").await;
+    assert_eq!((started["routine_id"].as_str(), started["owner"].as_str(), started["source_kind"].as_str()), (Some(r.id.as_str()), Some(owner.id.as_str()), Some("routine")), "{started}");
+    assert_eq!(started["routine_fp"].as_str(), Some(auditor::routine_fingerprint("Post the digest", None).as_str()), "{started}");
+
+    // Second run the next day: skipped, and the task says why and since when
+    let second = run_in_review(&e, &r, 1).await;
+    assert_eq!(review(&e, &second).await, None);
+    assert!(e.state.db.audits_of(&second.id).await.unwrap().is_empty());
+    let skipped = last_event(&e, &second.id, "audit_skipped").await;
+    assert_eq!(skipped["reason"], auditor::ROUTINE_CHECKED, "{skipped}");
+    assert_eq!(skipped["last_audit_task_id"].as_str(), Some(first.id.as_str()), "{skipped}");
+    assert!(skipped["last_audit_at"].is_string() && skipped["next_audit_from"].is_string(), "{skipped}");
+
+    // Six days later still skipped; at seven days due again
+    e.state.db.exec_raw_for_test(&format!("UPDATE task_audits SET created_at = '{}' WHERE task_id = '{}'", (chrono::Utc::now() - chrono::Duration::days(6)).to_rfc3339(), first.id)).await.unwrap();
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, None, "6 days");
+    e.state.db.exec_raw_for_test(&format!("UPDATE task_audits SET created_at = '{}' WHERE task_id = '{}'", (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339(), first.id)).await.unwrap();
+    let week = run_in_review(&e, &r, 1).await;
+    assert_eq!(review(&e, &week).await, Some("low_confidence"), "7 days");
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, None, "the weekly one counts as the last");
+}
+
+#[tokio::test]
+async fn a_routine_run_after_its_instructions_or_acceptance_change_is_audited() {
+    let e = setup().await;
+    let (owner, other) = (bot(&e, "Ann").await, bot(&e, "Ben").await);
+    auditor_on(&e, 50).await;
+    let r = routine(&e, &owner, "Daily digest").await;
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, Some("low_confidence"));
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, None);
+
+    // New instructions: the next run is audited, the one after isn't
+    let r = e.state.db.update_routine(&r.id, &routine_input(&owner, "Daily digest", "Post the digest and the top 3 links", None)).await.unwrap().unwrap();
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, Some("low_confidence"), "instructions changed");
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, None);
+
+    // A new acceptance too; renaming it or its schedule isn't a change of what it does
+    let r = e.state.db.update_routine(&r.id, &routine_input(&owner, "Daily digest", "Post the digest and the top 3 links", Some("3 links, each opens"))).await.unwrap().unwrap();
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, Some("low_confidence"), "acceptance changed");
+    let r = e.state.db.update_routine(&r.id, &routine_input(&owner, "Morning digest", "Post the digest and the top 3 links", Some("3 links, each opens"))).await.unwrap().unwrap();
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, None, "renamed only");
+
+    // An audit from before 14a (its event has no fingerprint) doesn't hold the next run back
+    let legacy = run_in_review(&e, &r, 1).await;
+    e.state.db.create_audit(&legacy.id, &legacy.space_id, 1, "low_confidence", &other.id, &owner.id).await.unwrap().unwrap();
+    assert_eq!(e.state.db.last_routine_audit(&r.id).await.unwrap().unwrap().fingerprint, None);
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, Some("low_confidence"), "no fingerprint");
+}
+
+#[tokio::test]
+async fn an_audit_that_never_checked_does_not_count_for_its_routine() {
+    let e = setup().await;
+    let (owner, _other) = (bot(&e, "Ann").await, bot(&e, "Ben").await);
+    auditor_on(&e, 50).await;
+    let r = routine(&e, &owner, "Daily digest").await;
+    let first = run_in_review(&e, &r, 1).await;
+    assert_eq!(review(&e, &first).await, Some("low_confidence"));
+    for status in ["failed", "skipped", "interrupted"] {
+        e.state.db.exec_raw_for_test(&format!("UPDATE task_audits SET status = '{status}' WHERE task_id = '{}'", first.id)).await.unwrap();
+        let next = run_in_review(&e, &r, 1).await;
+        assert_eq!(auditor::review_trigger(&e.state, &next).await, Some("low_confidence"), "{status}");
+    }
+}
+
+#[tokio::test]
+async fn high_priority_routine_runs_hand_offs_and_other_tasks_are_audited_as_before() {
+    let e = setup().await;
+    let (owner, _other) = (bot(&e, "Ann").await, bot(&e, "Ben").await);
+    auditor_on(&e, 50).await;
+    let r = routine(&e, &owner, "Daily digest").await;
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, Some("low_confidence"));
+    // Marked high priority: audited every run
+    for _ in 0..2 {
+        assert_eq!(review(&e, &run_in_review(&e, &r, 2).await).await, Some("high_impact"));
+    }
+    // A low-priority run is still held back by the audits above
+    assert_eq!(review(&e, &run_in_review(&e, &r, 1).await).await, None);
+
+    // Hand-offs and person tasks with no check: every one, as before
+    for _ in 0..2 {
+        let d = task(&e, Some(&owner), 1, "review").await;
+        e.state.db.exec_raw_for_test(&format!("UPDATE tasks SET source_kind = 'delegation', source_id = 'd-{}' WHERE id = '{}'", d.id, d.id)).await.unwrap();
+        let d = e.state.db.get_task(&d.id).await.unwrap().unwrap();
+        assert_eq!(review(&e, &d).await, Some("low_confidence"), "hand-off");
+        assert_eq!(review(&e, &task(&e, Some(&owner), 1, "review").await).await, Some("low_confidence"), "person task");
+    }
+    // A routine run whose routine is gone is treated like any task
+    let gone = run_in_review(&e, &r, 1).await;
+    e.state.db.delete_routine(&r.id).await.unwrap();
+    assert_eq!(auditor::review_trigger(&e.state, &gone).await, Some("low_confidence"));
+}
+
+#[tokio::test]
+async fn the_daily_cap_still_holds_and_a_capped_run_does_not_count() {
+    let e = setup().await;
+    let (owner, _other) = (bot(&e, "Ann").await, bot(&e, "Ben").await);
+    auditor_on(&e, 1).await;
+    let (a, b) = (routine(&e, &owner, "Digest A").await, routine(&e, &owner, "Digest B").await);
+    assert_eq!(review(&e, &run_in_review(&e, &a, 1).await).await, Some("low_confidence"));
+    // Routine B's first run is due but today's cap is used: skipped for the cap
+    let capped = run_in_review(&e, &b, 1).await;
+    assert_eq!(auditor::review_trigger(&e.state, &capped).await, Some("low_confidence"));
+    assert!(auditor::start(&e.state, &capped, "low_confidence").await.unwrap_err().contains("cap"));
+    assert_eq!(last_event(&e, &capped.id, "audit_skipped").await["reason"], "daily_cap");
+    // So B's next run is still its first check
+    assert_eq!(auditor::review_trigger(&e.state, &run_in_review(&e, &b, 1).await).await, Some("low_confidence"));
+}
+
+#[test]
+fn routine_due_rules() {
+    use kwnt::db::auditor::RoutineAudit;
+    let now = chrono::Utc::now();
+    let fp = auditor::routine_fingerprint("Post the digest", None);
+    assert_eq!(fp, auditor::routine_fingerprint("  Post the digest\n", Some("")), "whitespace and an empty acceptance are no change");
+    assert_ne!(fp, auditor::routine_fingerprint("Post the digest", Some("x")));
+    assert_ne!(auditor::routine_fingerprint("ab", Some("c")), auditor::routine_fingerprint("a", Some("bc")), "fields are separated");
+    let at = |days: i64, fp: Option<&str>| RoutineAudit { audit_id: "a".into(), task_id: "t".into(), created_at: now - chrono::Duration::days(days), fingerprint: fp.map(String::from) };
+    assert!(auditor::routine_due(None, &fp, now));
+    assert!(!auditor::routine_due(Some(&at(0, Some(&fp))), &fp, now));
+    assert!(!auditor::routine_due(Some(&at(6, Some(&fp))), &fp, now));
+    assert!(auditor::routine_due(Some(&at(7, Some(&fp))), &fp, now));
+    assert!(auditor::routine_due(Some(&at(1, Some("other"))), &fp, now));
+    assert!(auditor::routine_due(Some(&at(1, None)), &fp, now));
 }

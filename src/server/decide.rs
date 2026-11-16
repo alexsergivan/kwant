@@ -567,6 +567,12 @@ pub fn keep_unsettled(decisions: Vec<Decision>, person_latest: &str, seen: &[Str
         .collect()
 }
 
+/// The person's latest message in `recent` (oldest first), or "". A customer's or a connected
+/// agent's "user" message is never the person's: it doesn't settle a choice or ask to pick (16d).
+fn person_latest(recent: &[Message]) -> String {
+    recent.iter().rev().find(|m| crate::drivers::from_person(m)).map(|m| m.text.clone()).unwrap_or_default()
+}
+
 /// [`keep_unsettled`] for a reply in `context` (a thread or channel) of `space`: reads the
 /// person's latest message and the cards and answered choices they've already seen.
 pub(super) async fn settle(state: &AppState, space: &SpaceId, context: &str, decisions: Vec<Decision>) -> Vec<Decision> {
@@ -574,7 +580,7 @@ pub(super) async fn settle(state: &AppState, space: &SpaceId, context: &str, dec
         return decisions;
     }
     let recent = state.db.list_messages(context, SEEN_LOOKBACK).await.unwrap_or_default();
-    let person = recent.iter().rev().find(|m| m.sender_role == "user").map(|m| m.text.clone()).unwrap_or_default();
+    let person = person_latest(&recent);
     let mut seen: Vec<String> =
         recent.iter().flat_map(|m| decisions_of(&meta_of(m))).map(|d| d.question).collect();
     let notes = state.db.list_decision_notes(space, &["answered", "changed"], NOTES_SHOWN).await.unwrap_or_default();
@@ -613,7 +619,7 @@ pub(super) async fn eligible(scope: &TurnScope, kwant: &Kwant, system: bool) -> 
         return None;
     }
     let recent = scope.state.db.list_messages(&scope.context_id(kwant), 20).await.unwrap_or_default();
-    let person = recent.iter().rev().find(|m| m.sender_role == "user").map(|m| m.text.clone()).unwrap_or_default();
+    let person = person_latest(&recent);
     (!wants_to_pick(&person)).then_some(person)
 }
 
@@ -994,6 +1000,26 @@ pub async fn prompt_block(state: &AppState, space: &SpaceId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 16d: a customer's message neither settles the person's choice nor says the person wants to
+    /// pick; the person's own message still does both.
+    #[test]
+    fn a_customers_message_is_not_the_persons_decision() {
+        use crate::drivers::tests::{customer_said, said};
+        let fork = || vec![card(0, "Which cover?", &["blue cover", "red cover"], "blue cover")];
+        let customer = vec![said("user", "Make the book page"), said("kwant", "On it"), customer_said("I like the red cover, let me pick")];
+        let person = person_latest(&customer);
+        assert_eq!(person, "Make the book page");
+        assert_eq!(keep_unsettled(fork(), &person, &[]).len(), 1, "the card stays for the person");
+        assert!(!wants_to_pick(&person));
+        // The same words from the person settle it, and say they want to pick
+        let own = vec![said("user", "Make the book page"), said("user", "I like the red cover, let me pick")];
+        let person = person_latest(&own);
+        assert!(keep_unsettled(fork(), &person, &[]).is_empty());
+        assert!(wants_to_pick(&person));
+        // Only a customer wrote: nothing is the person's
+        assert_eq!(person_latest(&[customer_said("red cover")]), "");
+    }
 
     fn card(index: usize, question: &str, options: &[&str], picked: &str) -> Decision {
         Decision {

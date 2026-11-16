@@ -727,9 +727,71 @@ fn command_line(args: &Value) -> Option<String> {
     (!line.is_empty()).then_some(line)
 }
 
+/// Whether `name` is a tool that runs a shell command (`Bash`, codex's `exec_command`,
+/// `mcp__x__run_shell_command`), ignoring an `mcp__server__` prefix and case. The one list of
+/// shell tools: [`summarize`] titles them "Running `…`", and the desktop island names only their
+/// program (server/activity.rs).
+pub fn is_shell_tool(name: &str) -> bool {
+    matches!(
+        tool_part(name).to_ascii_lowercase().as_str(),
+        "bash" | "shell" | "exec" | "exec_command" | "command_execution" | "run_terminal_cmd" | "run_shell_command" | "local_shell"
+    )
+}
+
+/// The tools whose argument is the bot's own words (a search pattern, a web query, a helper's
+/// brief), by kind. The one list of them: [`summarize`] titles them with the words ("Searching the
+/// web for “…”"), and the desktop island shows only the kind ([`island_kind_title`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WordsTool {
+    Files,
+    Web,
+    Helper,
+}
+
+impl WordsTool {
+    /// `tool` is the name without its `mcp__server__` prefix, lowercased.
+    fn of(tool: &str) -> Option<Self> {
+        match tool {
+            "glob" | "grep" | "search_files" | "list_dir" | "ls" | "find" => Some(Self::Files),
+            "websearch" | "web_search" | "search" => Some(Self::Web),
+            "task" | "agent" => Some(Self::Helper),
+            _ => None,
+        }
+    }
+
+    /// The title without the words: what the island shows, and the chat's title when the
+    /// argument is missing.
+    fn bare(self) -> &'static str {
+        match self {
+            Self::Files => "Searching files",
+            Self::Web => "Searching the web",
+            Self::Helper => "Starting a helper",
+        }
+    }
+}
+
+/// The desktop island's title for a search or helper tool (`Grep`, `WebSearch`, `Task`,
+/// `mcp__x__grep`), ignoring an `mcp__server__` prefix and case: "Searching files", "Searching the
+/// web" or "Starting a helper", never the query or brief (19a). `None` for every other tool.
+pub fn island_kind_title(name: &str) -> Option<&'static str> {
+    WordsTool::of(&tool_part(name).to_ascii_lowercase()).map(WordsTool::bare)
+}
+
+/// A tool's name without its `mcp__server__` prefix (`mcp__x__grep` gives `grep`), as
+/// [`summarize`] reads it; `name` itself when it has none.
+fn tool_part(name: &str) -> &str {
+    name.strip_prefix("mcp__").and_then(|r| r.split_once("__")).map_or(name, |(_, t)| t)
+}
+
 /// A short title for a tool call, and the detail to show when the step is opened (the whole
 /// command, address or query). Neither is redacted here.
 pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
+    if is_shell_tool(name) {
+        return match command_line(args) {
+            Some(cmd) => (format!("Running `{}`", cut(&cmd, 80)), Some(cmd)),
+            None => ("Running a command".into(), None),
+        };
+    }
     // `mcp__server__tool`: kwnt's own tools read as built-ins, others name their server
     let (server, tool) = match name.strip_prefix("mcp__").and_then(|r| r.split_once("__")) {
         Some(("kwnt" | "kwant", t)) => (None, t),
@@ -739,29 +801,22 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
     let lower = tool.to_ascii_lowercase();
     let path = || arg(args, &["file_path", "path", "filePath", "notebook_path", "target_file"]).map(short_path);
     let url = arg(args, &["url", "href", "uri"]);
+    if let Some(kind) = WordsTool::of(&lower) {
+        let title = match kind {
+            WordsTool::Files => arg(args, &["pattern", "query", "glob", "path"]).map(|p| format!("Searching files for `{}`", cut(p, 60))),
+            WordsTool::Web => arg(args, &["query", "q"]).map(|q| format!("Searching the web for “{}”", cut(q, 80))),
+            WordsTool::Helper => arg(args, &["description", "subagent_type"]).map(|d| format!("Starting a helper: {}", cut(d, 80))),
+        };
+        return (title.unwrap_or_else(|| kind.bare().to_string()), None);
+    }
     match lower.as_str() {
-        "bash" | "shell" | "exec" | "exec_command" | "command_execution" | "run_terminal_cmd" | "run_shell_command"
-        | "local_shell" => match command_line(args) {
-            Some(cmd) => (format!("Running `{}`", cut(&cmd, 80)), Some(cmd)),
-            None => ("Running a command".into(), None),
-        },
         "read" | "read_file" | "view" | "cat" => (path().map_or("Reading a file".into(), |p| format!("Reading {p}")), None),
         "edit" | "multiedit" | "edit_file" | "str_replace" | "str_replace_based_edit_tool" | "apply_patch" | "file_change"
         | "notebookedit" => (path().map_or("Editing files".into(), |p| format!("Editing {p}")), None),
         "write" | "write_file" | "create_file" => (path().map_or("Writing a file".into(), |p| format!("Writing {p}")), None),
-        "glob" | "grep" | "search_files" | "list_dir" | "ls" | "find" => {
-            match arg(args, &["pattern", "query", "glob", "path"]) {
-                Some(p) => (format!("Searching files for `{}`", cut(p, 60)), None),
-                None => ("Searching files".into(), None),
-            }
-        }
         "webfetch" | "fetch" | "web_fetch" | "browser_open" | "browser_navigate" | "navigate" | "open_url" => match url {
             Some(u) => (format!("Opening {}", host_of(u)), Some(u.to_string())),
             None => ("Opening a page".into(), None),
-        },
-        "websearch" | "web_search" | "search" => match arg(args, &["query", "q"]) {
-            Some(q) => (format!("Searching the web for “{}”", cut(q, 80)), None),
-            None => ("Searching the web".into(), None),
         },
         "browser_page" | "browser_snapshot" | "browser_read" => ("Reading the browser page".into(), None),
         "browser_screenshot" => ("Looking at the browser page".into(), None),
@@ -769,10 +824,6 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
         "browser_act" | "browser_click" | "browser_type" => ("Using the browser".into(), None),
         "ask_user" => ("Asking you a question".into(), None),
         "request_human_step" => ("Asking you to do a step in the browser".into(), arg(args, &["reason"]).map(str::to_string)),
-        "task" | "agent" => match arg(args, &["description", "subagent_type"]) {
-            Some(d) => (format!("Starting a helper: {}", cut(d, 80)), None),
-            None => ("Starting a helper".into(), None),
-        },
         "todowrite" | "todo_list" | "update_plan" => ("Updating the plan".into(), None),
         _ => {
             let shown = match server {
@@ -948,6 +999,13 @@ mod tests {
             ("WebFetch", json!({"url": "https://www.github.com/x/y"}), "Opening github.com"),
             ("mcp__kwnt__browser_open", json!({"url": "https://example.com/login"}), "Opening example.com"),
             ("WebSearch", json!({"query": "rust sse"}), "Searching the web for “rust sse”"),
+            ("WebSearch", json!({}), "Searching the web"),
+            ("Grep", json!({"pattern": "TODO"}), "Searching files for `TODO`"),
+            ("mcp__x__grep", json!({"pattern": "TODO"}), "Searching files for `TODO`"),
+            ("Glob", json!({}), "Searching files"),
+            ("Task", json!({"description": "Find the bug"}), "Starting a helper: Find the bug"),
+            ("Agent", json!({"subagent_type": "Explore"}), "Starting a helper: Explore"),
+            ("Task", json!({}), "Starting a helper"),
             ("mcp__kwnt__ask_user", json!({}), "Asking you a question"),
             ("mcp__linear__list_issues", json!({}), "Using list_issues (linear)"),
             ("something_else", json!({}), "Using something_else"),
@@ -960,6 +1018,33 @@ mod tests {
         let s = log.observe(&pending("1", "Bash", json!({"command": long})));
         assert!(s[0].title.chars().count() <= MAX_TITLE);
         assert!(s[0].detail.as_ref().unwrap().chars().count() <= MAX_DETAIL);
+    }
+
+    /// 19a: the island's bare title per search or helper kind, ignoring an mcp prefix and case;
+    /// every other tool (shell included) has none.
+    #[test]
+    fn island_kind_titles_name_the_kind_only() {
+        for (name, want) in [
+            ("Grep", Some("Searching files")),
+            ("Glob", Some("Searching files")),
+            ("mcp__x__grep", Some("Searching files")),
+            ("mcp__kwnt__SEARCH_FILES", Some("Searching files")),
+            ("WebSearch", Some("Searching the web")),
+            ("web_search", Some("Searching the web")),
+            ("Task", Some("Starting a helper")),
+            ("mcp__x__agent", Some("Starting a helper")),
+            ("Bash", None),
+            ("Read", None),
+            ("WebFetch", None),
+            ("mcp__linear__list_issues", None),
+            ("mcp__grep", None),
+        ] {
+            assert_eq!(island_kind_title(name), want, "{name}");
+            // The island's title is the chat's title without its words
+            if let Some(bare) = want {
+                assert_eq!(summarize(name, &Value::Null).0, bare, "{name}");
+            }
+        }
     }
 
     #[test]

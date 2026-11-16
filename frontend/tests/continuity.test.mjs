@@ -197,7 +197,7 @@ test('monthly and cron schedules in plain words', () => {
   assert.equal(c.monthDaysText([15, 'last', 1]), 'the 1st, 15th and last day');
   assert.equal(c.monthDaysText([2, 3, 11, 12, 13, 21, 22, 23]), 'the 2nd, 3rd, 11th, 12th, 13th, 21st, 22nd and 23rd');
   assert.equal(c.monthDaysText(['last']), 'the last day');
-  assert.equal(c.describeSchedule({ type: 'monthly', time: '09:00', days: [1], tz: 'UTC' }), 'Every month on the 1st at 9:00 AM, UTC');
+  assert.equal(c.describeSchedule({ type: 'monthly', time: '09:00', days: [1], tz: 'UTC' }), 'Every month on the 1st at 9:00\u00a0AM, UTC');
   assert.equal(c.describeSchedule({ type: 'cron', expression: '0 9 * * MON#2', tz: 'UTC' }), 'Custom rule 0 9 * * MON#2, UTC');
   assert.equal(c.describeSchedule({ type: 'lunar' }), 'Unknown schedule');
 });
@@ -246,14 +246,14 @@ test('sameDays: the Weekdays chip is on only for exactly Mon–Fri', () => {
 
 test('describeSchedule writes the zone as a city and names common day sets', () => {
   const w = (weekdays) => c.describeSchedule({ type: 'weekly', time: '09:00', weekdays, tz: 'Europe/Kyiv' });
-  assert.equal(c.describeSchedule({ type: 'daily', time: '09:00', tz: 'Europe/Kyiv' }), 'Every day at 9:00 AM, Kyiv time');
-  assert.equal(w(['mon']), 'Every Monday at 9:00 AM, Kyiv time');
-  assert.equal(w(['fri', 'mon', 'wed']), 'Mon, Wed and Fri at 9:00 AM, Kyiv time');
-  assert.equal(w(['mon', 'tue', 'wed', 'thu', 'fri']), 'Weekdays at 9:00 AM, Kyiv time');
-  assert.equal(w(['sat', 'sun']), 'Weekends at 9:00 AM, Kyiv time');
-  assert.equal(w(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']), 'Every day at 9:00 AM, Kyiv time');
-  assert.equal(w(['tue', 'thu']), 'Tue and Thu at 9:00 AM, Kyiv time');
-  assert.equal(c.describeSchedule({ type: 'monthly', time: '07:00', days: [1], tz: 'Europe/Kyiv' }), 'Every month on the 1st at 7:00 AM, Kyiv time');
+  assert.equal(c.describeSchedule({ type: 'daily', time: '09:00', tz: 'Europe/Kyiv' }), 'Every day at 9:00\u00a0AM, Kyiv time');
+  assert.equal(w(['mon']), 'Every Monday at 9:00\u00a0AM, Kyiv time');
+  assert.equal(w(['fri', 'mon', 'wed']), 'Mon, Wed and Fri at 9:00\u00a0AM, Kyiv time');
+  assert.equal(w(['mon', 'tue', 'wed', 'thu', 'fri']), 'Weekdays at 9:00\u00a0AM, Kyiv time');
+  assert.equal(w(['sat', 'sun']), 'Weekends at 9:00\u00a0AM, Kyiv time');
+  assert.equal(w(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']), 'Every day at 9:00\u00a0AM, Kyiv time');
+  assert.equal(w(['tue', 'thu']), 'Tue and Thu at 9:00\u00a0AM, Kyiv time');
+  assert.equal(c.describeSchedule({ type: 'monthly', time: '07:00', days: [1], tz: 'Europe/Kyiv' }), 'Every month on the 1st at 7:00\u00a0AM, Kyiv time');
   assert.equal(c.describeSchedule({ type: 'cron', expression: '0 9 * * MON#2', tz: 'Europe/Kyiv' }), 'Custom rule 0 9 * * MON#2, Kyiv time');
   assert.equal(c.describeSchedule({ type: 'interval', every_minutes: 120 }), 'Every 2 h');
 });

@@ -31,6 +31,8 @@ export interface ActiveTurn {
   since?: string;
   /** "decide": a consult or decide turn of the decide-first gate. */
   purpose?: string;
+  /** 14a: an audit's hidden turn, with whose work it double-checks and why. */
+  audit?: import('./auditor').AuditTurn;
   /** A running turn's steps so far (like `meta.activity`), so a page opened mid-turn can show them. */
   activity?: unknown;
 }
@@ -48,6 +50,11 @@ export interface Thread {
   updated_at: string;
   delegation?: Delegation | null;
   active?: ActiveTurn[];
+  /** Continue in a new chat (continueChat.ts): the chat and message it was continued from; null otherwise. */
+  forked_from_context?: string | null;
+  forked_from_message_id?: string | null;
+  forked_copied?: number | null;
+  forked_truncated?: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +186,7 @@ export function applyTurnEvent(turns: TurnMap, ev: { type?: string; data?: any }
           state: 'running',
           seq: prev?.seq ?? ++seqCounter,
           since: prev?.since ?? new Date().toISOString(),
+          ...((d.audit ?? prev?.audit) ? { audit: d.audit ?? prev?.audit } : {}),
         },
       };
     }
