@@ -68,6 +68,7 @@ Key facts:
 - [Use kwant from Claude Code, Codex or Cursor over MCP](https://kwant.si/docs/agents-connect): Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can't approve anything, revoked at once.
 - [Telegram: message your kwant bots and get alerts on your phone](https://kwant.si/docs/telegram): Pair a Telegram chat with a kwant space. Write to your bots from Telegram, get their replies, questions and approvals on your phone, and allow some approvals once with a tap. It needs no public address.
 - [AI agent browser: your Chrome or Docker](https://kwant.si/docs/browser): Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.
+- [Browser proxy: your bots' browser through a home connection](https://kwant.si/docs/browser-proxy): Send only kwant's bot browser through a SOCKS5 or HTTP proxy with KWNT_BROWSER_PROXY, so sites see a home connection, not a VPS. Check it with kwnt doctor.
 
 ## Alternatives
 - [Grok Bot Alternative: Open-Source & Self-Hosted](https://kwant.si/alternatives/grok-bot): kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.
