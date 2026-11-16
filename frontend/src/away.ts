@@ -9,6 +9,8 @@ export interface AwayLink {
   thread_id: string | null;
   channel_id: string | null;
   direct_kwant_id: string | null;
+  /** 22i (Lin, #700): set only when the item's thread belongs to another bot; open the thread under it. */
+  thread_kwant_id?: string | null;
 }
 
 export interface AwayItem {
@@ -46,6 +48,10 @@ export interface AwayItem {
   /** "sign_in" or "reconnect" (an app to connect again); older servers may leave it out. */
   cause?: string;
   fix?: { label: string; opens?: string } | null;
+  /** 22i (Lin's server part): what resolves the item. Older servers leave it out; `askAction` infers it. */
+  action?: 'retry' | 'continue' | 'ask_again' | 'answer' | 'decide' | 'browser' | null;
+  /** 22i (Lin, #700): whether "Done, clear it" may close it. Older servers leave it out (the strip infers). */
+  dismissable?: boolean;
 }
 
 export interface AwayCounts {
@@ -169,7 +175,7 @@ export type AwayTarget = { thread: string; kwant: string } | { channel: string }
 
 export function awayTarget(item: Pick<AwayItem, 'kwant_id' | 'link'>): AwayTarget {
   const l = item.link;
-  if (l.thread_id) return { thread: l.thread_id, kwant: item.kwant_id };
+  if (l.thread_id) return { thread: l.thread_id, kwant: l.thread_kwant_id || item.kwant_id };
   if (l.channel_id) return { channel: l.channel_id };
   return { direct: l.direct_kwant_id || item.kwant_id };
 }
@@ -229,8 +235,13 @@ export function actionFailureNotice(status: number, serverMessage: string, title
 }
 
 export class AwayError extends Error {
+  /** The server's machine-readable `code` (22i dismiss: `not_found`, `person_only`, `use_*`), when it sent one. */
+  public code: string | null;
+  /** `body`: the parsed JSON error body (22f: a 409 `needs_backup` floor refusal), when there was one. */
   constructor(public status: number, message: string, public body: unknown = null) {
     super(message);
+    const c = body && typeof body === 'object' ? (body as { code?: unknown }).code : undefined;
+    this.code = typeof c === 'string' && c ? c : null;
   }
 }
 
@@ -299,6 +310,10 @@ export const awayApi = {
   approvals: (status: string) => call<unknown>('GET', `/api/approvals?status=${enc(status)}`),
   /** 0.9.5: ask again for an approval that expired unanswered (starts a new turn; grants nothing). */
   retryApproval: (approvalId: string) => call<unknown>('POST', `/api/approvals/${enc(approvalId)}/retry`),
+  /** 22i: Retry on a failed task or routine run that names its task (`missions` retry_task). */
+  retryTask: (taskId: string) => call<unknown>('POST', `/api/tasks/${enc(taskId)}/retry`),
+  /** 22i: "Done, clear it" (the person only, Lin #700): closes one item kwant can't close by itself. */
+  dismiss: (id: string, kind: string) => call<unknown>('POST', `/api/waiting/${enc(id)}/dismiss`, { kind }),
 };
 
 /**
@@ -319,5 +334,10 @@ const AWAY_EVENTS = new Set([
   'delegation_updated', 'DelegationUpdated',
   'routine_run', 'RoutineRun',
   'ApprovalRequired', 'ApprovalWithdrawn',
+  // 22i: a stopped item closes when a later reply there ends, a browser step when it is done, and
+  // any item when it is cleared; each refreshes Needs attention and the strip without a reload.
+  'turn_ended', 'TurnEnded',
+  'human_step_updated', 'HumanStepUpdated',
+  'waiting_updated', 'WaitingUpdated', 'waiting_closed', 'WaitingClosed',
 ]);
 export const affectsAway = (type: unknown): boolean => typeof type === 'string' && AWAY_EVENTS.has(type);
