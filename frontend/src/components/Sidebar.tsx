@@ -14,7 +14,7 @@ import { ApprovalsOffBadge } from './ApprovalsSetting';
 import { approvalsOff } from '../approvalMode';
 import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
-import { InstallAppButton } from './InstallAppButton';
+import { PhoneAppTip } from './PhoneAppTip';
 import { trapFocusTarget } from '../imports';
 import { type AttentionRow, type NeedsYouRow, PINNED_RANK, NEEDS_YOU_LABEL, workingIds, directIds, rollupLabel } from '../chatsTab';
 import { askAction, askKind, askLine, isAsk } from '../askHere';
@@ -105,6 +105,8 @@ export interface SidebarProps {
   onSwitchSpace: (id: string) => void;
   onCreateSpace: () => void;
   onOpenSpaceSettings: () => void;
+  /** The phone tip: Settings › All spaces, at "Use kwant bots on your phone". */
+  onOpenPhoneApp?: () => void;
   onOpenArchived: () => void;
   onOpenSearch: () => void;
   /** Phones show one tab at a time, full width. */
@@ -290,6 +292,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSwitchSpace,
   onCreateSpace,
   onOpenSpaceSettings,
+  onOpenPhoneApp,
   onOpenArchived,
   onOpenSearch,
   section = 'all',
@@ -1174,8 +1177,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         )}
 
-        {/* Desktop: a one-time tip; Settings › All spaces keeps "Install app" for later */}
-        {section === 'all' && <InstallAppButton tip className={navRow(false)} />}
+        {/* Desktop: a one-time tip; Settings › All spaces keeps "Use kwant bots on your phone" for later */}
+        {section === 'all' && onOpenPhoneApp && <PhoneAppTip className={navRow(false)} onOpen={onOpenPhoneApp} />}
       </div>
 
       {/* Footer: what this space's bots run on, from the real checks */}

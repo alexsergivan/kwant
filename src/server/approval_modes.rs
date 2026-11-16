@@ -204,8 +204,47 @@ pub async fn list(State(state): State<AppState>, Scope(space): Scope, Query(q): 
                 "answered_via": a.answered_via,
                 "created_at": a.created_at,
                 "details": super::away::masked_details(details),
+                "link": approval_link(a.resume.as_deref()),
             })
         })
         .collect();
     Json(out).into_response()
+}
+
+/// 22a: a row's `link`, the chat it happened in, from its stored `resume` in the same
+/// `{thread_id, channel_id, direct_kwant_id}` shape as a live card's link (each key present,
+/// `null` when not that kind). `null` for a row stored without a chat (before 22a, or never in one).
+fn approval_link(resume: Option<&str>) -> Value {
+    let Some(chat) = resume.and_then(|r| serde_json::from_str::<Value>(r).ok()) else {
+        return Value::Null;
+    };
+    let field = |k: &str| chat.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+    let (thread_id, channel_id, direct_kwant_id) = (field("thread_id"), field("channel_id"), field("direct_kwant_id"));
+    if thread_id.is_none() && channel_id.is_none() && direct_kwant_id.is_none() {
+        return Value::Null;
+    }
+    json!({"thread_id": thread_id, "channel_id": channel_id, "direct_kwant_id": direct_kwant_id})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rows_link_is_its_stored_chat_in_a_cards_shape() {
+        let link = |r: &str| approval_link(Some(r));
+        assert_eq!(link(r#"{"thread_id":"t1"}"#), json!({"thread_id": "t1", "channel_id": null, "direct_kwant_id": null}));
+        assert_eq!(link(r#"{"channel_id":"c1"}"#), json!({"thread_id": null, "channel_id": "c1", "direct_kwant_id": null}));
+        assert_eq!(link(r#"{"direct_kwant_id":"k1"}"#), json!({"thread_id": null, "channel_id": null, "direct_kwant_id": "k1"}));
+        // A card's routing extras never show
+        assert_eq!(
+            link(r#"{"direct_kwant_id":"k1","agent":"claude","effort":"high","purpose":"x"}"#),
+            json!({"thread_id": null, "channel_id": null, "direct_kwant_id": "k1"})
+        );
+        // Stored without a chat, or not one: no link
+        assert_eq!(approval_link(None), Value::Null);
+        assert_eq!(link("not json"), Value::Null);
+        assert_eq!(link(r#"{"purpose":"x"}"#), Value::Null);
+        assert_eq!(link(r#"{"thread_id":""}"#), Value::Null);
+    }
 }
