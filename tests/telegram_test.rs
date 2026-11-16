@@ -663,6 +663,11 @@ fn floor_refused() -> Vec<(&'static str, Value, &'static str)> {
         ("prepush_grant", flagged("prepush_grant", json!({"repo": "o/r"})), "This pushes code."),
         ("strict_ask", flagged("strict_ask", json!(true)), "This pushes code."),
         ("smart_reason", flagged("smart_reason", json!("Deletes records")), "kwant flagged this step as risky."),
+        // 20d: still refused once names match as whole words
+        ("run_query", mcp("db", "run_query", json!({"limit": 10})), "This runs a command."),
+        ("evaluate_js", mcp("browser", "evaluate_js", json!({"expression": "1"})), "This runs a command."),
+        ("push_files", mcp("github", "push_files", json!({"owner": "o", "repo": "r", "branch": "main"})), "This pushes code."),
+        ("GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", mcp("composio", "GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", json!({"pull_number": 12})), "This pushes code."),
     ]
 }
 
@@ -674,6 +679,13 @@ fn floor_allowed() -> Vec<(&'static str, Value)> {
             mcp("composio", "GMAIL_SEND_EMAIL", json!({"recipient_email": "a@example.com", "subject": "Our press release", "body": "The press release is attached."})),
         ),
         ("NOTION_SEARCH_NOTION_PAGE", mcp("composio", "NOTION_SEARCH_NOTION_PAGE", json!({"query": "release notes"}))),
+        // 20d: Rigel's #667 finding 2, reads the old part match refused with a wrong line
+        ("GITHUB_GET_A_RELEASE", mcp("composio", "GITHUB_GET_A_RELEASE", json!({"owner": "o", "repo": "r", "release_id": 1}))),
+        ("list_merge_requests", mcp("gitlab", "list_merge_requests", json!({}))),
+        ("truncate_text", mcp("db", "truncate_text", json!({"t": "x"}))),
+        ("get_description", mcp("crm", "get_description", json!({"id": 1}))),
+        ("url_encode", mcp("util", "url_encode", json!({"u": "x"}))),
+        ("geocode", mcp("maps", "geocode", json!({"q": "Paris"}))),
     ]
 }
 

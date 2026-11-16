@@ -91,11 +91,23 @@ pub fn app_path(space: &str, link: &Value, kwant_id: &str, card: Option<&str>) -
     }
 }
 
-/// GitHub tool names that merge, push or change a branch without a file write [`mcp_writes`]
-/// would see (a merge, a branch update, a release). Any case, any prefix.
+/// Word runs of a tool name ([`words`]) that merge, push or change a branch or a release without a
+/// file write [`mcp_writes`] would see. Every word but the last matches whole; the last also matches
+/// as a prefix, so `merges`, `pushed`, `releases`, `update_refs` and `update_reference` count. Whole
+/// words since 20d (they were parts before, so `GITHUB_GET_A_RELEASE` "pushed code"), and a name
+/// with a [`READ_VERBS`] word only reads ([`ships_by_name`]).
 ///
 /// [`mcp_writes`]: super::dev::prepush::mcp_writes
-const PUSH_WORDS: &[&str] = &["MERGE", "PUSH", "UPDATE_BRANCH", "UPDATE_A_REFERENCE", "UPDATE_REF", "CREATE_A_REFERENCE", "DELETE_A_REFERENCE", "RELEASE"];
+const PUSH_WORDS: &[&[&str]] = &[
+    &["merge"],
+    &["push"],
+    &["release"],
+    &["update", "branch"],
+    &["update", "ref"],
+    &["update", "a", "ref"],
+    &["create", "a", "ref"],
+    &["delete", "a", "ref"],
+];
 
 /// Whole words of a tool name ([`words`]) that make a commit or a branch: `commit_files`,
 /// `create_commit`, `create_branch`, `GITHUB_CREATE_A_BRANCH` (18c, Rigel's B55–B56). Whole words, so
@@ -106,10 +118,22 @@ const COMMIT_NAME_WORDS: &[&str] = &["commit", "branch"];
 /// Whole words of a tool name that only read; they keep [`COMMIT_NAME_WORDS`] from refusing.
 const READ_VERBS: &[&str] = &["get", "list", "search", "read", "view", "show", "describe", "find", "compare"];
 
-/// Parts of a tool or server name (any case) that mark a tool taking free text to run: a command,
-/// a script, code or a query. A one-line peek can't show what that text does, and a list of bad
-/// commands is never complete, so all of them need the full card.
-const RUNS_TEXT_NAMES: &[&str] = &["RUN", "EXEC", "COMMAND", "CMD", "SHELL", "BASH", "TERMINAL", "SSH", "SCRIPT", "EVAL", "CODE", "SQL"];
+/// Word starts of a tool or server name ([`words`]) that mark a tool taking free text to run: a
+/// command, a script, code or a query. A one-line peek can't show what that text does, and a list of
+/// bad commands is never complete, so all of them need the full card. Prefixes of whole words since
+/// 20d, so `execute`, `evaluate`, `commands`, `scripts`, `runner` and `shellExec` count while
+/// `truncate`, `description`, `encode` and `geocode` don't. See [`runs_by_name`].
+const RUNS_TEXT_NAMES: &[&str] = &["run", "exec", "command", "cmd", "shell", "bash", "terminal", "ssh", "script", "eval", "code", "sql"];
+
+/// Whole words of a tool or server name that run free text but hide a [`RUNS_TEXT_NAMES`] word
+/// inside one word, which the old part match caught and a prefix match would miss (20d): SQL
+/// dialects, shells and script languages written as one word, and code editors.
+const RUNS_TEXT_NAME_WORDS: &[&str] = &[
+    "mysql", "mssql", "psql", "pgsql", "plsql", "tsql", "nosql", "postgresql", //
+    "powershell", "subshell", "subcommand", "autoexec", "rerun", "autorun", //
+    "javascript", "typescript", "applescript", "vbscript", "jscript", //
+    "vscode", "xcode", "opencode", "claudecode",
+];
 
 /// Argument keys (any depth, any case) that carry free text to run.
 const RUNS_TEXT_KEYS: &[&str] = &["command", "cmd", "argv", "args", "script", "code", "shell", "query", "sql"];
@@ -141,19 +165,41 @@ const READ_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
 const PUSH_FAMILY: &[&[&str]] = &[&["push"], &["merge"], &["publish"], &["release"], &["send", "pack"], &["receive", "pack"], &["refs"], &["deploy"], &["tag"]];
 
 /// Parts of a tool name (any case) that act outside kwant or destroy something: publishing,
-/// sending, deleting, posting or paying.
+/// sending, deleting or paying. These are verbs: a read verb never lifts them, so `get_deploy_logs`
+/// and `list_and_send_emails` still need the full card.
 const OUTWARD_NAMES: &[&str] = &[
-    "PUBLISH", "DEPLOY", "SEND", "EMAIL", "MAIL", "DELETE", "REMOVE", "DESTROY", "DROP", "POST", "PAY",
+    "PUBLISH", "DEPLOY", "SEND", "DELETE", "REMOVE", "DESTROY",
     // 0.9.14 (Rigel's hole 3)
-    "TRANSFER", "SUBMIT", "TWEET", "SHARE", "INVITE", "FORWARD", "UPLOAD", "WIPE", "TERMINATE", "REVOKE", "PURCHASE",
+    "TRANSFER", "SUBMIT", "TWEET", "INVITE", "FORWARD", "WIPE", "TERMINATE", "REVOKE", "PURCHASE",
     // 18c (Rigel's B34)
     "BROADCAST",
 ];
 
+/// Parts of a tool name (any case) that act outside kwant as a verb but are just as often the
+/// thing a read looks at: mail, posts, payments, shares, uploads, drops. They refuse like
+/// [`OUTWARD_NAMES`] unless the name only reads ([`reads_outward_noun`], 21a), so `GMAIL_FETCH_EMAILS`
+/// and `get_payment_status` keep Allow once while `create_post` and `pay_invoice` don't.
+const OUTWARD_NOUNS: &[&str] = &["EMAIL", "MAIL", "DROP", "POST", "PAY", "SHARE", "UPLOAD"];
+
 /// Whole words of a tool name ([`words`]) that act outside kwant but sit inside ordinary words as
-/// parts (`ship` in `membership`, `relationship`), so they can't join [`OUTWARD_NAMES`]: `ship_it`,
-/// `rollout` (18c, Rigel's B54).
+/// parts (`ship` in `membership`, `relationship`), so they can't join [`OUTWARD_NOUNS`]: `ship_it`,
+/// `rollout` (18c, Rigel's B54). Lifted like [`OUTWARD_NOUNS`]: `ship_status`, `rollout_status`.
 const OUTWARD_NAME_WORDS: &[&str] = &["ship", "rollout"];
+
+/// Whole words that, with the [`READ_VERBS`], say a name with only [`OUTWARD_NOUNS`] in it reads
+/// (21a). Local to the outward layer: `fetch` must not join [`READ_VERBS`], where it would lift
+/// push and commit words too.
+const OUTWARD_READ_WORDS: &[&str] = &["fetch"];
+
+/// Last words of a tool name that make it a read of something's state: `rollout_status`,
+/// `get_payment_status`, `ship_state` (21a).
+const OUTWARD_READ_LAST_WORDS: &[&str] = &["status", "state"];
+
+/// Whole words that add a second action to a read name, so the read verb can't vouch for it:
+/// `find_and_share_file`, `get_then_pay`, `list_or_create_posts` (via `create`), `fetch_and_reply` (21a).
+const SECOND_ACTION_WORDS: &[&str] = &[
+    "and", "then", "create", "update", "add", "set", "put", "write", "edit", "modify", "reply", "save", "schedule", "upsert", "insert",
+];
 
 /// Whole words in the value of an `action`, `operation` or `op` argument ([`is_action_key`]) that
 /// change or destroy something (18c, Rigel's H01–H02): the [`WRITE_METHODS`] verbs, plus these.
@@ -245,6 +291,57 @@ fn has_push_word(text: &str) -> bool {
     PUSH_FAMILY.iter().any(|phrase| words.windows(phrase.len()).any(|w| w.iter().zip(phrase.iter()).all(|(a, b)| a == b)))
 }
 
+/// Whether `name` (already split by [`words`]) has a [`READ_VERBS`] word, so it only reads.
+fn reads(name: &[String]) -> bool {
+    name.iter().any(|w| READ_VERBS.contains(&w.as_str()))
+}
+
+/// Whether a tool name ships code by its words (20d: one place for Telegram and the island): a
+/// [`PUSH_WORDS`] run or a [`COMMIT_NAME_WORDS`] word, in a name with no [`READ_VERBS`] word.
+/// `GITHUB_GET_A_RELEASE`, `list_merge_requests` and `get_commit` only read; `GITHUB_MERGE_A_PULL_REQUEST`,
+/// `GITHUB_CREATE_A_RELEASE`, `push_files` and `GITHUB_UPDATE_A_PULL_REQUEST_BRANCH` ship.
+fn ships_by_name(tool: &str) -> bool {
+    let name = words(tool);
+    let push = PUSH_WORDS.iter().any(|run| {
+        let Some((last, head)) = run.split_last() else { return false };
+        name.windows(run.len()).any(|w| w[..head.len()].iter().zip(head.iter()).all(|(a, b)| a == b) && w[head.len()].starts_with(last))
+    });
+    let commit = name.iter().any(|w| COMMIT_NAME_WORDS.contains(&w.as_str()));
+    (push || commit) && !reads(&name)
+}
+
+/// Whether a tool name acts outside kwant or destroys something ([`inline_refusal`] step 3): a
+/// part of it is one of [`OUTWARD_NAMES`], or it has an outward noun ([`OUTWARD_NOUNS`] as a part,
+/// [`OUTWARD_NAME_WORDS`] as a whole word) and doesn't only read ([`reads_outward_noun`]).
+fn outward_by_name(tool: &str) -> bool {
+    let upper = tool.to_ascii_uppercase();
+    if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) {
+        return true;
+    }
+    let name = words(tool);
+    let noun = OUTWARD_NOUNS.iter().any(|w| upper.contains(w)) || name.iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str()));
+    noun && !reads_outward_noun(&name)
+}
+
+/// Whether a name (already split by [`words`]) whose only outward words are nouns only reads them
+/// (21a): it has a [`READ_VERBS`] or [`OUTWARD_READ_WORDS`] word, or ends in one of
+/// [`OUTWARD_READ_LAST_WORDS`], and has none of [`SECOND_ACTION_WORDS`]. `GMAIL_LIST_THREADS`,
+/// `WORDPRESS_GET_POST` and `ship_status` read; `GMAIL_REPLY_TO_THREAD`, `find_and_share_file` and
+/// `set_payment_status` don't.
+fn reads_outward_noun(name: &[String]) -> bool {
+    let read = reads(name)
+        || name.iter().any(|w| OUTWARD_READ_WORDS.contains(&w.as_str()))
+        || name.last().is_some_and(|w| OUTWARD_READ_LAST_WORDS.contains(&w.as_str()));
+    read && !name.iter().any(|w| SECOND_ACTION_WORDS.contains(&w.as_str()))
+}
+
+/// Whether a tool or its server is named for running free text (20d: one place for Telegram and the
+/// island): a word of either name starting with a [`RUNS_TEXT_NAMES`] word, or one of
+/// [`RUNS_TEXT_NAME_WORDS`]. A read verb doesn't lift it: `run_query` and `get_shell` still run.
+fn runs_by_name(server: &str, tool: &str) -> bool {
+    words(server).iter().chain(words(tool).iter()).any(|w| RUNS_TEXT_NAMES.iter().any(|r| w.starts_with(r)) || RUNS_TEXT_NAME_WORDS.contains(&w.as_str()))
+}
+
 /// Whether a flattened argument key names an HTTP verb: `method`, `http_method`, `httpMethod`,
 /// `verb`, `request_verb` (18c, H03), or an `X-HTTP-Method-Override` header (18c, H05).
 fn is_method_key(f: &str) -> bool {
@@ -301,12 +398,13 @@ fn writes_by_method(args: &Value) -> bool {
 /// push floor (a prepush grant, a GitHub write, a merge) and details it can't read.
 ///
 /// It fails closed in four layers, each of which refuses on its own (Ada, #646 round 2; 0.9.14):
-/// 1. a push-family word ([`PUSH_FAMILY`]) anywhere in the tool name, an argument key or a string
-///    value, as a whole word, camelCase humps included ([`words`]);
-/// 2. a tool that runs free text: its tool or server name says so ([`RUNS_TEXT_NAMES`]) or an
+/// 1. a push-family word ([`PUSH_FAMILY`]) in the tool name (unless a [`READ_VERBS`] word says it
+///    only reads), an argument key or a string value, as a whole word, camelCase humps included
+///    ([`words`]);
+/// 2. a tool that runs free text: its tool or server name says so ([`runs_by_name`]) or an
 ///    argument key at any depth does ([`is_run_key`]: exact, by containment, or by word);
-/// 3. a tool whose name acts outside kwant or destroys something ([`OUTWARD_NAMES`], or a whole
-///    word of [`OUTWARD_NAME_WORDS`]);
+/// 3. a tool whose name acts outside kwant or destroys something ([`outward_by_name`]: a verb of
+///    [`OUTWARD_NAMES`] anywhere, or an outward noun in a name that doesn't only read it);
 /// 4. an HTTP verb that changes something in a method or action argument, or a body sent to a URL
 ///    with no method ([`writes_by_method`]).
 pub fn inline_refusal(details: &Value) -> Option<&'static str> {
@@ -325,20 +423,20 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     let tool = details["tool"].as_str().unwrap_or_default();
     let server = details["server"].as_str().unwrap_or_default();
     let args = &details["arguments"];
-    let upper = tool.to_ascii_uppercase();
-    // 1. A push-family word wherever it hides: the name, a key, a value, an argv item
-    let mut all = vec![tool];
+    // 1. A push-family word wherever it hides: the name (unless it only reads, 20d), a key, a
+    //    value, an argv item
+    let mut all = Vec::new();
     texts(args, &mut all);
-    if has_push_word(&all.join(" ")) {
+    if has_push_word(&all.join(" ")) || (has_push_word(tool) && !reads(&words(tool))) {
         return Some(PUSHES);
     }
     // 2. Free text to run, whatever it says
-    let names = format!("{} {}", server.to_ascii_uppercase(), upper);
-    if RUNS_TEXT_NAMES.iter().any(|w| names.contains(w)) || has_run_key(args) {
+    if runs_by_name(server, tool) || has_run_key(args) {
         return Some(RUNS);
     }
-    // 3. Acts outside kwant or destroys something
-    if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) || words(tool).iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str())) {
+    // 3. Acts outside kwant or destroys something (an outward noun in a name that only reads it
+    //    doesn't count, 21a)
+    if outward_by_name(tool) {
         return Some(OUTWARD);
     }
     // 4. An HTTP call that changes something, whatever the tool is called
@@ -349,9 +447,9 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
 }
 
 /// A risky step or the push floor, from the details alone: a step smart approvals flagged
-/// ([`RISKY`]); a prepush grant, a strict ask, a GitHub write [`mcp_writes`] sees, or a
-/// [`PUSH_WORDS`] part in the tool name, or a [`COMMIT_NAME_WORDS`] word in a name with no
-/// [`READ_VERBS`] word ([`PUSHES`]). The first layers of [`inline_refusal`], in its
+/// ([`RISKY`]); a prepush grant, a strict ask, a GitHub write [`mcp_writes`] sees, or a tool
+/// named for a push, a merge, a release, a commit or a branch that doesn't only read
+/// ([`ships_by_name`], [`PUSHES`]). The first layers of [`inline_refusal`], in its
 /// order.
 ///
 /// [`mcp_writes`]: super::dev::prepush::mcp_writes
@@ -367,13 +465,7 @@ fn ships(details: &Value) -> Option<&'static str> {
     if !super::dev::prepush::mcp_writes(tool, &details["arguments"]).is_empty() {
         return Some(PUSHES);
     }
-    let upper = tool.to_ascii_uppercase();
-    if PUSH_WORDS.iter().any(|w| upper.contains(w)) {
-        return Some(PUSHES);
-    }
-    let name = words(tool);
-    let has = |list: &[&str]| name.iter().any(|w| list.contains(&w.as_str()));
-    if has(COMMIT_NAME_WORDS) && !has(READ_VERBS) {
+    if ships_by_name(tool) {
         return Some(PUSHES);
     }
     None
@@ -387,7 +479,7 @@ const TELEGRAM_RUN_KEYS: &[&str] = &["command", "cmd", "argv", "script", "sql"];
 
 /// What Telegram's Allow once adds to its own floor (18b, Rigel's push-floor advisory): a step
 /// that ships code or runs a command, or one kwant flagged as risky. [`ships`], then a tool that
-/// runs free text: a [`RUNS_TEXT_NAMES`] part in the server or tool name, or an argument key that
+/// runs free text: a server or tool name word for it ([`runs_by_name`]), or an argument key that
 /// is exactly one of [`TELEGRAM_RUN_KEYS`] ([`RUNS`]). Whatever it refuses,
 /// [`inline_refusal`] refuses too; the island's other layers (outward names, HTTP verbs, push words
 /// inside values, the broad run keys) stay off Telegram on purpose, so an email that says
@@ -399,8 +491,7 @@ pub fn ships_or_runs(details: &Value) -> Option<&'static str> {
     }
     let tool = details["tool"].as_str().unwrap_or_default();
     let server = details["server"].as_str().unwrap_or_default();
-    let names = format!("{} {}", server.to_ascii_uppercase(), tool.to_ascii_uppercase());
-    if RUNS_TEXT_NAMES.iter().any(|w| names.contains(w)) || any_key(&details["arguments"], &|k, _| TELEGRAM_RUN_KEYS.iter().any(|r| k.eq_ignore_ascii_case(r))) {
+    if runs_by_name(server, tool) || any_key(&details["arguments"], &|k, _| TELEGRAM_RUN_KEYS.iter().any(|r| k.eq_ignore_ascii_case(r))) {
         return Some(RUNS);
     }
     None
@@ -945,6 +1036,174 @@ mod tests {
         ] {
             assert_eq!(ships_or_runs(&d), None, "{d}");
         }
+    }
+
+    /// 20d: Rigel's #667 probe rows (finding 2), ordinary reads that the old part match refused
+    /// with a wrong reason on both surfaces. tests/telegram_test.rs reads them back through Telegram.
+    fn reads_rows() -> Vec<(&'static str, Value)> {
+        vec![
+            ("GITHUB_GET_A_RELEASE (RELEASE)", mcp("composio", "GITHUB_GET_A_RELEASE", json!({"id": 1}))),
+            ("list_merge_requests (MERGE)", mcp("gitlab", "list_merge_requests", json!({}))),
+            ("truncate_text (RUN)", mcp("db", "truncate_text", json!({"t": "x"}))),
+            ("get_description (SCRIPT)", mcp("crm", "get_description", json!({"id": 1}))),
+            ("url_encode (CODE)", mcp("util", "url_encode", json!({"u": "x"}))),
+            ("geocode (CODE)", mcp("maps", "geocode", json!({"q": "Paris"}))),
+            // Near misses of the same kind
+            ("GITHUB_LIST_RELEASES", mcp("composio", "GITHUB_LIST_RELEASES", json!({"owner": "o", "repo": "r"}))),
+            ("get_merge_request", mcp("gitlab", "get_merge_request", json!({"iid": 4}))),
+            ("search_retrieval (EVAL)", mcp("docs", "search_retrieval", json!({"q": "x"}))),
+            ("get_subscription (SCRIPT)", mcp("crm", "get_subscription", json!({"id": "s"}))),
+            ("decode_barcode (CODE)", mcp("util", "decode_barcode", json!({"image": "a.png"}))),
+            ("list_trunk_builds (RUN)", mcp("ci", "list_trunk_builds", json!({}))),
+        ]
+    }
+
+    /// The older Telegram floor's line for a wrapper (`link_only_reason`), which the island shows
+    /// first: any tool name with MULTI_EXECUTE, WORKBENCH, BASH or SHELL in it.
+    const OTHER: &str = "This step runs other actions inside it.";
+
+    /// 20d: what must still refuse after the switch to whole words, with its reason on each surface
+    /// (island, Telegram's `ships_or_runs`).
+    fn still_refused_rows() -> Vec<(&'static str, Value, &'static str, &'static str)> {
+        vec![
+            ("COMPOSIO_MULTI_EXECUTE_TOOL", mcp("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", json!({})), OTHER, RUNS),
+            ("run_command", mcp("devtools", "run_command", json!({})), RUNS, RUNS),
+            ("execute_sql", mcp("db", "execute_sql", json!({})), RUNS, RUNS),
+            ("evaluate_js", mcp("browser", "evaluate_js", json!({})), RUNS, RUNS),
+            ("GITHUB_MERGE_A_PULL_REQUEST", mcp("composio", "GITHUB_MERGE_A_PULL_REQUEST", json!({})), PUSHES, PUSHES),
+            ("GITHUB_CREATE_A_RELEASE", mcp("composio", "GITHUB_CREATE_A_RELEASE", json!({})), PUSHES, PUSHES),
+            ("push_files", mcp("gh", "push_files", json!({})), PUSHES, PUSHES),
+            ("GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", mcp("composio", "GITHUB_UPDATE_A_PULL_REQUEST_BRANCH", json!({})), PUSHES, PUSHES),
+            // A read verb doesn't lift a run name
+            ("run_query", mcp("db", "run_query", json!({})), RUNS, RUNS),
+            ("get_shell", mcp("x", "get_shell", json!({})), OTHER, RUNS),
+            ("list_commands", mcp("x", "list_commands", json!({})), RUNS, RUNS),
+            // Prefixes of whole words, camelCase humps, server names
+            ("runner server", mcp("runner", "start", json!({})), RUNS, RUNS),
+            ("shellExec", mcp("x", "shellExec", json!({})), OTHER, RUNS),
+            ("commands / scripts", mcp("x", "save_scripts", json!({})), RUNS, RUNS),
+            ("executeSql", mcp("x", "executeSql", json!({})), RUNS, RUNS),
+            ("my-ssh server", mcp("my-ssh", "connect", json!({})), RUNS, RUNS),
+            // One-word names the old part match caught and a prefix alone would miss
+            ("mysql server", mcp("mysql", "query", json!({})), RUNS, RUNS),
+            ("POSTGRESQL server", mcp("POSTGRESQL", "query", json!({})), RUNS, RUNS),
+            ("powershell", mcp("win", "powershell", json!({})), OTHER, RUNS),
+            ("javascript", mcp("x", "javascript", json!({})), RUNS, RUNS),
+            ("vscode server", mcp("vscode", "open_file", json!({})), RUNS, RUNS),
+            ("rerun_job", mcp("ci", "rerun_job", json!({})), RUNS, RUNS),
+            // Push words: plurals, past tense, camelCase, references
+            ("merges_pr", mcp("x", "merges_pr", json!({})), PUSHES, PUSHES),
+            ("gitPushed", mcp("x", "gitPushed", json!({})), PUSHES, PUSHES),
+            ("GITHUB_UPDATE_A_REFERENCE", mcp("composio", "GITHUB_UPDATE_A_REFERENCE", json!({})), PUSHES, PUSHES),
+            ("GITHUB_CREATE_A_REFERENCE", mcp("composio", "GITHUB_CREATE_A_REFERENCE", json!({})), PUSHES, PUSHES),
+            ("GITHUB_DELETE_A_REFERENCE", mcp("composio", "GITHUB_DELETE_A_REFERENCE", json!({})), PUSHES, PUSHES),
+            ("update_refs", mcp("git", "update_refs", json!({})), PUSHES, PUSHES),
+            ("updateBranch", mcp("x", "updateBranch", json!({})), PUSHES, PUSHES),
+            ("publish_release", mcp("x", "publish_release", json!({})), PUSHES, PUSHES),
+        ]
+    }
+
+    #[test]
+    fn ordinary_reads_keep_allow_once_on_both_surfaces() {
+        let rows = reads_rows();
+        assert_eq!(rows.len(), 12);
+        for (name, d) in rows {
+            assert_eq!(ships_or_runs(&d), None, "telegram: {name}");
+            assert_eq!(inline_refusal(&d), None, "island: {name}");
+        }
+    }
+
+    #[test]
+    fn real_pushes_and_runs_still_refuse_on_both_surfaces() {
+        let rows = still_refused_rows();
+        assert_eq!(rows.len(), 30);
+        for (name, d, island, telegram) in rows {
+            assert_eq!(inline_refusal(&d), Some(island), "island: {name}");
+            assert_eq!(ships_or_runs(&d), Some(telegram), "telegram: {name}");
+        }
+    }
+
+    /// The other island layers are unchanged (brief, "Don't touch"): a push word in a key or value
+    /// still refuses a read tool there, and Telegram, which doesn't read them, keeps Allow once.
+    #[test]
+    fn a_push_word_in_the_arguments_still_refuses_a_read_on_the_island() {
+        let d = mcp("composio", "GITHUB_GET_A_RELEASE", json!({"owner": "o", "repo": "r", "release_id": 1}));
+        assert_eq!(inline_refusal(&d), Some(PUSHES));
+        assert_eq!(ships_or_runs(&d), None);
+        // And a read verb lifts only the name's push words, not an outward one
+        assert_eq!(inline_refusal(&mcp("x", "get_deploy_logs", json!({}))), Some(OUTWARD));
+    }
+
+    /// 21a: the island's outward layer, both directions. A read of mail, files, posts, payments,
+    /// uploads or a rollout keeps Allow once; a name that acts on them, or reads and then acts, doesn't.
+    fn outward_rows() -> Vec<(&'static str, Value, Option<&'static str>)> {
+        vec![
+            // Reads: Allow once (each was OUTWARD before 21a)
+            ("GMAIL_FETCH_EMAILS (MAIL, EMAIL)", mcp("composio", "GMAIL_FETCH_EMAILS", json!({"max_results": 10})), None),
+            ("GMAIL_LIST_THREADS (MAIL)", mcp("composio", "GMAIL_LIST_THREADS", json!({})), None),
+            ("DROPBOX_LIST_FILES (DROP)", mcp("composio", "DROPBOX_LIST_FILES", json!({"path": "/"})), None),
+            ("SHAREPOINT_GET_FILE (SHARE)", mcp("composio", "SHAREPOINT_GET_FILE", json!({"file_id": "f"})), None),
+            ("WORDPRESS_GET_POST (POST)", mcp("composio", "WORDPRESS_GET_POST", json!({"post_id": 7})), None),
+            ("get_payment_status (PAY)", mcp("stripe", "get_payment_status", json!({"id": "pi_1"})), None),
+            ("list_uploads (UPLOAD)", mcp("files", "list_uploads", json!({})), None),
+            ("rollout_status (rollout)", mcp("ci", "rollout_status", json!({})), None),
+            ("ship_status (ship)", mcp("ci", "ship_status", json!({})), None),
+            ("getPaymentState (camelCase)", mcp("x", "getPaymentState", json!({})), None),
+            // Acts on them, or reads and then acts: still OUTWARD
+            ("GMAIL_SEND_EMAIL", mcp("composio", "GMAIL_SEND_EMAIL", json!({})), Some(OUTWARD)),
+            ("GMAIL_REPLY_TO_THREAD", mcp("composio", "GMAIL_REPLY_TO_THREAD", json!({})), Some(OUTWARD)),
+            ("create_post", mcp("x", "create_post", json!({})), Some(OUTWARD)),
+            ("SLACK_CHAT_POST_MESSAGE", mcp("composio", "SLACK_CHAT_POST_MESSAGE", json!({})), Some(OUTWARD)),
+            ("pay_invoice", mcp("x", "pay_invoice", json!({})), Some(OUTWARD)),
+            ("share_page", mcp("x", "share_page", json!({})), Some(OUTWARD)),
+            ("find_and_share_file", mcp("x", "find_and_share_file", json!({})), Some(OUTWARD)),
+            ("get_and_delete_post", mcp("x", "get_and_delete_post", json!({})), Some(OUTWARD)),
+            ("list_and_send_emails", mcp("x", "list_and_send_emails", json!({})), Some(OUTWARD)),
+            ("ship_it", mcp("x", "ship_it", json!({})), Some(OUTWARD)),
+            ("DROPBOX_DELETE_FILE", mcp("composio", "DROPBOX_DELETE_FILE", json!({})), Some(OUTWARD)),
+            ("upload_file", mcp("x", "upload_file", json!({})), Some(OUTWARD)),
+            ("get_post sending a POST body (step 4)", mcp("x", "get_post", json!({"url": "https://api.example.com/posts", "method": "POST", "body": {"t": "x"}})), Some(OUTWARD)),
+            // Near misses of the lift
+            ("set_payment_status (set)", mcp("x", "set_payment_status", json!({})), Some(OUTWARD)),
+            ("fetch_then_pay (then)", mcp("x", "fetch_then_pay", json!({})), Some(OUTWARD)),
+            ("get_or_create_post (create)", mcp("x", "get_or_create_post", json!({})), Some(OUTWARD)),
+            ("GMAIL_FETCH_AND_REPLY (and, reply)", mcp("composio", "GMAIL_FETCH_AND_REPLY", json!({})), Some(OUTWARD)),
+            ("schedule_post_status (schedule)", mcp("x", "schedule_post_status", json!({})), Some(OUTWARD)),
+            ("get_deploy_logs (a verb isn't lifted)", mcp("x", "get_deploy_logs", json!({})), Some(OUTWARD)),
+            ("list_mail_to_forward (a verb isn't lifted)", mcp("x", "list_mail_to_forward", json!({})), Some(OUTWARD)),
+            ("GMAILFETCHEMAILS (one word, no read verb)", mcp("x", "GMAILFETCHEMAILS", json!({})), Some(OUTWARD)),
+            ("status_of_payment (status not last)", mcp("x", "status_of_payment", json!({})), Some(OUTWARD)),
+        ]
+    }
+
+    /// Step 3 as it was before 21a: any outward part, or a whole `ship`/`rollout` word.
+    fn outward_before_21a(tool: &str) -> bool {
+        let upper = tool.to_ascii_uppercase();
+        OUTWARD_NAMES.iter().chain(OUTWARD_NOUNS.iter()).any(|w| upper.contains(w)) || words(tool).iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str()))
+    }
+
+    #[test]
+    fn reads_of_outward_things_keep_allow_once_and_acts_on_them_do_not() {
+        let rows = outward_rows();
+        assert_eq!(rows.len(), 32);
+        for (name, d, want) in rows {
+            let tool = d["tool"].as_str().unwrap();
+            assert!(outward_before_21a(tool), "{name}: step 3 refused it before 21a");
+            assert_eq!(inline_refusal(&d), want, "island: {name}");
+            // Telegram's floor doesn't read outward names, before or after
+            assert_eq!(ships_or_runs(&d), None, "telegram: {name}");
+        }
+    }
+
+    #[test]
+    fn the_lift_only_touches_outward_nouns() {
+        // Steps 1 and 2 answer first, whatever the name reads
+        assert_eq!(inline_refusal(&mcp("composio", "GMAIL_FETCH_EMAILS", json!({"query": "label:x"}))), Some(RUNS), "a run key");
+        assert_eq!(inline_refusal(&mcp("x", "get_post", json!({"note": "merge it"}))), Some(PUSHES), "a push word in a value");
+        // fetch lifts outward nouns only; it doesn't join READ_VERBS for push and commit names
+        assert!(!READ_VERBS.contains(&"fetch"));
+        assert_eq!(inline_refusal(&mcp("x", "fetch_and_merge", json!({}))), Some(PUSHES));
+        assert_eq!(inline_refusal(&mcp("x", "fetch_commit", json!({}))), Some(PUSHES));
     }
 
     #[test]

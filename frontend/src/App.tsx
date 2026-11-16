@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
@@ -3439,8 +3440,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       : []
     : [];
 
+  // 15e: the lead first (the "Ask:" row and the header's faces), the rest in roster order, like the team home.
   const currentTeamMembers = currentTeam
-    ? kwants.filter((k) => currentTeamMemberIds.includes(k.id))
+    ? askOrder(kwants.filter((k) => currentTeamMemberIds.includes(k.id)), currentTeam.lead_kwant_id)
     : [];
   // 0.8.1 F3: whose pre-push lines a team chat or channel shows (membership, like approvalsForChat).
   const pointerMemberIds: string[] = currentTeam ? currentTeamMemberIds : openChat?.kind === 'channel' ? openChat.memberIds.filter((id): id is string => !!id) : [];
