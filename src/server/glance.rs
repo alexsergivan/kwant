@@ -165,19 +165,41 @@ const READ_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
 const PUSH_FAMILY: &[&[&str]] = &[&["push"], &["merge"], &["publish"], &["release"], &["send", "pack"], &["receive", "pack"], &["refs"], &["deploy"], &["tag"]];
 
 /// Parts of a tool name (any case) that act outside kwant or destroy something: publishing,
-/// sending, deleting, posting or paying.
+/// sending, deleting or paying. These are verbs: a read verb never lifts them, so `get_deploy_logs`
+/// and `list_and_send_emails` still need the full card.
 const OUTWARD_NAMES: &[&str] = &[
-    "PUBLISH", "DEPLOY", "SEND", "EMAIL", "MAIL", "DELETE", "REMOVE", "DESTROY", "DROP", "POST", "PAY",
+    "PUBLISH", "DEPLOY", "SEND", "DELETE", "REMOVE", "DESTROY",
     // 0.9.14 (Rigel's hole 3)
-    "TRANSFER", "SUBMIT", "TWEET", "SHARE", "INVITE", "FORWARD", "UPLOAD", "WIPE", "TERMINATE", "REVOKE", "PURCHASE",
+    "TRANSFER", "SUBMIT", "TWEET", "INVITE", "FORWARD", "WIPE", "TERMINATE", "REVOKE", "PURCHASE",
     // 18c (Rigel's B34)
     "BROADCAST",
 ];
 
+/// Parts of a tool name (any case) that act outside kwant as a verb but are just as often the
+/// thing a read looks at: mail, posts, payments, shares, uploads, drops. They refuse like
+/// [`OUTWARD_NAMES`] unless the name only reads ([`reads_outward_noun`], 21a), so `GMAIL_FETCH_EMAILS`
+/// and `get_payment_status` keep Allow once while `create_post` and `pay_invoice` don't.
+const OUTWARD_NOUNS: &[&str] = &["EMAIL", "MAIL", "DROP", "POST", "PAY", "SHARE", "UPLOAD"];
+
 /// Whole words of a tool name ([`words`]) that act outside kwant but sit inside ordinary words as
-/// parts (`ship` in `membership`, `relationship`), so they can't join [`OUTWARD_NAMES`]: `ship_it`,
-/// `rollout` (18c, Rigel's B54).
+/// parts (`ship` in `membership`, `relationship`), so they can't join [`OUTWARD_NOUNS`]: `ship_it`,
+/// `rollout` (18c, Rigel's B54). Lifted like [`OUTWARD_NOUNS`]: `ship_status`, `rollout_status`.
 const OUTWARD_NAME_WORDS: &[&str] = &["ship", "rollout"];
+
+/// Whole words that, with the [`READ_VERBS`], say a name with only [`OUTWARD_NOUNS`] in it reads
+/// (21a). Local to the outward layer: `fetch` must not join [`READ_VERBS`], where it would lift
+/// push and commit words too.
+const OUTWARD_READ_WORDS: &[&str] = &["fetch"];
+
+/// Last words of a tool name that make it a read of something's state: `rollout_status`,
+/// `get_payment_status`, `ship_state` (21a).
+const OUTWARD_READ_LAST_WORDS: &[&str] = &["status", "state"];
+
+/// Whole words that add a second action to a read name, so the read verb can't vouch for it:
+/// `find_and_share_file`, `get_then_pay`, `list_or_create_posts` (via `create`), `fetch_and_reply` (21a).
+const SECOND_ACTION_WORDS: &[&str] = &[
+    "and", "then", "create", "update", "add", "set", "put", "write", "edit", "modify", "reply", "save", "schedule", "upsert", "insert",
+];
 
 /// Whole words in the value of an `action`, `operation` or `op` argument ([`is_action_key`]) that
 /// change or destroy something (18c, Rigel's H01–H02): the [`WRITE_METHODS`] verbs, plus these.
@@ -288,6 +310,31 @@ fn ships_by_name(tool: &str) -> bool {
     (push || commit) && !reads(&name)
 }
 
+/// Whether a tool name acts outside kwant or destroys something ([`inline_refusal`] step 3): a
+/// part of it is one of [`OUTWARD_NAMES`], or it has an outward noun ([`OUTWARD_NOUNS`] as a part,
+/// [`OUTWARD_NAME_WORDS`] as a whole word) and doesn't only read ([`reads_outward_noun`]).
+fn outward_by_name(tool: &str) -> bool {
+    let upper = tool.to_ascii_uppercase();
+    if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) {
+        return true;
+    }
+    let name = words(tool);
+    let noun = OUTWARD_NOUNS.iter().any(|w| upper.contains(w)) || name.iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str()));
+    noun && !reads_outward_noun(&name)
+}
+
+/// Whether a name (already split by [`words`]) whose only outward words are nouns only reads them
+/// (21a): it has a [`READ_VERBS`] or [`OUTWARD_READ_WORDS`] word, or ends in one of
+/// [`OUTWARD_READ_LAST_WORDS`], and has none of [`SECOND_ACTION_WORDS`]. `GMAIL_LIST_THREADS`,
+/// `WORDPRESS_GET_POST` and `ship_status` read; `GMAIL_REPLY_TO_THREAD`, `find_and_share_file` and
+/// `set_payment_status` don't.
+fn reads_outward_noun(name: &[String]) -> bool {
+    let read = reads(name)
+        || name.iter().any(|w| OUTWARD_READ_WORDS.contains(&w.as_str()))
+        || name.last().is_some_and(|w| OUTWARD_READ_LAST_WORDS.contains(&w.as_str()));
+    read && !name.iter().any(|w| SECOND_ACTION_WORDS.contains(&w.as_str()))
+}
+
 /// Whether a tool or its server is named for running free text (20d: one place for Telegram and the
 /// island): a word of either name starting with a [`RUNS_TEXT_NAMES`] word, or one of
 /// [`RUNS_TEXT_NAME_WORDS`]. A read verb doesn't lift it: `run_query` and `get_shell` still run.
@@ -356,8 +403,8 @@ fn writes_by_method(args: &Value) -> bool {
 ///    ([`words`]);
 /// 2. a tool that runs free text: its tool or server name says so ([`runs_by_name`]) or an
 ///    argument key at any depth does ([`is_run_key`]: exact, by containment, or by word);
-/// 3. a tool whose name acts outside kwant or destroys something ([`OUTWARD_NAMES`], or a whole
-///    word of [`OUTWARD_NAME_WORDS`]);
+/// 3. a tool whose name acts outside kwant or destroys something ([`outward_by_name`]: a verb of
+///    [`OUTWARD_NAMES`] anywhere, or an outward noun in a name that doesn't only read it);
 /// 4. an HTTP verb that changes something in a method or action argument, or a body sent to a URL
 ///    with no method ([`writes_by_method`]).
 pub fn inline_refusal(details: &Value) -> Option<&'static str> {
@@ -376,7 +423,6 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     let tool = details["tool"].as_str().unwrap_or_default();
     let server = details["server"].as_str().unwrap_or_default();
     let args = &details["arguments"];
-    let upper = tool.to_ascii_uppercase();
     // 1. A push-family word wherever it hides: the name (unless it only reads, 20d), a key, a
     //    value, an argv item
     let mut all = Vec::new();
@@ -388,8 +434,9 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     if runs_by_name(server, tool) || has_run_key(args) {
         return Some(RUNS);
     }
-    // 3. Acts outside kwant or destroys something
-    if OUTWARD_NAMES.iter().any(|w| upper.contains(w)) || words(tool).iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str())) {
+    // 3. Acts outside kwant or destroys something (an outward noun in a name that only reads it
+    //    doesn't count, 21a)
+    if outward_by_name(tool) {
         return Some(OUTWARD);
     }
     // 4. An HTTP call that changes something, whatever the tool is called
@@ -1085,6 +1132,78 @@ mod tests {
         assert_eq!(ships_or_runs(&d), None);
         // And a read verb lifts only the name's push words, not an outward one
         assert_eq!(inline_refusal(&mcp("x", "get_deploy_logs", json!({}))), Some(OUTWARD));
+    }
+
+    /// 21a: the island's outward layer, both directions. A read of mail, files, posts, payments,
+    /// uploads or a rollout keeps Allow once; a name that acts on them, or reads and then acts, doesn't.
+    fn outward_rows() -> Vec<(&'static str, Value, Option<&'static str>)> {
+        vec![
+            // Reads: Allow once (each was OUTWARD before 21a)
+            ("GMAIL_FETCH_EMAILS (MAIL, EMAIL)", mcp("composio", "GMAIL_FETCH_EMAILS", json!({"max_results": 10})), None),
+            ("GMAIL_LIST_THREADS (MAIL)", mcp("composio", "GMAIL_LIST_THREADS", json!({})), None),
+            ("DROPBOX_LIST_FILES (DROP)", mcp("composio", "DROPBOX_LIST_FILES", json!({"path": "/"})), None),
+            ("SHAREPOINT_GET_FILE (SHARE)", mcp("composio", "SHAREPOINT_GET_FILE", json!({"file_id": "f"})), None),
+            ("WORDPRESS_GET_POST (POST)", mcp("composio", "WORDPRESS_GET_POST", json!({"post_id": 7})), None),
+            ("get_payment_status (PAY)", mcp("stripe", "get_payment_status", json!({"id": "pi_1"})), None),
+            ("list_uploads (UPLOAD)", mcp("files", "list_uploads", json!({})), None),
+            ("rollout_status (rollout)", mcp("ci", "rollout_status", json!({})), None),
+            ("ship_status (ship)", mcp("ci", "ship_status", json!({})), None),
+            ("getPaymentState (camelCase)", mcp("x", "getPaymentState", json!({})), None),
+            // Acts on them, or reads and then acts: still OUTWARD
+            ("GMAIL_SEND_EMAIL", mcp("composio", "GMAIL_SEND_EMAIL", json!({})), Some(OUTWARD)),
+            ("GMAIL_REPLY_TO_THREAD", mcp("composio", "GMAIL_REPLY_TO_THREAD", json!({})), Some(OUTWARD)),
+            ("create_post", mcp("x", "create_post", json!({})), Some(OUTWARD)),
+            ("SLACK_CHAT_POST_MESSAGE", mcp("composio", "SLACK_CHAT_POST_MESSAGE", json!({})), Some(OUTWARD)),
+            ("pay_invoice", mcp("x", "pay_invoice", json!({})), Some(OUTWARD)),
+            ("share_page", mcp("x", "share_page", json!({})), Some(OUTWARD)),
+            ("find_and_share_file", mcp("x", "find_and_share_file", json!({})), Some(OUTWARD)),
+            ("get_and_delete_post", mcp("x", "get_and_delete_post", json!({})), Some(OUTWARD)),
+            ("list_and_send_emails", mcp("x", "list_and_send_emails", json!({})), Some(OUTWARD)),
+            ("ship_it", mcp("x", "ship_it", json!({})), Some(OUTWARD)),
+            ("DROPBOX_DELETE_FILE", mcp("composio", "DROPBOX_DELETE_FILE", json!({})), Some(OUTWARD)),
+            ("upload_file", mcp("x", "upload_file", json!({})), Some(OUTWARD)),
+            ("get_post sending a POST body (step 4)", mcp("x", "get_post", json!({"url": "https://api.example.com/posts", "method": "POST", "body": {"t": "x"}})), Some(OUTWARD)),
+            // Near misses of the lift
+            ("set_payment_status (set)", mcp("x", "set_payment_status", json!({})), Some(OUTWARD)),
+            ("fetch_then_pay (then)", mcp("x", "fetch_then_pay", json!({})), Some(OUTWARD)),
+            ("get_or_create_post (create)", mcp("x", "get_or_create_post", json!({})), Some(OUTWARD)),
+            ("GMAIL_FETCH_AND_REPLY (and, reply)", mcp("composio", "GMAIL_FETCH_AND_REPLY", json!({})), Some(OUTWARD)),
+            ("schedule_post_status (schedule)", mcp("x", "schedule_post_status", json!({})), Some(OUTWARD)),
+            ("get_deploy_logs (a verb isn't lifted)", mcp("x", "get_deploy_logs", json!({})), Some(OUTWARD)),
+            ("list_mail_to_forward (a verb isn't lifted)", mcp("x", "list_mail_to_forward", json!({})), Some(OUTWARD)),
+            ("GMAILFETCHEMAILS (one word, no read verb)", mcp("x", "GMAILFETCHEMAILS", json!({})), Some(OUTWARD)),
+            ("status_of_payment (status not last)", mcp("x", "status_of_payment", json!({})), Some(OUTWARD)),
+        ]
+    }
+
+    /// Step 3 as it was before 21a: any outward part, or a whole `ship`/`rollout` word.
+    fn outward_before_21a(tool: &str) -> bool {
+        let upper = tool.to_ascii_uppercase();
+        OUTWARD_NAMES.iter().chain(OUTWARD_NOUNS.iter()).any(|w| upper.contains(w)) || words(tool).iter().any(|w| OUTWARD_NAME_WORDS.contains(&w.as_str()))
+    }
+
+    #[test]
+    fn reads_of_outward_things_keep_allow_once_and_acts_on_them_do_not() {
+        let rows = outward_rows();
+        assert_eq!(rows.len(), 32);
+        for (name, d, want) in rows {
+            let tool = d["tool"].as_str().unwrap();
+            assert!(outward_before_21a(tool), "{name}: step 3 refused it before 21a");
+            assert_eq!(inline_refusal(&d), want, "island: {name}");
+            // Telegram's floor doesn't read outward names, before or after
+            assert_eq!(ships_or_runs(&d), None, "telegram: {name}");
+        }
+    }
+
+    #[test]
+    fn the_lift_only_touches_outward_nouns() {
+        // Steps 1 and 2 answer first, whatever the name reads
+        assert_eq!(inline_refusal(&mcp("composio", "GMAIL_FETCH_EMAILS", json!({"query": "label:x"}))), Some(RUNS), "a run key");
+        assert_eq!(inline_refusal(&mcp("x", "get_post", json!({"note": "merge it"}))), Some(PUSHES), "a push word in a value");
+        // fetch lifts outward nouns only; it doesn't join READ_VERBS for push and commit names
+        assert!(!READ_VERBS.contains(&"fetch"));
+        assert_eq!(inline_refusal(&mcp("x", "fetch_and_merge", json!({}))), Some(PUSHES));
+        assert_eq!(inline_refusal(&mcp("x", "fetch_commit", json!({}))), Some(PUSHES));
     }
 
     #[test]
