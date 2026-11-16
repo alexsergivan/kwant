@@ -19,6 +19,7 @@ import {
 import { playSfx } from '../audio/chiptune';
 import { BOT_BUSY_TEXT, HELD_BY_PERSON_TEXT, useBrowserStream } from '../useBrowserStream';
 import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, SignInLine, useComputerMode } from './ComputerModeSwitch';
+import { useSteadyFrame } from '../steadyFrame';
 import { browserFooterLabel, browserOwnerWord, isBlankPage, showsLocalWindow } from '../computerMode';
 import { paneStatus } from '../browserPanel';
 import { ModernAvatar } from './ModernAvatar';
@@ -267,7 +268,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const pageUrl = stream.location ? stream.location.url : chosenPage ? pageInfo?.url ?? '' : activeUrl;
   // The same for the title: a new page's empty title must not fall back to the previous page's.
   const shownTitle = stream.location ? stream.location.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
-  const currentScreenshot = isBlankPage(pageUrl) ? null : stream.frame?.image || screenshotBase64;
+  // A blank light frame from Chrome (a page committing) waits behind the last good picture: no grey flash
+  const steady = useSteadyFrame(stream.frame, stream.acknowledgeFrame);
+  const currentScreenshot = isBlankPage(pageUrl) ? null : steady.frame?.image || screenshotBase64;
   const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
   const blankFrameId = isBlankPage(pageUrl) ? stream.frame?.id : undefined;
@@ -441,7 +444,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
   // The frame the side pane shows is acknowledged once drawn; one image, its source swapped
   const paneFrameId = useRef<number | null>(null);
-  paneFrameId.current = stream.frame?.id ?? null;
+  // The picture on screen: its <img> load acknowledges it (a held one was acknowledged when it came)
+  paneFrameId.current = steady.frame?.id ?? null;
 
   const loginsOnThisPage = useMemo(() => passwords.logins.filter((l) => loginMatchesPage(l, pageUrl)).length, [passwords.logins, pageUrl]);
 
@@ -961,6 +965,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     </button>
                   )}
                 </>
+              ) : steady.holding && !isBlankPage(pageUrl) ? (
+                /* The first picture of this view is blank or still being checked: the dark pane, not "Browser idle" */
+                <div data-frame-holding="" aria-hidden="true" className="absolute inset-0" />
               ) : (
                 <div className="text-center p-6 text-zinc-500 text-xs">
                   <Globe size={32} className="mx-auto mb-2 opacity-40 text-zinc-500" />
