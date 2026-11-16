@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.18] - 2026-11-16
+
+kwant 0.9.18: a team named once, never "… team team", audio files up to 100 MB in the chat, a bot browser preview that never flashes white while a page loads, browser step cards that stop asking for you once they are closed, tidier reply buttons on a phone, a production deploy card that always has a way forward, A refused customer call remembers its chat and A step that keeps failing ends in one Blocked card.
+
+### Fixed
+- A team named like "Marketing_Team", "Sales-Team" or "SalesTeam" now reads "@Marketing_Team" in the sidebar, the team home, the message box and the drop-a-file heading, never "… team team". (#694)
+- You can drop audio files into a chat: MP3, M4A, AAC, WAV, OGG/Opus and FLAC, up to 100 MB each (other files stay at 20 MB). kwant goes by the file's bytes, not its name, so a program or archive renamed song.mp3 is still refused. A bot gets the audio as a file it can open, or upload on a page for you. AIFF, WMA and MIDI are still refused. (#712)
+- The bot browser's live preview no longer flashes white or grey while a page loads: it keeps the last picture until the new page shows (at most 1.5 s, so a page that really is white still shows), and a fresh view opens dark instead of white. This covers the pane, its enlarged view, the phone controls and the takeover screen. (#726)
+- A browser step card that is done, skipped, solved, timed out or stopped no longer says the bot "needs you in the browser": it now reads "<name> asked for you in the browser" in grey, with a grey hand, and only an open card keeps the amber hand and the ask. (#729)
+- On a phone, a reply's buttons are tidier: Reply, 👍, 👎 and Copy sit on one row as small icons, the result buttons like "Show as text" get their own row below, the empty gap under a reply that browsed no pages is gone, and "From this reply" reads as a quiet caption instead of a chip. The small bot pictures in the Ask: row show an amber dot when a bot needs you, instead of a cut-off "!". (#680)
+- A production deploy card that can't tell whether the deploy changes the database is no longer a dead end with only Deny: it offers Set backup command right in the card, then Back up first, and Allow without a backup after you tick "This deploy doesn't change the database". Steps that delete data or run a known migration still need a fresh backup, and a bot can never skip it. The card's Where line now shows the real server, not a variable like $R. (#696, #698)
+- A customer's call that kwant refused now remembers the chat it happened in: the approvals list gives each row a link to that chat (a customer's Telegram chat is its thread), so it can show in the right conversation. A retry keeps the first chat, and rows from before this change list without one. (#706)
+- A bot whose step keeps failing no longer repeats the same reply while kwant asks Keep going?: it stops once with a Blocked card naming the step and its error, such as "couldn't run journalctl …: Error: no terminal session is open." The same reply after Keep going is blocked too, and the Keep going card now says which step failed. (#705)
+
 ## [Mac 0.9.17] - 2026-11-16
 
 kwant 0.9.17: a card that puts kwant bots on your phone, a team chip that names the team once, steps that fold under a reply instead of pushing it down, "Pick a repo" that always lands in Repo URL, Allow once for notes that mention a release or a merge, Blocked when a reply asks you to pick after a closing line, Claude bots that stop repeating a command or file read that keeps failing, The island names a file, never its folders, dates and times that read one way everywhere, a bot that asks for a missing file in the chat, Keep going never passes a customer's words on as yours and Writes named like reads keep the full card.
