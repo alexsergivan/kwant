@@ -53,7 +53,7 @@ export const AccountCard: React.FC<{ onOpenAccounts?: () => void }> = ({ onOpenA
           type="button"
           onClick={onOpenAccounts}
           data-connect-account
-          className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-gradient-to-b from-[#7a62f0] to-[#5b47d6] px-4 text-body font-semibold text-white hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120e26] sm:h-9 sm:w-auto"
+          className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-accent-gradient kw-hover-deepen px-4 text-body font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120e26] sm:h-9 sm:w-auto"
         >
           Connect an account
         </button>

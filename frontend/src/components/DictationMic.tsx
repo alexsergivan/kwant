@@ -807,7 +807,7 @@ export function DictationSetupPopover({ d, phone, onOpenAccounts }: { d: Dictati
               d.closePopover(false);
               onOpenAccounts?.();
             }}
-            className={`${btn} inline-flex items-center rounded-[10px] bg-accent-gradient text-white font-semibold hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300`}
+            className={`${btn} inline-flex items-center rounded-[10px] bg-accent-gradient kw-hover-deepen text-white font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300`}
           >
             Open Apps &amp; accounts
           </button>

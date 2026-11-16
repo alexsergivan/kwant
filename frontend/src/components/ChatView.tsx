@@ -2997,7 +2997,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 canSend
                   ? phone
                     ? 'bg-[#6c58e0] text-white hover:bg-[#5845bd] active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
-                    : 'bg-accent-gradient text-white shadow-glow hover:brightness-110 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
+                    : 'bg-accent-gradient kw-hover-deepen text-white shadow-glow active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
                   : phone
                     ? 'bg-[#2c2552] text-[#5a5383] cursor-not-allowed'
                     : 'bg-surface-overlay text-zinc-400 cursor-not-allowed'

@@ -294,6 +294,7 @@
    .kw-card-interactive  the same, tappable: lifts 1px and brightens its hairline on hover/focus
    .kw-chip            a pill label; add .kw-chip-ok / -warn / -bad / -info / -accent for a status colour
    .kw-btn-primary     the accent gradient button (one per view); .kw-btn-ghost a quiet button
+   .kw-hover-deepen    the same hover for a hand-built bg-accent-gradient button with white text (never hover:brightness)
    .kw-status-dot      a 8px dot; .kw-status-ok / -warn / -bad / -idle, .kw-pulse while something is live
    .kw-focus           the focus ring (2px accent, 2px offset); already on every .kw-card-interactive
    .kw-hit             a 44px tap area on phone for a small inline link, with no visual change
@@ -353,7 +354,9 @@
   }
   /* Hover deepens the gradient (sky-600 to sky-700) instead of brightening it: brightness(1.12) put white text at
      3.66:1 on the light stop. Now 5.1:1 or more on hover (26g). */
-  .kw-btn-primary:hover:not(:disabled) { background-image: linear-gradient(135deg, theme('colors.sky.600') 0%, theme('colors.sky.700') 100%); box-shadow: theme('boxShadow.glow'); }
+  .kw-btn-primary:hover:not(:disabled),
+  .kw-hover-deepen:hover:not(:disabled) { background-image: linear-gradient(135deg, theme('colors.sky.600') 0%, theme('colors.sky.700') 100%); }
+  .kw-btn-primary:hover:not(:disabled) { box-shadow: theme('boxShadow.glow'); }
   .kw-btn-primary:active:not(:disabled) { transform: scale(0.97); }
   .kw-btn-primary:disabled { @apply cursor-not-allowed; background-image: none; background-color: var(--kw-surface-overlay); color: theme('colors.zinc.400'); box-shadow: none; }
   .kw-btn-ghost {

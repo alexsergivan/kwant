@@ -762,7 +762,7 @@ export const RoutinesPanel: React.FC<{
             onClick={() => setEditing('new')}
             disabled={kwants.length === 0}
             data-routine-new
-            className="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-b from-[#7a62f0] to-[#5b47d6] px-4 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120e26] sm:h-9 sm:w-auto"
+            className="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-accent-gradient kw-hover-deepen px-4 text-sm font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120e26] sm:h-9 sm:w-auto"
           >
             <Plus size={15} aria-hidden="true" /> New routine
           </button>

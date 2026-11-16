@@ -87,7 +87,7 @@ export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phon
 
   const btnH = phone ? 'h-12' : 'h-10';
   const ghost = `inline-flex ${btnH} items-center justify-center gap-1.5 rounded-xl border border-white/[0.14] bg-white/[0.03] px-3.5 text-[13px] font-medium text-zinc-200 hover:bg-white/[0.08] hover:text-zinc-50 ${focus}`;
-  const primary = `inline-flex ${btnH} min-w-[120px] items-center justify-center rounded-xl bg-[linear-gradient(135deg,#7a62f0_0%,#5b47d6_100%)] px-5 text-sm font-semibold text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/.04),0_1px_2px_0_rgb(6_3_20/.5)] hover:brightness-110 ${phone ? 'flex-1' : ''} ${focus}`;
+  const primary = `inline-flex ${btnH} min-w-[120px] items-center justify-center rounded-xl bg-accent-gradient kw-hover-deepen px-5 text-sm font-semibold text-white shadow-card ${phone ? 'flex-1' : ''} ${focus}`;
   const close = (
     <button
       type="button"
