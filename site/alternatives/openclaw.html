@@ -50,7 +50,7 @@
   <div class="wrap">
     <p class="kicker">Alternatives · OpenClaw</p>
     <h1>An OpenClaw alternative that checks the work</h1>
-    <p class="lede">kwant is an open-source, self-hosted team of AI bots in one app. A task counts as Verified only when kwant runs the check itself, and a bot that can't go on tells you why. It can bring in your OpenClaw workspace.</p>
+    <p class="lede">kwant is an open-source, self-hosted team of AI bots in one app, with nothing extra to install. A task counts as Verified only when kwant runs the check itself, and a bot that can't go on tells you why. It can bring in your OpenClaw workspace.</p>
     <div class="cta">
       <a class="btn btn-violet" href="/docs/install">Install kwant</a>
       <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
@@ -67,9 +67,9 @@
 <ul>
   <li><strong>Verified means kwant checked it.</strong> Work shows up as cards on a Mission board. A card turns Verified only when its checks pass: a command such as the tests, a web address that has to answer, a file that has to exist, a review by a teammate who isn't the task's owner, or you pressing Verify. A bot can't verify its own work, and a check a bot adds to its own task waits for your OK. See <a href="/docs/mission-board#verified">what "Verified" means</a>.</li>
   <li><strong>A bot that stops says so, and why.</strong> When a step fails or is refused, a bot tries it again, then tries another way. If nothing works, its last line starts with <code>Blocked:</code> and says what would unblock it, and from a team's lead that comes to you as a question card. A lead that stops without handing on, asking you or writing <code>Done:</code> gets up to 2 more turns, then you get one <strong>Keep going?</strong> card. See <a href="/docs/bots-and-teams#handoffs">handoffs</a>.</li>
-  <li><strong>Nothing extra to install.</strong> kwant is one app for Mac or Linux (and a Windows beta), or one program, <code>kwnt</code>, with the web app built in. You don't install Node.js or Python yourself: the apps set up kwant's Laya router on first start, with their own <code>uv</code> when there's no Python, and since 0.7.6 kwant installs Codex without Node. Docker is optional, only for VM mode and the bots' shared browser. Building kwant from source needs Rust and Node.js; the downloads don't. See <a href="/docs/install">Install &amp; run</a>.</li>
+  <li><strong>Nothing extra to install.</strong> kwant is one app for Mac or Linux (and a Windows beta), or one program, <code>kwnt</code>, with the web app built in. You don't install Node.js or Python yourself: the apps set up what they need on first start, and kwant installs Codex for you without Node. Docker is optional, only for VM mode and the bots' shared browser. Building kwant from source needs Rust and Node.js; the downloads don't. See <a href="/docs/install">Install &amp; run</a>.</li>
 </ul>
-<p>None of this makes OpenClaw a bad product. It reaches you in far more chat apps than kwant does. These are the cases where kwant fits better.</p>
+<p>None of this makes OpenClaw a bad product, and it reaches you in far more chat apps than kwant does. The three points above are where kwant fits better.</p>
 
 <h2 id="compare">OpenClaw vs kwant</h2>
 <p>We only list what we can show from kwant's own docs and from OpenClaw's own README and docs, as read on November 16, 2026. Where we haven't checked an OpenClaw detail, we point you to <a href="https://docs.openclaw.ai/" rel="noopener">OpenClaw's docs</a> rather than guess.</p>
@@ -85,7 +85,7 @@
     <tr><th scope="row">Scheduled work</th><td>Scheduled jobs, webhooks and Gmail triggers in the Gateway scheduler (<a href="https://docs.openclaw.ai/automation/cron-jobs" rel="noopener">Automations</a>)</td><td>Routines and cron rules on your own machine; they run while the machine is on</td></tr>
     <tr><th scope="row">Tool safety</th><td>Tools run on the host for the main session unless you configure sandboxing (<a href="https://docs.openclaw.ai/gateway/security" rel="noopener">security guide</a>, <a href="https://docs.openclaw.ai/gateway/sandboxing" rel="noopener">sandboxing</a>)</td><td>Asks before bots run commands or edit files outside their folder, with three <a href="/docs/approvals">approval</a> modes. Payments always ask</td></tr>
     <tr><th scope="row">What goes to the developers</th><td>A daily version check by default; anonymous feature statistics are opt-in (<a href="https://docs.openclaw.ai/gateway/telemetry" rel="noopener">telemetry</a>)</td><td>No telemetry</td></tr>
-    <tr><th scope="row">License</th><td>MIT</td><td>AGPL-3.0, with commercial licenses available</td></tr>
+    <tr><th scope="row">License</th><td>MIT (<a href="https://github.com/openclaw/openclaw/blob/main/LICENSE" rel="noopener">LICENSE</a>)</td><td>AGPL-3.0, with commercial licenses available</td></tr>
   </tbody>
 </table>
 </div>

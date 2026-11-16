@@ -11,7 +11,7 @@ card_art: avatar:brand
   <div class="wrap">
     <p class="kicker">Alternatives · Hermes Agent</p>
     <h1>A Hermes Agent alternative that checks the work</h1>
-    <p class="lede">kwant is an open-source, self-hosted team of AI bots in one app. A task counts as Verified only when kwant runs the check itself, and a bot that can't go on tells you why. It can bring in your Hermes home and profiles.</p>
+    <p class="lede">kwant is an open-source, self-hosted team of AI bots in one app, with nothing extra to install. A task counts as Verified only when kwant runs the check itself, and a bot that can't go on tells you why. It can bring in your Hermes home and profiles.</p>
     <div class="cta">
       <a class="btn btn-violet" href="../docs/install.html">Install kwant</a>
       <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
@@ -28,9 +28,9 @@ card_art: avatar:brand
 <ul>
   <li><strong>Verified means kwant checked it.</strong> Work shows up as cards on a Mission board. A card turns Verified only when its checks pass: a command such as the tests, a web address that has to answer, a file that has to exist, a review by a teammate who isn't the task's owner, or you pressing Verify. A bot can't verify its own work, and a check a bot adds to its own task waits for your OK. See <a href="../docs/mission-board.html#verified">what "Verified" means</a>.</li>
   <li><strong>A bot that stops says so, and why.</strong> When a step fails or is refused, a bot tries it again, then tries another way. If nothing works, its last line starts with <code>Blocked:</code> and says what would unblock it, and from a team's lead that comes to you as a question card. A lead that stops without handing on, asking you or writing <code>Done:</code> gets up to 2 more turns, then you get one <strong>Keep going?</strong> card. See <a href="../docs/bots-and-teams.html#handoffs">handoffs</a>.</li>
-  <li><strong>Nothing extra to install.</strong> kwant is one app for Mac or Linux (and a Windows beta), or one program, <code>kwnt</code>, with the web app built in. You don't install Node.js or Python yourself: the apps set up kwant's Laya router on first start, with their own <code>uv</code> when there's no Python, and since 0.7.6 kwant installs Codex without Node. Docker is optional, only for VM mode and the bots' shared browser. Building kwant from source needs Rust and Node.js; the downloads don't. See <a href="../docs/install.html">Install &amp; run</a>.</li>
+  <li><strong>Nothing extra to install.</strong> kwant is one app for Mac or Linux (and a Windows beta), or one program, <code>kwnt</code>, with the web app built in. You don't install Node.js or Python yourself: the apps set up what they need on first start, and kwant installs Codex for you without Node. Docker is optional, only for VM mode and the bots' shared browser. Building kwant from source needs Rust and Node.js; the downloads don't. See <a href="../docs/install.html">Install &amp; run</a>.</li>
 </ul>
-<p>Hermes works on the same problem in its own way. Its Kanban board, added in <a href="https://github.com/NousResearch/hermes-agent/releases/tag/v2026.5.7" rel="noopener">v0.13.0</a>, blocks a task when an agent exits before it's complete, and since <a href="https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.0" rel="noopener">v0.22.0</a> interrupted turns aren't reported as done. None of this makes Hermes Agent a bad product. These are the cases where kwant fits better.</p>
+<p>Hermes works on the same problem in its own way. Its Kanban board, added in <a href="https://github.com/NousResearch/hermes-agent/releases/tag/v2026.5.7" rel="noopener">v0.13.0</a>, blocks a task when an agent exits before it's complete, and since <a href="https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.0" rel="noopener">v0.22.0</a> interrupted turns aren't reported as done. None of this makes Hermes Agent a bad product. The three points above are where kwant fits better.</p>
 
 <h2 id="compare">Hermes Agent vs kwant</h2>
 <p>We only list what we can show from kwant's own docs and from Hermes Agent's own README, docs and release notes, as read on November 16, 2026. Where we haven't checked a Hermes detail, we point you to <a href="https://hermes-agent.nousresearch.com/docs/" rel="noopener">its docs</a> rather than guess.</p>
@@ -46,7 +46,7 @@ card_art: avatar:brand
     <tr><th scope="row">Learning</th><td>A built-in learning loop: it creates skills from experience and improves them during use (README)</td><td>Per-bot <a href="../docs/memory-skills.html">memories and skills</a>, plus <a href="../docs/lessons.html">lessons</a> kwant builds from failed checks and your send-backs, so a bot can't write its own</td></tr>
     <tr><th scope="row">Scheduled work</th><td>A built-in cron scheduler with delivery to any platform (<a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/cron" rel="noopener">Cron Scheduling</a>)</td><td>Routines and cron rules on your own machine; they run while the machine is on</td></tr>
     <tr><th scope="row">Tool safety</th><td>Command approval, DM pairing and container isolation (<a href="https://hermes-agent.nousresearch.com/docs/user-guide/security" rel="noopener">Security</a>)</td><td>Asks before bots run commands or edit files outside their folder, with three <a href="../docs/approvals.html">approval</a> modes. Payments always ask</td></tr>
-    <tr><th scope="row">License</th><td>MIT</td><td>AGPL-3.0, with commercial licenses available</td></tr>
+    <tr><th scope="row">License</th><td>MIT (<a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE" rel="noopener">LICENSE</a>)</td><td>AGPL-3.0, with commercial licenses available</td></tr>
   </tbody>
 </table>
 </div>
@@ -74,7 +74,7 @@ card_art: avatar:brand
 </ul>
 
 <h2 id="stay">When Hermes Agent is still the better fit</h2>
-<p>If you want one agent that learns from its own work and writes its own skills, that is what Hermes is built around. It also reaches you in more chat apps than kwant, and it can run on serverless backends such as Modal and Daytona that cost little while idle. And kwant runs on a machine you look after: if your bots live on a laptop that is switched off, routines wait until it is back on. A small VPS with the systemd setup in <a href="../docs/install.html">Install &amp; run</a> avoids that.</p>
+<p>If you want one agent that learns from its own work and writes its own skills, that is what Hermes is built around. It also reaches you in more chat apps than kwant, and it can run on serverless backends such as Modal and Daytona that cost little while idle (<a href="https://github.com/NousResearch/hermes-agent" rel="noopener">README</a>). And kwant runs on a machine you look after: if your bots live on a laptop that is switched off, routines wait until it is back on. A small VPS with the systemd setup in <a href="../docs/install.html">Install &amp; run</a> avoids that.</p>
 
 <h2 id="start">Get started</h2>
 <p>Install <code>kwnt</code> on a laptop, a VPS or with Docker, add a login, and import your Hermes profiles.</p>
@@ -95,7 +95,7 @@ card_art: avatar:brand
 <h3>What does "Verified" mean in kwant?</h3>
 <p>A task on the Mission board turns Verified only when its checks pass: a command such as the tests, a web address, a file, a review by a teammate who isn't the task's owner, or you pressing Verify. The bot that did the work can't verify it, and a check it adds to its own task waits for your OK.</p>
 <h3>Do I need Python to run kwant?</h3>
-<p>No. The Mac, Linux and Windows apps and the one-line Linux install use a prebuilt program with the web app built in. kwant's Laya router brings its own <code>uv</code> when the computer has no Python. Only building kwant from source needs Rust and Node.js.</p>
+<p>No. The Mac, Linux and Windows apps and the one-line Linux install use a prebuilt program with the web app built in. kwant sets up what it needs itself, even on a computer with no Python. Only building kwant from source needs Rust and Node.js.</p>
 <h3>Is kwant free?</h3>
 <p>The software is free under the AGPL-3.0, and commercial licenses are available. You pay for whatever model accounts or API keys you connect. kwant sends no telemetry to its developers.</p>
 <h3>What is kwnt?</h3>
