@@ -177,7 +177,7 @@ function haTarget(args: Record<string, unknown>, domain: string | null): string 
 
 /**
  * A Home Assistant tool call in house words, or null when the tool isn't HA's. `alwaysAsk` is the
- * server's 26f mark for locks, doors, gates and alarms: with no domain in the args, an on/off call
+ * server's 26f `home_always_ask` mark (not the started-by `always_ask`) for locks, doors, gates and alarms: with no domain in the args, an on/off call
  * then reads "unlock or open", never "turn off Front door".
  */
 export function homeAction(tool: string, args?: Record<string, unknown> | null, alwaysAsk?: boolean): HomeAction | null {

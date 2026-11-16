@@ -207,7 +207,7 @@ export function homeView(approval: PendingApproval): HomeAction | null {
   const mcp = mcpView(approval);
   if (!mcp) return null;
   const args = mcp.raw && typeof mcp.raw === 'object' && !Array.isArray(mcp.raw) ? (mcp.raw as Record<string, unknown>) : null;
-  return homeAction(mcp.tool, args, approval.details?.always_ask === true);
+  return homeAction(mcp.tool, args, approval.details?.home_always_ask === true);
 }
 
 /** The facts under a Home Assistant card: Area (when it isn't the target), light settings, and where. */
@@ -309,7 +309,9 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   // A session allow doesn't count in a turn kwant started on its own (the server asks again),
   // so those cards don't offer one.
   const alwaysAsk = approval.details?.always_ask === true;
-  const offerAlways = !shell && !waiting && !payment && !alwaysAsk;
+  // 26f: a lock, door, garage door, gate or alarm call always asks; its own field, not `always_ask`.
+  const homeAlwaysAsk = approval.details?.home_always_ask === true;
+  const offerAlways = !shell && !waiting && !payment && !alwaysAsk && !homeAlwaysAsk;
 
   const bot = botName ? <strong className="font-semibold text-zinc-50">{botName}</strong> : 'A bot';
   // "<Bot> wants to open a pull request on <Server>", the server in bold.
@@ -317,10 +319,9 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const home = mcp && !summary ? homeView(approval) : null;
   // Home Assistant: bold the device, never the "on" of "turn on" (design §3.3).
   const on = mcp && !summary && !home ? / on (.+)$/.exec(action) : null;
-  // 26f marks lock/door/alarm calls with `always_ask`, the same field a turn kwant started on its own
-  // carries; only a Home Assistant card gets the lock note, and in a started-by turn only when the
-  // verb itself is a lock/open/close.
-  const lockNote = !!home && alwaysAsk && (!startedBy || /\b(lock|unlock|open|close)\b/.test(home.base));
+  // 26f marks lock/door/alarm calls with `home_always_ask` (`always_ask` stays the started-by turn's
+  // field). Only a Home Assistant card gets the lock note, as a second guard.
+  const lockNote = !!home && homeAlwaysAsk;
   const what: React.ReactNode = home?.target ? (
     <>
       {home.base} <strong className="font-semibold text-zinc-50">{home.target}</strong>

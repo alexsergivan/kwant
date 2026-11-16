@@ -163,7 +163,7 @@ test('approval card: the device is bold, Area and In Home Assistant are the fact
 });
 
 test('approval card: a 26f lock call shows the lock note and no Always allow', () => {
-  const html = card(haTicket('HassTurnOff', { name: 'Front door', domain: ['lock'] }, { always_ask: true }));
+  const html = card(haTicket('HassTurnOff', { name: 'Front door', domain: ['lock'] }, { home_always_ask: true }));
   assert.match(html, /wants to unlock <strong[^>]*>Front door<\/strong>/);
   assert.match(html, /data-lock-note[^>]*>.*Locks, doors, garage doors, gates and alarms always ask\./s);
   assert.doesNotMatch(html, /Always allow<\/span>/);
@@ -173,6 +173,28 @@ test('approval card: a 26f lock call shows the lock note and no Always allow', (
 test('approval card: a started-by card (same always_ask field) for another tool gets no lock note', () => {
   const html = card({ id: 'x', tool_name: 'write_file', details: { path: '/tmp/a', always_ask: true, started_by: 'Watch' } });
   assert.doesNotMatch(html, /data-lock-note/);
+});
+
+test('approval card: a 26f lock call without a domain still says unlock or open, from home_always_ask', () => {
+  const html = card(haTicket('HassTurnOff', { name: 'Front door' }, { home_always_ask: true }));
+  assert.match(html, /wants to unlock( or open)? <strong[^>]*>Front door<\/strong>/);
+  assert.match(html, /data-lock-note/);
+});
+
+test('approval card: always_ask with no home_always_ask shows no lock note, even on Home Assistant', () => {
+  const started = card(haTicket('HassTurnOff', { name: 'Front door' }, { always_ask: true, started_by: 'Watch' }));
+  assert.doesNotMatch(started, /data-lock-note/);
+  assert.doesNotMatch(started, /wants to unlock/, 'the lock verb reads home_always_ask only');
+  assert.match(started, /wants to turn off <strong[^>]*>Front door<\/strong>/);
+  const plain = card(haTicket('HassTurnOn', { name: 'Garage' }, { always_ask: true }));
+  assert.doesNotMatch(plain, /data-lock-note/);
+  assert.doesNotMatch(plain, /wants to (lock|open)/);
+});
+
+test('approval card: home_always_ask on a non-Home Assistant card gets no lock note', () => {
+  const html = card({ id: 'y', tool_name: 'write_file', details: { path: '/tmp/a', home_always_ask: true } });
+  assert.doesNotMatch(html, /data-lock-note/);
+  assert.doesNotMatch(html, /Always allow<\/span>/);
 });
 
 // ---- The sheet
