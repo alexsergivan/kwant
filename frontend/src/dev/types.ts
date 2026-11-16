@@ -215,6 +215,14 @@ export interface ProdFloor {
   needs_backup: boolean;
   space_id: string | null;
   backup: FloorBackup;
+  /** 22f: "yes" when the deploy is known to change the database, "guess" when kwant can't tell (it then
+   * counts as one, but the person may allow it without a backup); null when there's no migration. */
+  migration: 'yes' | 'guess' | null;
+}
+
+/** How the card answers: `without_backup` only from the person's own confirm on a "guess" deploy (22f). */
+export interface FloorResolveOpts {
+  withoutBackup?: boolean;
 }
 
 /** `POST /api/spaces/:id/dev/backup`. */
@@ -574,7 +582,15 @@ export function parseProdFloor(details: unknown): ProdFloor | null {
     needs_backup: p.needs_backup === true || p.kind === 'destructive' || p.kind === 'deploy_migration',
     space_id: str(p.space_id, 80),
     backup: parseBackup(p.backup),
+    migration: p.migration === 'yes' || p.migration === 'guess' ? p.migration : null,
   };
+}
+
+/** The card's live backup state (22f, Juno's GET): the bare state, or wrapped as `{backup: {...}}`. */
+export function parseBackupState(v: unknown): FloorBackup | null {
+  const b = isObj(v) && isObj(v.backup) ? v.backup : v;
+  if (!isObj(b) || !BACKUP_STATES.includes(b.state as BackupState)) return null;
+  return parseBackup(b);
 }
 
 export function parseBackupResult(v: unknown): BackupResult {
