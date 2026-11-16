@@ -357,6 +357,9 @@ async fn kwants_tools_refuse_a_customer_turns_call_nobody_allowed() {
     assert_eq!(rows.len(), 1, "{v}");
     assert_eq!(rows[0]["status"], CUSTOMER_REFUSED);
     assert_eq!(rows[0]["details"]["customer_chat"], true, "{v}");
+    // 22a: ... linked to Ann's customer thread, where it happened
+    let ann_thread = chat_row(&env, &ANN).await.thread_id;
+    assert_eq!(rows[0]["link"], json!({"thread_id": ann_thread, "channel_id": null, "direct_kwant_id": null}), "{v}");
     // Nothing to answer: Allow on it never runs or resumes anything
     let (s, v) = call(&env.app, "POST", &format!("/api/approvals/{}/resolve", refused.id), Some(json!({"decision": "allow_once"}))).await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
