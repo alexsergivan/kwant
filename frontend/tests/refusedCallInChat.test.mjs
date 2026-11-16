@@ -12,6 +12,7 @@ const ui = await loadBundled(`
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { ChatView } from './src/components/ChatView';
   export { refusedCallText } from './src/components/RefusedCustomerCall';
+  export { localClock } from './src/clock';
   export const chat = (props) => renderToStaticMarkup(React.createElement(ChatView, props));
 `);
 
@@ -46,6 +47,12 @@ test('a refused row with a thread link is drawn only in that thread, as one quie
   const html = ui.chat(chatProps(here));
   assert.ok(html.includes(LINE), html);
   assert.match(html, /data-refused-call="ap_r1"/);
+  // Round 2 (Mira): the line ends with " · <time>" from the row's asked_at, like the Telegram line.
+  const p = /data-refused-call="ap_r1"[^>]*>[^]*?<p class="[^"]*">([^]*?)<\/p>/.exec(html)[1].replace(/<!-- -->/g, '').replace(/&#x27;/g, "'");
+  assert.ok(p.endsWith(` · ${ui.localClock(here[0].asked_at)}`), p);
+  assert.ok(p.startsWith(ui.refusedCallText(here[0])), p);
+  const noTime = ui.chat(chatProps([{ ...here[0], asked_at: undefined }]));
+  assert.ok(noTime.includes(`${LINE}</p>`), 'no asked_at: no time and no dot');
   assert.doesNotMatch(html, /kwnt_tools/, 'no internal server name');
   assert.doesNotMatch(html.slice(html.indexOf('data-refused-call')), /^[^]*?<button[^>]*>[^<]*(Allow|Deny)/, 'nothing to answer');
   assert.doesNotMatch(html, /Allowed once from Telegram/);
