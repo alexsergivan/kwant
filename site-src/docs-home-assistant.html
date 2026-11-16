@@ -1,0 +1,72 @@
+title: Connect Home Assistant to your AI agents
+description: Let kwant bots read and control your home through Home Assistant's MCP server, with an access token, a ready-made Home team, and locks, doors and alarms that always ask.
+card_title: Home Assistant
+path: docs/home-assistant.html
+nav: home-assistant
+card: Connect Home Assistant with an address and a token. Locks, doors and alarms always ask.
+card_art: avatar:devops
+---
+<p class="kicker">Docs</p>
+<h1>Connect Home Assistant</h1>
+<p class="intro">kwant connects to <a href="https://www.home-assistant.io" rel="noopener">Home Assistant</a> through Home Assistant's own MCP server. Bots can then read the state of your home and switch things, and every change follows your approvals. Locks, doors, garage doors, gates and alarms always ask.</p>
+
+<h2 id="need">What you need</h2>
+<ul>
+  <li><strong>Home Assistant 2025.2 or later</strong>, with its Model Context Protocol integration added. In Home Assistant, open <strong>Settings › Devices &amp; services › Add integration</strong> and pick <strong>Model Context Protocol</strong>. Before 2026.11 it's listed as <strong>Model Context Protocol Server</strong>.</li>
+  <li><strong>A long-lived access token.</strong> In Home Assistant, open your profile, then <strong>Security › Long-lived access tokens › Create token</strong>, and copy it: Home Assistant shows it once. kwant uses this token, not Home Assistant's sign-in page.</li>
+  <li><strong>An address kwant can reach</strong>, the one you open Home Assistant at, such as <code>homeassistant.local:8123</code>, <code>http://192.168.1.20:8123</code> or your <code>https://…</code> remote address.</li>
+</ul>
+<p>Home Assistant's own setup steps, options and limits are on its <a href="https://www.home-assistant.io/integrations/mcp_server/" rel="noopener">Model Context Protocol page</a>. Two of its options change what your bots get. Both are under <strong>Settings › Devices &amp; services › Model Context Protocol › Configure</strong> (Home Assistant 2026.10 and later):</p>
+<ul>
+  <li><strong>Expose all AI tools</strong> is on for a new setup. Then the address kwant uses (Home Assistant's <strong>Main URL</strong>, <code>/api/mcp</code>) also offers the <strong>Home Assistant</strong> set of tools, which can read every entity and run any action. To give bots only the devices you expose to Assist (<strong>Settings › Voice assistants › Expose</strong>), turn it off and pick only <strong>Device control</strong> (called Assist in older versions).</li>
+  <li><strong>Require an administrator account</strong> is on for a new setup. Then the token has to belong to an administrator, or Home Assistant refuses it and kwant shows the token error below.</li>
+</ul>
+
+<h2 id="connect">Connect in kwant</h2>
+<p>The same <strong>Connect Home Assistant</strong> sheet opens from two places:</p>
+<ul>
+  <li><strong>The Home team.</strong> Its chat shows what the team needs. Press <strong>Connect</strong> on <strong>Connect Home Assistant</strong>, or <strong>Fix</strong> after a failed check.</li>
+  <li><strong>Tools.</strong> <strong>Settings › This space › Apps &amp; accounts › Advanced › Manage tools › Add server</strong>, then <strong>Home Assistant</strong> under <strong>Home</strong>. Searching for "Home Assistant" or "hass" finds it too.</li>
+</ul>
+<div class="table-wrap"><table>
+  <thead><tr><th>Field</th><th>What to put there</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Address</strong></td><td>Where you open Home Assistant. With no <code>http://</code> or <code>https://</code>, kwant uses <code>http://</code>, and plain <code>http</code> with no port gets Home Assistant's <code>8123</code>. Any path is replaced: kwant connects to <code>&lt;address&gt;/api/mcp</code>.</td></tr>
+    <tr><td><strong>Access token</strong></td><td>The long-lived access token. <strong>Make one in Home Assistant</strong> next to the label opens your profile's Security page. kwant sends it as <code>Authorization: Bearer &lt;token&gt;</code> and keeps it masked, like every <a href="mcp.html#secrets">tool server secret</a>.</td></tr>
+  </tbody>
+</table></div>
+<p>Press <strong>Connect</strong>. kwant saves the server in Tools (named <code>home-assistant</code>), checks it, and shows <strong>Connected · N actions</strong> when Home Assistant answers and lists what it can do. From the Home team, kwant gives it to the team's bots, so House can use it at once. From Tools, it's saved in Tools: start a Home team (<strong>Start a Home team</strong>, shown while you have none), or turn it on for any bot in that bot's settings.</p>
+<p>The token field empties as soon as you press Connect. If the check fails after the save, leaving the field empty on <strong>Try again</strong> keeps the saved token, so you can fix only the address.</p>
+
+<h2 id="errors">When the check fails</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>The sheet says</th><th>What to do</th></tr></thead>
+  <tbody>
+    <tr><td>Home Assistant didn’t accept this access token.</td><td>Make a new token in Home Assistant and paste all of it. With <strong>Require an administrator account</strong> on, the token must be an administrator's.</td></tr>
+    <tr><td>Home Assistant answered, but its MCP Server is off.</td><td>Add the Model Context Protocol integration in Home Assistant (<strong>Open integrations in Home Assistant</strong>), then press <strong>Try again</strong>.</td></tr>
+    <tr><td>kwant can’t reach <em>host</em>.</td><td>Check that Home Assistant is on and the address is right. If kwant runs on another computer or in Docker, <code>homeassistant.local</code> may not work there: use Home Assistant's IP address, like <code>http://192.168.1.20:8123</code>.</td></tr>
+    <tr><td>This address answered, but it isn’t Home Assistant.</td><td>The server answered under another name. Use the address you open Home Assistant at.</td></tr>
+    <tr><td>Couldn’t connect to Home Assistant.</td><td>Check that the address opens your Home Assistant in a browser, then try again. The server's own message is shown under it.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="home-team">The Home team</h2>
+<p><a href="bots-and-teams.html#ready-made"><strong>New team › From a template</strong></a> › <strong>Home</strong> makes:</p>
+<ul>
+  <li><strong>House</strong>, the lead and only bot. It answers what's on, open or warm, turns things on and off when you ask, and names each device and the result. It never unlocks a door, opens a garage door or gate, or turns off an alarm on its own, and never changes automations, scenes or schedules.</li>
+  <li><strong>Check the house</strong>, House's skill: one short list of what's on, open or running.</li>
+  <li><strong>Lights out</strong>, a <a href="routines.html#routines">routine</a> every day at 22:00 that turns off the lights still on and says which. It's <strong>off</strong> until you turn it on.</li>
+</ul>
+<p>The team needs Home Assistant. A local model is optional, to keep what happens at home on your own computer.</p>
+
+<h2 id="approvals">What asks and what doesn't</h2>
+<p>Home Assistant's tools follow the bot's <a href="approvals.html#modes">approval mode</a>, with one rule on top:</p>
+<ul>
+  <li><strong>Reads.</strong> Under <strong>Ask only when risky</strong>, tools Home Assistant marks read-only, like looking at the live state of your home, run without a card. Under <strong>Ask before running commands</strong>, they ask like every tool.</li>
+  <li><strong>Switching things</strong> (lights, heating, covers, media) asks or runs as your approval mode says. <strong>Always allow</strong> on such a card lets that bot run that tool without a card in that conversation only, and it still holds after kwant restarts. <strong>Bot settings › Approvals › Allowed without asking</strong> lists these, with <strong>Take back</strong> on each and <strong>Take back all</strong>.</li>
+  <li><strong>Locks, doors, garage doors, gates and alarms always ask</strong>, in every mode, approvals off included. A call counts when its arguments name the <code>lock</code> or <code>alarm_control_panel</code> domain or a <code>cover</code> that is a garage, door or gate (or doesn't say), or contain the word lock, unlock, door, garage, gate, alarm or disarm. The card says "Locks, doors, garage doors, gates and alarms always ask. Always allow isn’t offered for them." Allowing it covers that one call.</li>
+</ul>
+<div class="note">kwant applies the lock rule to any server that calls itself <code>home-assistant</code> when it connects, and to a server it hasn't heard from yet, never by its address.</div>
+
+<h2 id="tested">Tested</h2>
+<p>kwant was tested against its own Home Assistant-shaped test server, not against every Home Assistant setup.</p>
