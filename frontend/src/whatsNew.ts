@@ -2,14 +2,20 @@
 // Stored per browser in localStorage; a missing or blocked storage just shows nothing.
 
 export const NEW_VERSION = '0.6.9';
-export type NewId = 'mention' | 'starters';
+export type NewId = 'mention' | 'starters' | 'home-team' | 'home-assistant';
+
+/** The release each sticker came in. A new id brings its own version, so the older ones stay seen. */
+const NEW_SINCE: Partial<Record<NewId, string>> = {
+  'home-team': '0.9.22',
+  'home-assistant': '0.9.22',
+};
 
 export interface KeyValueStore {
   getItem(k: string): string | null;
   setItem(k: string, v: string): void;
 }
 
-export const newKey = (id: NewId, version = NEW_VERSION) => `kwant:new:${version}:${id}`;
+export const newKey = (id: NewId, version = NEW_SINCE[id] ?? NEW_VERSION) => `kwant:new:${version}:${id}`;
 
 const defaultStore = (): KeyValueStore | null => {
   try {

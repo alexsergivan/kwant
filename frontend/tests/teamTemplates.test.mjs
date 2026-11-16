@@ -118,7 +118,7 @@ test('wire → internal: bots carry their slot as key (§1); reason_parts and st
   const t = m.normTemplate(m.TEMPLATES_WIRE[0]);
   assert.deepEqual(t.bots.map((b) => b.key), ['InboxManager', 'Drafter', 'Researcher']);
   const slots = m.TEMPLATES_WIRE.flatMap((x) => x.bots.map((b) => b.slot));
-  assert.deepEqual(slots, ['InboxManager', 'Drafter', 'Researcher', 'SalesLead', 'Prospector', 'OutreachWriter', 'TechLead', 'Frontend', 'Backend', 'QA']);
+  assert.deepEqual(slots, ['InboxManager', 'Drafter', 'Researcher', 'SalesLead', 'Prospector', 'OutreachWriter', 'TechLead', 'Frontend', 'Backend', 'QA', 'House']);
   assert.equal(m.normTemplate({ ...m.TEMPLATES_WIRE[0], bots: [{ ...m.TEMPLATES_WIRE[0].bots[0], slot: undefined, key: 'old' }] }).bots[0].key, 'old', 'a §0 key still reads');
   // §1: skill owners and the routine's bot are slots, not renamed names.
   assert.equal(t.skills[0].owner, 'InboxManager');
@@ -759,7 +759,7 @@ test('T7/D1 entry points: tiles, sidebar box (hide sticks per space), Suggest on
     );
   const v = await mount(tree(''));
   assert.ok(calls.some((c) => c.url === '/api/team-templates?space=spc_demo'));
-  assert.equal(document.querySelectorAll('#tiles [data-template]').length, 3);
+  assert.equal(document.querySelectorAll('#tiles [data-template]').length, 4);
   assert.equal(document.querySelector('#suggest [data-suggest-members]'), null);
   assert.ok(document.querySelector('#box [data-template-sidebar]'));
   await click(document.querySelector('[aria-label="Hide ready-made teams"]'));

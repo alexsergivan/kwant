@@ -5,7 +5,7 @@ import { badgeUsageFor, modelBadgeFor, modelBadgeSize, type ModelBadge } from '.
 import { badgeBotOf, badgeEngines, badgeProfiles, subscribeBadgeData } from '../modelBadgeData';
 import { EngineMark } from './EngineMark';
 import { AvatarMoodMark, useKwantMood, useKwantNotices } from './AvatarMood';
-import { moodLabel, restingUntilOf } from '../kwantMood';
+import { moodLabel, restingUntilOf, type Mood } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
 import { avatarStyleFor, botLooksRev, subscribeBotLooks } from '../botLooks';
 
@@ -23,6 +23,13 @@ interface ModernAvatarProps {
   modelBadge?: boolean;
   /** Eyes shut and still: the empty chat while nothing can run yet (first-screen E). */
   asleep?: boolean;
+  /**
+   * A mood set by the screen instead of the bot's own turns, for a bot that isn't created yet or a
+   * check that isn't a turn (House while Connect Home Assistant tests). `working` shows the ring.
+   */
+  mood?: Mood;
+  /** Words for that set mood ("House is checking Home Assistant"); the avatar is then an image with this name. */
+  moodText?: string;
 }
 
 const noopUnsubscribe = () => undefined;
@@ -138,7 +145,7 @@ type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
-  | 'partyhat' | 'hardhat' | 'flower' | 'none';
+  | 'partyhat' | 'hardhat' | 'flower' | 'roof' | 'none';
 
 export interface Creature {
   body: string;
@@ -203,6 +210,7 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'party', label: 'Party' },
   { id: 'builder', label: 'Builder' },
   { id: 'zen', label: 'Wellbeing' },
+  { id: 'home', label: 'Home' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -231,6 +239,7 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   party: ['peach', 'partyhat'],
   builder: ['steel', 'hardhat'],
   zen: ['blossom', 'flower'],
+  home: ['gold', 'roof'],
 };
 
 /** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
@@ -271,6 +280,7 @@ function pickCreature(role: string, name: string): Creature {
     [['diy', 'builder', 'handy'], 'steel', 'hardhat'],
     [['wellbeing', 'mindful', 'zen'], 'blossom', 'flower'],
     [['coach', 'mentor'], 'amber', 'cap'],
+    [['home', 'house'], 'gold', 'roof'],
   ];
   for (const [keys, palette, accessory] of rules) {
     if (keys.some((k) => norm.includes(k))) return { ...PALETTES[palette], accessory };
@@ -314,6 +324,17 @@ function renderAccessory(c: Creature) {
       return [px(8, 5, 1, 2, c.accent), px(9, 6, 1, 1, c.accent), px(17, 5, 1, 2, c.accent), px(16, 6, 1, 1, c.accent)];
     case 'sprout':
       return [px(13, 5, 1, 2, '#3ccf6e'), px(14, 4, 2, 1, '#3ccf6e'), px(11, 4, 2, 1, '#1f8f4c')];
+    case 'roof':
+      // House (26e): a red roof with a chimney and one still smoke puff, all above the body (y 2–6).
+      return [
+        px(15, 3, 2, 3, '#8f5b4a'), px(15, 3, 2, 1, '#b07a63'),
+        px(17, 2, 1, 1, '#d9d6f0'), px(18, 2, 1, 1, '#8d87b8'),
+        px(12, 2, 2, 1, c.accent), px(11, 3, 4, 1, c.accent),
+        px(10, 4, 6, 1, c.accent), px(9, 5, 8, 1, c.accent),
+        px(7, 6, 12, 1, '#a8323a'),
+        px(14, 3, 1, 1, '#a8323a'), px(15, 4, 1, 1, '#a8323a'), px(16, 5, 1, 1, '#a8323a'),
+        px(12, 2, 1, 1, '#ff8f8f'),
+      ];
     case 'crown':
       return [
         px(10, 5, 6, 2, c.accent), px(10, 4, 1, 1, c.accent), px(12, 3, 2, 2, c.accent), px(15, 4, 1, 1, c.accent),
@@ -454,14 +475,18 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   kwantId,
   modelBadge = true,
   asleep = false,
+  mood: moodOverride,
+  moodText: moodTextOverride,
 }) => {
-  const working = useKwantWorking(kwantId);
+  const turnWorking = useKwantWorking(kwantId);
+  const working = moodOverride ? moodOverride === 'working' : turnWorking;
   // Never green (or idle grey) while a turn runs: the turn stream wins over a stale status.
   const shown = status && working && STATUS_PRIORITY.indexOf(status) > STATUS_PRIORITY.indexOf('working') ? 'working' : status;
   // The mood (thinking, finished, failed, needs you, resting) adds a pixel mark and its own words.
-  const mood = useKwantMood(kwantId);
+  const kwantMood = useKwantMood(kwantId);
+  const mood: Mood = moodOverride ?? kwantMood;
   const notices = useKwantNotices(kwantId);
-  const moodText = moodLabel(mood, name, restingUntilOf(kwantId));
+  const moodText = moodTextOverride ?? moodLabel(mood, name, restingUntilOf(kwantId));
   const label = moodText ?? (shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined);
   // Same bot, same look in every place: re-reads when the app's bot list changes.
   useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
@@ -479,6 +504,8 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
       className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${working ? 'kw-avatar-working' : ''} ${mood === 'resting' ? 'kw-avatar-resting' : ''} ${className}`}
       style={{ width: size, height: size }}
       title={label}
+      role={moodTextOverride ? 'img' : undefined}
+      aria-label={moodTextOverride}
       data-working={working || undefined}
       data-status={shown}
       data-mood={mood === 'idle' ? undefined : mood}

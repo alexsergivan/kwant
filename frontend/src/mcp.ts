@@ -75,13 +75,14 @@ export const emptyMcpForm = (transport: McpTransport = 'stdio'): McpFormState =>
   timeout_secs: 30,
 });
 
-export type McpPresetCategory = 'files' | 'web' | 'data' | 'productivity' | 'business' | 'creative' | 'devtools';
+export type McpPresetCategory = 'files' | 'web' | 'data' | 'home' | 'productivity' | 'business' | 'creative' | 'devtools';
 
 /** Catalog groups, in display order. */
 export const MCP_PRESET_CATEGORIES: Array<{ id: McpPresetCategory; label: string }> = [
   { id: 'files', label: 'Files & code' },
   { id: 'web', label: 'Web' },
   { id: 'data', label: 'Data' },
+  { id: 'home', label: 'Home' },
   { id: 'productivity', label: 'Productivity' },
   { id: 'business', label: 'Payments & customers' },
   { id: 'creative', label: 'Design & media' },
@@ -102,6 +103,8 @@ export interface McpPreset {
   form: McpFormState;
   /** The maker's own domain, when the server's address is on another one (GitHub's is api.githubcopilot.com). */
   domain?: string;
+  /** More words a search finds it by ("hass", "smart home"). */
+  keywords?: string[];
 }
 
 /** A preset's secret: name, placeholder, and whether the server needs it to work. */
@@ -132,6 +135,18 @@ const httpPreset = (name: string, url: string, headers: PresetSecret[] = []): Mc
  * which kwnt's Connect flow needs.
  */
 export const MCP_PRESETS: McpPreset[] = [
+  {
+    // Home Assistant's own MCP Server integration (2025.2+). Picking it opens Connect Home Assistant
+    // (26e), which builds this URL and header from an address and an access token.
+    id: 'home-assistant',
+    label: 'Home Assistant',
+    blurb: 'Lights, heating, blinds and more in your home.',
+    category: 'home',
+    needs: ['Token'],
+    source: 'https://www.home-assistant.io/integrations/mcp_server/',
+    form: httpPreset('home-assistant', 'http://homeassistant.local:8123/api/mcp', [['Authorization', 'Bearer <token>', true]]),
+    keywords: ['hass', 'homeassistant', 'smart', 'lights', 'heating'],
+  },
   {
     // npm @modelcontextprotocol/server-filesystem 1.0.0
     id: 'files',
@@ -470,7 +485,7 @@ const matches = (query: string) => {
 /** Presets matching a search, by name, blurb, group or what they need. A blank query keeps all. */
 export const searchPresets = (query: string, presets: McpPreset[] = MCP_PRESETS): McpPreset[] => {
   const hit = matches(query);
-  return presets.filter((p) => hit(presetText(p, p.needs)));
+  return presets.filter((p) => hit(presetText(p, [...p.needs, ...(p.keywords ?? [])])));
 };
 
 /** Composio-only apps matching a search, the same way. A blank query keeps all. */
