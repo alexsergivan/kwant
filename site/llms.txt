@@ -11,7 +11,7 @@ Key facts:
 - kwant has no token (no coin, no crypto). The official X account is @kwantbot (https://x.com/kwantbot).
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
-- Windows app (beta, 64-bit): https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.15/kwant_0.9.15_windows_x64_beta_setup.exe (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
+- Windows app (beta, 64-bit): https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.18/kwant_0.9.18_windows_x64_beta_setup.exe (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
 - Phone app (iPhone and Android, no app store): open your kwant server's https address in Safari or Chrome and add it to the Home Screen; it gets notifications when a bot needs you. https://kwant.si/docs/phone
 - Run Claude inside the VM (Linux, off by default): each bot's Claude replies run in a container with no network, and the real key stays outside. https://kwant.si/docs/agents-in-vm
 - The program you install and run is called `kwnt` (`kwnt serve`).
@@ -68,6 +68,7 @@ Key facts:
 - [Use kwant from Claude Code, Codex or Cursor over MCP](https://kwant.si/docs/agents-connect): Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can't approve anything, revoked at once.
 - [Telegram: message your kwant bots and get alerts on your phone](https://kwant.si/docs/telegram): Pair a Telegram chat with a kwant space. Write to your bots from Telegram, get their replies, questions and approvals on your phone, and allow some approvals once with a tap. It needs no public address.
 - [AI agent browser: your Chrome or Docker](https://kwant.si/docs/browser): Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.
+- [Browser proxy: your bots' browser through a home connection](https://kwant.si/docs/browser-proxy): Send only kwant's bot browser through a SOCKS5 or HTTP proxy with KWNT_BROWSER_PROXY, so sites see a home connection, not a VPS. Check it with kwnt doctor.
 
 ## Alternatives
 - [Grok Bot Alternative: Open-Source & Self-Hosted](https://kwant.si/alternatives/grok-bot): kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.

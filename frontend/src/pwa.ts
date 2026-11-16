@@ -23,10 +23,49 @@ export function isIos(nav: Pick<Navigator, 'userAgent' | 'maxTouchPoints'>): boo
   return /iPhone|iPad|iPod/.test(nav.userAgent) || (/Macintosh/.test(nav.userAgent) && nav.maxTouchPoints > 1);
 }
 
+/** Android phones and tablets, where installing is the browser menu's Add to Home screen or Install app. */
+export function isAndroid(nav: Pick<Navigator, 'userAgent'>): boolean {
+  return /Android/.test(nav.userAgent);
+}
+
+/** 127.0.0.1, localhost, *.localhost, ::1, 0.0.0.0: addresses only this computer can open (the Mac
+ *  app's This Mac, local dev). A phone scanning a QR of one would open itself. Also `localhost.`
+ *  (a trailing dot is still this computer) and IPv4-mapped loopback: URL turns
+ *  `[::ffff:127.0.0.1]` into the hostname `[::ffff:7f00:1]`, so both spellings count. */
+export function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
+  return (
+    h === 'localhost' ||
+    h.endsWith('.localhost') ||
+    h === '::1' ||
+    h === '0.0.0.0' ||
+    /^127\.\d+\.\d+\.\d+$/.test(h) ||
+    /^::ffff:(127\.\d+\.\d+\.\d+|7f[0-9a-f]{2}:[0-9a-f]{1,4})$/.test(h)
+  );
+}
+
+/** What "Use kwant bots on your phone" offers on a computer: a one-time sign-in QR (`signin`), a QR of
+ *  this address (`address`), why a phone can't reach this computer (`loopback`), or why a phone
+ *  can't install from plain http (`insecure`). Loopback is checked first: http://127.0.0.1 is not
+ *  "insecure", it's unreachable. */
+export type PhoneAppKind = 'signin' | 'address' | 'loopback' | 'insecure';
+
+export function phoneAppKind(s: { hostname: string; protocol: string; authRequired: boolean; deviceLogin: boolean }): PhoneAppKind {
+  if (isLoopbackHost(s.hostname)) return 'loopback';
+  if (s.protocol !== 'https:') return 'insecure';
+  return s.authRequired && s.deviceLogin ? 'signin' : 'address';
+}
+
+/** The kwant.si how-to the card links to, and the https proxy section. */
+export const PHONE_GUIDE_URL = 'https://kwant.si/docs/phone.html';
+export const TELEGRAM_GUIDE_URL = 'https://kwant.si/docs/telegram.html';
+export const HTTPS_GUIDE_URL = 'https://kwant.si/docs/install.html#proxy';
+
 export type InstallHintKind = 'prompt' | 'ios' | null;
 
 /** Which install hint to show: the browser's own install button (Android, Chrome), the Share
- * steps (iOS), or none: already installed, dismissed, not a phone, or not served over HTTPS. */
+ * steps (iOS), or none: already installed, dismissed, not a phone, not served over HTTPS, or the
+ * "Use kwant bots on your phone" card is on screen and already shows the same steps. */
 export function installHintKind(s: {
   standalone: boolean;
   dismissed: boolean;
@@ -34,13 +73,42 @@ export function installHintKind(s: {
   secure: boolean;
   ios: boolean;
   canPrompt: boolean;
+  phoneCardOnScreen?: boolean;
 }): InstallHintKind {
-  if (s.standalone || s.dismissed || !s.phone || !s.secure) return null;
+  if (s.standalone || s.dismissed || !s.phone || !s.secure || s.phoneCardOnScreen) return null;
   if (s.canPrompt) return 'prompt';
   return s.ios ? 'ios' : null;
 }
 
 export const INSTALL_HINT_DISMISSED_KEY = 'kwnt.installHint.dismissed';
+
+// Whether a PhoneAppCard is mounted (Settings › All spaces), so the floating InstallHint can step
+// aside instead of repeating its steps. A count, so two cards (or a remount) can't clear it early.
+let phoneCards = 0;
+const phoneCardListeners = new Set<() => void>();
+const notifyPhoneCard = () => phoneCardListeners.forEach((fn) => fn());
+
+/** Call when a PhoneAppCard mounts; returns the unmount cleanup. */
+export function phoneCardShown(): () => void {
+  phoneCards += 1;
+  notifyPhoneCard();
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    phoneCards -= 1;
+    notifyPhoneCard();
+  };
+}
+
+export const isPhoneCardOnScreen = (): boolean => phoneCards > 0;
+
+export function subscribePhoneCard(fn: () => void): () => void {
+  phoneCardListeners.add(fn);
+  return () => {
+    phoneCardListeners.delete(fn);
+  };
+}
 
 /** The Mac app's .dmg in the newest release (published by the mac workflow on a mac-v* tag). */
 export const MAC_DOWNLOAD_URL = 'https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg';

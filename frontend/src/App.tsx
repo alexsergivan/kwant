@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
@@ -10,6 +11,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { focusPhoneApp } from './components/PhoneAppTip';
 import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
@@ -184,6 +186,7 @@ import { ModernAvatar } from './components/ModernAvatar';
 import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
+import type { FloorResolveOpts } from './dev/types';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -2048,21 +2051,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const handleResolveApproval = async (
     ticketId: string,
-    decision: 'allow_once' | 'always_allow' | 'deny'
+    decision: 'allow_once' | 'always_allow' | 'deny',
+    opts?: FloorResolveOpts
   ) => {
     haptic('tap');
     try {
       const res = await fetch(`/api/approvals/${ticketId}/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision }),
+        // 22f: the person's own "Allow without a backup" on a deploy kwant only guessed changes the database.
+        body: JSON.stringify(opts?.withoutBackup && decision === 'allow_once' ? { decision, without_backup: true } : { decision }),
       });
       // Production floor (Dev mode): Allow without a fresh backup is refused and the card stays waiting.
       if (res.status === 409) {
         const body = await res.clone().json().catch(() => null);
         if (body && typeof body === 'object' && (body as { status?: unknown }).status === 'needs_backup') {
           haptic('warning');
-          pushToast('Back up first', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
+          const b = body as { code?: unknown; error?: unknown };
+          // 22f: `without_backup` refused (a destructive step, a known database change, or a card from before 22f).
+          if (b.code === 'backup_required' && typeof b.error === 'string' && b.error) pushToast('Needs a fresh backup', b.error);
+          else pushToast('Needs a fresh backup', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
           return;
         }
       }
@@ -3344,8 +3352,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       : []
     : [];
 
+  // 15e: the lead first (the "Ask:" row and the header's faces), the rest in roster order, like the team home.
   const currentTeamMembers = currentTeam
-    ? kwants.filter((k) => currentTeamMemberIds.includes(k.id))
+    ? askOrder(kwants.filter((k) => currentTeamMemberIds.includes(k.id)), currentTeam.lead_kwant_id)
     : [];
   // 0.8.1 F3: whose pre-push lines a team chat or channel shows (membership, like approvalsForChat).
   const pointerMemberIds: string[] = currentTeam ? currentTeamMemberIds : openChat?.kind === 'channel' ? openChat.memberIds.filter((id): id is string => !!id) : [];
@@ -4090,6 +4099,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onSwitchSpace={onSwitchSpace}
       onCreateSpace={onCreateSpace}
       onOpenSpaceSettings={() => openSpaceSettings('general')}
+      onOpenPhoneApp={() => {
+        openAppSettings();
+        focusPhoneApp();
+      }}
       onOpenArchived={onOpenArchived}
       onOpenSearch={() => setIsSearchOpen(true)}
       section={section}

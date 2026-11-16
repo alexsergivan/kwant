@@ -7,6 +7,7 @@ import test, { afterEach } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
+import { until } from './heldTimers.mjs';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
 const g = globalThis;
@@ -258,7 +259,8 @@ test('Look now: Asking… while it waits, then the slip moves to Being peeked at
   assert.equal(asking.getAttribute('aria-disabled'), 'true');
   assert.equal(asking.disabled, false, 'busy stays focusable (M3)');
   d.resolve();
-  await settle();
+  // The 202 → render chain is real work; wait for it, not a fixed tick count (22e).
+  await until(() => sectionOfCard(host, ID.fresh) === 'peeking');
   assert.equal(sectionOfCard(host, ID.fresh), 'peeking');
   assert.match(text(card(host, ID.fresh).querySelector('[data-peeking-text]')), /^Pixel is peeking/, 'kwant_name from the 202 names the bot');
 });
@@ -488,6 +490,8 @@ test('dropping an idea: POST, then it shows in the jar and the live region says 
   const input = host.querySelector('[data-quick-add] input');
   await typeInto(input, '  A faster way to find old chats ');
   await submit(host.querySelector('[data-quick-add]'));
+  // The POST → render chain is real work; wait for the card, not a fixed tick count (22e).
+  await until(() => card(host, 'new-1'));
   assert.deepEqual(calls.find((c) => c.method === 'POST').body, { space_id: 'spc_default', text: 'A faster way to find old chats' });
   assert.ok(card(host, 'new-1'));
   assert.equal(input.value, '');

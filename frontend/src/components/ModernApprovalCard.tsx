@@ -6,7 +6,7 @@ import { tierReason } from '../flightSchool';
 import { toolAction } from '../toolLabel';
 import { localClock } from '../clock';
 import { isPhoneLayout } from '../layout';
-import { parseProdFloor, type BackupResult } from '../dev/types';
+import { parseProdFloor, type BackupResult, type FloorBackup, type FloorResolveOpts } from '../dev/types';
 import { ProdFloorCard } from './dev/ProdFloorCard';
 
 export interface PendingApproval {
@@ -24,13 +24,17 @@ export interface PendingApproval {
 
 interface ModernApprovalCardProps {
   approval: PendingApproval;
-  onResolve: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
+  /** `opts` only from the production-floor card: Allow without a backup (22f). */
+  onResolve: (id: string, decision: 'allow_once' | 'always_allow' | 'deny', opts?: FloorResolveOpts) => void;
   /** While an answer is being sent. */
   disabled?: boolean;
   /** Forces the phone or desktop look (tests); by default it follows the window when the card appears. */
   phone?: boolean;
   /** Production floor (Dev mode): takes a backup; defaults to the space's backup route. */
   onBackup?: (spaceId: string) => Promise<BackupResult>;
+  /** Floor card only (22f): saves the backup command / re-reads the backup state; tests and the rig fake them. */
+  onSetCommand?: (spaceId: string, command: string) => Promise<void>;
+  onLoadBackup?: (spaceId: string) => Promise<FloorBackup | null>;
 }
 
 /** Server/tool/arguments of an MCP approval, or null for other tools. */
@@ -231,6 +235,8 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   disabled = false,
   phone,
   onBackup,
+  onSetCommand,
+  onLoadBackup,
 }) => {
   // Dev mode's production floor has its own card: blast radius, backup row, and never "always allow".
   const floor = parseProdFloor(approval.details);
@@ -246,10 +252,12 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         cwd={shellCmd?.cwd ?? null}
         disabled={disabled}
         onBackup={onBackup}
-        onResolve={(id, decision) => {
+        onSetCommand={onSetCommand}
+        onLoadBackup={onLoadBackup}
+        onResolve={(id, decision, opts) => {
           if (disabled) return;
           playSfx('click');
-          onResolve(id, decision);
+          onResolve(id, decision, opts);
         }}
       />
     );
