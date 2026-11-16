@@ -80,7 +80,7 @@ test('a bot pinned to Ollama that cannot reach it gets an Ollama card with Re-ch
   const checking = card({ meta, onRecheck: () => {}, rechecking: true });
   assert.match(checking, /Checking…/);
   // The spinner stops under reduced motion; the label carries the state
-  assert.match(checking, /class="animate-spin motion-reduce:animate-none"/);
+  assert.match(checking, /class="[^"]*animate-spin motion-reduce:animate-none"/);
   // Same fallback phrase as the server's (src/drivers/engines.rs shown_url)
   assert.match(card({ meta: { reason: 'ollama_down' }, onRecheck: () => {} }), /at the address in Settings\./);
   // Without a Re-check handler there is no button at all, never Accounts
