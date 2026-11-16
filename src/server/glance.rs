@@ -160,7 +160,7 @@ const WRITE_METHODS: &[&str] = &["DELETE", "PUT", "PATCH", "POST"];
 /// value, or one that isn't a plain string, needs the full card.
 const READ_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
 
-/// Whole words (in the tool name, any argument key or any string value) that push, merge, publish
+/// Whole words (in the tool name, an argument key or a string value, see [`inline_refusal`] step 1) that push, merge, publish
 /// or release, or move refs and tags.
 const PUSH_FAMILY: &[&[&str]] = &[&["push"], &["merge"], &["publish"], &["release"], &["send", "pack"], &["receive", "pack"], &["refs"], &["deploy"], &["tag"]];
 
@@ -291,6 +291,62 @@ fn has_push_word(text: &str) -> bool {
     PUSH_FAMILY.iter().any(|phrase| words.windows(phrase.len()).any(|w| w.iter().zip(phrase.iter()).all(|(a, b)| a == b)))
 }
 
+/// Whole words of an argument key that make its value a git thing or a mode, so a push word in it
+/// counts however long the value is (21b): `ref`, `branch`, `tag`/`tag_name`, `remote`,
+/// `target_commitish`, `head`, `base`, `sha`, `commit`, and `mode`/`strategy` (`merge_mode`).
+const GIT_KEY_WORDS: &[&str] = &["ref", "refs", "branch", "branches", "tag", "tags", "remote", "commitish", "head", "base", "sha", "commit", "mode", "strategy"];
+
+/// Whole words ([`words`]) in a value that make a push word in it a git action, not prose (21b):
+/// `push to origin main`, `gh release create`, `git merge --force`. `HEAD` (upper case only) and
+/// `refs/` are checked in [`git_signal`].
+const GIT_SIGNAL_WORDS: &[&str] = &["git", "gh", "origin", "upstream", "remote", "branch", "force"];
+
+/// Whether a value carries a git signal: a [`GIT_SIGNAL_WORDS`] word, `refs/`, or `HEAD`.
+fn git_signal(s: &str) -> bool {
+    words(s).iter().any(|w| GIT_SIGNAL_WORDS.contains(&w.as_str())) || s.contains("refs/") || s.split(|c: char| !c.is_alphanumeric()).any(|t| t == "HEAD")
+}
+
+/// Whether a value under this key is an action, a mode, a command or a git thing, so any push word
+/// in it counts (21b): a run key ([`is_run_key`]), an action or method key ([`is_action_key`],
+/// [`is_method_key`]) or a [`GIT_KEY_WORDS`] key.
+fn strict_key(k: &str) -> bool {
+    let f = flat(k);
+    is_run_key(k) || is_action_key(&f) || is_method_key(&f) || words(k).iter().any(|w| GIT_KEY_WORDS.contains(&w.as_str()))
+}
+
+/// Whether a push word in one string value counts (21b). Always under a [`strict_key`] or as an
+/// item of a list (argv-style). Otherwise only when the value reads as an action or a ref, not a
+/// sentence: one word (`merge`, `receive-pack`, `forcePush`); two words where the push word comes
+/// first (`Push it`, `merge main`) or the other word has a digit (`v1 TAG`); or any length with a
+/// [`git_signal`] (`push to origin main`). "Our press release", "press release" and "Release
+/// notes for 0.9" don't count.
+fn push_value_counts(s: &str, strict: bool) -> bool {
+    if !has_push_word(s) {
+        return false;
+    }
+    let toks: Vec<&str> = s.split_whitespace().collect();
+    strict
+        || toks.len() <= 1
+        || git_signal(s)
+        || (toks.len() == 2 && (has_push_word(toks[0]) || toks.iter().any(|t| t.chars().any(|c| c.is_ascii_digit()))))
+}
+
+/// Step 1 of [`inline_refusal`] on the arguments (21b): a push word in a key, at any depth, when the
+/// tool name doesn't read (`keys_count`), so `release_id` on `GITHUB_GET_A_RELEASE` doesn't count
+/// and `what_to_merge` on `save_note` does; or a push word in a string value that counts
+/// ([`push_value_counts`]). Everything under a [`strict_key`] is strict, and a string that is an
+/// item of a list is too.
+fn push_word_in_args(v: &Value, keys_count: bool, strict: bool, in_list: bool) -> bool {
+    match v {
+        Value::String(s) => push_value_counts(s, strict || in_list),
+        Value::Array(items) => items.iter().any(|i| push_word_in_args(i, keys_count, strict, true)),
+        Value::Object(map) => {
+            map.iter().any(|(k, v)| (keys_count && has_push_word(k)) || push_word_in_args(v, keys_count, strict || strict_key(k), false))
+        }
+        _ => false,
+    }
+}
+
 /// Whether `name` (already split by [`words`]) has a [`READ_VERBS`] word, so it only reads.
 fn reads(name: &[String]) -> bool {
     name.iter().any(|w| READ_VERBS.contains(&w.as_str()))
@@ -398,9 +454,10 @@ fn writes_by_method(args: &Value) -> bool {
 /// push floor (a prepush grant, a GitHub write, a merge) and details it can't read.
 ///
 /// It fails closed in four layers, each of which refuses on its own (Ada, #646 round 2; 0.9.14):
-/// 1. a push-family word ([`PUSH_FAMILY`]) in the tool name (unless a [`READ_VERBS`] word says it
-///    only reads), an argument key or a string value, as a whole word, camelCase humps included
-///    ([`words`]);
+/// 1. a push-family word ([`PUSH_FAMILY`]) in the tool name or an argument key (unless a
+///    [`READ_VERBS`] word says the name only reads), or in a string value that is an action, a mode,
+///    a command or a ref rather than a sentence ([`push_word_in_args`], 21b), as a whole word,
+///    camelCase humps included ([`words`]);
 /// 2. a tool that runs free text: its tool or server name says so ([`runs_by_name`]) or an
 ///    argument key at any depth does ([`is_run_key`]: exact, by containment, or by word);
 /// 3. a tool whose name acts outside kwant or destroys something ([`outward_by_name`]: a verb of
@@ -423,11 +480,11 @@ pub fn inline_refusal(details: &Value) -> Option<&'static str> {
     let tool = details["tool"].as_str().unwrap_or_default();
     let server = details["server"].as_str().unwrap_or_default();
     let args = &details["arguments"];
-    // 1. A push-family word wherever it hides: the name (unless it only reads, 20d), a key, a
-    //    value, an argv item
-    let mut all = Vec::new();
-    texts(args, &mut all);
-    if has_push_word(&all.join(" ")) || (has_push_word(tool) && !reads(&words(tool))) {
+    // 1. A push-family word wherever it hides: the name (unless it only reads, 20d), a key (unless
+    //    the name only reads, 21b), a value that is an action, a mode or a ref rather than a
+    //    sentence (21b), an argv item
+    let name_reads = reads(&words(tool));
+    if push_word_in_args(args, !name_reads, !args.is_object(), false) || (has_push_word(tool) && !name_reads) {
         return Some(PUSHES);
     }
     // 2. Free text to run, whatever it says
@@ -1123,15 +1180,83 @@ mod tests {
         }
     }
 
-    /// The other island layers are unchanged (brief, "Don't touch"): a push word in a key or value
-    /// still refuses a read tool there, and Telegram, which doesn't read them, keeps Allow once.
+    /// Step 1 as it was before 21b: a push word anywhere in the joined keys and values, or in a name
+    /// that doesn't read.
+    fn step1_before_21b(d: &Value) -> bool {
+        let tool = d["tool"].as_str().unwrap_or_default();
+        let mut all = Vec::new();
+        texts(&d["arguments"], &mut all);
+        has_push_word(&all.join(" ")) || (has_push_word(tool) && !reads(&words(tool)))
+    }
+
+    /// 21b: a push word in a sentence, or in a key of a tool that only reads, doesn't say "This pushes
+    /// code". Each row: before (old step 1 refused?), the island's answer after.
+    fn prose_rows() -> Vec<(&'static str, Value, bool, Option<&'static str>)> {
+        let note = |args: Value| mcp("notes", "save_note", args);
+        vec![
+            // Allow once now (each said PUSHES before)
+            ("GITHUB_GET_A_RELEASE release_id (a key, the name reads)", mcp("composio", "GITHUB_GET_A_RELEASE", json!({"owner": "o", "repo": "r", "release_id": 1})), true, None),
+            ("GITHUB_GET_A_RELEASE_BY_TAG_NAME tag v1.0", mcp("composio", "GITHUB_GET_A_RELEASE_BY_TAG_NAME", json!({"owner": "o", "repo": "r", "tag": "v1.0"})), true, None),
+            ("K07 (Rigel) gmail create_draft \"press release\"", mcp("gmail", "create_draft", json!({"subject": "press release", "body": "hi"})), true, None),
+            ("K07 (brief) notion create_page \"Our press release\"", mcp("notion", "create_page", json!({"title": "Our press release", "content": "The press release is attached."})), true, None),
+            ("notion create_page \"Release notes for 0.9\"", mcp("notion", "create_page", json!({"title": "Release notes for 0.9", "parent": {"page_id": "abc"}})), true, None),
+            ("save_note \"We will merge the two lists\"", note(json!({"text": "We will merge the two lists"})), true, None),
+            ("linear create_issue, launch post title", mcp("linear", "create_issue", json!({"title": "Publish the launch blog post on Monday", "description": "Draft is in the doc"})), true, None),
+            // Allow once before and after
+            ("save_note \"we merged the two lists\" (merged isn't a push word)", note(json!({"text": "we merged the two lists"})), false, None),
+            // Still refused, another layer now answers (step 3, out of scope)
+            ("K07 (brief) GMAIL_CREATE_EMAIL_DRAFT \"Our press release\"", mcp("composio", "GMAIL_CREATE_EMAIL_DRAFT", json!({"recipient_email": "a@b.c", "subject": "Our press release", "body": "The press release is attached."})), true, Some(OUTWARD)),
+            // Still PUSHES
+            ("message \"push to origin main\" (git signal)", note(json!({"message": "push to origin main"})), true, Some(PUSHES)),
+            ("branch \"release\" (git key)", note(json!({"branch": "release"})), true, Some(PUSHES)),
+            ("action \"merge\" (action key)", note(json!({"action": "merge"})), true, Some(PUSHES)),
+            ("cmd \"deploy the site to prod now\" (run key)", note(json!({"cmd": "deploy the site to prod now"})), true, Some(PUSHES)),
+            ("strategy \"squash merge\" (mode key)", note(json!({"strategy": "squash merge"})), true, Some(PUSHES)),
+            ("opts.mode, a sentence under a mode key", note(json!({"opts": {"mode": "force push it right now"}})), true, Some(PUSHES)),
+            ("\"force push\" (git signal)", note(json!({"t": "force push"})), true, Some(PUSHES)),
+            ("\"git merge feature into main please\"", note(json!({"t": "git merge feature into main please"})), true, Some(PUSHES)),
+            ("\"move the refs/heads/main pointer\" (refs/)", note(json!({"t": "move the refs/heads/main pointer"})), true, Some(PUSHES)),
+            ("\"reset HEAD and then push it\" (HEAD)", note(json!({"t": "reset HEAD and then push it"})), true, Some(PUSHES)),
+            ("a sentence in a list (argv-style)", note(json!({"items": ["deploy the site now"]})), true, Some(PUSHES)),
+            ("\"Release 2.0\" (two words, push word first)", note(json!({"t": "Release 2.0"})), true, Some(PUSHES)),
+            ("\"merge main\" (two words, push word first)", note(json!({"t": "merge main"})), true, Some(PUSHES)),
+            ("a read with tag \"release\" (a git key's value still counts)", mcp("composio", "GITHUB_GET_A_RELEASE_BY_TAG_NAME", json!({"tag": "release"})), true, Some(PUSHES)),
+            ("key what_to_merge on a name that doesn't read", note(json!({"what_to_merge": "a"})), true, Some(PUSHES)),
+            ("a bare string argument", note(json!("publish the site now")), true, Some(PUSHES)),
+        ]
+    }
+
     #[test]
-    fn a_push_word_in_the_arguments_still_refuses_a_read_on_the_island() {
-        let d = mcp("composio", "GITHUB_GET_A_RELEASE", json!({"owner": "o", "repo": "r", "release_id": 1}));
-        assert_eq!(inline_refusal(&d), Some(PUSHES));
-        assert_eq!(ships_or_runs(&d), None);
-        // And a read verb lifts only the name's push words, not an outward one
+    fn a_push_word_in_prose_or_a_read_s_key_keeps_allow_once_and_actions_do_not() {
+        let rows = prose_rows();
+        assert_eq!(rows.len(), 25);
+        for (name, d, before, want) in rows {
+            assert_eq!(step1_before_21b(&d), before, "before 21b: {name}");
+            assert_eq!(inline_refusal(&d), want, "island: {name}");
+        }
+        // A read verb lifts only the name's and keys' push words, not an outward one
         assert_eq!(inline_refusal(&mcp("x", "get_deploy_logs", json!({}))), Some(OUTWARD));
+        // Telegram is unchanged: it never read push words in arguments
+        let d = mcp("composio", "GITHUB_GET_A_RELEASE", json!({"owner": "o", "repo": "r", "release_id": 1}));
+        assert_eq!(ships_or_runs(&d), None);
+    }
+
+    /// Every row the island refused at step 1 before 21b still needs the full card after it, unless
+    /// it is one of the [`prose_rows`] the brief lifts on purpose.
+    #[test]
+    fn only_prose_and_read_keys_are_lifted() {
+        let mut rows: Vec<Value> = risky_rows().into_iter().map(|(_, d)| d).collect();
+        rows.extend(hardening_rows().into_iter().map(|(_, d, _)| d));
+        rows.extend(reads_rows().into_iter().map(|(_, d)| d));
+        rows.extend(outward_rows().into_iter().map(|(_, d, _)| d));
+        let mut checked = 0;
+        for d in &rows {
+            if step1_before_21b(d) {
+                checked += 1;
+                assert!(inline_refusal(d).is_some(), "{d}");
+            }
+        }
+        assert!(checked >= 8, "{checked}");
     }
 
     /// 21a: the island's outward layer, both directions. A read of mail, files, posts, payments,
