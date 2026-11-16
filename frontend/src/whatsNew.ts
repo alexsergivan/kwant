@@ -6,8 +6,8 @@ export type NewId = 'mention' | 'starters' | 'home-team' | 'home-assistant';
 
 /** The release each sticker came in. A new id brings its own version, so the older ones stay seen. */
 const NEW_SINCE: Partial<Record<NewId, string>> = {
-  'home-team': '0.9.22',
-  'home-assistant': '0.9.22',
+  'home-team': '0.9.21',
+  'home-assistant': '0.9.21',
 };
 
 export interface KeyValueStore {

@@ -107,9 +107,9 @@ test('the Home template: House on the home sprite, Lights out off by default', (
   assert.equal(home.routine.enabled, false);
 });
 
-test('New tags: home-team and home-assistant are new in 0.9.22; older ids keep their version', () => {
-  assert.equal(m.newKey('home-team'), 'kwant:new:0.9.22:home-team');
-  assert.equal(m.newKey('home-assistant'), 'kwant:new:0.9.22:home-assistant');
+test('New tags: home-team and home-assistant are new in 0.9.21; older ids keep their version', () => {
+  assert.equal(m.newKey('home-team'), 'kwant:new:0.9.21:home-team');
+  assert.equal(m.newKey('home-assistant'), 'kwant:new:0.9.21:home-assistant');
   assert.equal(m.newKey('mention'), 'kwant:new:0.6.9:mention');
 });
 

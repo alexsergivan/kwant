@@ -12,7 +12,7 @@ import { plural, type TeamTemplate } from '../teams/teamTemplates';
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 
-/** 26e: the Home team is new in 0.9.22; picking it (any door) clears the tag. */
+/** 26e: the Home team is new in 0.9.21; picking it (any door) clears the tag. */
 const pickTemplate = (onPick: (id: string) => void, id: string) => {
   if (id === 'home') markNewSeen('home-team');
   onPick(id);
