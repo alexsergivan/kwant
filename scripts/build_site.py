@@ -119,7 +119,8 @@ DOC_GROUPS = [
         ("loose-ends", "Loose ends & letters"),
         ("parallel-universe", "Parallel Universe"),
     ]),
-    ("Connect", [("mcp", "MCP tools"), ("agents-connect", "Coding agents"), ("telegram", "Telegram"), ("browser", "Browser")]),
+    ("Connect", [("mcp", "MCP tools"), ("agents-connect", "Coding agents"), ("telegram", "Telegram"), ("browser", "Browser"),
+                 ("browser-proxy", "Browser proxy")]),
 ]
 DOCS = [d for _, items in DOC_GROUPS for d in items]
 

@@ -432,6 +432,71 @@ jobs:
           path: ${{ runner.temp }}/nudge
           if-no-files-found: ignore
           retention-days: 14
+      # The perch (apps/mac/src/perch_window.rs): the built app runs as --demo-perch, with the perch
+      # on (Always) and a made-up glance (one bot working, one need). Once the page rests it opens
+      # the perch the way ⌥⌘K does (perch_window::toggle) and prints the window's state every half
+      # second. The job fails unless, after the shortcut, the window is visible, has a size and sits
+      # inside the screen at its top, checked here from the numbers the window server gives. The
+      # runner has no notch, so this is the floating tab under the menu bar.
+      - name: Perch on screen after the shortcut (--demo-perch)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          shots="$RUNNER_TEMP/perch"
+          mkdir -p "$shots"
+          out="$shots/demo-perch.txt"
+          app=apps/mac/target/universal-apple-darwin/release/bundle/macos/kwant.app/Contents/MacOS/kwant
+          waitfor() {
+            for _ in $(seq 1 120); do grep -q "$1" "$out" && return 0; sleep 0.5; done
+            echo "never saw: $1"; cat "$out"; return 1
+          }
+          shot() { screencapture -x "$shots/$1.png" || true; }
+          osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to false' || true
+          "$app" --demo-perch > "$out" 2>&1 &
+          pid=$!
+          waitfor "demo-perch: before toggle"
+          shot 1-before-shortcut
+          waitfor "demo-perch: toggled"
+          sleep 2; shot 2-after-shortcut
+          waitfor "demo-perch: result"
+          shot 3-result
+          waitfor "demo-perch: done" || true
+          kill $pid 2>/dev/null || true
+          wait $pid 2>/dev/null || true
+          ls -l "$shots"
+          grep 'demo-perch:' "$out"
+          result=$(grep -m1 'demo-perch: result' "$out")
+          python3 - "$result" <<'PY'
+          import re, sys
+          line = sys.argv[1]
+          m = re.search(r"visible=(\w+) frame=(-?\d+),(-?\d+),(\d+)x(\d+) screen=(-?\d+),(-?\d+),(\d+)x(\d+) scale=([\d.]+)", line)
+          if not m:
+              print("::error::no perch frame in: " + line)
+              sys.exit(1)
+          visible = m.group(1) == "true"
+          x, y, w, h, sx, sy, sw, sh = map(int, m.groups()[1:9])
+          scale = float(m.group(10))
+          problems = []
+          if not visible:
+              problems.append("not visible")
+          if w <= 0 or h <= 0:
+              problems.append(f"size {w}x{h}")
+          if not (sx <= x and x + w <= sx + sw and sy <= y and y + h <= sy + sh):
+              problems.append(f"frame {x},{y},{w}x{h} not inside the screen {sx},{sy},{sw}x{sh}")
+          if y - sy > 80 * scale:
+              problems.append(f"top edge {y - sy}px below the screen's top")
+          if problems:
+              print("::error::the perch after the shortcut: " + "; ".join(problems) + " (" + line + ")")
+              sys.exit(1)
+          print("perch OK: " + line)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perch
+          path: ${{ runner.temp }}/perch
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.bundle.outputs.name }}
