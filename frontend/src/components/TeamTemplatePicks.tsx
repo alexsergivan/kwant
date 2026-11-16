@@ -24,7 +24,7 @@ export const TemplateWelcome: React.FC<{ templates: TeamTemplate[]; onPick: (id:
   const phone = useMedia(PHONE_QUERY);
   if (!templates.length) return null;
   return (
-    <section aria-labelledby="t-welcome-h" className="w-full max-w-[752px] mx-auto mt-8 px-4" data-template-welcome>
+    <section aria-labelledby="t-welcome-h" className="w-full max-w-[752px] xl:max-w-[960px] mx-auto mt-8 px-4" data-template-welcome>
       <div className="flex items-center gap-3">
         <span className="flex-1 h-px bg-white/10" aria-hidden="true" />
         <h3 id="t-welcome-h" className="text-[11px] leading-4 font-semibold uppercase tracking-[.08em] text-zinc-400">
@@ -72,8 +72,8 @@ export const TemplateWelcome: React.FC<{ templates: TeamTemplate[]; onPick: (id:
                         </span>
                       ))}
                     </span>
-                    <span className="text-xs text-zinc-400">{plural(t.bots.length, 'bot')}</span>
-                    <span className="ml-auto text-xs font-medium text-sky-300">Preview ›</span>
+                    <span className="text-xs text-zinc-400 whitespace-nowrap">{plural(t.bots.length, 'bot')}</span>
+                    <span className="ml-auto text-xs font-medium text-sky-300 whitespace-nowrap">Preview ›</span>
                   </span>
                 </>
               )}
