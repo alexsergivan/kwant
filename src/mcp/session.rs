@@ -295,6 +295,12 @@ impl McpToolSession {
         };
         let text = redact(&text, &self.secrets);
         self.repeats.after(&repeat_key, status, &text);
+        // 22t: a call that worked and may have changed something gives the stopped calls their
+        // tries again. Read-only by the server's own claim (readOnlyHint) or by its name (the
+        // restart classifier's list) changes nothing.
+        if status == "ok" && offered.is_some_and(|t| !t.tool.read_only) && !crate::server::restart_resume::read_only(name) {
+            self.repeats.changed();
+        }
         let (server, tool) = super::split_tool_name(name).unwrap_or(("", name));
         let mut record = json!({
             "id": call_id,

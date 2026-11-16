@@ -713,6 +713,39 @@ async fn reads_of_mail_files_and_payments_keep_allow_once_on_the_island() {
     }
 }
 
+/// 22u (Rigel's F1 on #697 and his gaps on #716), through the glance: a ship command typed as free
+/// text says it pushes code, a list sign-up or notice named like a read says it acts outside kwant,
+/// and a sentence that mentions a release or a read of subscribers keeps Allow once.
+#[tokio::test]
+async fn ship_commands_in_free_text_and_list_sign_ups_need_the_full_card() {
+    use kwnt::server::glance::{OUTWARD, PUSHES};
+    let (app, state, _tmp) = setup().await;
+    let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].clone();
+    let mcp = |server: &str, tool: &str, args: Value| json!({"source": "mcp", "server": server, "tool": tool, "arguments": args});
+    let rows: Vec<(&str, Value, Option<&str>)> = vec![
+        ("text: npm publish", mcp("x", "do_thing", json!({"text": "npm publish"})), Some(PUSHES)),
+        ("message: docker push", mcp("x", "do_thing", json!({"message": "docker push myorg/app:latest"})), Some(PUSHES)),
+        ("prompt: kubectl rollout", mcp("x", "do_thing", json!({"prompt": "kubectl rollout restart deploy/app"})), Some(PUSHES)),
+        ("value: make deploy", mcp("x", "do_thing", json!({"value": "make deploy"})), Some(PUSHES)),
+        ("opt_out_mailing_list", mcp("composio", "opt_out_mailing_list", json!({"list_id": "l1"})), Some(OUTWARD)),
+        ("resubscribe_list", mcp("composio", "resubscribe_list", json!({"list_id": "l1"})), Some(OUTWARD)),
+        ("notify_email_list", mcp("composio", "notify_email_list", json!({"list_id": "l1"})), Some(OUTWARD)),
+        ("text: Release notes for 0.9", mcp("x", "do_thing", json!({"text": "Release notes for 0.9"})), None),
+        ("MAILCHIMP_LIST_SUBSCRIBERS", mcp("composio", "MAILCHIMP_LIST_SUBSCRIBERS", json!({"list_id": "l1"})), None),
+    ];
+    let mut made = Vec::new();
+    for (name, details, _) in &rows {
+        let tool = details["tool"].as_str().unwrap().to_string();
+        made.push((name, approval(&state, &bot.id, &tool, details.clone()).await));
+    }
+    let (v, _) = glance(&app).await;
+    for ((name, (id, _rx)), (_, _, why)) in made.iter().zip(&rows) {
+        let a = &find(&v["needs_you"], id)["approval"];
+        assert_eq!(a["can_allow_inline"], why.is_none(), "{name}: {a}");
+        assert_eq!(a["why_open"], json!(why), "{name}: {a}");
+    }
+}
+
 /// 18c: every row Rigel's r10/r11 still allowed at 253bacc9 ("Still allowed after 253bacc9" in
 /// desktop-island/qa-server-review.md), with the reason the island now gives, and the steps that
 /// must keep Allow once. Same details as his probes. The Telegram column is `ships_or_runs`: only
