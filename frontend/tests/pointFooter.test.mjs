@@ -132,5 +132,10 @@ test('count: one pick through the point layer makes the footer say "1 picked", t
 test('the takeover hand-back line follows the same one-line rule', () => {
   for (const c of ['min-w-0', 'truncate', 'whitespace-nowrap']) assert.ok(m.POINT_FOOTER_SLOT.split(' ').includes(c));
   assert.ok(!m.POINT_FOOTER_SLOT.split(' ').includes('flex-1'));
-  assert.ok(m.POINT_COPY.handBack.length > 0);
+  // 18g: short enough to fit the slot at 390 next to both buttons
+  assert.equal(m.POINT_COPY.handBack, 'Hand back to point');
+});
+
+test('the pick count uses tabular figures, so 1 → 3 picks does not nudge the line', () => {
+  assert.ok(m.POINT_FOOTER_SLOT.split(' ').includes('tabular-nums'));
 });

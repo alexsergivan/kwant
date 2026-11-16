@@ -30,6 +30,8 @@ node perf/stream/run.mjs --n 30 --tokens 2000 --rate 50
 node perf/stream/run.mjs --n 300 --tokens 0                  # 40 s idle: what the machine itself costs
 node perf/stream/run.mjs --n 300 --width 390 --shot mid.png  # screenshot at 60% of the stream
 node perf/stream/run.mjs --n 300 --end-shot end.png --final-shot final.png  # last token in, then the reply landed
+node perf/stream/run.mjs --n 300 --width 390 --measure geo.json   # the reply's box and blocks live vs landed (16a)
+node perf/stream/run.mjs --n 300 --width 390 --message-html m.html  # the landed reply's outerHTML, to diff the final render byte for byte (16a)
 ```
 
 It needs `playwright-core` and a Chromium; point `PLAYWRIGHT_CORE` (path to its `index.mjs`) and `CHROMIUM`

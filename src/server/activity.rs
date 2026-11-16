@@ -190,12 +190,20 @@ fn step_now(steps: &[Step]) -> Option<(String, String)> {
     steps.iter().rev().find(|s| s.kind != "thinking").map(|s| (island_title(s), s.started_at.clone()))
 }
 
-/// A step's title as the island shows it (17a). A shell step names only its program ("Running
-/// git"), never the command: the island sits on the person's screen above every app, shared
-/// screens and calls included, and redaction only catches known secret shapes. The chat's
-/// activity list keeps the full command. Every other step keeps its title.
+/// A step's title as the island shows it (17a, 19a). A shell step names only its program
+/// ("Running git"), never the command, and a search or helper step only its kind ("Searching the
+/// web"), never the query or brief: the island sits on the person's screen above every app, shared
+/// screens and calls included, and redaction only catches known secret shapes. The chat's activity
+/// list keeps the full titles. Every other step keeps its title.
 fn island_title(s: &Step) -> String {
-    if s.kind != "tool" || !s.tool.as_deref().is_some_and(crate::drivers::activity::is_shell_tool) {
+    let tool = match s.tool.as_deref() {
+        Some(tool) if s.kind == "tool" => tool,
+        _ => return s.title.clone(),
+    };
+    if let Some(bare) = crate::drivers::activity::island_kind_title(tool) {
+        return bare.to_string();
+    }
+    if !crate::drivers::activity::is_shell_tool(tool) {
         return s.title.clone();
     }
     match shell_program(&s.title) {
@@ -310,6 +318,50 @@ mod tests {
         assert_eq!(current_step("turn-island-other").unwrap().0, "Thinking");
         approval_waiting("turn-island-other", "ap", "Bash");
         assert_eq!(current_step("turn-island-other").unwrap().0, "Waiting for your approval: Running a command");
+    }
+
+    /// 19a: the island names a search or helper step's kind, never its query or brief; the chat's
+    /// activity list keeps them.
+    #[test]
+    fn current_step_names_a_search_or_helper_kind_never_its_words() {
+        let words = "acme invoice 4471";
+        let cases: Vec<(&str, Value, &str)> = vec![
+            ("Grep", json!({"pattern": words}), "Searching files"),
+            ("Glob", json!({"pattern": format!("**/{words}*")}), "Searching files"),
+            ("mcp__x__grep", json!({"query": words}), "Searching files"),
+            ("WebSearch", json!({"query": words}), "Searching the web"),
+            ("mcp__kwnt__web_search", json!({"q": words}), "Searching the web"),
+            ("Task", json!({"description": format!("Find {words} in the mail")}), "Starting a helper"),
+            ("Agent", json!({"subagent_type": words}), "Starting a helper"),
+            ("WebSearch", Value::Null, "Searching the web"),
+        ];
+        let (tx, _rx) = broadcast::channel(64);
+        for (n, (tool, args, want)) in cases.into_iter().enumerate() {
+            let id = format!("turn-island-words-{n}");
+            let tag = TurnTag { turn_id: id.clone(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+            let turn = TurnActivity::start(tx.clone(), tag);
+            turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: tool.into(), args: args.clone() });
+            assert_eq!(current_step(&id).unwrap().0, want, "{tool} {args}");
+            // The chat's activity list keeps the words, byte for byte
+            let chat = turn.with_log(|log| log.steps()[0].clone());
+            assert_eq!(chat.title, crate::drivers::activity::summarize(tool, &args).0);
+            assert_eq!(chat.title.contains(words), !args.is_null(), "{}", chat.title);
+            // Between steps, the finished step still names only its kind
+            turn.observe(&RuntimeEvent::ToolCallCompleted { id: "1".into(), result: json!({"status": "ok"}) });
+            let (title, _) = current_step(&id).unwrap();
+            assert_eq!(title, want);
+            assert!(!title.contains("acme") && !title.contains("4471"), "{title}");
+        }
+
+        // An approval for a search keeps its (already bare) title; a Reading step keeps its path
+        let tag = TurnTag { turn_id: "turn-island-words-other".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        approval_waiting("turn-island-words-other", "ap", "WebSearch");
+        assert_eq!(current_step("turn-island-words-other").unwrap().0, "Waiting for your approval: Searching the web");
+        approval_settled("turn-island-words-other", "ap", "ok");
+        let read = json!({"file_path": "/tmp/acme.md"});
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "2".into(), name: "Read".into(), args: read.clone() });
+        assert_eq!(current_step("turn-island-words-other").unwrap().0, crate::drivers::activity::summarize("Read", &read).0);
     }
 
     #[test]

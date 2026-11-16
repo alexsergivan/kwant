@@ -1049,7 +1049,9 @@ pub async fn prepare_turn_with_opts(
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
-    if let (true, Some(scope)) = (self_tools, self_scope) {
+    if let (true, Some(mut scope)) = (self_tools, self_scope) {
+        // 18a: one repeat guard per turn token, fresh even when the caller's scope was cloned before
+        scope.repeats = Default::default();
         state.self_tools.lock().await.insert(token.clone(), scope);
     }
     Some((ctx, token))
