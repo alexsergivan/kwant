@@ -227,8 +227,8 @@ function SenderLetter({ name }: { name: string }) {
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
-// 25b: a customer's or a bot's chat-API message, on the left. A bot reply's tones at your bubble's width; never violet.
-const OTHER_BUBBLE = 'bg-zinc-900/40 text-zinc-200 rounded-tl-sm border border-zinc-700/50';
+// 25b: a customer's or a bot's chat-API message, on the left. Outline only: not yours (filled, lighter), not a bot reply (filled); never violet.
+const OTHER_BUBBLE = 'bg-transparent text-zinc-200 rounded-tl-sm border border-zinc-700';
 
 export interface ChatViewProps {
   /** H3: a line under the person's held message ("Waiting for Juno: …", Try again), by message id. */

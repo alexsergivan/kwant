@@ -57,7 +57,11 @@ test("a customer's and a bot's chat-API message sit on the left in the other bub
     assert.match(r, /items-start/, `${id}: column starts on the left`);
     assert.doesNotMatch(r, /items-end/, id);
     assert.match(r, /data-other-bubble=""/, `${id}: the other bubble`);
-    assert.match(r, /bg-zinc-900\/40 text-zinc-200 rounded-tl-sm/, `${id}: neutral, left corner`);
+    const bubble = r.match(/<div[^>]*class="([^"]*)"[^>]*data-other-bubble=""/)?.[1] ?? '';
+    assert.match(bubble, /\bbg-transparent\b/, `${id}: outline, no fill`);
+    assert.match(bubble, /\bborder-zinc-700(?![\/\d])/, `${id}: full zinc-700 edge`);
+    assert.match(bubble, /text-zinc-200 rounded-tl-sm/, `${id}: neutral, left corner`);
+    assert.doesNotMatch(bubble, /bg-zinc-900\/60/, `${id}: never a bot reply's fill`);
     assert.doesNotMatch(r, YOUR_BUBBLE, `${id}: never your bubble`);
     assert.doesNotMatch(r, /violet/, `${id}: no violet`);
     assert.match(r, /data-sender-letter=/, `${id}: still the letter avatar`);
