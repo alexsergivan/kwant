@@ -25,6 +25,7 @@ use kwnt::{
 };
 use futures::StreamExt;
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
@@ -133,6 +134,7 @@ async fn setup() -> (Router, AppState, TempDir) {
 
 /// [`setup`], with a change to the state before the router is made.
 async fn setup_with(change: impl FnOnce(&mut AppState)) -> (Router, AppState, TempDir) {
+    install_log_capture();
     stub_base();
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
@@ -284,30 +286,83 @@ async fn a_refused_key_is_a_502_without_the_key() {
     let (app, state, _tmp) = setup().await;
     space_key(&state, &SpaceId::default_space(), "sk-bad").await;
     // Everything this test's thread logs
-    let log = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let sink = log.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_ansi(false)
-        .with_writer(move || Capture(sink.clone()))
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let (log, _capture) = capture_logs();
+
+    // Another thread reaches the same `dictation failed` line first, as a parallel test can (a
+    // 429 in `other_upstream_failures_and_the_fallback_model`). With a thread-scoped subscriber
+    // that registered the line against the other thread's empty default and this test's log
+    // stayed empty (CI #673, #686). The capture must not depend on which thread logs first.
+    let limited = state
+        .db
+        .create_space(&NewSpace { name: "Elsewhere".into(), icon: "x".into(), color: None, this_machine_enabled: true })
+        .await
+        .unwrap();
+    space_key(&state, &SpaceId::new(&limited.id), "sk-limit").await;
+    let (other, req, rt) = (app.clone(), audio_post(&limited.id, "", "audio/webm", vec![3; 100]), tokio::runtime::Handle::current());
+    let (code, _) = tokio::task::spawn_blocking(move || rt.block_on(call(&other, req))).await.unwrap();
+    assert_eq!(code, StatusCode::BAD_GATEWAY, "the other thread logged `dictation failed` too");
+    let early = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+    assert!(!early.contains("dictation failed"), "another thread's log isn't this test's: {early}");
 
     let (code, v) = call(&app, audio_post(DEF, "", "audio/wav", vec![3; 500])).await;
     assert_eq!(code, StatusCode::BAD_GATEWAY);
     assert_eq!(v, json!({"error": "The OpenAI key was refused.", "code": "transcriber_failed"}));
     assert_eq!(calls_with("sk-bad").len(), 1, "a refused key isn't retried with the other model");
     let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
-    assert!(log.contains("dictation failed"), "{log}");
+    assert_eq!(log.matches("dictation failed").count(), 1, "{log}");
     assert!(!log.contains("sk-bad") && !v.to_string().contains("sk-bad"), "{log}");
     assert!(!log.contains("Incorrect API key"), "OpenAI's own text isn't passed on: {log}");
 }
 
-struct Capture(Arc<Mutex<Vec<u8>>>);
+thread_local! {
+    /// Where this thread's log goes while a test captures it ([`capture_logs`]).
+    static CAPTURE: RefCell<Option<Arc<Mutex<Vec<u8>>>>> = const { RefCell::new(None) };
+}
+
+/// One global subscriber for the whole binary, installed by [`setup_with`] before any test can
+/// reach a server log line. It writes only what a capturing thread logs.
+///
+/// Not `tracing::subscriber::set_default` per test: while that is the only dispatcher ever made,
+/// tracing-core (0.1.36) asks the *registering thread's* default whether a log line is wanted. A
+/// line first reached by another test's thread (no subscriber) is cached as "never", and the
+/// capturing test's own event is dropped: an empty log at random. The filter is dynamic for the
+/// same reason: `filter_fn` caches its answer per line too.
+fn install_log_capture() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        use tracing_subscriber::prelude::*;
+        let capturing = tracing_subscriber::filter::dynamic_filter_fn(|_, _| CAPTURE.try_with(|c| c.borrow().is_some()).unwrap_or(false));
+        let layer = tracing_subscriber::fmt::layer().with_ansi(false).with_writer(|| Capture).with_filter(capturing);
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer)).unwrap();
+    });
+}
+
+/// Captures everything this thread logs (at every level) until the guard drops.
+fn capture_logs() -> (Arc<Mutex<Vec<u8>>>, CaptureGuard) {
+    install_log_capture();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    CAPTURE.with(|c| *c.borrow_mut() = Some(log.clone()));
+    (log, CaptureGuard)
+}
+
+struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        let _ = CAPTURE.try_with(|c| *c.borrow_mut() = None);
+    }
+}
+
+/// Writes to the current thread's capture, if any.
+struct Capture;
 
 impl Write for Capture {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
+        let _ = CAPTURE.try_with(|c| {
+            if let Some(log) = c.borrow().as_ref() {
+                log.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(buf);
+            }
+        });
         Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
