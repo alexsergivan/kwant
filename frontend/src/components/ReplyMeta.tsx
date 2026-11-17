@@ -56,7 +56,8 @@ const REPLY_NAME_LINE_TYPE = 'items-center gap-x-2 gap-y-1 text-xs text-zinc-400
 // The Details button's height: min-h-6, and 44 px where modern.css makes every control a 44 px tap target
 // (touch screens below 768 px), so the live line is as tall as the finished one there too.
 export const REPLY_NAME_LINE_LIVE_HEIGHT = 'min-h-6 [@media(max-width:767px)_and_(pointer:coarse)]:min-h-11';
-export const replyNameLine = (extra: string): string => `${REPLY_NAME_LINE_BOX} ${extra} ${REPLY_NAME_LINE_TYPE}`;
+export const replyNameLine = (extra: string, wrap = false): string =>
+  `${wrap ? REPLY_NAME_LINE_BOX.replace('flex-nowrap', 'flex-wrap') : REPLY_NAME_LINE_BOX} ${extra} ${REPLY_NAME_LINE_TYPE}`;
 
 export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
   <p data-failover-note="" className="-mt-0.5 mb-1.5 max-w-full text-xs leading-snug text-zinc-500 break-words">
@@ -101,7 +102,8 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
   const hasDetails = facts.length > 0 || hasContent(children) || !!why.panel;
   return (
     <div className="w-full max-w-full min-w-0">
-      <div className={replyNameLine('sm:flex-wrap')}>
+      {/* 26d: a Details label that names an outcome is long; on a phone it moves to its own row rather than clip. */}
+      <div className={replyNameLine('sm:flex-wrap', !!told)} data-name-line-wraps={told ? '' : undefined}>
         {avatar && <span className="sm:hidden shrink-0 inline-flex">{avatar}</span>}
         <span className={REPLY_NAME}>{name}</span>
         {done && <DoneMarker done={done} />}
@@ -119,7 +121,7 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-controls={open ? panelId : undefined}
-            className={`shrink-0 inline-flex items-center gap-0.5 rounded-md px-1.5 min-h-6 text-xs hover:text-zinc-100 hover:bg-zinc-800 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${tone}`}
+            className={`shrink-0 inline-flex items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 min-h-6 text-xs hover:text-zinc-100 hover:bg-zinc-800 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${tone}`}
             data-details-outcome={told && !open ? told.kind : undefined}
           >
             {open ? 'Details' : detailsLabel(told)}

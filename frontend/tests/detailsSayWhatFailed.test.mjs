@@ -96,6 +96,14 @@ test('ReplyMeta: the folded toggle names the outcome; open, it reads Details', (
   assert.doesNotMatch(html(null), /data-details-outcome/);
   // The old boolean still works for callers that pass it
   assert.match(ui.meta({ name: 'Ada', ranOn: 'Codex', failed: true }), /Details · a step failed/);
+  // At 390 px the long label must not clip: the name line may wrap when it names an outcome, and the label stays whole
+  const recovered = html({ kind: 'recovered', count: 1, stepId: 's1' });
+  assert.match(recovered, /data-name-line-wraps=""/);
+  assert.match(recovered, /class="[^"]*\bflex-wrap\b[^"]*"[^>]*data-name-line-wraps/);
+  assert.doesNotMatch(recovered, /class="[^"]*flex-nowrap[^"]*"[^>]*data-name-line-wraps/);
+  assert.match(recovered, /whitespace-nowrap[^"]*"[^>]*data-details-outcome/);
+  assert.match(html(null), /flex-nowrap/, 'a plain Details keeps the one-row phone line');
+  assert.doesNotMatch(html(null), /data-name-line-wraps/);
 });
 
 test('ReplyCheckLine: only for a step that didn\'t run or failed for good, with a Details button', () => {
