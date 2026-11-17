@@ -1263,6 +1263,12 @@ pub fn inside_workspace(workspace: &FsPath, p: &str) -> Option<(std::fs::File, P
     Some((file, real))
 }
 
+/// "This turn has …" as "this turn has …", for a reason inside a sentence.
+fn lowercase_first(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_lowercase().chain(c).collect()).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1469,10 +1475,4 @@ mod tests {
         assert!(body.contains("[page 1]") && !body.contains("[page 40]"));
         assert!(body.contains("onwards is left out of 40 pages]"), "{}", &body[body.len() - 80..]);
     }
-}
-
-/// "This turn has …" as "this turn has …", for a reason inside a sentence.
-fn lowercase_first(s: &str) -> String {
-    let mut c = s.chars();
-    c.next().map(|f| f.to_lowercase().chain(c).collect()).unwrap_or_default()
 }
