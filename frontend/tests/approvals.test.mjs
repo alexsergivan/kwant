@@ -121,3 +121,38 @@ test('a reloaded payment keeps its reason in every form the server sends, so no 
   assert.equal(plain.details.source, 'summary');
   assert.equal('payment_reason' in plain.details, false);
 });
+
+// ha-sheet-polish (b): the Needs-you strip and the sidebar pin tip say the card's sentence, never the
+// server's raw "Use intent__HassTurnOff (home-assistant)" (Mira's 0.9.21 follow-up 2).
+// Shaped like the 0.9.21 shot rig's lock ask (homeAssistant.test.mjs's haTicket, as an Inbox item).
+const haItem = (args, over = {}) => ({
+  kind: 'approval', id: 'h1', kwant_id: 'k-house', kwant_name: 'House', status: 'waiting',
+  title: 'Use intent__HassTurnOff (home-assistant)', summary: '',
+  tool_name: 'mcp__home-assistant__intent__HassTurnOff',
+  details: { source: 'mcp', server: 'home-assistant', tool: 'intent__HassTurnOff', arguments: args },
+  ...over,
+});
+
+test('approvalLine: a Home Assistant lock ask reads like its card, even when the server set a question', () => {
+  const lock = { name: 'Front door', area: 'Hallway', domain: ['lock'] };
+  assert.equal(a.approvalLine(haItem(lock)), 'House wants to unlock Front door');
+  assert.equal(a.approvalLine(haItem(lock, { question: 'Turn off “Front door”?' })), 'House wants to unlock Front door');
+  assert.equal(a.approvalLine(haItem({ name: 'Living room lamp' })), 'House wants to turn off Living room lamp');
+  // The always-ask floor with no domain never reads "turn off"
+  const floor = haItem({ name: 'Front door' });
+  floor.details.home_always_ask = true;
+  assert.equal(a.approvalLine(floor), 'House wants to unlock or open Front door');
+  // No bot name: the action alone, capitalised, as awayTitle does
+  assert.equal(a.approvalLine(haItem(lock, { kwant_name: '' })), 'Unlock Front door');
+});
+
+test('approvalLine: a raw "Use <tool> (<server>)" title with no question gives the card sentence; anything else keeps its line', () => {
+  const gh = { kind: 'approval', id: 'g1', kwant_id: 'k-ann', kwant_name: 'Ann', title: 'Use create_pull_request (github)', summary: '', status: 'waiting' };
+  assert.equal(a.approvalLine(gh), 'Ann wants to open a pull request');
+  assert.equal(a.approvalLine(bashItem()), 'Dev wants to run a command');
+  // A question the server wrote wins for a non-home tool; so does a title already in words
+  assert.equal(a.approvalLine({ ...gh, question: 'Open “Fix checkout” on demo-app?' }), null);
+  assert.equal(a.approvalLine({ ...gh, title: 'Wants to run a command' }), null);
+  // Not an approval: never touched
+  assert.equal(a.approvalLine({ kind: 'stopped', id: 's1', kwant_id: 'k', kwant_name: 'Q', title: 'Use the retry', summary: '', status: 'open' }), null);
+});
