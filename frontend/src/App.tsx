@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
@@ -117,10 +118,13 @@ import {
   queuePosition,
   queuedInChat,
   reloadOnTurnEnd,
+  landedNewReply,
+  settlesOnTurnComplete,
   shouldRenderDelta,
   streamTarget,
   waitsForOtherBot,
   threadBadge,
+  writingBadge,
   threadsApi,
   turnsIn,
   upsertThread,
@@ -899,14 +903,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       delete streamsRef.current[ctx];
       delete liveKwantRef.current[ctx];
     }
+    if (ctx && ctx in liveRef.current) {
+      const next = { ...liveRef.current };
+      delete next[ctx];
+      liveRef.current = next;
+      // 22r: the working line goes in this commit, before its words are cleared below. The streamed text is an
+      // outside store that repaints at once; cleared first, the line showed blank until React's next render.
+      flushSync(() => setLive(next));
+    }
     if (ctx === openCtxRef.current) {
       streamStore.show({ text: '', thinking: '' });
     }
-    if (!ctx || !(ctx in liveRef.current)) return;
-    const next = { ...liveRef.current };
-    delete next[ctx];
-    liveRef.current = next;
-    setLive(next);
   };
   const kwantName = (id: unknown) => (typeof id === 'string' ? kwantsRef.current.find((k) => k.id === id)?.name : undefined);
   // 0.8.1 F4: which bot runs in each live chat, so a name that wasn't known yet can be filled in. A page
@@ -925,28 +932,33 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const chatLoadsRef = useRef(new ChatLoads());
   /** Loads a chat's latest messages into the cache, and on screen if it's open. */
-  const refreshContext = async (ctx: string | null | undefined): Promise<void> => {
-    if (!ctx) return;
-    const n = chatLoadsRef.current.start(ctx);
-    try {
-      let data: ChatMessage[];
-      if (knownThreadsRef.current.has(ctx)) {
-        data = await threadsApi.messages<ChatMessage>(ctx);
-      } else {
-        const res = await fetch(`/api/channels/${encodeURIComponent(ctx)}/messages`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        data = await res.json();
+  const refreshContext = (ctx: string | null | undefined): Promise<void> => {
+    if (!ctx) return Promise.resolve();
+    // Resolves once the newest load of this chat has landed (22r), so a settle after it never ends the turn on an older list.
+    return chatLoadsRef.current.run(ctx, async (isLatest) => {
+      try {
+        let data: ChatMessage[];
+        if (knownThreadsRef.current.has(ctx)) {
+          data = await threadsApi.messages<ChatMessage>(ctx);
+        } else {
+          const res = await fetch(`/api/channels/${encodeURIComponent(ctx)}/messages`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          data = await res.json();
+        }
+        // A newer load of this chat started meanwhile: it has the newer messages
+        if (!isLatest()) return;
+        messagesCacheRef.current[ctx] = data;
+        if (openCtxRef.current === ctx) {
+          // 22r: on screen now, so a settle after this load (which clears the streamed words) never paints before the saved reply.
+          flushSync(() => {
+            setMessages(data);
+            setMessagesError(null);
+          });
+        }
+      } catch {
+        if (openCtxRef.current === ctx && isLatest()) setMessagesError('Could not load this chat.');
       }
-      // A newer load of this chat started meanwhile: it has the newer messages
-      if (!chatLoadsRef.current.isLatest(ctx, n)) return;
-      messagesCacheRef.current[ctx] = data;
-      if (openCtxRef.current === ctx) {
-        setMessages(data);
-        setMessagesError(null);
-      }
-    } catch {
-      if (openCtxRef.current === ctx && chatLoadsRef.current.isLatest(ctx, n)) setMessagesError('Could not load this chat.');
-    }
+    });
   };
 
   const rememberThreads = (list: Thread[]) => list.forEach((t) => knownThreadsRef.current.add(t.id));
@@ -1754,8 +1766,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             }
             if (typeof event.turn_id === 'string') completed.add(event.turn_id);
             // The stream stays up until the saved reply is on screen, so nothing jumps.
+            const shown = ctx ? messagesCacheRef.current[ctx] : undefined;
             refreshContext(ctx).then(() => {
-              if (!discussionInProgressRef.current) settle(ctx);
+              // 22r: a turn still running waits for turn_ended, whose load has the saved reply, unless this load has it.
+              if (discussionInProgressRef.current) return;
+              if (settlesOnTurnComplete(turnsRef.current, event.turn_id) || landedNewReply(shown, ctx ? messagesCacheRef.current[ctx] : undefined)) settle(ctx);
             });
             break;
           }
@@ -4032,7 +4047,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         openThreadId,
         turns,
         awaiting: awaitingTurns,
-        directBadge: threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns),
+        // 25a: the open chat's badge stays "Working" while its live card is up, so it goes idle with the body
+        directBadge: writingBadge(threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns), !openThreadId && currentKwant.id in live),
+        openWriting: isCurrentContextStreaming,
         showArchived,
         onToggleArchived: () => setShowArchived((v) => !v),
         onOpenDirect: openDirectChat,
@@ -4048,10 +4065,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       {shownThread && (
         <ThreadHeader
           thread={shownThread}
-          badge={threadBadge(
-            { id: shownThread.id, delegation: shownThread.delegation ? delegations[shownThread.delegation.id] ?? shownThread.delegation : null },
-            turns,
-            awaitingTurns,
+          // 25a: "Working" and its Stop stay up while the body still shows the live card; header, body and
+          // composer go idle in the one commit that drops it (clearLive), with the saved reply
+          badge={writingBadge(
+            threadBadge(
+              { id: shownThread.id, delegation: shownThread.delegation ? delegations[shownThread.delegation.id] ?? shownThread.delegation : null },
+              turns,
+              awaitingTurns,
+            ),
+            shownThread.id in live,
           )}
           delegatedBy={kwantName(shownThread.delegation?.lead_kwant_id ?? shownThread.created_by)}
           onBack={openDirectChat}

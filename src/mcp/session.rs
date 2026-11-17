@@ -97,6 +97,20 @@ pub struct CallOutcome {
     pub text: String,
     pub status: &'static str,
     pub record: Value,
+    /// 26b: this is the turn's first call that failed or didn't run, so the model's copy of
+    /// `text` gets [`super::NO_FALSE_CLAIMS_TEXT`] (see [`CallOutcome::model_text`]).
+    pub remind: bool,
+}
+
+impl CallOutcome {
+    /// What goes back to the model: `text`, plus the once-per-turn reminder when `remind`.
+    pub fn model_text(&self) -> String {
+        if self.remind {
+            super::with_no_false_claims(&self.text)
+        } else {
+            self.text.clone()
+        }
+    }
 }
 
 impl McpToolSession {
@@ -248,8 +262,14 @@ impl McpToolSession {
                 "result": truncate_text(&stopped.text, RECORD_RESULT_MAX_CHARS),
                 "repeat_stopped": stopped.count,
             });
+            let remind = !self.ctx.had_miss();
             self.ctx.record(record.clone());
-            return CallOutcome { text: stopped.text, status: "error", record };
+            return CallOutcome {
+                text: stopped.text,
+                status: "error",
+                record,
+                remind,
+            };
         }
         let offered = self.tools.iter().find(|t| t.name == name);
         let (status, text) = match offered {
@@ -301,6 +321,8 @@ impl McpToolSession {
         if status == "ok" && offered.is_some_and(|t| !t.tool.read_only) && !crate::server::restart_resume::read_only(name) {
             self.repeats.changed();
         }
+        // 26b: the turn's first call that failed or went unanswered carries the one reminder
+        let remind = super::reminds(status) && !self.ctx.had_miss();
         let (server, tool) = super::split_tool_name(name).unwrap_or(("", name));
         let mut record = json!({
             "id": call_id,
@@ -315,7 +337,12 @@ impl McpToolSession {
             record["result"] = json!(truncate_text(&text, RECORD_RESULT_MAX_CHARS));
         }
         self.ctx.record(record.clone());
-        CallOutcome { text, status, record }
+        CallOutcome {
+            text,
+            status,
+            record,
+            remind,
+        }
     }
 
     pub async fn shutdown(mut self) {

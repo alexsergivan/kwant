@@ -245,6 +245,9 @@ impl Database {
         db.migrate_spend().await?;
         // 0.9.0 G2: per-bot monthly budgets (add-only; after usage, parked and routines)
         db.migrate_bot_budget().await?;
+        // 26b: routine runs can end `needs_you` or `incomplete` (rebuilds `routine_runs` once;
+        // after the step that adds its `note` column)
+        db.migrate_run_statuses().await?;
         // 0.9.0 P5: tool notes (add-only)
         db.migrate_tool_notes().await?;
         // 0.9.0 P1: mission watches and their checks (add-only)
