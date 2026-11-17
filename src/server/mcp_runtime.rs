@@ -315,7 +315,7 @@ impl BrokerApprover {
     /// payment floor, Flight School or the production floor wants a card (exactly as in
     /// [`Self::classified`]), it names kwnt's secrets, or the grant was used or expired.
     async fn granted(&self, req: &ToolApprovalRequest, grant: &mcp::PrepushGrant) -> Option<Option<String>> {
-        if req.payment.is_some() || mcp::payment_floor::reason(req, None).is_some() {
+        if req.payment.is_some() || mcp::payment_floor::reason(req, None).is_some() || credit_floor(&self.db, req).await.is_some() {
             return None;
         }
         if home_floor(&self.db, req).await {
@@ -356,7 +356,10 @@ impl BrokerApprover {
         let mode = self.db.kwant_approvals(&req.kwant_id).await.ok();
         // The payment floor (D8): a call that pays always gets a card, whatever the approvals,
         // "Ask only when risky" or "always allow" say. Allowing it covers this one call.
-        let payment = req.payment.clone().or_else(|| mcp::payment_floor::reason(&req, None));
+        let payment = match req.payment.clone().or_else(|| mcp::payment_floor::reason(&req, None)) {
+            Some(why) => Some(why),
+            None => credit_floor(&self.db, &req).await,
+        };
         // Flight School (C3): the bot's tier for this task can add a card, never remove one. It
         // skips approvals off and smart Allow; a session "always allow" still counts (D9).
         let tier = match payment {
@@ -413,6 +416,10 @@ impl BrokerApprover {
         }
         if let Some(why) = &payment {
             details["payment_reason"] = json!(why);
+            // 26h: the card says whose credits it uses instead of "a payment"
+            if let Some(app) = mcp::payment_floor::CreditApp::of_reason(why) {
+                details["credits"] = json!(app.label());
+            }
         }
         if let Some(why) = &tier {
             details["tier_reason"] = json!(why);
@@ -590,6 +597,25 @@ impl BrokerApprover {
         let class = if outcome.allowed() { "approved" } else { "denied" };
         (outcome, class, Some(ticket))
     }
+}
+
+/// 26h: why a call to a renamed credit app (FLUX, Picsart) asks: the bot's stored server with
+/// this name is at the app's address ([`mcp::payment_floor::credits_reason`]). Calls kwnt runs
+/// itself already carry the address in `req.payment`; this covers the ones an agent CLI asks
+/// about by name only. `None` for kwnt's own and claude's built-in tools.
+pub async fn credit_floor(db: &Database, req: &ToolApprovalRequest) -> Option<String> {
+    if req.builtin.is_some() || req.server.is_empty() || req.server == mcp::SELF_SERVER_NAME {
+        return None;
+    }
+    let servers = match db.list_active_mcp_servers_for_kwant(&req.kwant_id).await {
+        Ok(servers) => servers,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the bot's MCP servers for the credit check");
+            return None;
+        }
+    };
+    let server = servers.into_iter().find(|s| s.name == req.server)?;
+    mcp::payment_floor::credits_reason(&server.name, server.url.as_deref(), &req.tool)
 }
 
 /// 26f: whether `req` acts on a lock, a door, a garage door, a gate or an alarm on a Home
@@ -1129,6 +1155,14 @@ pub async fn prepare_turn_with_opts(
     // A dry run writes nothing, so it needs no pre-push card
     let approver: Arc<dyn ToolApprover> =
         if opts.rehearse.is_some() { approver } else { Arc::new(PrepushApprover { inner: approver, state: state.clone() }) };
+    // 26h: files a tool returns are saved in the turn's chat (not in a dry run, which writes nothing)
+    let media = match (&self_scope, &opts.rehearse) {
+        (Some(scope), None) if scope.origin.is_some() => Some(Arc::new(super::attachments::ChatMedia {
+            state: state.clone(),
+            scope: scope.clone(),
+        }) as Arc<dyn mcp::media::MediaSink>),
+        _ => None,
+    };
     let ctx = McpTurnContext {
         servers,
         approver,
@@ -1150,6 +1184,7 @@ pub async fn prepare_turn_with_opts(
         },
         records: Default::default(),
         kwnt_only: opts.every_call,
+        media,
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);

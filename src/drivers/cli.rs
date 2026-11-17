@@ -2720,6 +2720,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 approvals: crate::mcp::Approvals::Ask,
                 records: Default::default(),
                 kwnt_only: false,
+                media: None,
             }
         }
 

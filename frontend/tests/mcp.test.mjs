@@ -197,11 +197,26 @@ test('apps without a usable official server point to Composio instead of an inve
   assert.ok(ids.includes('gmail'));
 });
 
-test('the asked-for apps are offered: Cloudflare and Picsart as presets, Gmail via Composio', () => {
-  for (const id of ['cloudflare', 'picsart']) {
+test('the asked-for apps are offered: Cloudflare, Picsart and FLUX as presets, Gmail via Composio', () => {
+  for (const id of ['cloudflare', 'picsart', 'flux']) {
     const p = MCP_PRESETS.find((x) => x.id === id);
     assert.ok(p && p.needs.includes('Sign-in') && p.form.transport === 'http', id);
     assert.match(p.source, /^https:\/\//, id);
+  }
+  // 26h: FLUX sits right after Picsart in Design & media, names BFL credits, and waits for slow generations
+  const ids = MCP_PRESETS.map((p) => p.id);
+  assert.equal(ids.indexOf('flux'), ids.indexOf('picsart') + 1);
+  const flux = MCP_PRESETS.find((p) => p.id === 'flux');
+  assert.equal(flux.label, 'FLUX');
+  assert.equal(flux.category, 'creative');
+  assert.equal(flux.form.name, 'flux');
+  assert.equal(flux.form.url, 'https://mcp.bfl.ai');
+  assert.equal(flux.form.timeout_secs, 180);
+  assert.ok(flux.blurb.length <= 100, flux.blurb);
+  assert.match(flux.blurb, /BFL credits/);
+  assert.doesNotMatch(flux.blurb, /official|partner|endorse|recommended/i);
+  for (const q of ['flux', 'FLUX', 'Black Forest']) {
+    assert.ok(searchPresets(q).some((p) => p.id === 'flux'), q);
   }
   assert.deepEqual(searchComposioOnly('gmail').map((a) => a.id), ['gmail']);
   assert.deepEqual(searchPresets('gmail'), []);

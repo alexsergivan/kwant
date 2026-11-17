@@ -277,6 +277,7 @@ impl McpToolSession {
             Some(_) if !arguments.is_object() => ("error", "Tool arguments must be a JSON object.".to_string()),
             Some(t) => {
                 let (server, client) = &self.clients[t.server_index];
+                let server_url = self.ctx.servers.iter().find(|s| &s.name == server).and_then(|s| s.url.as_deref());
                 let req = ToolApprovalRequest {
                     kwant_id: caller.kwant_id.clone(),
                     kwant_name: caller.kwant_name.clone(),
@@ -287,7 +288,8 @@ impl McpToolSession {
                     arguments: arguments.clone(),
                     builtin: None,
                     smart: Some(read_only_verdict(t.tool.read_only)),
-                    payment: None,
+                    // 26h: a paid generation (FLUX, Picsart credits) always asks, also by its address
+                    payment: super::payment_floor::credits_reason(server, server_url, &t.tool.name),
                 };
                 // B2: a write to a GitHub branch waits for its pre-push card before any card or rule
                 match self.ctx.approver.prepush_gate(&req).await {
@@ -305,7 +307,8 @@ impl McpToolSession {
                         } else {
                             match client.call_tool(&t.tool.name, arguments.clone()).await {
                                 Ok(r) if r.is_error => ("error", r.text),
-                                Ok(r) => ("ok", r.text),
+                                // 26h: files it returned are saved in the chat and named, never sent as base64
+                                Ok(r) => ("ok", super::media::finish(&r, server, server_url, &t.tool.name, self.ctx.media.as_deref()).await),
                                 Err(e) => ("error", format!("Tool call failed: {e}")),
                             }
                         }

@@ -144,6 +144,15 @@ export const paymentReason = (approval: PendingApproval) => {
 };
 
 /**
+ * 26h: whose credits a paid generation spends ("Black Forest Labs", "Picsart"), from the server's
+ * `details.credits`, or null for any other card. The card never guesses a price.
+ */
+export const paymentCredits = (approval: PendingApproval) => {
+  const who = approval.details?.credits;
+  return typeof who === 'string' && who.trim() ? who.trim() : null;
+};
+
+/**
  * Who started a turn, as the card names it after "Started by": the server's raw label
  * (`details.started_by`) mapped to a name people know (Mira's table, #569). Internal names
  * nobody sees on screen become plain nouns; a label not listed shows its part before the first ":".
@@ -303,6 +312,8 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const waiting = approval.waiting === true;
   const botName = name ?? mcp?.kwant ?? null;
   const payment = paymentReason(approval);
+  const credits = payment ? paymentCredits(approval) : null;
+  const creditTool = typeof approval.details?.tool === 'string' && approval.details.tool.trim() ? approval.details.tool.trim() : payment;
   const tier = payment ? null : tierReason(approval.details);
   const startedBy = payment || tier ? null : startedByNote(approval);
   const time = localClock(approval.asked_at);
@@ -451,10 +462,21 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         <div role="note" className="flex items-start gap-2 mt-2.5 rounded-lg border border-rose-500/30 bg-rose-950/30 px-3 py-2 text-sm leading-5">
           <CreditCard size={14} className="mt-0.5 shrink-0 text-rose-300" aria-hidden="true" />
           <div className="min-w-0 space-y-0.5">
-            <p className="text-rose-100 break-words">
-              <span className="font-semibold">This looks like a payment:</span> {payment}.
-            </p>
-            <p className="text-xs leading-[18px] text-zinc-400">Payments always ask you, even with approvals off. Allowing covers this one payment.</p>
+            {credits ? (
+              <>
+                <p className="text-rose-100 break-words" data-credits>
+                  <span className="font-semibold">This uses your {credits} credits:</span> {creditTool}.
+                </p>
+                <p className="text-xs leading-[18px] text-zinc-400">Paid generations always ask you, even with approvals off. Allowing covers this one call.</p>
+              </>
+            ) : (
+              <>
+                <p className="text-rose-100 break-words">
+                  <span className="font-semibold">This looks like a payment:</span> {payment}.
+                </p>
+                <p className="text-xs leading-[18px] text-zinc-400">Payments always ask you, even with approvals off. Allowing covers this one payment.</p>
+              </>
+            )}
           </div>
         </div>
       )}

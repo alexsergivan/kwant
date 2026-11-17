@@ -56,6 +56,7 @@ fn ctx(dir: &std::path::Path, approver: Arc<dyn ToolApprover>) -> McpTurnContext
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
         kwnt_only: false,
+        media: None,
     }
 }
 

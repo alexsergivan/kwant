@@ -17,7 +17,10 @@ an install; switch it in Settings when you're ready. While the built-in password
 passwords, a new space starts on `ask` instead (see below). An unknown bot always asks.
 
 Whatever the mode, a call that looks like a payment shows a card, even when `smart` finds it
-safe or "Always this session" was given: see [payments.md](payments.md).
+safe or "Always this session" was given: see [payments.md](payments.md). That includes paid
+generations: a FLUX (Black Forest Labs) or Picsart tool that spends the person's credits asks
+every time, and its card says whose credits it uses, without a price. Their reads (a balance, a
+job's status) don't ask.
 
 Whatever the mode, on a Home Assistant MCP server (it answers `initialize` with `serverInfo.name`
 `home-assistant`), a call that acts on a lock, a door, a garage door, a gate or an alarm shows a
@@ -150,5 +153,5 @@ session" on such a card allows that one call.
 
 ## Tests
 
-`cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test --test payment_floor_test --test home_locks_always_ask_test`
+`cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test --test payment_floor_test --test home_locks_always_ask_test --test mcp_media_test`
 and the classifier tables in `src/mcp/shell_risk.rs` (`cargo test --lib shell_risk`).

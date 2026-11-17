@@ -1745,6 +1745,7 @@ mod tests {
             approvals: crate::mcp::Approvals::Ask,
             records: Default::default(),
             kwnt_only: false,
+            media: None,
         };
         let (path, mut dropped) = turn.write_mcp_config(&ctx).unwrap();
         dropped.sort();

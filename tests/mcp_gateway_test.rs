@@ -72,6 +72,7 @@ async fn register(state: &AppState, token: &str, approver: Arc<dyn ToolApprover>
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
         kwnt_only: false,
+        media: None,
     };
     state.mcp_sessions.lock().await.insert(
         token.into(),
@@ -265,6 +266,7 @@ async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
         kwnt_only: false,
+        media: None,
     };
     state
         .mcp_sessions

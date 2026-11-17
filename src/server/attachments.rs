@@ -1198,6 +1198,37 @@ pub async fn post_file(state: &AppState, scope: &SelfScope, stored: Stored, name
     Ok(Posted::New(a))
 }
 
+/// 26h: where the files an MCP tool returns go ([`crate::mcp::media`]): stored like a share and
+/// posted in the turn's chat as the bot's file (`auto`: kwnt shared it, the bot didn't ask), with
+/// [`post_file`]'s sha256 dedupe.
+pub struct ChatMedia {
+    pub state: AppState,
+    pub scope: SelfScope,
+}
+
+#[async_trait::async_trait]
+impl crate::mcp::media::MediaSink for ChatMedia {
+    async fn save(&self, bytes: Vec<u8>, name: &str) -> Result<crate::mcp::media::SavedFile, String> {
+        let name = clean_name(name);
+        let stored = store_bytes(&root(&self.state), &bytes, &name).await.map_err(|e| match e {
+            StoreError::TooLarge(Cap::Video) => "the video is larger than 100 MB".to_string(),
+            StoreError::TooLarge(Cap::Audio) => "the audio file is larger than 100 MB".to_string(),
+            StoreError::TooLarge(_) => "the file is larger than 20 MB (videos and audio up to 100 MB)".to_string(),
+            StoreError::Empty => "the file is empty".to_string(),
+            StoreError::Unsupported => {
+                "only images, videos (MP4, MOV, WebM), audio (MP3, M4A, AAC, WAV, OGG, Opus, FLAC), PDFs and UTF-8 text files can be shared".to_string()
+            }
+            StoreError::Io => "it could not be stored".to_string(),
+        })?;
+        let saved = |a: Attachment, already| crate::mcp::media::SavedFile { id: a.id, name: a.name, already };
+        match post_file(&self.state, &self.scope, stored, &name, true).await {
+            Ok(Posted::New(a)) => Ok(saved(a, false)),
+            Ok(Posted::Already(a)) => Ok(saved(a, true)),
+            Err(why) => Err(lowercase_first(why.trim_end_matches('.'))),
+        }
+    }
+}
+
 /// Stores a JPEG screenshot (base64, as the browser returned it) and posts it as the bot (see
 /// [`post_file`]). `name` is cleaned like any shared file's.
 pub async fn post_screenshot(state: &AppState, scope: &SelfScope, data_b64: &str, name: &str, auto: bool) -> Result<Posted, String> {
@@ -1438,4 +1469,10 @@ mod tests {
         assert!(body.contains("[page 1]") && !body.contains("[page 40]"));
         assert!(body.contains("onwards is left out of 40 pages]"), "{}", &body[body.len() - 80..]);
     }
+}
+
+/// "This turn has …" as "this turn has …", for a reason inside a sentence.
+fn lowercase_first(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_lowercase().chain(c).collect()).unwrap_or_default()
 }

@@ -403,6 +403,20 @@ export const MCP_PRESETS: McpPreset[] = [
     source: 'https://picsart.github.io/picsart-mcp-cli-docs/guide/mcp-quickstart',
     form: httpPreset('picsart', 'https://api.picsart.com/gen-ai/mcp'),
   },
+  {
+    // 26h: Black Forest Labs' hosted FLUX server, sign-in only. Generations, edits and videos use
+    // BFL credits, so they always ask (src/mcp/payment_floor.rs); pictures come back as files in the
+    // chat. Results can take minutes, hence the longer timeout. Checked 2026-11-17 from its README;
+    // not yet tried with a real sign-in.
+    id: 'flux',
+    label: 'FLUX',
+    blurb: 'Make and edit images and video with FLUX. Uses your BFL credits. Sign in after adding.',
+    category: 'creative',
+    needs: ['Sign-in'],
+    source: 'https://github.com/black-forest-labs/flux-mcp',
+    form: { ...httpPreset('flux', 'https://mcp.bfl.ai'), timeout_secs: 180 },
+    keywords: ['Black Forest Labs', 'bfl', 'image generation'],
+  },
 ];
 
 /**
