@@ -26,7 +26,7 @@ export const ApproveRow: React.FC<{
         onClick={onApprove}
         disabled={busy}
         data-approve=""
-        className={`inline-flex items-center justify-center gap-1.5 bg-accent-gradient text-white shadow-card transition-[filter] duration-[120ms] hover:brightness-110 motion-reduce:transition-none ${size} ${ring}`}
+        className={`inline-flex items-center justify-center gap-1.5 bg-accent-gradient kw-hover-deepen text-white shadow-card ${size} ${ring}`}
       >
         <Check size={14} aria-hidden="true" />
         Approve

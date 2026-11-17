@@ -97,7 +97,7 @@ const QUOTA: [&str; 13] = [
     "quota exceeded",
 ];
 
-const TRANSIENT: [&str; 18] = [
+const TRANSIENT: [&str; 19] = [
     "rate limit",
     "rate-limit",
     "rate_limit",
@@ -116,6 +116,8 @@ const TRANSIENT: [&str; 18] = [
     "internal server error",
     "econnreset",
     "etimedout",
+    // kwant's own line when a bot pinned to Ollama finds it down (drivers/engines.rs): it comes back
+    "ollama isn't answering",
 ];
 
 const TRANSIENT_CODES: [&str; 6] = ["429", "500", "502", "503", "504", "529"];
@@ -1292,6 +1294,10 @@ mod tests {
         }
         // The give-up text has no "401" of its own: the words alone must carry it
         assert!(!texts[0].contains("401"), "{}", texts[0]);
+        // A bot pinned to Ollama that finds it down waits and retries: nothing to sign in to
+        let down = crate::drivers::engines::ollama_down_notice("Ann", "http://127.0.0.1:11434").0;
+        assert_eq!(classify("turn", "error", &down), "transient", "{down}");
+        assert_eq!(strategy_for(classify("turn", "error", &down)), "wait_and_retry");
     }
 
     #[test]

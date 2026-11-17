@@ -180,7 +180,7 @@ const StoryLine: React.FC<{ story: Story; card: Card; bot: string; onOpenCard?: 
         {/* The light stays beside the first line of text when a long line wraps on a phone (round 2). */}
         <span data-story-text className="flex min-w-0 items-start gap-2">
           <Led s={STORY_LED[story.step]} className={`mt-[5px] shrink-0 ${story.step === 'pushed' || story.step === 'blocked' ? '' : 'dv-led-still'}`} />
-          <span data-story-now className={`min-w-0 [overflow-wrap:anywhere] ${story.step === 'pushed' ? 'font-medium text-emerald-300' : story.step === 'blocked' ? 'text-rose-300' : 'text-zinc-200'}`}>
+          <span data-story-now className={`min-w-0 [overflow-wrap:anywhere] ${story.step === 'pushed' ? 'font-medium text-ok' : story.step === 'blocked' ? 'text-rose-300' : 'text-zinc-200'}`}>
             {story.step === 'asks' ? `${bot}'s push still needs your OK.` : story.now}
           </span>
         </span>
@@ -374,7 +374,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({
             return (
               <span data-pushed>
                 {/* Mira FIX 4: keyed on the grant, so it reads the same when the pressed card is out of view. */}
-                <span className="font-medium text-emerald-300">{pushedLine(used)}</span> · <code className="dv-sha dv-sha-whole" title={p.branch} data-pushed-branch>{p.branch}</code>
+                <span className="font-medium text-ok">{pushedLine(used)}</span> · <code className="dv-sha dv-sha-whole" title={p.branch} data-pushed-branch>{p.branch}</code>
                 {card.grant?.kind === 'override'
                   ? " · your Push anyway was the OK, so it didn't ask again."
                   : " · your retry was the OK, so it didn't ask again."}

@@ -277,7 +277,7 @@ const CheckRow: React.FC<{
       >
         {sw ? (
           <span
-            className={`absolute left-[3px] top-[3px] w-3.5 h-3.5 rounded-full transition-transform motion-reduce:transition-none ${on ? 'translate-x-4 bg-zinc-50' : 'shadow-[inset_0_0_0_2px_#d4d4d8]'}`}
+            className={`absolute left-[3px] top-[3px] w-3.5 h-3.5 rounded-full transition-transform motion-reduce:transition-none ${on ? 'translate-x-4 bg-zinc-50' : 'shadow-[inset_0_0_0_2px_theme(colors.zinc.300)]'}`}
             aria-hidden="true"
           />
         ) : (

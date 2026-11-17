@@ -53,7 +53,7 @@
   width: 22px;
   height: 22px;
   border-radius: 9999px;
-  border: 2px solid theme('colors.emerald.300');
+  border: 2px solid theme('colors.teal.300');
   animation: kws-burst-ring 200ms ease-out both;
 }
 .kws-burst-dot {
@@ -63,7 +63,7 @@
   width: 4px;
   height: 4px;
   border-radius: 9999px;
-  background: theme('colors.emerald.300');
+  background: theme('colors.teal.300');
   animation: kws-burst-dot 200ms ease-out both;
 }
 @keyframes kws-burst-ring {

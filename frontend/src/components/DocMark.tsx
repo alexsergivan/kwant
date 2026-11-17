@@ -4,7 +4,7 @@ import { docKind, markOf } from '../spaceDocs';
 /** The type mark: PDF, MD or TXT (or the odd extension). It tells the types apart; it is not a status. */
 export const DocMark: React.FC<{ name: string; size?: 28 | 32 }> = ({ name, size = 32 }) => {
   const k = docKind(name);
-  const tone = k === 'pdf' ? 'text-rose-200' : k === 'md' ? 'text-violet-200' : 'text-zinc-200';
+  const tone = k === 'pdf' ? 'text-rose-200' : k === 'md' ? 'text-sky-200' : 'text-zinc-200';
   return (
     <span
       aria-hidden="true"

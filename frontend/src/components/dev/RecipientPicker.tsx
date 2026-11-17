@@ -100,7 +100,7 @@ export const GoesTo: React.FC<GoesToProps> = ({ load, pick, size = 'md', phone =
         <AlertTriangle size={14} aria-hidden="true" className="shrink-0 text-[#fcd34d]" />
         <span className="text-zinc-300">No default bot</span>
         <span aria-hidden="true" className="text-zinc-500">·</span>
-        <span className="font-semibold text-violet-300">Pick who fixes it</span>
+        <span className="font-semibold text-info">Pick who fixes it</span>
         <ChevronDown size={14} aria-hidden="true" className="shrink-0 text-zinc-400" />
       </button>
     );
@@ -112,7 +112,7 @@ export const GoesTo: React.FC<GoesToProps> = ({ load, pick, size = 'md', phone =
         <ModernAvatar name={to.name} size={16} />
       </span>
       <span className="min-w-0 truncate font-semibold text-zinc-100">{to.name}</span>
-      {why && <span className={`min-w-0 truncate ${chosen ? 'text-[#c4b5fd]' : 'text-zinc-400'}`}>· {why}</span>}
+      {why && <span className={`min-w-0 truncate ${chosen ? 'text-[#b8adff]' : 'text-zinc-400'}`}>· {why}</span>}
       <ChevronDown size={14} aria-hidden="true" className="shrink-0 text-zinc-400" />
     </button>
   );
@@ -151,7 +151,7 @@ export const BarTrigger: React.FC<{ load: RecipientsLoad; pick: RecipientBot | n
           <span className="font-semibold text-zinc-100">{name}</span>
         </>
       ) : (
-        <span className="font-semibold text-violet-300">Pick a bot</span>
+        <span className="font-semibold text-info">Pick a bot</span>
       )}
       <ChevronDown size={14} aria-hidden="true" className="shrink-0 text-zinc-400" />
     </button>
@@ -378,7 +378,7 @@ export const RecipientPicker: React.FC<RecipientPickerProps> = ({ r, pick, ancho
                       {meta && <span className="max-w-[45%] shrink-0 truncate text-meta text-zinc-400">{meta}</span>}
                     </>
                   )}
-                  <span className="inline-flex w-4 shrink-0 justify-center">{sel && <Check size={15} aria-hidden="true" className="text-[#a78bfa]" />}</span>
+                  <span className="inline-flex w-4 shrink-0 justify-center">{sel && <Check size={15} aria-hidden="true" className="text-[#9d8fff]" />}</span>
                 </li>
                 {isDefault && !q.trim() && i === 0 && shown.length > 1 && <li role="presentation" aria-hidden="true" className="mx-2 my-1 border-t border-hairline" />}
               </React.Fragment>

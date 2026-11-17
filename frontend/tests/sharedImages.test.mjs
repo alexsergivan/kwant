@@ -420,7 +420,7 @@ test('ChatView: tap targets and focus ring on shared tiles (Mira 2, 3, 4, 5, 7, 
   assert.match(dl.querySelector('span').className, /sr-only/);
   const thumb = tile.querySelector('[data-image-thumb]');
   assert.match(thumb.className, /focus-visible:outline-offset-\[-2px\]/, 'ring drawn inside the clipped figure');
-  assert.match(thumb.className, /focus-visible:outline-violet-400/);
+  assert.match(thumb.className, /focus-visible:outline-sky-400/);
   assert.match(tile.parentElement.className, /w-full sm:w-auto/, 'full bubble width on phone');
   flushSync(() => toggle.click());
   const chips = [...v.host.querySelectorAll('[data-earlier-copy] [data-download]')];

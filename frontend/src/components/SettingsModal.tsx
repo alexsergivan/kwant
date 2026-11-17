@@ -705,7 +705,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               data-api-keys-link
               className="w-full flex items-center gap-2 p-3 text-left rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
             >
-              <Key size={14} className="text-violet-400" aria-hidden="true" />
+              <Key size={14} className="text-sky-400" aria-hidden="true" />
               <span className="flex-1">
                 <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
                 <span className="block text-[11px] text-zinc-500">Now in Settings › This space › Apps & accounts, next to the accounts that use them.</span>
@@ -890,7 +890,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           {(proactive || ideaCap !== null) && (
             <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-testid="proactive-settings">
               <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
-                <Sparkles size={14} className="text-violet-300" aria-hidden="true" />
+                <Sparkles size={14} className="text-info" aria-hidden="true" />
                 <span>Bots on their own</span>
               </legend>
               {/* The jar's row stands on its own: a server without decide_first still shows it (#323 S3). */}
@@ -1204,7 +1204,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           )}
 
           {saveSuccess && (
-            <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-2 rounded-lg text-xs flex items-center gap-2">
+            <div className="bg-teal-400/10 border border-teal-400/20 text-ok px-3 py-2 rounded-lg text-xs flex items-center gap-2">
               <Check size={14} />
               <span>Saved for every space</span>
             </div>
@@ -1237,7 +1237,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             <button
               type="submit"
               disabled={saving || !!webhookError || limitsInvalid || tokenLimitsInvalid || spendStopInvalid}
-              className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
+              className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Save'}
             </button>

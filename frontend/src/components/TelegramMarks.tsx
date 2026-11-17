@@ -30,7 +30,7 @@ export const SentToTelegram: React.FC = () => (
  */
 export const AllowedFromTelegram: React.FC<{ lead: string }> = ({ lead }) => (
   <div className="tg-done flex items-start gap-2 ml-0 sm:ml-[50px] max-w-3xl px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-900/50 text-xs text-zinc-400" data-resolved-via="telegram">
-    <ShieldCheck size={14} className="mt-0.5 shrink-0 text-violet-300" aria-hidden="true" />
+    <ShieldCheck size={14} className="mt-0.5 shrink-0 text-info" aria-hidden="true" />
     <p className="min-w-0 break-words leading-5">
       {lead} · <b className="font-semibold text-zinc-100">{ALLOWED_FROM_TELEGRAM}</b>
     </p>
@@ -46,9 +46,9 @@ export const ResolvedViaTelegram: React.FC<{ kind: 'question' | 'approval'; lead
   return (
     <div className="tg-done flex items-start gap-2 ml-0 sm:ml-[50px] max-w-3xl px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-900/50 text-xs text-zinc-400" data-resolved-via="telegram">
       {kind === 'question' ? (
-        <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-emerald-400" aria-hidden="true" />
+        <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-ok" aria-hidden="true" />
       ) : (
-        <ShieldCheck size={14} className="mt-0.5 shrink-0 text-violet-300" aria-hidden="true" />
+        <ShieldCheck size={14} className="mt-0.5 shrink-0 text-info" aria-hidden="true" />
       )}
       <p className="min-w-0 break-words leading-5">
         {lead} · <b className="font-semibold text-zinc-100">{outcome}</b> <ViaTelegram />

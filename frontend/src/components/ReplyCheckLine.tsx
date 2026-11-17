@@ -17,7 +17,7 @@ export const ReplyCheckLine: React.FC<{ outcome: ReplyOutcome | null; onDetails:
         <button
           type="button"
           onClick={onDetails}
-          className="kw-focus kw-hit rounded font-semibold text-violet-300 hover:text-violet-200"
+          className="kw-focus kw-hit rounded font-semibold text-info hover:text-sky-200"
           data-compact
         >
           Details

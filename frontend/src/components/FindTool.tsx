@@ -203,7 +203,7 @@ export function buildGroups(opts: { composioApps: ComposioRowApp[]; connections:
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 motion-reduce:transition-none';
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-500`;
+const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-700`;
 const linkBtn =
   'inline-flex items-center gap-1 min-h-[44px] sm:min-h-[28px] text-xs font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
 const chip = 'inline-flex items-center px-1.5 py-px rounded-md border border-zinc-700 text-[11px] text-zinc-300';
@@ -216,7 +216,7 @@ const activeBar = 'shadow-[inset_2px_0_0_#9d8fff]';
 const Mark: React.FC<{ name: string; slug?: string }> = ({ name, slug }) => (
   <span
     aria-hidden="true"
-    className={`shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-lg border border-violet-400/20 text-[11px] font-semibold ${(slug && TINT[slug]) || 'text-violet-100'}`}
+    className={`shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-lg border border-sky-400/20 text-[11px] font-semibold ${(slug && TINT[slug]) || 'text-sky-100'}`}
     style={{ background: '#231d4b' }}
   >
     {appInitials(name)}
@@ -886,7 +886,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
           <span className="text-zinc-300">Waiting for you to finish signing in, in the new tab.</span>
         ) : status ? (
           <span className={status.ok ? 'text-zinc-300' : 'text-amber-300'} data-in-use>
-            {status.ok && <Check size={13} className="inline-block align-[-2px] mr-1 text-emerald-300" aria-hidden="true" />}
+            {status.ok && <Check size={13} className="inline-block align-[-2px] mr-1 text-ok" aria-hidden="true" />}
             {status.text}
           </span>
         ) : (
@@ -1081,7 +1081,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
     if (r.app.connected)
       return (
         <span className={`flex items-center gap-3 ${phone ? 'w-full' : ''}`}>
-          <span className="inline-flex items-center gap-1 text-xs text-emerald-300 whitespace-nowrap">
+          <span className="inline-flex items-center gap-1 text-xs text-ok whitespace-nowrap">
             <Check size={12} aria-hidden="true" /> Connected
           </span>
           {main('Choose bots', () => run(o), { primary: !composioUsers().length })}

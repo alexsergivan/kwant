@@ -34,7 +34,7 @@ const StatusIcon: React.FC<{ step: ActivityStep }> = ({ step }) => {
     switch (step.status) {
       case 'running':
         return step.kind === 'thinking' ? (
-          <Brain size={13} className="text-violet-300 animate-pulse motion-reduce:animate-none" />
+          <Brain size={13} className="text-info animate-pulse motion-reduce:animate-none" />
         ) : (
           <Loader2 size={13} className="text-sky-300 animate-spin motion-reduce:animate-none" />
         );
@@ -42,7 +42,7 @@ const StatusIcon: React.FC<{ step: ActivityStep }> = ({ step }) => {
         return step.kind === 'approval' ? <ShieldQuestion size={13} className="text-amber-300" /> : <Hand size={13} className="text-amber-300" />;
       case 'ok':
       case 'done':
-        return step.kind === 'thinking' ? <Brain size={13} className="text-violet-300/80" /> : <Check size={13} className="text-emerald-300" />;
+        return step.kind === 'thinking' ? <Brain size={13} className="text-sky-300/80" /> : <Check size={13} className="text-ok" />;
       case 'failed':
         return <X size={13} className="text-rose-300" />;
       case 'declined':
@@ -97,7 +97,7 @@ const ThinkingBox: React.FC<{ text: string; live: boolean; id: string }> = ({ te
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
       }}
-      className="mt-1 max-h-56 overflow-y-auto rounded-lg bg-zinc-950/80 border border-zinc-800 px-3 py-2 text-xs text-zinc-300 whitespace-pre-wrap break-words leading-relaxed focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+      className="mt-1 max-h-56 overflow-y-auto rounded-lg bg-zinc-950/80 border border-zinc-800 px-3 py-2 text-xs text-zinc-300 whitespace-pre-wrap break-words leading-relaxed focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
       aria-label="Thinking"
     >
       {text || <span className="text-zinc-400 italic">Nothing shared yet…</span>}
@@ -157,7 +157,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
           aria-expanded={open}
           aria-controls={open ? boxId : undefined}
           disabled={!text && !running}
-          className="w-full flex items-start gap-2 text-left rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 disabled:cursor-default"
+          className="w-full flex items-start gap-2 text-left rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:cursor-default"
         >
           {head}
           {(text || running) && (

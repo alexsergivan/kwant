@@ -162,9 +162,9 @@ test('Unknown is never drawn like Met: its own word, colour, outline and icon', 
 
   const html = b.stripHtml({ names, now: NOW, initial: { goals: [goal({ id: 'a', status: 'met' }), goal({ id: 'b', status: 'unknown' })] }, api: fakeApi([]) });
   const pill = (status) => html.match(new RegExp(`<span[^>]*data-goal-status="${status}"[^>]*>.*?</span>`))[0];
-  assert.match(pill('met'), /emerald/);
+  assert.match(pill('met'), /teal/);
   assert.match(pill('unknown'), /border-dashed/);
-  assert.doesNotMatch(pill('unknown'), /emerald/);
+  assert.doesNotMatch(pill('unknown'), /teal/);
   assert.match(pill('unknown'), /lucide-circle-help|circle-question/);
   assert.doesNotMatch(pill('unknown'), /circle-check/);
   assert.match(text(pill('unknown')), /^Can’t check$/);

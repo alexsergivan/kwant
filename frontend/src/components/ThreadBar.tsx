@@ -8,7 +8,7 @@ const BADGE_STYLE: Record<BadgeKind, string> = {
   waiting: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
   // Grey like the in-chat "In line" line: waiting its turn isn't waiting on you (0.7.7 final check, F).
   queued: 'text-zinc-300 bg-zinc-800/60 border-zinc-600',
-  done: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
+  done: 'text-ok bg-teal-400/10 border-teal-400/30',
   failed: 'text-rose-300 bg-rose-500/10 border-rose-500/30',
   interrupted: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
   cancelled: 'text-zinc-400 bg-zinc-800/60 border-zinc-700',

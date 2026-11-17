@@ -3,6 +3,9 @@
 //! poisoned project gives the same team as its plain twin, and an existing team only gains the
 //! roles it lacks. All folders are temporary and all names are invented; nothing leaves the host.
 
+#[path = "support/skip.rs"]
+mod skip;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -433,7 +436,7 @@ async fn an_existing_team_only_gains_the_roles_it_lacks() {
 async fn a_git_folder_is_read_from_its_tracked_files() {
     let git_ok = std::process::Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success());
     if !git_ok {
-        eprintln!("git isn't installed; skipped");
+        skip::skip_or_fail("git", "install git");
         return;
     }
     let e = setup().await;
@@ -479,7 +482,7 @@ async fn a_folder_kwant_cant_list_is_a_bad_path() {
     // root (or CAP_DAC_READ_SEARCH) still lists it: nothing to test there
     if std::fs::read_dir(&shut).is_ok() {
         std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
-        eprintln!("skipped: this user can list a mode 000 folder (root)");
+        skip::skip_or_fail("a user that file modes apply to (this one lists a mode 000 folder: root?)", "run the tests as a normal user");
         return;
     }
     let (s, v) = suggest(&e, json!({ "workspace_path": shut.to_str().unwrap() })).await;
@@ -499,7 +502,7 @@ async fn a_folder_kwant_cant_list_is_a_bad_path() {
 async fn a_host_that_never_answers_is_read_failed_within_the_budget() {
     let git_ok = std::process::Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success());
     if !git_ok {
-        eprintln!("git isn't installed; skipped");
+        skip::skip_or_fail("git", "install git");
         return;
     }
     // Loopback is refused in every build, so the silent host listens on this machine's LAN address
@@ -510,7 +513,7 @@ async fn a_host_that_never_answers_is_read_failed_within_the_budget() {
     let ip = match lan {
         Ok(ip) if !ip.is_loopback() && !ip.is_unspecified() => ip,
         _ => {
-            eprintln!("no LAN address; skipped");
+            skip::skip_or_fail("a LAN address", "connect a network with a non-loopback IPv4 address");
             return;
         }
     };

@@ -1,6 +1,9 @@
 // Engine status from GET /api/engines, shared by Settings, the kwant form and the sidebar.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { EngineInfo } from './engines';
+import { canRunNow, type EngineInfo } from './engines';
+
+/** How often the cached status is read again while Ollama is down or nothing can run. */
+export const DOWN_POLL_MS = 30_000;
 
 export interface EnginesApi {
   /** null until the first load; [] from a server that has no engine checks. */
@@ -16,7 +19,8 @@ export interface EnginesApi {
   apply: (engines: EngineInfo[]) => void;
 }
 
-/** Loads /api/engines while `active`; polls briefly while any engine is still "checking". */
+/** Loads /api/engines while `active`; polls briefly while any engine is still "checking", and slowly
+ *  while Ollama's last check failed or nothing can run (the server keeps looking at Ollama). */
 export function useEngines(active: boolean): EnginesApi {
   const [engines, setEngines] = useState<EngineInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +61,16 @@ export function useEngines(active: boolean): EnginesApi {
     const t = window.setTimeout(load, 1500);
     return () => window.clearTimeout(t);
   }, [active, anyChecking, engines, load]);
+
+  // After a failed Ollama check the server looks again on its own (15 s, 30 s, 60 s, then every
+  // 5 min), and with nothing able to run, a late engine is what everyone waits for: read the cached
+  // status again every 30 s meanwhile, so the sidebar and space agree without a reload.
+  const waiting = !!engines?.some((e) => e.id === 'ollama' && e.enabled !== false && e.status === 'error') || canRunNow(engines) === false;
+  useEffect(() => {
+    if (!active || !waiting || anyChecking) return;
+    const t = window.setTimeout(load, DOWN_POLL_MS);
+    return () => window.clearTimeout(t);
+  }, [active, waiting, anyChecking, engines, load]);
 
   const recheck = useCallback(async () => {
     setRechecking(true);

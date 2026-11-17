@@ -26,7 +26,7 @@ import {
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-  emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  emerald: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
   sky: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   zinc: 'border-zinc-700 bg-zinc-800 text-zinc-300',
@@ -34,7 +34,7 @@ const TONES: Record<Tone, string> = {
 
 const SECTION_ICON: Record<AwaySection, React.ReactNode> = {
   waiting: <Inbox size={13} className="text-amber-300" aria-hidden="true" />,
-  finished: <CheckCircle2 size={13} className="text-emerald-400" aria-hidden="true" />,
+  finished: <CheckCircle2 size={13} className="text-ok" aria-hidden="true" />,
   failed: <AlertTriangle size={13} className="text-rose-400" aria-hidden="true" />,
 };
 
@@ -183,8 +183,8 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
                   notice.error
                     ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
                     : notice.info
-                      ? 'border-slate-500/30 bg-slate-500/10 text-slate-200'
-                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                      ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-200'
+                      : 'border-teal-400/30 bg-teal-400/10 text-teal-200'
                 }`}
               >
                 {notice.text}
@@ -200,7 +200,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
 
           {data && empty && (
             <div className="py-16 flex flex-col items-center text-center gap-2">
-              <CheckCircle2 size={28} className="text-emerald-400" aria-hidden="true" />
+              <CheckCircle2 size={28} className="text-ok" aria-hidden="true" />
               <p className="text-sm font-medium text-zinc-200">You're all caught up</p>
               <p className="text-xs text-zinc-500 max-w-xs">Nothing new since you last looked. Questions, approvals and finished work will show up here.</p>
             </div>

@@ -45,7 +45,7 @@ export const ReviewItemStub: React.FC<ReviewItemViewProps> = ({ item, onApprove,
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold text-zinc-100 break-words">{item.title}</h2>
           <div className="mt-1 flex flex-wrap gap-1.5">
-            {item.round.n > 1 && <span className="px-1.5 rounded-md border border-violet-400/40 text-[11px] text-violet-200">Round {item.round.n}</span>}
+            {item.round.n > 1 && <span className="px-1.5 rounded-md border border-sky-400/40 text-[11px] text-sky-200">Round {item.round.n}</span>}
             {item.risk.level && item.risk.level !== 'medium' && (
               <span className={`px-1.5 rounded-md border text-[11px] ${item.risk.level === 'high' ? 'border-amber-500/40 text-amber-200' : 'border-zinc-600 text-zinc-300'}`}>
                 {item.risk.level === 'high' ? 'High risk' : 'Low risk'}
@@ -82,7 +82,7 @@ export const ReviewItemStub: React.FC<ReviewItemViewProps> = ({ item, onApprove,
           type="button"
           aria-disabled={!!ap.blocked || busy}
           onClick={() => !ap.blocked && !busy && onApprove?.(item)}
-          className={`kw-focus inline-flex items-center gap-1.5 min-h-[44px] lg:min-h-[34px] px-4 rounded-lg text-sm font-semibold bg-violet-500/80 text-white ${ap.blocked || busy ? 'opacity-[.42] cursor-not-allowed' : 'hover:bg-violet-500'}`}
+          className={`kw-focus inline-flex items-center gap-1.5 min-h-[44px] lg:min-h-[34px] px-4 rounded-lg text-sm font-semibold bg-sky-600 text-white ${ap.blocked || busy ? 'opacity-[.42] cursor-not-allowed' : 'hover:bg-sky-700'}`}
           data-stub-approve
         >
           {busy ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}

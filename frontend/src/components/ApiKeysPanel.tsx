@@ -94,7 +94,7 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center gap-2 p-3 text-left rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
       >
-        <Key size={14} className="text-violet-400" aria-hidden="true" />
+        <Key size={14} className="text-sky-400" aria-hidden="true" />
         <span className="flex-1">
           <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
           <span className="block text-[11px] text-zinc-500">
@@ -151,11 +151,11 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
             )}
             <div className="flex items-center justify-end gap-2">
               {saved && (
-                <span role="status" className="flex items-center gap-1 text-xs text-emerald-400">
+                <span role="status" className="flex items-center gap-1 text-xs text-ok">
                   <Check size={13} /> Saved for every space
                 </span>
               )}
-              <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50">
+              <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50">
                 {saving ? 'Saving…' : 'Save keys'}
               </button>
             </div>

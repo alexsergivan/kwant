@@ -51,7 +51,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
 
   const line =
     status === 'resolved_auto' ? (
-      <span className="inline-flex items-center gap-1.5 text-emerald-300">
+      <span className="inline-flex items-center gap-1.5 text-ok">
         <CheckCircle2 size={13} className="shrink-0" aria-hidden="true" /> Solved. {kwantName} continues.
       </span>
     ) : status === 'timed_out' ? (
@@ -59,7 +59,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
         <Clock size={13} className="shrink-0" aria-hidden="true" /> Nobody solved it in time. {kwantName} moved on without it. If you finished, say so in the chat.
       </span>
     ) : status === 'done' ? (
-      <span className="inline-flex items-center gap-1.5 text-emerald-300">
+      <span className="inline-flex items-center gap-1.5 text-ok">
         <CheckCircle2 size={13} className="shrink-0" aria-hidden="true" /> Done. {kwantName} is carrying on{view.status === 'open' ? '…' : '.'}
       </span>
     ) : status === 'declined' ? (

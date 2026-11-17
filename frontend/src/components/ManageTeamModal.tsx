@@ -565,7 +565,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
                       aria-hidden="true"
                       className={`w-5 h-5 shrink-0 rounded flex items-center justify-center border transition-all ${
                         isMember
-                          ? 'bg-sky-500 text-white border-sky-400'
+                          ? 'bg-sky-600 text-white border-sky-400'
                           : 'border-zinc-700 bg-zinc-900 text-transparent'
                       }`}
                     >
@@ -592,8 +592,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               disabled={isDeleting}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
                 confirmDelete
-                  ? 'bg-red-600 text-white border-red-500 animate-pulse'
-                  : 'text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border-red-500/20'
+                  ? 'bg-rose-600 text-white border-rose-500 animate-pulse motion-reduce:animate-none'
+                  : 'text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/20'
               }`}
             >
               <Trash2 size={13} />
@@ -614,7 +614,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               <button
                 type="submit"
                 disabled={isSaving}
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium bg-sky-500 hover:bg-sky-400 text-white shadow-sm transition-all"
+                className="kw-btn-primary kw-focus gap-1.5 px-4 py-1.5 rounded-lg text-xs"
               >
                 <Check size={14} />
                 <span>{isSaving ? 'Saving...' : 'Save Changes'}</span>

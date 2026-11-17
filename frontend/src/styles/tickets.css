@@ -170,7 +170,7 @@ a.tk-src:hover { border-color: rgb(157 143 255 / .5); color: var(--t1); }
 .tk-q .blocks .lb { color: var(--t4); }
 .tk-q .blocks .srcs { vertical-align: middle; margin-left: 4px; }
 .tk-choices { margin: 10px 0 0 20px; display: flex; flex-wrap: wrap; gap: 8px; }
-.tk-ch { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 12px; border-radius: 12px; border: 1px solid #3f3f46; background: rgb(39 39 42 / .6); color: var(--t1);
+.tk-ch { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 12px; border-radius: 12px; border: 1px solid theme('colors.zinc.700'); background: theme('colors.zinc.800 / 60%'); color: var(--t1);
   font: 400 13.5px/20px Inter, sans-serif; cursor: pointer; text-align: left; max-width: 100%; overflow-wrap: anywhere; }
 .tk-ch .def { font: 600 10.5px/1 Inter, sans-serif; letter-spacing: .04em; text-transform: uppercase; color: #120e26; background: var(--kw-warn); padding: 3px 5px; border-radius: 4px; flex: none; }
 .tk-ch[aria-pressed="true"] { border-color: var(--kw-ok); background: var(--dv-ok-bg); }

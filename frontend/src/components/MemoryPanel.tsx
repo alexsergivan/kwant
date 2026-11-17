@@ -15,7 +15,7 @@ const inputClass =
 
 const SourceBadge: React.FC<{ source: Memory['source'] }> = ({ source }) =>
   source === 'agent' ? (
-    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-300 border border-violet-500/20">
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-500/10 text-info border border-sky-500/20">
       <Bot size={10} aria-hidden="true" /> Bot
     </span>
   ) : (
@@ -149,7 +149,7 @@ export const MemoryRow: React.FC<{
               type="button"
               onClick={save}
               disabled={busy || !text.trim() || text.length > MAX_MEMORY}
-              className={`${smallBtn} border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
+              className={`${smallBtn} border-sky-500/50 bg-sky-600 text-white hover:bg-sky-700`}
             >
               <Check size={11} /> Save
             </button>
@@ -317,7 +317,7 @@ export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string; onOpenT
           <button
             type="submit"
             disabled={adding || full || !draft.trim() || draft.length > MAX_MEMORY}
-            className={`${smallBtn} ml-auto border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
+            className={`${smallBtn} ml-auto border-sky-500/50 bg-sky-600 text-white hover:bg-sky-700`}
           >
             {adding ? <Loader2 size={11} className="animate-spin motion-reduce:animate-none" /> : <Plus size={11} />} Add
           </button>

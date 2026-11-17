@@ -206,7 +206,7 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-200">
       <header className="flex items-center gap-3 px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/60">
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className={`w-2.5 h-2.5 rounded-full ${error ? 'bg-zinc-500' : 'bg-emerald-400 animate-pulse'}`} />
+          <span className={`w-2.5 h-2.5 rounded-full ${error ? 'bg-zinc-500' : 'bg-teal-300 animate-pulse'}`} />
           <span className="text-sm font-semibold">Sandbox browser</span>
         </div>
 
@@ -245,7 +245,7 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
         <OpenWindowButton api={computer} label />
 
         <div
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 flex-shrink-0"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-ok bg-teal-400/10 border border-teal-400/30 flex-shrink-0"
           title="This is the same browser your bots use. They will see the current page on their next reply."
         >
           <Share2 size={12} />

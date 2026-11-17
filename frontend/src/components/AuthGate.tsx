@@ -274,7 +274,7 @@ const Command: React.FC<{ children: string }> = ({ children }) => {
         aria-label={copied ? 'Copied' : `Copy: ${children}`}
         className="shrink-0 p-1.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
       >
-        {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+        {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
       </button>
     </div>
   );
@@ -411,7 +411,7 @@ export const TokenForm: React.FC<{
         <button
           type="submit"
           disabled={busy || !token.trim()}
-          className="shrink-0 flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50"
+          className="shrink-0 flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50"
         >
           {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
         </button>

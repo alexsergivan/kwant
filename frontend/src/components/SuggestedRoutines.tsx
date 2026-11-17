@@ -30,7 +30,7 @@ import { playSfx } from '../audio/chiptune';
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-200 hover:bg-zinc-700`;
-const primaryBtn = `${smallBtn} border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`;
+const primaryBtn = `${smallBtn} border-sky-500/50 bg-sky-600 text-white hover:bg-sky-700`;
 
 /** A card the person just decided: stays as one line so they see what happened. */
 type Done = { id: string; text: string };
@@ -183,7 +183,7 @@ export const SuggestionCard: React.FC<{
     );
 
   return (
-    <li aria-labelledby={titleId} className="rounded-xl border border-violet-500/25 bg-zinc-950/60 p-3 space-y-2.5" data-testid="suggestion-card">
+    <li aria-labelledby={titleId} className="rounded-xl border border-sky-500/25 bg-zinc-950/60 p-3 space-y-2.5" data-testid="suggestion-card">
       <div className="flex items-start gap-2.5">
         {kwant ? (
           <ModernAvatar role={kwant.avatar_sprite} name={kwant.name} size={28} kwantId={kwant.id} />
@@ -242,7 +242,7 @@ export const SuggestionCard: React.FC<{
 
         {p && (
           <div className="flex items-start gap-1.5" data-testid="permissions-preview">
-            <ShieldCheck size={12} className="mt-0.5 shrink-0 text-emerald-300/80" aria-hidden="true" />
+            <ShieldCheck size={12} className="mt-0.5 shrink-0 text-teal-300/80" aria-hidden="true" />
             <p>
               <span className="text-zinc-300">{p.flight_school ? p.tier_label : 'Works as this bot does today'}.</span> {approvalText(p.approval_mode)}. Payments always ask you.{' '}
               {pastText(p.past)}
@@ -460,9 +460,9 @@ export const SuggestedRoutines: React.FC<{
     <section aria-labelledby={headingId} className="space-y-2" data-testid="suggested-routines">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 id={headingId} className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
-          <Sparkles size={13} className="text-violet-300" aria-hidden="true" />
+          <Sparkles size={13} className="text-info" aria-hidden="true" />
           Suggested routines
-          {offers.length > 0 && <span className="px-1.5 rounded-full bg-violet-500/15 text-violet-200 text-[10px] font-medium">{offers.length}</span>}
+          {offers.length > 0 && <span className="px-1.5 rounded-full bg-sky-500/15 text-sky-200 text-[10px] font-medium">{offers.length}</span>}
         </h3>
         {list && blocked.length === 0 && (
           <div className="flex items-center gap-1.5">
@@ -538,7 +538,7 @@ export const SuggestedRoutines: React.FC<{
               key={d.id}
               ref={i === done.length - 1 ? doneRef : undefined}
               tabIndex={-1}
-              className="flex items-start gap-1.5 text-[11px] text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/50"
+              className="flex items-start gap-1.5 text-[11px] text-teal-200 bg-teal-400/10 border border-teal-400/20 rounded-lg px-3 py-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-teal-400/50"
             >
               <Check size={12} className="mt-0.5 shrink-0" aria-hidden="true" /> {d.text}
             </p>

@@ -18,7 +18,7 @@ import { DocMark } from './DocMark';
 import { DocViewerOpen, DocViewerSheet } from './DocViewerSheet';
 
 const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400';
-const primaryBtn = `inline-flex items-center justify-center gap-1.5 px-3 rounded-lg text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 transition-colors motion-reduce:transition-none disabled:opacity-50 ${focusRing}`;
+const primaryBtn = `kw-btn-primary kw-focus px-3 rounded-lg text-xs motion-reduce:transition-none`;
 const quietBtn = `inline-flex items-center justify-center gap-1.5 px-3 rounded-lg text-xs font-medium text-zinc-200 border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 ${focusRing}`;
 const dangerBtn = `inline-flex items-center justify-center gap-1.5 px-3 rounded-lg text-xs font-medium bg-rose-300/[.12] border border-rose-300/40 text-rose-100 hover:bg-rose-300/20 ${focusRing}`;
 const tooBig = (size: number) => `It’s ${formatSize(size)}, over the 2 MB bots can read. Save a smaller copy or split it.`;
@@ -197,12 +197,12 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
       </div>
     ) : (
       <div
-        className={`flex items-center gap-3.5 p-4 rounded-xl border border-dashed transition-colors motion-reduce:transition-none ${over ? 'border-violet-400 bg-violet-400/[.06]' : 'border-zinc-700 bg-zinc-900/50'}`}
+        className={`flex items-center gap-3.5 p-4 rounded-xl border border-dashed transition-colors motion-reduce:transition-none ${over ? 'border-sky-400 bg-sky-400/[.06]' : 'border-zinc-700 bg-zinc-900/50'}`}
         data-docs-drop
         data-over={over || undefined}
       >
         <span className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-[10px] bg-zinc-900 border border-zinc-800" aria-hidden="true">
-          <Upload size={18} className="text-violet-300" />
+          <Upload size={18} className="text-info" />
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium text-zinc-100">Drop files here, or choose them</p>
@@ -215,12 +215,12 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
   const empty = list && docs.length === 0 && (
     <div
       className={`flex flex-col items-center text-center gap-2 px-4 py-8 rounded-xl border ${isPhone ? 'border-zinc-800' : 'border-dashed'} ${
-        over ? 'border-violet-400 bg-violet-400/[.06]' : `${isPhone ? '' : 'border-zinc-700'} bg-zinc-900/50`
+        over ? 'border-sky-400 bg-sky-400/[.06]' : `${isPhone ? '' : 'border-zinc-700'} bg-zinc-900/50`
       }`}
       data-docs-empty
     >
       <span className="inline-flex items-center justify-center w-10 h-10 rounded-[10px] bg-zinc-900 border border-zinc-800" aria-hidden="true">
-        <FileText size={18} className="text-violet-300" />
+        <FileText size={18} className="text-info" />
       </span>
       <p className="text-sm font-medium text-zinc-100">No documents yet</p>
       <p className="max-w-[420px] text-[13px] text-zinc-300 leading-relaxed">
@@ -377,7 +377,7 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
       {list === null && !failed && canEdit && !isPhone && (
         <div className="flex items-center gap-3.5 p-4 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/50">
           <span className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-[10px] bg-zinc-900 border border-zinc-800" aria-hidden="true">
-            <Upload size={18} className="text-violet-300" />
+            <Upload size={18} className="text-info" />
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-medium text-zinc-100">Drop files here, or choose them</p>
@@ -441,7 +441,7 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
           {!isPhone && (
             <>
               {' '}
-              <button type="button" onClick={copyFolder} className={`inline-flex items-center gap-1 align-middle rounded text-violet-300 hover:text-violet-200 hover:underline ${focusRing}`}>
+              <button type="button" onClick={copyFolder} className={`inline-flex items-center gap-1 align-middle rounded text-info hover:text-sky-200 hover:underline ${focusRing}`}>
                 <Copy size={12} aria-hidden="true" /> {copied ? 'Copied' : 'Copy folder'}
               </button>
             </>
@@ -450,7 +450,7 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
       )}
       {list && isPhone && (
         <div className="mt-1">
-          <button type="button" onClick={copyFolder} className={`inline-flex items-center gap-1 h-11 -my-1.5 rounded text-xs text-violet-300 hover:text-violet-200 hover:underline ${focusRing}`}>
+          <button type="button" onClick={copyFolder} className={`inline-flex items-center gap-1 h-11 -my-1.5 rounded text-xs text-info hover:text-sky-200 hover:underline ${focusRing}`}>
             <Copy size={12} aria-hidden="true" /> {copied ? 'Copied' : 'Copy folder'}
           </button>
         </div>

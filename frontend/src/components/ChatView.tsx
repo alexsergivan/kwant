@@ -420,6 +420,11 @@ export interface ChatViewProps {
   onEditBot?: (botName: string) => void;
   /** Whether anything can run a bot in this space now (null while unknown). */
   canRun?: boolean | null;
+  /** Whether Ollama answers now (null while unknown), for a bot's "Ollama isn't answering" card. */
+  ollamaReady?: boolean | null;
+  /** Checks the engines again, from that card's Re-check button. */
+  onRecheckEngines?: () => void;
+  recheckingEngines?: boolean;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
   awaitingAnswer?: boolean;
   /** …and the pause is a browser step (sign-in, CAPTCHA) rather than a question. */
@@ -469,15 +474,15 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> =
 
   return (
     <div className="flex items-start gap-3.5 w-full max-w-5xl" aria-live="polite">
-      <div className="w-[34px] h-[34px] flex-shrink-0 rounded-full bg-violet-500/15 border border-violet-500/40 flex items-center justify-center shadow-sm shadow-violet-500/10">
-        <Sparkles size={16} className={`text-violet-300 ${deciding ? 'animate-pulse' : ''}`} />
+      <div className="w-[34px] h-[34px] flex-shrink-0 rounded-full bg-sky-500/15 border border-sky-500/40 flex items-center justify-center shadow-sm shadow-sky-500/10">
+        <Sparkles size={16} className={`text-info ${deciding ? 'animate-pulse' : ''}`} />
       </div>
       <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
         <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
           <span className="text-zinc-200">Laya</span>
           <span className="text-zinc-500">· router</span>
         </div>
-        <div className="px-4 py-3 rounded-2xl rounded-tl-sm bg-violet-950/20 border border-violet-500/20 text-sm text-zinc-200 shadow-sm w-full">
+        <div className="px-4 py-3 rounded-2xl rounded-tl-sm bg-sky-950/20 border border-sky-500/20 text-sm text-zinc-200 shadow-sm w-full">
           {deciding ? (
             <div className="flex items-center gap-2">
               <span>
@@ -487,7 +492,7 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> =
                 {[0, 1, 2].map((i) => (
                   <span
                     key={i}
-                    className="w-1 h-1 rounded-full bg-violet-300 animate-bounce"
+                    className="w-1 h-1 rounded-full bg-sky-300 animate-bounce"
                     style={{ animationDelay: `${i * 150}ms` }}
                   />
                 ))}
@@ -497,7 +502,7 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> =
             <div className="flex flex-col gap-0.5">
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span>{isDiscuss ? 'Starting a team discussion led by' : 'Sending your question to'}</span>
-                <span className="font-semibold text-violet-200">{routing.kwantName}</span>
+                <span className="font-semibold text-sky-200">{routing.kwantName}</span>
                 {routing.kwantTitle && <span className="text-zinc-400 text-xs">({routing.kwantTitle})</span>}
               </div>
               {why && <span className="text-xs text-zinc-400">{why}</span>}
@@ -515,7 +520,7 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> =
                     title={`${c.name} — ${c.title}`}
                     className={`flex items-center gap-1.5 pl-0.5 pr-2.5 py-0.5 rounded-full border text-[11px] transition-all duration-300 ${
                       chosen
-                        ? 'border-violet-400/60 bg-violet-500/20 text-violet-100 scale-105'
+                        ? 'border-sky-400/60 bg-sky-500/20 text-sky-100 scale-105'
                         : deciding
                           ? 'border-zinc-700/60 bg-zinc-900/60 text-zinc-300 animate-pulse'
                           : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 opacity-50'
@@ -524,7 +529,7 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> =
                   >
                     <ModernAvatar role={c.name} name={c.name} size={18} />
                     <span>{c.name}</span>
-                    {chosen && <Check size={11} className="text-violet-300" />}
+                    {chosen && <Check size={11} className="text-info" />}
                   </div>
                 );
               })}
@@ -670,6 +675,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onChangeTeamFolder,
   onEditBot,
   canRun = null,
+  ollamaReady = null,
+  onRecheckEngines,
+  recheckingEngines,
   awaitingAnswer,
   awaitingBrowser,
   awaitingBot,
@@ -1686,6 +1694,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
             spaceName={spaceName ?? 'this space'}
             canRun={canRun}
             onOpenAccounts={onOpenAccounts}
+            ollamaReady={ollamaReady}
+            onRecheck={onRecheckEngines}
+            rechecking={recheckingEngines}
             flash={flashId === msg.id}
           />
         </div>
@@ -1911,7 +1922,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     onClick={() => toggleThought(msg.id)}
                     className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
                   >
-                    <Sparkles size={13} className="text-violet-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
+                    <Sparkles size={13} className="text-sky-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
                     <span className="truncate min-w-0 sm:max-w-md">
                       {msg.reasoning_content.split('\n')[0].replace(/^🔮\s*/, '')}
                     </span>
@@ -1948,7 +1959,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 : isUser
                   ? `${OTHER_BUBBLE} max-w-2xl`
                   : workAhead
-                    ? 'bg-indigo-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-indigo-400/25'
+                    ? 'bg-sky-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-sky-400/25'
                     : REPLY_BUBBLE_BOT
             }`}
             data-other-bubble={isUser && !onYourSide ? '' : undefined}
@@ -2343,7 +2354,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {workspacePath ? (
                 <Folder size={12} className="text-amber-400 flex-shrink-0" />
               ) : (
-                <GitBranch size={12} className="text-emerald-400 flex-shrink-0" />
+                <GitBranch size={12} className="text-ok flex-shrink-0" />
               )}
               <span className="truncate">
                 {workspacePath
@@ -2484,7 +2495,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={onCancelDiscussion}
-                className="shrink-0 flex items-center gap-1 px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded border border-red-500/30 transition-colors cursor-pointer"
+                className="shrink-0 flex items-center gap-1 px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded border border-rose-500/30 transition-colors cursor-pointer"
               >
                 <Square size={11} fill="currentColor" />
                 <span>Stop<span className="hidden sm:inline"> Discussion</span></span>
@@ -2620,8 +2631,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {liveActivity && !stepsBelow && liveStepsList}
 
               {thinking && (
-                <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
-                  <Sparkles size={13} className="text-violet-400 flex-shrink-0" />
+                <div className="mb-2 p-2.5 rounded-xl bg-sky-950/20 border border-sky-500/20 text-xs text-sky-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
+                  <Sparkles size={13} className="text-sky-400 flex-shrink-0" />
                   <span className="truncate"><StreamPart stream={stream} part="thinking" onGrow={onStreamGrow} /></span>
                 </div>
               )}
@@ -2860,11 +2871,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </div>
           )}
           {ideaMode && (
-            <p data-idea-hint className="basis-full min-w-0 px-1 pt-0.5 flex items-center gap-1.5 text-[12px] leading-4 text-violet-200">
-              <JarIcon size={13} className="shrink-0 text-violet-300" />
+            <p data-idea-hint className="basis-full min-w-0 px-1 pt-0.5 flex items-center gap-1.5 text-[12px] leading-4 text-sky-200">
+              <JarIcon size={13} className="shrink-0 text-info" />
               <span className="min-w-0 line-clamp-2">
                 Goes in the idea jar, not to{' '}
-                <span className="font-medium text-violet-100">
+                <span className="font-medium text-sky-100">
                   {home?.kind === 'bot' ? home.bot?.name ?? title : title.startsWith('#') || home?.kind === 'team' ? title : `#${title}`}
                 </span>
                 . No bot reads it now.
@@ -2888,8 +2899,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 onClick={completeIdea}
                 className="w-full flex items-center gap-2.5 px-2.5 min-h-11 sm:min-h-9 rounded-lg bg-white/[0.06] text-left text-sm text-zinc-100 hover:bg-white/[0.08]"
               >
-                <JarIcon size={15} className="text-violet-300 shrink-0" />
-                <span className="font-semibold text-violet-300">/idea</span>
+                <JarIcon size={15} className="text-info shrink-0" />
+                <span className="font-semibold text-info">/idea</span>
                 <span className="text-zinc-400">Drop an idea in the jar</span>
                 <kbd className="ml-auto font-sans text-[11px] text-zinc-500">Tab</kbd>
               </button>
@@ -3015,7 +3026,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onCancelDiscussion}
-              className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
+              className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
               title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop'}
               aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop'}
             >
@@ -3040,10 +3051,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
               disabled={!canSend}
               data-send-ready={canSend ? 'true' : 'false'}
               data-idea-send
-              className={`w-11 h-11 ${phone ? '' : 'sm:w-9 sm:h-9'} rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 ${
+              className={`w-11 h-11 ${phone ? '' : 'sm:w-9 sm:h-9'} rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 ${
                 canSend
-                  ? 'bg-violet-500 text-white hover:bg-violet-400 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
-                  : 'bg-violet-500/20 text-violet-300/60 cursor-not-allowed'
+                  ? 'bg-sky-600 text-white hover:bg-sky-700 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
+                  : 'bg-sky-500/20 text-sky-300/60 cursor-not-allowed'
               }`}
             >
               <JarIcon size={phone ? 18 : 17} />
@@ -3059,7 +3070,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 canSend
                   ? phone
                     ? 'bg-[#6c58e0] text-white hover:bg-[#5845bd] active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
-                    : 'bg-accent-gradient text-white shadow-glow hover:brightness-110 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
+                    : 'bg-accent-gradient kw-hover-deepen text-white shadow-glow active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
                   : phone
                     ? 'bg-[#2c2552] text-[#5a5383] cursor-not-allowed'
                     : 'bg-surface-overlay text-zinc-400 cursor-not-allowed'

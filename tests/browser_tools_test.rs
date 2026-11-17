@@ -4,6 +4,9 @@
 //! only the turn's own sandbox. The browser part runs a real windowless Chrome in Local mode and
 //! is skipped when none is installed.
 
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use chrome_guard::ChromeGuard;
@@ -193,7 +196,7 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
     }
 
     if computer::local_chrome_path().is_none() {
-        eprintln!("browser part skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         mcp_runtime::finish_turn(&state, &token).await;
         return;
     }

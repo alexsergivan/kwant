@@ -162,7 +162,7 @@ const ReviewSubline: React.FC<{ item: ReviewItem }> = ({ item }) => {
   return (
     <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
       {item.round.n > 1 && (
-        <span className="px-1.5 rounded-md border border-violet-400/40 bg-violet-500/10 text-violet-200 text-[11px]" data-round-chip>
+        <span className="px-1.5 rounded-md border border-sky-400/40 bg-sky-500/10 text-sky-200 text-[11px]" data-round-chip>
           Round {item.round.n}
         </span>
       )}
@@ -231,7 +231,7 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
   const oneTap = !!review && review.one_tap && !review.stale && !review.approve_error && review.verdict.result !== 'none' && !isBeingChecked(review);
   const stale = !!review?.stale;
   const disabled = busy !== null;
-  const tint = selected ? 'border-violet-400/70 bg-violet-500/10' : GROUP_STYLE[item.group].row;
+  const tint = selected ? 'border-sky-400/70 bg-sky-500/10' : GROUP_STYLE[item.group].row;
   const kicker = (isDoneGroup(item.group) ? rowKicker(item) : null) ?? place ?? null;
   // A team job names the team's size where a row names its bot: "@Spring launch · 3 bots" (Needs B 2).
   const who = (item.kind === 'team_job' ? teamSize(item) : null) ?? item.kwant_name;
@@ -271,7 +271,7 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
             </span>
             {unread && (
               <span className="ml-auto shrink-0 inline-flex items-center" data-unread>
-                <span className="block w-2 h-2 rounded-full bg-violet-400" aria-hidden="true" />
+                <span className="block w-2 h-2 rounded-full bg-sky-400" aria-hidden="true" />
                 <span className="sr-only">New</span>
               </span>
             )}
@@ -402,7 +402,7 @@ const ProgressBar: React.FC<{ rows: BatchRow[] }> = ({ rows }) => {
   return (
     <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={p.total} aria-valuenow={p.done} aria-label="Approve all">
       <div
-        className="h-full w-full origin-left rounded-full bg-violet-400 transition-transform duration-300 motion-reduce:transition-none"
+        className="h-full w-full origin-left rounded-full bg-sky-400 transition-transform duration-300 motion-reduce:transition-none"
         style={{ transform: `scaleX(${p.total ? p.done / p.total : 0})` }}
       />
     </div>
@@ -415,7 +415,7 @@ const BatchCard: React.FC<{ items: InboxItem[]; selected: boolean; focusable: bo
   const n = running ? batch!.rows.length : items.length;
   const people = running ? batch!.rows : items;
   return (
-    <li role="presentation" className={`rounded-xl border transition-colors ${selected ? 'border-violet-400/70 bg-violet-500/10' : 'border-violet-400/30 bg-violet-950/20'}`} data-batch-card>
+    <li role="presentation" className={`rounded-xl border transition-colors ${selected ? 'border-sky-400/70 bg-sky-500/10' : 'border-sky-400/30 bg-sky-950/20'}`} data-batch-card>
       <div
         role="option"
         id="inbox-opt-batch"
@@ -478,7 +478,7 @@ const BatchCard: React.FC<{ items: InboxItem[]; selected: boolean; focusable: bo
 const ROW_STATUS: Record<BatchRow['status'], { word: string; tone: string; icon: React.ReactNode }> = {
   approved: { word: 'Approved', tone: 'text-teal-300', icon: <Check size={14} className="text-teal-300" aria-hidden="true" /> },
   came_back: { word: 'Came back', tone: 'text-rose-300', icon: <XCircle size={14} className="text-rose-300" aria-hidden="true" /> },
-  approving: { word: 'Approving…', tone: 'text-violet-200', icon: <Loader2 size={14} className="text-violet-200 animate-spin motion-reduce:animate-none" aria-hidden="true" /> },
+  approving: { word: 'Approving…', tone: 'text-sky-200', icon: <Loader2 size={14} className="text-sky-200 animate-spin motion-reduce:animate-none" aria-hidden="true" /> },
   waiting: { word: 'Waiting', tone: 'text-zinc-400', icon: <CircleDashed size={14} className="text-zinc-500" aria-hidden="true" /> },
   error: { word: 'Couldn’t approve', tone: 'text-rose-300', icon: <AlertTriangle size={14} className="text-rose-300" aria-hidden="true" /> },
   stopped: { word: 'Left in To review', tone: 'text-zinc-400', icon: <MinusCircle size={14} className="text-zinc-500" aria-hidden="true" /> },
@@ -891,7 +891,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       {notice && (
         <p
           className={`px-3 py-2 rounded-lg border text-xs ${
-            notice.tone === 'error' ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : notice.tone === 'info' ? 'border-slate-500/30 bg-slate-500/10 text-slate-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-100'
+            notice.tone === 'error' ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : notice.tone === 'info' ? 'border-zinc-500/30 bg-zinc-500/10 text-zinc-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-100'
           }`}
         >
           {notice.text}

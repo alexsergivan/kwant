@@ -4,6 +4,10 @@
 //! guard's frame policy Chrome stops passing clicks and keys to the tab while it asks whether to
 //! open the app; with it, Chrome blocks the frame and the page keeps taking input. Skipped when no
 //! Chrome is installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use chrome_guard::ChromeGuard;
@@ -120,7 +124,7 @@ async fn moves_reaching(ctrl: &BrowserController) -> i64 {
 #[tokio::test]
 async fn a_hidden_frame_opening_another_app_leaves_the_page_taking_input() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -142,7 +146,7 @@ async fn a_hidden_frame_opening_another_app_leaves_the_page_taking_input() {
 #[tokio::test]
 async fn frames_the_tab_opens_itself_still_load_under_the_guard() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

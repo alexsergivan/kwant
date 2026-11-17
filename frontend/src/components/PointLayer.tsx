@@ -363,7 +363,7 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
       }}
       onClick={onClick}
       onKeyDown={onKeyDown}
-      className="absolute inset-0 z-10 cursor-crosshair rounded-xl ring-2 ring-inset ring-violet-500/70 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-sky-300"
+      className="absolute inset-0 z-10 cursor-crosshair rounded-xl ring-2 ring-inset ring-sky-500/70 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-sky-300"
     >
       <div className="absolute top-0 inset-x-0 h-7 px-2.5 flex items-center justify-between gap-2 bg-[rgb(14_10_33/0.88)] text-[11.5px] text-zinc-100 pointer-events-none rounded-t-xl">
         <span className="truncate font-semibold">{bar?.kind === 'waiting' ? bar.text : topText}</span>
@@ -375,7 +375,7 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
           <div
             data-point-outline=""
             className={`absolute pointer-events-none rounded-[3px] border-2 ${
-              teal ? 'border-teal-300 bg-teal-300/15' : 'border-violet-400 bg-violet-400/10'
+              teal ? 'border-teal-300 bg-teal-300/15' : 'border-sky-400 bg-sky-400/10'
             } motion-safe:transition-[left,top,width,height] motion-safe:duration-75`}
             style={{ left: outline.x, top: outline.y, width: outline.width, height: outline.height }}
           />
@@ -383,7 +383,7 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
             ref={tagRef}
             data-point-tag=""
             className={`absolute pointer-events-none max-w-[calc(100%-8px)] truncate h-[18px] px-1.5 leading-[18px] rounded font-mono text-[11px] ${
-              teal ? 'bg-teal-300 text-teal-950' : 'bg-violet-600 text-white'
+              teal ? 'bg-teal-300 text-teal-950' : 'bg-sky-600 text-white'
             }`}
             style={{
               left: Math.max(4, Math.min(outline.x, size.width - 4 - tagW)),
@@ -427,14 +427,14 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
                 <button
                   type="button"
                   onClick={() => neighbour('parent')}
-                  className="flex-1 h-11 rounded-[10px] border border-[#3f3868] text-zinc-100 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                  className="flex-1 h-11 rounded-[10px] border border-[#3f3868] text-zinc-100 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
                 >
                   {POINT_COPY.wider}
                 </button>
                 <button
                   type="button"
                   onClick={() => pick(sel, false)}
-                  className="flex-1 h-11 rounded-[10px] bg-violet-600 text-white text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                  className="flex-1 h-11 rounded-[10px] bg-sky-600 text-white text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
                 >
                   {POINT_COPY.add}
                 </button>
@@ -451,14 +451,14 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
                     setSheet('none');
                     select(null, false);
                   }}
-                  className="flex-1 h-11 rounded-[10px] border border-[#3f3868] text-zinc-100 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                  className="flex-1 h-11 rounded-[10px] border border-[#3f3868] text-zinc-100 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
                 >
                   {POINT_COPY.keep}
                 </button>
                 <button
                   type="button"
                   onClick={() => (onBackToChat ?? onExit)()}
-                  className="flex-1 h-11 rounded-[10px] bg-violet-600 text-white text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+                  className="flex-1 h-11 rounded-[10px] bg-sky-600 text-white text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
                 >
                   {POINT_COPY.back}
                 </button>

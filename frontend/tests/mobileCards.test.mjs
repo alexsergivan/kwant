@@ -97,7 +97,7 @@ test('approval card on a phone: header, one sentence, two key facts, details clo
   assert.match(b[0].attrs, /min-h-\[44px\]/);
   assert.match(b[1].attrs, /w-full/);
   assert.match(b[1].attrs, /min-h-\[48px\]/);
-  assert.match(b[1].attrs, /bg-\[#059669\]/);
+  assert.match(b[1].attrs, /bg-teal-300 hover:bg-teal-200 .*text-zinc-950/);
   for (const x of b.slice(2)) assert.match(x.attrs, /min-h-\[44px\]/, x.label);
   // Allow once is the only child of its row; Deny and Always allow share the next one.
   assert.match(html, /data-approval-actions[^>]*>\s*<button[^>]*data-approval-allow[\s\S]*?<\/button>\s*<div class="grid gap-2 sm:flex grid-cols-2">/);

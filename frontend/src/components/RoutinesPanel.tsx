@@ -67,7 +67,7 @@ export interface RoutineFocus {
 // 26d: `waiting` and `needs_you` take the amber the steps list already uses for an ask; no new colours.
 const TONE: Record<RunTone, string> = {
   running: 'bg-sky-500/10 text-sky-300 border-sky-500/20',
-  ok: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20',
+  ok: 'bg-teal-400/10 text-ok border-teal-400/20',
   error: 'bg-rose-500/10 text-rose-300 border-rose-500/20',
   skipped: 'bg-zinc-700/30 text-zinc-400 border-zinc-700',
   waiting: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
@@ -87,7 +87,7 @@ const StatusBadge: React.FC<{ status: string; wait?: RunWait | null }> = ({ stat
 /** On a routine added from one kwant suggested (Automation Discovery). */
 export const SuggestedBadge: React.FC = () => (
   <span
-    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border bg-violet-500/10 text-violet-200 border-violet-500/25"
+    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border bg-sky-500/10 text-sky-200 border-sky-500/25"
     title="You added this from a suggestion, after you asked for it on a regular rhythm."
   >
     <Sparkles size={9} aria-hidden="true" />
@@ -425,7 +425,7 @@ export const RoutineForm: React.FC<{
         <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
           Cancel
         </button>
-        <button type="submit" disabled={saving} className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50">
+        <button type="submit" disabled={saving} className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50">
           {saving ? 'Saving…' : submitLabel ?? (initial ? 'Save routine' : 'Create routine')}
         </button>
       </div>
@@ -467,7 +467,7 @@ export const RunRow: React.FC<{
   const t = onOpenRunResult ? runResultTarget(routine, r) : null;
   const card = onOpenRunCard && st.cardId ? st.cardId : null;
   const note = routineRunNote(r);
-  const link = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-violet-300 hover:text-violet-200';
+  const link = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200';
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400" data-run-row={r.id} data-run-state={st.tone}>
       <StatusBadge status={r.status} wait={wait} />
@@ -770,7 +770,7 @@ export const RoutinesPanel: React.FC<{
               onClick={() => setEditing('new')}
               disabled={kwants.length === 0}
               data-routine-new
-              className={`${smallBtn} shrink-0 justify-center min-h-11 sm:min-h-0 border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
+              className={`${smallBtn} shrink-0 justify-center min-h-11 sm:min-h-0 border-sky-500/50 bg-sky-600 text-white hover:bg-sky-700`}
             >
               <Plus size={11} aria-hidden="true" /> New routine
             </button>
@@ -813,7 +813,7 @@ export const RoutinesPanel: React.FC<{
             onClick={() => setEditing('new')}
             disabled={kwants.length === 0}
             data-routine-new
-            className="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-b from-[#7a62f0] to-[#5b47d6] px-4 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120e26] sm:h-9 sm:w-auto"
+            className="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-accent-gradient kw-hover-deepen px-4 text-sm font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120e26] sm:h-9 sm:w-auto"
           >
             <Plus size={15} aria-hidden="true" /> New routine
           </button>

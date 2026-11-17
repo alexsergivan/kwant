@@ -38,14 +38,14 @@ export function validVerification(raw: unknown): VerificationBlock | null {
 const STATUS_TEXT: Record<CheckStatus, string> = { passed: 'Passed', failed: 'Failed', error: 'Error', pending: 'Pending' };
 const STATUS_ICON: Record<CheckStatus, React.ElementType> = { passed: CheckCircle2, failed: XCircle, error: AlertTriangle, pending: CircleDashed };
 const STATUS_COLOR: Record<CheckStatus, string> = {
-  passed: 'text-emerald-400',
+  passed: 'text-ok',
   failed: 'text-rose-400',
   error: 'text-amber-400',
   pending: 'text-zinc-400',
 };
 
 const STATUS_PILL: Record<CheckStatus, string> = {
-  passed: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+  passed: 'border-teal-400/40 bg-teal-400/10 text-ok',
   failed: 'border-rose-500/40 bg-rose-500/10 text-rose-300',
   error: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
   pending: 'border-zinc-600 bg-zinc-800/60 text-zinc-300',

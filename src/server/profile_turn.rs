@@ -400,22 +400,31 @@ pub async fn with_accounts(state: &AppState, space: &SpaceId, mut reports: Vec<E
 
 /// How many of `space`'s enabled accounts could take a turn now: This machine when its
 /// engine's own login is ready and the engine is on, any other account when it is signed in
-/// and its engine is on.
+/// and its engine is on, plus each engine that runs with no account at all (Ollama) when it is
+/// on and ready, so the space never says "no account yet" while the sidebar says Ollama is ready.
 pub async fn ready_accounts(state: &AppState, space: &SpaceId) -> usize {
-    let Some((profiles, avail)) = accounts(state, space).await else {
-        return 0;
-    };
     let reports = state.engines.snapshot();
+    let accountless = reports.iter().filter(|r| runs_without_account(r)).count();
+    let Some((profiles, avail)) = accounts(state, space).await else {
+        return accountless;
+    };
     let now = chrono::Utc::now();
-    profiles.iter().filter(|p| p.enabled && is_ready(state, p, &avail, &reports, now)).count()
+    accountless + profiles.iter().filter(|p| p.enabled && is_ready(state, p, &avail, &reports, now)).count()
+}
+
+/// An engine with no accounts (no model family: Ollama) that is on and passed its check.
+fn runs_without_account(r: &EngineReport) -> bool {
+    r.id.family().is_none() && r.enabled && r.status == EngineStatus::Ready
 }
 
 /// Whether an enabled account could take a turn now (see [`ready_accounts`]).
 fn is_ready(state: &AppState, p: &LlmProfile, avail: &Availability, reports: &[EngineReport], now: chrono::DateTime<chrono::Utc>) -> bool {
     match (p.kind.as_str(), Engine::parse(&p.engine)) {
+        // This machine runs on the engine's CLI login or on its API key from Settings, as the
+        // sidebar's `readiness` counts either
         ("system", Some(family)) => {
-            let (cli, _) = EngineId::of_family(family);
-            reports.iter().any(|r| r.id == cli && r.enabled && r.status == EngineStatus::Ready)
+            let (cli, api) = EngineId::of_family(family);
+            reports.iter().any(|r| (r.id == cli || r.id == api) && r.enabled && r.status == EngineStatus::Ready)
         }
         ("system", None) => false,
         _ => avail.admits(p, now, SignInBar::SignedIn) && profile_engine_on(state, p),

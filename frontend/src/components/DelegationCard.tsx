@@ -24,7 +24,7 @@ const LONG_RESULT = 1400;
 const tone: Record<DelegationStatus, { icon: React.ReactNode; ring: string; text: string }> = {
   queued: { icon: <Clock size={13} aria-hidden="true" />, ring: 'border-amber-500/30', text: 'text-amber-300' },
   running: { icon: <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />, ring: 'border-sky-500/30', text: 'text-sky-300' },
-  completed: { icon: <CheckCircle2 size={13} aria-hidden="true" />, ring: 'border-emerald-500/30', text: 'text-emerald-300' },
+  completed: { icon: <CheckCircle2 size={13} aria-hidden="true" />, ring: 'border-teal-400/30', text: 'text-ok' },
   failed: { icon: <XCircle size={13} aria-hidden="true" />, ring: 'border-rose-500/30', text: 'text-rose-300' },
   cancelled: { icon: <Square size={11} aria-hidden="true" />, ring: 'border-zinc-700', text: 'text-zinc-400' },
   interrupted: { icon: <AlertTriangle size={13} aria-hidden="true" />, ring: 'border-amber-500/30', text: 'text-amber-300' },

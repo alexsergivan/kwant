@@ -181,9 +181,9 @@ import { ReceiptsDownload } from './ReceiptsDownload';
 import { waitLine } from '../waitingChecks';
 
 const TONES: Record<Tone, string> = {
-  emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  emerald: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-  violet: 'border-violet-500/30 bg-violet-500/10 text-violet-200',
+  violet: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
   sky: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   zinc: 'border-zinc-700 bg-zinc-800 text-zinc-300',
@@ -194,15 +194,15 @@ const actionBtn =
 const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
 /** A secondary action that shouldn't pull the eye: text only, same tap target. */
 const subtleBtn = `${actionBtn} -ml-3 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 underline underline-offset-2 decoration-zinc-600`;
-const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
-const goodBtn = `${actionBtn} bg-emerald-600 text-white hover:bg-emerald-500`;
-const reviewBtn = `${actionBtn} bg-violet-500/80 text-white hover:bg-violet-500`;
+const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-700`;
+const goodBtn = `${actionBtn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`;
+const reviewBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-700`;
 const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg-rose-500/10`;
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40';
 // Card-sized buttons: compact on desktop, a full 40px tap target on the phone.
 const cardBtn =
   'relative inline-flex items-center justify-center gap-1 min-h-[40px] sm:min-h-[28px] px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
-const cardGoodBtn = 'bg-emerald-600/90 text-white hover:bg-emerald-500';
+const cardGoodBtn = 'bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200';
 const cardPlainBtn = 'border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700';
 const cardQuietBtn = 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800';
 const field =
@@ -216,7 +216,7 @@ export const Badge: React.FC<{ tone: Tone; children: React.ReactNode; title?: st
 );
 
 const Notice: React.FC<{ text: string; error?: boolean }> = ({ text, error = false }) => (
-  <p role={error ? 'alert' : 'status'} className={`px-3 py-2 rounded-lg border text-xs ${error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'}`}>
+  <p role={error ? 'alert' : 'status'} className={`px-3 py-2 rounded-lg border text-xs ${error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-200'}`}>
     {text}
   </p>
 );
@@ -462,7 +462,7 @@ export const InsightsStrip: React.FC<{
       sub: af.attempts > 0 ? `${formatTokens(af.tokens)} tokens on retries` : 'No retries this week',
     });
   }
-  const valueTone: Partial<Record<Tone, string>> = { emerald: 'text-emerald-300', rose: 'text-rose-300', amber: 'text-amber-300' };
+  const valueTone: Partial<Record<Tone, string>> = { emerald: 'text-ok', rose: 'text-rose-300', amber: 'text-amber-300' };
   return (
     <section aria-label="This week" data-insights>
       <dl className={`grid grid-cols-2 sm:grid-cols-3 ${items.length > 5 ? 'lg:grid-cols-6' : 'lg:grid-cols-5'} gap-2`}>
@@ -532,7 +532,7 @@ export const MeasuresPanel: React.FC<{ insights: Insights | null; timeZone?: str
       <div className="grid gap-3 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_minmax(0,12rem)] sm:items-end">
         <dl className="min-w-0" data-measure="per-week">
           <dt className="text-[11px] text-zinc-400">Verified per active week</dt>
-          <dd className="text-lg font-semibold tabular-nums text-emerald-300">{v.headline}</dd>
+          <dd className="text-lg font-semibold tabular-nums text-ok">{v.headline}</dd>
           <dd className="text-[10px] text-zinc-400">{v.headlineSub}</dd>
         </dl>
 
@@ -550,8 +550,8 @@ export const MeasuresPanel: React.FC<{ insights: Insights | null; timeZone?: str
                   className={`block w-full rounded-sm ${
                     w.verified > 0
                       ? n === v.weeks.length - 1
-                        ? 'bg-emerald-400'
-                        : 'bg-emerald-500/60'
+                        ? 'bg-teal-300'
+                        : 'bg-teal-400/60'
                       : w.active
                         ? 'bg-zinc-600'
                         : 'border-t border-dashed border-zinc-700'
@@ -760,7 +760,7 @@ export const TaskCard: React.FC<{
           </span>
         )}
         {status && (
-          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && (approvalHolds(t.checks_summary) || stoppedWaiting(t) > 0)) ? 'text-amber-200' : autofixLive ? 'text-violet-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
+          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && (approvalHolds(t.checks_summary) || stoppedWaiting(t) > 0)) ? 'text-amber-200' : autofixLive ? 'text-sky-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
           </span>
         )}
@@ -786,7 +786,7 @@ export const TaskCard: React.FC<{
           )}
           <span className="tabular-nums">{costText(t.spent_tokens, t.budget_tokens)}</span>
           {(t.state === 'review' || t.state === 'verified' || t.state === 'failed' || t.checks_summary.total > 0) && (
-            <span className={`inline-flex items-center gap-1 ${checks.tone === 'emerald' ? 'text-emerald-300' : checks.tone === 'rose' ? 'text-rose-300' : checks.tone === 'amber' ? 'text-amber-200' : 'text-zinc-400'}`}>
+            <span className={`inline-flex items-center gap-1 ${checks.tone === 'emerald' ? 'text-ok' : checks.tone === 'rose' ? 'text-rose-300' : checks.tone === 'amber' ? 'text-amber-200' : 'text-zinc-400'}`}>
               {checks.tone === 'emerald' ? <CheckCircle2 size={11} aria-hidden="true" /> : checks.tone === 'rose' ? <XCircle size={11} aria-hidden="true" /> : <CircleDashed size={11} aria-hidden="true" />}
               {checks.text}
             </span>
@@ -809,7 +809,7 @@ export const TaskCard: React.FC<{
             <button
               type="button"
               onClick={() => openReview(t.id, 'board')}
-              className={`${cardBtn} border border-violet-400/40 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25`}
+              className={`${cardBtn} border border-sky-400/40 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25`}
               data-card-review
             >
               <ShieldCheck size={12} aria-hidden="true" />
@@ -1130,8 +1130,8 @@ export const LiveStrip: React.FC<{
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-100">
           <span className="relative flex h-2 w-2" aria-hidden="true">
-            {!idle && <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping motion-reduce:animate-none" />}
-            <span className={`relative inline-flex h-2 w-2 rounded-full ${idle ? 'bg-zinc-600' : 'bg-emerald-400'}`} />
+            {!idle && <span className="absolute inline-flex h-full w-full rounded-full bg-teal-300 opacity-60 animate-ping motion-reduce:animate-none" />}
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${idle ? 'bg-zinc-600' : 'bg-teal-300'}`} />
           </span>
           Live now
         </span>
@@ -1158,14 +1158,14 @@ export const LiveStrip: React.FC<{
                       disabled={!onOpen}
                       title={`${b.name}: ${(b.kind === 'audit' && b.title ? b.title : b.what).replace(/\.$/, '')}${b.more ? ` (+${b.more} more)` : ''}. ${b.kind === 'audit' ? 'Open the task.' : 'Open the conversation.'}`}
                       className={`group flex items-center gap-2 w-full max-w-[320px] sm:w-[240px] min-h-[44px] px-2 py-1.5 rounded-xl border text-left ${
-                        b.kind === 'task' || b.kind === 'audit' ? 'border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10' : 'border-emerald-500/25 bg-emerald-500/5 hover:bg-emerald-500/10'
+                        b.kind === 'task' || b.kind === 'audit' ? 'border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10' : 'border-teal-400/25 bg-teal-400/5 hover:bg-teal-400/10'
                       } ${focusRing}`}
                       data-live-bot={b.kwantId}
                       data-live-kind={b.kind}
                     >
                       <span className="relative shrink-0">
                         <OwnerAvatar kwantId={b.kwantId} name={b.name} size={26} />
-                        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-zinc-950 bg-emerald-400" aria-hidden="true" />
+                        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-zinc-950 bg-teal-300" aria-hidden="true" />
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-baseline gap-1.5">
@@ -1283,11 +1283,11 @@ export const UndoToast: React.FC<{ text: string; onUndo: () => void; onClose: ()
 
 const statusIcon = (tone: Tone) =>
   tone === 'emerald' ? (
-    <CheckCircle2 size={15} className="text-emerald-400" aria-hidden="true" />
+    <CheckCircle2 size={15} className="text-ok" aria-hidden="true" />
   ) : tone === 'rose' ? (
     <XCircle size={15} className="text-rose-400" aria-hidden="true" />
   ) : tone === 'violet' ? (
-    <Loader2 size={15} className="text-violet-300 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+    <Loader2 size={15} className="text-info animate-spin motion-reduce:animate-none" aria-hidden="true" />
   ) : tone === 'amber' ? (
     <Hand size={15} className="text-amber-300" aria-hidden="true" />
   ) : (
@@ -1335,10 +1335,10 @@ export const EvidenceReceipt: React.FC<{
 }> = ({ receipt, names, busy = false, onApproveCheck, scopeWarnings = [], owner }) => (
   <section aria-labelledby="receipt-h" className="space-y-3" data-receipt>
     <h4 id="receipt-h" tabIndex={-1} className="flex items-center focus:outline-none gap-1.5 text-xs font-semibold text-zinc-200">
-      <ShieldCheck size={14} className="text-emerald-400" aria-hidden="true" /> Evidence receipt
+      <ShieldCheck size={14} className="text-ok" aria-hidden="true" /> Evidence receipt
     </h4>
     {receipt.verifiedBy && (
-      <p className="px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-200" data-verified-by>
+      <p className="px-3 py-2 rounded-lg border border-teal-400/30 bg-teal-400/10 text-xs text-teal-200" data-verified-by>
         Verified: {checkKindLabel(receipt.verifiedBy.check.kind).toLowerCase()} passed
         {receipt.verifiedBy.by ? `, checked by ${receipt.verifiedBy.by}` : ''}
         {receipt.verifiedBy.check.finished_at ? ` ${ago(receipt.verifiedBy.check.finished_at)}` : ''}.
@@ -1593,7 +1593,7 @@ export const FailureBox: React.FC<{
           </details>
         )}
         {status && (
-          <p className="flex items-start gap-1.5 text-violet-200" data-autofix-status={a!.status}>
+          <p className="flex items-start gap-1.5 text-sky-200" data-autofix-status={a!.status}>
             <RefreshCw size={13} className="mt-px shrink-0" aria-hidden="true" />
             <span>{status}</span>
           </p>
@@ -1650,7 +1650,7 @@ export const WorkflowChangeBox: React.FC<{
   const same = rows.filter((r) => !r.changed);
   const by = change ? (change.proposed_by === 'kwant' ? 'AutoFix' : change.proposed_by_name || names[change.proposed_by] || 'A bot') : null;
   const Cell: React.FC<{ label: string; value: string; tone: 'before' | 'after' }> = ({ label, value, tone }) => (
-    <div className={`min-w-0 rounded-md px-2 py-1.5 ${tone === 'before' ? 'bg-zinc-950/60 text-zinc-400' : 'bg-emerald-500/10 text-emerald-100'}`}>
+    <div className={`min-w-0 rounded-md px-2 py-1.5 ${tone === 'before' ? 'bg-zinc-950/60 text-zinc-400' : 'bg-teal-400/10 text-teal-100'}`}>
       <p className="text-[10px] uppercase tracking-wide opacity-70">{label}</p>
       <p className="whitespace-pre-wrap break-words font-mono text-[11px]">{value}</p>
     </div>
@@ -2420,15 +2420,15 @@ export const TaskDetailBody: React.FC<{
       )}
 
       {t.claim && (
-        <section aria-labelledby="live-h" className="px-3 py-2 rounded-lg border border-violet-500/30 bg-violet-500/10 text-xs" data-live>
-          <h4 id="live-h" className="flex items-center gap-1.5 font-semibold text-violet-100">
+        <section aria-labelledby="live-h" className="px-3 py-2 rounded-lg border border-sky-500/30 bg-sky-500/10 text-xs" data-live>
+          <h4 id="live-h" className="flex items-center gap-1.5 font-semibold text-sky-100">
             <span className="relative flex w-2 h-2" aria-hidden="true">
-              <span className="absolute inline-flex w-full h-full rounded-full bg-violet-400 opacity-75 animate-ping motion-reduce:animate-none" />
-              <span className="relative inline-flex w-2 h-2 rounded-full bg-violet-400" />
+              <span className="absolute inline-flex w-full h-full rounded-full bg-sky-400 opacity-75 animate-ping motion-reduce:animate-none" />
+              <span className="relative inline-flex w-2 h-2 rounded-full bg-sky-400" />
             </span>
             Working now
           </h4>
-          <p className="mt-0.5 text-violet-200">
+          <p className="mt-0.5 text-sky-200">
             {names[t.claim.kwant_id] || owner || 'A bot'} started {ago(t.claim.claimed_at, now)}. If nothing happens, it goes back to Ready {untilText(t.claim.expires_at, now)}.
           </p>
         </section>

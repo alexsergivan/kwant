@@ -53,8 +53,8 @@ export interface WtBot {
   rank?: number;
 }
 
-// H5 mini dots (the sidebar's team rollup colours).
-const RANK_DOT: Record<RollupRank, string> = { 1: 'bg-amber-400', 2: 'bg-rose-400', 3: 'bg-[#38bdf8]', 4: 'bg-teal-400', 5: 'bg-[#9d8fff]' };
+// H5 mini dots (the sidebar's team rollup colours). Review (3) is a hollow lavender ring next to working's filled dot.
+const RANK_DOT: Record<RollupRank, string> = { 1: 'bg-amber-400', 2: 'bg-rose-400', 3: 'border-[1.5px] border-sky-300 bg-transparent', 4: 'bg-teal-400', 5: 'bg-[#9d8fff]' };
 
 export function useWorktrees(space: string, on: boolean): WorktreesData {
   const data = useSyncExternalStore(worktreeStore.subscribe, () => worktreeStore.get(space), () => worktreeStore.get(space));
@@ -756,7 +756,7 @@ const CreateDialog: React.FC<{
   };
 
   const field = 'w-full h-10 rounded-lg border bg-black/30 px-3 text-[13.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300';
-  const seg = (on: boolean) => `text-left rounded-xl border px-3 py-2 ${on ? 'border-violet-400/70 bg-violet-500/15' : 'border-hairline-strong hover:bg-white/[0.04]'} ${ring}`;
+  const seg = (on: boolean) => `text-left rounded-xl border px-3 py-2 ${on ? 'border-sky-400/70 bg-sky-500/15' : 'border-hairline-strong hover:bg-white/[0.04]'} ${ring}`;
   const localBranches = branches?.filter((b) => !b.remote) ?? [];
 
   return (
@@ -816,7 +816,7 @@ const CreateDialog: React.FC<{
                 autoComplete="off"
                 aria-invalid={!!fieldErr || undefined}
                 aria-describedby={fieldErr ? `${ids.err} ${ids.hint}` : ids.hint}
-                className={`${field} font-mono ${fieldErr ? 'border-rose-400/70' : 'border-violet-400/60'}`}
+                className={`${field} font-mono ${fieldErr ? 'border-rose-400/70' : 'border-sky-400/60'}`}
                 data-wt-branch-input
               />
               {fieldErr && (

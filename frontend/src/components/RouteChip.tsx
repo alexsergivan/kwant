@@ -96,7 +96,7 @@ export function useRouteChip(route: RouteInfo | null | undefined): { reason: str
         </div>
       )}
       {sentTo && (
-        <p role="status" className="mb-1.5 text-xs text-emerald-300">
+        <p role="status" className="mb-1.5 text-xs text-ok">
           Sent to {sentTo}. Messages like this will go to {sentTo} from now on.
         </p>
       )}

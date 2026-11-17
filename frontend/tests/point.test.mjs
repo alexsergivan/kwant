@@ -181,7 +181,7 @@ test('layer: keyboard walks from the centre, Enter picks, Esc stops; announced i
   req.calls[0].resolve({ type: 'ack', el: el() });
   await settle();
   assert.equal(host.querySelector('[data-point-tag]').textContent, 'button.pay 328 × 36');
-  assert.match(host.querySelector('[data-point-tag]').className, /\bbg-violet-600\b/, 'tag is violet-600 for AA (M1)');
+  assert.match(host.querySelector('[data-point-tag]').className, /\bbg-sky-600\b/, 'tag is sky-600 for AA (M1)');
   assert.match(view.className, /focus-visible:ring-\[3px\] focus-visible:ring-sky-300/, 'view focus ring (S4)');
   assert.equal(host.querySelector('[data-point-live]').textContent, 'button.pay, 328 by 36, Pay €42.00');
 

@@ -53,7 +53,7 @@ const KEY_DEFAULT = 'https://dashboard.composio.dev';
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[30px] px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 motion-reduce:transition-none';
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-500`;
+const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-700`;
 const roseBtn = `${btn} border border-zinc-700 bg-transparent text-rose-300 hover:bg-rose-500/10 hover:border-rose-500/40`;
 const roseFill = `${btn} border border-rose-500 bg-rose-600 text-white hover:bg-rose-500`;
 const field =
@@ -208,7 +208,7 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
     </span>
   ) : entry.added ? (
     <span
-      className={`px-1.5 py-px rounded-md border text-[11px] ${entry.enabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-zinc-700 text-zinc-300'}`}
+      className={`px-1.5 py-px rounded-md border text-[11px] ${entry.enabled ? 'border-teal-400/30 bg-teal-400/10 text-teal-200' : 'border-zinc-700 text-zinc-300'}`}
       data-composio-chip={entry.enabled ? 'on' : 'off'}
     >
       {entry.enabled ? 'Added · on' : 'Added · off'}
@@ -391,7 +391,7 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
     body = (
       <div className="space-y-3">
         {open === 'switchKey' && (
-          <p className="flex items-start gap-2 px-3 py-2 rounded-lg border border-violet-400/30 bg-violet-500/10 text-xs text-violet-100" data-composio-switch-needs-key>
+          <p className="flex items-start gap-2 px-3 py-2 rounded-lg border border-sky-400/30 bg-sky-500/10 text-xs text-sky-100" data-composio-switch-needs-key>
             <Info size={14} className="mt-px shrink-0" aria-hidden="true" />
             The one-key setup needs your Composio API key. The apps you already connected stay connected.
           </p>
@@ -403,8 +403,8 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
     body = (
       <div className="space-y-2">
         {urlMode && entry.can_switch && (
-          <div className="px-3 py-2.5 rounded-xl border border-violet-400/30 bg-violet-500/10 space-y-2" data-composio-switch>
-            <p className="flex items-start gap-2 text-xs text-violet-100">
+          <div className="px-3 py-2.5 rounded-xl border border-sky-400/30 bg-sky-500/10 space-y-2" data-composio-switch>
+            <p className="flex items-start gap-2 text-xs text-sky-100">
               <Info size={14} className="mt-px shrink-0" aria-hidden="true" />
               Switch to the one-key setup to connect apps right here. Your bots then find any app by themselves, and the apps you already connected stay connected.
             </p>
@@ -464,7 +464,7 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
       )}
 
       {notice && (
-        <p role="status" className="px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-100" data-composio-notice>
+        <p role="status" className="px-3 py-2 rounded-lg border border-teal-400/30 bg-teal-400/10 text-xs text-teal-100" data-composio-notice>
           {notice}
         </p>
       )}

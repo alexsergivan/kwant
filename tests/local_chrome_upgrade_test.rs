@@ -1,6 +1,10 @@
 //! Upgrading kwant with its windowless Chrome still running: kwant 0.9.4 started it with a made-up
 //! `--user-agent` and marked automated (`navigator.webdriver`), which Google refuses to sign in,
 //! so kwant restarts it once as Chrome, and never again after. Skipped when no Chrome is installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use chrome_guard::ChromeGuard;
@@ -15,7 +19,7 @@ async fn an_older_kwants_headless_chrome_is_restarted_once() {
     std::env::remove_var("DISPLAY");
     std::env::remove_var("WAYLAND_DISPLAY");
     let Some(chrome) = computer::local_chrome_path() else {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     };
     let tmp = tempfile::tempdir().unwrap();

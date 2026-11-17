@@ -14,7 +14,7 @@ export const BrowsedChip = React.forwardRef<
   const pages = pagesOfReply(steps);
   if (pages.length === 0) return null;
   const t = browsedChipText(botName, pages, live);
-  const tone = live ? 'bg-emerald-400/[0.08] border-emerald-400/40' : 'bg-sky-400/10 border-sky-400/35';
+  const tone = live ? 'bg-teal-400/[0.08] border-teal-400/40' : 'bg-sky-400/10 border-sky-400/35';
   return (
     <button
       ref={ref}
@@ -25,7 +25,7 @@ export const BrowsedChip = React.forwardRef<
       className={`inline-flex max-w-full min-w-0 items-center gap-1.5 ${phone ? 'h-8' : 'h-7'} pl-2 pr-2.5 rounded-full border ${tone} text-[13px] font-medium text-zinc-100 transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#120e26]`}
     >
       {live ? (
-        <span aria-hidden="true" className="shrink-0 w-2 h-2 rounded-full bg-emerald-400 ring-[3px] ring-emerald-400/20 animate-[pulse_1.2s_ease-in-out_infinite] motion-reduce:animate-none" />
+        <span aria-hidden="true" className="shrink-0 w-2 h-2 rounded-full bg-teal-300 ring-[3px] ring-teal-400/20 animate-[pulse_1.2s_ease-in-out_infinite] motion-reduce:animate-none" />
       ) : (
         <Globe size={14} aria-hidden="true" className="shrink-0 text-sky-300" />
       )}

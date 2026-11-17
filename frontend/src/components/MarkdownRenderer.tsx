@@ -44,8 +44,8 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
         >
           {copied ? (
             <>
-              <Check size={12} className="text-emerald-400" />
-              <span className="text-emerald-400">Copied</span>
+              <Check size={12} className="text-ok" />
+              <span className="text-ok">Copied</span>
             </>
           ) : (
             <>

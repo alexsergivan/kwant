@@ -397,6 +397,9 @@ async fn run(browser_ws: String, ready: tokio::sync::oneshot::Sender<()>) {
 }
 
 #[cfg(test)]
+use crate::test_skip as skip;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -495,7 +498,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn real_chrome_keeps_its_identity() {
-        let Ok(driver) = std::env::var("KWNT_REAL_IDENTITY_DRIVER") else { return };
+        let Some(driver) = skip::opt_in("KWNT_REAL_IDENTITY_DRIVER", "the real Chrome identity check") else { return };
         let headless = std::env::var("KWNT_REAL_HEADED").is_err();
         let profile = tempfile::tempdir().unwrap();
         let (endpoint, windowless) = super::super::computer::ensure_local_chrome(profile.path(), headless).await.unwrap();

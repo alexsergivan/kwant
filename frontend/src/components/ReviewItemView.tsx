@@ -133,7 +133,7 @@ const btnApprove = `${btnBase} bg-accent-gradient text-white aria-disabled:opaci
 const btnQuiet = `${btnBase} border border-hairline-strong bg-white/[0.03] text-zinc-200 hover:bg-white/[0.08] disabled:opacity-50`;
 const btnRose = `${btnBase} border border-rose-400/40 bg-rose-500/[0.06] text-rose-200 hover:bg-rose-500/[0.12] disabled:opacity-50`;
 const btnRoseFill = `${btnBase} bg-rose-600 text-white hover:bg-rose-500 disabled:opacity-50`;
-const btnAllow = `${btnBase} bg-[#059669] text-white hover:bg-emerald-500 disabled:opacity-50`;
+const btnAllow = `${btnBase} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200 disabled:opacity-50`;
 const spin = 'motion-safe:animate-spin';
 
 // ---- Folds: open or closed per section for the session (Mira §3.5), not per item ----
@@ -423,7 +423,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
           )}
           <div className={doneView && item.round.n <= 1 && !showRisk ? 'hidden' : 'flex flex-wrap items-center gap-1.5 text-meta text-zinc-400'}>
             {item.round.n > 1 && (
-              <span className="kw-chip border-violet-400/40 bg-violet-500/15 text-violet-200 !py-0" data-round-chip>
+              <span className="kw-chip border-sky-400/40 bg-sky-500/15 text-sky-200 !py-0" data-round-chip>
                 Round {item.round.n}
               </span>
             )}
@@ -571,7 +571,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
             {notice.undo && (
               <>
                 {' '}
-                <button type="button" onClick={() => setRollOpen({ undoFrom: notice.undo ?? undefined })} className="text-violet-300 underline-offset-2 hover:underline rounded kw-focus kw-hit" data-undo-rollback>
+                <button type="button" onClick={() => setRollOpen({ undoFrom: notice.undo ?? undefined })} className="text-info underline-offset-2 hover:underline rounded kw-focus kw-hit" data-undo-rollback>
                   Undo the roll back
                 </button>
               </>
@@ -579,7 +579,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
             {notice.copy && onOpenTask && (
               <>
                 {' '}
-                <button type="button" onClick={() => onOpenTask(notice.copy!)} className="text-violet-300 underline-offset-2 hover:underline rounded kw-focus kw-hit" data-open-copy>
+                <button type="button" onClick={() => onOpenTask(notice.copy!)} className="text-info underline-offset-2 hover:underline rounded kw-focus kw-hit" data-open-copy>
                   Open the copy
                 </button>
               </>
@@ -606,7 +606,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
             />
           </Sheet>
         ) : (
-          <div className="rounded-2xl border border-violet-400/40 bg-surface-raised p-4 space-y-3 kw-fade-in" data-send-panel>
+          <div className="rounded-2xl border border-sky-400/40 bg-surface-raised p-4 space-y-3 kw-fade-in" data-send-panel>
             <h3 className="flex items-center gap-2 text-body font-semibold text-zinc-100">
               <CornerUpLeft size={15} aria-hidden="true" /> {redoTitle(item.kwant_name)}
             </h3>
@@ -835,15 +835,15 @@ const SendBackForm: React.FC<{
           }
         }}
         rows={3}
-        className="block w-full min-h-[76px] rounded-xl border border-violet-400/40 bg-surface-main px-3 py-2 text-body text-zinc-100 placeholder:text-zinc-500 kw-focus"
+        className="block w-full min-h-[76px] rounded-xl border border-sky-400/40 bg-surface-main px-3 py-2 text-body text-zinc-100 placeholder:text-zinc-500 kw-focus"
         data-send-note
       />
       {!empty && (
         <div className="flex flex-col sm:flex-row sm:items-start gap-1.5 sm:gap-3" data-becomes>
           <span className="shrink-0 text-meta text-zinc-400 sm:pt-2">Becomes criterion {nextCriterionIndex(item.criteria)}:</span>
-          <p className="min-w-0 flex-1 rounded-xl border border-dashed border-violet-400/40 px-3 py-2 text-body text-zinc-100 break-words whitespace-pre-wrap">
+          <p className="min-w-0 flex-1 rounded-xl border border-dashed border-sky-400/40 px-3 py-2 text-body text-zinc-100 break-words whitespace-pre-wrap">
             {note.trim()}{' '}
-            <span className="kw-chip border-violet-400/40 bg-violet-500/15 text-violet-200 !py-0 align-middle">Your note</span>
+            <span className="kw-chip border-sky-400/40 bg-sky-500/15 text-sky-200 !py-0 align-middle">Your note</span>
           </p>
         </div>
       )}
@@ -882,12 +882,12 @@ const RoundBox: React.FC<{ item: ReviewItem }> = ({ item }) => {
     <strong className={s === 'met' ? 'text-ok' : s === 'not_met' ? 'text-bad' : 'text-zinc-300'}>{CRITERION_WORD[s]}</strong>
   );
   return (
-    <section className="rounded-2xl border border-violet-400/40 bg-surface-raised px-4 py-3 space-y-2" aria-label={`Round ${item.round.n}, what changed since round ${item.round.n - 1}`} data-round-box>
+    <section className="rounded-2xl border border-sky-400/40 bg-surface-raised px-4 py-3 space-y-2" aria-label={`Round ${item.round.n}, what changed since round ${item.round.n - 1}`} data-round-box>
       <h3 className="flex items-center gap-1.5 text-body font-semibold text-zinc-100">
         <RotateCcw size={14} aria-hidden="true" /> Round {item.round.n} · what changed since round {item.round.n - 1}
       </h3>
       <p className="text-meta text-zinc-400">You sent it back{at ? ` ${at}` : ''}:</p>
-      <blockquote className="border-l-2 border-violet-400/60 bg-white/[0.03] px-3 py-2 text-body text-zinc-100 break-words whitespace-pre-wrap">{p.note}</blockquote>
+      <blockquote className="border-l-2 border-sky-400/60 bg-white/[0.03] px-3 py-2 text-body text-zinc-100 break-words whitespace-pre-wrap">{p.note}</blockquote>
       <ul className="list-disc pl-5 space-y-0.5 text-meta text-zinc-300">
         {mine && (
           <li>
@@ -905,7 +905,7 @@ const RoundBox: React.FC<{ item: ReviewItem }> = ({ item }) => {
             {item.evidence.pr && (
               <>
                 {' · '}
-                <a href={item.evidence.pr.url} target="_blank" rel="noopener noreferrer" className="text-violet-300 hover:underline rounded kw-focus">
+                <a href={item.evidence.pr.url} target="_blank" rel="noopener noreferrer" className="text-info hover:underline rounded kw-focus">
                   see the changes
                 </a>
               </>
@@ -968,7 +968,7 @@ const CriterionRow: React.FC<{ c: InboxCriterion }> = ({ c }) => {
         <p className="text-body text-zinc-100 break-words">
           {c.text}{' '}
           {c.source === 'person_note' && (
-            <span className="kw-chip border-violet-400/40 bg-violet-500/15 text-violet-200 !py-0 align-middle text-[11px]">Your note · round {c.round_added}</span>
+            <span className="kw-chip border-sky-400/40 bg-sky-500/15 text-sky-200 !py-0 align-middle text-[11px]">Your note · round {c.round_added}</span>
           )}
           {c.source === 'must_not_change' && <span className="kw-chip !py-0 align-middle text-[11px]">Must not change</span>}
         </p>
@@ -1034,7 +1034,7 @@ const Evidence: React.FC<{ item: ReviewItem }> = ({ item }) => {
           className="flex items-center gap-3 rounded-xl border border-hairline bg-white/[0.02] px-3 py-2 hover:bg-white/[0.05] kw-focus"
           data-pr-card
         >
-          <GitPullRequest size={16} className="shrink-0 text-violet-300" aria-hidden="true" />
+          <GitPullRequest size={16} className="shrink-0 text-info" aria-hidden="true" />
           <span className="min-w-0 flex-1">
             <span className="block text-body font-semibold text-zinc-100 truncate">
               {e.pr.repo} #{e.pr.number}
@@ -1071,7 +1071,7 @@ const CheckOutput: React.FC<{ c: ReviewItem['evidence']['checks'][number] }> = (
         </pre>
       )}
       {t.more && (
-        <button type="button" onClick={() => setAll((x) => !x)} className="text-meta text-violet-300 hover:underline rounded kw-focus kw-hit" aria-expanded={all}>
+        <button type="button" onClick={() => setAll((x) => !x)} className="text-meta text-info hover:underline rounded kw-focus kw-hit" aria-expanded={all}>
           {all ? 'Show the last 12 lines' : 'Show all'}
         </button>
       )}

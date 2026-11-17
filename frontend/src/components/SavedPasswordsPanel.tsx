@@ -162,7 +162,7 @@ export const PasswordsProblemNotice: React.FC<{ problem: PasswordsProblem; onRet
         <button
           type="button"
           onClick={requestPersonToken}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-700"
         >
           <KeyRound size={12} aria-hidden="true" /> Enter access token
         </button>
@@ -286,7 +286,7 @@ export const SavedLoginRow: React.FC<RowProps> = ({
   return (
     <li
       data-login-row={login.id}
-      className={`p-2.5 rounded-xl border text-xs bg-zinc-900/60 ${onThisPage ? 'border-emerald-500/40' : 'border-zinc-800/80 hover:border-zinc-700'}`}
+      className={`p-2.5 rounded-xl border text-xs bg-zinc-900/60 ${onThisPage ? 'border-teal-400/40' : 'border-zinc-800/80 hover:border-zinc-700'}`}
     >
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -294,7 +294,7 @@ export const SavedLoginRow: React.FC<RowProps> = ({
             {site}
           </span>
           {onThisPage && (
-            <span className="px-1.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[9px] font-mono flex-shrink-0">This page</span>
+            <span className="px-1.5 rounded bg-teal-400/10 text-ok border border-teal-400/20 text-[9px] font-mono flex-shrink-0">This page</span>
           )}
         </div>
         <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -325,7 +325,7 @@ export const SavedLoginRow: React.FC<RowProps> = ({
         <span className="text-[11px] font-mono text-zinc-300 truncate">{login.username || <span className="text-zinc-500 font-sans">No username</span>}</span>
         {login.username && (
           <button type="button" onClick={() => copy(login.username, 'user')} aria-label="Copy username" className="text-zinc-500 hover:text-zinc-200 p-1 ml-1">
-            {copied === 'user' ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+            {copied === 'user' ? <Check size={11} className="text-ok" /> : <Copy size={11} />}
           </button>
         )}
       </div>
@@ -337,7 +337,7 @@ export const SavedLoginRow: React.FC<RowProps> = ({
         <div className="flex items-center gap-0.5 ml-1 flex-shrink-0">
           {revealed !== null && (
             <button type="button" onClick={() => copy(revealed, 'pass')} aria-label="Copy password" className="text-zinc-500 hover:text-zinc-200 p-1">
-              {copied === 'pass' ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+              {copied === 'pass' ? <Check size={11} className="text-ok" /> : <Copy size={11} />}
             </button>
           )}
           <button
@@ -585,7 +585,7 @@ export const SavedPasswordsPanel: React.FC<{
 
       <div className="p-2 rounded-lg bg-zinc-900/40 border border-zinc-800/60 space-y-1.5 text-[10px] text-zinc-400">
         <div className="flex items-start gap-2">
-          <ShieldCheck size={14} className="text-emerald-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
+          <ShieldCheck size={14} className="text-ok flex-shrink-0 mt-0.5" aria-hidden="true" />
           <p className="leading-snug">
             <span className="text-zinc-300 font-medium">{bitwarden ? 'Kept in your Bitwarden, locked after every restart.' : 'Encrypted on the server, out of the bots’ folders.'}</span> A login is filled in only on the exact address it was saved for.
           </p>
