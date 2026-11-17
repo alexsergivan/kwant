@@ -1,0 +1,9 @@
+{
+  "_comment": "tools/list as Home Assistant's mcp_server sends it (core dev, Nov 2026): names and annotations only. Its ToolAnnotations default destructive=True, and read tools set only read_only=True.",
+  "tools": [
+    {"name": "GetLiveContext", "annotations": {"readOnlyHint": true, "destructiveHint": true, "openWorldHint": false, "idempotentHint": false}},
+    {"name": "HassGetState", "annotations": {"readOnlyHint": true, "destructiveHint": true, "openWorldHint": false, "idempotentHint": false}},
+    {"name": "HassTurnOn", "annotations": {"openWorldHint": false}},
+    {"name": "HassTurnOff", "annotations": {"idempotentHint": true, "openWorldHint": false}}
+  ]
+}

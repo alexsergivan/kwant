@@ -40,7 +40,7 @@ card_art: avatar:qa
 <ul>
   <li><strong>Shell commands</strong> in the bot's folder that a fail-closed allowlist recognises as safe: file and text tools like <code>ls</code>, <code>cat</code> or <code>jq</code>, and build tools like <code>cargo</code>, <code>npm</code>, <code>make</code> or <code>git</code>, with checks. Network tools, <code>sudo</code>, containers, <code>git push</code>, package installs, <code>npx</code>, inline code, and any path outside the folder still ask.</li>
   <li><strong>Reads</strong> outside the folder, unless they touch system data or anything that looks like a credential: <code>.ssh</code>, <code>.aws</code>, <code>.env</code> files, key files, browser profiles, shell histories and more.</li>
-  <li><strong>MCP tools</strong> the server marks read-only and not destructive.</li>
+  <li><strong>MCP tools</strong> the server marks read-only.</li>
 </ul>
 <p id="packages">Since 0.7.4, adding a package the project doesn't list yet asks first, because it downloads code that runs on your computer: <code>npm install &lt;name&gt;</code>, <code>pnpm add</code>, <code>yarn add</code>, <code>bun add</code>, <code>cargo add</code>, <code>uv add</code>, <code>poetry add</code>, <code>go get</code> and <code>dotnet add package</code>. An option or a workspace name in front can't hide it. A plain <code>npm install</code> of what the project already lists still runs on its own. Starters like <code>npm create vite</code>, <code>npx</code>, <code>npm exec</code> and <code>npm x</code> ask too.</p>
 <figure>
