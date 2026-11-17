@@ -3,6 +3,9 @@
 //! wait; one that is only slow to open its port still starts.
 #![cfg(unix)]
 
+#[path = "support/skip.rs"]
+mod skip;
+
 use kwnt::sandbox::computer::{self, CHROME_PATH_ENV};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -47,7 +50,7 @@ async fn a_chrome_that_exits_at_once_fails_fast_with_its_last_line() {
 async fn a_chrome_that_is_only_slow_still_starts() {
     let _env = ENV.lock().await;
     if std::process::Command::new("python3").arg("--version").output().is_err() {
-        eprintln!("skipped: no python3 for the slow fake Chrome");
+        skip::skip_or_fail("python3 (for the slow fake Chrome)", "install python3");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();

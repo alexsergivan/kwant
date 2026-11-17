@@ -4,6 +4,10 @@
 //! The shell bots' `/act` API can't show a card, so it refuses those and does nothing.
 //! Skipped when no Chrome is installed. `saucedemo_checkout_asks_before_finish` (ignored, needs
 //! the network) walks a real demo shop to its last step.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -149,7 +153,7 @@ async fn post_act(app: &Router, bot: &str, body: Value) -> (StatusCode, Value) {
 #[tokio::test]
 async fn the_page_decides_whether_a_browser_click_pays() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -192,7 +196,7 @@ async fn the_page_decides_whether_a_browser_click_pays() {
 #[tokio::test]
 async fn space_on_a_focused_button_asks_like_enter() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -224,7 +228,7 @@ async fn space_on_a_focused_button_asks_like_enter() {
 #[tokio::test]
 async fn approvals_off_still_cards_a_card_form_click_and_the_shell_api_refuses_it() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -283,7 +287,7 @@ async fn approvals_off_still_cards_a_card_form_click_and_the_shell_api_refuses_i
 #[ignore]
 async fn saucedemo_checkout_asks_before_finish() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
