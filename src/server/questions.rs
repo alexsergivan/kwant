@@ -155,7 +155,8 @@ async fn close_via(state: &AppState, id: &str, status: &str, answer: Option<&str
         let _ = state.db.set_answered_via("questions", id, via).await;
     }
     // Nothing waits on the person for it any more, and its reminder (if not sent yet) never goes out
-    let _ = state.db.close_waiting_for_question(id).await;
+    let rows = state.db.close_waiting_for_question(id).await.unwrap_or_default();
+    super::waiting::closed(state, &rows, super::waiting::REASON_ANSWERED);
     let q = state.db.get_question(id).await.ok().flatten()?;
     changed(state, &q).await;
     if status == "answered" {

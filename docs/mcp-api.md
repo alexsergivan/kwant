@@ -377,8 +377,9 @@ bad app name; 409 when Composio isn't added, has no key, the key is refused, or 
 ### Approvals
 
 Every MCP tool call needs approval through the permission broker, for both agent kinds, unless the
-bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHint: true` without
-`destructiveHint: true` (see [approvals.md](approvals.md)):
+bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHint: true`, whatever
+`destructiveHint` says (the MCP spec reads it only when `readOnlyHint` is false; see
+[approvals.md](approvals.md)):
 
 1. kwnt emits the SSE event
    `{"type":"ApprovalRequired","data":{"id":"<ticket>","tool_name":"mcp__echo__echo","details":{"source":"mcp","server":"echo","tool":"echo","arguments":{…},"kwant_id":"…","kwant_name":"…"}}}`

@@ -56,7 +56,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
       </span>
     ) : status === 'timed_out' ? (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
-        <Clock size={13} className="shrink-0" aria-hidden="true" /> Nobody solved it in time. {kwantName} moved on without it.
+        <Clock size={13} className="shrink-0" aria-hidden="true" /> Nobody solved it in time. {kwantName} moved on without it. If you finished, say so in the chat.
       </span>
     ) : status === 'done' ? (
       <span className="inline-flex items-center gap-1.5 text-emerald-300">
@@ -69,6 +69,11 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
     ) : status === 'cancelled' ? (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
         <MinusCircle size={13} className="shrink-0" aria-hidden="true" /> Closed: the reply was stopped.
+      </span>
+    ) : !open ? (
+      // A closed status this card has no line for (a newer server's): say it's closed, never "Press Done" with no Done button (23d)
+      <span className="inline-flex items-center gap-1.5 text-zinc-400">
+        <MinusCircle size={13} className="shrink-0" aria-hidden="true" /> This step is closed.
       </span>
     ) : waiting ? (
       <span className="inline-flex items-center gap-1.5 text-amber-300">
@@ -105,8 +110,9 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
             {open ? ' needs you in the browser' : ' asked for you in the browser'}
             {view.source === 'auto' && ' · spotted automatically'}
           </p>
-          <h3 id={headingId} className="text-sm font-semibold text-zinc-100">
-            {text.heading}
+          {/* Closed: the step's name, quieter, so it reads (and is announced) as done, not as an ask (22v). */}
+          <h3 id={headingId} className={`text-sm font-semibold ${open ? 'text-zinc-100' : 'text-zinc-300'}`}>
+            {open ? text.heading : text.closedHeading}
           </h3>
           {view.reason && <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words leading-snug">{view.reason}</p>}
           {domain && (

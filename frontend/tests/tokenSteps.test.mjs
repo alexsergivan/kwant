@@ -7,10 +7,10 @@ import { loadBundled } from './bundle.mjs';
 const m = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
-  import { OWN_TOKEN_HINT, OtherSetups, TokenForm, WRONG_TOKEN, isLoopback, selectForRetry, tokenFromPaste, tunnelCommand } from './src/components/AuthGate';
-  import { LINK_SPENT } from './src/auth';
-  export { LINK_SPENT, OWN_TOKEN_HINT, WRONG_TOKEN, isLoopback, selectForRetry, tokenFromPaste, tunnelCommand };
-  export const form = (notice = null) => renderToStaticMarkup(React.createElement(TokenForm, { notice, onSignedIn: () => {} }));
+  import { HINT_WRONG_TOKEN, OWN_TOKEN_HINT, OtherSetups, TokenForm, WRONG_TOKEN, isLoopback, selectForRetry, tokenFromPaste, tunnelCommand, wrongTokenError } from './src/components/AuthGate';
+  import { LINK_SPENT, signinHintOf } from './src/auth';
+  export { HINT_WRONG_TOKEN, LINK_SPENT, OWN_TOKEN_HINT, WRONG_TOKEN, isLoopback, selectForRetry, signinHintOf, tokenFromPaste, tunnelCommand, wrongTokenError };
+  export const form = (notice = null, extra = {}) => renderToStaticMarkup(React.createElement(TokenForm, { notice, onSignedIn: () => {}, ...extra }));
   export const other = (loc, docker = false) => renderToStaticMarkup(React.createElement(OtherSetups, { loc, docker }));
 `);
 
@@ -97,4 +97,78 @@ test('after a wrong token the box is focused and selected, so the next paste rep
   m.selectForRetry({ focus: () => calls.push('focus'), select: () => calls.push('select') });
   assert.deepEqual(calls, ['focus', 'select']);
   assert.doesNotThrow(() => m.selectForRetry(null));
+});
+
+// 24f: an app store (Umbrel, CasaOS, Coolify, Render) sets the token and says where it shows it.
+const UMBREL = 'Use the password Umbrel shows on kwnt\'s app page. <b>not html</b>';
+
+test('a store hint leads: its words, then the token box open, before the device code and the link', () => {
+  const html = m.form(null, { signinHint: UMBREL, deviceLogin: true });
+  const t = text(html);
+  assert.match(html, /data-testid="kwnt-signin-hint"/);
+  assert.match(t, /Use the password Umbrel shows on kwnt's app page\. <b>not html<\/b>/, 'shown as text, never as markup');
+  assert.ok(!html.includes('<b>not html</b>'));
+  const fold = html.indexOf('<details');
+  const box = html.indexOf('id="kwnt-token"');
+  assert.ok(box > 0 && box < fold, 'the token box is outside the fold');
+  assert.equal(html.split('id="kwnt-token"').length, 2, 'one token box');
+  assert.ok(html.indexOf('kwnt-signin-hint') < box);
+  assert.ok(t.indexOf('Umbrel shows') < t.indexOf('kwnt signin-link'));
+  // The fold still has the shell ways in, for people who have one
+  assert.match(text(html.slice(fold)), /cat ~\/\.kwnt\/api-token|docker compose exec kwnt kwnt token --raw/);
+});
+
+test('with a hint, the device button and the link command are not above Other setups', () => {
+  for (const deviceLogin of [true, false]) {
+    const html = m.form(null, { signinHint: UMBREL, deviceLogin });
+    const fold = html.indexOf('<details');
+    const above = text(html.slice(0, fold));
+    const inside = text(html.slice(fold));
+    assert.ok(!/Sign in from another device|signin-link|one-time sign-in link/.test(above), `nothing above the fold (deviceLogin ${deviceLogin}): ${above}`);
+    // In the fold: the device code first, then the link starting with "Open", then the shell token commands
+    assert.match(inside, /Open the one-time sign-in link/);
+    assert.ok(!/Or open/.test(inside));
+    assert.match(inside, /kwnt signin-link/);
+    assert.ok(inside.indexOf('one-time sign-in link') < inside.indexOf('Get the access token'));
+    if (deviceLogin) assert.ok(inside.indexOf('Sign in from another device') < inside.indexOf('one-time sign-in link'));
+    else assert.ok(!inside.includes('Sign in from another device'));
+    // hint -> token box -> Other setups -> footer
+    const order = ['kwnt-signin-hint', 'id="kwnt-token"', '<details', 'Stays signed in for a year'].map((k) => html.indexOf(k));
+    assert.ok(order.every((i, n) => i >= 0 && (n === 0 || i > order[n - 1])), String(order));
+  }
+});
+
+test('with a hint, a wrong token points back to the hint; without one the error is unchanged', () => {
+  assert.equal(m.HINT_WRONG_TOKEN, "That isn't this install's token. Copy it again from the place named above.");
+  assert.equal(m.wrongTokenError(UMBREL), m.HINT_WRONG_TOKEN);
+  assert.equal(m.wrongTokenError(null), m.WRONG_TOKEN);
+});
+
+test('the token box and Continue are 44 px tall on a phone, unchanged from sm up', () => {
+  const html = m.form(null, { signinHint: UMBREL });
+  assert.match(html, /<input id="kwnt-token"[^>]*class="[^"]*min-h-\[44px\] sm:min-h-0/);
+  assert.match(html, /<button type="submit"[^>]*class="[^"]*min-h-\[44px\] sm:min-h-0/);
+});
+
+test('without a hint the screen is unchanged: the device code and the link lead, "Or open" after the button', () => {
+  const t = text(m.form(null, { deviceLogin: true }));
+  assert.ok(t.indexOf('Sign in from another device') < t.indexOf('Or open the one-time sign-in link'));
+  assert.ok(t.indexOf('kwnt signin-link') < t.indexOf('Other setups'));
+});
+
+test('without a hint the screen is unchanged: the box stays folded', () => {
+  for (const hint of [undefined, null, '']) {
+    const html = m.form(null, { signinHint: hint });
+    assert.ok(!html.includes('kwnt-signin-hint'), String(hint));
+    assert.ok(html.indexOf('id="kwnt-token"') > html.indexOf('<details'), String(hint));
+  }
+});
+
+test('the hint from the status answer: text only, trimmed, null when missing or odd', () => {
+  assert.equal(m.signinHintOf({ signin_hint: '  Copy KWNT_API_TOKEN from Render. ' }), 'Copy KWNT_API_TOKEN from Render.');
+  assert.equal(m.signinHintOf({ signin_hint: null }), null);
+  assert.equal(m.signinHintOf({}), null, 'a server without a hint leaves the field out');
+  assert.equal(m.signinHintOf({}), null);
+  assert.equal(m.signinHintOf({ signin_hint: '   ' }), null);
+  assert.equal(m.signinHintOf({ signin_hint: 42 }), null);
 });

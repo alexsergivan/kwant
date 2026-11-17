@@ -1047,7 +1047,9 @@ fn execute_single_turn(
 /// Runs a routine's turn as if the user had sent `prompt` to `kwant` in `thread_id`, in
 /// `channel_id` or in their direct chat: same team context, workspace, approvals and profile failover, and the
 /// chat's stop button cancels it. The prompt message must already be saved. Returns the id of
-/// the kwant's reply, or `Err` with why there is none.
+/// the kwant's reply, or `Err` with why there is none. Every reply of the turn (its busy retries
+/// and automatic continuation too) has `run_id` in its meta under
+/// [`super::scheduler::ROUTINE_RUN_KEY`], so the run reads only its own steps (26b D1).
 pub(super) async fn run_routine_turn(
     state: &AppState,
     kwant: &Kwant,
@@ -1055,10 +1057,16 @@ pub(super) async fn run_routine_turn(
     thread_id: Option<String>,
     prompt: String,
     routine_name: &str,
+    run_id: &str,
 ) -> Result<Option<String>, String> {
     // 0.9.5: nobody watches a routine run, so a busy browser step it ends on is retried here,
     // bounded (see [`super::busy_retry::unwatched`]); a run that still ends busy fails to the Inbox
-    let opts = || TurnOpts { source: Some(super::bot_status::TurnSource::routine(routine_name)), ..TurnOpts::default() };
+    let key = super::scheduler::ROUTINE_RUN_KEY;
+    let opts = || TurnOpts {
+        source: Some(super::bot_status::TurnSource::routine(routine_name)),
+        extra_meta: Some(serde_json::json!({ key: run_id })),
+        ..TurnOpts::default()
+    };
     run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, true, Vec::new()).await
 }
 
@@ -1100,10 +1108,12 @@ async fn run_turn_with(
         super::busy_retry::unwatched(scope, &kwant.name, &prompt, |p, slot| {
             let mut o = opts();
             o.busy_slot = Some(slot.clone());
+            // The continuation's reply is the same turn's, so it keeps the turn's extra meta
+            let extra_meta = o.extra_meta.clone();
             // boxed, so the retry loop around the turn adds no stack to it
             async move {
                 let reply = Box::pin(try_kwant_turn(scope, kwant, p, o)).await;
-                Box::pin(continue_once_if_capped_into(scope, kwant, reply, None, Some(&slot))).await
+                Box::pin(continue_once_if_capped_into(scope, kwant, reply, None, Some(&slot), extra_meta)).await
             }
         })
         .await
@@ -1153,17 +1163,19 @@ pub(super) async fn continue_once_if_capped(
     first: Result<String, String>,
     started_by: Option<&str>,
 ) -> Result<String, String> {
-    continue_once_if_capped_into(scope, kwant, first, started_by, None).await
+    continue_once_if_capped_into(scope, kwant, first, started_by, None, None).await
 }
 
 /// [`continue_once_if_capped`] for an unwatched turn: the continuation, when there is one, is the
-/// turn that ended last, so only its busy step (if any) is left in `busy_slot`.
+/// turn that ended last, so only its busy step (if any) is left in `busy_slot`. `extra_meta` is
+/// the first turn's [`TurnOpts::extra_meta`], saved on the continuation's reply too.
 pub(super) async fn continue_once_if_capped_into(
     scope: &TurnScope,
     kwant: &Kwant,
     first: Result<String, String>,
     started_by: Option<&str>,
     busy_slot: Option<&super::busy_retry::Slot>,
+    extra_meta: Option<serde_json::Value>,
 ) -> Result<String, String> {
     let Ok(text) = &first else {
         return first;
@@ -1180,6 +1192,7 @@ pub(super) async fn continue_once_if_capped_into(
         always_ask: started_by.is_some(),
         started_by: started_by.map(str::to_string),
         busy_slot: busy_slot.cloned(),
+        extra_meta,
         ..Default::default()
     };
     match try_kwant_turn(scope, kwant, CONTINUE_PROMPT.to_string(), opts).await {
@@ -2257,9 +2270,10 @@ pub(super) async fn try_kwant_turn(
     super::delivery_check::after_turn(first, Some(prompt), scope.cancel_token.is_cancelled(), again).await
 }
 
-/// Set in the meta of a "user" message a bot sent through the chat API (its turn token, not the
-/// person's): its words are never read as the person's (see [`person_words`]).
-pub(crate) const SENT_BY_BOT: &str = "sent_by_bot";
+// Set in the meta of a "user" message a bot sent through the chat API (its turn token, not the
+// person's): its words are never read as the person's (see `person_words`). Drivers own it, so
+// the history a bot reads frames such a message too (22n).
+pub(crate) use crate::drivers::{SENT_BY_BOT, SENT_BY_BOT_NAME, SENT_BY_KWANT_ID};
 
 /// The person's own words this turn answers, which the delivery check reads what they expect
 /// from: the saved message the prompt was built from, never the prompt itself (kwnt adds
@@ -2272,13 +2286,9 @@ fn person_words(person_turn: bool, current: Option<&Message>) -> Option<&str> {
 
 /// `m` is the person's own message: a "user" message that neither a connected outside agent nor
 /// a bot (through the chat API, [`SENT_BY_BOT`]) sent. The one filter for the delivery plan's
-/// current and earlier messages.
+/// current and earlier messages; the same as [`crate::drivers::from_person`].
 pub(crate) fn is_persons(m: &Message) -> bool {
-    if m.sender_role != "user" || crate::drivers::from_outsider(m) {
-        return false;
-    }
-    let meta: Option<serde_json::Value> = m.meta.as_deref().and_then(|s| serde_json::from_str(s).ok());
-    !meta.as_ref().is_some_and(|v| v[SENT_BY_BOT] == true)
+    crate::drivers::from_person(m)
 }
 
 /// The turn's one delivery plan (P9/P10): the prompt's "[What to deliver]" hint and the delivery
@@ -3014,6 +3024,7 @@ async fn run_kwant_turn_inner(
             workspace: workspace_dir.clone(),
             sandbox_target: Some(sandbox_target.clone()),
             repeats: Default::default(),
+            folder_tools: Default::default(),
         };
         // A replay works in its own scratch browser and asks nobody
         let _turn_on_browser = opts.rehearse.is_none().then(|| state.human_steps.track_turn(&sandbox_target, turn_scope.clone()));
@@ -3448,6 +3459,8 @@ async fn run_kwant_turn_inner(
                     break;
                 }
             };
+            // #715: an API engine has no file tools of its own, so this attempt offers the bot's folder
+            turn_scope.folder_tools.store(driver.needs_folder_tools(), std::sync::atomic::Ordering::Relaxed);
             // The model for the engine this attempt runs on: the pinned one, else the effort's tier
             let runs_on = host_engine.or_else(|| profile.as_ref().and_then(super::profile_turn::profile_engine));
             let custom = profile.as_ref().filter(|p| p.kind == "custom_api");
@@ -4186,7 +4199,7 @@ pub async fn send_chat(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
-    Json(payload): Json<SendChatPayload>,
+    Json(mut payload): Json<SendChatPayload>,
 ) -> axum::response::Response {
     use super::spaces::RowKind;
     // An explicit ?space= must match every row the body names (a thread overrides the others)
@@ -4205,6 +4218,14 @@ pub async fn send_chat(
         return super::reactions::error(status, msg);
     }
     let from_person = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "").await.is_ok();
+    // 22q: a bot's message is saved with the name and id of the bot whose turn token sent it, so
+    // its frame names that bot, not the `sender_id` it passed (often "user"). Both save paths
+    // (`send_chat_routed`, `send_to_thread`) merge `payload.meta`, which no request can set.
+    if !from_person {
+        if let Some((id, name)) = super::mcp_suggest::calling_bot(&state, &headers).await {
+            merge_meta(&mut payload.meta, Some(&json!({ SENT_BY_BOT_NAME: name, SENT_BY_KWANT_ID: id })));
+        }
+    }
     // The composer's `/idea <text>` goes in the idea jar: no message is saved, no bot sees it
     if let Some(text) = super::idea_jar::slash_idea(&payload.prompt) {
         return idea_from_chat(&state, &headers, &payload, text, from_person).await;

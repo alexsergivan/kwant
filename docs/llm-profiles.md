@@ -37,7 +37,8 @@ didn't say). Overloads and rate limits are retried, not failed over.
 chat API (`openai-chat`: OpenRouter, NVIDIA's `https://integrate.api.nvidia.com/v1`, LM Studio, Agent
 Maestro's `/api/openai/v1`, …) or the
 Anthropic Messages API (`anthropic-messages`: Agent Maestro's `/api/anthropic`). A space can have
-several; they belong to that space only. The base URL is cut back to the API root (a pasted
+several; they belong to that space only. Requests to OpenRouter name kwant as the app
+(https://kwant.si), so they count on OpenRouter's app page. Nothing about you or your space is sent. The base URL is cut back to the API root (a pasted
 `…/chat/completions` or `…/messages` is removed; Anthropic gets `/v1` added), must be http(s), and
 may not carry a user, password, query or fragment, so a key never sits in it. The account is
 checked with `GET {base}/models` when it is created or changed, on `POST …/check`, and again
@@ -99,6 +100,11 @@ as any other user it fails with an error, because it can't find or read the toke
 systemd unit, `sudo cat /var/lib/kwnt/api-token`). Each
 install has its own token, so a token from another computer won't work either. The
 sign-in screen asks where kwant runs (a server, Docker, or this computer) and shows the matching steps.
+`KWNT_SIGNIN_HINT` puts one line of your own at the top of the sign-in screen, before anyone signs
+in, with the token box right under it. App-store listings use it to say where their generated
+password is, e.g. "Use the password Umbrel shows for kwant". It is shown as plain text (no HTML),
+cut to one line of at most 300 characters, and left out entirely if it contains the API token.
+`GET /api/auth/status` returns it as `signin_hint`.
 
 Person-only routes (sign-in links, saved passwords and the vault, answering approval cards, the approvals switch,
 deleting a bot or team, undo, Loose ends, Parallel Universe, letters) refuse a bot's turn token, or

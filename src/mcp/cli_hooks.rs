@@ -8,7 +8,9 @@
 //!   `permissionDecision: "deny"` with the same [`stop_text`](super::repeat_guard::stop_text) as
 //!   kwnt's own tools (18a), so the model reads the same words. Claude runs PreToolUse before its
 //!   permission check, so a stopped call never shows a card.
-//! - `PostToolUse` (claude 2.1.325: a call that worked) clears the call.
+//! - `PostToolUse` (claude 2.1.325: a call that worked) clears the call. 22t: when that call
+//!   changed something ([`changes_something`]: an edit, or a shell command that isn't stopped and
+//!   may write, 23b), every stopped call gets its tries again ([`RepeatGuard::changed`]), so a fixed test runs.
 //! - `PostToolUseFailure` (a call that failed, with its `error` text, e.g. `"Exit code 1\n…"`)
 //!   counts one more identical failure. A call claude or the person denied fires neither event.
 //!
@@ -18,9 +20,10 @@
 
 use super::cli_config::{create_private_dir, ConfigFile};
 use super::repeat_guard::{is_stop_text, RepeatGuard};
+use super::shell_risk;
 use serde_json::{json, Value};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The hook events kwnt asks claude to post.
 pub const HOOK_EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "PostToolUseFailure"];
@@ -96,6 +99,36 @@ pub fn key(tool: &str, input: &Value) -> [u8; 32] {
     }
 }
 
+/// 22t: claude's tools that write files. A read (Read, Grep, Glob, LS, WebFetch…) changes nothing.
+pub const WRITE_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+
+/// 22t: whether a call that worked may have changed what a stopped call would see: a file write,
+/// or a shell command other than a stopped one (Rigel, #693 QA).
+/// [`REPEAT_CEILING`](super::repeat_guard::REPEAT_CEILING) still ends a loop.
+/// 23b: a shell command that only reads inside the turn's folder (`cat a.js`, `git status`,
+/// `ls && grep -n x a.js`, judged by [`shell_risk::reads_only`]) changes nothing either, so
+/// "cat the file, rerun the same failing test" can't loop. With no `command` or no `cwd` (the
+/// payload's working folder) kwnt can't tell, and the call counts as a change, as before.
+pub fn changes_something(guard: &RepeatGuard, tool: &str, key: &[u8; 32], input: &Value, cwd: Option<&str>) -> bool {
+    if WRITE_TOOLS.contains(&tool) {
+        return true;
+    }
+    if tool != "Bash" || guard.check(key).is_some() {
+        return false;
+    }
+    !shell_reads_only(input, cwd)
+}
+
+/// 23b: whether a Bash call's `command` only reads inside `cwd`. `false` when either is missing.
+fn shell_reads_only(input: &Value, cwd: Option<&str>) -> bool {
+    let (Some(command), Some(cwd)) = (input["command"].as_str(), cwd.filter(|c| !c.trim().is_empty())) else {
+        return false;
+    };
+    // reads_only compares real paths: resolve the folder (macOS /var is /private/var)
+    let folder = std::fs::canonicalize(cwd).unwrap_or_else(|_| PathBuf::from(cwd));
+    shell_risk::reads_only(command, &folder)
+}
+
 /// What kwnt does with one hook payload. `Some` is the hook's stdout (a PreToolUse deny);
 /// `None` means no output, and claude goes on as usual.
 pub fn on_event(guard: &RepeatGuard, msg: &Value) -> Option<Value> {
@@ -118,7 +151,11 @@ pub fn on_event(guard: &RepeatGuard, msg: &Value) -> Option<Value> {
             }))
         }
         "PostToolUse" => {
+            let changed = changes_something(guard, tool, &k, &input, msg["cwd"].as_str());
             guard.after(&k, "ok", "");
+            if changed {
+                guard.changed();
+            }
             None
         }
         "PostToolUseFailure" => {
@@ -136,7 +173,7 @@ pub fn on_event(guard: &RepeatGuard, msg: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::repeat_guard::{STOP_PREFIX, REPEAT_LIMIT};
+    use crate::mcp::repeat_guard::{stop_text, REPEAT_CEILING, REPEAT_LIMIT, STOP_PREFIX};
 
     // Shapes recorded from claude 2.1.325 (Nov 15), see autonomy/cli-tools-repeat-guard/impl.md
     fn pre(tool: &str, input: Value) -> Value {
@@ -232,6 +269,217 @@ mod tests {
         for junk in [json!(null), json!({}), json!({"hook_event_name": "PreToolUse"}), json!({"tool_name": "Bash"})] {
             assert_eq!(on_event(&g, &junk), None);
         }
+    }
+
+    // ---- 22t: a stopped call gets its tries again once something changed ----
+
+    const NPM_ERR: &str = "Exit code 1\nFAIL src/sum.test.js\n  expected 3, received 4";
+
+    fn npm(description: &str) -> Value {
+        json!({"command": "npm test", "description": description})
+    }
+
+    /// `npm test` fails the same way 3 times; the 4th is denied.
+    fn npm_fails_three_times(g: &RepeatGuard) {
+        for i in 0..REPEAT_LIMIT {
+            assert_eq!(on_event(g, &pre("Bash", npm("run tests"))), None, "npm test {} runs", i + 1);
+            on_event(g, &failed("Bash", npm("run tests"), NPM_ERR));
+        }
+        assert!(on_event(g, &pre("Bash", npm("again"))).is_some(), "4th npm test denied");
+    }
+
+    #[test]
+    fn a_an_edit_that_worked_lets_the_stopped_test_run_again() {
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        let edit = json!({"file_path": "/w/src/sum.js", "old_string": "a + b + 1", "new_string": "a + b"});
+        assert_eq!(on_event(&g, &pre("Edit", edit.clone())), None);
+        on_event(&g, &worked("Edit", edit));
+        assert_eq!(on_event(&g, &pre("Bash", npm("after the fix"))), None, "the 4th npm test runs after the edit");
+        on_event(&g, &worked("Bash", npm("after the fix")));
+        assert_eq!(on_event(&g, &pre("Bash", npm("once more"))), None);
+        // Write, MultiEdit and NotebookEdit change files too
+        for tool in ["Write", "MultiEdit", "NotebookEdit"] {
+            let g = RepeatGuard::default();
+            npm_fails_three_times(&g);
+            on_event(&g, &worked(tool, json!({"file_path": "/w/x"})));
+            assert_eq!(on_event(&g, &pre("Bash", npm("again"))), None, "{tool} reopens it");
+        }
+        // An edit that failed changed nothing
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        on_event(&g, &failed("Edit", json!({"file_path": "/w/x"}), "String to replace not found in file."));
+        assert!(on_event(&g, &pre("Bash", npm("again"))).is_some());
+    }
+
+    #[test]
+    fn b_a_different_shell_command_that_worked_lets_it_run_again() {
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        let sed = json!({"command": "sed -i 's/a + b + 1/a + b/' src/sum.js", "description": "fix the sum"});
+        assert_eq!(on_event(&g, &pre("Bash", sed.clone())), None);
+        on_event(&g, &worked("Bash", sed));
+        assert_eq!(on_event(&g, &pre("Bash", npm("after sed"))), None, "the 4th npm test runs after sed");
+        // A different shell command that failed changed nothing
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        on_event(&g, &failed("Bash", json!({"command": "sed -i 's/x/y/' nope.js"}), "Exit code 2\nsed: can't read nope.js"));
+        assert!(on_event(&g, &pre("Bash", npm("again"))).is_some());
+    }
+
+    #[test]
+    fn c_a_read_does_not_reopen_it_but_a_later_edit_does() {
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        for (tool, input) in [
+            ("Read", json!({"file_path": "/w/src/sum.js"})),
+            ("Grep", json!({"pattern": "a \\+ b", "path": "/w/src"})),
+            ("Glob", json!({"pattern": "**/*.test.js"})),
+            ("LS", json!({"path": "/w/src"})),
+            ("WebFetch", json!({"url": "https://jestjs.io/docs/expect", "prompt": "toBe"})),
+            ("TodoWrite", json!({"todos": [{"content": "fix sum", "status": "in_progress"}]})),
+        ] {
+            assert_eq!(on_event(&g, &pre(tool, input.clone())), None, "{tool} runs");
+            on_event(&g, &worked(tool, input));
+            let out = on_event(&g, &pre("Bash", npm("again"))).unwrap_or_else(|| panic!("{tool} reopened npm test"));
+            assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(3, NPM_ERR));
+        }
+        // Then the bot really fixes the file
+        on_event(&g, &worked("Edit", json!({"file_path": "/w/src/sum.js", "old_string": "+ 1", "new_string": ""})));
+        assert_eq!(on_event(&g, &pre("Bash", npm("after the fix"))), None);
+    }
+
+    #[test]
+    fn d_with_an_edit_between_every_failure_it_stops_at_the_turn_ceiling() {
+        let g = RepeatGuard::default();
+        for i in 1..=REPEAT_CEILING {
+            assert_eq!(on_event(&g, &pre("Bash", npm(&format!("try {i}")))), None, "npm test {i} runs");
+            on_event(&g, &failed("Bash", npm(&format!("try {i}")), NPM_ERR));
+            on_event(&g, &worked("Edit", json!({"file_path": "/w/src/sum.js", "old_string": format!("v{i}"), "new_string": format!("v{}", i + 1)})));
+        }
+        let out = on_event(&g, &pre("Bash", npm("try 7"))).expect("the 7th npm test is denied");
+        let reason = out["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert_eq!(reason, stop_text(REPEAT_CEILING, NPM_ERR));
+        assert!(reason.contains("already failed 6 times in this turn"), "{reason}");
+        // Neither an edit nor another shell command lifts the ceiling
+        on_event(&g, &worked("Write", json!({"file_path": "/w/src/sum.js"})));
+        on_event(&g, &worked("Bash", json!({"command": "git stash"})));
+        assert!(on_event(&g, &pre("Bash", npm("try 8"))).is_some());
+        // 3 in a row, an edit, 3 in a row: the 6th is the ceiling too
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        on_event(&g, &worked("Edit", json!({"file_path": "/w/a"})));
+        for i in 4..=6 {
+            assert_eq!(on_event(&g, &pre("Bash", npm("t"))), None, "npm test {i} runs");
+            on_event(&g, &failed("Bash", npm("t"), NPM_ERR));
+        }
+        on_event(&g, &worked("Edit", json!({"file_path": "/w/b"})));
+        assert!(on_event(&g, &pre("Bash", npm("t"))).is_some(), "stopped after 6 in the turn");
+    }
+
+    #[test]
+    fn e_a_different_error_still_starts_again_at_1() {
+        let g = RepeatGuard::default();
+        let edit = |i: u32| worked("Edit", json!({"file_path": "/w/src/sum.js", "old_string": format!("v{i}"), "new_string": "x"}));
+        // 5 identical failures with edits between: under the ceiling, so each one ran
+        for i in 1..REPEAT_CEILING {
+            assert_eq!(on_event(&g, &pre("Bash", npm("t"))), None, "npm test {i} runs");
+            on_event(&g, &failed("Bash", npm("t"), NPM_ERR));
+            on_event(&g, &edit(i));
+        }
+        // The fix moved the failure on: a new error counts from 1, for both counts
+        let other = "Exit code 1\nFAIL src/mul.test.js\n  expected 6, received 5";
+        for i in 1..REPEAT_CEILING {
+            assert_eq!(on_event(&g, &pre("Bash", npm("t"))), None, "npm test with the new error {i} runs");
+            on_event(&g, &failed("Bash", npm("t"), other));
+            on_event(&g, &edit(10 + i));
+        }
+        on_event(&g, &failed("Bash", npm("t"), other));
+        let out = on_event(&g, &pre("Bash", npm("t"))).expect("6 of the new error stop it");
+        assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(6, other));
+        // Without edits, the new error still stops at 3, as before
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        on_event(&g, &edit(1));
+        for _ in 0..REPEAT_LIMIT {
+            on_event(&g, &failed("Bash", npm("t"), other));
+        }
+        let out = on_event(&g, &pre("Bash", npm("t"))).expect("3 of the new error in a row");
+        assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(3, other));
+    }
+
+    // ---- 23b: a read-only shell command doesn't give a stopped call its tries again ----
+
+    /// The turn's folder, with the file the bot reads (canonical, as reads_only compares real paths).
+    fn ws() -> (tempfile::TempDir, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.js"), "module.exports = (a, b) => a + b + 1;\n").unwrap();
+        let cwd = tmp.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        (tmp, cwd)
+    }
+    /// A shell command that worked, with claude's `cwd`.
+    fn ran(command: &str, cwd: &str) -> Value {
+        let mut m = worked("Bash", json!({"command": command, "description": "look"}));
+        m["cwd"] = json!(cwd);
+        m
+    }
+
+    #[test]
+    fn f_a_shell_command_that_only_reads_does_not_reopen_it() {
+        let (_tmp, cwd) = ws();
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        for cmd in ["cat a.js", "git status", "git diff", "ls -la && grep -n x a.js", "git log --oneline -3", "head -5 a.js | wc -l"] {
+            assert!(shell_risk::reads_only(cmd, Path::new(&cwd)), "{cmd} is a read for reads_only");
+            assert_eq!(on_event(&g, &pre("Bash", json!({"command": cmd, "description": "look"}))), None, "{cmd} runs");
+            on_event(&g, &ran(cmd, &cwd));
+            let out = on_event(&g, &pre("Bash", npm("again"))).unwrap_or_else(|| panic!("{cmd} reopened npm test"));
+            assert_eq!(out["hookSpecificOutput"]["permissionDecisionReason"], stop_text(3, NPM_ERR), "after {cmd}");
+        }
+        // Then the bot really changes the file
+        on_event(&g, &ran("sed -i 's/ + 1//' a.js", &cwd));
+        assert_eq!(on_event(&g, &pre("Bash", npm("after the fix"))), None, "sed -i reopens it");
+    }
+
+    #[test]
+    fn g_a_shell_command_that_may_write_reopens_it() {
+        let (_tmp, cwd) = ws();
+        for cmd in [
+            "sed -i 's/ + 1//' a.js",
+            "npm install",
+            "git checkout a.js",
+            "echo x > a.js",
+            "cat a.js > b.js",
+            "ls && rm b.js",
+            // Outside the folder reads_only can't vouch for it: it still counts (conservative)
+            #[cfg(unix)]
+            "cat /etc/hosts",
+        ] {
+            assert!(!shell_risk::reads_only(cmd, Path::new(&cwd)), "{cmd} may write for reads_only");
+            let g = RepeatGuard::default();
+            npm_fails_three_times(&g);
+            on_event(&g, &ran(cmd, &cwd));
+            assert_eq!(on_event(&g, &pre("Bash", npm("again"))), None, "{cmd} reopens npm test");
+        }
+    }
+
+    #[test]
+    fn h_without_a_cwd_or_a_command_any_shell_command_still_reopens_it() {
+        let (_tmp, cwd) = ws();
+        // No cwd (worked() has none) or an empty one
+        for msg in [worked("Bash", json!({"command": "cat a.js"})), ran("cat a.js", ""), ran("cat a.js", "  ")] {
+            let g = RepeatGuard::default();
+            npm_fails_three_times(&g);
+            on_event(&g, &msg);
+            assert_eq!(on_event(&g, &pre("Bash", npm("again"))), None, "{msg} reopens npm test");
+        }
+        // No command at all
+        let g = RepeatGuard::default();
+        npm_fails_three_times(&g);
+        let mut m = worked("Bash", json!({"description": "?"}));
+        m["cwd"] = json!(cwd);
+        on_event(&g, &m);
+        assert_eq!(on_event(&g, &pre("Bash", npm("again"))), None);
     }
 
     #[test]

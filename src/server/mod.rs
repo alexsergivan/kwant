@@ -48,6 +48,7 @@ pub mod computer;
 pub mod mcp_directory;
 pub mod mcp_suggest;
 pub mod page_source;
+pub mod bot_files;
 pub mod tool_failures;
 pub mod tool_notes;
 pub mod openai_key;
@@ -134,6 +135,9 @@ pub struct AppState {
     pub self_tools: Arc<Mutex<HashMap<String, continuity::SelfScope>>>,
     /// Routines with a run in progress; a run that would overlap is skipped.
     pub running_routines: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// How long a turn's tool call waits for its approval card, in ms: always
+    /// [`crate::mcp::APPROVAL_TIMEOUT_SECS`]; only tests shorten it (26b).
+    pub approval_wait_ms: Arc<std::sync::atomic::AtomicU64>,
     /// Wakes the scheduler early when routines change.
     pub scheduler_wake: Arc<tokio::sync::Notify>,
     /// `ask_user` calls waiting for the user's answer.
@@ -214,6 +218,9 @@ impl AppState {
             api_token,
             self_tools: Default::default(),
             running_routines: Default::default(),
+            approval_wait_ms: Arc::new(std::sync::atomic::AtomicU64::new(
+                crate::mcp::APPROVAL_TIMEOUT_SECS * 1000,
+            )),
             scheduler_wake: Default::default(),
             questions: Default::default(),
             human_steps: Default::default(),
@@ -524,6 +531,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/attachments/:id", get(attachments::get))
         .route("/api/attachments/:id/content", get(attachments::content))
         .route("/api/waiting", get(waiting::list))
+        .route("/api/waiting/:id/dismiss", post(waiting::dismiss))
         .route("/api/questions", get(questions::list))
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))
