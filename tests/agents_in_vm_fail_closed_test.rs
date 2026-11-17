@@ -8,6 +8,8 @@
 
 #[path = "common/exe.rs"]
 mod exe;
+#[path = "support/skip.rs"]
+mod skip;
 
 use axum::Router;
 use kwnt::{
@@ -204,7 +206,7 @@ async fn every_failure_is_a_notice_and_nothing_runs_on_this_computer() {
         case.refused(&case.run(&vm, Some(&profile), Some(&work)).await, "relay_down", "broker down");
         vm.remove_containers(|_| true).await;
     } else {
-        eprintln!("broker-down case skipped: needs Docker and {}", image_tag());
+        skip::skip_or_fail(&format!("Docker or the agent image {} (for the broker-down case)", image_tag()), skip::AGENT_IMAGE_FIX);
     }
     // A missing folder is never swapped for one on this computer: the shim still never ran
     assert!(!case.marker().exists());

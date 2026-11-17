@@ -2,6 +2,10 @@
 //! submits a form, and letters, Space, Backspace and Tab still do what they do on a keyboard.
 //! Before the fix the bot's Enter went out as a bare `rawKeyDown` with only `key` and `code`:
 //! keydown fired, the form never submitted. Skipped when no Chrome is installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -120,7 +124,7 @@ async fn url_after(ctrl: &BrowserController, wait: Duration) -> String {
 #[tokio::test]
 async fn a_bots_enter_submits_the_form_and_other_keys_still_type() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

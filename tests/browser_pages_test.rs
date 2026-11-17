@@ -8,6 +8,9 @@
 //! DevTools endpoint, where a job page is a new page in the team's browser context) and in Local
 //! mode (a new window of the person's Chrome). Skipped when no Chrome is installed.
 
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -64,7 +67,7 @@ async fn serve() -> String {
 
 async fn start_chrome(profile: &Path) -> Option<(String, ChromeGuard)> {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return None;
     }
     let (endpoint, _) = computer::ensure_local_chrome(profile, true).await.expect("Chrome starts");
@@ -552,7 +555,7 @@ async fn closing_a_pages_connections_keeps_its_sign_in_and_reconnects_the_same_p
 #[tokio::test]
 async fn in_local_mode_a_job_page_is_a_window_of_the_same_chrome_with_its_sign_ins() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let tmp = tempdir().unwrap();

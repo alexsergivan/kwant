@@ -143,12 +143,21 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  # Strict: GitHub sets CI=true, so a test whose precondition is missing (Chrome, ffmpeg, Xvfb, git)
+  # fails instead of printing "skipped" and passing (tests/support/skip.rs). The Docker tests run in
+  # docker-tests; what runs nowhere in CI is listed in tests/NOT_IN_CI.md.
   rust:
     name: rust
     runs-on: ubuntu-latest
     needs: frontend
+    env:
+      KWNT_TEST_REQUIRE: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Test skips go through skip_or_fail
+        run: python3 scripts/check_test_skips.py
+      - name: Test tools
+        run: scripts/ci_docker_tests.sh tools
       # The binary embeds frontend/dist, so the Rust build needs it
       - uses: actions/download-artifact@v4
         with:
@@ -165,7 +174,39 @@ jobs:
       - name: Mac lockfile in sync
         run: cargo metadata --locked --format-version 1 --manifest-path apps/mac/Cargo.toml > /dev/null
       - name: Tests
-        run: cargo test --locked --no-fail-fast
+        run: scripts/ci_docker_tests.sh rust-tests
+      # Proves the rule itself: a browser test with Chrome hidden fails with CI=true and skips without
+      - name: Strict fails, local skips
+        run: scripts/ci_docker_tests.sh both-ways
       - name: Disk usage
         if: always()
         run: df -h / && du -sh target || true
+
+  # The agents-in-VM security tests, the VM browser container and the parallel harness need Docker
+  # and kwant's own images. This job builds them (timed, in the job summary) and runs those tests
+  # strict, so a missing image fails here instead of skipping. In parallel with rust, so its disk
+  # and time stay as they were.
+  docker-tests:
+    name: docker-tests
+    runs-on: ubuntu-latest
+    needs: frontend
+    timeout-minutes: 60
+    env:
+      KWNT_TEST_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: docker-tests
+      - name: Build the images
+        run: scripts/ci_docker_tests.sh images
+      - name: Docker tests (strict)
+        run: scripts/ci_docker_tests.sh run
+      - name: Disk usage
+        if: always()
+        run: df -h / && docker system df && du -sh target || true

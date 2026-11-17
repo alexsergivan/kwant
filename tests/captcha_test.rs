@@ -6,6 +6,9 @@
 //! The browser parts run a real windowless Chrome as the "VM" browser (an external CDP endpoint)
 //! and are skipped when none is installed; the time-out part needs no browser.
 
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -70,7 +73,7 @@ async fn serve_fixtures() -> String {
 /// A windowless Chrome on its own profile, standing in for the VM browser.
 async fn start_chrome(profile: &Path) -> Option<(String, ChromeGuard)> {
     if computer::local_chrome_path().is_none() {
-        eprintln!("browser part skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return None;
     }
     let (endpoint, _) = computer::ensure_local_chrome(profile, true).await.expect("Chrome starts");

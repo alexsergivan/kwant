@@ -1186,6 +1186,9 @@ impl Drop for IsolatedTurn {
 }
 
 #[cfg(test)]
+use crate::test_skip as skip;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1389,15 +1392,14 @@ mod tests {
     /// folder; a normal `git commit` inside still works, and nothing reached the hooks folder on
     /// this computer. Then the #462 review's race, made certain: `.git/hooks` is checked as a real
     /// folder, then swapped for a link to a "secret" folder before `docker run`, and the secret
-    /// must not be readable inside. Needs Docker and the agent image; skips without them unless
-    /// `KWNT_AGENT_TEST_REQUIRE=1`.
+    /// must not be readable inside. Needs Docker and the agent image; skips without them, except in
+    /// CI or with `KWNT_TEST_REQUIRE=1` (`skip_or_fail`).
     #[cfg(target_os = "linux")]
     #[test]
     fn in_a_real_container_a_hook_cant_be_written_but_git_commit_works() {
         use std::process::Command as Std;
         if !Std::new("docker").args(["image", "inspect", &image_tag()]).output().is_ok_and(|o| o.status.success()) {
-            assert!(std::env::var("KWNT_AGENT_TEST_REQUIRE").is_err(), "Docker or the agent image {} is missing", image_tag());
-            eprintln!("skipped: needs Docker and the agent image {}", image_tag());
+            skip::skip_or_fail(&format!("Docker or the agent image {}", image_tag()), skip::AGENT_IMAGE_FIX);
             return;
         }
         let d = tempfile::tempdir().unwrap();
