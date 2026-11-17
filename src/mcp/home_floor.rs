@@ -217,6 +217,9 @@ pub fn filtered(args: &Value) -> bool {
 /// filter, another tool or a call that didn't run. The caller checks that the server is Home
 /// Assistant's.
 pub fn live_context_hint(tool: &str, args: &Value, status: &str) -> Option<&'static str> {
+    if crate::NOFIX_27E {
+        return None;
+    }
     if !is_live_context(tool) || !filtered(args) {
         return None;
     }

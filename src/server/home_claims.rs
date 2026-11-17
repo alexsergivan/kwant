@@ -116,6 +116,9 @@ fn sentence_claims(sentence: &str) -> bool {
 /// The first sentence of `reply` that says, as done or as being done now, that the bot changed
 /// a device in the home; `None` when there is none. Code never counts.
 pub fn claimed_change(reply: &str) -> Option<String> {
+    if crate::NOFIX_27E {
+        return None;
+    }
     sentences(reply).into_iter().find(|s| sentence_claims(s))
 }
 

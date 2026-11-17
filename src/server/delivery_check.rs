@@ -130,7 +130,7 @@ fn home_read(tool: &str) -> bool {
 /// 27e: what the turn did with the Home Assistant servers named `servers`, from its saved
 /// activity (`{"steps": [...]}`). `None` when the turn had none.
 pub fn home_steps_in(activity: Option<&Value>, servers: &[String]) -> Option<HomeSeen> {
-    if servers.is_empty() {
+    if crate::NOFIX_27E || servers.is_empty() {
         return None;
     }
     let mut home = HomeSeen::default();

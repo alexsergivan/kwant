@@ -602,7 +602,7 @@ pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
                 // 27e: nor the Home Assistant read hints
                 crate::mcp::home_floor::HINTS
                     .iter()
-                    .fold(w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, ""), |w, h| w.replace(h, ""))
+                    .fold(w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, ""), |w, h| if crate::NOFIX_27E { w } else { w.replace(h, "") })
                     .trim()
                     .to_string()
             })

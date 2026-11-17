@@ -1,3 +1,5 @@
+/// 27e no-fix control: switches the fix off so CI shows each test failing without it. Never merge.
+pub const NOFIX_27E: bool = true;
 pub mod app_update;
 pub mod automation_discovery;
 pub mod broker;

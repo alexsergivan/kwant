@@ -278,7 +278,7 @@ export const TEMPLATES_WIRE: WireTemplate[] = [
       {
         "id": "local_model",
         "label": "A local model",
-        "why": "Keeps what happens at home on your own computer. A 7B model handles named devices (\"Turn off the living room lamp\"); for questions like \"Is anything left on?\" a larger or cloud model is more reliable.",
+        "why": "Keeps what happens at home on your own computer. A small Ollama model is enough.",
         "required": false,
         "opens": "accounts"
       }
@@ -293,7 +293,7 @@ export const TEMPLATES_WIRE: WireTemplate[] = [
         "owner": "House",
         "name": "Check the house",
         "description": "Looks at the live state of the home and lists what is on, open or running, so the person knows in one glance.",
-        "body": "Goal\nTell the person in one short list what is on, open or running at home, and do only what they ask about it.\n\nWhen to use\n- The Lights out routine runs (every day at 22:00, once the person turns it on).\n- The person asks \"is anything left on?\", \"what's open?\" or \"check the house\".\n\nSteps\n1. Read the live state once with GetLiveContext and no arguments (Look at your home). If it fails, say the check failed and why, and stop.\n2. List, one line each: lights that are on, doors, windows and covers that are open, locks that are unlocked, media that is playing, and the inside temperature if there is a sensor.\n3. If the run is Lights out, turn off each light that is on, one call per light or area, and say which ones you turned off. Leave everything else as it is and only mention it.\n4. If a step fails or waits for the person's OK, say so on its own line. Never say a light is off unless Home Assistant said so.\n5. Never unlock, open a garage or gate, or touch the alarm. Mention open or unlocked ones and let the person decide.\n\nOutput\nA short list, then one line: what you changed, or \"Nothing changed.\""
+        "body": "Goal\nTell the person in one short list what is on, open or running at home, and do only what they ask about it.\n\nWhen to use\n- The Lights out routine runs (every day at 22:00, once the person turns it on).\n- The person asks \"is anything left on?\", \"what's open?\" or \"check the house\".\n\nSteps\n1. Read the live state once (Look at your home).\n2. List, one line each: lights that are on, doors, windows and covers that are open, locks that are unlocked, media that is playing, and the inside temperature if there is a sensor.\n3. If the run is Lights out, turn off each light that is on, one call per light or area, and say which ones you turned off. Leave everything else as it is and only mention it.\n4. If a step fails or waits for the person's OK, say so on its own line. Never say a light is off unless Home Assistant said so.\n5. Never unlock, open a garage or gate, or touch the alarm. Mention open or unlocked ones and let the person decide.\n\nOutput\nA short list, then one line: what you changed, or \"Nothing changed.\""
       }
     ],
     "routine": {
