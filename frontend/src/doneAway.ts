@@ -383,7 +383,7 @@ export function findRun(runs: RoutineRun[], runId: string | null, at: string): R
   if (Number.isNaN(t)) return null;
   return (
     runs
-      .filter((r) => r.status === 'ok' || r.status === 'error')
+      .filter((r) => r.status === 'ok' || r.status === 'error' || r.status === 'needs_you' || r.status === 'incomplete')
       .map((r) => ({
         r,
         d: Math.abs(Date.parse(r.ended_at ?? r.started_at) - t),

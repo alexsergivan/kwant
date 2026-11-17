@@ -63,7 +63,9 @@ export type Schedule =
 
 export type MonthDay = number | 'last';
 
-export type RunStatus = 'running' | 'ok' | 'error' | 'skipped';
+// 26b (#766): `needs_you` is a run whose approval card nobody answered, so nothing ran; `incomplete` is a run
+// with a step that failed and never worked later (its `error` is that step's reason).
+export type RunStatus = 'running' | 'ok' | 'error' | 'skipped' | 'needs_you' | 'incomplete';
 
 export interface Routine {
   id: string;
@@ -621,7 +623,8 @@ export function notificationPermission(): NotificationPermission | 'unsupported'
 
 export type ContinuityEvent =
   | { type: 'memory_changed'; data: { kwant_id: string } }
-  | { type: 'routine_run'; data: { routine_id: string; run_id: string; status: RunStatus } }
+  /** 26b: `waiting` is true while the run's turn waits on an approval card (`approval_id`); missing reads false. */
+  | { type: 'routine_run'; data: { routine_id: string; run_id: string; status: RunStatus; waiting?: boolean; approval_id?: string } }
   | { type: 'skill_updated'; data: Skill | DeletedSkill }
   /** Show it once: `skill_recording_updated` (api.md §5), a recording's state changed. It never carries steps. */
   | { type: 'recording_updated'; data: Recording }

@@ -230,6 +230,8 @@ export const ROUTINE_SKIPPED_TEXT = 'Skipped: today’s spending stop was on.';
 /** A routine run's note: the stop's skip reads plainly, not as an error. */
 export function routineRunNote(r: { status: string; error: string | null }): { text: string; quiet: boolean } | null {
   if (!r.error) return null;
+  // 26d: the run row's badge already says a needs_you run waited on your approval and nothing ran.
+  if (r.status === 'needs_you') return null;
   if (r.status === 'skipped' && isSpendStopReason(r.error)) return { text: ROUTINE_SKIPPED_TEXT, quiet: true };
   return { text: r.error, quiet: false };
 }
