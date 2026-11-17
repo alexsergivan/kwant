@@ -1026,6 +1026,7 @@ mod tests {
             workspace: None,
             sandbox_target: Some("team".into()),
             repeats: Default::default(),
+            folder_tools: Default::default(),
         }
     }
 

@@ -2184,20 +2184,26 @@ mod tests {
     fn latest_never_loses_an_offer_or_runs_twice_under_contention() {
         use std::sync::atomic::AtomicUsize;
         let latest = Arc::new(Latest::new());
-        let (running, most, drained) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (held, most, drained) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         let mut runners = vec![];
         let offerers: Vec<_> = (0..4).map(|t| {
-            let (latest, running, most, drained) = (latest.clone(), running.clone(), most.clone(), drained.clone());
+            let (latest, held, most, drained) = (latest.clone(), held.clone(), most.clone(), drained.clone());
             std::thread::spawn(move || {
                 let mut started = vec![];
                 for i in 0..2000 {
                     if latest.offer(t * 10_000 + i) {
-                        let (latest, running, most, drained) = (latest.clone(), running.clone(), most.clone(), drained.clone());
+                        let (latest, held, most, drained) = (latest.clone(), held.clone(), most.clone(), drained.clone());
                         started.push(std::thread::spawn(move || {
-                            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
-                            most.fetch_max(now, Ordering::SeqCst);
-                            while latest.next().is_some() { drained.fetch_add(1, Ordering::SeqCst); }
-                            running.fetch_sub(1, Ordering::SeqCst);
+                            // count a runner while it holds a value, not for its thread's whole life: a finished
+                            // runner's last steps after its final next() may overlap the next runner's start
+                            while latest.next().is_some() {
+                                let now = held.fetch_add(1, Ordering::SeqCst) + 1;
+                                most.fetch_max(now, Ordering::SeqCst);
+                                // hold the value briefly, so a real second runner would overlap and be seen
+                                std::thread::yield_now();
+                                held.fetch_sub(1, Ordering::SeqCst);
+                                drained.fetch_add(1, Ordering::SeqCst);
+                            }
                         }));
                     }
                 }
