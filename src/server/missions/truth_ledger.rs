@@ -103,8 +103,10 @@ const OUTSIDE_TOOLS: &[&str] = &[
     "execute_shell",
 ];
 
-/// kwant's own tools that read outside text: a page, an attachment, another server's tools.
-const OUTSIDE_SELF_TOOLS: &[&str] = &["read_attachment", "mcp_search", crate::server::page_source::TOOL];
+/// kwant's own tools that read outside text: a page, an attachment, a file in the bot's folder
+/// (put there by the person, or fetched by an earlier turn), another server's tools.
+const OUTSIDE_SELF_TOOLS: &[&str] =
+    &["read_attachment", crate::server::bot_files::READ_FILE, "mcp_search", crate::server::page_source::TOOL];
 
 fn outside_self_tool(tool: &str) -> bool {
     tool.starts_with("browser_") || OUTSIDE_SELF_TOOLS.contains(&tool)

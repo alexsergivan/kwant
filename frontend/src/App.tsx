@@ -37,6 +37,7 @@ import {
   HumanStepMeta,
   applyHumanStep,
   captchaStepFor,
+  closedStepText,
   humanStepsApi,
   latestOpenStep,
   openStepFor,
@@ -2658,9 +2659,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       try {
         const { step } = await humanStepsApi.get(id);
         setHumanSteps((prev) => applyHumanStep(prev, step));
-        if (step.status === 'done') return 'This was already marked done.';
-        if (step.status === 'declined') return 'This was already skipped.';
-        if (step.status === 'cancelled') return 'This was closed: the reply was stopped.';
+        const closed = closedStepText(step.status, which, kwantName(step.kwant_id) ?? 'the bot');
+        if (closed !== undefined) return closed ?? undefined;
       } catch {
         // keep the first error
       }
