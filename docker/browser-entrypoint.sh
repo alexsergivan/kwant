@@ -28,7 +28,10 @@ if [ -n "${KWNT_BROWSER_PROXY:-}" ]; then
 fi
 chromium "$@" about:blank &
 chrome_pid=$!
-socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9223 &
+# max-children caps forked copies so a connection leak runs out of room loudly (ECONNREFUSED) well
+# before it exhausts the container's processes/threads and takes Chromium down with it (#753). No
+# timeout: a site guard or download connection sitting idle is normal, not stuck.
+socat TCP-LISTEN:9222,fork,reuseaddr,max-children=64 TCP:127.0.0.1:9223 &
 proxy_pid=$!
 trap 'kill "$chrome_pid" "$proxy_pid" 2>/dev/null || true' EXIT INT TERM
 wait "$chrome_pid"

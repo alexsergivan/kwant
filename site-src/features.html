@@ -39,6 +39,54 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0920" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.20</p>
+      <h2>Needs attention takes you to the exact ask, and Bots on API engines read files in their own folder</h2>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0920" class="span3"><h3>Smaller changes in 0.9.20</h3><p>Click a Needs-attention row and you land on the exact ask, with a Needs you bar above the message box saying it in full, and the row disappears by itself once it's resolved. Bots on API engines can read the files in their own folder, a page at a time with the line count, and nothing outside it; a customer's turn still asks first. A finished browser step card is headed by a quiet name, like Sign-in or Human check, instead of still saying Sign in needed. If the desktop app can't save a setting, it keeps the old one and tells you to check that ~/.kwnt can be written. You can install kwnt's server and command line on Mac and Linux with `brew install alexsergivan/kwant/kwnt`. Bots no longer lose their browser after a long day: kwant closes browser connections it isn't using, so the browser stops running out of room. Home Assistant's state and timer reads run without asking in "Ask only when risky"; anything that changes a device still asks. You can run kwant from Render, CasaOS, Umbrel or Coolify, and a store install's sign-in screen says where its password is. Only your own messages sit on your side of the chat; a customer's or another bot's message sits on the left.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-0919" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.19</p>
+      <h2>Bot messages never read as yours, and Bot messages name their bot</h2>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0919" class="span3"><h3>Smaller changes in 0.9.19</h3><p>A message a bot sends through the chat API reads as that bot's in every bot's history, never as yours, so other bots don't take it as your instruction and it can't settle a choice for you. A message a bot sends through the chat API now names the bot that sent it, so other bots see who it came from in their history, hand-offs and follow-ups instead of "unnamed". A customer's refused call shows as one quiet line in that customer's chat, with its time, and never in the bot's direct chat. Chat steps shorten Windows file paths the way they shorten Mac ones, so a long client path reads …\acme\contract.md. A step kwant stopped after 3 identical failures runs again once the bot has changed something, up to 6 tries in a turn. A ship command like docker push or npm publish hidden in a tool's text, or a mailing-list sign-up, now opens the full card instead of the island's Allow once. A bot that keeps rerunning the same failing command now stops after 3 tries even when only the timings, ids or ports in its error change. A shell command that only reads (cat, ls, grep, git status) no longer gives a stopped step 3 more tries; an edit still does. A Telegram customer's message reads "Ann (customer)" and a bot's reads "Scout (bot)", each with its own letter, instead of "You" with your picture. Requests to OpenRouter now name kwant as the app (https://kwant.si), so kwant's use shows on OpenRouter's app page and rankings.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-0918" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.18</p>
+      <h2>A team is named once, never "… team team", and Audio files up to 100 MB in the chat</h2>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0918" class="span3"><h3>Smaller changes in 0.9.18</h3><p>A team named like "Marketing_Team" or "SalesTeam" reads "@Marketing_Team" in the sidebar, team home, message box and drop heading, never "… team team". You can drop MP3, M4A, AAC, WAV, OGG/Opus and FLAC files up to 100 MB into a chat, and a bot can upload them on a page for you. The bot browser's live preview no longer flashes white or grey while a page loads; it keeps the last picture until the new page shows. A browser step card that is done, skipped or timed out stops saying the bot needs you; it reads "<name> asked for you in the browser" in grey, so only open cards ask. On a phone, a reply's buttons line up on one row, result buttons get their own row, the empty gap is gone, and the Ask: row shows a neat dot when a bot needs you. A production deploy card that can't tell whether the database changes offers Set backup command, and Allow without a backup after a confirm, instead of only Deny. A customer's refused call now remembers the chat it happened in, and the approvals list links each one to that chat, so it can show in the right conversation. A bot whose step keeps failing stops once with a Blocked card naming the step and its error, instead of repeating the same reply and asking Keep going?</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-0917" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.17</p>
+      <h2>Kwant bots on your phone, and team chips that name the team once</h2>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0917" class="span3"><h3>Smaller changes in 0.9.17</h3><p>Settings › All spaces starts with a card that puts kwant bots on your phone in three steps, and the sidebar tip points to it. The Ask: row's team chip names the team once, long team names stay inside their pill, and Approve puts your keyboard back in the message box. Once a bot starts writing, its steps fold into one row under the reply, so nothing jumps when the reply lands. In Manage team, "Pick a repo" puts the cursor in the Repo URL field every time, even when the app is busy. A mail draft, page or note that only mentions a release, merge or deploy in a sentence, or a read like getting a GitHub release, keeps Allow once on the desktop island; commands, branches and tags still need the full card. After a failed step, a reply that asks you to pick, like "Let me know which one you want to keep" or "…, or which file to use", now shows Blocked; polite closing lines still don't. On the Claude engine, a bot whose own command or file read keeps failing the same way stops after three tries and changes course or says what's blocked, as it already did for kwant's tools. The desktop island names only the file a bot reads or edits, like "Reading contract.md", never its folders, so client folder names stay off a shared screen; the chat is unchanged. Import history, a check's time and the goal squares' tooltips read dates like the rest of kwant ("Nov 15, 3:42 PM"), and the terminal log's times stay on one line. A bot that can't get a file itself, such as a download its browser couldn't keep, asks you to drop it into the chat and uploads it on the page itself, instead of handing you the page. When kwant asks a lead to keep going, it quotes only your own messages, never a bot's or a customer's, and a hand-off from a customer-only chat carries their words marked as theirs. On the desktop island, writes whose names sound like reads, such as retrying a payment, posting a status or subscribing someone to a mailing list, keep the full card; plain reads like getting a payment status keep Allow once.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-0916" class="fgroup">
   <div class="wrap">
     <div class="section-head">
@@ -1467,7 +1515,7 @@ card_art: team
       </article>
       <article class="gcard">
         <div class="frame">{{shot:v2-import|The Import bots into Trailhead Outfitters dialog: bring a bot from Grok, ChatGPT, Claude or another app, or upload one or several files.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude or a file, with no tools or keys. <a href="alternatives/grok-bot.html">Coming from Grok Bot?</a></p>
+        <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude, OpenClaw, Hermes Agent or a file, with no tools or keys. Coming from <a href="alternatives/grok-bot.html">Grok Bot</a>, <a href="alternatives/openclaw.html">OpenClaw</a> or <a href="alternatives/hermes-agent.html">Hermes Agent</a>?</p>
       </article>
       <article class="gcard">
         <div class="frame">{{shot:desktop-handoff|The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>

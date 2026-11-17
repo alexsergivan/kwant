@@ -40,6 +40,7 @@ MEDIA = ROOT / "site" / "assets" / "media"
 GUIDE_PAGES = {
     "payments": "flight-school.html#payments",
     "saved-passwords": "approvals.html",
+    "self-host-stores": "install.html#stores",
 }
 
 HEAD = re.compile(r"^## \[Mac (\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}\s*$", re.M)

@@ -20,7 +20,10 @@ chromium \
   --enable-features=PasswordImport,AutofillServerCommunication \
   --disable-blink-features=AutomationControlled &
 
-# Proxy incoming port 9222 from container network to local Chromium on 9223
-socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9223 &
+# Proxy incoming port 9222 from container network to local Chromium on 9223.
+# max-children caps forked copies so a connection leak runs out of room loudly (ECONNREFUSED) well
+# before it exhausts the container's processes/threads and takes Chromium down with it (#753). No
+# timeout: a site guard or download connection sitting idle is normal, not stuck.
+socat TCP-LISTEN:9222,fork,reuseaddr,max-children=64 TCP:127.0.0.1:9223 &
 
 exec sleep infinity

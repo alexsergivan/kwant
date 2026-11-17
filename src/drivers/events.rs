@@ -174,6 +174,15 @@ pub enum RuntimeEvent {
     /// `crate::db::human_steps`.
     #[serde(rename = "human_step_updated", alias = "HumanStepUpdated")]
     HumanStepUpdated { step: Value },
+    /// 22i: an item in Needs you opened or closed, so clients refresh it live (the Needs-you
+    /// list and the badge re-read `GET /api/away`). `item` is `{id, kind, status, reason,
+    /// kwant_id, channel_id, direct_kwant_id, thread_id}`: `kind` "stopped", "reply" or
+    /// "question" (a waiting item), "delegation" or "routine_run" (a failed or stuck one);
+    /// `status` "open" or "closed"; `reason` why it closed ("later_reply", "person_wrote",
+    /// "answered", "replaced", "resumed", "place_gone", "dismissed"), `null` when it opened.
+    /// Questions, browser steps and approvals keep their own events too.
+    #[serde(rename = "waiting_updated", alias = "WaitingUpdated")]
+    WaitingUpdated { item: Value },
     /// An MCP server an agent suggested was suggested, installed or dismissed; `suggestion` is the
     /// whole record. See `crate::db::mcp_suggestions`.
     #[serde(rename = "mcp_suggestion_updated", alias = "McpSuggestionUpdated")]

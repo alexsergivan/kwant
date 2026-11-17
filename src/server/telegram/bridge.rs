@@ -376,15 +376,16 @@ async fn allow_once(state: &AppState, runner: &Runner, link: &TelegramLink, ask:
         let _ = runner.client.answer_callback(cb_id, Some(copy::ALREADY_ANSWERED)).await;
         return;
     }
-    let (status, body) = crate::server::routes::resolve_approval_inner(state, &ask.ref_id, ApprovalDecision::AllowOnce, Some("telegram")).await;
+    let (status, body) = crate::server::routes::resolve_approval_inner(state, &ask.ref_id, ApprovalDecision::AllowOnce, Some("telegram"), false).await;
     if status.is_success() {
         let _ = runner.client.answer_callback(cb_id, None).await;
         edit_answered(state, runner, ask, &format!("{TEAL_CHECK} Allowed once from Telegram · {}", hhmm(state).await)).await;
     } else if body["status"] == "needs_backup" {
         let _ = state.db.telegram_reopen_ask(&ask.id).await;
         let _ = state.db.telegram_ask_link_only(&ask.id).await;
-        let _ = runner.client.answer_callback(cb_id, Some(copy::NEEDS_BACKUP)).await;
-        let html = format!("{}\n\n<i>{}</i>", ask.text, text::escape(copy::NEEDS_BACKUP));
+        let why = copy::needs_backup(&body);
+        let _ = runner.client.answer_callback(cb_id, Some(why)).await;
+        let html = format!("{}\n\n<i>{}</i>", ask.text, text::escape(why));
         edit(state, runner, ask, html, open_markup(state, link, &runner.space, None).await);
     } else {
         let _ = runner.client.answer_callback(cb_id, Some(copy::NO_LONGER_WAITING)).await;
@@ -872,6 +873,24 @@ mod tests {
         assert_eq!(excluded_reason(why(json!({"source": "mcp", "prod_floor": {}})), true), "This is a production connection. Approve it in kwant.");
         assert_eq!(excluded_reason(why(json!({"source": "local_shell"})), true), "This is a command on your computer. Approve it in kwant.");
         assert_eq!(excluded_reason(None, true), "Approve it in kwant.");
+    }
+
+    /// 22f: a deploy kwant only guesses changes the database says it can be allowed without a
+    /// backup in the app; a destructive step or a known migration doesn't.
+    #[test]
+    fn a_guessed_migration_says_it_can_go_without_a_backup_in_kwant() {
+        let why = |d: Value| super::super::link_only_reason(&d);
+        let guess = json!({"source": "mcp", "prod_floor": {"kind": "deploy_migration", "migration": "guess", "needs_backup": true}});
+        assert_eq!(
+            excluded_reason(why(guess), true),
+            "This is a production deploy: it needs a fresh backup, or you can allow it without one. Approve it in kwant."
+        );
+        for f in [json!({"kind": "deploy_migration", "migration": "yes", "needs_backup": true}), json!({"kind": "destructive", "needs_backup": true})] {
+            assert_eq!(excluded_reason(why(json!({"source": "mcp", "prod_floor": f})), true), "This is a production connection. Approve it in kwant.");
+        }
+        assert_eq!(copy::needs_backup(&json!({"can_allow_without_backup": true})), copy::NEEDS_BACKUP_OR_SKIP);
+        assert_eq!(copy::needs_backup(&json!({"can_allow_without_backup": false})), copy::NEEDS_BACKUP);
+        assert_eq!(copy::needs_backup(&json!({})), copy::NEEDS_BACKUP);
     }
 
     #[test]
