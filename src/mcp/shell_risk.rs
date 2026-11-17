@@ -171,6 +171,26 @@ fn lex(command: &str) -> Result<Vec<Tok>, String> {
     Ok(toks)
 }
 
+/// 27b: the simple commands in `command`, each as its words the way the shell passes them on
+/// (quotes removed), with redirects and their files left out. `None` when the line can't be read
+/// (a variable, a subshell, a heredoc, more than one line).
+pub(crate) fn simple_commands(command: &str) -> Option<Vec<Vec<String>>> {
+    let mut commands = vec![Vec::new()];
+    let mut toks = lex(command).ok()?.into_iter();
+    while let Some(tok) = toks.next() {
+        match tok {
+            Tok::Word(w) => commands.last_mut()?.push(w.text),
+            Tok::Sep => commands.push(Vec::new()),
+            Tok::Redirect => {
+                toks.next();
+            }
+            Tok::Dup => {}
+        }
+    }
+    commands.retain(|c| !c.is_empty());
+    Some(commands)
+}
+
 /// Programs that reach outside the folder by their nature, with what they do.
 const RISKY: &[(&str, &str)] = &[
     ("curl", "uses the network"),
@@ -441,7 +461,7 @@ fn simple_command(words: &[Word], ctx: &mut Ctx) -> Verdict {
 }
 
 /// `NAME=` at the start of a word: the name.
-fn assignment(text: &str) -> Option<(&str, ())> {
+pub(crate) fn assignment(text: &str) -> Option<(&str, ())> {
     let (name, _) = text.split_once('=')?;
     let mut chars = name.chars();
     let first = chars.next()?;

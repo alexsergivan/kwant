@@ -2446,6 +2446,11 @@ pub(super) async fn turn_once(
     // Only the person's own message carries a nav prompt (hand-offs, routines, missions and Jira
     // tasks never do), so this is how the stop knows it held the person's message
     let person_turn = opts.nav_prompt.is_some();
+    // 27b: the person wrote again, so what they declined in this conversation may be asked again.
+    // A turn kwant starts on its own (follow-through, keep-going, a hand-off, a routine) keeps it
+    if person_turn {
+        super::mcp_runtime::person_wrote(&scope.state.broker, &target_kwant.id, tag.thread_id.clone(), tag.context_id.clone());
+    }
     super::spend_stop::gate(scope, target_kwant, quiet_stop, person_turn).await?;
     // Then the bot's own monthly budget (G2): daily stop, mission budget (checked by the mission
     // runner before it asks for a turn), bot budget; the first one hit holds the turn. A turn that
