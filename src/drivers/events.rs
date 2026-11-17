@@ -349,12 +349,22 @@ pub enum RuntimeEvent {
     /// object of `release-090/h4-contract.md` §1 (see `crate::server::bot_status`).
     #[serde(rename = "bot_status", alias = "BotStatus")]
     BotStatus { kwant_id: String, status: Value },
-    /// A routine run started or finished. `status` is "running", "ok", "error" or "skipped".
+    /// A routine run started or finished. `status` is "running", "ok", "error", "skipped",
+    /// "needs_you" (a step waits on an approval card nobody answered, so it didn't run) or
+    /// "incomplete" (a step failed and no later call of that tool worked) (26b).
     #[serde(rename = "routine_run", alias = "RoutineRun")]
     RoutineRun {
         routine_id: String,
         run_id: String,
         status: String,
+        /// 26b: a "running" run whose turn waits on an approval card right now. Sent `true` when
+        /// the card opens and `false` when it's answered or the turn stops waiting. Old events and
+        /// old clients: missing means `false`.
+        #[serde(default)]
+        waiting: bool,
+        /// The approval card the run waits on, while `waiting`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_id: Option<String>,
     },
     /// A Mission Control task changed (state, claim, checks, evidence). `task` is the board's Task
     /// shape and carries `space_id`.

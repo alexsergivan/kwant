@@ -279,3 +279,25 @@ test('a late Done or Skip on a closed step: nothing where the footer says it, wo
   assert.equal(h.closedStepText('open', 'done', 'Pixel'), undefined);
   assert.equal(h.closedStepText('paused_for_x', 'done', 'Pixel'), 'This step is already closed.');
 });
+
+test('a closed card always says what is next: timed_out tells you to say so; an unknown closed status never says "Press Done" (23d)', () => {
+  // timed_out: what to do if you did finish, the same words as left_for_message's late Done
+  for (const kind of ['sign_in', 'captcha', 'two_factor', 'other']) {
+    const html = ui.render(props({ meta: h.parseHumanStepMeta(meta({ step_kind: kind })), live: rec({ kind, status: 'timed_out' }), waiting: false }));
+    assert.match(html, /Nobody solved it in time\. Pixel moved on without it\. If you finished, say so in the chat\./, kind);
+    assert.doesNotMatch(html, /<button/, kind);
+  }
+  // A closed status the card has no line for: the neutral line, no buttons, never the open card's lines, waiting or not
+  for (const kind of ['sign_in', 'captcha', 'two_factor', 'other']) {
+    for (const waiting of [false, true]) {
+      const html = ui.render(props({ meta: h.parseHumanStepMeta(meta({ step_kind: kind })), live: rec({ kind, status: 'left_for_message' }), waiting }));
+      assert.match(html, /<span class="inline-flex items-center gap-1\.5 text-zinc-400"><svg[^>]*lucide-circle-minus[^]*?<\/svg> This step is closed\.<\/span>/, `${kind} waiting=${waiting}`);
+      assert.doesNotMatch(html, /Press Done|stopped waiting|paused and waiting|carries on by itself|<button/, `${kind} waiting=${waiting}`);
+    }
+  }
+  // The open card after the turn ended keeps its pick-it-up-later line and its buttons
+  const open = ui.render(props({ waiting: false, meta: h.parseHumanStepMeta(meta({ step_kind: 'sign_in' })) }));
+  assert.match(open, /stopped waiting\. Press Done any time and it picks up in a new reply\./);
+  assert.match(open, /<button/);
+  assert.doesNotMatch(open, /This step is closed/);
+});

@@ -1047,7 +1047,9 @@ fn execute_single_turn(
 /// Runs a routine's turn as if the user had sent `prompt` to `kwant` in `thread_id`, in
 /// `channel_id` or in their direct chat: same team context, workspace, approvals and profile failover, and the
 /// chat's stop button cancels it. The prompt message must already be saved. Returns the id of
-/// the kwant's reply, or `Err` with why there is none.
+/// the kwant's reply, or `Err` with why there is none. Every reply of the turn (its busy retries
+/// and automatic continuation too) has `run_id` in its meta under
+/// [`super::scheduler::ROUTINE_RUN_KEY`], so the run reads only its own steps (26b D1).
 pub(super) async fn run_routine_turn(
     state: &AppState,
     kwant: &Kwant,
@@ -1055,10 +1057,16 @@ pub(super) async fn run_routine_turn(
     thread_id: Option<String>,
     prompt: String,
     routine_name: &str,
+    run_id: &str,
 ) -> Result<Option<String>, String> {
     // 0.9.5: nobody watches a routine run, so a busy browser step it ends on is retried here,
     // bounded (see [`super::busy_retry::unwatched`]); a run that still ends busy fails to the Inbox
-    let opts = || TurnOpts { source: Some(super::bot_status::TurnSource::routine(routine_name)), ..TurnOpts::default() };
+    let key = super::scheduler::ROUTINE_RUN_KEY;
+    let opts = || TurnOpts {
+        source: Some(super::bot_status::TurnSource::routine(routine_name)),
+        extra_meta: Some(serde_json::json!({ key: run_id })),
+        ..TurnOpts::default()
+    };
     run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, true, Vec::new()).await
 }
 
@@ -1100,10 +1108,12 @@ async fn run_turn_with(
         super::busy_retry::unwatched(scope, &kwant.name, &prompt, |p, slot| {
             let mut o = opts();
             o.busy_slot = Some(slot.clone());
+            // The continuation's reply is the same turn's, so it keeps the turn's extra meta
+            let extra_meta = o.extra_meta.clone();
             // boxed, so the retry loop around the turn adds no stack to it
             async move {
                 let reply = Box::pin(try_kwant_turn(scope, kwant, p, o)).await;
-                Box::pin(continue_once_if_capped_into(scope, kwant, reply, None, Some(&slot))).await
+                Box::pin(continue_once_if_capped_into(scope, kwant, reply, None, Some(&slot), extra_meta)).await
             }
         })
         .await
@@ -1153,17 +1163,19 @@ pub(super) async fn continue_once_if_capped(
     first: Result<String, String>,
     started_by: Option<&str>,
 ) -> Result<String, String> {
-    continue_once_if_capped_into(scope, kwant, first, started_by, None).await
+    continue_once_if_capped_into(scope, kwant, first, started_by, None, None).await
 }
 
 /// [`continue_once_if_capped`] for an unwatched turn: the continuation, when there is one, is the
-/// turn that ended last, so only its busy step (if any) is left in `busy_slot`.
+/// turn that ended last, so only its busy step (if any) is left in `busy_slot`. `extra_meta` is
+/// the first turn's [`TurnOpts::extra_meta`], saved on the continuation's reply too.
 pub(super) async fn continue_once_if_capped_into(
     scope: &TurnScope,
     kwant: &Kwant,
     first: Result<String, String>,
     started_by: Option<&str>,
     busy_slot: Option<&super::busy_retry::Slot>,
+    extra_meta: Option<serde_json::Value>,
 ) -> Result<String, String> {
     let Ok(text) = &first else {
         return first;
@@ -1180,6 +1192,7 @@ pub(super) async fn continue_once_if_capped_into(
         always_ask: started_by.is_some(),
         started_by: started_by.map(str::to_string),
         busy_slot: busy_slot.cloned(),
+        extra_meta,
         ..Default::default()
     };
     match try_kwant_turn(scope, kwant, CONTINUE_PROMPT.to_string(), opts).await {
