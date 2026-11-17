@@ -1498,15 +1498,36 @@ pub async fn permission_endpoint(
     }
 }
 
+/// 26h D3: the largest hook payload kwnt reads. A claude PostToolUse for an MCP tool carries the
+/// pictures it returned as base64 (a 20 MB image is ~27 MB); past this the hook gets a 413, which
+/// its `curl -f` turns into no output, and claude keeps its own output (nothing is saved).
+pub const HOOK_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
 /// `POST /api/mcp/permission/:token/hook`: claude's PreToolUse, PostToolUse and
 /// PostToolUseFailure hooks for this turn's built-in tools ([`mcp::cli_hooks`]). Answers a
 /// PreToolUse deny when the same call already failed 3 times the same way, and nothing otherwise
 /// (204). An unknown token is a 404, which the hook's `curl -f` turns into no output: the call runs.
+/// 26h D3: a PostToolUse for one of the bot's MCP tools saves the files in its result in the
+/// turn's chat ([`mcp::media::finish_claude`]) and answers the text the model reads instead.
 pub async fn permission_hook_endpoint(State(state): State<AppState>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
     let session = state.mcp_sessions.lock().await.get(&token).cloned();
     let Some(session) = session else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if let Some((server, tool)) = mcp::cli_hooks::mcp_call(&msg) {
+        let Some(cfg) = session.ctx.servers.iter().find(|s| s.name == server && mcp::cli_hooks::saves_media_for(server)) else {
+            return StatusCode::NO_CONTENT.into_response();
+        };
+        let dir = mcp::cli_hooks::tool_results_dir(&msg);
+        let media = session.ctx.media.as_deref();
+        return match mcp::media::finish_claude(&msg["tool_response"], server, cfg.url.as_deref(), tool, media, dir.as_deref()).await {
+            Some(text) => {
+                tracing::info!(kwant = %session.kwant_id, turn = %session.turn_id, %server, %tool, "saved a claude MCP tool's files in the chat");
+                Json(mcp::cli_hooks::replace_output(&text)).into_response()
+            }
+            None => StatusCode::NO_CONTENT.into_response(),
+        };
+    }
     match mcp::cli_hooks::on_event(&session.repeats, &msg) {
         Some(out) => {
             tracing::info!(kwant = %session.kwant_id, turn = %session.turn_id, "repeat guard: a claude tool call was denied");

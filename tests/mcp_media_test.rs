@@ -232,3 +232,55 @@ async fn a_renamed_bfl_server_still_asks_and_the_card_names_the_credits() {
         assert_eq!(pending.await.unwrap(), ApprovalOutcome::Allowed);
     }
 }
+
+/// 26h D3 (Rigel's QA of #780): on the claude engine claude calls the bot's servers itself, so a
+/// picture reaches kwnt only through claude's PostToolUse hook. A whole claude turn with a FLUX
+/// server: the fake claude runs the hooks kwnt's `--settings` gives it, with the payload claude
+/// 2.1.326 sent for a PNG (Nov 17), through the real hook command and route. The picture ends up
+/// as the bot's file in the chat, and the model reads its saved line, not the base64.
+#[cfg(unix)] // the hook command is `sh -c "curl … || true"`, as claude runs it
+#[tokio::test]
+async fn a_claude_engine_tool_picture_is_saved_in_the_chat() {
+    use base64::Engine;
+    let env = setup().await;
+    env.state.db.create_mcp_server(&SpaceId::default_space(), &echo("flux")).await.unwrap();
+    // A 1×1 PNG
+    let png = base64::engine::general_purpose::STANDARD.encode(PNG_1X1);
+    let response = json!([
+        {"type": "text", "text": "Here is your picture."},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": png}},
+        {"type": "text", "text": "[Image: source: /home/o/.claude/projects/-w/s1/tool-results/mcp-flux-blob-1794927710294-86qnbo.png]"}
+    ]);
+    let marker = mcp_hook_marker("flux", "generate_image", response);
+    send_direct(&env, &env.a, &format!("make a fox {marker} REPLYTAG:d3claude"), json!({})).await;
+    let reply = wait_reply(&env, &env.a, "answer d3claude").await;
+
+    // kwnt gave claude the media hook, and claude's model read the saved line instead of the picture
+    assert!(reply.text.contains("HOOKS[1]"), "{}", reply.text);
+    assert!(
+        reply.text.contains("MODELSAW[Here is your picture.\nImage saved in this chat as flux-generate_image-1.png (id "),
+        "{}",
+        reply.text
+    );
+    assert!(!reply.text.contains("iVBOR") && !reply.text.contains("tool-results"), "{}", reply.text);
+    let launch = invocations_with("d3claude").pop().unwrap();
+    assert!(launch.contains(kwnt::mcp::cli_hooks::MCP_MATCHER), "{launch}");
+
+    // The picture is the bot's file in the chat, made with flux
+    let files = shared_files(&env).await;
+    assert_eq!(files.len(), 1, "{files:?}");
+    let (text, meta) = &files[0];
+    assert!(text.starts_with("Shared a file: flux-generate_image-1.png"), "{text}");
+    assert_eq!(meta["auto"], true);
+    assert_eq!(meta["made_with"], "flux", "{meta}");
+    assert_eq!(meta["attachments"][0]["mime"], "image/png", "{meta}");
+    let id = meta["attachments"][0]["id"].as_str().unwrap();
+    assert!(reply.text.contains(&format!("(id {id})")), "the model names the saved file: {}", reply.text);
+}
+
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+    0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99, 0x3D, 0x1D, 0x00, 0x00,
+    0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];

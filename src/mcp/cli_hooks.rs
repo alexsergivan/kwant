@@ -14,6 +14,13 @@
 //! - `PostToolUseFailure` (a call that failed, with its `error` text, e.g. `"Exit code 1\n…"`)
 //!   counts one more identical failure. A call claude or the person denied fires neither event.
 //!
+//! 26h D3: claude also calls the bot's own MCP servers itself (`--mcp-config`), so kwnt never sees
+//! their results either. With a chat to save files in, one more `PostToolUse` hook for `mcp__…`
+//! tools posts the result; kwnt saves its pictures, audio and video in the chat (and FLUX's
+//! delivery links, [`super::media::finish_claude`]) and answers `updatedMCPToolOutput`, so the
+//! model reads "Image saved in this chat as …" instead of the base64. That hook waits longer
+//! ([`MEDIA_HOOK_SECS`]): a delivery download may take up to a minute.
+//!
 //! The hook never blocks a turn on its own error: `curl -sf -m 2 … || true` exits 0 with no output
 //! when kwnt is unreachable, slow, or answers with an error, and claude then runs the call as usual.
 //! The URL (it carries the turn's token) sits in a 0600 curl config file, never in argv.
@@ -35,6 +42,19 @@ pub const BUILTIN_MATCHER: &str = "^(?!mcp__)";
 /// Seconds claude waits for the hook before it runs the call anyway (curl itself gives up after 2).
 const HOOK_TIMEOUT_SECS: u64 = 5;
 
+/// 26h D3: the bot's MCP servers' tools, not kwnt's own (its permission server, `kwnt`, and its
+/// tools for the bot, `kwnt_tools`, whose results kwnt already made).
+pub const MCP_MATCHER: &str = "^mcp__(?!kwnt(?:_tools)?__)";
+
+/// 26h D3: whether a server's tool results go through the media hook: every server but kwnt's own.
+pub fn saves_media_for(server: &str) -> bool {
+    !server.eq_ignore_ascii_case(super::RESERVED_SERVER_NAME) && !server.eq_ignore_ascii_case(super::SELF_SERVER_NAME)
+}
+
+/// 26h D3: how long the media hook's curl waits for kwnt (a delivery download takes up to 60 s);
+/// claude waits 5 s more. Past it the call goes on with claude's own output, nothing saved.
+pub const MEDIA_HOOK_SECS: u64 = 90;
+
 /// Where the hooks post for the turn whose permission endpoint is `permission_url`.
 pub fn hook_url(permission_url: &str) -> String {
     format!("{}/hook", permission_url.trim_end_matches('/'))
@@ -47,23 +67,75 @@ fn sh_quote(s: &str) -> String {
 /// The hook command: posts claude's payload (stdin) to the URL in `curl_config`. Silent and
 /// exit 0 whatever happens, so a failure never blocks the call (exit 2 would).
 pub fn hook_command(curl_config: &Path) -> String {
+    hook_command_for(curl_config, 2)
+}
+
+/// [`hook_command`], with curl giving up after `secs`.
+pub fn hook_command_for(curl_config: &Path, secs: u64) -> String {
     format!(
-        "curl -sf -m 2 -H 'Content-Type: application/json' --data-binary @- -K {} || true",
+        "curl -sf -m {secs} -H 'Content-Type: application/json' --data-binary @- -K {} || true",
         sh_quote(&curl_config.to_string_lossy())
     )
 }
 
-/// The `hooks` object merged into the turn's one `--settings`.
-pub fn settings(curl_config: &Path) -> Value {
-    let entry = json!([{
+/// The `hooks` object merged into the turn's one `--settings`: the repeat guard's hooks for
+/// claude's own tools (`builtins`), and 26h's media hook for the bot's MCP tools (`media`).
+pub fn settings(curl_config: &Path, builtins: bool, media: bool) -> Value {
+    let entry = json!({
         "matcher": BUILTIN_MATCHER,
         "hooks": [{"type": "command", "command": hook_command(curl_config), "timeout": HOOK_TIMEOUT_SECS}],
-    }]);
+    });
     let mut hooks = serde_json::Map::new();
-    for event in HOOK_EVENTS {
-        hooks.insert(event.to_string(), entry.clone());
+    if builtins {
+        for event in HOOK_EVENTS {
+            hooks.insert(event.to_string(), json!([entry.clone()]));
+        }
+    }
+    if media {
+        let media_entry = json!({
+            "matcher": MCP_MATCHER,
+            "hooks": [{"type": "command", "command": hook_command_for(curl_config, MEDIA_HOOK_SECS), "timeout": MEDIA_HOOK_SECS + 5}],
+        });
+        match hooks.get_mut("PostToolUse") {
+            Some(Value::Array(list)) => list.push(media_entry),
+            _ => {
+                hooks.insert("PostToolUse".to_string(), json!([media_entry]));
+            }
+        }
     }
     json!({ "hooks": hooks })
+}
+
+/// 26h D3: the server and tool of a PostToolUse payload for one of the bot's MCP tools
+/// (`mcp__<server>__<tool>`; a server name never holds `__`). `None` for anything else.
+pub fn mcp_call(msg: &Value) -> Option<(&str, &str)> {
+    if msg["hook_event_name"] != "PostToolUse" {
+        return None;
+    }
+    let (server, tool) = msg["tool_name"].as_str()?.strip_prefix("mcp__")?.split_once("__")?;
+    (!server.is_empty() && !tool.is_empty()).then_some((server, tool))
+}
+
+/// 26h D3: the folder claude keeps this session's saved tool output in: next to the transcript
+/// (`<dir>/<session_id>.jsonl`), `<dir>/<session_id>/tool-results`. `None` when the payload
+/// doesn't say, or the transcript isn't named for the session.
+pub fn tool_results_dir(msg: &Value) -> Option<PathBuf> {
+    let session = msg["session_id"].as_str().filter(|s| !s.is_empty() && !s.contains(['/', '\\', '.']))?;
+    let transcript = Path::new(msg["transcript_path"].as_str()?);
+    if transcript.file_name()?.to_str()? != format!("{session}.jsonl") {
+        return None;
+    }
+    Some(transcript.parent()?.join(session).join("tool-results"))
+}
+
+/// 26h D3: the PostToolUse answer that gives the model `text` instead of the tool's own output.
+pub fn replace_output(text: &str) -> Value {
+    json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "updatedMCPToolOutput": [{"type": "text", "text": text}],
+        }
+    })
 }
 
 /// Writes the curl config (`url = "…"`, mode 0600) for this turn's hooks next to its MCP config.
@@ -494,7 +566,7 @@ mod tests {
     #[test]
     fn settings_post_three_events_for_builtin_tools_and_fail_open() {
         let path = Path::new("/Users/o/Library/Application Support/kwnt/mcp/claude-hook-1.curl");
-        let v = settings(path);
+        let v = settings(path, true, false);
         let hooks = v["hooks"].as_object().unwrap();
         assert_eq!(hooks.len(), 3);
         for event in HOOK_EVENTS {
@@ -527,5 +599,62 @@ mod tests {
         let path = f.path.clone();
         drop(f);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn the_media_hook_posts_mcp_results_and_waits_longer() {
+        let path = Path::new("/d/mcp/claude-hook-1.curl");
+        let both = settings(path, true, true);
+        let post = both["hooks"]["PostToolUse"].as_array().unwrap();
+        assert_eq!(post.len(), 2, "the repeat guard's entry and the media entry: {post:?}");
+        assert_eq!(post[0]["matcher"], BUILTIN_MATCHER);
+        assert_eq!(post[1]["matcher"], MCP_MATCHER);
+        let h = &post[1]["hooks"][0];
+        assert_eq!(h["timeout"], MEDIA_HOOK_SECS + 5);
+        let cmd = h["command"].as_str().unwrap();
+        assert!(cmd.starts_with(&format!("curl -sf -m {MEDIA_HOOK_SECS} ")), "{cmd}");
+        assert!(cmd.ends_with(" || true"), "{cmd}");
+        assert_eq!(both["hooks"]["PreToolUse"].as_array().unwrap().len(), 1, "media only after the call");
+        // A turn whose builtins aren't guarded still gets the media hook alone
+        let media = settings(path, false, true);
+        assert_eq!(media["hooks"].as_object().unwrap().len(), 1);
+        assert_eq!(media["hooks"]["PostToolUse"][0]["matcher"], MCP_MATCHER);
+        assert_eq!(settings(path, false, false)["hooks"], json!({}));
+    }
+
+    #[test]
+    fn mcp_calls_and_the_sessions_tool_results_folder_come_from_the_payload() {
+        // Recorded from claude 2.1.326 (Nov 17), the image trimmed
+        let msg = json!({"session_id": "1e0695b0-0780-4de2-8bde-9303851e57f9",
+            "transcript_path": "/home/o/.claude/projects/-w/1e0695b0-0780-4de2-8bde-9303851e57f9.jsonl",
+            "hook_event_name": "PostToolUse", "tool_name": "mcp__flux__generate_image", "tool_input": {},
+            "tool_response": [{"type": "text", "text": "Here is your picture."}],
+            "tool_use_id": "toolu_01", "mcp_server": {"name": "flux", "source": "dynamic"}});
+        assert_eq!(mcp_call(&msg), Some(("flux", "generate_image")));
+        assert_eq!(
+            tool_results_dir(&msg).unwrap(),
+            Path::new("/home/o/.claude/projects/-w/1e0695b0-0780-4de2-8bde-9303851e57f9/tool-results")
+        );
+        let mut other = msg.clone();
+        other["hook_event_name"] = json!("PreToolUse");
+        assert_eq!(mcp_call(&other), None);
+        other = msg.clone();
+        other["tool_name"] = json!("Bash");
+        assert_eq!(mcp_call(&other), None);
+        // A transcript that isn't the session's, or a session id that walks out, gives no folder
+        other = msg.clone();
+        other["transcript_path"] = json!("/home/o/.claude/projects/-w/other.jsonl");
+        assert_eq!(tool_results_dir(&other), None);
+        other = msg.clone();
+        other["session_id"] = json!("../x");
+        other["transcript_path"] = json!("/home/o/../x.jsonl");
+        assert_eq!(tool_results_dir(&other), None);
+        let out = replace_output("Image saved in this chat as flux-generate_image-1.png (id a1); the person sees it there.");
+        assert_eq!(out["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+        assert_eq!(out["hookSpecificOutput"]["updatedMCPToolOutput"][0]["type"], "text");
+        // The media hook's matcher leaves kwnt's own permission server alone (claude's regexes are JavaScript's)
+        assert_eq!(MCP_MATCHER, "^mcp__(?!kwnt(?:_tools)?__)");
+        assert!(saves_media_for("flux") && saves_media_for("kwnt-images"));
+        assert!(!saves_media_for("kwnt") && !saves_media_for("kwnt_tools"));
     }
 }

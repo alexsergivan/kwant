@@ -411,6 +411,141 @@ async fn save_links(mut text: String, rule: &DeliveryRule, saver: &mut Saver<'_>
     text
 }
 
+/// 26h D3: claude's PostToolUse hook for an MCP tool call (the claude engine calls the bot's
+/// servers itself, so [`finish`] never sees the result). `tool_response` is the content claude
+/// made of the result, recorded from claude 2.1.326 (Nov 17):
+/// - an `image` part is `{"type":"image","source":{"type":"base64","media_type":…,"data":…}}`,
+///   then claude's own `[Image: source: <its local copy>]` text;
+/// - an `audio` part (or a blob claude can't show) is only a text line, `[Audio from <server>]
+///   Binary content (<type>, <size>) saved to <path>`, with the bytes in claude's `tool-results`
+///   folder for this session;
+/// - a `resource_link` is `[Resource link: <name>] <uri>`, which the delivery rule reads as a link.
+///
+/// The parts come back in MCP's shape (`{"content": […]}`) so the same saving runs on them.
+/// `tool_results` is that session's `tool-results` folder; a saved-to path is read only when it is
+/// a plain file claude wrote there for an MCP tool (`mcp-…-blob-…`), never anywhere a result's
+/// text points. Also says whether a part was turned into a note (a file over the cap).
+pub fn from_claude(tool_response: &Value, tool_results: Option<&std::path::Path>) -> (Value, bool) {
+    let blocks: Vec<Value> = match tool_response {
+        Value::Array(a) => a.clone(),
+        Value::Object(o) if o.get("content").is_some_and(Value::is_array) => o["content"].as_array().cloned().unwrap_or_default(),
+        Value::String(s) => vec![serde_json::json!({"type": "text", "text": s})],
+        _ => Vec::new(),
+    };
+    let mut content = Vec::new();
+    let mut noted = false;
+    let mut after_image = false;
+    for block in blocks {
+        let was_image = std::mem::replace(&mut after_image, false);
+        let kind = block["type"].as_str().unwrap_or("").to_string();
+        match kind.as_str() {
+            "image" if block["source"]["type"] == "base64" => {
+                if let Some(data) = block["source"]["data"].as_str() {
+                    let mime = block["source"]["media_type"].as_str().unwrap_or("image/png");
+                    content.push(serde_json::json!({"type": "image", "mimeType": mime, "data": data}));
+                    after_image = true;
+                    continue;
+                }
+                content.push(block);
+            }
+            "text" => {
+                let text = block["text"].as_str().unwrap_or("");
+                // claude's note of where it kept the picture it just showed: the saved line says it now
+                if was_image && text.starts_with("[Image: source: ") && text.ends_with(']') && !text.contains('\n') {
+                    continue;
+                }
+                match claude_blob(text).map(|(mime, path)| (mime, read_blob(path, tool_results))) {
+                    Some((mime, Ok(bytes))) => {
+                        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let part = match mime.split('/').next() {
+                            Some("image") => serde_json::json!({"type": "image", "mimeType": mime, "data": data}),
+                            Some("audio") => serde_json::json!({"type": "audio", "mimeType": mime, "data": data}),
+                            _ => serde_json::json!({"type": "resource", "resource": {"uri": "", "mimeType": mime, "blob": data}}),
+                        };
+                        content.push(part);
+                    }
+                    Some((mime, Err(BlobError::TooBig))) => {
+                        noted = true;
+                        let line = format!(
+                            "[{}: {mime}] {} came back but couldn't be saved: it is larger than 100 MB.",
+                            noun(&mime).to_lowercase(),
+                            article(noun(&mime))
+                        );
+                        content.push(serde_json::json!({"type": "text", "text": line}));
+                    }
+                    // Not a file claude kept for this session: the text stays as it is
+                    _ => content.push(block),
+                }
+            }
+            _ => content.push(block),
+        }
+    }
+    (serde_json::json!({ "content": content }), noted)
+}
+
+/// The type and path in claude's `[Audio from x] Binary content (audio/wav, 7.9KB) saved to /p`.
+fn claude_blob(text: &str) -> Option<(String, &str)> {
+    if !["[Audio from ", "[Image from ", "[Resource from "].iter().any(|p| text.starts_with(p)) || text.contains('\n') {
+        return None;
+    }
+    let (_, rest) = text.split_once("] Binary content (")?;
+    let (mime, rest) = rest.split_once(", ")?;
+    let (_, path) = rest.split_once(") saved to ")?;
+    let mime = mime.trim();
+    let mime = if mime.contains('/') && !mime.contains(char::is_whitespace) { mime.to_string() } else { "application/octet-stream".to_string() };
+    Some((mime, path.trim()))
+}
+
+enum BlobError {
+    TooBig,
+    NotAllowed,
+}
+
+/// Reads `path` only when it is a plain file (not a link) directly in `dir`, named the way claude
+/// names an MCP tool's blob (`mcp-<server>-blob-…`), and at most [`MAX_FILE_BYTES`].
+fn read_blob(path: &str, dir: Option<&std::path::Path>) -> Result<Vec<u8>, BlobError> {
+    let dir = dir.and_then(|d| std::fs::canonicalize(d).ok()).ok_or(BlobError::NotAllowed)?;
+    let path = std::path::Path::new(path);
+    if !path.is_absolute() {
+        return Err(BlobError::NotAllowed);
+    }
+    let meta = std::fs::symlink_metadata(path).map_err(|_| BlobError::NotAllowed)?;
+    let real = std::fs::canonicalize(path).map_err(|_| BlobError::NotAllowed)?;
+    let name = real.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !meta.file_type().is_file() || real.parent() != Some(dir.as_path()) || !name.starts_with("mcp-") || !name.contains("-blob-") {
+        return Err(BlobError::NotAllowed);
+    }
+    if meta.len() > MAX_FILE_BYTES as u64 {
+        return Err(BlobError::TooBig);
+    }
+    std::fs::read(&real).map_err(|_| BlobError::NotAllowed)
+}
+
+/// 26h D3: [`finish`] for a claude PostToolUse payload's `tool_response` ([`from_claude`]): the
+/// files are saved in the chat and the model's text names them. `None` when there is nothing to
+/// save (no file part, and no allowlisted delivery link for this app): claude's own output stays.
+pub async fn finish_claude(
+    tool_response: &Value,
+    server: &str,
+    server_url: Option<&str>,
+    tool: &str,
+    sink: Option<&dyn MediaSink>,
+    tool_results: Option<&std::path::Path>,
+) -> Option<String> {
+    let (raw, noted) = from_claude(tool_response, tool_results);
+    let delivery = CreditApp::of_server(server, server_url).and_then(DeliveryRule::for_app);
+    let text = result_text_with(&raw, |_| None);
+    let files = raw["content"].as_array().into_iter().flatten().any(|p| file_part(p).is_some());
+    let has_links = delivery
+        .as_ref()
+        .is_some_and(|rule| links(&text).into_iter().any(|l| reqwest::Url::parse(l).is_ok_and(|u| rule.allows(&u))));
+    if !files && !has_links && !noted {
+        return None;
+    }
+    let result = ToolCallResult { text, is_error: false, raw };
+    Some(finish_with(&result, server, tool, sink, delivery.as_ref()).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,5 +814,84 @@ mod tests {
         let rule = DeliveryRule::for_app(CreditApp::Bfl).unwrap();
         let url = reqwest::Url::parse("https://127.0.0.1/x.png").unwrap();
         assert_eq!(download(&rule, &url).await, Err("its address isn't one of the app's file hosts".into()));
+    }
+
+    /// claude's PostToolUse `tool_response` for an image, as claude 2.1.326 sent it (Nov 17).
+    fn claude_image(local_copy: &str) -> Value {
+        json!([
+            {"type": "text", "text": "Here is your picture."},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(PNG)}},
+            {"type": "text", "text": format!("[Image: source: {local_copy}]")}
+        ])
+    }
+
+    async fn claude(resp: &Value, sink: Option<&Sink>, dir: Option<&std::path::Path>) -> Option<String> {
+        finish_claude(resp, "flux", None, "generate_image", sink.map(|s| s as &dyn MediaSink), dir).await
+    }
+
+    #[tokio::test]
+    async fn a_claude_hook_picture_is_saved_and_claudes_local_copy_line_goes() {
+        let sink = Sink::default();
+        let text = claude(&claude_image("/h/.claude/projects/-w/s1/tool-results/mcp-flux-blob-1.png"), Some(&sink), None).await.unwrap();
+        assert_eq!(
+            text,
+            "Here is your picture.\nImage saved in this chat as flux-generate_image-1.png (id att1); the person sees it there."
+        );
+        assert!(!text.contains("tool-results") && !text.contains(&b64(PNG)[..12]), "{text}");
+        assert_eq!(sink.files.lock().unwrap()[0].1, PNG);
+        // Without a chat the model still hears why
+        let none = claude(&claude_image("/x"), None, None).await.unwrap();
+        assert!(none.contains("[image: image/png] An image came back but couldn't be saved: this turn has no chat to save it in."), "{none}");
+        // Text only, or a link no rule allows: nothing to do, claude's own output stays
+        assert_eq!(claude(&json!([{"type": "text", "text": "done"}]), Some(&sink), None).await, None);
+        assert_eq!(claude(&json!("done"), Some(&sink), None).await, None);
+        let link = json!([{"type": "text", "text": "[Resource link: y.png] https://example.com/y.png"}]);
+        assert_eq!(claude(&link, Some(&sink), None).await, None);
+        // A text that only looks like claude's copy line, not after a picture, stays
+        let (raw, _) = from_claude(&json!([{"type": "text", "text": "[Image: source: /etc/x]"}]), None);
+        assert_eq!(raw["content"][0]["text"], "[Image: source: /etc/x]");
+    }
+
+    #[tokio::test]
+    async fn a_claude_hook_audio_file_is_read_only_from_the_sessions_tool_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("s1").join("tool-results");
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = b"RIFF\x24\x00\x00\x00WAVEfmt more".to_vec();
+        let kept = dir.join("mcp-flux-blob-1794927836623-qzwmn2.wav");
+        std::fs::write(&kept, &wav).unwrap();
+        fn line(p: &std::path::Path) -> Value {
+            json!([{"type": "text", "text": format!("[Audio from flux] Binary content (audio/wav, 7.9KB) saved to {}", p.display())}])
+        }
+        let sink = Sink::default();
+        let text = claude(&line(&kept), Some(&sink), Some(&dir)).await.unwrap();
+        assert_eq!(text, "Audio file saved in this chat as flux-generate_image-1.wav (id att1); the person sees it there.");
+        assert_eq!(sink.files.lock().unwrap()[0].1, wav);
+
+        // A path elsewhere, a file claude didn't name as a tool's blob, or no folder: not read
+        let outside = tmp.path().join("mcp-flux-blob-2.wav");
+        std::fs::write(&outside, &wav).unwrap();
+        let other = dir.join("toolu_01.txt");
+        std::fs::write(&other, b"secret").unwrap();
+        let sink = Sink::default();
+        for (path, folder) in [(&outside, Some(dir.as_path())), (&other, Some(dir.as_path())), (&kept, None)] {
+            assert_eq!(claude(&line(path), Some(&sink), folder).await, None, "{}", path.display());
+        }
+        let walk = dir.join("..").join("..").join("mcp-flux-blob-2.wav");
+        assert_eq!(claude(&line(&walk), Some(&sink), Some(&dir)).await, None, "a .. path out of the folder");
+        assert!(sink.files.lock().unwrap().is_empty());
+        #[cfg(unix)]
+        {
+            let link = dir.join("mcp-flux-blob-3.wav");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert_eq!(claude(&line(&link), Some(&sink), Some(&dir)).await, None, "a link in the folder isn't followed");
+            // Over the cap: named, not read
+            let big = dir.join("mcp-flux-blob-4.mp4");
+            std::fs::File::create(&big).unwrap().set_len(MAX_FILE_BYTES as u64 + 1).unwrap();
+            let msg = json!([{"type": "text", "text": format!("[Resource from flux at file:///v.mp4] Binary content (video/mp4, 100MB) saved to {}", big.display())}]);
+            let text = claude(&msg, Some(&sink), Some(&dir)).await.unwrap();
+            assert_eq!(text, "[video: video/mp4] A video came back but couldn't be saved: it is larger than 100 MB.");
+            assert!(sink.files.lock().unwrap().is_empty());
+        }
     }
 }
