@@ -121,6 +121,10 @@ test('Steps list: a failed step keeps "Failed" and an unanswered one says "Not a
   const rec = ui.steps({ activity: { steps: FAILED_THEN_OK, dropped: 0 }, idBase: 'a', defaultOpen: true });
   assert.match(rec, /data-step-mark="failed"[^>]*>Failed</);
   assert.match(rec, /aria-label="Failed"/, 'the icon still names it for screen readers');
+  // Mira's design check: the step Details lands on shows a visible ring, and its detail never splits a word on a phone
+  assert.match(rec, /focus-visible:outline-sky-400[^"]*"[^>]*data-step-status|data-step-status="[^"]*"[^>]*class="[^"]*focus-visible:outline-sky-400/);
+  assert.match(rec, /\[overflow-wrap:anywhere\]/);
+  assert.doesNotMatch(rec, /break-all/);
   const un = ui.steps({ activity: { steps: UNANSWERED_PLUS_OK, dropped: 0 }, idBase: 'a', defaultOpen: true, focusStep: 's1' });
   assert.match(un, /data-step-mark="unanswered"[^>]*>Not approved in time</);
   assert.match(un, /aria-label="Not approved in time"/);

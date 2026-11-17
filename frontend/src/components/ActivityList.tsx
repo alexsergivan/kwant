@@ -174,7 +174,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
       id={`${listId}-${step.id}`}
       tabIndex={-1}
       data-step-status={step.status}
-      className={`px-3 py-1.5 text-xs focus:outline-none focus-visible:bg-zinc-800/60 ${waiting ? 'bg-amber-500/[0.06]' : ''}`}
+      className={`px-3 py-1.5 text-xs focus:outline-none focus-visible:bg-zinc-800/60 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400 ${waiting ? 'bg-amber-500/[0.06]' : ''}`}
     >
       {step.detail ? (
         <details className="group" open={opened || undefined}>
@@ -183,7 +183,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
             <ChevronRight size={13} className="mt-px flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
           </summary>
           <pre
-            className={`mt-1 ml-5 font-mono text-[11px] whitespace-pre-wrap break-all rounded-md border px-2 py-1.5 max-h-40 overflow-y-auto ${
+            className={`mt-1 ml-5 font-mono text-[11px] whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border px-2 py-1.5 max-h-40 overflow-y-auto ${
               step.status === 'failed' ? 'text-rose-200 bg-rose-950/30 border-rose-500/20' : 'text-zinc-300 bg-zinc-950/80 border-zinc-800'
             }`}
           >
