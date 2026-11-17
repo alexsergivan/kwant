@@ -70,7 +70,7 @@ async fn stdio_client_lists_and_calls_tools() {
 
     let tools = client.list_tools().await.unwrap();
     let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, ["echo", "add", "sleep", "env", "crash"]);
+    assert_eq!(names, ["echo", "add", "sleep", "env", "crash", "peek"]);
     assert_eq!(tools[0].input_schema["required"], json!(["text"]));
 
     let out = client.call_tool("echo", json!({"text": "hello mcp"})).await.unwrap();
@@ -186,7 +186,7 @@ async fn test_endpoint_lists_tools_and_redacts_errors() {
     let (status, result) = call(&app, "POST", &format!("/api/mcp/servers/{}/test", ok_server["id"].as_str().unwrap()), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["ok"], true, "{result}");
-    assert_eq!(result["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(result["tools"].as_array().unwrap().len(), 6);
     assert_eq!(result["server_info"]["name"], "kwnt-echo");
 
     // A server that prints its secret and dies: the error comes back without the secret

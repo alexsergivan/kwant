@@ -267,6 +267,14 @@ echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up
 - **kwant's own `execute_shell` tool** runs in per-team Docker containers, so it isn't available inside this stack: that would need the host's Docker socket, which is root on the host. The CLIs' own shell tools work inside the kwnt container.
 - **Upgrading from an older image:** kwnt now runs as uid 10001, not root. If it says `/data isn't writable`, run once: `docker compose run --rm -u root kwnt chown -R 10001:10001 /data`.
 
+### Render, CasaOS, Umbrel and Coolify
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant)
+
+The button reads [`render.yaml`](render.yaml): one web service from the released image with a 1 GB disk on `/data`. **Render keeps files only on a disk, and disks need a paid instance** (Starter or up), so the free plan won't work. Render makes the sign-in token: copy `KWNT_API_TOKEN` from the service's **Environment** page and paste it on the sign-in screen.
+
+For home servers, [`deploy/`](deploy) has a listing for each store, pinned to the release: [CasaOS](deploy/casaos/Kwnt/docker-compose.yml) (sign in with `kwnt token --raw` from the app's **Terminal**), [Umbrel](deploy/umbrel/kwant) (sign in with the password Umbrel shows for kwant) and [Coolify](deploy/coolify/kwnt.yaml) (sign in with `SERVICE_PASSWORD_64_KWNT` from the service's environment variables). Until a store lists kwant, CasaOS can import the file under **Custom Install** and Coolify can run it as a **Docker Compose** resource; Umbrel needs the listing. These run kwnt alone, without Laya or the bots' browser; see [docs/self-host-stores.md](docs/self-host-stores.md).
+
 ### Without Docker: `kwnt setup`
 
 `kwnt setup` installs what kwant needs on this machine: Chromium or Chrome for the bots' browser, Laya (in kwant's data folder, with its own `uv` if you have no Python), and a CLI (`claude` unless you name others with `--clis`). It asks before each step (`--yes` skips the questions), never runs `sudo` itself (it prints the command for you instead), installs into your home folder where it can, skips Docker unless you pass `--docker`, and running it again changes nothing. `--dry-run` shows the plan. The app has the same checklist under **Setup**.
