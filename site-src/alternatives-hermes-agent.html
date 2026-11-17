@@ -1,0 +1,105 @@
+title: Hermes Agent Alternative: Self-Hosted, With Verified Work
+description: kwant is an open-source, self-hosted alternative to Hermes Agent: a team of AI bots whose work counts as done only when kwant checks it. Import your profiles.
+path: alternatives/hermes-agent.html
+active: alternatives
+faq: yes
+card_title: Hermes Agent alternative
+card: Verified only when kwant runs the check. Import your Hermes profiles.
+card_art: avatar:brand
+---
+<section class="page-head">
+  <div class="wrap">
+    <p class="kicker">Alternatives · Hermes Agent</p>
+    <h1>A Hermes Agent alternative that checks the work</h1>
+    <p class="lede">kwant is an open-source, self-hosted team of AI bots in one app, with nothing extra to install. A task counts as Verified only when kwant runs the check itself, and a bot that can't go on tells you why. It can bring in your Hermes home and profiles.</p>
+    <div class="cta">
+      <a class="btn btn-violet" href="../docs/install.html">Install kwant</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<div class="wrap">
+  <article class="prose solo">
+<p>Hermes Agent is Nous Research's open-source, self-improving AI agent. According to <a href="https://github.com/NousResearch/hermes-agent" rel="noopener">its README</a>, it creates skills from experience, improves them as it uses them, and talks to you from Telegram, Discord, Slack, WhatsApp, Signal or the terminal through one gateway. kwant is built around something else: a team of bots on hardware you control, where the work is checked before it counts as done.</p>
+<p>If you want to try kwant without starting over, it can read your Hermes home and each profile and recreate them as bots. <a href="#import">See what the import brings across</a>.</p>
+
+<h2 id="different">What kwant does differently</h2>
+<ul>
+  <li><strong>Verified means kwant checked it.</strong> Work shows up as cards on a Mission board. A card turns Verified only when its checks pass: a command such as the tests, a web address that has to answer, a file that has to exist, a review by a teammate who isn't the task's owner, or you pressing Verify. A bot can't verify its own work, and a check a bot adds to its own task waits for your OK. See <a href="../docs/mission-board.html#verified">what "Verified" means</a>.</li>
+  <li><strong>A bot that stops says so, and why.</strong> When a step fails or is refused, a bot tries it again, then tries another way. If nothing works, its last line starts with <code>Blocked:</code> and says what would unblock it, and from a team's lead that comes to you as a question card. A lead that stops without handing on, asking you or writing <code>Done:</code> gets up to 2 more turns, then you get one <strong>Keep going?</strong> card. See <a href="../docs/bots-and-teams.html#handoffs">handoffs</a>.</li>
+  <li><strong>Nothing extra to install.</strong> kwant is one app for Mac or Linux (and a Windows beta), or one program, <code>kwnt</code>, with the web app built in. You don't install Node.js or Python yourself: the apps set up what they need on first start, and kwant installs Codex for you without Node. Docker is optional, only for VM mode and the bots' shared browser. Building kwant from source needs Rust and Node.js; the downloads don't. See <a href="../docs/install.html">Install &amp; run</a>.</li>
+</ul>
+<p>Hermes works on the same problem in its own way. Its Kanban board, added in <a href="https://github.com/NousResearch/hermes-agent/releases/tag/v2026.5.7" rel="noopener">v0.13.0</a>, blocks a task when an agent exits before it's complete, and since <a href="https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.0" rel="noopener">v0.22.0</a> interrupted turns aren't reported as done. None of this makes Hermes Agent a bad product. The three points above are where kwant fits better.</p>
+
+<h2 id="compare">Hermes Agent vs kwant</h2>
+<p>We only list what we can show from kwant's own docs and from Hermes Agent's own README, docs and release notes, as read on November 16, 2026. Where we haven't checked a Hermes detail, we point you to <a href="https://hermes-agent.nousresearch.com/docs/" rel="noopener">its docs</a> rather than guess.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th scope="col">Topic</th><th scope="col">Hermes Agent</th><th scope="col">kwant</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Where it runs</th><td>Your laptop, a VPS or a GPU cluster, with six terminal backends: local, Docker, SSH, Modal, Daytona and Vercel Sandbox (<a href="https://github.com/NousResearch/hermes-agent" rel="noopener">README</a>)</td><td>Your laptop, a VPS or Docker, on hardware you control</td></tr>
+    <tr><th scope="row">Where you talk to it</th><td>Telegram, Discord, Slack, WhatsApp, Signal and the terminal, from one gateway, plus Hermes Desktop (README)</td><td>kwant's web app, the Mac app, the Linux and Windows apps (both in beta), a <a href="../docs/phone.html">phone app</a> you add from the browser, and one paired <a href="../docs/telegram.html">Telegram</a> chat per space</td></tr>
+    <tr><th scope="row">What it runs on</th><td>Python. The installer manages its own Python environment with a bundled <code>uv</code> (README)</td><td>One program with the web app built in. No Node.js or Python for you to install</td></tr>
+    <tr><th scope="row">Models</th><td>Nous Portal, OpenRouter, OpenAI, your own endpoint and <a href="https://hermes-agent.nousresearch.com/docs/integrations/providers" rel="noopener">many others</a></td><td>Claude, Codex or Grok CLI logins, API keys, local Ollama or any OpenAI-compatible server, with failover across accounts</td></tr>
+    <tr><th scope="row">When work counts as done</th><td>A Kanban board that blocks a task when an agent exits early (<a href="https://github.com/NousResearch/hermes-agent/releases/tag/v2026.5.7" rel="noopener">v0.13.0 notes</a>); see <a href="https://hermes-agent.nousresearch.com/docs/" rel="noopener">its docs</a> for how a task is checked</td><td>Verified only when its checks pass, run by kwant or by someone other than the bot that did the work. A bot that can't finish ends with <code>Blocked:</code> and what would unblock it</td></tr>
+    <tr><th scope="row">Learning</th><td>A built-in learning loop: it creates skills from experience and improves them during use (README)</td><td>Per-bot <a href="../docs/memory-skills.html">memories and skills</a>, plus <a href="../docs/lessons.html">lessons</a> kwant builds from failed checks and your send-backs, so a bot can't write its own</td></tr>
+    <tr><th scope="row">Scheduled work</th><td>A built-in cron scheduler with delivery to any platform (<a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/cron" rel="noopener">Cron Scheduling</a>)</td><td>Routines and cron rules on your own machine; they run while the machine is on</td></tr>
+    <tr><th scope="row">Tool safety</th><td>Command approval, DM pairing and container isolation (<a href="https://hermes-agent.nousresearch.com/docs/user-guide/security" rel="noopener">Security</a>)</td><td>Asks before bots run commands or edit files outside their folder, with three <a href="../docs/approvals.html">approval</a> modes. Payments always ask</td></tr>
+    <tr><th scope="row">License</th><td>MIT (<a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE" rel="noopener">LICENSE</a>)</td><td>AGPL-3.0, with commercial licenses available</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="import">Bring your Hermes Agent into kwant</h2>
+<p>Open <strong>Settings › Import</strong>. Since 0.8.0 it reads Hermes Agent homes and profiles. In the Mac, Linux and Windows apps, <strong>Found on this computer</strong> lists <code>~/.hermes</code> by name and count only. It reads nothing until you pick it, and it never follows a link out of the folder. On a server, pick the folder or a GitHub link instead. Every import shows a preview first, and nothing is created until you press Import.</p>
+<p>Your Hermes home, <code>~/.hermes</code>, becomes one bot, and so does each profile in <code>~/.hermes/profiles/&lt;name&gt;</code>. kwant brings across:</p>
+<ul>
+  <li><code>SOUL.md</code> as the bot's soul</li>
+  <li><code>memories/MEMORY.md</code> as its memories, one per <code>§</code> entry</li>
+  <li><code>memories/USER.md</code> as what it knows about you</li>
+  <li>the skills you or your agent made, from <code>skills/</code></li>
+</ul>
+<p>Skills that Hermes installs itself (listed in <code>skills/.bundled_manifest</code>) are left out, and the preview names them under <strong>Not brought over</strong>. kwant never reads <code>.env</code>, <code>auth.json</code>, <code>config.yaml</code> or your past sessions, so no keys or sign-ins come across: you add your logins in kwant. Cron jobs aren't part of the import, so set them up again as <a href="../docs/routines.html">routines</a>. One Undo removes the whole import. See <a href="../docs/bots-and-teams.html#import">Import bots</a>.</p>
+
+<h2 id="after">What you get in kwant after you move</h2>
+<ul>
+  <li><strong>Teams and handoffs.</strong> Group bots into teams with a lead and let them pass work with @mentions. Each hand-off gets a card, and the bot that handed it out reviews the result. See <a href="../docs/bots-and-teams.html">teams and handoffs</a>.</li>
+  <li><strong>A mission board.</strong> Every check and its evidence on the task's receipt, and checkpoints that let you undo a task's file changes. See the <a href="../docs/mission-board.html">mission board</a>.</li>
+  <li><strong>Routines.</strong> Schedule bot work with routines, cron rules and follow-ups. See <a href="../docs/routines.html">routines</a>.</li>
+  <li><strong>Approvals.</strong> Three <a href="../docs/approvals.html">approval</a> modes per space or bot, and <a href="../docs/flight-school.html">Flight School</a> tiers (Observe, Sandbox, Act) that set how much freedom each bot has earned.</li>
+  <li><strong>Your models, your accounts.</strong> Add <a href="../docs/accounts.html">multiple Claude, Codex and Grok accounts</a> or API keys with failover. See <a href="../docs/models.html">models and routing</a>.</li>
+  <li><strong>Tools through MCP.</strong> Connect Model Context Protocol servers with per-bot access and approval before risky calls. See <a href="../docs/mcp.html">MCP tools</a>.</li>
+  <li><strong>Spaces.</strong> Keep work and home apart, each with its own bots, routines and approval rules. See <a href="../docs/spaces.html">spaces</a>.</li>
+</ul>
+
+<h2 id="stay">When Hermes Agent is still the better fit</h2>
+<p>If you want one agent that learns from its own work and writes its own skills, that is what Hermes is built around. It also reaches you in more chat apps than kwant, and it can run on serverless backends such as Modal and Daytona that cost little while idle (<a href="https://github.com/NousResearch/hermes-agent" rel="noopener">README</a>). And kwant runs on a machine you look after: if your bots live on a laptop that is switched off, routines wait until it is back on. A small VPS with the systemd setup in <a href="../docs/install.html">Install &amp; run</a> avoids that.</p>
+
+<h2 id="start">Get started</h2>
+<p>Install <code>kwnt</code> on a laptop, a VPS or with Docker, add a login, and import your Hermes profiles.</p>
+{{install:hermes}}
+<ul>
+  <li><a href="../docs/install.html">Install kwnt</a></li>
+  <li><a href="../docs/quickstart.html">Quickstart</a></li>
+  <li><a href="../blog/openclaw-vs-hermes-agent-vs-kwant.html">OpenClaw vs Hermes Agent vs kwant</a></li>
+  <li><a href="https://github.com/alexsergivan/kwant" rel="noopener">Source and releases on GitHub</a></li>
+</ul>
+
+<section class="faq" id="faq" aria-labelledby="faq-title">
+<h2 id="faq-title">FAQ</h2>
+<h3>What is a good open-source alternative to Hermes Agent?</h3>
+<p>It depends on what you need. kwant is an open-source (AGPL-3.0), self-hosted option built around a team of AI bots that hand work to each other with @mentions, where a task counts as Verified only when kwant runs the check itself. It runs on your laptop, a VPS or Docker.</p>
+<h3>Can I import my Hermes Agent into kwant?</h3>
+<p>Yes. Since 0.8.0, Settings › Import reads Hermes homes and profiles, and the desktop apps list <code>~/.hermes</code> under Found on this computer. Your home and each profile become a bot with its soul, memories, what it knows about you, and the skills you made. Skills Hermes installed itself are left out and listed in the preview, and keys, settings and sessions are never read.</p>
+<h3>What does "Verified" mean in kwant?</h3>
+<p>A task on the Mission board turns Verified only when its checks pass: a command such as the tests, a web address, a file, a review by a teammate who isn't the task's owner, or you pressing Verify. The bot that did the work can't verify it, and a check it adds to its own task waits for your OK.</p>
+<h3>Do I need Python to run kwant?</h3>
+<p>No. The Mac, Linux and Windows apps and the one-line Linux install use a prebuilt program with the web app built in. kwant sets up what it needs itself, even on a computer with no Python. Only building kwant from source needs Rust and Node.js.</p>
+<h3>Is kwant free?</h3>
+<p>The software is free under the AGPL-3.0, and commercial licenses are available. You pay for whatever model accounts or API keys you connect. kwant sends no telemetry to its developers.</p>
+<h3>What is kwnt?</h3>
+<p>It is the program you install and run for kwant. Start it with <code>kwnt serve</code>.</p>
+</section>
+  </article>
+</div>
