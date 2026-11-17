@@ -395,7 +395,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({
             <button type="button" onClick={closeSkip} className={QUIET}>
               Cancel
             </button>
-            <button type="button" data-floor-skip-allow aria-disabled={!skip.sure || off || undefined} onClick={allowWithoutBackup} className={`${AMBER} aria-disabled:hover:bg-amber-600`}>
+            <button type="button" data-floor-skip-allow aria-disabled={!skip.sure || off || undefined} onClick={allowWithoutBackup} className={`${AMBER} aria-disabled:hover:bg-amber-500`}>
               <Check size={14} aria-hidden="true" />
               Allow without a backup
             </button>
