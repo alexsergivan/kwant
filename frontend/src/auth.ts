@@ -61,6 +61,14 @@ export interface AuthStatus {
   person_authenticated?: boolean;
   /** This server can let a new browser in from a signed-in device (newer servers). */
   device_login?: boolean;
+  /** Where an app store or host shows this install's token (`KWNT_SIGNIN_HINT`), plain text; absent when unset. */
+  signin_hint?: string | null;
+}
+
+/** The store's or host's sign-in hint, or null: trimmed text only, whatever an older or odd server sent. */
+export function signinHintOf(s: Pick<AuthStatus, 'signin_hint'>): string | null {
+  const h = typeof s.signin_hint === 'string' ? s.signin_hint.trim() : '';
+  return h ? h : null;
 }
 
 /** Asks for the token for a person-only action, as if one had answered 401. */
