@@ -148,7 +148,20 @@ person takes it back (`DELETE /api/kwants/:id/always-allowed`, see [mcp-api.md](
 command only. Neither covers a payment or a Home Assistant lock, door or alarm, and "Always this
 session" on such a card allows that one call.
 
+## A no stays a no
+
+When the person presses Deny, the bot is told not to try it again or another way, and for the
+rest of that conversation (a thread, else the channel or direct chat) kwnt refuses a call of the
+same family from that bot at once, with no card. A family is a shell program and its first
+subcommand (`gh pr`, `git push`), or a URL program and its host (`curl` to `api.github.com`); a
+file and whether it's read or written; a page's host; an MCP server's tool. Other built-in tools
+keep asking. The bot hears `DECLINED_BEFORE_TEXT` and the step shows as declined. It lasts until
+the person writes in that conversation again, and only in memory: a restart, another conversation
+or another bot asks as before. An unanswered card, a card its turn dropped, and kwnt's own refusals
+don't count, and a late Allow on an earlier card still runs that call (`src/mcp/declined.rs`).
+
 ## Tests
 
 `cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test --test payment_floor_test --test home_locks_always_ask_test`
-and the classifier tables in `src/mcp/shell_risk.rs` (`cargo test --lib shell_risk`).
+and the classifier tables in `src/mcp/shell_risk.rs` (`cargo test --lib shell_risk`); a no that
+stays a no: `cargo test --lib declined`.

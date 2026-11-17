@@ -131,6 +131,10 @@ async fn broker_approver_follows_user_decisions() {
     let (h, ticket) = ask(&state, a.clone(), "echo").await;
     assert!(state.broker.resolve(&ticket, ApprovalDecision::Deny).await);
     assert!(!h.await.unwrap(), "denied by broker");
+    // 27b: the same tool in the same chat is refused at once, with no card, until the person writes
+    assert!(!tokio::time::timeout(Duration::from_secs(5), a.approve(request("echo"))).await.expect("no card the second time"));
+    assert!(state.broker.pending_ids().await.is_empty());
+    state.broker.declined.clear("k1", "conv-test");
 
     let (h, ticket) = ask(&state, a.clone(), "echo").await;
     assert_eq!(state.db.get_approval(&ticket).await.unwrap().unwrap().status, "pending");
