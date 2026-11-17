@@ -168,10 +168,12 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn four_templates_in_order() {
+    fn five_templates_in_order() {
         let ids: Vec<_> = all().iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["helpers", "inbox", "sales", "coding"]);
+        assert_eq!(ids, ["helpers", "inbox", "sales", "coding", "home"]);
         assert!(get("coding").unwrap().routine.is_none());
+        // Lights out ships off: House turns lights off only once the person turns the routine on
+        assert!(get("home").unwrap().routine.as_ref().is_some_and(|r| !r.enabled));
         assert!(get("nope").is_none());
     }
 

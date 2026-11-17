@@ -35,9 +35,9 @@ pub const LOCATION_SETTING: &str = "location";
 /// Settings agents may read and change; everything else in Settings is the person's.
 const SETTINGS: [&str; 6] = ["timezone", "location", "max_turns_per_agent", "max_turns_global", "delegation_follow_up_minutes", "notify_on"];
 
-const AVATARS: [&str; 22] = [
+const AVATARS: [&str; 23] = [
     "default", "architect", "tech_lead", "devops", "security", "fast", "designer", "data", "qa", "product", "writer", "research",
-    "teacher", "marketing", "legal", "coach", "traveler", "chef", "fitness", "party", "builder", "zen",
+    "teacher", "marketing", "legal", "coach", "traveler", "chef", "fitness", "party", "builder", "zen", "home",
 ];
 
 const TOOL_NAMES: [&str; 23] = [

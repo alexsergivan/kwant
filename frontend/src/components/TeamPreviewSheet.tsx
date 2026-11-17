@@ -13,6 +13,7 @@ import {
   FileText,
   FolderOpen,
   Handshake,
+  House,
   Inbox,
   Info,
   Loader2,
@@ -81,6 +82,7 @@ export const TEMPLATE_ICONS: Record<string, LucideIcon> = {
   inbox: Inbox,
   handshake: Handshake,
   'code-xml': Code2,
+  house: House,
 };
 export const TemplateGlyph: React.FC<{ icon: string; size?: number; box?: string; className?: string }> = ({ icon, size = 17, box = 'w-8 h-8 rounded-[9px]', className = '' }) => {
   const Icon = TEMPLATE_ICONS[icon] ?? ScanSearch;

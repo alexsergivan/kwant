@@ -6,6 +6,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { Sparkles, X } from 'lucide-react';
 import { TeamPreviewSheet, type SheetMode } from './TeamPreviewSheet';
 import { TeamNeedBox } from './TeamNeedBox';
+import { loadStatuses, type McpServer } from '../mcp';
+import { HA_CHANGED_EVENT, haNeedState } from '../homeAssistant';
 import { useEscapeLayer } from '../escape';
 import { useMedia } from '../useMedia';
 import { PHONE_QUERY } from '../layout';
@@ -494,6 +496,7 @@ export function useNeedsContext(
 ): NeedsContext & { info: TeamTemplateInfo | null | undefined } {
   const [imap, setImap] = useState<NeedsContext['imap']>({ state: 'none' });
   const [apps, setApps] = useState<string[]>([]);
+  const [haServers, setHaServers] = useState<McpServer[] | null>(null);
   const [read, setRead] = useState<{ teamId: string; info: TeamTemplateInfo | null } | null>(null);
   const info = read && read.teamId === teamId ? read.info : undefined;
   const needsDone = info?.needs_done ?? [];
@@ -502,7 +505,11 @@ export function useNeedsContext(
   useEffect(() => {
     const f = () => setSeq((n) => n + 1);
     window.addEventListener('focus', f);
-    return () => window.removeEventListener('focus', f);
+    window.addEventListener(HA_CHANGED_EVENT, f);
+    return () => {
+      window.removeEventListener('focus', f);
+      window.removeEventListener(HA_CHANGED_EVENT, f);
+    };
   }, []);
   useEffect(() => {
     let live = true;
@@ -512,6 +519,10 @@ export function useNeedsContext(
       () => undefined,
     );
     if (space) devApi.get(space).then((st) => devStore.set(space, st), () => undefined);
+    fetch('/api/mcp/servers').then(
+      (r) => (r.ok ? r.json() : []),
+      () => [],
+    ).then((list: unknown) => live && setHaServers(Array.isArray(list) ? (list as McpServer[]) : []));
     return () => {
       live = false;
     };
@@ -536,7 +547,8 @@ export function useNeedsContext(
       : row.status === 'error' || row.poll_error
         ? { state: 'failed', detail: row.poll_error }
         : { state: 'checking', detail: row.repo };
-  return { canRun, imap, apps, repo, needsDone, info };
+  const homeAssistant = haServers === null ? { state: 'none' as const } : haNeedState(haServers, loadStatuses());
+  return { canRun, imap, apps, repo, needsDone, homeAssistant, info };
 }
 
 export interface TeamNeedsTopProps {

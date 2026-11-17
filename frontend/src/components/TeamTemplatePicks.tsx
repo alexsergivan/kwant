@@ -3,6 +3,8 @@
 import React from 'react';
 import { ChevronRight, Sparkles, X } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { NewTag } from './NewTag';
+import { markNewSeen } from '../whatsNew';
 import { TEMPLATE_ICONS, TemplateGlyph } from './TeamPreviewSheet';
 import { useMedia } from '../useMedia';
 import { PHONE_QUERY } from '../layout';
@@ -10,12 +12,19 @@ import { plural, type TeamTemplate } from '../teams/teamTemplates';
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 
+/** 26e: the Home team is new in 0.9.21; picking it (any door) clears the tag. */
+const pickTemplate = (onPick: (id: string) => void, id: string) => {
+  if (id === 'home') markNewSeen('home-team');
+  onPick(id);
+};
+const HomeNew: React.FC<{ id: string; className?: string }> = ({ id, className }) => (id === 'home' ? <NewTag id="home-team" className={className} /> : null);
+
 /** T7.1: under FirstRunWelcome. Works before any account exists. */
 export const TemplateWelcome: React.FC<{ templates: TeamTemplate[]; onPick: (id: string) => void; onBlank: () => void }> = ({ templates, onPick, onBlank }) => {
   const phone = useMedia(PHONE_QUERY);
   if (!templates.length) return null;
   return (
-    <section aria-labelledby="t-welcome-h" className="w-full max-w-[752px] mx-auto mt-8 px-4" data-template-welcome>
+    <section aria-labelledby="t-welcome-h" className="w-full max-w-[752px] xl:max-w-[960px] mx-auto mt-8 px-4" data-template-welcome>
       <div className="flex items-center gap-3">
         <span className="flex-1 h-px bg-white/10" aria-hidden="true" />
         <h3 id="t-welcome-h" className="text-[11px] leading-4 font-semibold uppercase tracking-[.08em] text-zinc-400">
@@ -24,13 +33,13 @@ export const TemplateWelcome: React.FC<{ templates: TeamTemplate[]; onPick: (id:
         <span className="flex-1 h-px bg-white/10" aria-hidden="true" />
       </div>
       <p className="mt-2 mb-3 text-[13px] text-zinc-400 text-center">A lead, helpers, instructions and skills for one job. You can add the account after.</p>
-      <ul className={phone ? 'flex flex-col gap-2' : 'grid grid-cols-3 gap-3'}>
+      <ul className={phone ? 'flex flex-col gap-2' : 'grid grid-cols-2 xl:grid-cols-4 gap-3'}>
         {templates.map((t) => (
           <li key={t.id}>
             <button
               type="button"
               data-template={t.id}
-              onClick={() => onPick(t.id)}
+              onClick={() => pickTemplate(onPick, t.id)}
               aria-label={`${t.label} team: ${t.card_line} ${plural(t.bots.length, 'bot')}. Preview`}
               className={
                 phone
@@ -42,7 +51,7 @@ export const TemplateWelcome: React.FC<{ templates: TeamTemplate[]; onPick: (id:
                 <>
                   <TemplateGlyph icon={t.icon} />
                   <span className="flex-1 min-w-0">
-                    <span className="block text-sm leading-5 font-semibold text-zinc-50">{t.label}</span>
+                    <span className="flex items-center gap-1.5 text-sm leading-5 font-semibold text-zinc-50">{t.label}<HomeNew id={t.id} /></span>
                     <span className="block text-[12.5px] leading-[18px] text-zinc-300">{t.card_line}</span>
                   </span>
                   <ChevronRight size={16} className="text-zinc-400 shrink-0" aria-hidden="true" />
@@ -52,6 +61,7 @@ export const TemplateWelcome: React.FC<{ templates: TeamTemplate[]; onPick: (id:
                   <span className="flex items-center gap-2.5">
                     <TemplateGlyph icon={t.icon} />
                     <span className="text-sm leading-5 font-semibold text-zinc-50">{t.label}</span>
+                    <HomeNew id={t.id} className="ml-auto" />
                   </span>
                   <span className="text-[12.5px] leading-[18px] text-zinc-300">{t.card_line}</span>
                   <span className="mt-auto flex items-center gap-2" aria-hidden="true">
@@ -62,8 +72,8 @@ export const TemplateWelcome: React.FC<{ templates: TeamTemplate[]; onPick: (id:
                         </span>
                       ))}
                     </span>
-                    <span className="text-xs text-zinc-400">{plural(t.bots.length, 'bot')}</span>
-                    <span className="ml-auto text-xs font-medium text-sky-300">Preview ›</span>
+                    <span className="text-xs text-zinc-400 whitespace-nowrap">{plural(t.bots.length, 'bot')}</span>
+                    <span className="ml-auto text-xs font-medium text-sky-300 whitespace-nowrap">Preview ›</span>
                   </span>
                 </>
               )}
@@ -86,17 +96,20 @@ export const TemplateTiles: React.FC<{ templates: TeamTemplate[]; onPick: (id: s
   return (
     <div data-template-tiles>
       <p className="block text-sm font-medium text-zinc-300 mb-2">From a template</p>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {templates.map((t) => (
           <button
             key={t.id}
             type="button"
             data-template={t.id}
-            onClick={() => onPick(t.id)}
+            onClick={() => pickTemplate(onPick, t.id)}
             aria-label={`${t.label} template, ${plural(t.bots.length, 'bot')}. Preview`}
             className={`flex flex-col items-start gap-1.5 p-2.5 min-h-[76px] rounded-[10px] border border-white/10 bg-zinc-900/60 text-left hover:border-sky-300/45 transition-colors ${FOCUS}`}
           >
-            <TemplateGlyph icon={t.icon} size={14} box="w-[26px] h-[26px] rounded-[7px]" />
+            <span className="w-full flex items-start justify-between gap-1">
+              <TemplateGlyph icon={t.icon} size={14} box="w-[26px] h-[26px] rounded-[7px]" />
+              <HomeNew id={t.id} />
+            </span>
             <span className="text-[13px] leading-4 font-semibold text-zinc-50">{t.label}</span>
             <span className="text-[11px] leading-[14px] text-zinc-400">{plural(t.bots.length, 'bot')}</span>
           </button>
@@ -141,12 +154,13 @@ export const TemplateSidebarBox: React.FC<{ templates: TeamTemplate[]; onPick: (
               key={t.id}
               type="button"
               data-template={t.id}
-              onClick={() => onPick(t.id)}
+              onClick={() => pickTemplate(onPick, t.id)}
               aria-label={`${t.label} team. Preview`}
               className={`inline-flex items-center gap-[5px] ${phone ? 'h-11 px-3.5' : 'h-[26px] px-[9px]'} rounded-full border border-white/10 bg-zinc-900/60 text-xs font-medium text-zinc-200 hover:border-sky-300/45 ${FOCUS}`}
             >
               {Icon && <Icon size={12} className="text-sky-300" aria-hidden="true" />}
               {t.label}
+              <HomeNew id={t.id} />
             </button>
           );
         })}

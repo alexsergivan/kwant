@@ -30,6 +30,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { NewTag } from './NewTag';
 import {
   CatalogEntry,
   ComposioAppList,
@@ -979,6 +980,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
             <Mark name={row.name} slug={slug} />
             <div className="min-w-0 flex-1">
               <Name name={row.name} bold={row.match?.bold ?? null} />
+              {slug === 'home-assistant' && <NewTag id="home-assistant" className="ml-1.5 align-middle" />}
               {description && (
                 <p className={`text-[13px] text-zinc-300 ${phone ? 'line-clamp-2' : 'truncate'}`} title={s.description}>
                   {description}
@@ -1143,6 +1145,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline gap-x-1.5">
                 <Name name={r.name} bold={null} />
+                {slug === 'home-assistant' && <NewTag id="home-assistant" className="self-center" />}
                 <span className="text-xs text-zinc-400">{small}</span>
               </div>
               {description && (

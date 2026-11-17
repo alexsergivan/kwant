@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  House,
   Plug,
   Terminal,
   Globe,
@@ -57,6 +58,9 @@ import { inDesktopApp, leaveForSignIn, pollUntil, signInChanged } from '../exter
 import { useEscapeLayer } from '../escape';
 import { signInDeadEnd } from '../mcpSignInDeadEnd';
 import { ChooseBotsTarget, FindTool, FindToolApi } from './FindTool';
+import { NewTag } from './NewTag';
+import { openHomeAssistant } from './HomeAssistantSheet';
+import { HA_CHANGED_EVENT, isHaServer } from '../homeAssistant';
 import { DirectoryEntry, connectionsApi } from '../connections';
 
 interface McpServersModalProps {
@@ -301,9 +305,10 @@ export const BuiltInGrid: React.FC<{ onPick: (preset: McpPreset) => void }> = ({
                 >
                   <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200 group-hover:text-sky-200">
                     <span className="text-sky-400" aria-hidden="true">
-                      {p.form.transport === 'stdio' ? <Terminal size={13} /> : <Globe size={13} />}
+                      {p.category === 'home' ? <House size={13} /> : p.form.transport === 'stdio' ? <Terminal size={13} /> : <Globe size={13} />}
                     </span>
                     {p.label}
+                    {p.id === 'home-assistant' && <NewTag id="home-assistant" className="ml-1" />}
                   </span>
                   <span className="mt-1 block text-[11px] text-zinc-400 leading-snug">{p.blurb}</span>
                   <span className="mt-2 flex flex-wrap gap-1">
@@ -456,6 +461,17 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     // Also catches a sign-in finished elsewhere, like the same-tab fallback when popups are blocked.
     refresh().then(() => checkNewSignIns());
   }, [isOpen, startAdding, refresh, checkNewSignIns]);
+
+  // Connect Home Assistant saved, tested or removed a server: show it as it is now.
+  useEffect(() => {
+    if (!isOpen) return;
+    const on = () => {
+      setStatuses(loadStatuses());
+      void refresh();
+    };
+    window.addEventListener(HA_CHANGED_EVENT, on);
+    return () => window.removeEventListener(HA_CHANGED_EVENT, on);
+  }, [isOpen, refresh]);
 
   useEffect(() => {
     if (!isOpen || !startWith) return;
@@ -618,6 +634,12 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
 
   const openForm = (target: 'new' | McpServer, preset?: McpPreset) => {
     playSfx('click');
+    // Home Assistant has its own sheet (26e): an address and an access token, nothing else.
+    if (preset?.id === 'home-assistant' || (target !== 'new' && isHaServer(target))) {
+      setPicking(false);
+      openHomeAssistant({ door: 'tools', serverId: target !== 'new' ? target.id : undefined });
+      return;
+    }
     setFormError(null);
     setPicking(false);
     setPresetId(preset?.id ?? null);

@@ -84,6 +84,7 @@ import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/R
 import { SpaceReadyCard } from './components/SpaceReadyCard';
 import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
+import { channelBotIds } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
@@ -160,7 +161,7 @@ import {
   turnsAwaitingAnswer,
 } from './questions';
 import { AwayError, AwayItem, affectsAway, awayApi } from './away';
-import { asksHere, closedId, isHandOff, dismissKind, dropClosed, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
+import { asksHere, closedId, isHandOff, dismissKind, dropClosed, loadAskWindow, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
 import { NeedsYouStrip } from './components/NeedsYouStrip';
 import { chainBudgetApi } from './chainBudget';
 import { needsYouRows, attentionRows } from './chatsTab';
@@ -183,6 +184,7 @@ import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, creat
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
+import { HomeAssistantHost, openHomeAssistant } from './components/HomeAssistantSheet';
 import { JiraSetupHost } from './components/JiraSetup';
 import { useDevMode, useDevModeOn } from './components/DevModeSwitch';
 import { DevModeSuggestion, SUGGEST_HIDDEN } from './components/DevModeSuggestion';
@@ -2425,18 +2427,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     };
     if (t.focusKind === 'approval') return document.querySelector(`[data-approval-card="${CSS.escape(focus)}"]`) ? ring() : false;
     if (shownMessagesRef.current.some((m) => m.id === focus)) return ring();
-    if (quiet || t.thread_id) return false;
-    const ctx = t.channel_id ?? t.kwant_id;
-    try {
-      const res = await fetch(`/api/channels/${encodeURIComponent(ctx)}/messages?around=${encodeURIComponent(focus)}`);
-      if (!res.ok) return false;
-      const around: ChatMessage[] = await res.json();
-      if (!around.some((m) => m.id === focus) || selectedIdRef.current !== ctx) return false;
-      setHistoryWindow({ ctx, messages: around });
-      return ring();
-    } catch {
-      return false;
-    }
+    if (quiet) return false;
+    // 22x: a thread too (its route takes `around`); the window shows only while that chat is open.
+    const w = await loadAskWindow<ChatMessage>(t, focus);
+    if (!w || openCtxRef.current !== w.ctx) return false;
+    setHistoryWindow(w);
+    return ring();
   };
 
   /** 22i: where an away item lands: its exact chat, and its own message or card to ring there. */
@@ -3326,6 +3322,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setLooseAddImap((n) => n + 1);
       showPage('inbox', 'loose');
     } else if (opens === 'connections') openConnections();
+    else if (opens === 'home_assistant') openHomeAssistant({ door: 'team', teamId: team.id });
+    else if (opens === 'accounts') openSettings();
     else if (opens === 'dev_mode_setup') {
       // The team's repo is set in Manage team (Team settings > Git Repo), where Dev mode's line shows.
       const t = teams.find((x) => x.id === team.id);
@@ -5085,6 +5083,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
       <JiraSetupHost onSaved={() => pushToast('Taking tickets from Jira', 'Tickets you hand over show up on the Dev desk.')} />
+      <HomeAssistantHost
+        teamIds={teams.map((t) => t.id)}
+        teamKwants={(id) => {
+          const t = teams.find((x) => x.id === id);
+          return t ? channelBotIds(t) : [];
+        }}
+      />
       <GitHubConnectHost
         onConnected={(_space, source, test) => {
           const t = connectedToast(source, test);

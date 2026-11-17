@@ -13,9 +13,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// The avatars kwant draws; an import's `avatar_hint` is used when it names one.
-pub const AVATARS: [&str; 22] = [
+pub const AVATARS: [&str; 23] = [
     "default", "architect", "tech_lead", "devops", "security", "fast", "designer", "data", "qa", "product", "writer", "research",
-    "teacher", "marketing", "legal", "coach", "traveler", "chef", "fitness", "party", "builder", "zen",
+    "teacher", "marketing", "legal", "coach", "traveler", "chef", "fitness", "party", "builder", "zen", "home",
 ];
 
 /// One bot an import created, and what it looked like then (to tell if it was edited since).

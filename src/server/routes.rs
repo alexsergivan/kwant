@@ -533,6 +533,18 @@ pub async fn list_messages(
     Path(channel_or_kwant_id): Path<String>,
     Query(q): Query<MessagesQuery>,
 ) -> Result<Json<Vec<Message>>, (StatusCode, Json<serde_json::Value>)> {
+    messages_page(&state.db, &channel_or_kwant_id, &q).await.map(Json)
+}
+
+/// One page of a chat's messages (channel, direct chat or thread) for [`MessagesQuery`]: the
+/// latest `limit` (default 100), or the window around / page before a message of this chat.
+/// 400 for a bad limit or both anchors, 404 when the anchor isn't in this chat. 22x: the
+/// thread route answers through this too, so an old ask in a thread can be loaded and rung.
+pub(crate) async fn messages_page(
+    db: &crate::db::Database,
+    chat_id: &str,
+    q: &MessagesQuery,
+) -> Result<Vec<Message>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, m: &str| (status, Json(json!({ "error": m })));
     let max = crate::db::history::MAX_HISTORY_PAGE;
     let limit = match q.limit {
@@ -540,17 +552,16 @@ pub async fn list_messages(
         Some(n) if (1..=max).contains(&n) => n,
         Some(_) => return Err(err(StatusCode::BAD_REQUEST, &format!("limit must be 1–{max}"))),
     };
-    let db = &state.db;
     let rows = match (q.around.as_deref(), q.before.as_deref()) {
         (Some(_), Some(_)) => return Err(err(StatusCode::BAD_REQUEST, "use around or before, not both")),
-        (Some(id), None) => db.list_messages_around(&channel_or_kwant_id, id, limit).await,
-        (None, Some(id)) => db.list_messages_before(&channel_or_kwant_id, id, limit).await,
-        (None, None) => db.list_messages(&channel_or_kwant_id, limit).await.map(Some),
+        (Some(id), None) => db.list_messages_around(chat_id, id, limit).await,
+        (None, Some(id)) => db.list_messages_before(chat_id, id, limit).await,
+        (None, None) => db.list_messages(chat_id, limit).await.map(Some),
     };
     match rows {
         Ok(Some(mut rows)) => {
             db.attach_chat_fields(&mut rows).await;
-            Ok(Json(rows))
+            Ok(rows)
         }
         Ok(None) => Err(err(StatusCode::NOT_FOUND, "That message isn't in this chat.")),
         Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not load messages.")),
