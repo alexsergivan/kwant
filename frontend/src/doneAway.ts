@@ -307,7 +307,7 @@ export function trailFrom(msg: DoneMessage | null, place: string | null): TrailR
     .filter((s) => s.kind !== 'thinking' && s.kind !== 'note')
     .map((s) => ({
       at: hms(s.started_at),
-      what: readableStepTitle(plainTitle(s.title), s.status),
+      what: readableStepTitle(plainTitle(s.title), s.outcome ?? s.status),
       detail: s.detail ? plainTitle(s.detail) : null,
       failed: s.status === 'failed',
     }));
