@@ -21,7 +21,7 @@ const m = await loadBundled(`
   export * from './src/homeAssistant';
   export { homeAction, homePhrase, readableStepTitle } from './src/toolLabel';
   export { ModernApprovalCard, approvalAction } from './src/components/ModernApprovalCard';
-  export { HomeAssistantSheet } from './src/components/HomeAssistantSheet';
+  export { HomeAssistantSheet, urlWithBreaks } from './src/components/HomeAssistantSheet';
   export { needView } from './src/teams/teamTemplates';
   export { TEMPLATES_WIRE } from './src/teams/templateFixtures';
   export { newKey, isNewThing } from './src/whatsNew';
@@ -427,4 +427,12 @@ test('D2: the welcome grid’s Home card has the home-team New tag; picking it c
   } finally {
     g.fetch = g.window.fetch = realFetch;
   }
+});
+
+// ha-sheet-polish (a): the "kwant will connect to" URL wraps only after a "/", never mid-word ("/api/m|cp").
+test('the connect URL breaks only after each "/", with the scheme\'s "//" kept whole', () => {
+  const html = m.renderToStaticMarkup(h('span', null, ...m.urlWithBreaks('http://homeassistant.local:8123/api/mcp')));
+  assert.equal(html, '<span>http://<wbr/>homeassistant.local:8123/<wbr/>api/<wbr/>mcp</span>');
+  assert.ok(!html.includes('/<wbr/>/'), 'never between the two slashes');
+  assert.equal(m.renderToStaticMarkup(h('span', null, ...m.urlWithBreaks('https://ha.example.com/api/mcp/'))), '<span>https://<wbr/>ha.example.com/<wbr/>api/<wbr/>mcp/</span>');
 });
