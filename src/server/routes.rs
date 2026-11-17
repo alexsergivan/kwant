@@ -1023,10 +1023,13 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
-        // H3: a message held for a stuck or waiting bot starts its turn once the bot can take it
+        // H3: a message held for a stuck or waiting bot starts its turn once the bot can take it,
+        // after the older ones the person held in this chat (27d: answered in the order sent)
+        let mut held_place = None;
         if let Some(id) = &held {
-            if !super::bot_status::wait_released(&scope.state, id, &scope.cancel_token).await {
-                return;
+            match super::bot_status::wait_turn(&scope.state, id, &scope.cancel_token).await {
+                Some(place) => held_place = Some(place),
+                None => return,
             }
         }
         // P10: what the person expects and how best to deliver it, planned once before the bot
@@ -1045,7 +1048,7 @@ fn execute_single_turn(
             super::delivery_plan::remember(&scope.job_id, &message_id, plan);
         }
         // A full link in the person's own message may open the bot browser first
-        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), ..TurnOpts::default() };
+        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), held_place, ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
             // Several bots asked the person something: one list of it all (when the chain is over)
@@ -2142,6 +2145,10 @@ pub(super) struct TurnOpts {
     /// first turn's, and is checked against it). `None`: the plan comes from the person's own
     /// message, or there is none (see [`crate::router::delivery::plan_for_turn`]).
     pub(super) delivery: Option<crate::router::delivery::DeliveryPlan>,
+    /// 27d: a released held message's place in its chat's line, given up once this turn has its
+    /// own place in the bot's line (see [`super::bot_status::wait_turn`]). Only the first attempt
+    /// carries it. `None` for every turn that wasn't held.
+    pub(super) held_place: Option<super::bot_status::HeldPlace>,
 }
 
 /// See [`TurnOpts::chat_handover`].
@@ -2432,7 +2439,7 @@ pub(super) async fn turn_once(
     scope: &TurnScope,
     target_kwant: &Kwant,
     prompt: String,
-    opts: TurnOpts,
+    mut opts: TurnOpts,
 ) -> Result<String, String> {
     let tag = crate::drivers::events::TurnTag {
         turn_id: uuid::Uuid::new_v4().to_string(),
@@ -2475,9 +2482,14 @@ pub(super) async fn turn_once(
     // A delivery continuation starts on the slot its first turn handed over (see
     // [`TurnOpts::chat_handover`]); every other turn takes one
     let handed = opts.chat_handover.as_ref().and_then(|h| h.lock().ok()?.take());
+    // 27d: a released held message keeps its chat's line until this turn is in the bot's line
+    let place = opts.held_place.take();
     let slot = match handed {
-        Some(slot) => slot,
-        None => match turns.acquire(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender).await {
+        Some(slot) => {
+            drop(place);
+            slot
+        }
+        None => match turns.acquire_then(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender, move || drop(place)).await {
             Some(slot) => slot,
             None => return Err("stopped by the user".into()),
         },
@@ -5083,7 +5095,7 @@ async fn send_to_thread(
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
-    let opts = TurnOpts {
+    let mut opts = TurnOpts {
         nav_prompt: Some(payload.prompt.clone()),
         source: Some(super::bot_status::TurnSource::sender(from_person)),
         ..TurnOpts::default()
@@ -5096,9 +5108,11 @@ async fn send_to_thread(
     let held_id = held.as_ref().map(|_| saved.id.clone());
     tokio::spawn(async move {
         let _job = job;
+        // After the older messages the person held in this thread (27d)
         if let Some(id) = &held_id {
-            if !super::bot_status::wait_released(&scope.state, id, &scope.cancel_token).await {
-                return;
+            match super::bot_status::wait_turn(&scope.state, id, &scope.cancel_token).await {
+                Some(place) => opts.held_place = Some(place),
+                None => return,
             }
         }
         run_kwant_turn(&scope, &target, prompt, opts).await;

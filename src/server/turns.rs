@@ -482,9 +482,26 @@ impl TurnRegistry {
         cancel: &CancellationToken,
         events: &broadcast::Sender<RuntimeEvent>,
     ) -> Option<Slot> {
+        self.acquire_then(tag, one_per_chat, cancel, events, || {}).await
+    }
+
+    /// [`Self::acquire`], calling `in_line` as soon as the turn has its place: its slot, or its
+    /// place in the line (after `turn_queued` is sent). A released held message passes its
+    /// [`super::bot_status::HeldPlace`] here, so the next one in its chat goes only then (27d).
+    pub async fn acquire_then(
+        &self,
+        tag: &crate::drivers::events::TurnTag,
+        one_per_chat: bool,
+        cancel: &CancellationToken,
+        events: &broadcast::Sender<RuntimeEvent>,
+        in_line: impl FnOnce(),
+    ) -> Option<Slot> {
         let chat = one_per_chat.then_some(tag.context_id.as_str());
         let rx = match self.limiter.try_acquire_in(&tag.kwant_id, chat) {
-            Ok(slot) => return Some(slot),
+            Ok(slot) => {
+                in_line();
+                return Some(slot);
+            }
             Err(wait) => wait,
         };
         self.set_turn(ActiveTurn {
@@ -507,6 +524,7 @@ impl TurnRegistry {
             reason: rx.reason.into(),
             slots: None,
         });
+        in_line();
         tokio::select! {
             slot = rx.rx => slot.ok(),
             _ = cancel.cancelled() => None,
