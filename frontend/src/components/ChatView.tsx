@@ -43,6 +43,8 @@ import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from 
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
+import { ReplyCheckLine } from './ReplyCheckLine';
+import { replyOutcome } from '../replyOutcome';
 import { FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
@@ -1275,6 +1277,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     return result ? result.ok : true;
   };
 
+  // 26d: the line under a reply opens its Details at the step that failed or didn't run (a nonce per message).
+  const [detailsAsk, setDetailsAsk] = useState<Record<string, number>>({});
+  const askDetails = (id: string) => setDetailsAsk((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }));
   const toggleThought = (id: string) => {
     setOpenThoughts((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -1778,6 +1783,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const filesOnly = files.length > 0 && isSharedFileMessage(msg.meta);
     const isThoughtOpen = !!openThoughts[msg.id];
     const savedActivity = !isUser && msg.meta ? parseActivityMeta(msg.meta) : null;
+    const outcome = replyOutcome(savedActivity?.steps);
     const ranOn = isUser ? null : ranOnLabel(msg.meta);
     const account = isUser ? null : ranOnAccount(msg.meta);
     const tokens = isUser ? null : replyTokens(msg.tokens_used, msg.meta);
@@ -1869,7 +1875,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               tokens={tokens}
               cost={cost}
               done={done}
-              failed={!!savedActivity?.steps.some((s) => s.status === 'failed')}
+              outcome={outcome}
+              openRequest={detailsAsk[msg.id]}
               note={savedFailoverNotice(msg.meta) ?? switchNoteFor.get(msg.id)}
               handoff={savedFailoverHandoff(msg.meta)}
               route={
@@ -1898,7 +1905,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
-                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`}>
+                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null}>
                   {msg.tool_calls && (
                     <div className="border-t border-zinc-800/60 p-2">
                       <ToolCallsList raw={msg.tool_calls} />
@@ -1978,6 +1985,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
           </div>
           )}
+          {!isUser && !underReply && <ReplyCheckLine outcome={outcome} onDetails={() => askDetails(msg.id)} />}
           {files.length > 0 && <FileTiles files={files} align={onYourSide ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
           {isUser && heldNotes?.[msg.id]}
           {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (

@@ -1,4 +1,4 @@
-import React, { useId, useState } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { localClock } from '../clock';
 import { RouteInfo, useRouteChip } from './RouteChip';
@@ -7,6 +7,7 @@ import { SentToTelegram } from './TelegramMarks';
 import { DoneMarker } from './DoneMarker';
 import { ranOnWords } from '../modelUsage';
 import type { ReplyDone } from '../replyDone';
+import { detailsLabel, type ReplyOutcome } from '../replyOutcome';
 
 export interface ReplyFacts {
   /** "Claude · Opus 5.5": the engine and model the reply ran on. */
@@ -23,8 +24,12 @@ export interface ReplyMetaProps extends ReplyFacts {
   at?: string | null;
   /** Drawn before the name on phones, where the avatar column is hidden. */
   avatar?: React.ReactNode;
-  /** Whether a step failed: the Details toggle says so while it's folded. */
+  /** Whether a step failed: the Details toggle says so while it's folded. Superseded by `outcome` when given. */
   failed?: boolean;
+  /** 26d: what the steps add up to (replyOutcome); the folded toggle says which step failed or didn't run. */
+  outcome?: ReplyOutcome | null;
+  /** 26d: changes each time the line under the reply asks Details to open (a nonce; 0 or absent does nothing). */
+  openRequest?: number;
   /** One muted line under the name, e.g. "Claude is out until 03:00 · answered on Codex (GPT-6.1)". */
   note?: string | null;
   /** Why this bot answered: Details' first row, in words, with "Wrong bot?" after it. */
@@ -51,7 +56,8 @@ const REPLY_NAME_LINE_TYPE = 'items-center gap-x-2 gap-y-1 text-xs text-zinc-400
 // The Details button's height: min-h-6, and 44 px where modern.css makes every control a 44 px tap target
 // (touch screens below 768 px), so the live line is as tall as the finished one there too.
 export const REPLY_NAME_LINE_LIVE_HEIGHT = 'min-h-6 [@media(max-width:767px)_and_(pointer:coarse)]:min-h-11';
-export const replyNameLine = (extra: string): string => `${REPLY_NAME_LINE_BOX} ${extra} ${REPLY_NAME_LINE_TYPE}`;
+export const replyNameLine = (extra: string, wrap = false): string =>
+  `${wrap ? REPLY_NAME_LINE_BOX.replace('flex-nowrap', 'flex-wrap') : REPLY_NAME_LINE_BOX} ${extra} ${REPLY_NAME_LINE_TYPE}`;
 
 export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
   <p data-failover-note="" className="-mt-0.5 mb-1.5 max-w-full text-xs leading-snug text-zinc-500 break-words">
@@ -62,8 +68,14 @@ export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
 const hasContent = (n: React.ReactNode) => React.Children.toArray(n).length > 0;
 
 /** A bot reply's header: one line, "Name · [Done] · 3:42 PM · Details", and a Details toggle holding the rest in words. */
-export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, cost, failed = false, note, route, done, handoff, now, sentToTelegram = false, children }) => {
+export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, cost, failed = false, outcome, openRequest, note, route, done, handoff, now, sentToTelegram = false, children }) => {
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (openRequest) setOpen(true);
+  }, [openRequest]);
+  const told: ReplyOutcome | null = outcome !== undefined ? outcome : failed ? { kind: 'failed', stepId: '' } : null;
+  // Rose for a step that didn't work for good, amber for one nobody answered, quiet for "failed, then worked".
+  const tone = !told || open ? 'text-zinc-400' : told.kind === 'failed' ? 'text-rose-300' : told.kind === 'unanswered' ? 'text-amber-300' : 'text-zinc-300';
   const why = useRouteChip(route);
   const panelId = useId();
   const time = localClock(at, now);
@@ -90,7 +102,8 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
   const hasDetails = facts.length > 0 || hasContent(children) || !!why.panel;
   return (
     <div className="w-full max-w-full min-w-0">
-      <div className={replyNameLine('sm:flex-wrap')}>
+      {/* 26d: a Details label that names an outcome is long; on a phone it moves to its own row rather than clip. */}
+      <div className={replyNameLine('sm:flex-wrap', !!told)} data-name-line-wraps={told ? '' : undefined}>
         {avatar && <span className="sm:hidden shrink-0 inline-flex">{avatar}</span>}
         <span className={REPLY_NAME}>{name}</span>
         {done && <DoneMarker done={done} />}
@@ -108,11 +121,10 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-controls={open ? panelId : undefined}
-            className={`shrink-0 inline-flex items-center gap-0.5 rounded-md px-1.5 min-h-6 text-xs hover:text-zinc-100 hover:bg-zinc-800 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
-              failed && !open ? 'text-rose-300' : 'text-zinc-400'
-            }`}
+            className={`shrink-0 inline-flex items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 min-h-6 text-xs hover:text-zinc-100 hover:bg-zinc-800 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${tone}`}
+            data-details-outcome={told && !open ? told.kind : undefined}
           >
-            {failed && !open ? 'Details · a step failed' : 'Details'}
+            {open ? 'Details' : detailsLabel(told)}
             <ChevronRight size={12} className={`transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
           </button>
         )}
