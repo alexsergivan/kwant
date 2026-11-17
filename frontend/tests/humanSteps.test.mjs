@@ -287,13 +287,20 @@ test('a closed card always says what is next: timed_out tells you to say so; an 
     assert.match(html, /Nobody solved it in time\. Pixel moved on without it\. If you finished, say so in the chat\./, kind);
     assert.doesNotMatch(html, /<button/, kind);
   }
-  // A closed status the card has no line for: the neutral line, no buttons, never the open card's lines, waiting or not
+  // A closed status the card has no line for (a newer server's): the neutral line, no buttons, never the open card's lines, waiting or not.
+  // Not left_for_message: 22m (#721) gives that one its own line, pinned below.
   for (const kind of ['sign_in', 'captcha', 'two_factor', 'other']) {
     for (const waiting of [false, true]) {
-      const html = ui.render(props({ meta: h.parseHumanStepMeta(meta({ step_kind: kind })), live: rec({ kind, status: 'left_for_message' }), waiting }));
+      const html = ui.render(props({ meta: h.parseHumanStepMeta(meta({ step_kind: kind })), live: rec({ kind, status: 'closed_by_newer_server' }), waiting }));
       assert.match(html, /<span class="inline-flex items-center gap-1\.5 text-zinc-400"><svg[^>]*lucide-circle-minus[^]*?<\/svg> This step is closed\.<\/span>/, `${kind} waiting=${waiting}`);
       assert.doesNotMatch(html, /Press Done|stopped waiting|paused and waiting|carries on by itself|<button/, `${kind} waiting=${waiting}`);
     }
+  }
+  // left_for_message (22m) has its own line, not the neutral one, and no buttons either
+  for (const waiting of [false, true]) {
+    const html = ui.render(props({ meta: h.parseHumanStepMeta(meta({ step_kind: 'sign_in' })), live: rec({ status: 'left_for_message' }), waiting }));
+    assert.match(html, /Closed: Pixel is reading the file you sent\./, `waiting=${waiting}`);
+    assert.doesNotMatch(html, /This step is closed|Press Done|<button/, `waiting=${waiting}`);
   }
   // The open card after the turn ended keeps its pick-it-up-later line and its buttons
   const open = ui.render(props({ waiting: false, meta: h.parseHumanStepMeta(meta({ step_kind: 'sign_in' })) }));
