@@ -136,8 +136,9 @@ test('presets are valid forms with distinct ids and names', () => {
       assert.equal(row.value, '', `${p.id} ${row.key}`);
       assert.equal(row.saved, false, `${p.id} ${row.key}`);
     }
-    // URL servers are https and keep their keys in headers, never in the address.
-    if (p.form.transport === 'http') assert.match(p.form.url, /^https:\/\/[^?#]+$/, p.id);
+    // URL servers are https and keep their keys in headers, never in the address. Home Assistant is the
+    // one exception: it lives on the home network on plain http:8123, and its own sheet builds the URL (26e).
+    if (p.form.transport === 'http') assert.match(p.form.url, p.id === 'home-assistant' ? /^http:\/\/[^?#]+\/api\/mcp$/ : /^https:\/\/[^?#]+$/, p.id);
     // What a preset needs matches how it runs.
     const cmd = splitCommandLine(p.form.commandLine)[0];
     if (cmd === 'npx') assert.ok(p.needs.includes('Node.js'), p.id);
@@ -384,7 +385,7 @@ test('only presets that need a key or token mark it required', () => {
   const marked = Object.fromEntries(
     MCP_PRESETS.map((p) => [p.id, [...p.form.env, ...p.form.headers].filter((r) => r.required).map((r) => r.key)]).filter(([, keys]) => keys.length > 0),
   );
-  assert.deepEqual(marked, { github: ['Authorization'], 'brave-search': ['BRAVE_API_KEY'], postgres: ['DATABASE_URI'] });
+  assert.deepEqual(marked, { 'home-assistant': ['Authorization'], github: ['Authorization'], 'brave-search': ['BRAVE_API_KEY'], postgres: ['DATABASE_URI'] });
   // Every preset tagged as needing a key or token has a required field, and no Sign-in preset does.
   for (const p of MCP_PRESETS) {
     const hasRequired = [...p.form.env, ...p.form.headers].some((r) => r.required);

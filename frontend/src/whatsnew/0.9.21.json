@@ -1,0 +1,55 @@
+{
+  "version": "0.9.21",
+  "date": "2026-11-17",
+  "highlights": [
+    {
+      "id": "home-assistant",
+      "title": "Connect Home Assistant in two fields",
+      "text": "Paste your Home Assistant's address and an access token, and your bots can see and switch the devices you share with Assist. If it doesn't connect, the sheet says why in plain words.",
+      "image": "home-assistant.webp",
+      "open": null
+    },
+    {
+      "id": "home-team",
+      "title": "A Home team, with House",
+      "text": "Pick the new Home team to get House, a bot that checks your home and switches things with your OK, plus a Lights out routine you can turn on when you like.",
+      "image": "home-team.webp",
+      "open": null
+    },
+    {
+      "id": "locks-ask",
+      "title": "Locks, doors and alarms always ask",
+      "text": "When a bot wants to unlock a door, open the garage or a gate, or disarm an alarm in Home Assistant, you get a card every time, in every approval mode. Always allow isn't offered.",
+      "image": "locks-ask.webp",
+      "open": null
+    },
+    {
+      "id": "always-allowed",
+      "title": "See and take back what runs without asking",
+      "text": "Always allow now lasts after a restart, in that conversation only. A bot's settings list each one, with Take back on every row and Take back all.",
+      "image": "always-allowed.webp",
+      "open": null
+    },
+    {
+      "id": "file-wakes-wait",
+      "title": "Files reach a waiting bot at once",
+      "text": "Drop a file into the chat while a bot waits for you in the browser, and the bot gets it right away; the card closes and says the bot is reading your file.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "turn-end-no-stale-frame",
+      "title": "No flash of the old question when a turn ends",
+      "text": "Answer a bot with a 👍 and the chat moves straight to its reply. The Approve row you just answered no longer blinks back for a moment.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "The thread header keeps saying Working, with its Stop button, until the reply appears, instead of going idle while it's still being written.",
+    "A closed browser step card always says what's next, instead of asking you to press a Done button that isn't there.",
+    "A Needs-attention row takes you to its ask in a thread even when the ask is older than the latest 100 messages.",
+    "A routine step nobody approved no longer counts as done: the run says a step is waiting for your approval and didn't run.",
+    "A reply's Details say which step failed or didn't run, and a routine waiting for your approval links to the card."
+  ]
+}

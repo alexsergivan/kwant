@@ -36,6 +36,7 @@ export const TOOL_ALIASES: Record<string, string[]> = {
   twitter: ['twitter'],
   postgresql: ['postgres', 'pg'],
   postgres: ['postgres', 'pg'],
+  homeassistant: ['hass', 'smart home'],
 };
 
 const SKIPPED = /[\s\-._/'’&,:()+]/;

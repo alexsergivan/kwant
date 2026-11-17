@@ -483,6 +483,8 @@ export interface NeedsContext {
   /** `needs_done` from GET /api/teams/:id/template (A5): Need ids the server sees are done. Sales'
    *  `what_you_sell` is ticked only from here: the person posted in the team chat (a bot's message doesn't count). */
   needsDone: string[];
+  /** The Home Assistant server in Tools and its last check (26e). Missing: not read yet, idle. */
+  homeAssistant?: { state: 'none' | 'checking' | 'ok' | 'failed'; detail?: string | null; actions?: number };
 }
 
 export interface NeedView {
@@ -514,6 +516,16 @@ export function needView(n: TemplateNeed, ctx: NeedsContext): NeedView {
       return idle;
     case 'composer_prompt':
       return ctx.needsDone.includes(n.id) ? { state: 'done', text: 'Done · you told the team' } : idle;
+    case 'home_assistant': {
+      const ha = ctx.homeAssistant;
+      if (ha?.state === 'ok') return { state: 'done', text: `Connected${ha.detail ? ` · ${ha.detail}` : ''}` };
+      if (ha?.state === 'checking') return { state: 'checking', text: 'Checking Home Assistant…' };
+      if (ha?.state === 'failed') return { state: 'bad', text: ha.detail || 'Couldn’t connect to Home Assistant. Open it to see why.' };
+      return idle;
+    }
+    // A local model can't be seen from here: the row stays Optional with its why, never done.
+    case 'accounts':
+      return idle;
     default:
       return idle;
   }

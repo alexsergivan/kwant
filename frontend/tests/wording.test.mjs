@@ -36,6 +36,10 @@ const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // Allowed without asking (0.9.22 25e): Mira's design-check-768 fix 4 says whose restart, in the docs' words ("also after kwant restarts").
 const RULED = /\bafter kwant restarts\b|\bkwant compared the reply with what you asked for\b|\bkwant (?:can remove it|won’t delete it|won’t write into it|suggests one from the task|cleans build output)\b|\bmade outside kwant\b|\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass|can’t fetch|can’t download|only downloads)\b|\b[Rr]estart kwant\b|\bStart kwant as\b|\bkwant (?:looked|never follows|downloads it|found nothing|doesn’t fetch)\b|\bNothing kwant can bring\b|\bwhere kwant looked\b|\bsent kwant somewhere\b/g;
 
+// Connect Home Assistant (0.9.21 26e): Mira's connect-home-assistant/design.md (plain-words check) names kwant, the
+// program that connects, in the sheet's helper, token, MCP Server off and can't-reach copy and the Tested sticker's title.
+const RULED_HA = /\bkwant (?:will connect to|reached Home Assistant|can’t reach|runs on another computer)\b|\blets kwant (?:into|control)\b|\bapps like kwant\b/g;
+
 /** Whether a literal reads like text a person sees (a sentence, or a capitalised word). */
 const looksVisible = (text, node) => {
   const p = node.parent;
@@ -63,7 +67,7 @@ export function findBareWording() {
       else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) s = node.text;
       else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) s = node.text;
       if (s !== null) {
-        const stripped = s.replace(MAESTRO, '').replace(RULED, '').replace(ALLOWED, '');
+        const stripped = s.replace(MAESTRO, '').replace(RULED, '').replace(RULED_HA, '').replace(ALLOWED, '');
         // URLs, paths, event names and storage keys (kwnt:..., kwant.x) are not prose.
         // Example paths a person reads (~/dev/x) stay in.
         const prose = stripped.replace(/(?<!\S)(?!~)\S*(?:[:./_#=]\w)\S*/g, (w) => (/^[A-Za-z]+[.,;:!?)]?$/.test(w) ? w : ''));

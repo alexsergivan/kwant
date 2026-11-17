@@ -1,9 +1,9 @@
 import React, { useId, useState } from 'react';
-import { ShieldAlert, Check, CheckCheck, X, FileText, Clock, CreditCard, GraduationCap, ChevronDown } from 'lucide-react';
+import { ShieldAlert, Check, CheckCheck, X, FileText, Clock, CreditCard, GraduationCap, ChevronDown, Lock } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { formatArgs, parseMcpToolName } from '../mcp';
 import { tierReason } from '../flightSchool';
-import { toolAction } from '../toolLabel';
+import { toolAction, homeAction, homePhrase, type HomeAction } from '../toolLabel';
 import { localClock } from '../clock';
 import { isPhoneLayout } from '../layout';
 import { parseProdFloor, type BackupResult, type FloorBackup, type FloorResolveOpts } from '../dev/types';
@@ -197,8 +197,35 @@ export function approvalAction(approval: PendingApproval): string {
   if (builtin) return toolAction(builtin.tool);
   const summary = summaryView(approval);
   if (summary) return toolAction(summary.tool);
+  const home = homeView(approval);
+  if (home) return homePhrase(home, 'base');
   return mcp ? toolAction(mcp.tool, mcp.server || null) : toolAction(approval.tool_name);
 }
+
+/** A Home Assistant call in house words (26e), or null for any other tool. */
+export function homeView(approval: PendingApproval): HomeAction | null {
+  const mcp = mcpView(approval);
+  if (!mcp) return null;
+  const args = mcp.raw && typeof mcp.raw === 'object' && !Array.isArray(mcp.raw) ? (mcp.raw as Record<string, unknown>) : null;
+  return homeAction(mcp.tool, args, approval.details?.home_always_ask === true);
+}
+
+/** The facts under a Home Assistant card: Area (when it isn't the target), light settings, and where. */
+function homeFacts(raw: unknown): Array<[string, string]> {
+  const a = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const out: Array<[string, string]> = [];
+  const area = typeof a.area === 'string' && a.area.trim() ? a.area.trim() : null;
+  // The area is a fact unless it became the target itself (no name in the call).
+  const named = typeof a.name === 'string' && a.name.trim() !== '';
+  if (area && named) out.push(['Area', area]);
+  if (typeof a.brightness === 'number' || (typeof a.brightness === 'string' && a.brightness)) out.push(['Brightness', `${a.brightness} %`]);
+  if (typeof a.color === 'string' && a.color) out.push(['Colour', a.color]);
+  out.push(['In', 'Home Assistant']);
+  return out;
+}
+
+/** The 26f note: these never get "Always allow". */
+export const LOCK_NOTE = 'Locks, doors, garage doors, gates and alarms always ask. Always allow isn’t offered for them.';
 
 /** The pre/JSON style inside a card: wraps between words, and only splits a word too long for the line. */
 /** "Show details": closed on a phone, so Allow is on screen with the card's top; open on desktop. */
@@ -282,15 +309,29 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   // A session allow doesn't count in a turn kwant started on its own (the server asks again),
   // so those cards don't offer one.
   const alwaysAsk = approval.details?.always_ask === true;
-  const offerAlways = !shell && !waiting && !payment && !alwaysAsk;
+  // 26f: a lock, door, garage door, gate or alarm call always asks; its own field, not `always_ask`.
+  const homeAlwaysAsk = approval.details?.home_always_ask === true;
+  const offerAlways = !shell && !waiting && !payment && !alwaysAsk && !homeAlwaysAsk;
 
   const bot = botName ? <strong className="font-semibold text-zinc-50">{botName}</strong> : 'A bot';
   // "<Bot> wants to open a pull request on <Server>", the server in bold.
   const action = approvalAction(approval);
-  const on = mcp && !summary ? / on (.+)$/.exec(action) : null;
-  const what: React.ReactNode = on ? <>{action.slice(0, on.index)} on <strong className="font-semibold text-zinc-50">{on[1]}</strong></> : action;
+  const home = mcp && !summary ? homeView(approval) : null;
+  // Home Assistant: bold the device, never the "on" of "turn on" (design §3.3).
+  const on = mcp && !summary && !home ? / on (.+)$/.exec(action) : null;
+  // 26f marks lock/door/alarm calls with `home_always_ask` (`always_ask` stays the started-by turn's
+  // field). Only a Home Assistant card gets the lock note, as a second guard.
+  const lockNote = !!home && homeAlwaysAsk;
+  const what: React.ReactNode = home?.target ? (
+    <>
+      {home.base} <strong className="font-semibold text-zinc-50">{home.target}</strong>
+      {home.rest ? ` ${home.rest}` : ''}
+    </>
+  ) : on ? <>{action.slice(0, on.index)} on <strong className="font-semibold text-zinc-50">{on[1]}</strong></> : action;
 
-  const facts: Array<[string, string]> = mcp
+  const facts: Array<[string, string]> = home
+    ? homeFacts(mcp?.raw)
+    : mcp
     ? keyFacts(mcp.raw)
     : builtin?.kind === 'file' && builtin.path
       ? [['path', builtin.path]]
@@ -397,6 +438,13 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
             </div>
           ))}
         </dl>
+      )}
+
+      {lockNote && (
+        <p role="note" data-lock-note className="flex items-start gap-1.5 mt-2 text-xs leading-[18px] text-amber-200 break-words">
+          <Lock size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+          {LOCK_NOTE}
+        </p>
       )}
 
       {payment && (
