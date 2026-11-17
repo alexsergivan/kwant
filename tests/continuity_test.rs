@@ -1557,6 +1557,7 @@ async fn messages_load_around_and_before_a_message() {
     for q in [format!("around={foreign}"), format!("before={foreign}"), "around=nope".into()] {
         let (s, v) = req(&app, "GET", &format!("{base}?{q}"), None).await;
         assert_eq!(s, StatusCode::NOT_FOUND, "{q}");
+        assert_eq!(v, json!({ "code": "not_found", "error": "That message isn't in this chat." }), "{q}");
         assert!(!v.to_string().contains("elsewhere"));
     }
     // Bounded, and one mode at a time
@@ -1584,6 +1585,82 @@ async fn messages_load_around_and_before_a_message() {
         &[("host", "kwnt.example.com")],
     )
     .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+/// 22x: a thread takes the same `around`/`before`/`limit` as the chat route, so a Needs-attention
+/// row whose notice is older than the thread's latest page can load it and ring it (Rigel's F1 on
+/// 22i: 150+ messages, the notice near the top). Before 22x the route ignored the query and always
+/// sent the latest 100, so the window had no notice in it.
+#[tokio::test]
+async fn thread_messages_load_around_and_before_an_old_notice() {
+    use kwnt::db::models::MessageExtra;
+    let (app, state, _tmp) = setup().await;
+    let kwant = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().remove(0);
+    let thread = state.db.create_thread(&kwant.id, "Long hand-off", "chat", None, "user").await.unwrap();
+    let other = state.db.create_thread(&kwant.id, "Another", "chat", None, "user").await.unwrap();
+    let in_thread = |t: &str| MessageExtra { thread_id: Some(t.to_string()), meta: None };
+    let mut ids = Vec::new();
+    for i in 0..160 {
+        let text = if i == 3 { "Stopped: I need you to sign in".to_string() } else { format!("t{i}") };
+        let role = if i % 2 == 0 { "kwant" } else { "user" };
+        ids.push(state.db.insert_message_with(&msg(None, None, role, "x", &text), &in_thread(&thread.id)).await.unwrap().id);
+        if i % 40 == 0 {
+            state.db.insert_message_with(&msg(None, None, "user", "x", "elsewhere"), &in_thread(&other.id)).await.unwrap();
+        }
+    }
+    let notice = ids[3].clone();
+    let foreign = state.db.insert_message_with(&msg(None, None, "user", "x", "elsewhere"), &in_thread(&other.id)).await.unwrap().id;
+    let direct = state.db.insert_message(&msg(None, Some(&kwant.id), "user", "me", "elsewhere")).await.unwrap().id;
+    let ids_of = |v: &Value| v.as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let span = |a: usize, b: usize| ids[a..b].to_vec();
+    let base = format!("/api/threads/{}/messages", thread.id);
+
+    // Unchanged without parameters: the latest 100, oldest first, and the notice isn't among them
+    let (s, v) = req(&app, "GET", &base, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(ids_of(&v), span(60, 160));
+    assert!(!ids_of(&v).contains(&notice));
+
+    // Around the notice: the window holds it (3 before it exist, it, and 49 after)
+    let (s, v) = req(&app, "GET", &format!("{base}?around={notice}"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(ids_of(&v), span(0, 53));
+    assert_eq!(v[3]["text"], "Stopped: I need you to sign in");
+    let (_, v) = req(&app, "GET", &format!("{base}?around={}&limit=10", ids[80]), None).await;
+    assert_eq!(ids_of(&v), span(75, 85));
+
+    // Paging back
+    let (s, v) = req(&app, "GET", &format!("{base}?before={}&limit=30", ids[60]), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(ids_of(&v), span(30, 60));
+    let (_, v) = req(&app, "GET", &format!("{base}?before={}", ids[0]), None).await;
+    assert_eq!(v, json!([]));
+
+    // A message of another thread, of the bot's 1:1, or none: the chat route's 404, revealing nothing
+    for q in [format!("around={foreign}"), format!("before={foreign}"), format!("around={direct}"), "around=nope".into()] {
+        let (s, v) = req(&app, "GET", &format!("{base}?{q}"), None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{q}");
+        assert_eq!(v, json!({ "code": "not_found", "error": "That message isn't in this chat." }), "{q}");
+    }
+    // Bounded, and one mode at a time: the chat route's 400s
+    for q in ["limit=0", "limit=201", "limit=-1", &format!("around={}&before={}", ids[1], ids[2])] {
+        let (s, v) = req(&app, "GET", &format!("{base}?{q}"), None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{q}");
+        assert!(v["error"].is_string(), "{q}: {v}");
+    }
+    let (_, v) = req(&app, "GET", &format!("{base}?limit=200"), None).await;
+    assert_eq!(ids_of(&v), span(0, 160));
+
+    // An unknown thread is still "thread not found", with or without a query
+    for q in ["", "?around=nope"] {
+        let (s, v) = req(&app, "GET", &format!("/api/threads/nope/messages{q}"), None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{q}");
+        assert_eq!(v["error"], "thread not found", "{q}");
+    }
+
+    // Same auth as the rest of the API
+    let (s, _) = call(&app, "GET", &format!("{base}?around={notice}"), None, &[("host", "kwnt.example.com")]).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
 }
 
