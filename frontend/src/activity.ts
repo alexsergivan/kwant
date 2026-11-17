@@ -4,7 +4,9 @@
 import { parseMetaObject } from './questions';
 
 export type StepKind = 'thinking' | 'tool' | 'approval' | 'human_step' | 'note';
-export type StepStatus = 'running' | 'waiting' | 'ok' | 'failed' | 'done' | 'declined' | 'stopped';
+// 26b (#766): `unanswered` is a step whose approval card nobody answered in time, so it didn't run; `rehearsed`
+// is a dry run (Skill Foundry) that recorded the call instead of running it. Neither is "ok".
+export type StepStatus = 'running' | 'waiting' | 'ok' | 'failed' | 'done' | 'declined' | 'stopped' | 'unanswered' | 'rehearsed';
 
 export interface ActivityStep {
   id: string;
@@ -37,7 +39,7 @@ export interface LiveActivity {
 }
 
 const KINDS: StepKind[] = ['thinking', 'tool', 'approval', 'human_step', 'note'];
-const STATUSES: StepStatus[] = ['running', 'waiting', 'ok', 'failed', 'done', 'declined', 'stopped'];
+const STATUSES: StepStatus[] = ['running', 'waiting', 'ok', 'failed', 'done', 'declined', 'stopped', 'unanswered', 'rehearsed'];
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
 /** A step from the wire, or null when it isn't one. Unknown kinds draw as notes. */
@@ -173,7 +175,8 @@ export function formatClock(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
 
-/** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when any failed. */
+/** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when any failed and
+ *  "· 1 didn't run" when an approval went unanswered (26d). */
 export function activitySummary(a: SavedActivity): string {
   const n = counted(a.steps).length + a.dropped;
   const steps = `${n} ${n === 1 ? 'step' : 'steps'}`;
@@ -181,6 +184,8 @@ export function activitySummary(a: SavedActivity): string {
   const parts = span !== null && span >= 1000 ? [`Worked ${formatClock(span)}`, steps] : [steps];
   const failed = a.steps.filter((s) => s.status === 'failed').length;
   if (failed) parts.push(`${failed} failed`);
+  const unanswered = a.steps.filter((s) => s.status === 'unanswered').length;
+  if (unanswered) parts.push(`${unanswered} didn’t run`);
   return parts.join(' · ');
 }
 
@@ -201,6 +206,10 @@ export function statusLabel(s: ActivityStep): string {
       return s.kind === 'approval' ? 'Denied' : 'Skipped';
     case 'stopped':
       return 'Stopped';
+    case 'unanswered':
+      return 'Not approved in time';
+    case 'rehearsed':
+      return 'Dry run';
   }
 }
 

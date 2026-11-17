@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { routineRunNote } from '../spendStop';
+import { liveWaitOf, runRowState, runWaitsNow, subscribeRunWaits, type RunTone, type RunWait } from '../routineRow';
+import type { NotifiedChat } from '../chatTarget';
 import { useUndoableDelete } from '../undoDelete';
 import { UndoNotice } from './UndoNotice';
 import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, History, Loader2, Pencil, Play, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
@@ -7,7 +9,6 @@ import {
   Routine,
   RoutineInput,
   RoutineRun,
-  RunStatus,
   ScheduleForm,
   WEEKDAYS,
   WORK_WEEK,
@@ -63,19 +64,25 @@ export interface RoutineFocus {
   nonce: number;
 }
 
-const STATUS: Record<RunStatus, { label: string; cls: string }> = {
-  running: { label: 'Running', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/20' },
-  ok: { label: 'OK', cls: 'bg-teal-400/10 text-ok border-teal-400/20' },
-  error: { label: 'Failed', cls: 'bg-rose-500/10 text-rose-300 border-rose-500/20' },
-  skipped: { label: 'Skipped', cls: 'bg-zinc-700/30 text-zinc-400 border-zinc-700' },
+// 26d: `waiting` and `needs_you` take the amber the steps list already uses for an ask; no new colours.
+const TONE: Record<RunTone, string> = {
+  running: 'bg-sky-500/10 text-sky-300 border-sky-500/20',
+  ok: 'bg-teal-400/10 text-ok border-teal-400/20',
+  error: 'bg-rose-500/10 text-rose-300 border-rose-500/20',
+  skipped: 'bg-zinc-700/30 text-zinc-400 border-zinc-700',
+  waiting: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
+  needs_you: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
 };
 
-const StatusBadge: React.FC<{ status: RunStatus }> = ({ status }) => (
-  <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${STATUS[status]?.cls ?? STATUS.skipped.cls}`}>
-    {status === 'running' && <Loader2 size={9} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
-    {STATUS[status]?.label ?? status}
-  </span>
-);
+const StatusBadge: React.FC<{ status: string; wait?: RunWait | null }> = ({ status, wait }) => {
+  const st = runRowState({ status }, wait);
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${TONE[st.tone]}`} data-run-badge={st.tone}>
+      {st.tone === 'running' && <Loader2 size={9} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+      {st.label}
+    </span>
+  );
+};
 
 /** On a routine added from one kwant suggested (Automation Discovery). */
 export const SuggestedBadge: React.FC = () => (
@@ -440,7 +447,70 @@ const lastRanDate = (iso: string | null | undefined): string | null => {
 export const runResultTarget = (routine: Routine, run: RoutineRun): MessageTarget | null =>
   run.message_id ? { message_id: run.message_id, channel_id: routine.channel_id, kwant_id: routine.kwant_id, thread_id: routine.thread_id ?? null } : null;
 
-const RunHistory: React.FC<{ routine: Routine; tick: number; onOpenRunResult?: (t: MessageTarget) => void }> = ({ routine, tick, onOpenRunResult }) => {
+/** 26d: a run's card, for "Open the card" on a run that waits (or waited) on it. */
+export const runCardTarget = (routine: Routine, cardId: string): NotifiedChat => ({
+  channel_id: routine.channel_id,
+  kwant_id: routine.kwant_id,
+  thread_id: routine.thread_id ?? null,
+  card_id: cardId,
+});
+
+/** One run in History: badge, when, how it started, Open the card (26d), Open result and the run's note. */
+export const RunRow: React.FC<{
+  routine: Routine;
+  run: RoutineRun;
+  wait?: RunWait | null;
+  onOpenRunResult?: (t: MessageTarget) => void;
+  onOpenRunCard?: (t: NotifiedChat) => void;
+}> = ({ routine, run: r, wait, onOpenRunResult, onOpenRunCard }) => {
+  const st = runRowState(r, wait);
+  const t = onOpenRunResult ? runResultTarget(routine, r) : null;
+  const card = onOpenRunCard && st.cardId ? st.cardId : null;
+  const note = routineRunNote(r);
+  const link = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200';
+  return (
+    <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400" data-run-row={r.id} data-run-state={st.tone}>
+      <StatusBadge status={r.status} wait={wait} />
+      <span>{formatWhen(r.started_at)}</span>
+      <span className="text-zinc-400">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
+      {/* Mira re-check 6: on a phone the links always sit on their own line under the badge. */}
+      {(t || card) && <span className="basis-full h-0 sm:hidden" aria-hidden="true" />}
+      {card && (
+        <button
+          type="button"
+          onClick={() => onOpenRunCard!(runCardTarget(routine, card))}
+          className={link}
+          aria-label={`Open the approval card the run on ${formatWhen(r.started_at)} ${st.tone === 'waiting' ? 'waits on' : 'waited on'}`}
+          data-compact
+          data-run-card={card}
+        >
+          Open the card <ChevronRight size={11} aria-hidden="true" />
+        </button>
+      )}
+      {t && (
+        <button
+          type="button"
+          onClick={() => onOpenRunResult!(t)}
+          className={link}
+          aria-label={`Open the result of the run on ${formatWhen(r.started_at)}`}
+          data-compact
+          data-run-result={r.id}
+        >
+          Open result <ChevronRight size={11} aria-hidden="true" />
+        </button>
+      )}
+      {note && <span className={`basis-full min-w-0 [overflow-wrap:anywhere] ${note.quiet ? 'text-zinc-400' : 'text-rose-300/90'}`}>{note.text}</span>}
+    </li>
+  );
+};
+
+const RunHistory: React.FC<{
+  routine: Routine;
+  tick: number;
+  waits: Record<string, RunWait>;
+  onOpenRunResult?: (t: MessageTarget) => void;
+  onOpenRunCard?: (t: NotifiedChat) => void;
+}> = ({ routine, tick, waits, onOpenRunResult, onOpenRunCard }) => {
   const routineId = routine.id;
   const [runs, setRuns] = useState<RoutineRun[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -460,40 +530,13 @@ const RunHistory: React.FC<{ routine: Routine; tick: number; onOpenRunResult?: (
   return (
     <ol className="space-y-1" aria-label="Run history">
       {runs.map((r) => (
-        <li key={r.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400">
-          <StatusBadge status={r.status} />
-          <span>{formatWhen(r.started_at)}</span>
-          <span className="text-zinc-400">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
-          {(() => {
-            const t = onOpenRunResult ? runResultTarget(routine, r) : null;
-            if (!t) return null;
-            return (
-              <>
-                {/* Mira re-check 6: on a phone Open result always sits on its own line under the badge. */}
-                <span className="basis-full h-0 sm:hidden" aria-hidden="true" />
-                <button
-                  type="button"
-                  onClick={() => onOpenRunResult!(t)}
-                  className="kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200"
-                  aria-label={`Open the result of the run on ${formatWhen(r.started_at)}`}
-                  data-compact
-                  data-run-result={r.id}
-                >
-                  Open result <ChevronRight size={11} aria-hidden="true" />
-                </button>
-              </>
-            );
-          })()}
-          {(() => {
-            const note = routineRunNote(r);
-            if (!note) return null;
-            return <span className={`basis-full min-w-0 [overflow-wrap:anywhere] ${note.quiet ? 'text-zinc-400' : 'text-rose-300/90'}`}>{note.text}</span>;
-          })()}
-        </li>
+        <RunRow key={r.id} routine={routine} run={r} wait={waits[r.id]} onOpenRunResult={onOpenRunResult} onOpenRunCard={onOpenRunCard} />
       ))}
     </ol>
   );
 };
+
+const NO_WAITS: Record<string, RunWait> = {};
 
 export const RoutineRow: React.FC<{
   routine: Routine;
@@ -505,10 +548,13 @@ export const RoutineRow: React.FC<{
   onEdit: () => void;
   /** 0.9.5 F: History rows link to each run's result message. */
   onOpenRunResult?: (t: MessageTarget) => void;
+  /** 26d: live waits by run id, and where "Open the card" goes. */
+  waits?: Record<string, RunWait>;
+  onOpenRunCard?: (t: NotifiedChat) => void;
   onChanged: () => void;
   /** Tests: start in the Undo window. */
   initialPending?: boolean;
-}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onOpenRunResult, onChanged, initialPending = false }) => {
+}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onOpenRunResult, waits = NO_WAITS, onOpenRunCard, onChanged, initialPending = false }) => {
   const rowRef = useRef<HTMLLIElement>(null);
   const switchRef = useRef<HTMLInputElement>(null);
   const [highlight, setHighlight] = useState(false);
@@ -572,7 +618,7 @@ export const RoutineRow: React.FC<{
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className={`text-xs font-medium break-words ${routine.enabled ? 'text-zinc-100' : 'text-zinc-400'}`}>{routine.name}</span>
             {routine.origin === 'discovery' && <SuggestedBadge />}
-            {routine.last_status && <StatusBadge status={routine.last_status} />}
+            {routine.last_status && <StatusBadge status={routine.last_status} wait={liveWaitOf(waits, routine.id)} />}
           </div>
           {/* Routines setup F: what it does, then when it runs next, then the schedule, bot and place. */}
           {what.line && (
@@ -625,7 +671,7 @@ export const RoutineRow: React.FC<{
       {(error ?? removal.error) && <p className="pl-9 text-[11px] text-rose-400" role="alert">{error ?? `Couldn’t delete it: ${removal.error}`}</p>}
       {open && (
         <div id={historyId} className="pl-9 pt-1">
-          <RunHistory routine={routine} tick={tick} onOpenRunResult={onOpenRunResult} />
+          <RunHistory routine={routine} tick={tick} waits={waits} onOpenRunResult={onOpenRunResult} onOpenRunCard={onOpenRunCard} />
         </div>
       )}
     </li>
@@ -645,11 +691,16 @@ export const RoutinesPanel: React.FC<{
   onOpenSettings?: () => void;
   /** 0.9.5 F: a History row's Open result. */
   onOpenRunResult?: (t: MessageTarget) => void;
-}> = ({ kwantId, kwants, channels, focus, onOpenSettings, onOpenRunResult }) => {
+  /** 26d: a waiting run's "Open the card": the routine's chat at its approval card. */
+  onOpenRunCard?: (t: NotifiedChat) => void;
+}> = ({ kwantId, kwants, channels, focus, onOpenSettings, onOpenRunResult, onOpenRunCard }) => {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Routine | 'new' | null>(null);
   const [tick, setTick] = useState(0);
+  // 26d: which runs wait on an approval card right now, by run id. App records the live `routine_run` events even
+  // while this panel is closed (routineRow.recordRunWait), so a wait that began earlier still shows.
+  const waits = useSyncExternalStore(subscribeRunWaits, runWaitsNow, runWaitsNow);
 
   const reload = useCallback(async () => {
     try {
@@ -785,6 +836,8 @@ export const RoutinesPanel: React.FC<{
                 focusPause={focus?.mode === 'pause' && focus.id === r.id ? focus.nonce : undefined}
                 onEdit={() => setEditing(r)}
                 onOpenRunResult={onOpenRunResult}
+                waits={waits}
+                onOpenRunCard={onOpenRunCard}
                 onChanged={reload}
               />
             ),
