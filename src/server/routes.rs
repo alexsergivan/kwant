@@ -4006,6 +4006,7 @@ async fn run_kwant_turn_inner(
                         failed_step,
                         declined,
                         home: super::delivery_check::home_steps_in(activity.as_ref(), &home_servers),
+                        other_changed: super::delivery_check::other_change_in(activity.as_ref(), &home_servers),
                     };
                     // ...counting what the delivery's earlier turns did (F1)
                     let seen = match opts.delivery_seen.as_ref().map(|d| d.lock()) {
