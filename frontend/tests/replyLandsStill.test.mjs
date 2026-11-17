@@ -77,7 +77,8 @@ test('the live row and the finished row share one geometry', () => {
   // The finished row uses the same strings.
   assert.match(chat, /size=\{REPLY_AVATAR\}\s+kwantId=\{replyKwantId\}/);
   assert.match(chat, /size=\{REPLY_AVATAR_PHONE\} kwantId=\{replyKwantId\}/);
-  assert.match(chat, /className=\{`\$\{REPLY_BUBBLE\} \$\{\s+isUser/);
+  // 25b: the finished row picks its look by side (onYourSide), still from REPLY_BUBBLE
+  assert.match(chat, /className=\{`\$\{REPLY_BUBBLE\} \$\{\s+onYourSide/);
   assert.match(chat, /: REPLY_BUBBLE_BOT\s+\}`\}/);
 });
 
