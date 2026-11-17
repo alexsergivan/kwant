@@ -348,12 +348,13 @@ fn article(noun: &str) -> String {
     }
 }
 
-/// The `https://…` links in `text` (each once, in order), ending at whitespace, a quote, a
-/// bracket or a backslash, without trailing punctuation.
+/// The `https://…` and `http://…` links in `text` (each once, in order), ending at whitespace, a
+/// quote, a bracket or a backslash, without trailing punctuation. The delivery rule then refuses
+/// plain http (only this module's tests allow it).
 fn links(text: &str) -> Vec<&str> {
     let mut out: Vec<&str> = Vec::new();
     let mut rest = text;
-    while let Some(at) = rest.find("https://") {
+    while let Some(at) = [rest.find("https://"), rest.find("http://")].into_iter().flatten().min() {
         let tail = &rest[at..];
         let end = tail
             .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | '\\' | ')' | ']' | '}'))
@@ -362,7 +363,7 @@ fn links(text: &str) -> Vec<&str> {
         if !out.contains(&link) {
             out.push(link);
         }
-        rest = &tail[end.max(8)..];
+        rest = &tail[end.max(7)..];
     }
     out
 }
@@ -591,6 +592,7 @@ mod tests {
             links(text),
             ["https://delivery-eu1.bfl.ai/r/a.jpeg?se=1&sig=a%2Fb", "https://x.example/p", "https://y.example/q"]
         );
+        assert_eq!(links("a http://127.0.0.1:9/png, b"), ["http://127.0.0.1:9/png"]);
     }
 
     /// A local file host: `/png` is a picture, `/away` redirects off the list, `/hop` redirects
