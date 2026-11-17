@@ -6,7 +6,10 @@
 //!   (the last marker counts, and each marker runs once: later turns see it again in history).
 //!   It calls kwnt's own tools straight away; with `ASKFIRST` in the prompt too it first asks
 //!   kwnt's permission prompt (`--permission-prompt-tool`), as claude does, and on a deny replies
-//!   `TOOLDENIED` without calling.
+//!   `TOOLDENIED[<what kwnt said>]` without calling. `ASKAS:<tool>` too (say `ASKAS:Bash`): the
+//!   prompt is asked for that tool, with the marker's arguments as its input, and the call shows
+//!   as claude's own `stream-json` tool_use and, on a deny, its error tool_result (kwant's
+//!   own tools never get a card in a person's turn; Bash always asks).
 //! - `REPLYTAG:<tag>`: reply "answer <tag>" (after any tool call).
 //! - `REPLYTEXT:<base64 text>`: reply exactly that text (say, a markdown table), and nothing else.
 //! - `REPLYSEQ:<tag>`: reply the test's planned answers in turn: the files `seq-<tag>-1`, `seq-<tag>-2`, …
@@ -181,15 +184,25 @@ if m and "--mcp-config" in args:
     # ASKFIRST: ask kwnt's permission prompt first, as claude does before an MCP tool call
     if "ASKFIRST" in prompt and "--permission-prompt-tool" in args:
         perm = cfg["mcpServers"]["kwnt"]
+        ask_as = re.findall(r"ASKAS:([A-Za-z_]+)", prompt)
+        asked = ask_as[-1] if ask_as else "mcp__kwnt_tools__" + m.group(1)
+        if ask_as:
+            # claude prints the call before it asks, and its result after
+            print(json.dumps({"type": "assistant", "message": {"id": "msg_askas", "content": [
+                {"type": "tool_use", "id": "toolu_askfirst", "name": asked, "input": call_args}]}}), flush=True)
         ask = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
-            "arguments": {"tool_name": "mcp__kwnt_tools__" + m.group(1), "input": call_args, "tool_use_id": "toolu_askfirst"}}}).encode()
+            "arguments": {"tool_name": asked, "input": call_args, "tool_use_id": "toolu_askfirst"}}}).encode()
         preq = urllib.request.Request(perm["url"], data=ask, method="POST",
             headers={"content-type": "application/json", **perm.get("headers", {})})
         verdict = json.loads(json.load(urllib.request.urlopen(preq, timeout=600))["result"]["content"][0]["text"])
         if verdict.get("behavior") == "allow":
             call_args = verdict.get("updatedInput", call_args)
         else:
-            reply.append("TOOLDENIED")
+            # what kwnt told the bot, in brackets, so tests can read it
+            reply.append("TOOLDENIED[" + verdict.get("message", "") + "]")
+            if ask_as:
+                print(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result",
+                    "tool_use_id": "toolu_askfirst", "is_error": True, "content": verdict.get("message", "")}]}}), flush=True)
             m = None
 if m and "--mcp-config" in args:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",

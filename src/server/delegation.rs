@@ -605,7 +605,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
         // boxed, so the retry loop around the turn adds no stack to it
         async move {
             let outcome = Box::pin(try_kwant_turn(scope, specialist, p, opts)).await;
-            Box::pin(continue_once_if_capped_into(scope, specialist, outcome, None, Some(&slot))).await
+            Box::pin(continue_once_if_capped_into(scope, specialist, outcome, None, Some(&slot), None)).await
         }
     })
     .await;
