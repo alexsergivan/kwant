@@ -1937,7 +1937,10 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
                 .await?;
         }
         "channel_create" => match state.db.delete_empty_channel(&target).await {
-            Ok(true) => super::passwords::forget_deleted_owners(state, &[&target]).await,
+            Ok(true) => {
+                super::passwords::forget_deleted_owners(state, &[&target]).await;
+                state.broker.forget_conversation(&target).await;
+            }
             Ok(false) => return Err(error(StatusCode::CONFLICT, "the channel already has messages, so it is kept")),
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
         },

@@ -408,6 +408,7 @@ pub(super) async fn purge_kwant(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, id
         "DELETE FROM questions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
         "DELETE FROM approvals WHERE kwant_id = ?1",
         "DELETE FROM approval_modes WHERE scope = 'kwant' AND id = ?1",
+        "DELETE FROM always_allowed WHERE kwant_id = ?1",
         "DELETE FROM skills WHERE kwant_id = ?1",
         "DELETE FROM mcp_suggestions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
         "DELETE FROM hire_proposals WHERE kwant_id = ?1 OR direct_kwant_id = ?1",

@@ -1,17 +1,22 @@
 //! Human steps: `request_human_step` pauses the turn with a card and a `human_step`
 //! notification, Done or Decline resumes it with that outcome, Stop cancels it, a late answer
 //! starts a new turn, and the bot's browser tools are refused while a step is open. Two turns of
-//! a bot in one chat asking for the same sign-in share one step.
+//! a bot in one chat asking for the same sign-in share one step. A file the person sends in the
+//! chat while a turn waits on a step returns that turn at once (22m).
 
 mod common;
 
-use axum::http::StatusCode;
+use axum::{
+    body::{to_bytes, Body},
+    http::{Request, StatusCode},
+};
 use common::*;
 use kwnt::server::continuity::{SelfScope, TurnOrigin};
 use kwnt::server::mcp_runtime;
 use kwnt::RuntimeEvent;
 use serde_json::{json, Value};
 use std::time::Duration;
+use tower::ServiceExt;
 
 fn step_marker(kind: &str, reason: &str) -> String {
     call_tool_marker("request_human_step", json!({"kind": kind, "reason": reason, "url": "https://me:pw@example.com/login?token=abc"}))
@@ -313,4 +318,100 @@ async fn a_sign_in_for_another_site_gets_its_own_step_while_one_is_open() {
     assert_eq!(code, StatusCode::OK, "{v}");
     let (text, is_error) = finished(instagram).await;
     assert!(!is_error && text.contains("declined the step"), "{text}");
+}
+
+/// Uploads a small text file, as the composer does before sending; gives its id.
+async fn upload(env: &Env, name: &str) -> String {
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/attachments?name={name}"))
+        .header("content-type", "application/octet-stream")
+        .body(Body::from(format!("contents of {name}\n")))
+        .unwrap();
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+    v["id"].as_str().unwrap().to_string()
+}
+
+/// 22m: while bot a waits on its "needs you in the browser" card in its 1:1, typed text and a file
+/// sent to another bot leave the wait alone; a file sent to a returns the waiting turn at once
+/// (not after the 290 s wait), the card closes as `left_for_message` (never "done") with the
+/// browser handed back, and the message's own turn gets the file on its `[Attached files]` line.
+#[tokio::test]
+async fn a_file_sent_in_the_chat_returns_the_turn_waiting_on_its_step() {
+    let env = setup().await;
+    send_direct(&env, &env.a, &format!("{} REPLYTAG:w1", step_marker("other", "Upload the MP3 on rss.com")), json!({})).await;
+    let s = open_step(&env, &env.a).await;
+    let id = s["id"].as_str().unwrap().to_string();
+    wait_for("the turn waiting", || async { step(&env, &id).await["waiting"] == true }).await;
+
+    // Typed text (the person may be mid sign-in) and another bot's file don't wake it
+    send_direct(&env, &env.a, "doing it now REPLYTAG:w0", json!({})).await;
+    let other = upload(&env, "other.txt").await;
+    send_direct(&env, &env.b, "for b REPLYTAG:wb", json!({"attachment_ids": [other]})).await;
+    wait_reply(&env, &env.b, "answer wb").await;
+    let st = step(&env, &id).await;
+    assert_eq!((st["step"]["status"].as_str(), st["waiting"].as_bool()), (Some("open"), Some(true)), "{st}");
+
+    let file = upload(&env, "episode.txt").await;
+    let started = std::time::Instant::now();
+    send_direct(&env, &env.a, "here it is REPLYTAG:w2", json!({"attachment_ids": [file]})).await;
+    let first = wait_reply(&env, &env.a, "answer w1").await;
+    assert!(started.elapsed() < Duration::from_secs(30), "returned at once, not after the wait");
+    assert!(first.text.contains("sent a file in this chat") && first.text.contains("End this turn now"), "{}", first.text);
+    assert!(!first.text.contains("TOOLERROR") && !first.text.contains("says the step is done"), "{}", first.text);
+    let st = step(&env, &id).await;
+    assert_eq!((st["step"]["status"].as_str(), st["waiting"].as_bool()), (Some("left_for_message"), Some(false)), "{st}");
+    if let Some(target) = s["page_key"].as_str().or(s["sandbox_target"].as_str()) {
+        assert!(!kwnt::server::human_steps::browser_is_held(&env.state, target).await, "the browser is the bot's again");
+    }
+    let card = messages(&env, &env.a).await.into_iter().find(|m| m.text.starts_with("Your help is needed")).unwrap();
+    assert!(card.meta.as_deref().unwrap().contains("\"status\":\"left_for_message\""));
+    assert!(!messages(&env, &env.a).await.iter().any(|m| m.sender_role == "user" && m.text == "Done"), "no Done reply is made up");
+
+    // The message's own turn reads the file; the typed one still runs too
+    wait_reply(&env, &env.a, "answer w2").await;
+    // Any prompt carrying the tag (a later turn may quote it as history): one of them is w2's own, with the file
+    let prompts = invocations_with("REPLYTAG:w2");
+    assert!(prompts.iter().any(|p| p.contains("[Attached files]") && p.contains(&format!("id {file}"))), "{prompts:?}");
+    wait_reply(&env, &env.a, "answer w0").await;
+    let (code, _) = call(&env.app, "POST", &format!("/api/human-steps/{id}/done"), None).await;
+    assert_eq!(code, StatusCode::CONFLICT, "closed once only");
+}
+
+/// 22m in a thread: a file sent to the same bot's 1:1 doesn't wake the thread's wait; one sent in
+/// the thread does.
+#[tokio::test]
+async fn a_file_wakes_only_the_wait_in_its_own_thread() {
+    let env = setup().await;
+    let thread = env.state.db.create_thread(&env.a, "Podcast upload", "chat", None, "user").await.unwrap();
+    let to_thread = |prompt: String, extra: Value| {
+        let mut body = json!({"prompt": prompt, "sender_id": "user", "thread_id": thread.id});
+        for (k, v) in extra.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        let app = env.app.clone();
+        async move {
+            let (code, v) = call(&app, "POST", "/api/chat/send", Some(body)).await;
+            assert_eq!(code, StatusCode::OK, "{v}");
+        }
+    };
+    to_thread(format!("{} REPLYTAG:t1", step_marker("sign_in", "Sign in to rss.com")), json!({})).await;
+    let s = open_step(&env, &thread.id).await;
+    let id = s["id"].as_str().unwrap().to_string();
+    wait_for("the thread turn waiting", || async { step(&env, &id).await["waiting"] == true }).await;
+
+    let dm_file = upload(&env, "dm.txt").await;
+    send_direct(&env, &env.a, "in the 1:1 REPLYTAG:t0", json!({"attachment_ids": [dm_file]})).await;
+    let st = step(&env, &id).await;
+    assert_eq!((st["step"]["status"].as_str(), st["waiting"].as_bool()), (Some("open"), Some(true)), "another chat of the same bot: {st}");
+
+    let file = upload(&env, "thread.txt").await;
+    to_thread("here REPLYTAG:t2".into(), json!({"attachment_ids": [file]})).await;
+    let first = wait_reply(&env, &thread.id, "answer t1").await;
+    assert!(first.text.contains("sent a file in this chat"), "{}", first.text);
+    assert_eq!(step(&env, &id).await["step"]["status"], "left_for_message");
+    wait_reply(&env, &thread.id, "answer t2").await;
+    assert!(invocations_with("REPLYTAG:t2").iter().any(|p| p.contains("[Attached files]") && p.contains(&format!("id {file}"))));
 }

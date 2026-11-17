@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Clock, Globe, Hand, Loader2, MinusCircle, MonitorPlay, Puzzle } from 'lucide-react';
+import { CheckCircle2, Clock, Globe, Hand, Loader2, MinusCircle, MonitorPlay, Paperclip, Puzzle } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { HumanStep, HumanStepMeta, KIND_TEXT, domainOf, humanStepView } from '../humanSteps';
 
@@ -65,6 +65,11 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
     ) : status === 'declined' ? (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
         <MinusCircle size={13} className="shrink-0" aria-hidden="true" /> Skipped. {kwantName} continues without it.
+      </span>
+    ) : status === 'left_for_message' ? (
+      // 22m: closed because the person sent a file, not because the step was done
+      <span className="inline-flex items-center gap-1.5 text-zinc-400">
+        <Paperclip size={13} className="shrink-0" aria-hidden="true" /> Closed: {kwantName} is reading the file you sent.
       </span>
     ) : status === 'cancelled' ? (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">

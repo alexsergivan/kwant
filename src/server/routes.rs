@@ -4697,6 +4697,7 @@ async fn send_chat_routed(
                     target_kwant.name, target_kwant.title, reason
                 )));
 
+                file_wakes_browser_wait(&state, &target_kwant.id, direct_chat(&payload), !uploads.is_empty(), from_person).await;
                 let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id, from_person).await;
                 execute_single_turn(
                     state.clone(),
@@ -4932,6 +4933,7 @@ async fn send_chat_routed(
             return Ok(Json(v));
         }
         let team_keys = active_team.as_ref().map(|t| (t.id.clone(), t.name.clone()));
+        file_wakes_browser_wait(&state, &target_kwant.id, direct_chat(&payload), !uploads.is_empty(), from_person).await;
         let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id, from_person).await;
         execute_single_turn(
             state.clone(),
@@ -5054,6 +5056,7 @@ async fn send_to_thread(
     };
     let prompt = payload.prompt + &note;
     let target = kwant.clone();
+    file_wakes_browser_wait(&state, &kwant.id, Some(&thread.id), !uploads.is_empty(), from_person).await;
     // H3: the message is saved and shows; its turn waits while the bot is stuck or waits on the person
     let held = super::bot_status::hold_from(&state, &kwant, &thread.id, "message", &saved.id, from_person).await;
     let held_id = held.as_ref().map(|_| saved.id.clone());
@@ -5074,6 +5077,22 @@ async fn send_to_thread(
     });
     with_held(&mut reply, held);
     Ok(Json(reply))
+}
+
+/// The chat a channel or 1:1 send's turn runs in, as its turn's origin names it
+/// ([`super::human_steps::chat_key`]): the channel, else the bot of the 1:1.
+fn direct_chat(payload: &SendChatPayload) -> Option<&str> {
+    payload.channel_id.as_deref().or(payload.kwant_id.as_deref())
+}
+
+/// 22m: a file the person sends to `kwant` in `chat` reaches it at once. A turn of that bot
+/// waiting there on a "needs you in the browser" card returns now (the card closes as
+/// `left_for_message`), so this message's turn isn't held behind the wait for up to 290 s. Only a
+/// message with files from the person wakes it: typed text ("signing in now…") must not take the
+/// browser back from someone mid sign-in, so it waits as before (H3).
+async fn file_wakes_browser_wait(state: &AppState, kwant_id: &str, chat: Option<&str>, has_files: bool, from_person: bool) {
+    let Some(chat) = chat.filter(|_| has_files && from_person) else { return };
+    super::human_steps::wake_chat(state, kwant_id, chat).await;
 }
 
 /// Holds a chat or 1:1 message to `kwant` while it is stuck or waits on the person elsewhere (H3).
