@@ -228,6 +228,8 @@ function SenderLetter({ name }: { name: string }) {
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
+// 25b: a customer's or a bot's chat-API message, on the left. Outline only: not yours (filled, lighter), not a bot reply (filled); never violet.
+const OTHER_BUBBLE = 'bg-transparent text-zinc-200 rounded-tl-sm border border-zinc-700';
 
 export interface ChatViewProps {
   /** H3: a line under the person's held message ("Waiting for Juno: …", Try again), by message id. */
@@ -1789,6 +1791,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     // 23c: a customer's or a bot's "user" message says who wrote it; the person (Telegram too) and a coding agent as before
     const otherSender = isUser ? otherSenderLabel(msg.meta, knownBots, msg.sender_id) : null;
     const displayName = isUser ? otherSender ?? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
+    // 25b: only what you wrote sits on your side (you, you from Telegram, your coding agent). A customer or a bot's
+    // chat-API message sits on the left in a neutral bubble. Side and look only; content still follows isUser.
+    const onYourSide = isUser && !otherSender;
     // P4: a share that now sits under its bot's reply reads as part of it, without a second header.
     const underReply = !isUser && filesOnly && (arranged.attached.has(msg.id) || liveShareIds.has(msg.id));
     const olderCopies = filesOnly ? arranged.earlier.get(msg.id) : undefined;
@@ -1808,7 +1813,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         data-shared-under={underReply ? '' : undefined}
         // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
         style={underReply ? { marginTop: '0.5rem' } : undefined}
-        className={`group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+        className={`group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${onYourSide ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
@@ -1835,7 +1840,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </span>
         )}
 
-        <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-[85%] sm:max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
+        <div className={`flex flex-col min-w-0 ${onYourSide ? 'max-w-[85%] sm:max-w-2xl items-end' : isUser ? 'max-w-[85%] sm:max-w-2xl items-start' : 'flex-1 max-w-4xl items-start'}`}>
           {underReply ? (
             <span className="sr-only">Shared by {displayName}</span>
           ) : isUser ? (
@@ -1922,18 +1927,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {!filesOnly && (text.trim() || !files.length) && (
           <div className={isUser ? 'relative w-full max-w-2xl' : 'contents'}>
           {isUser && (() => {
-            // The person's message: the overflow sits in the empty gutter left of the bubble, bottom-aligned, no row
-            const more = continueMenu(msg, messageAbout(otherSender), 'end', 'hover');
-            return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
+            // A "user" message: the overflow sits in the empty gutter beside the bubble, bottom-aligned, no row.
+            // Yours: left of your bubble. A customer's or a bot's (25b, on the left): right of theirs.
+            const more = continueMenu(msg, messageAbout(otherSender), onYourSide ? 'end' : 'start', 'hover');
+            return more ? (
+              <div className={onYourSide ? 'absolute right-full bottom-0 mr-1' : 'absolute left-full bottom-0 ml-1'} data-message-more-gutter="">
+                {more}
+              </div>
+            ) : null;
           })()}
           <div
             className={`${REPLY_BUBBLE} ${
-              isUser
+              onYourSide
                 ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
-                : workAhead
-                  ? 'bg-sky-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-sky-400/25'
-                  : REPLY_BUBBLE_BOT
+                : isUser
+                  ? `${OTHER_BUBBLE} max-w-2xl`
+                  : workAhead
+                    ? 'bg-sky-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-sky-400/25'
+                    : REPLY_BUBBLE_BOT
             }`}
+            data-other-bubble={isUser && !onYourSide ? '' : undefined}
             data-work-ahead={workAhead ? '' : undefined}
           >
             {isUser ? (
@@ -1956,7 +1969,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
           </div>
           )}
-          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
+          {files.length > 0 && <FileTiles files={files} align={onYourSide ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
           {isUser && heldNotes?.[msg.id]}
           {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (
             // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared
@@ -2048,7 +2061,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             )}
             </>
           )}
-          {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={isUser ? 'end' : 'start'} />}
+          {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={onYourSide ? 'end' : 'start'} />}
         </div>
       </div>
     );

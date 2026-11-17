@@ -14,6 +14,7 @@ import {
   fetchAuthStatus,
   installUnauthorizedListener,
   redeemSignIn,
+  signinHintOf,
 } from '../auth';
 import { fillTimeZone } from '../continuity';
 import { AuthContext, useAuth } from '../authContext';
@@ -22,8 +23,8 @@ export { useAuth };
 
 type GateState =
   | { kind: 'checking' }
-  | { kind: 'ready'; authRequired: boolean; deviceLogin: boolean }
-  | { kind: 'locked'; notice: string | null; deviceLogin: boolean }
+  | { kind: 'ready'; authRequired: boolean; deviceLogin: boolean; signinHint: string | null }
+  | { kind: 'locked'; notice: string | null; deviceLogin: boolean; signinHint: string | null }
   | { kind: 'offline'; message: string };
 
 installUnauthorizedListener();
@@ -56,10 +57,11 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     try {
       const s = await fetchAuthStatus();
       const deviceLogin = s.device_login === true;
+      const signinHint = signinHintOf(s);
       setState(
         s.auth_required && !s.authenticated
-          ? { kind: 'locked', notice, deviceLogin }
-          : { kind: 'ready', authRequired: s.auth_required, deviceLogin },
+          ? { kind: 'locked', notice, deviceLogin, signinHint }
+          : { kind: 'ready', authRequired: s.auth_required, deviceLogin, signinHint },
       );
     } catch (e) {
       setState({ kind: 'offline', message: offlineMessage(e, navigator.onLine) });
@@ -103,7 +105,12 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     try {
       await endSession();
     } finally {
-      setState((prev) => ({ kind: 'locked', notice: 'Signed out.', deviceLogin: prev.kind === 'ready' && prev.deviceLogin }));
+      setState((prev) => ({
+        kind: 'locked',
+        notice: 'Signed out.',
+        deviceLogin: prev.kind === 'ready' && prev.deviceLogin,
+        signinHint: prev.kind === 'ready' ? prev.signinHint : null,
+      }));
     }
   }, []);
 
@@ -116,6 +123,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
         {personPrompt && (
           <PersonTokenDialog
             deviceLogin={state.deviceLogin}
+            signinHint={state.signinHint}
             onClose={() => {
               setPersonPrompt(false);
               window.dispatchEvent(new Event(PERSON_PROMPT_CLOSED_EVENT));
@@ -160,18 +168,19 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
             </button>
           </div>
         )}
-        {state.kind === 'locked' && <TokenForm notice={state.notice} deviceLogin={state.deviceLogin} onSignedIn={() => check()} />}
+        {state.kind === 'locked' && <TokenForm notice={state.notice} deviceLogin={state.deviceLogin} signinHint={state.signinHint} onSignedIn={() => check()} />}
       </div>
     </div>
   );
 };
 
 /** The token screen as a dialog, for an action only the person may take. The app stays open under it. */
-export const PersonTokenDialog: React.FC<{ onClose: () => void; onSignedIn: () => void; deviceLogin?: boolean }> = ({
-  onClose,
-  onSignedIn,
-  deviceLogin = false,
-}) => {
+export const PersonTokenDialog: React.FC<{
+  onClose: () => void;
+  onSignedIn: () => void;
+  deviceLogin?: boolean;
+  signinHint?: string | null;
+}> = ({ onClose, onSignedIn, deviceLogin = false, signinHint = null }) => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -196,7 +205,7 @@ export const PersonTokenDialog: React.FC<{ onClose: () => void; onSignedIn: () =
         >
           <X size={14} />
         </button>
-        <TokenForm notice={null} onSignedIn={onSignedIn} personOnly onCancel={onClose} deviceLogin={deviceLogin} />
+        <TokenForm notice={null} onSignedIn={onSignedIn} personOnly onCancel={onClose} deviceLogin={deviceLogin} signinHint={signinHint} />
       </div>
     </div>
   );
@@ -325,6 +334,10 @@ export const selectForRetry = (el: Pick<HTMLInputElement, 'focus' | 'select'> | 
 export const WRONG_TOKEN = "That token isn't right. It has to come from the machine running kwant bots, as the user running it.";
 /** Only shown with the wrong-token error, not up front. */
 export const OWN_TOKEN_HINT = "Each install has its own token, so one copied from another computer won't work here.";
+/** With a store hint the person has no shell, so the wrong-token error points back to the hint instead. */
+export const HINT_WRONG_TOKEN = "That isn't this install's token. Copy it again from the place named above.";
+/** The error for a refused token: with a store hint, back to the hint; without, where it has to come from. */
+export const wrongTokenError = (signinHint: string | null) => (signinHint ? HINT_WRONG_TOKEN : WRONG_TOKEN);
 
 export const TokenForm: React.FC<{
   notice: string | null;
@@ -333,7 +346,12 @@ export const TokenForm: React.FC<{
   onCancel?: () => void;
   /** The server can let this browser in from a signed-in device: that comes first. */
   deviceLogin?: boolean;
-}> = ({ notice, onSignedIn, personOnly = false, onCancel, deviceLogin = false }) => {
+  /**
+   * An app store or host set this install's token and says where it shows it (`KWNT_SIGNIN_HINT`):
+   * the hint and the token box then lead, open, since its users have no shell for the link commands.
+   */
+  signinHint?: string | null;
+}> = ({ notice, onSignedIn, personOnly = false, onCancel, deviceLogin = false, signinHint = null }) => {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -345,10 +363,10 @@ export const TokenForm: React.FC<{
 
   useEffect(() => {
     if (error && !busy) {
-      setOthersOpen(true);
+      if (!signinHint) setOthersOpen(true);
       selectForRetry(inputRef.current);
     }
-  }, [error, busy]);
+  }, [error, busy, signinHint]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -363,13 +381,62 @@ export const TokenForm: React.FC<{
         onSignedIn();
         return;
       }
-      setError(result === 'link_used_or_expired' ? LINK_SPENT : WRONG_TOKEN);
+      setError(result === 'link_used_or_expired' ? LINK_SPENT : wrongTokenError(signinHint));
     } catch (err) {
       setError(err instanceof Error && err.message !== 'Failed to fetch' ? err.message : 'Could not reach the server.');
     } finally {
       setBusy(false);
     }
   };
+
+  const tokenBox = (
+    <div className="space-y-1.5">
+      <label htmlFor="kwnt-token" className="block text-[11px] text-zinc-500 leading-snug">
+        Paste a sign-in link or the access token
+      </label>
+      <div className="flex gap-2">
+        <input
+          id="kwnt-token"
+          ref={inputRef}
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          aria-invalid={!!error}
+          aria-describedby={error ? 'kwnt-token-error' : undefined}
+          className="flex-1 min-w-0 min-h-[44px] sm:min-h-0 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+          placeholder="Link or token"
+        />
+        <button
+          type="submit"
+          disabled={busy || !token.trim()}
+          className="shrink-0 flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50"
+        >
+          {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
+        </button>
+      </div>
+      {error && (
+        <p id="kwnt-token-error" className="text-[11px] text-rose-400 leading-snug" role="alert">
+          {error}
+          {error === WRONG_TOKEN && ` ${OWN_TOKEN_HINT}`}
+        </p>
+      )}
+    </div>
+  );
+
+  const deviceWays = (open: string) => (
+    <>
+      {deviceLogin && <DeviceWait onSignedIn={onSignedIn} />}
+      <div className="space-y-1.5">
+        <p className="text-xs text-zinc-400 leading-relaxed">
+          {open} the one-time sign-in link kwant bots printed when it started, or scan its QR code with your phone. Used or lost
+          it? Make a new one on the machine running kwant bots:
+        </p>
+        <Command>{docker ? DOCKER_LINK_COMMAND : LINK_COMMAND}</Command>
+      </div>
+    </>
+  );
 
   return (
     <form onSubmit={submit} className="space-y-4">
@@ -388,48 +455,20 @@ export const TokenForm: React.FC<{
           {notice}
         </p>
       )}
-      {deviceLogin && <DeviceWait onSignedIn={onSignedIn} />}
-      <div className="space-y-1.5">
-        <p className="text-xs text-zinc-400 leading-relaxed">
-          {deviceLogin ? 'Or open' : 'Open'} the one-time sign-in link kwant bots printed when it started, or scan its QR code with your phone. Used or lost
-          it? Make a new one on the machine running kwant bots:
-        </p>
-        <Command>{docker ? DOCKER_LINK_COMMAND : LINK_COMMAND}</Command>
-      </div>
-      <OtherSetups loc={loc} docker={docker} open={othersOpen} onToggle={setOthersOpen}>
-        <div className="space-y-1.5">
-          <label htmlFor="kwnt-token" className="block text-[11px] text-zinc-500 leading-snug">
-            Paste a sign-in link or the access token
-          </label>
-          <div className="flex gap-2">
-            <input
-              id="kwnt-token"
-              ref={inputRef}
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              aria-invalid={!!error}
-              aria-describedby={error ? 'kwnt-token-error' : undefined}
-              className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-              placeholder="Link or token"
-            />
-            <button
-              type="submit"
-              disabled={busy || !token.trim()}
-              className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50"
-            >
-              {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
-            </button>
-          </div>
-          {error && (
-            <p id="kwnt-token-error" className="text-[11px] text-rose-400 leading-snug" role="alert">
-              {error}
-              {error === WRONG_TOKEN && ` ${OWN_TOKEN_HINT}`}
-            </p>
-          )}
+      {/* A store install has no other signed-in device yet, so its own way in comes first */}
+      {signinHint && (
+        <div className="space-y-2">
+          <p className="text-xs text-zinc-300 leading-relaxed" data-testid="kwnt-signin-hint">
+            {signinHint}
+          </p>
+          {tokenBox}
         </div>
+      )}
+      {/* Without a hint: the device code and the link lead, the token box is the fallback. With one,
+          a fresh store install has no other device and no shell, so they move into the fold. */}
+      {!signinHint && deviceWays(deviceLogin ? 'Or open' : 'Open')}
+      <OtherSetups loc={loc} docker={docker} open={othersOpen} onToggle={setOthersOpen}>
+        {signinHint ? deviceWays('Open') : tokenBox}
       </OtherSetups>
       <p className="text-[11px] text-zinc-500">Stays signed in for a year. Anyone with a sign-in link or the token controls this server.</p>
       {onCancel && (
