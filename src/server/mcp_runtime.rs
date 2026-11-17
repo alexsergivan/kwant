@@ -1670,9 +1670,32 @@ mod declined_tests {
             LayaRouter::new(config.laya_url.clone()),
         );
         let space = SpaceId::default_space();
+        // The space's one MCP server is a plain http one, so a turn is set up the same on every
+        // OS: the seeded stdio servers can all be dropped by `isolate_stdio_servers` (they are on
+        // Windows), and with no server left `prepare_turn_with_opts` returns None
+        for s in state.db.list_mcp_servers(&space).await.unwrap() {
+            state.db.delete_mcp_server(&s.id).await.unwrap();
+        }
+        state.db.create_mcp_server(&space, &http_server("tools", "http://127.0.0.1:9/mcp")).await.unwrap();
         let bot = state.db.list_kwants(&space).await.unwrap()[0].clone();
         let general = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap().id;
         Env { state, bot, general, _tmp: tmp }
+    }
+
+    fn http_server(name: &str, url: &str) -> McpServer {
+        McpServer {
+            id: format!("s-{name}"),
+            name: name.into(),
+            transport: "http".into(),
+            command: None,
+            args: vec![],
+            url: Some(url.into()),
+            env: Default::default(),
+            headers: Default::default(),
+            enabled: true,
+            timeout_secs: 10,
+            created_at: None,
+        }
     }
 
     async fn other_bot(e: &Env) -> Kwant {
@@ -1953,19 +1976,7 @@ mod declined_tests {
         let addr = listener.local_addr().unwrap();
         let app = super::super::create_router(e.state.clone());
         let serve = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let server = McpServer {
-            id: "s-perm".into(),
-            name: "perm".into(),
-            transport: "http".into(),
-            command: None,
-            args: vec![],
-            url: Some(format!("http://{addr}/api/mcp/permission/{token}")),
-            env: Default::default(),
-            headers: Default::default(),
-            enabled: true,
-            timeout_secs: 10,
-            created_at: None,
-        };
+        let server = http_server("perm", &format!("http://{addr}/api/mcp/permission/{token}"));
         let ctx = McpTurnContext {
             servers: vec![server],
             approver: Arc::new(approver(&e, &e.general, Duration::from_secs(10))),
