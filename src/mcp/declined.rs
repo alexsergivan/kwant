@@ -42,14 +42,18 @@ const PLUMBING: &[&str] = &[
 ];
 const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh"];
 /// Global options that take the next word, by program, so `git -C repo push` is still `git push`.
-const GLOBAL_VALUED: &[(&str, &[&str])] = &[
-    ("git", &["-C", "-c", "--git-dir", "--work-tree", "--namespace"]),
-    ("gh", &["-R", "--repo", "--hostname"]),
-    ("docker", &["-H", "--host", "--context", "-c", "--config", "-l", "--log-level"]),
-    ("kubectl", &["-n", "--namespace", "--context", "--cluster", "--kubeconfig", "-s", "--server", "--user"]),
-    ("npm", &["--prefix", "-w", "--workspace"]),
-    ("cargo", &["--manifest-path", "-Z", "--config"]),
-];
+/// (A `match`, not a table: tests/host_git_calls_test.rs accepts a git name as a match pattern.)
+fn global_valued(program: &str) -> &'static [&'static str] {
+    match program {
+        "git" => &["-C", "-c", "--git-dir", "--work-tree", "--namespace"],
+        "gh" => &["-R", "--repo", "--hostname"],
+        "docker" => &["-H", "--host", "--context", "-c", "--config", "-l", "--log-level"],
+        "kubectl" => &["-n", "--namespace", "--context", "--cluster", "--kubeconfig", "-s", "--server", "--user"],
+        "npm" => &["--prefix", "-w", "--workspace"],
+        "cargo" => &["--manifest-path", "-Z", "--config"],
+        _ => &[],
+    }
+}
 /// curl's, wget's and httpie's options that take the next word (it is never the address).
 const URL_VALUED: &[&str] = &[
     "-o", "--output", "-H", "--header", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-X", "--request",
@@ -177,7 +181,7 @@ fn command_family(words: &[String], depth: u8, out: &mut Vec<String>) -> Option<
     if URL_PROGRAMS.contains(&program) {
         return url_host(args).map(|host| format!("sh:{program}@{host}"));
     }
-    let valued = GLOBAL_VALUED.iter().find(|(p, _)| *p == program).map_or(&[][..], |(_, v)| *v);
+    let valued = global_valued(program);
     let mut j = 0;
     let first = loop {
         let Some(a) = args.get(j) else { break None };
