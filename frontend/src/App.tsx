@@ -1,4 +1,6 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { flushSync } from 'react-dom';
+import { recordRunWait } from './routineRow';
 import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
@@ -37,6 +39,7 @@ import {
   HumanStepMeta,
   applyHumanStep,
   captchaStepFor,
+  closedStepText,
   humanStepsApi,
   latestOpenStep,
   openStepFor,
@@ -81,6 +84,7 @@ import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/R
 import { SpaceReadyCard } from './components/SpaceReadyCard';
 import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
+import { channelBotIds } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
@@ -116,10 +120,13 @@ import {
   queuePosition,
   queuedInChat,
   reloadOnTurnEnd,
+  landedNewReply,
+  settlesOnTurnComplete,
   shouldRenderDelta,
   streamTarget,
   waitsForOtherBot,
   threadBadge,
+  writingBadge,
   threadsApi,
   turnsIn,
   upsertThread,
@@ -153,7 +160,10 @@ import {
   questionsApi,
   turnsAwaitingAnswer,
 } from './questions';
-import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
+import { AwayError, AwayItem, affectsAway, awayApi } from './away';
+import { asksHere, closedId, isHandOff, dismissKind, dropClosed, loadAskWindow, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
+import { NeedsYouStrip } from './components/NeedsYouStrip';
+import { chainBudgetApi } from './chainBudget';
 import { needsYouRows, attentionRows } from './chatsTab';
 import { Space, eventsUrl, getCurrentSpace, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
@@ -174,6 +184,7 @@ import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, creat
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
+import { HomeAssistantHost, openHomeAssistant } from './components/HomeAssistantSheet';
 import { JiraSetupHost } from './components/JiraSetup';
 import { useDevMode, useDevModeOn } from './components/DevModeSwitch';
 import { DevModeSuggestion, SUGGEST_HIDDEN } from './components/DevModeSuggestion';
@@ -500,6 +511,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
+  // 22i: the highlight a Needs-attention row asked for also gets the pre-push ring.
+  const [ringId, setRingId] = useState<string | null>(null);
   // Older messages shown instead of the latest (a search hit beyond them). Kept apart from the
   // cache, which live updates keep current underneath.
   const [historyWindow, setHistoryWindow] = useState<{ ctx: string; messages: ChatMessage[] } | null>(null);
@@ -622,9 +635,23 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // "Needs you" nudges (attention.ts): what waits on the person, the pill, and the "Show nudges" setting.
   const [awayWaiting, setAwayWaiting] = useState(0);
   /** What waits on you right now (approvals, questions), for the phone Chats tab's Needs you. */
-  const [awayItems, setAwayItems] = useState<AwayItem[]>([]);
+  const [awayList, setAwayItems] = useState<AwayItem[]>([]);
   /** H5: unseen failed and finished items (ranks 2 and 3), and whether the first fetch has landed. */
   const [awayDone, setAwayDone] = useState<{ failed: AwayItem[]; finished: AwayItem[] } | null>(null);
+  // 22i: items the person just resolved from the strip go from the row and the strip at once; an id
+  // leaves this set once the server's list no longer has it.
+  const [clearedAsks, setClearedAsks] = useState<ReadonlySet<string>>(() => new Set());
+  const awayItems = useMemo(() => (clearedAsks.size ? awayList.filter((i) => !clearedAsks.has(i.id)) : awayList), [awayList, clearedAsks]);
+  // Rank-2 failed rows, minus any just cleared (a failed hand-off's "Done, clear it").
+  const awayFailed = useMemo(() => (awayDone?.failed ?? []).filter((i) => !clearedAsks.has(i.id)), [awayDone, clearedAsks]);
+  useEffect(() => {
+    setClearedAsks((prev) => {
+      if (!prev.size) return prev;
+      const live = new Set([...awayList, ...(awayDone?.failed ?? [])].map((i) => i.id));
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [awayList, awayDone]);
   /** H5: when the person last opened each bot's chat (a finished item older than that is read). */
   const [openedAt, setOpenedAt] = useState<Record<string, number>>({});
   // H4 (#499): each bot's status from the server; null on an older server (today's lines stay).
@@ -879,14 +906,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       delete streamsRef.current[ctx];
       delete liveKwantRef.current[ctx];
     }
+    if (ctx && ctx in liveRef.current) {
+      const next = { ...liveRef.current };
+      delete next[ctx];
+      liveRef.current = next;
+      // 22r: the working line goes in this commit, before its words are cleared below. The streamed text is an
+      // outside store that repaints at once; cleared first, the line showed blank until React's next render.
+      flushSync(() => setLive(next));
+    }
     if (ctx === openCtxRef.current) {
       streamStore.show({ text: '', thinking: '' });
     }
-    if (!ctx || !(ctx in liveRef.current)) return;
-    const next = { ...liveRef.current };
-    delete next[ctx];
-    liveRef.current = next;
-    setLive(next);
   };
   const kwantName = (id: unknown) => (typeof id === 'string' ? kwantsRef.current.find((k) => k.id === id)?.name : undefined);
   // 0.8.1 F4: which bot runs in each live chat, so a name that wasn't known yet can be filled in. A page
@@ -905,28 +935,33 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const chatLoadsRef = useRef(new ChatLoads());
   /** Loads a chat's latest messages into the cache, and on screen if it's open. */
-  const refreshContext = async (ctx: string | null | undefined): Promise<void> => {
-    if (!ctx) return;
-    const n = chatLoadsRef.current.start(ctx);
-    try {
-      let data: ChatMessage[];
-      if (knownThreadsRef.current.has(ctx)) {
-        data = await threadsApi.messages<ChatMessage>(ctx);
-      } else {
-        const res = await fetch(`/api/channels/${encodeURIComponent(ctx)}/messages`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        data = await res.json();
+  const refreshContext = (ctx: string | null | undefined): Promise<void> => {
+    if (!ctx) return Promise.resolve();
+    // Resolves once the newest load of this chat has landed (22r), so a settle after it never ends the turn on an older list.
+    return chatLoadsRef.current.run(ctx, async (isLatest) => {
+      try {
+        let data: ChatMessage[];
+        if (knownThreadsRef.current.has(ctx)) {
+          data = await threadsApi.messages<ChatMessage>(ctx);
+        } else {
+          const res = await fetch(`/api/channels/${encodeURIComponent(ctx)}/messages`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          data = await res.json();
+        }
+        // A newer load of this chat started meanwhile: it has the newer messages
+        if (!isLatest()) return;
+        messagesCacheRef.current[ctx] = data;
+        if (openCtxRef.current === ctx) {
+          // 22r: on screen now, so a settle after this load (which clears the streamed words) never paints before the saved reply.
+          flushSync(() => {
+            setMessages(data);
+            setMessagesError(null);
+          });
+        }
+      } catch {
+        if (openCtxRef.current === ctx && isLatest()) setMessagesError('Could not load this chat.');
       }
-      // A newer load of this chat started meanwhile: it has the newer messages
-      if (!chatLoadsRef.current.isLatest(ctx, n)) return;
-      messagesCacheRef.current[ctx] = data;
-      if (openCtxRef.current === ctx) {
-        setMessages(data);
-        setMessagesError(null);
-      }
-    } catch {
-      if (openCtxRef.current === ctx && chatLoadsRef.current.isLatest(ctx, n)) setMessagesError('Could not load this chat.');
-    }
+    });
   };
 
   const rememberThreads = (list: Thread[]) => list.forEach((t) => knownThreadsRef.current.add(t.id));
@@ -1273,6 +1308,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     sse.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data);
+        if (event.type === 'waiting_updated' || event.type === 'WaitingUpdated') {
+          // 22i (#700): a closed item leaves Needs attention and the strip now; an open one comes with the refetch.
+          const gone = closedId(event.data);
+          if (gone) {
+            setAwayItems((prev) => dropClosed(prev, gone));
+            setAwayDone((prev) => (prev ? { failed: dropClosed(prev.failed, gone), finished: prev.finished } : prev));
+          }
+        }
         if (affectsAway(event.type)) refreshAwayCount(800);
         if (changesBots(event.type, event.data)) {
           setRosterFresh(false);
@@ -1533,6 +1576,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'routine_run':
           case 'RoutineRun':
+            recordRunWait(event.data);
             emitContinuity({ type: 'routine_run', data: event.data });
             break;
           case 'notify':
@@ -1726,8 +1770,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             }
             if (typeof event.turn_id === 'string') completed.add(event.turn_id);
             // The stream stays up until the saved reply is on screen, so nothing jumps.
+            const shown = ctx ? messagesCacheRef.current[ctx] : undefined;
             refreshContext(ctx).then(() => {
-              if (!discussionInProgressRef.current) settle(ctx);
+              // 22r: a turn still running waits for turn_ended, whose load has the saved reply, unless this load has it.
+              if (discussionInProgressRef.current) return;
+              if (settlesOnTurnComplete(turnsRef.current, event.turn_id) || landedNewReply(shown, ctx ? messagesCacheRef.current[ctx] : undefined)) settle(ctx);
             });
             break;
           }
@@ -2342,7 +2389,59 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   openPlaceRef.current = openPlace;
 
-  /** Opens the thread, channel or direct chat an away item links to. */
+  // 22i: whether the last open came from the keyboard (Enter or Space), so a row's open focuses the strip.
+  const keyboardOpenRef = useRef(false);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') keyboardOpenRef.current = true;
+    };
+    const pointer = () => {
+      keyboardOpenRef.current = false;
+    };
+    window.addEventListener('keydown', key, true);
+    window.addEventListener('pointerdown', pointer, true);
+    return () => {
+      window.removeEventListener('keydown', key, true);
+      window.removeEventListener('pointerdown', pointer, true);
+    };
+  }, []);
+  const [stripFocusKey, setStripFocusKey] = useState(0);
+  // The messages the chat shows now (the latest page, or a history window), and the pending landing.
+  const shownMessagesRef = useRef<ChatMessage[]>([]);
+  const highlightRef = useRef<string | null>(null);
+  highlightRef.current = highlightMessageId;
+
+  /**
+   * 22i: scrolls to an ask's card or message in the chat on screen and rings it (design.md §1). Loads the
+   * messages around it when it is older than the latest page. False when it can't be found, or (quiet,
+   * when stepping) isn't already rendered.
+   */
+  const findAsk = async (item: AwayItem, quiet = false): Promise<boolean> => {
+    const t = awayLanding(item);
+    const focus = t.focus;
+    if (!focus) return false;
+    const ring = () => {
+      setRingId(focus);
+      setHighlightMessageId(focus);
+      return true;
+    };
+    if (t.focusKind === 'approval') return document.querySelector(`[data-approval-card="${CSS.escape(focus)}"]`) ? ring() : false;
+    if (shownMessagesRef.current.some((m) => m.id === focus)) return ring();
+    if (quiet) return false;
+    // 22x: a thread too (its route takes `around`); the window shows only while that chat is open.
+    const w = await loadAskWindow<ChatMessage>(t, focus);
+    if (!w || openCtxRef.current !== w.ctx) return false;
+    setHistoryWindow(w);
+    return ring();
+  };
+
+  /** 22i: where an away item lands: its exact chat, and its own message or card to ring there. */
+  const awayLanding = (item: AwayItem) =>
+    askOpenTarget(item, {
+      questionMessage: (id) => questionsRef.current[id]?.message_id,
+      stepMessage: (id) => humanStepsRef.current[id]?.message_id,
+    });
+  /** Opens the thread, channel or direct chat an away item links to, scrolled to its ask and ringed. */
   const openAwayItem = (item: AwayItem) => {
     // 0.9.0 P1: a watch item opens its mission's report on the board, where the needs-you line is.
     if (item.kind === 'watch' && item.mission_id) {
@@ -2351,17 +2450,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       showPage('board');
       return;
     }
-    const t = awayTarget(item);
-    // 0.8.1 F6: the same opener as a notification's tap, so a gone chat lands in the bot's 1:1 and
-    // an approval row shows its card
-    openPlace({
-      channel_id: 'channel' in t ? t.channel : null,
-      kwant_id: 'thread' in t ? t.kwant : 'direct' in t ? t.direct : item.kwant_id,
-      thread_id: 'thread' in t ? t.thread : null,
-      card_id: item.kind === 'approval' ? item.id : null,
-    });
+    const t = awayLanding(item);
+    // 0.8.1 F6: the same opener as a notification's tap, so a gone chat lands in the bot's 1:1. 22i:
+    // every kind names its message (a question's or browser step's card, a stopped reply's notice),
+    // not only approvals, and the landing gets the ring.
+    if (!openPlace({ channel_id: t.channel_id, kwant_id: t.kwant_id, thread_id: t.thread_id, card_id: t.focus })) return;
+    setRingId(t.focus);
+    // Enter on a row: focus goes to the strip, so a screen reader reads the ask and Tab reaches its button.
+    if (keyboardOpenRef.current) setStripFocusKey((k) => k + 1);
+    // Older than the latest page: once the chat has loaded, load the messages around it and ring it. Not
+    // found at all: no toast and no scroll, the strip is the landing (design.md §1).
+    const focus = t.focus;
+    if (!focus || t.focusKind === 'approval') return;
+    window.setTimeout(() => {
+      if (highlightRef.current !== focus || shownMessagesRef.current.some((m) => m.id === focus)) return;
+      void findAsk(item).then((found) => {
+        if (found) return;
+        setHighlightMessageId((h) => (h === focus ? null : h));
+        setRingId((r) => (r === focus ? null : r));
+      });
+    }, 700);
   };
-
   /** 0.8.0 B3: a pre-push Inbox item opens the bot's chat at its card. */
   const openPrepush = (c: PrepushCardData) => {
     if (!openTarget({ channel_id: null, kwant_id: c.kwant_id })) return pushToast('That bot no longer exists.');
@@ -2562,9 +2671,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       try {
         const { step } = await humanStepsApi.get(id);
         setHumanSteps((prev) => applyHumanStep(prev, step));
-        if (step.status === 'done') return 'This was already marked done.';
-        if (step.status === 'declined') return 'This was already skipped.';
-        if (step.status === 'cancelled') return 'This was closed: the reply was stopped.';
+        const closed = closedStepText(step.status, which, kwantName(step.kwant_id) ?? 'the bot');
+        if (closed !== undefined) return closed ?? undefined;
       } catch {
         // keep the first error
       }
@@ -2901,6 +3009,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   /** 0.9.5 F: a done item's Open in chat, and a routine run's History row: the chat, at the answer. */
+  // 26d: a waiting routine run's "Open the card" lands on its approval card in the routine's chat.
+  const openRunCard = (n: NotifiedChat) => {
+    if (spaceSettingsTab) closeSpaceSettings();
+    openPlace(n);
+  };
+
   const openRunResult = (t: MessageTarget) => {
     if (spaceSettingsTab) closeSpaceSettings();
     if (t.thread_id) {
@@ -3208,6 +3322,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setLooseAddImap((n) => n + 1);
       showPage('inbox', 'loose');
     } else if (opens === 'connections') openConnections();
+    else if (opens === 'home_assistant') openHomeAssistant({ door: 'team', teamId: team.id });
+    else if (opens === 'accounts') openSettings();
     else if (opens === 'dev_mode_setup') {
       // The team's repo is set in Manage team (Team settings > Git Repo), where Dev mode's line shows.
       const t = teams.find((x) => x.id === team.id);
@@ -3915,6 +4031,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   const viewingHistory = !!historyWindow && historyWindow.ctx === openCtx;
+
+  shownMessagesRef.current = viewingHistory ? historyWindow.messages : messages;
   const errorBar = messagesError ? (
     <div role="alert" className="px-3 sm:px-6 py-2 border-b border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
       <span>{messagesError}</span>
@@ -3935,7 +4053,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         openThreadId,
         turns,
         awaiting: awaitingTurns,
-        directBadge: threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns),
+        // 25a: the open chat's badge stays "Working" while its live card is up, so it goes idle with the body
+        directBadge: writingBadge(threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns), !openThreadId && currentKwant.id in live),
+        openWriting: isCurrentContextStreaming,
         showArchived,
         onToggleArchived: () => setShowArchived((v) => !v),
         onOpenDirect: openDirectChat,
@@ -3951,10 +4071,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       {shownThread && (
         <ThreadHeader
           thread={shownThread}
-          badge={threadBadge(
-            { id: shownThread.id, delegation: shownThread.delegation ? delegations[shownThread.delegation.id] ?? shownThread.delegation : null },
-            turns,
-            awaitingTurns,
+          // 25a: "Working" and its Stop stay up while the body still shows the live card; header, body and
+          // composer go idle in the one commit that drops it (clearLive), with the saved reply
+          badge={writingBadge(
+            threadBadge(
+              { id: shownThread.id, delegation: shownThread.delegation ? delegations[shownThread.delegation.id] ?? shownThread.delegation : null },
+              turns,
+              awaitingTurns,
+            ),
+            shownThread.id in live,
           )}
           delegatedBy={kwantName(shownThread.delegation?.lead_kwant_id ?? shownThread.created_by)}
           onBack={openDirectChat}
@@ -4062,7 +4187,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     ? attentionRows({
         kwants,
         needs: needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))),
-        failed: awayDone.failed,
+        failed: awayFailed,
         finished: awayDone.finished,
         busy: busyKwants,
         status: botStatus,
@@ -4209,6 +4334,88 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         wobbleJar();
         announceJar(JAR_DROPPED);
       }}
+    />
+  );
+
+  // 22i: the "Needs you" strip above the composer: the open asks of the chat on screen, from the same
+  // list as the Needs-attention rows, so both go the moment the item closes.
+  const askHere: Here | null =
+    page !== 'chat' || !selectedId ? null : openThreadId ? { thread: openThreadId, kwant: selectedId } : isChannel ? { channel: selectedId } : { direct: selectedId };
+  // A failed hand-off or run also shows on its thread's strip (#700: Retry with a board task, else Done only).
+  const asks = asksHere([...awayItems, ...awayFailed.filter(isHandOff)], askHere);
+  const askHereKey = !askHere ? '' : 'thread' in askHere ? `t:${askHere.thread}` : 'channel' in askHere ? `c:${askHere.channel}` : `d:${askHere.direct}`;
+  const runAsk = async (item: AwayItem, action: AskAction) => {
+    playSfx('click');
+    if (action === 'answer' || action === 'decide') return findAsk(item);
+    if (action === 'browser') {
+      const st = item.human_step_id ? humanStepsRef.current[item.human_step_id] : undefined;
+      if (!st) return findAsk(item);
+      pickPage(st.page_key);
+      setIsVmPaneOpen(true);
+      return;
+    }
+    if (action === 'ask_again') {
+      if (item.retry?.type !== 'approval') throw new Error('this ask has no approval to ask again');
+      await awayApi.retryApproval(item.retry.approval_id);
+    } else if (action === 'continue') {
+      if (!item.message_id) throw new Error('its notice isn’t in this chat anymore');
+      await chainBudgetApi.continue(item.message_id);
+    } else {
+      // Retry (#700 has no /api/waiting/:id/retry): an approval that ran out asks again, a failed task
+      // or run retries its task, a stopped turn or reply sends the person's last message again.
+      const route = retryRoute(item);
+      if (!route) throw new Error('there’s nothing here to run again');
+      if (route.via === 'approval') await awayApi.retryApproval(route.id);
+      else if (route.via === 'task') await awayApi.retryTask(route.id);
+      else {
+        const target = resendTarget(messages, item.message_id);
+        if (!target) throw new Error('there’s no message of yours here to send again');
+        const sent = await handleSendMessage(target.text, target.attachments);
+        if (sent === false) throw new Error('your message wasn’t sent');
+        if (typeof sent === 'string') throw new Error(sent);
+      }
+    }
+    // Sent: the strip waits for the close event (design.md §2); the list refreshes in case it was missed.
+    refreshAwayCount(300);
+  };
+  const dismissAsk = async (item: AwayItem): Promise<{ use: AskAction } | void> => {
+    if (item.human_step_id && item.dismissable === undefined) {
+      // An older server: a browser step clears by marking it done.
+      const err = await answerHumanStep(item.human_step_id, 'done');
+      if (err) throw new Error(err);
+    } else {
+      try {
+        await awayApi.dismiss(item.id, dismissKind(item));
+      } catch (e) {
+        if (!(e instanceof AwayError)) throw e;
+        // 409: it has its own answer, which tells the bot; the strip switches to that button.
+        const use = e.status === 409 ? switchFor(e.code) : null;
+        if (use) return { use };
+        if (e.code === 'person_only') throw new Error('only you can clear it, from your own sign-in');
+        if (e.code === 'not_found') {
+          // Already gone on the server: it leaves the row and the strip now.
+          setClearedAsks((prev) => new Set(prev).add(item.id));
+          refreshAwayCount(300);
+          return;
+        }
+        if (e.status === 404 || e.status === 405) throw new Error('this version can’t clear it yet. Update the app, or resolve it in the chat');
+        throw e;
+      }
+    }
+    // Cleared at once, with its sidebar row, before the server's close event (design.md §2).
+    setClearedAsks((prev) => new Set(prev).add(item.id));
+    refreshAwayCount(300);
+  };
+  const needsYouStrip = (
+    <NeedsYouStrip
+      asks={asks}
+      onAction={runAsk}
+      onDismiss={dismissAsk}
+      onShow={(item, o) => findAsk(item, o?.quiet)}
+      onOpenInbox={() => showPage('inbox', 'new')}
+      focusKey={stripFocusKey}
+      hereKey={askHereKey}
+      phone={isPhone}
     />
   );
 
@@ -4416,7 +4623,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           continuedFrom={continuedFrom}
           focusComposerKey={focusComposerKey}
           highlightMessageId={highlightMessageId}
-          onHighlightDone={() => setHighlightMessageId(null)}
+          highlightRing={!!ringId && ringId === highlightMessageId}
+          onHighlightDone={() => {
+            setHighlightMessageId(null);
+            setRingId(null);
+          }}
+          needsYouStrip={needsYouStrip}
+          needsYouOpen={asks.length > 0}
           subHeader={subHeader}
           threadLine={isPhone && threadBarProps ? <ThreadPicker {...threadBarProps} /> : undefined}
           notice={
@@ -4831,6 +5044,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           routineFocus={routineFocus}
           onOpenRunResult={openRunResult}
+          onOpenRunCard={openRunCard}
           isPhone={isPhone}
           onApprovalsChanged={refreshRoster}
           onImported={reloadAfterImport}
@@ -4869,6 +5083,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
       <JiraSetupHost onSaved={() => pushToast('Taking tickets from Jira', 'Tickets you hand over show up on the Dev desk.')} />
+      <HomeAssistantHost
+        teamIds={teams.map((t) => t.id)}
+        teamKwants={(id) => {
+          const t = teams.find((x) => x.id === id);
+          return t ? channelBotIds(t) : [];
+        }}
+      />
       <GitHubConnectHost
         onConnected={(_space, source, test) => {
           const t = connectedToast(source, test);

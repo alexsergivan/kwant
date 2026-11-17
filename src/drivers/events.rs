@@ -174,6 +174,15 @@ pub enum RuntimeEvent {
     /// `crate::db::human_steps`.
     #[serde(rename = "human_step_updated", alias = "HumanStepUpdated")]
     HumanStepUpdated { step: Value },
+    /// 22i: an item in Needs you opened or closed, so clients refresh it live (the Needs-you
+    /// list and the badge re-read `GET /api/away`). `item` is `{id, kind, status, reason,
+    /// kwant_id, channel_id, direct_kwant_id, thread_id}`: `kind` "stopped", "reply" or
+    /// "question" (a waiting item), "delegation" or "routine_run" (a failed or stuck one);
+    /// `status` "open" or "closed"; `reason` why it closed ("later_reply", "person_wrote",
+    /// "answered", "replaced", "resumed", "place_gone", "dismissed"), `null` when it opened.
+    /// Questions, browser steps and approvals keep their own events too.
+    #[serde(rename = "waiting_updated", alias = "WaitingUpdated")]
+    WaitingUpdated { item: Value },
     /// An MCP server an agent suggested was suggested, installed or dismissed; `suggestion` is the
     /// whole record. See `crate::db::mcp_suggestions`.
     #[serde(rename = "mcp_suggestion_updated", alias = "McpSuggestionUpdated")]
@@ -340,12 +349,22 @@ pub enum RuntimeEvent {
     /// object of `release-090/h4-contract.md` §1 (see `crate::server::bot_status`).
     #[serde(rename = "bot_status", alias = "BotStatus")]
     BotStatus { kwant_id: String, status: Value },
-    /// A routine run started or finished. `status` is "running", "ok", "error" or "skipped".
+    /// A routine run started or finished. `status` is "running", "ok", "error", "skipped",
+    /// "needs_you" (a step waits on an approval card nobody answered, so it didn't run) or
+    /// "incomplete" (a step failed and no later call of that tool worked) (26b).
     #[serde(rename = "routine_run", alias = "RoutineRun")]
     RoutineRun {
         routine_id: String,
         run_id: String,
         status: String,
+        /// 26b: a "running" run whose turn waits on an approval card right now. Sent `true` when
+        /// the card opens and `false` when it's answered or the turn stops waiting. Old events and
+        /// old clients: missing means `false`.
+        #[serde(default)]
+        waiting: bool,
+        /// The approval card the run waits on, while `waiting`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_id: Option<String>,
     },
     /// A Mission Control task changed (state, claim, checks, evidence). `task` is the board's Task
     /// shape and carries `space_id`.

@@ -1,8 +1,10 @@
 // The approvals switch: the space's setting, a bot's override, and the marker shown wherever a
 // bot runs without asking. The marker always has an icon and words, never colour alone.
 
-import React, { useEffect, useId, useState } from 'react';
-import { AlertTriangle, Loader2, ShieldCheck, ShieldOff } from 'lucide-react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { AlertTriangle, CheckCheck, Loader2, RotateCcw, ShieldCheck, ShieldOff, Undo2 } from 'lucide-react';
+import { AlwaysAllowed, alwaysAllowedApi, grantTool, grantWhere } from '../alwaysAllowed';
+import { relativeTime } from '../away';
 import {
   BotApprovals,
   BotApprovalsState,
@@ -254,6 +256,184 @@ export const SpaceApprovalsSetting: React.FC<{
   );
 };
 
+const takeBackCls =
+  'shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg text-xs font-medium text-zinc-200 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:opacity-50 disabled:cursor-not-allowed';
+
+const grantKey = (g: Pick<AlwaysAllowed, 'conversation' | 'tool_name'>) => `${g.conversation}\u0000${g.tool_name}`;
+
+/**
+ * "Allowed without asking" (25e): each "Always allow" this bot was given, kept across restarts,
+ * with Take back on each and Take back all at two or more. Nothing at all when there are none
+ * (or on an older server without the list).
+ */
+export const AlwaysAllowedList: React.FC<{
+  kwantId: string;
+  kwantName: string;
+  /** Tests pass the loaded rows instead of fetching them. */
+  initial?: AlwaysAllowed[] | null;
+  now?: number;
+}> = ({ kwantId, kwantName, initial, now }) => {
+  const [rows, setRows] = useState<AlwaysAllowed[] | null | undefined>(initial);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const headingId = useId();
+  const listRef = useRef<HTMLUListElement>(null);
+  const headingRef = useRef<HTMLParagraphElement>(null);
+
+  const load = useCallback(() => {
+    let live = true;
+    setRows(undefined);
+    setLoadError(null);
+    alwaysAllowedApi
+      .list(kwantId)
+      .then((r) => live && setRows(r))
+      .catch((e) => {
+        if (!live) return;
+        setRows(null);
+        setLoadError(e instanceof Error ? e.message : 'Couldn’t load what this bot does without asking.');
+      });
+    return () => {
+      live = false;
+    };
+  }, [kwantId]);
+
+  useEffect(() => {
+    if (initial !== undefined) return;
+    return load();
+  }, [initial, load]);
+
+  const takeBack = async (one?: AlwaysAllowed) => {
+    if (busy) return;
+    const key = one ? grantKey(one) : '*';
+    const index = one && rows ? rows.findIndex((r) => grantKey(r) === key) : -1;
+    const n = rows?.length ?? 0;
+    setBusy(key);
+    setError(null);
+    setDone(null);
+    try {
+      const left = await alwaysAllowedApi.revoke(kwantId, one);
+      setRows(left);
+      setDone(
+        one
+          ? `Taken back. ${kwantName} asks again before it can ${grantTool(one.tool_name).toLowerCase()} ${grantWhere(one)}.`
+          : `All ${n} taken back. ${kwantName} asks again before using any of them.`,
+      );
+      // Keep the keyboard in the list: the next row's Take back, else the heading
+      requestAnimationFrame(() => {
+        const buttons = listRef.current?.querySelectorAll<HTMLButtonElement>('button[data-take-back]');
+        const next = buttons && buttons.length ? buttons[Math.min(Math.max(index, 0), buttons.length - 1)] : null;
+        (next ?? headingRef.current)?.focus();
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t take that back. Try again.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (rows === undefined) {
+    return (
+      <p role="status" className="flex items-center gap-1.5 text-[11px] text-zinc-500" data-always-allowed-loading>
+        <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        Checking what runs without asking…
+      </p>
+    );
+  }
+  if (loadError) {
+    return (
+      <div role="alert" className="flex flex-wrap items-center gap-2 text-[11px] text-rose-300" data-always-allowed-error>
+        <AlertTriangle size={12} aria-hidden="true" />
+        <span className="min-w-0 flex-1">{loadError}</span>
+        <button type="button" onClick={load} className={takeBackCls}>
+          <RotateCcw size={12} aria-hidden="true" /> Try again
+        </button>
+      </div>
+    );
+  }
+  const list = rows ?? [];
+  if (list.length === 0) {
+    // Nothing to list: no heading, only the word that the last one went
+    return done ? (
+      <p role="status" tabIndex={-1} ref={headingRef} className="flex items-center gap-1.5 text-[11px] text-zinc-400 focus:outline-none" data-always-allowed-done>
+        <Undo2 size={12} aria-hidden="true" /> {done}
+      </p>
+    ) : null;
+  }
+
+  return (
+    <section aria-labelledby={headingId} className="space-y-2 pt-1" data-always-allowed>
+      <div className="flex items-center justify-between gap-2">
+        <p id={headingId} ref={headingRef} tabIndex={-1} className="flex items-center gap-1.5 text-xs font-medium text-zinc-400 focus:outline-none">
+          <CheckCheck size={14} aria-hidden="true" />
+          Allowed without asking
+          <span className="text-zinc-500 font-normal tabular-nums">({list.length})</span>
+        </p>
+        {list.length >= 2 && (
+          <button type="button" onClick={() => takeBack()} disabled={!!busy} className={takeBackCls} data-take-back-all>
+            {busy === '*' && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+            Take back all
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-zinc-500">
+        You answered Always allow on these. Each one runs without a card in that conversation only, also after kwant restarts.
+      </p>
+      <ul ref={listRef} className="rounded-lg border border-zinc-800 divide-y divide-zinc-800 bg-zinc-950/60">
+        {list.map((g) => {
+          const key = grantKey(g);
+          const tool = grantTool(g.tool_name);
+          const where = grantWhere(g);
+          const when = g.created_at ? relativeTime(g.created_at, now) : '';
+          const full = g.created_at && !Number.isNaN(Date.parse(g.created_at)) ? new Date(g.created_at).toLocaleString() : undefined;
+          return (
+            <li key={key} className="flex items-center justify-between gap-3 p-2.5" data-always-allowed-row>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-zinc-100 break-words" title={g.tool_name}>
+                  {tool}
+                </p>
+                <p className="text-[11px] text-zinc-500 break-words">
+                  {where}
+                  {when && (
+                    <>
+                      {' · '}
+                      <time dateTime={g.created_at} title={full ? `Allowed ${full}` : undefined}>
+                        allowed {when}
+                      </time>
+                    </>
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => takeBack(g)}
+                disabled={!!busy}
+                aria-label={`Take back: ${tool} ${where}`}
+                className={takeBackCls}
+                data-take-back
+              >
+                {busy === key && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+                Take back
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {done && (
+        <p role="status" className="flex items-center gap-1.5 text-[11px] text-zinc-400" data-always-allowed-done>
+          <Undo2 size={12} aria-hidden="true" /> {done}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="flex items-center gap-2 text-[11px] text-rose-300">
+          <AlertTriangle size={12} aria-hidden="true" /> {error}
+        </p>
+      )}
+    </section>
+  );
+};
+
 /** A bot's override, in its settings. Loads its own state; saves on change, with the confirm when it turns off. */
 export const BotApprovalsSetting: React.FC<{
   kwantId: string;
@@ -263,7 +443,10 @@ export const BotApprovalsSetting: React.FC<{
   initial?: BotApprovalsState | null;
   initialPending?: BotApprovals | null;
   initialPasswords?: StoreStatus | null;
-}> = ({ kwantId, kwantName, onChanged, initial, initialPending = null, initialPasswords = null }) => {
+  /** Tests pass the "Allowed without asking" rows instead of fetching them. */
+  initialAllowed?: AlwaysAllowed[] | null;
+  now?: number;
+}> = ({ kwantId, kwantName, onChanged, initial, initialPending = null, initialPasswords = null, initialAllowed, now }) => {
   const [state, setState] = useState<BotApprovalsState | null | undefined>(initial === undefined ? undefined : initial);
   const [pending, setPending] = useState<BotApprovals | null>(initialPending);
   const [busy, setBusy] = useState(false);
@@ -352,6 +535,7 @@ export const BotApprovalsSetting: React.FC<{
           <AlertTriangle size={12} aria-hidden="true" /> {error}
         </p>
       )}
+      <AlwaysAllowedList kwantId={kwantId} kwantName={kwantName} initial={initialAllowed} now={now} />
     </div>
   );
 };

@@ -39,6 +39,52 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0921" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.21</p>
+      <h2>Connect Home Assistant in two fields, and locks, doors and alarms that always ask</h2>
+      <p>Connect Home Assistant with its address and a token, and start a Home team with House. Locks, doors, garage doors, gates and alarms in Home Assistant always ask first. Always allow lasts after a restart, and a bot's settings list each one with Take back.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="connect-home-assistant">Connect Home Assistant</h3>
+        <p><strong>Connect Home Assistant</strong> takes two things: your Home Assistant's address and an access token. The sheet builds the connection, tests it, and names the problem in plain words when it fails (a wrong token, MCP Server off, an address it can't reach). Bots see only the devices you share with Assist. Start from <strong>Tools › Find a tool</strong>, or pick the new <strong>Home</strong> team: House checks your home and switches things with your OK, and its Lights out routine starts off.</p>
+      </div>
+      <div class="frame">{{shot:v0921-home-assistant|The Connect Home Assistant sheet over the @home team chat in kwant. Address homeassistant.local, "kwant will connect to http://homeassistant.local:8123/api/mcp", a saved access token, notes that bots can reach every device unless limited in Home Assistant and that locks, doors, garage doors, gates and alarms always ask, then "Connected · 14 actions" with a Tested sticker and "House can use it now."}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="home-locks-always-ask">Locks, doors and alarms always ask</h3>
+        <p>In Home Assistant, a lock, a door, a garage door, a gate or an alarm always shows an approval card, in every approval mode, even Off, and that card has no <strong>Always allow</strong>. Lights and other devices follow your usual approvals, and reading the house never asks.</p>
+      </div>
+      <div class="frame">{{shot:v0921-locks-ask|In House's chat, an approval card: "House wants to unlock Front door", Area Hallway, in Home Assistant, and the lock note "Locks, doors, garage doors, gates and alarms always ask. Always allow isn't offered for them." The details show home-assistant · intent__HassTurnOff for Front door. The only buttons are Deny and Allow once. A House needs you banner sits above the message box.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="always-allowed-list">Allowed without asking</h3>
+        <p>An <strong>Always allow</strong> answer now lasts after a restart, still for one bot, one conversation and one tool. A bot's settings list them under <strong>Allowed without asking</strong>, with where and when, and <strong>Take back</strong> on a row (or <strong>Take back all</strong>) makes the bot ask again from its very next call. Payments and production steps always ask and are never saved.</p>
+      </div>
+      <div class="frame">{{shot:v0921-always-allowed|Ann's bot settings in kwant, open at Approvals. "Allowed without asking (3)" with Take back all lists Open a pull request on GitHub in #general (5 min ago), Use add comment (github) in Checkout page polish (27 min ago) and Write a file in your chat (3 h ago), each with its own Take back button.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0921" class="span3"><h3>Smaller changes in 0.9.21</h3><p>A file you drop into the chat while a bot waits for you in the browser reaches the bot at once, and the card closes saying the bot is reading your file. Answer a bot's question with a 👍 and the chat goes straight to its reply, without a flash of the Approve row you just answered. The thread header keeps saying Working, with Stop, until the reply appears. A closed browser step card always says what's next, like "If you finished, say so in the chat." A Needs-attention row opens a thread at its ask and rings it, even when the ask is older than the thread's latest 100 messages. A routine run whose step nobody approved no longer shows as done; it says a step is waiting for your approval. A reply's Details say which step failed or didn't run, and a routine run waiting for your approval links to its card.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-0920" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.20</p>
+      <h2>Needs attention takes you to the exact ask, and Bots on API engines read files in their own folder</h2>
+    </div>
+    <ul class="flist">
+      <li id="fixes-0920" class="span3"><h3>Smaller changes in 0.9.20</h3><p>Click a Needs-attention row and you land on the exact ask, with a Needs you bar above the message box saying it in full, and the row disappears by itself once it's resolved. Bots on API engines can read the files in their own folder, a page at a time with the line count, and nothing outside it; a customer's turn still asks first. A finished browser step card is headed by a quiet name, like Sign-in or Human check, instead of still saying Sign in needed. If the desktop app can't save a setting, it keeps the old one and tells you to check that ~/.kwnt can be written. You can install kwnt's server and command line on Mac and Linux with `brew install alexsergivan/kwant/kwnt`. Bots no longer lose their browser after a long day: kwant closes browser connections it isn't using, so the browser stops running out of room. Home Assistant's state and timer reads run without asking in "Ask only when risky"; anything that changes a device still asks. You can run kwant from Render, CasaOS, Umbrel or Coolify, and a store install's sign-in screen says where its password is. Only your own messages sit on your side of the chat; a customer's or another bot's message sits on the left.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-0919" class="fgroup">
   <div class="wrap">
     <div class="section-head">
@@ -1503,7 +1549,7 @@ card_art: team
       </article>
       <article class="gcard">
         <div class="frame">{{shot:v2-import|The Import bots into Trailhead Outfitters dialog: bring a bot from Grok, ChatGPT, Claude or another app, or upload one or several files.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude or a file, with no tools or keys. <a href="alternatives/grok-bot.html">Coming from Grok Bot?</a></p>
+        <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude, OpenClaw, Hermes Agent or a file, with no tools or keys. Coming from <a href="alternatives/grok-bot.html">Grok Bot</a>, <a href="alternatives/openclaw.html">OpenClaw</a> or <a href="alternatives/hermes-agent.html">Hermes Agent</a>?</p>
       </article>
       <article class="gcard">
         <div class="frame">{{shot:desktop-handoff|The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>

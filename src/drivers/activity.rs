@@ -33,7 +33,9 @@ pub struct Step {
     pub id: String,
     /// "thinking", "tool", "approval", "human_step" or "note".
     pub kind: &'static str,
-    /// "running", "waiting", "ok", "failed", "done", "declined" or "stopped".
+    /// "running", "waiting", "ok", "failed", "done", "declined", "stopped", "unanswered" (a
+    /// tool call whose approval card nobody answered in time: it didn't run) or "rehearsed" (a
+    /// Skill Foundry dry run recorded the call instead of running it).
     pub status: &'static str,
     pub title: String,
     /// The tool's own name (`Bash`, `mcp__github__create_issue`), for tool and approval steps.
@@ -200,18 +202,18 @@ impl ActivityLog {
             RuntimeEvent::ToolCallCompleted { id, result } => {
                 changed.extend(self.close_thinking());
                 if let Some(i) = self.tools.remove(id) {
-                    let failed = failed_reason(result);
-                    if let Some(Some(why)) = failed {
-                        self.steps[i].detail = Some(cut(&self.redact(why), MAX_DETAIL));
+                    let (status, why) = step_end(result);
+                    if let Some(why) = why {
+                        self.steps[i].detail = Some(cut(&self.redact(&why), MAX_DETAIL));
                     }
-                    if failed.is_none() && self.steps[i].tool.as_deref().is_some_and(opens_page) {
+                    if status == "ok" && self.steps[i].tool.as_deref().is_some_and(opens_page) {
                         self.steps[i].page_title = result["title"]
                             .as_str()
                             .map(str::trim)
                             .filter(|t| !t.is_empty())
                             .map(|t| cut(&self.redact(t), MAX_TITLE));
                     }
-                    changed.push(self.end(i, if failed.is_some() { "failed" } else { "ok" }));
+                    changed.push(self.end(i, status));
                 }
             }
             _ => {}
@@ -237,12 +239,16 @@ impl ActivityLog {
         changed
     }
 
-    /// Ends the waiting step for `ref_id` with `status` ("ok", "done", "declined", "stopped").
+    /// Ends the waiting step for `ref_id` with `status` ("ok", "done", "declined", "stopped", or
+    /// "unanswered" for an approval card the turn stopped waiting for, still open for a late answer).
     pub fn settle(&mut self, ref_id: &str, status: &'static str) -> Option<Step> {
         let i = self
             .steps
             .iter()
             .rposition(|s| s.ref_id.as_deref() == Some(ref_id) && s.is_open())?;
+        if status == "unanswered" {
+            self.steps[i].detail = Some(crate::mcp::UNANSWERED_STEP_DETAIL.to_string());
+        }
         Some(self.end(i, status))
     }
 
@@ -559,6 +565,46 @@ pub fn failed_reason(result: &Value) -> Option<Option<&str>> {
             .iter()
             .find_map(|k| result[*k].as_str().map(str::trim).filter(|s| !s.is_empty())),
     )
+}
+
+/// How a finished tool call's step ends, and the detail it shows (26b). A call nobody approved
+/// in time is `unanswered` and a dry-run call `rehearsed`, never "ok": by the result's status
+/// (kwnt's own tools) or by the refusal kwnt gave the engine (the claude CLI reports both as an
+/// error carrying that text). Otherwise `failed` with its reason, as [`failed_reason`], or "ok".
+/// The once-per-turn reminder to the model ([`crate::mcp::NO_FALSE_CLAIMS_TEXT`]) never shows.
+pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
+    let said = |marker: &str| {
+        ["error", "content", "message"]
+            .iter()
+            .any(|k| result[*k].as_str().is_some_and(|t| t.contains(marker)))
+    };
+    let first_sentence = |text: &'static str| text.split_inclusive('.').next().unwrap_or(text);
+    let status = result["status"].as_str().unwrap_or("");
+    let refused = matches!(status, "error" | "failed" | "denied");
+    if status == "unanswered" || (refused && said(first_sentence(crate::mcp::UNANSWERED_TEXT))) {
+        return (
+            "unanswered",
+            Some(crate::mcp::UNANSWERED_STEP_DETAIL.to_string()),
+        );
+    }
+    if status == "rehearsed" || (refused && said(first_sentence(crate::mcp::REHEARSED_TEXT))) {
+        return (
+            "rehearsed",
+            Some(crate::mcp::REHEARSED_STEP_DETAIL.to_string()),
+        );
+    }
+    match failed_reason(result) {
+        None => ("ok", None),
+        Some(why) => (
+            "failed",
+            why.map(|w| {
+                w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
+                    .trim()
+                    .to_string()
+            })
+            .filter(|w| !w.is_empty()),
+        ),
+    }
 }
 
 pub fn redact(text: &str, secrets: &[String]) -> String {
@@ -921,9 +967,26 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
                 Some(s) => format!("Using {tool} ({s})"),
                 None => format!("Using {tool}"),
             };
-            (shown, url.map(str::to_string))
+            (shown, home_target(tool, args).or_else(|| url.map(str::to_string)))
         }
     }
+}
+
+/// 26f: what a Home Assistant intent tool (`intent__Hass*`, or `homeassistant__*` other than
+/// `GetLiveContext`) acts on, as a step's detail: its `name`, else its `area`, else its `domain`
+/// (the first one of a list). Plain text, at most 60 characters.
+fn home_target(tool: &str, args: &Value) -> Option<String> {
+    let intent = tool.starts_with("intent__Hass")
+        || tool.strip_prefix("homeassistant__").is_some_and(|t| t != "GetLiveContext");
+    if !intent {
+        return None;
+    }
+    fn text(v: &Value) -> Option<&str> {
+        v.as_str().or_else(|| v.as_array()?.first()?.as_str()).map(str::trim).filter(|t| !t.is_empty())
+    }
+    let target = text(&args["name"]).or_else(|| text(&args["area"])).or_else(|| text(&args["domain"]))?;
+    let plain: String = target.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    Some(plain.chars().take(60).collect())
 }
 
 /// What an engine can't show of its thinking, as the note opening a turn's steps; `None` when
@@ -941,6 +1004,18 @@ pub fn thinking_note(engine: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 26f: a Home Assistant step says what it acts on.
+    #[test]
+    fn home_assistant_steps_name_what_they_act_on() {
+        let detail = |tool: &str, args: Value| summarize(&format!("mcp__house__{tool}"), &args).1;
+        assert_eq!(detail("intent__HassTurnOff", json!({"name": "Living room lamp"})).as_deref(), Some("Living room lamp"));
+        assert_eq!(detail("intent__HassTurnOn", json!({"area": "Kitchen", "domain": ["light"]})).as_deref(), Some("Kitchen"));
+        assert_eq!(detail("intent__HassTurnOff", json!({"domain": ["light"]})).as_deref(), Some("light"));
+        assert_eq!(detail("homeassistant__GetLiveContext", json!({"name": "x"})), None);
+        assert_eq!(detail("intent__HassTurnOff", json!({"name": "a".repeat(80)})).map(|d| d.chars().count()), Some(60));
+        assert_eq!(detail("other_tool", json!({"name": "Living room lamp"})), None);
+    }
 
     /// Rigel's B1 on #294: the hold is cut on char boundaries for any script. Every prefix of
     /// mixed CJK, accented Latin, emoji, NBSP and U+3000 text around `key:`, `password = "a b"`
@@ -1050,6 +1125,76 @@ mod tests {
         assert_eq!(ended[0].detail.as_deref(), Some("401 for token ********"));
     }
 
+    /// 26b: a call nobody approved in time didn't run, so its step is `unanswered`, never "ok"
+    /// (and not lumped into "failed"), and says so.
+    #[test]
+    fn an_unanswered_call_is_never_ok() {
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "mcp__ha__turn_on", json!({})));
+        let ended = log.observe(&done("a", "unanswered"));
+        assert_eq!(ended[0].status, "unanswered");
+        assert_eq!(
+            ended[0].detail.as_deref(),
+            Some("Waited 5 minutes for your answer; nothing ran")
+        );
+        assert!(crate::mcp::UNANSWERED_STEP_DETAIL
+            .contains(&(crate::mcp::APPROVAL_TIMEOUT_SECS / 60).to_string()));
+        // The claude CLI reports kwnt's refusal as an error carrying its text (and the reminder)
+        log.observe(&pending("b", "mcp__ha__turn_on", json!({})));
+        let refusal = crate::mcp::with_no_false_claims(crate::mcp::UNANSWERED_TEXT);
+        let ended = log.observe(&RuntimeEvent::ToolCallCompleted {
+            id: "b".into(),
+            result: json!({"status": "error", "error": refusal}),
+        });
+        assert_eq!(ended[0].status, "unanswered");
+        assert_eq!(
+            ended[0].detail.as_deref(),
+            Some(crate::mcp::UNANSWERED_STEP_DETAIL)
+        );
+    }
+
+    /// 26b: a Skill Foundry dry run recorded the call instead of running it: its own status.
+    #[test]
+    fn a_rehearsed_call_has_its_own_status() {
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "mcp__mail__send", json!({})));
+        let ended = log.observe(&done("a", "rehearsed"));
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("rehearsed", Some(crate::mcp::REHEARSED_STEP_DETAIL))
+        );
+        log.observe(&pending("b", "Bash", json!({})));
+        let ended = log.observe(&RuntimeEvent::ToolCallCompleted {
+            id: "b".into(),
+            result: json!({"status": "error", "error": crate::mcp::REHEARSED_TEXT}),
+        });
+        assert_eq!(ended[0].status, "rehearsed");
+    }
+
+    /// 26b: the reminder to the model never shows as a step's reason; a denial stays "failed".
+    #[test]
+    fn the_reminder_to_the_model_stays_out_of_details() {
+        let (status, why) = step_end(
+            &json!({"status": "error", "content": crate::mcp::with_no_false_claims("boom: 500")}),
+        );
+        assert_eq!((status, why.as_deref()), ("failed", Some("boom: 500")));
+        let (status, why) = step_end(
+            &json!({"status": "error", "error": crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT)}),
+        );
+        assert_eq!(
+            (status, why.as_deref()),
+            ("failed", Some(crate::mcp::DENIED_TEXT))
+        );
+        assert_eq!(
+            step_end(&json!({"status": "ok", "content": "fine"})),
+            ("ok", None)
+        );
+        assert_eq!(
+            step_end(&json!({"status": "error", "content": crate::mcp::NO_FALSE_CLAIMS_TEXT})),
+            ("failed", None)
+        );
+    }
+
     #[test]
     fn steps_and_thinking_are_capped() {
         let mut log = ActivityLog::default();
@@ -1072,6 +1217,17 @@ mod tests {
         let w = log.wait("approval", "ap1", "Waiting for your approval: Bash", Some("Bash")).remove(0);
         assert_eq!((w.kind, w.status, w.ref_id.as_deref()), ("approval", "waiting", Some("ap1")));
         assert_eq!(log.settle("ap1", "ok").unwrap().status, "ok");
+        log.wait(
+            "approval",
+            "ap2",
+            "Waiting for your approval: Bash",
+            Some("Bash"),
+        );
+        let late = log.settle("ap2", "unanswered").unwrap();
+        assert_eq!(
+            (late.status, late.detail.as_deref()),
+            ("unanswered", Some(crate::mcp::UNANSWERED_STEP_DETAIL))
+        );
         assert!(log.settle("ap1", "ok").is_none(), "settled once");
         log.observe(&pending("t", "Read", json!({})));
         log.wait("human_step", "hs1", "Waiting for you to sign in", None);

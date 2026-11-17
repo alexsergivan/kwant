@@ -88,7 +88,7 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
             out
         }
         E::TrialEnded { bot, .. } => vec![Owner::Context(bot.clone())],
-        E::QuestionUpdated { question: v } | E::HumanStepUpdated { step: v } => fields(
+        E::QuestionUpdated { question: v } | E::HumanStepUpdated { step: v } | E::WaitingUpdated { item: v } => fields(
             v,
             &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"],
             Owner::Context,
@@ -261,6 +261,7 @@ mod tests {
             E::QuestionUpdated { question: json!({"id": "q", "kwant_id": "k"}) },
             E::Activity { step: json!({"id": "s1"}) },
             E::HumanStepUpdated { step: json!({"id": "h", "kwant_id": "k"}) },
+            E::WaitingUpdated { item: json!({"id": "w", "kind": "stopped", "status": "closed", "kwant_id": "k"}) },
             E::McpSuggestionUpdated { suggestion: json!({"id": "g", "space_id": "spc_default", "kwant_id": "k"}) },
             E::BotActionUpdated { action: json!({"id": "b", "space_id": "spc_default", "kwant_id": "k"}) },
             E::HireUpdated { hire: json!({"id": "h", "space_id": "spc_default", "kwant_id": "k"}) },
@@ -326,7 +327,7 @@ mod tests {
             E::Error { code: s("x"), message: s("x"), kwant_id: Some(s("k")) },
             E::MemoryChanged { kwant_id: s("k") },
             E::BotStatus { kwant_id: s("k"), status: json!({}) },
-            E::RoutineRun { routine_id: s("r"), run_id: s("x"), status: s("ok") },
+            E::RoutineRun { routine_id: s("r"), run_id: s("x"), status: s("ok"), waiting: false, approval_id: None },
             E::TaskUpdated { task: json!({"id": "t", "space_id": "spc_x"}) },
             E::MissionUpdated { mission: json!({"id": "m", "space_id": "spc_x"}) },
             E::GoalUpdated { id: s("g"), status: s("met"), space_id: s("spc_x") },
@@ -381,6 +382,7 @@ mod tests {
                 | E::QuestionUpdated { .. }
                 | E::Activity { .. }
                 | E::HumanStepUpdated { .. }
+                | E::WaitingUpdated { .. }
                 | E::McpSuggestionUpdated { .. }
                 | E::BotActionUpdated { .. }
                 | E::HireUpdated { .. }

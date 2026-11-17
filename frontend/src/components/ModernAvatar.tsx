@@ -5,7 +5,7 @@ import { badgeUsageFor, modelBadgeFor, modelBadgeSize, type ModelBadge } from '.
 import { badgeBotOf, badgeEngines, badgeProfiles, subscribeBadgeData } from '../modelBadgeData';
 import { EngineMark } from './EngineMark';
 import { AvatarMoodMark, useKwantMood, useKwantNotices } from './AvatarMood';
-import { moodLabel, restingUntilOf } from '../kwantMood';
+import { moodLabel, restingUntilOf, type Mood } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
 import { avatarStyleFor, botLooksRev, subscribeBotLooks } from '../botLooks';
 
@@ -23,6 +23,13 @@ interface ModernAvatarProps {
   modelBadge?: boolean;
   /** Eyes shut and still: the empty chat while nothing can run yet (first-screen E). */
   asleep?: boolean;
+  /**
+   * A mood set by the screen instead of the bot's own turns, for a bot that isn't created yet or a
+   * check that isn't a turn (House while Connect Home Assistant tests). `working` shows the ring.
+   */
+  mood?: Mood;
+  /** Words for that set mood ("House is checking Home Assistant"); the avatar is then an image with this name. */
+  moodText?: string;
 }
 
 const noopUnsubscribe = () => undefined;
@@ -138,7 +145,7 @@ type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
-  | 'partyhat' | 'hardhat' | 'flower' | 'none';
+  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'none';
 
 export interface Creature {
   body: string;
@@ -203,6 +210,7 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'party', label: 'Party' },
   { id: 'builder', label: 'Builder' },
   { id: 'zen', label: 'Wellbeing' },
+  { id: 'home', label: 'Home' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -231,6 +239,7 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   party: ['peach', 'partyhat'],
   builder: ['steel', 'hardhat'],
   zen: ['blossom', 'flower'],
+  home: ['gold', 'house'],
 };
 
 /** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
@@ -402,7 +411,63 @@ function renderOverlay(c: Creature) {
   }
 }
 
+/** House (26e): the body IS a little house. Roof wider than the walls, square walls, the eyes are its windows,
+ *  a door at the bottom centre. Eyes sit on the same cells as every creature, so blink and asleep still work. */
+function renderHouse(c: Creature) {
+  return [
+    // Ground shadow (only drawn at 48 px and up, like every creature)
+    px(6, 20, 14, 1, '#261d4a', 'shadow'),
+    // Chimney (left slope, so the mood badge never hides it)
+    px(8, 2, 2, 4, c.shade, 'c1'),
+    px(8, 2, 2, 1, c.body, 'c2'),
+    // Roof, 45 degree slopes
+    px(12, 2, 2, 1, c.accent, 'r1'),
+    px(11, 3, 4, 1, c.accent, 'r2'),
+    px(10, 4, 6, 1, c.accent, 'r3'),
+    px(9, 5, 8, 1, c.accent, 'r4'),
+    px(8, 6, 10, 1, c.accent, 'r5'),
+    px(7, 7, 12, 1, c.accent, 'r6'),
+    px(6, 8, 14, 1, c.accent, 'r7'),
+    // Eave: the widest row, 2 px past each wall
+    px(5, 9, 16, 1, c.accent, 'r8'),
+    // Right slope in shade
+    px(13, 2, 1, 1, '#a8323a', 'rs1'),
+    px(14, 3, 1, 1, '#a8323a', 'rs2'),
+    px(15, 4, 1, 1, '#a8323a', 'rs3'),
+    px(16, 5, 1, 1, '#a8323a', 'rs4'),
+    px(17, 6, 1, 1, '#a8323a', 'rs5'),
+    px(18, 7, 1, 1, '#a8323a', 'rs6'),
+    px(19, 8, 1, 1, '#a8323a', 'rs7'),
+    px(20, 9, 1, 1, '#a8323a', 'rs8'),
+    // Ridge highlight
+    px(12, 2, 1, 1, '#ff8f8f', 'rh1'),
+    px(11, 3, 1, 1, '#ff8f8f', 'rh2'),
+    // Walls
+    px(7, 10, 12, 10, c.body, 'w1'),
+    // Right wall in shade
+    px(18, 10, 1, 10, c.shade, 'w2'),
+    // Ground line
+    px(7, 19, 11, 1, c.shade, 'w3'),
+    // Highlight under the left eave
+    px(8, 10, 1, 2, c.light, 'w4'),
+    // Eyes, which are also the windows (same cells as every creature)
+    px(10, 10, 2, 3, INK, 'e1'),
+    px(14, 10, 2, 3, INK, 'e2'),
+    px(10, 10, 1, 1, '#f5f2ff', 'e3'),
+    px(14, 10, 1, 1, '#f5f2ff', 'e4'),
+    // Blush
+    px(8, 13, 2, 1, BLUSH, 'k1'),
+    px(16, 13, 2, 1, BLUSH, 'k2'),
+    // Door, bottom centre, round top
+    px(12, 15, 2, 1, '#8f5b4a', 'd1'),
+    px(11, 16, 4, 4, '#8f5b4a', 'd2'),
+    // Door knob
+    px(13, 17, 1, 1, '#ffe066', 'd3'),
+  ];
+}
+
 function renderCreature(c: Creature) {
+  if (c.accessory === 'house') return renderHouse(c);
   return [
     // Ground shadow
     px(7, 20, 12, 1, '#261d4a', 'shadow'),
@@ -454,14 +519,18 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   kwantId,
   modelBadge = true,
   asleep = false,
+  mood: moodOverride,
+  moodText: moodTextOverride,
 }) => {
-  const working = useKwantWorking(kwantId);
+  const turnWorking = useKwantWorking(kwantId);
+  const working = moodOverride ? moodOverride === 'working' : turnWorking;
   // Never green (or idle grey) while a turn runs: the turn stream wins over a stale status.
   const shown = status && working && STATUS_PRIORITY.indexOf(status) > STATUS_PRIORITY.indexOf('working') ? 'working' : status;
   // The mood (thinking, finished, failed, needs you, resting) adds a pixel mark and its own words.
-  const mood = useKwantMood(kwantId);
+  const kwantMood = useKwantMood(kwantId);
+  const mood: Mood = moodOverride ?? kwantMood;
   const notices = useKwantNotices(kwantId);
-  const moodText = moodLabel(mood, name, restingUntilOf(kwantId));
+  const moodText = moodTextOverride ?? moodLabel(mood, name, restingUntilOf(kwantId));
   const label = moodText ?? (shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined);
   // Same bot, same look in every place: re-reads when the app's bot list changes.
   useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
@@ -479,6 +548,8 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
       className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${working ? 'kw-avatar-working' : ''} ${mood === 'resting' ? 'kw-avatar-resting' : ''} ${className}`}
       style={{ width: size, height: size }}
       title={label}
+      role={moodTextOverride ? 'img' : undefined}
+      aria-label={moodTextOverride}
       data-working={working || undefined}
       data-status={shown}
       data-mood={mood === 'idle' ? undefined : mood}

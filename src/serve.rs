@@ -55,6 +55,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     }
 
     let state = AppState::new(config.clone(), db, tools, broker, router);
+    let kept = state.broker.load_saved().await;
+    if kept > 0 {
+        tracing::info!(count = kept, "kept the \"always allow\" answers from before the restart");
+    }
     // Saved passwords left in a bot's folder by older versions move into the vault
     crate::server::passwords::migrate_all(&state).await;
     crate::server::passwords::warn_if_exposed(&state).await;

@@ -43,6 +43,8 @@ import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from 
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
+import { ReplyCheckLine } from './ReplyCheckLine';
+import { replyOutcome } from '../replyOutcome';
 import { FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
@@ -83,7 +85,7 @@ import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSugg
 import { routeReasonText, routeWhyText } from '../routeReason';
 import { useInbox } from '../inboxStore';
 import { doneItemsOf, doneOf } from '../replyDone';
-import { APPROVE_TEXT, asksApproval, changePlaceholder, metaHidesApprove, refocusAfterApprove } from '../approvalAsk';
+import { APPROVE_TEXT, approveRowId, changePlaceholder, refocusAfterApprove } from '../approvalAsk';
 import { DoneCheckLine } from './DoneMarker';
 import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
@@ -99,6 +101,7 @@ import { awayApi } from '../away';
 import { parseBudgetNotice } from '../botBudget';
 import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
 import { isSystemNotice, parseExpiredApproval, parseInterruption, retryTargets } from '../interruptions';
+import { ringElement } from '../ring';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
@@ -227,6 +230,8 @@ function SenderLetter({ name }: { name: string }) {
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
+// 25b: a customer's or a bot's chat-API message, on the left. Outline only: not yours (filled, lighter), not a bot reply (filled); never violet.
+const OTHER_BUBBLE = 'bg-transparent text-zinc-200 rounded-tl-sm border border-zinc-700';
 
 export interface ChatViewProps {
   /** H3: a line under the person's held message ("Waiting for Juno: …", Try again), by message id. */
@@ -342,6 +347,12 @@ export interface ChatViewProps {
   focusComposerKey?: number;
   /** A message to scroll to and flash (from search). */
   highlightMessageId?: string | null;
+  /** 22i: also ring what `highlightMessageId` lands on (a Needs-attention row's ask), like a pre-push card. */
+  highlightRing?: boolean;
+  /** 22i: the "Needs you" strip, right above the composer. */
+  needsYouStrip?: React.ReactNode;
+  /** 22i: the strip shows an ask here, so the working line drops its own "Answer ↑". */
+  needsYouOpen?: boolean;
   onHighlightDone?: () => void;
   /** Set while `messages` is an older window (a search hit beyond the latest page). */
   viewingHistory?: boolean;
@@ -618,6 +629,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   pinned = [],
   onEditInstructions,
   highlightMessageId,
+  highlightRing,
+  needsYouStrip,
+  needsYouOpen,
   onContinueFrom,
   threadKind,
   continuedFrom,
@@ -1007,7 +1021,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       awaitingAnswer={!!awaitingAnswer}
       awaitingBrowser={!!awaitingBrowser}
       writing={writing}
-      onAnswer={showWaitingCard}
+      // 22i: one ask gets one button. While the Needs-you strip shows it, the strip's Go to … is that button.
+      onAnswer={needsYouOpen ? undefined : showWaitingCard}
       onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       phone={phone}
       audit={liveAudit}
@@ -1070,7 +1085,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Runs after the auto-scroll above, so it wins.
   const [flashId, setFlashId] = useState<string | null>(null);
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
-  const [flashKind, setFlashKind] = useState<'search' | 'quote'>('search');
+  // 22i: a Needs-attention landing ('ask') is the same amber flash as search, tagged so tests tell them apart.
+  const [flashKind, setFlashKind] = useState<'search' | 'quote' | 'ask'>('search');
   useEffect(() => {
     if (!highlightMessageId) return;
     // 0.8.1 F6: an approval's card (a notification names it), not a message
@@ -1079,7 +1095,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       if (!card) return;
       const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-      setFlashKind('search');
+      if (highlightRing) ringElement(card);
+      setFlashKind(highlightRing ? 'ask' : 'search');
       setFlashId(highlightMessageId);
       onHighlightDone?.();
       return;
@@ -1096,10 +1113,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!el) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-    setFlashKind('search');
+    setFlashKind(highlightRing ? 'ask' : 'search');
     setFlashId(highlightMessageId);
     onHighlightDone?.();
-  }, [highlightMessageId, messages, openThoughts, onHighlightDone, pendingApprovals]);
+  }, [highlightMessageId, highlightRing, messages, openThoughts, onHighlightDone, pendingApprovals]);
   useEffect(() => {
     if (!flashId) return;
     const t = setTimeout(() => setFlashId(null), flashKind === 'quote' ? 1600 : 2400);
@@ -1219,13 +1236,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const inboxData = useInbox().data;
   const doneItems = useMemo(() => doneItemsOf([...(inboxData?.items ?? []), ...(inboxData?.batch_items ?? [])]), [inboxData]);
   // reply-chrome part 2: the newest message, when it's a bot reply asking for an OK and nothing else is open.
+  // 22r: a 👍 that answered it counts as answered for good, across the turn-end reload.
   const approveId = useMemo(() => {
     const last = messages[messages.length - 1];
-    if (!last || last.sender_role !== 'kwant' || last.id.startsWith('temp-') || isStreaming || awaitingAnswer || pendingApprovals.length > 0) return null;
-    const meta = parseMetaObject(last.meta);
-    if (metaHidesApprove(meta)) return null;
-    return asksApproval(last.text) ? last.id : null;
-  }, [messages, isStreaming, awaitingAnswer, pendingApprovals.length]);
+    return approveRowId(last, last ? parseMetaObject(last.meta) : null, { busy: isStreaming || !!awaitingAnswer || pendingApprovals.length > 0, answered });
+  }, [messages, isStreaming, awaitingAnswer, pendingApprovals.length, answered]);
   const approve = async (msg: ChatMessage) => {
     if (approving) return;
     setApproving(msg.id);
@@ -1254,6 +1269,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     return result ? result.ok : true;
   };
 
+  // 26d: the line under a reply opens its Details at the step that failed or didn't run (a nonce per message).
+  const [detailsAsk, setDetailsAsk] = useState<Record<string, number>>({});
+  const askDetails = (id: string) => setDetailsAsk((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }));
   const toggleThought = (id: string) => {
     setOpenThoughts((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -1754,6 +1772,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const filesOnly = files.length > 0 && isSharedFileMessage(msg.meta);
     const isThoughtOpen = !!openThoughts[msg.id];
     const savedActivity = !isUser && msg.meta ? parseActivityMeta(msg.meta) : null;
+    const outcome = replyOutcome(savedActivity?.steps);
     const ranOn = isUser ? null : ranOnLabel(msg.meta);
     const account = isUser ? null : ranOnAccount(msg.meta);
     const tokens = isUser ? null : replyTokens(msg.tokens_used, msg.meta);
@@ -1776,6 +1795,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     // 23c: a customer's or a bot's "user" message says who wrote it; the person (Telegram too) and a coding agent as before
     const otherSender = isUser ? otherSenderLabel(msg.meta, knownBots, msg.sender_id) : null;
     const displayName = isUser ? otherSender ?? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
+    // 25b: only what you wrote sits on your side (you, you from Telegram, your coding agent). A customer or a bot's
+    // chat-API message sits on the left in a neutral bubble. Side and look only; content still follows isUser.
+    const onYourSide = isUser && !otherSender;
     // P4: a share that now sits under its bot's reply reads as part of it, without a second header.
     const underReply = !isUser && filesOnly && (arranged.attached.has(msg.id) || liveShareIds.has(msg.id));
     const olderCopies = filesOnly ? arranged.earlier.get(msg.id) : undefined;
@@ -1790,11 +1812,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
       <div
         key={msg.id}
         data-message-id={msg.id}
+        data-flash-kind={flashId === msg.id ? flashKind : undefined}
         tabIndex={-1}
         data-shared-under={underReply ? '' : undefined}
         // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
         style={underReply ? { marginTop: '0.5rem' } : undefined}
-        className={`group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+        className={`group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${onYourSide ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
@@ -1821,7 +1844,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </span>
         )}
 
-        <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-[85%] sm:max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
+        <div className={`flex flex-col min-w-0 ${onYourSide ? 'max-w-[85%] sm:max-w-2xl items-end' : isUser ? 'max-w-[85%] sm:max-w-2xl items-start' : 'flex-1 max-w-4xl items-start'}`}>
           {underReply ? (
             <span className="sr-only">Shared by {displayName}</span>
           ) : isUser ? (
@@ -1841,7 +1864,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               tokens={tokens}
               cost={cost}
               done={done}
-              failed={!!savedActivity?.steps.some((s) => s.status === 'failed')}
+              outcome={outcome}
+              openRequest={detailsAsk[msg.id]}
               note={savedFailoverNotice(msg.meta) ?? switchNoteFor.get(msg.id)}
               handoff={savedFailoverHandoff(msg.meta)}
               route={
@@ -1870,7 +1894,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
-                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`}>
+                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null}>
                   {msg.tool_calls && (
                     <div className="border-t border-zinc-800/60 p-2">
                       <ToolCallsList raw={msg.tool_calls} />
@@ -1908,18 +1932,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {!filesOnly && (text.trim() || !files.length) && (
           <div className={isUser ? 'relative w-full max-w-2xl' : 'contents'}>
           {isUser && (() => {
-            // The person's message: the overflow sits in the empty gutter left of the bubble, bottom-aligned, no row
-            const more = continueMenu(msg, messageAbout(otherSender), 'end', 'hover');
-            return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
+            // A "user" message: the overflow sits in the empty gutter beside the bubble, bottom-aligned, no row.
+            // Yours: left of your bubble. A customer's or a bot's (25b, on the left): right of theirs.
+            const more = continueMenu(msg, messageAbout(otherSender), onYourSide ? 'end' : 'start', 'hover');
+            return more ? (
+              <div className={onYourSide ? 'absolute right-full bottom-0 mr-1' : 'absolute left-full bottom-0 ml-1'} data-message-more-gutter="">
+                {more}
+              </div>
+            ) : null;
           })()}
           <div
             className={`${REPLY_BUBBLE} ${
-              isUser
+              onYourSide
                 ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
-                : workAhead
-                  ? 'bg-indigo-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-indigo-400/25'
-                  : REPLY_BUBBLE_BOT
+                : isUser
+                  ? `${OTHER_BUBBLE} max-w-2xl`
+                  : workAhead
+                    ? 'bg-indigo-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-indigo-400/25'
+                    : REPLY_BUBBLE_BOT
             }`}
+            data-other-bubble={isUser && !onYourSide ? '' : undefined}
             data-work-ahead={workAhead ? '' : undefined}
           >
             {isUser ? (
@@ -1942,7 +1974,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
           </div>
           )}
-          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
+          {!isUser && !underReply && <ReplyCheckLine outcome={outcome} onDetails={() => askDetails(msg.id)} />}
+          {files.length > 0 && <FileTiles files={files} align={onYourSide ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
           {isUser && heldNotes?.[msg.id]}
           {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (
             // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared
@@ -2034,7 +2067,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             )}
             </>
           )}
-          {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={isUser ? 'end' : 'start'} />}
+          {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={onYourSide ? 'end' : 'start'} />}
         </div>
       </div>
     );
@@ -2778,6 +2811,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* Phone and desktop (0.8.1 F4): the quiet line sits inside the composer section, right above the box. */}
         {budgetBanner}
         {workingStrip}
+        {/* 22i: below the working line, right above the box (design.md §2 order). */}
+        {needsYouStrip}
 
         <form
           onSubmit={handleSubmit}

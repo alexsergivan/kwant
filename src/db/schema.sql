@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS routine_runs (
     trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')),
     started_at TIMESTAMP NOT NULL,
     ended_at TIMESTAMP,
-    status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped')),
+    status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped', 'needs_you', 'incomplete')),
     error TEXT,
     message_id TEXT
 );

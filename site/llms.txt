@@ -11,7 +11,7 @@ Key facts:
 - kwant has no token (no coin, no crypto). The official X account is @kwantbot (https://x.com/kwantbot).
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
-- Windows app (beta, 64-bit): https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.19/kwant_0.9.19_windows_x64_beta_setup.exe (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
+- Windows app (beta, 64-bit): https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.21/kwant_0.9.21_windows_x64_beta_setup.exe (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
 - Phone app (iPhone and Android, no app store): open your kwant server's https address in Safari or Chrome and add it to the Home Screen; it gets notifications when a bot needs you. https://kwant.si/docs/phone
 - Run Claude inside the VM (Linux, off by default): each bot's Claude replies run in a container with no network, and the real key stays outside. https://kwant.si/docs/agents-in-vm
 - The program you install and run is called `kwnt` (`kwnt serve`).
@@ -73,6 +73,8 @@ Key facts:
 
 ## Alternatives
 - [Grok Bot Alternative: Open-Source & Self-Hosted](https://kwant.si/alternatives/grok-bot): kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.
+- [Hermes Agent Alternative: Self-Hosted, With Verified Work](https://kwant.si/alternatives/hermes-agent): kwant is an open-source, self-hosted alternative to Hermes Agent: a team of AI bots whose work counts as done only when kwant checks it. Import your profiles.
+- [OpenClaw Alternative: Self-Hosted, With Verified Work](https://kwant.si/alternatives/openclaw): kwant is an open-source, self-hosted alternative to OpenClaw: a team of AI bots whose work counts as done only when kwant checks it. Import your workspace.
 
 ## Blog
 - [Blog: guides and comparisons for self-hosted AI agents](https://kwant.si/blog/): Guides, comparisons and notes on running a self-hosted team of AI agents with kwant.

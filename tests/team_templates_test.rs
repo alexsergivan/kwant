@@ -110,12 +110,12 @@ async fn undo(e: &Env, action_id: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn catalogue_lists_the_four_templates_and_preview_names_free_slots() {
+async fn catalogue_lists_the_five_templates_and_preview_names_free_slots() {
     let e = setup().await;
     let (s, v) = call(&e.app, "GET", "/api/team-templates", &[], None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let ids: Vec<&str> = v["templates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["helpers", "inbox", "sales", "coding"]);
+    assert_eq!(ids, ["helpers", "inbox", "sales", "coding", "home"]);
 
     let (s, p) = call(&e.app, "GET", "/api/team-templates/inbox/preview", &[], None).await;
     assert_eq!(s, StatusCode::OK, "{p}");

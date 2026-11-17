@@ -377,15 +377,35 @@ bad app name; 409 when Composio isn't added, has no key, the key is refused, or 
 ### Approvals
 
 Every MCP tool call needs approval through the permission broker, for both agent kinds, unless the
-bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHint: true` without
-`destructiveHint: true` (see [approvals.md](approvals.md)):
+bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHint: true`, whatever
+`destructiveHint` says (the MCP spec reads it only when `readOnlyHint` is false; see
+[approvals.md](approvals.md)):
 
 1. kwnt emits the SSE event
    `{"type":"ApprovalRequired","data":{"id":"<ticket>","tool_name":"mcp__echo__echo","details":{"source":"mcp","server":"echo","tool":"echo","arguments":{…},"kwant_id":"…","kwant_name":"…"}}}`
    and stores the ticket in `approvals`.
 2. The UI resolves it with the existing `POST /api/approvals/:id/resolve`
    `{"decision": "allow_once" | "always_allow" | "deny"}`.
-   `always_allow` allows that tool for that kwant until kwnt restarts.
+   `always_allow` lets that kwant use that tool in that conversation (the thread, else the channel,
+   else the direct chat) without asking again, also after kwnt restarts (table `always_allowed`,
+   kept out of exports and imports). Never for a payment, a production step, a shell card or an
+   always-ask tool. The person sees each one, and takes it back, in the bot's settings; both
+   routes are person-only:
+   - `GET /api/kwants/:id/always-allowed` →
+     `[{"tool_name","conversation","conversation_kind":"thread"|"channel"|"direct"|"unknown","conversation_label","created_at"}]`,
+     newest first (`conversation_label` is the thread's title, `#<channel>` or `your chat`).
+   - `DELETE /api/kwants/:id/always-allowed` with `{"conversation","tool_name"}` takes back that
+     one, with `{}` all of them → `{"revoked": <count>, "always_allowed": [...what is left]}`.
+     An empty body or only one of the two fields is `400`. The next call asks again, no restart
+     needed. Deleting the bot, or its thread or channel, removes its answers too.
+   On a Home Assistant server (its test or kwnt's last connection got `serverInfo.name`
+   `home-assistant`; kept per server in `mcp_server_facts`, forgotten when its address changes),
+   a call that acts on a lock, a door, a garage door, a gate or an alarm (see
+   [approvals.md](approvals.md)) always gets a card, with approvals `off` and over an
+   `always_allow` for the tool, for chats, routines and the chat API alike. Its `details` carry
+   `"home_always_ask": true` (not `always_ask`, which means a turn kwnt started) and
+   `"home_reason": "Locks, doors, garage doors, gates and alarms always ask. Always allow isn’t offered for them."`; the card offers no `always_allow`, and
+   one sent anyway, like `allow_once`, runs that call only and stores nothing.
    With Flight School on (`flight_school`), a bot below `act` for the task it works gets a card for calls
    its tier doesn't allow even with approvals `off` or a smart Allow, with `details.tier_reason`; see
    [mission-control.md](mission-control.md) §14.

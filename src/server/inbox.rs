@@ -855,6 +855,9 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     items.extend(waiting.into_iter().map(|r| away_item(r, Group::WaitingOnYou, seen)));
     items.extend(watch.into_iter().map(|v| watch_item(v, seen)));
     items.extend(stopped.into_iter().map(|v| watch_item(v, seen)));
+    // 22i: the same `action`, `dismissable`, `task_id` and `link.thread_kwant_id` as /api/away
+    // puts on these items, so an away item comes through here unchanged
+    away::annotate(&state, &mut items).await;
     items.extend(connections.into_iter().map(|(at, v)| connection_item(at, &v, seen)));
     // An approval's title is its own question when the call names what it is about (Iris's #539).
     // `question` is sent only then, so the Inbox can tell it from today's tool title, which stays
@@ -865,12 +868,15 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
             v["question"] = json!(q);
         }
     }
+    let mut done_items = Vec::with_capacity(done.len());
     for (row, group, facts) in done {
         let mut v = away_item(row, group, seen);
         let unread = v["unread"].as_bool().unwrap_or(true);
         inbox_done::apply(&mut v, &facts, unread);
-        items.push(v);
+        done_items.push(v);
     }
+    away::annotate(&state, &mut done_items).await;
+    items.extend(done_items);
     for (r, facts) in reviews.iter().zip(&review_facts) {
         if let Some((mut v, _)) = review_item(r, seen) {
             inbox_done::apply(&mut v, facts, seen.is_none_or(|s| r.in_review_since > s));

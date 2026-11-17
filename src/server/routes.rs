@@ -533,6 +533,18 @@ pub async fn list_messages(
     Path(channel_or_kwant_id): Path<String>,
     Query(q): Query<MessagesQuery>,
 ) -> Result<Json<Vec<Message>>, (StatusCode, Json<serde_json::Value>)> {
+    messages_page(&state.db, &channel_or_kwant_id, &q).await.map(Json)
+}
+
+/// One page of a chat's messages (channel, direct chat or thread) for [`MessagesQuery`]: the
+/// latest `limit` (default 100), or the window around / page before a message of this chat.
+/// 400 for a bad limit or both anchors, 404 when the anchor isn't in this chat. 22x: the
+/// thread route answers through this too, so an old ask in a thread can be loaded and rung.
+pub(crate) async fn messages_page(
+    db: &crate::db::Database,
+    chat_id: &str,
+    q: &MessagesQuery,
+) -> Result<Vec<Message>, (StatusCode, Json<serde_json::Value>)> {
     let err = |status: StatusCode, m: &str| (status, Json(json!({ "error": m })));
     let max = crate::db::history::MAX_HISTORY_PAGE;
     let limit = match q.limit {
@@ -540,17 +552,16 @@ pub async fn list_messages(
         Some(n) if (1..=max).contains(&n) => n,
         Some(_) => return Err(err(StatusCode::BAD_REQUEST, &format!("limit must be 1–{max}"))),
     };
-    let db = &state.db;
     let rows = match (q.around.as_deref(), q.before.as_deref()) {
         (Some(_), Some(_)) => return Err(err(StatusCode::BAD_REQUEST, "use around or before, not both")),
-        (Some(id), None) => db.list_messages_around(&channel_or_kwant_id, id, limit).await,
-        (None, Some(id)) => db.list_messages_before(&channel_or_kwant_id, id, limit).await,
-        (None, None) => db.list_messages(&channel_or_kwant_id, limit).await.map(Some),
+        (Some(id), None) => db.list_messages_around(chat_id, id, limit).await,
+        (None, Some(id)) => db.list_messages_before(chat_id, id, limit).await,
+        (None, None) => db.list_messages(chat_id, limit).await.map(Some),
     };
     match rows {
         Ok(Some(mut rows)) => {
             db.attach_chat_fields(&mut rows).await;
-            Ok(Json(rows))
+            Ok(rows)
         }
         Ok(None) => Err(err(StatusCode::NOT_FOUND, "That message isn't in this chat.")),
         Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not load messages.")),
@@ -1047,7 +1058,9 @@ fn execute_single_turn(
 /// Runs a routine's turn as if the user had sent `prompt` to `kwant` in `thread_id`, in
 /// `channel_id` or in their direct chat: same team context, workspace, approvals and profile failover, and the
 /// chat's stop button cancels it. The prompt message must already be saved. Returns the id of
-/// the kwant's reply, or `Err` with why there is none.
+/// the kwant's reply, or `Err` with why there is none. Every reply of the turn (its busy retries
+/// and automatic continuation too) has `run_id` in its meta under
+/// [`super::scheduler::ROUTINE_RUN_KEY`], so the run reads only its own steps (26b D1).
 pub(super) async fn run_routine_turn(
     state: &AppState,
     kwant: &Kwant,
@@ -1055,10 +1068,16 @@ pub(super) async fn run_routine_turn(
     thread_id: Option<String>,
     prompt: String,
     routine_name: &str,
+    run_id: &str,
 ) -> Result<Option<String>, String> {
     // 0.9.5: nobody watches a routine run, so a busy browser step it ends on is retried here,
     // bounded (see [`super::busy_retry::unwatched`]); a run that still ends busy fails to the Inbox
-    let opts = || TurnOpts { source: Some(super::bot_status::TurnSource::routine(routine_name)), ..TurnOpts::default() };
+    let key = super::scheduler::ROUTINE_RUN_KEY;
+    let opts = || TurnOpts {
+        source: Some(super::bot_status::TurnSource::routine(routine_name)),
+        extra_meta: Some(serde_json::json!({ key: run_id })),
+        ..TurnOpts::default()
+    };
     run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, true, Vec::new()).await
 }
 
@@ -1100,10 +1119,12 @@ async fn run_turn_with(
         super::busy_retry::unwatched(scope, &kwant.name, &prompt, |p, slot| {
             let mut o = opts();
             o.busy_slot = Some(slot.clone());
+            // The continuation's reply is the same turn's, so it keeps the turn's extra meta
+            let extra_meta = o.extra_meta.clone();
             // boxed, so the retry loop around the turn adds no stack to it
             async move {
                 let reply = Box::pin(try_kwant_turn(scope, kwant, p, o)).await;
-                Box::pin(continue_once_if_capped_into(scope, kwant, reply, None, Some(&slot))).await
+                Box::pin(continue_once_if_capped_into(scope, kwant, reply, None, Some(&slot), extra_meta)).await
             }
         })
         .await
@@ -1153,17 +1174,19 @@ pub(super) async fn continue_once_if_capped(
     first: Result<String, String>,
     started_by: Option<&str>,
 ) -> Result<String, String> {
-    continue_once_if_capped_into(scope, kwant, first, started_by, None).await
+    continue_once_if_capped_into(scope, kwant, first, started_by, None, None).await
 }
 
 /// [`continue_once_if_capped`] for an unwatched turn: the continuation, when there is one, is the
-/// turn that ended last, so only its busy step (if any) is left in `busy_slot`.
+/// turn that ended last, so only its busy step (if any) is left in `busy_slot`. `extra_meta` is
+/// the first turn's [`TurnOpts::extra_meta`], saved on the continuation's reply too.
 pub(super) async fn continue_once_if_capped_into(
     scope: &TurnScope,
     kwant: &Kwant,
     first: Result<String, String>,
     started_by: Option<&str>,
     busy_slot: Option<&super::busy_retry::Slot>,
+    extra_meta: Option<serde_json::Value>,
 ) -> Result<String, String> {
     let Ok(text) = &first else {
         return first;
@@ -1180,6 +1203,7 @@ pub(super) async fn continue_once_if_capped_into(
         always_ask: started_by.is_some(),
         started_by: started_by.map(str::to_string),
         busy_slot: busy_slot.cloned(),
+        extra_meta,
         ..Default::default()
     };
     match try_kwant_turn(scope, kwant, CONTINUE_PROMPT.to_string(), opts).await {
@@ -3011,6 +3035,7 @@ async fn run_kwant_turn_inner(
             workspace: workspace_dir.clone(),
             sandbox_target: Some(sandbox_target.clone()),
             repeats: Default::default(),
+            folder_tools: Default::default(),
         };
         // A replay works in its own scratch browser and asks nobody
         let _turn_on_browser = opts.rehearse.is_none().then(|| state.human_steps.track_turn(&sandbox_target, turn_scope.clone()));
@@ -3445,6 +3470,8 @@ async fn run_kwant_turn_inner(
                     break;
                 }
             };
+            // #715: an API engine has no file tools of its own, so this attempt offers the bot's folder
+            turn_scope.folder_tools.store(driver.needs_folder_tools(), std::sync::atomic::Ordering::Relaxed);
             // The model for the engine this attempt runs on: the pinned one, else the effort's tier
             let runs_on = host_engine.or_else(|| profile.as_ref().and_then(super::profile_turn::profile_engine));
             let custom = profile.as_ref().filter(|p| p.kind == "custom_api");
@@ -4681,6 +4708,7 @@ async fn send_chat_routed(
                     target_kwant.name, target_kwant.title, reason
                 )));
 
+                file_wakes_browser_wait(&state, &target_kwant.id, direct_chat(&payload), !uploads.is_empty(), from_person).await;
                 let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id, from_person).await;
                 execute_single_turn(
                     state.clone(),
@@ -4916,6 +4944,7 @@ async fn send_chat_routed(
             return Ok(Json(v));
         }
         let team_keys = active_team.as_ref().map(|t| (t.id.clone(), t.name.clone()));
+        file_wakes_browser_wait(&state, &target_kwant.id, direct_chat(&payload), !uploads.is_empty(), from_person).await;
         let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id, from_person).await;
         execute_single_turn(
             state.clone(),
@@ -5038,6 +5067,7 @@ async fn send_to_thread(
     };
     let prompt = payload.prompt + &note;
     let target = kwant.clone();
+    file_wakes_browser_wait(&state, &kwant.id, Some(&thread.id), !uploads.is_empty(), from_person).await;
     // H3: the message is saved and shows; its turn waits while the bot is stuck or waits on the person
     let held = super::bot_status::hold_from(&state, &kwant, &thread.id, "message", &saved.id, from_person).await;
     let held_id = held.as_ref().map(|_| saved.id.clone());
@@ -5058,6 +5088,22 @@ async fn send_to_thread(
     });
     with_held(&mut reply, held);
     Ok(Json(reply))
+}
+
+/// The chat a channel or 1:1 send's turn runs in, as its turn's origin names it
+/// ([`super::human_steps::chat_key`]): the channel, else the bot of the 1:1.
+fn direct_chat(payload: &SendChatPayload) -> Option<&str> {
+    payload.channel_id.as_deref().or(payload.kwant_id.as_deref())
+}
+
+/// 22m: a file the person sends to `kwant` in `chat` reaches it at once. A turn of that bot
+/// waiting there on a "needs you in the browser" card returns now (the card closes as
+/// `left_for_message`), so this message's turn isn't held behind the wait for up to 290 s. Only a
+/// message with files from the person wakes it: typed text ("signing in now…") must not take the
+/// browser back from someone mid sign-in, so it waits as before (H3).
+async fn file_wakes_browser_wait(state: &AppState, kwant_id: &str, chat: Option<&str>, has_files: bool, from_person: bool) {
+    let Some(chat) = chat.filter(|_| has_files && from_person) else { return };
+    super::human_steps::wake_chat(state, kwant_id, chat).await;
 }
 
 /// Holds a chat or 1:1 message to `kwant` while it is stuck or waits on the person elsewhere (H3).

@@ -1708,7 +1708,12 @@ impl BrowserController {
         if self.downloads.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
             return;
         }
-        let center = super::browser_downloads::DownloadCenter::start(self.clone(), workspace, home, context_id, staging_root).await;
+        // `run` only calls `get_ws_url()`, never touches `downloads` — give it a clone with that
+        // field cut so the center isn't kept alive by its own background task (ctrl -> downloads
+        // -> jobs Sender -> the Receiver `run` awaits forever), which would leak its connection.
+        let mut ctrl = self.clone();
+        ctrl.downloads = Arc::default();
+        let center = super::browser_downloads::DownloadCenter::start(ctrl, workspace, home, context_id, staging_root).await;
         let mut guard = self.downloads.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             *guard = Some(center);

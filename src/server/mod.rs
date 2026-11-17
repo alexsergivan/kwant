@@ -48,6 +48,7 @@ pub mod computer;
 pub mod mcp_directory;
 pub mod mcp_suggest;
 pub mod page_source;
+pub mod bot_files;
 pub mod tool_failures;
 pub mod tool_notes;
 pub mod openai_key;
@@ -61,6 +62,7 @@ pub mod import_routes;
 pub mod inbox;
 pub mod inbox_done;
 pub mod isolated_folders_routes;
+pub mod always_allowed;
 pub mod approval_modes;
 pub mod passwords;
 pub mod loose_ends_owner;
@@ -133,6 +135,9 @@ pub struct AppState {
     pub self_tools: Arc<Mutex<HashMap<String, continuity::SelfScope>>>,
     /// Routines with a run in progress; a run that would overlap is skipped.
     pub running_routines: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// How long a turn's tool call waits for its approval card, in ms: always
+    /// [`crate::mcp::APPROVAL_TIMEOUT_SECS`]; only tests shorten it (26b).
+    pub approval_wait_ms: Arc<std::sync::atomic::AtomicU64>,
     /// Wakes the scheduler early when routines change.
     pub scheduler_wake: Arc<tokio::sync::Notify>,
     /// `ask_user` calls waiting for the user's answer.
@@ -193,6 +198,8 @@ impl AppState {
         let api_token = Arc::new(auth::ApiToken::load(&config));
         let browser_service = Arc::new(crate::sandbox::service::BrowserService::new(config.data_dir.clone(), config.browser_cdp_url.clone()));
         let agent_vm = crate::sandbox::agent_vm::AgentVm::new(&config.data_dir, config.agents_in_vm.clone(), db.clone());
+        // "Always allow" answers are kept in this database and come back after a restart (25e)
+        broker.attach_store(db.clone());
         Self {
             config,
             db,
@@ -211,6 +218,9 @@ impl AppState {
             api_token,
             self_tools: Default::default(),
             running_routines: Default::default(),
+            approval_wait_ms: Arc::new(std::sync::atomic::AtomicU64::new(
+                crate::mcp::APPROVAL_TIMEOUT_SECS * 1000,
+            )),
             scheduler_wake: Default::default(),
             questions: Default::default(),
             human_steps: Default::default(),
@@ -352,6 +362,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dev/notes/:note_id", patch(dev::line_notes::edit).delete(dev::line_notes::delete))
         .route("/api/dev/notes/:note_id/restore", post(dev::line_notes::restore))
         .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
+        .route("/api/kwants/:id/always-allowed", get(always_allowed::list).delete(always_allowed::revoke))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
         .route("/api/isolated-folders", get(isolated_folders_routes::list))
@@ -520,6 +531,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/attachments/:id", get(attachments::get))
         .route("/api/attachments/:id/content", get(attachments::content))
         .route("/api/waiting", get(waiting::list))
+        .route("/api/waiting/:id/dismiss", post(waiting::dismiss))
         .route("/api/questions", get(questions::list))
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))

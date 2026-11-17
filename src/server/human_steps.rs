@@ -10,6 +10,10 @@
 //! is gone the step closes as `resolved_auto` and the bot carries on by itself. Nobody solving it
 //! within `captcha_timeout_minutes` (default 10) closes it as `timed_out`, and the bot is told to
 //! move on rather than wait.
+//!
+//! 22m: a file the person drops in the chat while a turn waits on its step closes the step as
+//! `left_for_message` and returns that turn at once ([`wake_chat`]), so the message's own turn
+//! (with the `[Attached files]` line) starts now instead of after the wait.
 
 use super::continuity::{notify, Notification, SelfScope};
 use super::routes::{scope_for, try_kwant_turn, TurnOpts};
@@ -46,6 +50,9 @@ pub enum Outcome {
     /// Not an answer: another turn of the bot in this chat already asked for the same sign-in and
     /// is waiting on it, so this turn steps aside. The step stays open.
     AlreadyAsked,
+    /// 22m: the person sent a file in this chat while the turn waited. The step closes (not as
+    /// done) and the turn ends so the message's own turn can read it.
+    Message,
 }
 
 impl Outcome {
@@ -56,6 +63,7 @@ impl Outcome {
             Outcome::ResolvedAuto => "resolved_auto",
             Outcome::TimedOut => "timed_out",
             Outcome::AlreadyAsked => "open",
+            Outcome::Message => "left_for_message",
         }
     }
 }
@@ -67,9 +75,17 @@ pub const MAX_CAPTCHA_TIMEOUT_MINUTES: u64 = 60;
 /// between two looks doesn't close it.
 const GONE_AFTER_MISSES: u32 = 2;
 
+/// A turn waiting on a step, and the bot and chat ([`chat_key`]) it waits in, so a message there
+/// can find it ([`HumanStepHub::waiting_in`]). Kept only while the turn waits: every way a wait
+/// ends takes it out, so nothing is left behind.
+struct Waiter {
+    tx: oneshot::Sender<Outcome>,
+    chat: Option<(String, String)>,
+}
+
 /// The turns waiting on a human step, by step id. Empty (no cost) when unused.
 pub struct HumanStepHub {
-    waiters: Mutex<HashMap<String, oneshot::Sender<Outcome>>>,
+    waiters: Mutex<HashMap<String, Waiter>>,
     wait_ms: AtomicU64,
     /// Tests only: CAPTCHA time limit and probe interval in ms (0 = setting / default).
     captcha_timeout_ms: AtomicU64,
@@ -119,14 +135,28 @@ impl HumanStepHub {
         }
     }
 
-    fn register(&self, id: &str) -> oneshot::Receiver<Outcome> {
+    /// A turn now waits on step `id`; `chat` is its bot and chat ([`chat_key`]), when it has one.
+    fn register(&self, id: &str, chat: Option<(String, String)>) -> oneshot::Receiver<Outcome> {
         let (tx, rx) = oneshot::channel();
-        self.waiters.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), tx);
+        self.waiters.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), Waiter { tx, chat });
         rx
     }
 
     fn take(&self, id: &str) -> Option<oneshot::Sender<Outcome>> {
-        self.waiters.lock().unwrap_or_else(|e| e.into_inner()).remove(id)
+        self.waiters.lock().unwrap_or_else(|e| e.into_inner()).remove(id).map(|w| w.tx)
+    }
+
+    /// The steps a live turn of `kwant` waits on in `chat` ([`chat_key`]): never another bot's,
+    /// nor this bot's in another chat.
+    pub fn waiting_in(&self, kwant: &str, chat: &str) -> Vec<String> {
+        let waiters = self.waiters.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ids: Vec<String> = waiters
+            .iter()
+            .filter(|(_, w)| !w.tx.is_closed() && w.chat.as_ref().is_some_and(|(k, c)| k == kwant && c == chat))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids
     }
 
     /// Wakes the turn waiting on this step; `false` when no live turn waits.
@@ -326,7 +356,12 @@ async fn close(state: &AppState, id: &str, status: &'static str) -> Option<Human
     let s = state.db.get_human_step(id).await.ok().flatten()?;
     release_browser(state, s.page()).await;
     if let Some(turn) = s.turn_id.as_deref().and_then(super::activity::TurnActivity::find) {
-        turn.settle(&s.id, if status == "cancelled" { "stopped" } else { status });
+        // The wait stopped because a message came, not because the step was done
+        let shown = match status {
+            "cancelled" | "left_for_message" => "stopped",
+            other => other,
+        };
+        turn.settle(&s.id, shown);
     }
     changed(state, &s).await;
     Some(s)
@@ -393,6 +428,10 @@ fn outcome_text(outcome: Option<Outcome>, captcha: bool) -> String {
         Some(Outcome::TimedOut) => "The person didn't solve the CAPTCHA in time, so the step was closed. Don't wait for \
             it or ask again now: skip this site and use another source (an official API or a site you're signed in to), \
             or tell the person you'll try this site later."
+            .into(),
+        Some(Outcome::Message) => "The person sent a file in this chat while you were waiting, so the step was closed \
+            (they didn't say it is done) and the browser is yours again. End this turn now, at most with one short line; \
+            their message and its file come to you in your next turn."
             .into(),
         Some(Outcome::AlreadyAsked) => "You already asked the person for this sign-in in another turn in this chat, and \
             that turn is waiting for their answer, so no new card was made. Don't ask again: end your turn now, at most \
@@ -463,13 +502,15 @@ async fn raise_step(
     hold_browser(state, place.page_key.as_deref().or(place.sandbox_target.as_deref())).await;
     // Like ask_user, the step, its card and the waiter appear together
     let hub = &state.human_steps;
+    // The bot and chat this turn waits in, so a file dropped there wakes it (22m)
+    let waits_in = chat_key(scope).map(|c| (scope.kwant_id.clone(), c));
     let target_json = target.and_then(|t| serde_json::to_string(t).ok());
     let mut waiter = None;
     let created = state
         .db
         .create_human_step_with_card(&place, kind, reason, url, target_json.as_deref(), source, |s| {
             if wait_for_it {
-                waiter = Some((s.id.clone(), hub.register(&s.id)));
+                waiter = Some((s.id.clone(), hub.register(&s.id, waits_in.clone())));
             }
             let mut text = format!("{}: {}", kind_label(&s.kind), s.reason);
             if let Some(u) = &s.url {
@@ -512,7 +553,7 @@ async fn raise_step(
     // wait on that one
     let rx = match waiter {
         Some((_, rx)) => Some(rx),
-        None if wait_for_it => Some(hub.register(&step.id)),
+        None if wait_for_it => Some(hub.register(&step.id, waits_in)),
         None => None,
     };
     let _guard = rx.is_some().then(|| WaiterGuard { hub, id: step.id.clone() });
@@ -883,13 +924,34 @@ async fn resume(state: &AppState, s: &HumanStep, outcome: Outcome) {
              continue with another source (an official API or a site you're signed in to), or tell the person you'll try this site later.",
             s.reason
         ),
-        // Not an answer: nothing to tell a new turn.
-        Outcome::AlreadyAsked => return,
+        // Not an answer: nothing to tell a new turn. A message's own turn reads the message.
+        Outcome::AlreadyAsked | Outcome::Message => return,
     };
     tokio::spawn(async move {
         let _job = job;
         let _ = try_kwant_turn(&scope, &kwant, prompt, TurnOpts::default()).await;
     });
+}
+
+/// 22m: the person sent a file to `kwant` in `chat` ([`chat_key`]) while a turn of that bot waits
+/// there on a browser step. Each such step closes as `left_for_message` (the browser goes back to
+/// the bot) and its turn returns at once, so the message's own turn, queued or held behind it,
+/// starts now instead of after the wait. A step no turn waits on any more stays open: its Done
+/// still starts a new turn. Returns how many waiting turns were woken.
+pub async fn wake_chat(state: &AppState, kwant: &str, chat: &str) -> usize {
+    let mut woke = 0;
+    for id in state.human_steps.waiting_in(kwant, chat) {
+        // Closed first: a Done or Decline racing this gets 409, never a second answer
+        let Some(s) = close(state, &id, Outcome::Message.status()).await else { continue };
+        if state.human_steps.wake(&s.id, Outcome::Message) {
+            woke += 1;
+            tracing::info!(human_step_id = %s.id, kwant_id = %kwant, "a file in the chat woke the turn waiting on its browser step");
+        } else {
+            // Its wait ended just now; the message starts its own turn anyway
+            tracing::info!(human_step_id = %s.id, kwant_id = %kwant, "a file in the chat closed a browser step nobody waited on any more");
+        }
+    }
+    woke
 }
 
 /// After a turn was stopped: its open steps are cancelled and the browser handed back.
@@ -917,15 +979,41 @@ mod tests {
     #[tokio::test]
     async fn the_hub_wakes_the_waiting_turn_once() {
         let hub = HumanStepHub::default();
-        let rx = hub.register("s1");
+        let rx = hub.register("s1", None);
         assert!(hub.is_waiting("s1"));
         assert!(hub.wake("s1", Outcome::Declined));
         assert_eq!(rx.await.unwrap(), Outcome::Declined);
         assert!(!hub.is_waiting("s1"));
         assert!(!hub.wake("s1", Outcome::Done), "nobody waits any more: a new turn starts instead");
-        let rx = hub.register("s2");
+        let rx = hub.register("s2", None);
         drop(rx);
         assert!(!hub.wake("s2", Outcome::Done), "the tool call already ended");
+    }
+
+    /// 22m: a message finds only the steps its own bot waits on in its own chat; a wait that ended
+    /// (Done, Decline, timeout, the tool call hanging up) leaves nothing behind.
+    #[tokio::test]
+    async fn a_chat_finds_only_its_own_bots_waiting_steps() {
+        let hub = HumanStepHub::default();
+        let at = |k: &str, c: &str| Some((k.to_string(), c.to_string()));
+        let rx_a = hub.register("a-dm", at("ann", "ann"));
+        let _rx_t = hub.register("a-thread", at("ann", "thread-1"));
+        let _rx_b = hub.register("b-dm", at("bob", "bob"));
+        let _rx_none = hub.register("no-chat", None);
+        assert_eq!(hub.waiting_in("ann", "ann"), vec!["a-dm".to_string()]);
+        assert_eq!(hub.waiting_in("ann", "thread-1"), vec!["a-thread".to_string()], "the thread, never the DM");
+        assert!(hub.waiting_in("ann", "bob").is_empty(), "another bot's chat");
+        assert!(hub.waiting_in("bob", "ann").is_empty(), "another bot in this chat");
+        assert!(hub.waiting_in("ann", "thread-2").is_empty(), "another thread of the same bot");
+
+        assert!(hub.wake("a-dm", Outcome::Message));
+        assert_eq!(rx_a.await.unwrap(), Outcome::Message);
+        assert!(hub.waiting_in("ann", "ann").is_empty(), "woken once: gone");
+        drop(hub.take("a-thread"));
+        assert!(hub.waiting_in("ann", "thread-1").is_empty(), "a wait that ended leaves no entry");
+        drop(_rx_b);
+        assert!(hub.waiting_in("bob", "bob").is_empty(), "a tool call that hung up wakes nothing");
+        assert_eq!(hub.waiters.lock().unwrap().len(), 2, "a hung-up waiter stays until its guard takes it, but never matches");
     }
 
     fn turn(kwant: &str) -> SelfScope {
@@ -938,6 +1026,7 @@ mod tests {
             workspace: None,
             sandbox_target: Some("team".into()),
             repeats: Default::default(),
+            folder_tools: Default::default(),
         }
     }
 
@@ -1027,5 +1116,9 @@ mod tests {
         assert!(outcome_text(None, true).contains("closes by itself"));
         assert_eq!(Outcome::ResolvedAuto.status(), "resolved_auto");
         assert_eq!(Outcome::TimedOut.status(), "timed_out");
+        let message = outcome_text(Some(Outcome::Message), false);
+        assert!(message.contains("sent a file") && message.contains("End this turn now") && message.contains("next turn"), "{message}");
+        assert!(!message.contains("is done and"), "never says the step is done");
+        assert_eq!(Outcome::Message.status(), "left_for_message");
     }
 }

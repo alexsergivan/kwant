@@ -4,6 +4,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, CheckCircle2, Loader2, Undo2, X } from 'lucide-react';
 import { TemplateGlyph } from './TeamPreviewSheet';
+import { ModernAvatar } from './ModernAvatar';
+import { Sticker } from './Sticker';
 import { useEscapeLayer } from '../escape';
 import { useMedia } from '../useMedia';
 import { PHONE_QUERY } from '../layout';
@@ -64,6 +66,8 @@ const ACTION: Record<string, string> = {
   connections: 'Connect',
   dev_mode_setup: 'Pick a repo',
   composer_prompt: 'Tell the team',
+  home_assistant: 'Connect',
+  accounts: 'Set up',
 };
 
 export interface TeamNeedsCardProps {
@@ -126,7 +130,7 @@ export const TeamNeedsCard: React.FC<TeamNeedsCardProps> = ({ template: t, handl
   const btn = (primary: boolean) =>
     `${phone ? 'h-11 w-full mt-2' : 'h-8'} shrink-0 px-3 rounded-lg text-[13px] font-medium disabled:opacity-50 ${primary ? 'bg-sky-600 hover:bg-sky-500 text-white' : 'border border-zinc-700 text-zinc-100 hover:bg-white/5'} ${FOCUS}`;
 
-  const row = (key: string, s: NeedState, label: string, text: string, optional: boolean, action: React.ReactNode) => (
+  const row = (key: string, s: NeedState, label: string, text: string, optional: boolean, action: React.ReactNode, earned?: React.ReactNode) => (
     <li key={key} data-need={key} data-s={s} className={`flex ${phone ? 'flex-wrap' : 'items-center'} gap-3 min-h-[52px] p-2 border-t border-white/5 first:border-t-0`}>
       <Circle s={s} />
       <div className={`${phone ? 'flex-1 min-w-0 basis-[calc(100%-44px)]' : 'flex-1 min-w-0'}`}>
@@ -137,6 +141,7 @@ export const TeamNeedsCard: React.FC<TeamNeedsCardProps> = ({ template: t, handl
         </p>
         <p className="text-xs leading-[17px]" style={{ color: s === 'done' ? 'var(--kw-ok)' : s === 'bad' ? 'var(--kw-bad)' : 'var(--t4)' }}>
           {text}
+          {earned}
         </p>
       </div>
       {action && <div className={phone ? 'w-full pl-8' : ''}>{action}</div>}
@@ -146,7 +151,11 @@ export const TeamNeedsCard: React.FC<TeamNeedsCardProps> = ({ template: t, handl
   return (
     <section role="region" aria-label={`${t.label} team setup`} data-needs-card={teamId} className="kw-card p-0 overflow-hidden">
       <header className="flex items-start gap-3 px-4 pt-3.5 pb-2.5">
-        <TemplateGlyph icon={t.icon} size={18} box="w-9 h-9 rounded-[10px]" />
+        {t.id === 'home' ? (
+          <ModernAvatar role={t.bots.find((b) => b.lead)?.avatar_sprite ?? 'home'} name={t.bots.find((b) => b.lead)?.name ?? 'House'} size={32} modelBadge={false} className="mt-0.5" />
+        ) : (
+          <TemplateGlyph icon={t.icon} size={18} box="w-9 h-9 rounded-[10px]" />
+        )}
         <div className="min-w-0">
           <h3 className="text-sm leading-5 font-semibold text-zinc-50">Your {t.label} team is set up</h3>
           <p className="text-[12.5px] leading-[18px] text-zinc-400">{needsSub(t, ctx)}</p>
@@ -176,6 +185,18 @@ export const TeamNeedsCard: React.FC<TeamNeedsCardProps> = ({ template: t, handl
                 {v.state === 'bad' ? 'Fix' : ACTION[n.opens] ?? 'Open'}
               </button>
             ),
+            // Earned: the last check reached Home Assistant and listed its actions. Gone once a check fails.
+            n.opens === 'home_assistant' && v.state === 'done' && (ctx.homeAssistant?.actions ?? 0) > 0 ? (
+              <Sticker
+                tone="holo"
+                size="sm"
+                icon={<CheckCircle2 />}
+                title={`kwant reached Home Assistant and found ${v.text.replace(/^Connected · /, '')}`}
+                className="ml-2 align-middle"
+              >
+                Tested
+              </Sticker>
+            ) : undefined,
           ),
         )}
       </ul>

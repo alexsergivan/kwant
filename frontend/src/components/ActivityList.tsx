@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Brain, Check, ChevronRight, CircleSlash, Hand, Info, ListTree, Loader2, ShieldQuestion, X } from 'lucide-react';
+import { Brain, Check, ChevronRight, CircleDashed, CircleSlash, Hand, Info, ListTree, Loader2, ShieldQuestion, TimerOff, X } from 'lucide-react';
 import {
   ActivityStep,
   LiveActivity,
@@ -49,6 +49,10 @@ const StatusIcon: React.FC<{ step: ActivityStep }> = ({ step }) => {
         return <CircleSlash size={13} className="text-zinc-400" />;
       case 'stopped':
         return <CircleSlash size={13} className="text-zinc-400" />;
+      case 'unanswered':
+        return <TimerOff size={13} className="text-amber-300" />;
+      case 'rehearsed':
+        return <CircleDashed size={13} className="text-zinc-400" />;
     }
   })();
   return (
@@ -101,7 +105,12 @@ const ThinkingBox: React.FC<{ text: string; live: boolean; id: string }> = ({ te
   );
 };
 
-const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string }> = ({ step, live, now, listId }) => {
+const STEP_MARK: Partial<Record<ActivityStep['status'], string>> = {
+  failed: 'text-rose-300 border-rose-500/30',
+  unanswered: 'text-amber-300 border-amber-500/30',
+};
+
+const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean }> = ({ step, live, now, listId, opened = false }) => {
   const time = stepTime(step, now);
   const running = step.kind === 'thinking' && step.status === 'running';
   const text = step.kind === 'thinking' ? thinkingText(step, live) : '';
@@ -120,12 +129,20 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
     );
 
   const waiting = step.status === 'waiting';
+  // 26d: a step that failed or wasn't approved in time says so in words, not only by its icon, even when a later
+  // step worked. The icon's label already names it for screen readers, so the mark is hidden from them.
+  const mark = STEP_MARK[step.status];
   const head = (
     <>
       <StatusIcon step={step} />
       <span className={`min-w-0 flex-1 break-words ${step.status === 'stopped' ? 'text-zinc-400' : waiting ? 'text-amber-100' : 'text-zinc-200'}`}>
         {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title)} />}
       </span>
+      {mark && (
+        <span aria-hidden="true" data-step-mark={step.status} className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark}`}>
+          {statusLabel(step)}
+        </span>
+      )}
       {time && <span className="flex-shrink-0 font-mono text-[10px] text-zinc-400 tabular-nums">{time}</span>}
     </>
   );
@@ -153,15 +170,20 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   }
 
   return (
-    <li className={`px-3 py-1.5 text-xs ${waiting ? 'bg-amber-500/[0.06]' : ''}`}>
+    <li
+      id={`${listId}-${step.id}`}
+      tabIndex={-1}
+      data-step-status={step.status}
+      className={`px-3 py-1.5 text-xs focus:outline-none focus-visible:bg-zinc-800/60 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400 ${waiting ? 'bg-amber-500/[0.06]' : ''}`}
+    >
       {step.detail ? (
-        <details className="group">
+        <details className="group" open={opened || undefined}>
           <summary className="flex items-start gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
             {head}
             <ChevronRight size={13} className="mt-px flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
           </summary>
           <pre
-            className={`mt-1 ml-5 font-mono text-[11px] whitespace-pre-wrap break-all rounded-md border px-2 py-1.5 max-h-40 overflow-y-auto ${
+            className={`mt-1 ml-5 font-mono text-[11px] whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border px-2 py-1.5 max-h-40 overflow-y-auto ${
               step.status === 'failed' ? 'text-rose-200 bg-rose-950/30 border-rose-500/20' : 'text-zinc-300 bg-zinc-950/80 border-zinc-800'
             }`}
           >
@@ -175,12 +197,12 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   );
 };
 
-const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string }> = ({ steps, live, dropped = 0, id }) => {
+const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null }> = ({ steps, live, dropped = 0, id, openStep = null }) => {
   const now = useNow(steps.some(isOpenStep));
   return (
     <ol id={id} aria-label="Steps" className="divide-y divide-zinc-700/40">
       {steps.map((s) => (
-        <StepRow key={s.id} step={s} live={live} now={now} listId={id} />
+        <StepRow key={s.id} step={s} live={live} now={now} listId={id} opened={s.id === openStep} />
       ))}
       {dropped > 0 && (
         <li className="px-3 py-1.5 text-xs text-zinc-400">
@@ -314,10 +336,32 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
 };
 
 /** On a saved reply: "Worked 0:41 · 12 steps", opening to the list. `children` go under the steps. */
-export const SavedActivityList: React.FC<{ activity: SavedActivity; idBase: string; children?: React.ReactNode }> = ({ activity, idBase, children }) => {
-  const [open, setOpen] = useState(false);
+export const SavedActivityList: React.FC<{
+  activity: SavedActivity;
+  idBase: string;
+  children?: React.ReactNode;
+  /** 26d: a nonce from the line under the reply; each new value opens the list at `focusStep` and focuses it. */
+  openRequest?: number;
+  focusStep?: string | null;
+  /** Start open (tests and shots). */
+  defaultOpen?: boolean;
+}> = ({ activity, idBase, children, openRequest, focusStep = null, defaultOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  const [asked, setAsked] = useState<string | null>(defaultOpen ? focusStep : null);
   const listId = `${idBase}-steps`;
+  useEffect(() => {
+    if (!openRequest) return;
+    setOpen(true);
+    setAsked(focusStep);
+  }, [openRequest, focusStep]);
+  useEffect(() => {
+    if (!openRequest || !focusStep) return;
+    const el = document.getElementById(`${listId}-${focusStep}`);
+    el?.focus({ preventScroll: true });
+    el?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }, [openRequest, focusStep, listId, open]);
   const failed = activity.steps.some((s) => s.status === 'failed');
+  const unanswered = activity.steps.some((s) => s.status === 'unanswered');
   return (
     <div className="mb-2 max-w-full">
       <button
@@ -327,13 +371,13 @@ export const SavedActivityList: React.FC<{ activity: SavedActivity; idBase: stri
         aria-controls={open ? listId : undefined}
         className={STEPS_ROW_BUTTON}
       >
-        <ListTree size={13} className={failed ? 'text-rose-300' : 'text-sky-400/80'} aria-hidden="true" />
+        <ListTree size={13} className={unanswered ? 'text-amber-300' : failed ? 'text-rose-300' : 'text-sky-400/80'} aria-hidden="true" />
         <span className="truncate min-w-0">{activitySummary(activity)}</span>
         <ChevronRight size={13} className={`flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
       </button>
       {open && (
         <div className={STEPS_ROW_LIST}>
-          <Steps steps={activity.steps} dropped={activity.dropped} id={listId} />
+          <Steps steps={activity.steps} dropped={activity.dropped} id={listId} openStep={asked} />
           {children}
         </div>
       )}
