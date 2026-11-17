@@ -1,6 +1,9 @@
 // Reactions and replies on bot messages (react-reply contract, section 3).
 // Pure helpers, so the toggle, the excerpt and the save-with-rollback are testable without a DOM.
 
+import { otherSenderLabel } from './agentConnections';
+import type { BotRef } from './sharedFiles';
+
 export type Reaction = 'up' | 'down';
 
 /** What a reply points at: the server's shape, or a target that was deleted. */
@@ -53,9 +56,12 @@ export function excerptOf(text: string, max = 120): string {
   return `${plain.slice(0, max - 1).trimEnd()}…`;
 }
 
-/** Who a message or quote is from, as the chat shows it: long ids (uuids) fall back to the chat's title. */
-export function senderLabel(senderRole: string | undefined, senderId: string | undefined, fallback: string): string {
-  if (senderRole === 'user') return 'You';
+/**
+ * Who a message or quote is from, as the chat shows it: long ids (uuids) fall back to the chat's title.
+ * A "user" message someone else wrote (a customer, a bot's chat-API post; see `otherSenderLabel`) says who.
+ */
+export function senderLabel(senderRole: string | undefined, senderId: string | undefined, fallback: string, meta?: string | null, knownBots?: ReadonlyArray<BotRef>): string {
+  if (senderRole === 'user') return otherSenderLabel(meta, knownBots, senderId) ?? 'You';
   if (!senderId) return fallback;
   return senderId.length > 20 ? fallback : senderId;
 }

@@ -27,7 +27,8 @@ impl Hits {
 }
 
 /// An http MCP server with `fail` (always the same error), `flaky` (a new error each time) and
-/// `status` (always works).
+/// `status` (always works, may change things). `lookup` (marked `readOnlyHint`) and `get_board`
+/// (a reader by its name) always work and only read.
 async fn fake_mcp() -> (String, Hits) {
     async fn mcp(State(hits): State<Hits>, Json(msg): Json<Value>) -> axum::response::Response {
         use axum::response::IntoResponse;
@@ -36,7 +37,11 @@ async fn fake_mcp() -> (String, Hits) {
         let result = match msg["method"].as_str().unwrap_or("") {
             "initialize" => json!({"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
                                    "serverInfo": {"name": "fake-fail", "version": "1.0.0"}}),
-            "tools/list" => json!({"tools": [tool("fail"), tool("flaky"), tool("status")]}),
+            "tools/list" => {
+                let mut lookup = tool("lookup");
+                lookup["annotations"] = json!({"readOnlyHint": true});
+                json!({"tools": [tool("fail"), tool("flaky"), tool("status"), lookup, tool("get_board")]})
+            }
             "tools/call" => {
                 let name = msg["params"]["name"].as_str().unwrap_or("").to_string();
                 let n = {
@@ -175,6 +180,45 @@ async fn working_polls_changing_errors_and_denials_are_not_stopped() {
         session.call(&caller(), "x", "mcp__board__fail", r#"{"board": "roadmap"}"#).await;
     }
     assert_eq!(hits.of("fail"), 3);
+    session.shutdown().await;
+}
+
+/// 22t: on the API engines, a call that worked and may have changed something gives the stopped
+/// call 3 more tries, up to 6 identical failures in the turn; a read changes nothing.
+#[tokio::test]
+async fn a_call_that_changed_something_lets_the_stopped_call_run_again() {
+    let (url, hits) = fake_mcp().await;
+    let c = ctx(&url, counting(true), 32);
+    let (session, problems) = McpToolSession::open(&c, None).await;
+    assert!(problems.is_empty(), "{problems:?}");
+    macro_rules! fail {
+        () => {
+            session.call(&caller(), "f", "mcp__board__fail", r#"{"board": "roadmap"}"#).await
+        };
+    }
+    for _ in 0..4 {
+        fail!();
+    }
+    assert_eq!(hits.of("fail"), 3);
+    // Reads, by the server's claim or by name, don't reopen it
+    for tool in ["mcp__board__lookup", "mcp__board__get_board"] {
+        let o = session.call(&caller(), "r", tool, r#"{"board": "roadmap"}"#).await;
+        assert_eq!(o.status, "ok");
+        assert!(fail!().record.get("repeat_stopped").is_some(), "{tool} reopened it");
+    }
+    assert_eq!(hits.of("fail"), 3);
+    // A call that isn't marked read-only worked: 3 more tries reach the server
+    assert_eq!(session.call(&caller(), "w", "mcp__board__status", r#"{"board": "roadmap"}"#).await.status, "ok");
+    for i in 4..=6 {
+        let o = fail!();
+        assert_eq!((o.status, o.text.as_str()), ("error", FAIL_TEXT), "try {i} sent");
+    }
+    // 6 in the turn is the ceiling: another change doesn't send a 7th
+    session.call(&caller(), "w", "mcp__board__status", r#"{"board": "roadmap"}"#).await;
+    let o = fail!();
+    assert_eq!(o.record["repeat_stopped"], 6);
+    assert!(o.text.contains("already failed 6 times in this turn"), "{}", o.text);
+    assert_eq!(hits.of("fail"), 6);
     session.shutdown().await;
 }
 
