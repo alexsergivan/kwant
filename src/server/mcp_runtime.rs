@@ -1908,9 +1908,9 @@ mod declined_tests {
     async fn claude_asks(e: &Env, tool: &str, input: Value, answer: Answer) -> (Value, Option<String>) {
         let turn_id = uuid::Uuid::new_v4().to_string();
         let folder = tempdir().unwrap();
-        let (_, token) = prepare_turn_with_opts(&e.state, &e.bot, Some(turn_id.clone()), Some(folder.path().to_path_buf()), None, Default::default())
-            .await
-            .unwrap();
+        // The turn is registered before its MCP context is built, as `turn_once` does: the
+        // approver takes its conversation from the registry then, and an unregistered turn is a
+        // conversation of its own (`turn:<id>`), so two asks wouldn't share the person's no
         e.state.turns.set_turn(super::super::turns::ActiveTurn {
             turn_id: turn_id.clone(),
             kwant_id: e.bot.id.clone(),
@@ -1921,6 +1921,9 @@ mod declined_tests {
             purpose: None,
             audit: None,
         });
+        let (_, token) = prepare_turn_with_opts(&e.state, &e.bot, Some(turn_id.clone()), Some(folder.path().to_path_buf()), None, Default::default())
+            .await
+            .unwrap();
         let app = super::super::create_router(e.state.clone());
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
             "arguments": {"tool_name": tool, "input": input, "tool_use_id": "tu_1"}}});
