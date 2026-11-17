@@ -85,7 +85,7 @@ import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSugg
 import { routeReasonText, routeWhyText } from '../routeReason';
 import { useInbox } from '../inboxStore';
 import { doneItemsOf, doneOf } from '../replyDone';
-import { APPROVE_TEXT, asksApproval, changePlaceholder, metaHidesApprove, refocusAfterApprove } from '../approvalAsk';
+import { APPROVE_TEXT, approveRowId, changePlaceholder, refocusAfterApprove } from '../approvalAsk';
 import { DoneCheckLine } from './DoneMarker';
 import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
@@ -1236,13 +1236,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const inboxData = useInbox().data;
   const doneItems = useMemo(() => doneItemsOf([...(inboxData?.items ?? []), ...(inboxData?.batch_items ?? [])]), [inboxData]);
   // reply-chrome part 2: the newest message, when it's a bot reply asking for an OK and nothing else is open.
+  // 22r: a 👍 that answered it counts as answered for good, across the turn-end reload.
   const approveId = useMemo(() => {
     const last = messages[messages.length - 1];
-    if (!last || last.sender_role !== 'kwant' || last.id.startsWith('temp-') || isStreaming || awaitingAnswer || pendingApprovals.length > 0) return null;
-    const meta = parseMetaObject(last.meta);
-    if (metaHidesApprove(meta)) return null;
-    return asksApproval(last.text) ? last.id : null;
-  }, [messages, isStreaming, awaitingAnswer, pendingApprovals.length]);
+    return approveRowId(last, last ? parseMetaObject(last.meta) : null, { busy: isStreaming || !!awaitingAnswer || pendingApprovals.length > 0, answered });
+  }, [messages, isStreaming, awaitingAnswer, pendingApprovals.length, answered]);
   const approve = async (msg: ChatMessage) => {
     if (approving) return;
     setApproving(msg.id);
