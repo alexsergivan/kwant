@@ -35,7 +35,7 @@ import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 import { PointLayer, PointSink } from './PointLayer';
 import { POINT_COPY, footerText } from '../point';
-import { choosePage, noteTitle, pageOpened, pageTeam, pageTitleOf, restingPage, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
+import { choosePage, noteTitle, ownNewestPage, pageOpened, pageTeam, pageTitleOf, restingPage, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
 import { secondsText } from '../clock';
@@ -236,9 +236,13 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [heldPage, setHeldPage] = useState<string | null>(null);
   const lastList = useRef(pages.list);
   const opened = pages.list !== lastList.current && pageOpened(lastList.current, pages.list);
+  const botName = useCallback((id: string) => botNames?.[id], [botNames]);
+  // 28o: the first list since the pane opened: rest first on the newest page of the bot whose panel it
+  // is. Held from then on, so it is decided once and never re-evaluated.
+  const firstPage = !lastList.current && !heldPage ? ownNewestPage(pages.list, browsingBot, botName) : null;
   const chosenPage =
     choosePage({ picked: picked?.page ?? null, stepPage: stepPage(openStep), pages: knownPages }) ??
-    restingPage(opened ? null : heldPage, pages.list);
+    restingPage(opened ? null : heldPage, pages.list, firstPage);
   useEffect(() => {
     lastList.current = pages.list;
   }, [pages.list]);
@@ -255,7 +259,6 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const onScreen = (s: HumanStep | null | undefined) => (s && stepPage(s) === pageOnScreen ? s : null);
   humanStep = onScreen(humanStep);
   captchaStep = onScreen(captchaStep);
-  const botName = useCallback((id: string) => botNames?.[id], [botNames]);
   // Who the page on screen belongs to: its bot on a job page, else the team ("Architect needs you to sign in")
   const pageBot = (pageInfo?.job && pageInfo.kwant_id && botNames?.[pageInfo.kwant_id]) || teamName;
   // 0.9.8 header and footer: "Ben's browser", or "The team's browser" when no bot owns the page on screen
@@ -723,6 +726,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           </div>
         ) : activeTab === 'browser' ? (
           <div className="flex-1 min-h-0 flex flex-col p-3 gap-2 overflow-y-auto" onScroll={touch} data-pane-body="">
+            {/* 28o: while the pane waits for the list, the strip's row is kept, empty, so the dark box doesn't move down when the tabs arrive */}
+            {!pagesKnown && <div aria-hidden="true" data-page-strip-reserved="" className={`shrink-0 ${narrow ? 'h-11' : 'h-7'}`} />}
             {pages.list && (
               <BrowserPageStrip
                 pages={pages.list.pages}
