@@ -1024,6 +1024,53 @@ impl Database {
         Ok(row.and_then(|r| r.0))
     }
 
+    /// 26b: routine runs can also end `needs_you` (a step waits on an approval card) or
+    /// `incomplete` (a step failed). SQLite can't widen a CHECK, so the table is rebuilt once with
+    /// every row, column (`note` included) and index; older binaries read and write it as before.
+    pub(super) async fn migrate_run_statuses(&self) -> Result<(), DbError> {
+        let sql: Option<(String,)> = sqlx::query_as(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'routine_runs'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        if sql.is_none_or(|(sql,)| sql.contains("'needs_you'")) {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        super::spaces::rebuild(
+            &mut tx,
+            "routine_runs",
+            "CREATE TABLE routine_runs__spaces_new (
+                id TEXT PRIMARY KEY,
+                routine_id TEXT NOT NULL,
+                trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')),
+                started_at TIMESTAMP NOT NULL,
+                ended_at TIMESTAMP,
+                status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped', 'needs_you', 'incomplete')),
+                error TEXT,
+                message_id TEXT,
+                note TEXT
+            )",
+            &[
+                "CREATE INDEX IF NOT EXISTS routine_runs_by_routine ON routine_runs (routine_id, started_at)",
+                "CREATE INDEX IF NOT EXISTS routine_runs_by_end ON routine_runs (status, ended_at) WHERE ended_at IS NOT NULL",
+            ],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// 26b: a manual run's start is the routine's last run too. `next_run_at` is left alone.
+    pub async fn set_routine_last_run(&self, id: &str, at: DateTime<Utc>) -> Result<(), DbError> {
+        sqlx::query("UPDATE routines SET last_run_at = ? WHERE id = ?")
+            .bind(at)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_routine_schedule_state(
         &self,
         id: &str,

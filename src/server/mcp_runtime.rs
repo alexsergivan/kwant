@@ -510,16 +510,27 @@ impl BrokerApprover {
             details,
         });
         super::activity::approval_waiting(&req.turn_id, &ticket, &req.tool_name);
+        // 26b: a routine run's turn waits on this card: its run says so until the wait ends
+        let chat_key = ["thread_id", "channel_id", "direct_kwant_id"]
+            .iter()
+            .find_map(|k| chat[*k].as_str())
+            .unwrap_or(&req.kwant_id)
+            .to_string();
+        super::scheduler::approval_wait(&self.events, &req.kwant_id, &chat_key, Some(&ticket));
 
         let decision = tokio::time::timeout(self.timeout, rx).await;
         guard.id = None;
-        let settled = match &decision {
-            Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => "ok",
-            Ok(_) => "declined",
-            // the card stays up, but this turn stops waiting for it
-            Err(_) => "stopped",
+        super::scheduler::approval_wait(&self.events, &req.kwant_id, &chat_key, None);
+        let answered = match &decision {
+            Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => {
+                Some("ok")
+            }
+            Ok(_) => Some("declined"),
+            Err(_) => None,
         };
-        super::activity::approval_settled(&req.turn_id, &ticket, settled);
+        if let Some(settled) = answered {
+            super::activity::approval_settled(&req.turn_id, &ticket, settled);
+        }
         let outcome = match decision {
             Ok(Ok(ApprovalDecision::AllowOnce)) => ApprovalOutcome::Allowed,
             // A payment's "always allow" covers this one call: nothing is remembered
@@ -534,17 +545,31 @@ impl BrokerApprover {
             // Nobody answered: the card stays up as `waiting`, and a late Allow resumes the work
             // (see `resume_late_approval`)
             Err(_) => {
-                if !self.broker.cancel(&ticket).await {
-                    return (ApprovalOutcome::Denied, "denied", Some(ticket));
-                }
-                match self.db.park_approval(&ticket, &chat).await {
-                    Ok(true) => ApprovalOutcome::Unanswered,
-                    _ => {
-                        let _ = self.db.update_approval_status(&ticket, "expired").await;
-                        let _ = self.events.send(RuntimeEvent::approval_withdrawn(ticket.clone(), "expired", None));
-                        ApprovalOutcome::Denied
+                let outcome = if !self.broker.cancel(&ticket).await {
+                    ApprovalOutcome::Denied
+                } else {
+                    match self.db.park_approval(&ticket, &chat).await {
+                        Ok(true) => ApprovalOutcome::Unanswered,
+                        _ => {
+                            let _ = self.db.update_approval_status(&ticket, "expired").await;
+                            let _ = self.events.send(RuntimeEvent::approval_withdrawn(
+                                ticket.clone(),
+                                "expired",
+                                None,
+                            ));
+                            ApprovalOutcome::Denied
+                        }
                     }
-                }
+                };
+                // The card stays up, but this turn stops waiting for it: `unanswered` (26b) when
+                // it was parked for a late answer, else `stopped`
+                let settled = if outcome == ApprovalOutcome::Unanswered {
+                    "unanswered"
+                } else {
+                    "stopped"
+                };
+                super::activity::approval_settled(&req.turn_id, &ticket, settled);
+                outcome
             }
         };
         let class = if outcome.allowed() { "approved" } else { "denied" };
@@ -1017,7 +1042,11 @@ pub async fn prepare_turn_with_opts(
         db: state.db.clone(),
         broker: state.broker.clone(),
         events: state.event_sender.clone(),
-        timeout: APPROVAL_TIMEOUT,
+        timeout: Duration::from_millis(
+            state
+                .approval_wait_ms
+                .load(std::sync::atomic::Ordering::Relaxed),
+        ),
         conversation: turn_conversation(state, &turn_id),
         chat,
         always_ask: opts.always_ask,
@@ -1266,6 +1295,11 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool, grant: O
             return json!({"behavior": "deny", "message": "The turn ended before the user answered."});
         }
     };
+    // 26b: the turn's first unanswered (or otherwise failed) call carries the one reminder; a
+    // plain denial doesn't
+    let remind = !outcome.allowed()
+        && mcp::reminds(outcome.record_status())
+        && !session.ctx.had_miss();
     session.ctx.record(json!({
         "id": tool_use_id,
         "name": tool_name,
@@ -1276,6 +1310,8 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool, grant: O
     }));
     if outcome.allowed() {
         json!({"behavior": "allow", "updatedInput": input})
+    } else if remind {
+        json!({"behavior": "deny", "message": mcp::with_no_false_claims(outcome.refusal_text())})
     } else {
         json!({"behavior": "deny", "message": outcome.refusal_text()})
     }
@@ -1465,7 +1501,7 @@ async fn gateway_rpc(
             }
             rpc_result(
                 id,
-                json!({"content": [{"type": "text", "text": outcome.text}], "isError": outcome.status != "ok"}),
+                json!({"content": [{"type": "text", "text": outcome.model_text()}], "isError": outcome.status != "ok"}),
             )
         }
         _ => rpc_error(id, -32601, "method not found"),

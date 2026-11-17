@@ -218,11 +218,14 @@ pub fn meta_of(m: &Message) -> Value {
 }
 
 /// A step's status in Iris's three words: `failed` is `error`; a step that never ran or never
-/// finished (declined, stopped, still running or waiting when the reply was saved) is `skipped`.
+/// finished (declined, stopped, unanswered, rehearsed, still running or waiting when the reply was
+/// saved) is `skipped`.
 fn trail_status(status: Option<&str>) -> &'static str {
     match status {
         Some("failed") => "error",
-        Some("declined" | "stopped" | "running" | "waiting") => "skipped",
+        Some("declined" | "stopped" | "unanswered" | "rehearsed" | "running" | "waiting") => {
+            "skipped"
+        }
         _ => "ok",
     }
 }
