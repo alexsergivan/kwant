@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.22] - 2026-11-17
+
+kwant 0.9.22: one green and one purple across the app and Ollama bots that work again on their own when Ollama starts after kwant.
+
+### Changed
+- kwant now uses one green and one purple everywhere. About 120 screens still had an older green and an older purple next to kwant's own teal and lavender (approval buttons, Ready chips, Documents, the Start picker, Hiring); they now match. Buttons with white text no longer get lighter and harder to read on hover, the main button's light corner is a little deeper, and "Allow once" is easier to read. Every button now reads at 4.5:1 or better. A build check stops off-palette colours from coming back. (#767)
+
+### Fixed
+- If Ollama starts after kwant does, your Ollama bots now work on their own, within about 15 seconds or at your next message, with no Re-check. Before, they kept saying "No account can run bots here yet" until someone pressed Re-check. A bot set to an Ollama model that still can't reach Ollama now says "Ollama isn't answering at <address>. Start it, then try again." with a Re-check button that tells you if it's still down, instead of asking you to add an account. A space that runs only on Ollama now counts it in its subtitle, as the sidebar already did. (#764)
+
 ## [Mac 0.9.21] - 2026-11-17
 
 kwant 0.9.21: Home Assistant in two fields with a new Home team, Home Assistant locks, doors and alarms that always ask, a list of what each bot may do without asking, files that reach a bot waiting in the browser at once, a turn end that goes straight to the saved reply, a thread header that stays on Working until the reply appears, closed browser step cards that always say what's next, Needs-attention rows that land on an old ask in a thread, routine runs that say when a step waited for your approval or failed, instead of counting as done and replies whose Details say which step failed or didn't run.

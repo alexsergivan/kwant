@@ -23,6 +23,11 @@ pub mod teams;
 pub mod tools;
 pub mod zombie;
 
+/// tests/support/skip.rs, once for the whole lib: a missing test precondition skips locally and fails in CI.
+#[cfg(test)]
+#[path = "../tests/support/skip.rs"]
+pub(crate) mod test_skip;
+
 pub use broker::{ApprovalDecision, ApprovalRequest, PermissionBroker};
 pub use config::{Config, ConfigError};
 pub use db::{Database, DbError};

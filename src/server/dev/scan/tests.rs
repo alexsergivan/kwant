@@ -11,6 +11,8 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use crate::test_skip as skip;
+
 fn diff(path: &str, status: &str, patch: Option<&str>) -> FileDiff {
     let adds = patch.map_or(0, |p| p.lines().filter(|l| l.starts_with('+')).count() as u64);
     let dels = patch.map_or(0, |p| p.lines().filter(|l| l.starts_with('-')).count() as u64);
@@ -243,7 +245,7 @@ fn j_s2_hide_lines_replaces_whole_added_lines_and_keeps_numbers() {
 // Real gitleaks (local only): `KWANT_TEST_GITLEAKS=/path/to/gitleaks-8.30.1 cargo test j_s -- --ignored`
 
 fn real_bin() -> Option<std::path::PathBuf> {
-    let p = std::path::PathBuf::from(std::env::var("KWANT_TEST_GITLEAKS").ok()?);
+    let p = std::path::PathBuf::from(skip::opt_in("KWANT_TEST_GITLEAKS", "the real gitleaks tests")?);
     p.is_file().then_some(p)
 }
 

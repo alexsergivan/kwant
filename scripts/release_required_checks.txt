@@ -6,3 +6,4 @@ rust
 frontend
 site
 fresh-machine
+docker-tests

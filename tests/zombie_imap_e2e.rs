@@ -12,6 +12,9 @@
 //!
 //! Without it the test passes without doing anything (and says so).
 
+#[path = "support/skip.rs"]
+mod skip;
+
 use chrono::{Duration, Utc};
 use futures::StreamExt;
 use kwnt::zombie::{
@@ -51,8 +54,7 @@ async fn flags(s: &mut Session, folder: &str) -> BTreeMap<u32, Vec<String>> {
 
 #[tokio::test]
 async fn the_imap_source_reads_without_changing_anything() {
-    let Ok(addr) = std::env::var("KWNT_TEST_IMAP") else {
-        eprintln!("KWNT_TEST_IMAP is not set: skipping the IMAP end-to-end test");
+    let Some(addr) = skip::opt_in("KWNT_TEST_IMAP", "the IMAP end-to-end test") else {
         return;
     };
     let (host, port) = addr.rsplit_once(':').unwrap();
