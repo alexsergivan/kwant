@@ -125,8 +125,9 @@ earlier in the same turn. Choose `ask` for bots or folders you don't trust.
   Known gaps, left as they are: options that follow symlinks (`grep -R`, `rg -L`, `find -L`,
   `ls -R`, `zip -r`) run without a card, so a symlink already in the folder that points out of
   it can be read through them.
-- **MCP tools** the server marks `readOnlyHint: true` without `destructiveHint: true`. That is
-  the server's own claim. If kwnt can't check it, the call asks.
+- **MCP tools** the server marks `readOnlyHint: true`. As the MCP spec says, `destructiveHint`
+  counts only when `readOnlyHint` is false, so a tool marked both (Home Assistant's reads, like
+  GetLiveContext) runs too. That is the server's own claim. If kwnt can't check it, the call asks.
 
 **kwnt itself always asks.** kwnt's person-only routes take no token from this computer, so a
 request to kwnt from a bot could turn approvals off or answer its own cards. A curl, wget or

@@ -200,6 +200,21 @@ pub fn acceptable_endpoint(endpoint: &str) -> bool {
     }
 }
 
+/// Said when a sign-in endpoint is plain http off this computer (a Home Assistant on the home
+/// network, say). There's no sign-in over plain http there, since the token would cross the network
+/// unencrypted; a Bearer header works instead. Keeps "must use https" for anything matching on it.
+pub const LAN_HTTP_SIGN_IN: &str = "This server's sign-in must use https (plain http works only on this computer). \
+For a server on your home network, like Home Assistant, add a header instead: Authorization = Bearer <token>, \
+then Test connection.";
+
+/// Why discovery refuses `endpoint` (one [`acceptable_endpoint`] said no to): plain http names
+/// the header way; anything else keeps `other`.
+fn refused_endpoint(endpoint: &str, other: &str) -> OAuthError {
+    let plain_http = Url::parse(endpoint).is_ok_and(|u| u.scheme() == "http");
+    let message = if plain_http { LAN_HTTP_SIGN_IN } else { other };
+    OAuthError::Discovery(message.to_string())
+}
+
 fn random_token() -> String {
     // Two v4 UUIDs: 244 random bits from the OS generator, 64 unreserved characters
     format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
@@ -431,7 +446,7 @@ pub async fn discover(
         .map(str::to_string)
         .unwrap_or_else(|| origin.clone());
     if !acceptable_endpoint(&issuer) {
-        return Err(OAuthError::Discovery("the authorization server must use https".into()));
+        return Err(refused_endpoint(&issuer, "the authorization server must use https"));
     }
     let resource = resource_meta
         .as_ref()
@@ -477,7 +492,7 @@ pub async fn discover(
         .flatten()
     {
         if !acceptable_endpoint(endpoint) {
-            return Err(OAuthError::Discovery("the server's sign-in endpoints must use https".into()));
+            return Err(refused_endpoint(endpoint, "the server's sign-in endpoints must use https"));
         }
     }
     if let Some(methods) = &metadata.code_challenge_methods_supported {
@@ -848,8 +863,33 @@ mod tests {
         assert!(acceptable_endpoint("http://[::1]:8/token"));
         assert!(!acceptable_endpoint("http://auth.dev/token"));
         assert!(!acceptable_endpoint("http://10.0.0.1/token"));
+        // Home networks too: no plain-http sign-in off this computer
+        assert!(!acceptable_endpoint("http://homeassistant.lan/token"));
+        assert!(!acceptable_endpoint("http://homeassistant.local/token"));
+        assert!(!acceptable_endpoint("http://192.168.0.1/token"));
+        assert!(!acceptable_endpoint("http://homeassistant.lan:8123/api/mcp"));
         assert!(!acceptable_endpoint("javascript:alert(1)"));
         assert!(!acceptable_endpoint("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn a_plain_http_refusal_names_the_header() {
+        for http in ["http://homeassistant.lan:8123", "http://192.168.0.1/token", "http://auth.dev/token"] {
+            let e = refused_endpoint(http, "x").to_string();
+            assert!(e.contains("must use https") && e.contains("Authorization = Bearer <token>"), "{http}: {e}");
+        }
+        assert!(LAN_HTTP_SIGN_IN.contains("Home Assistant") && LAN_HTTP_SIGN_IN.contains("Test connection"));
+        let other = refused_endpoint("ftp://auth.dev/token", "the authorization server must use https").to_string();
+        assert!(other.ends_with("the authorization server must use https") && !other.contains("Bearer"), "{other}");
+    }
+
+    #[tokio::test]
+    async fn discovery_on_a_lan_http_server_says_to_use_a_header() {
+        // No request leaves: every metadata url is plain http off this computer, so the server is
+        // its own (refused) authorization server.
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let err = discover(&http, "http://homeassistant.lan:8123/api/mcp", None).await.unwrap_err().to_string();
+        assert!(err.contains(LAN_HTTP_SIGN_IN), "{err}");
     }
 
     #[test]

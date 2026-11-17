@@ -294,18 +294,23 @@ async fn smart_runs_read_only_mcp_tools_and_asks_for_the_rest() {
     let server = e.state.db.create_mcp_server(&space, &server).await.unwrap();
     e.state.db.set_kwant_mcp_servers(&e.bot.id, &[server.id]).await.unwrap();
 
-    // Under ask both tools ask
+    // Under ask every tool asks
     assert!(is_card(&ask(&e, "mcp__echo__echo", |_| json!({"text": "hi"})).await));
     space_mode(&e, "smart").await;
     assert_eq!(ask(&e, "mcp__echo__echo", |_| json!({"text": "hi"})).await, Outcome::Answered(true), "readOnlyHint");
+    // Home Assistant's read shape: readOnlyHint and destructiveHint both true. The MCP spec reads
+    // destructiveHint only when readOnlyHint is false, so this runs without a card.
+    assert_eq!(ask(&e, "mcp__echo__peek", |_| json!({})).await, Outcome::Answered(true), "readOnlyHint wins (MCP spec)");
     match ask(&e, "mcp__echo__add", |_| json!({"a": 1, "b": 2})).await {
         Outcome::Card(details) => assert_eq!(details["smart_reason"], "this MCP tool can change things"),
-        other => panic!("destructiveHint wins over readOnlyHint: {other:?}"),
+        other => panic!("a tool not marked readOnlyHint asks: {other:?}"),
     }
     assert!(is_card(&ask(&e, "mcp__echo__env", |_| json!({"name": "HOME"})).await), "no hint asks");
     let rows = get(&e, "/api/approvals?status=auto_allowed").await;
-    assert_eq!(rows[0]["tool_name"], "mcp__echo__echo");
-    assert_eq!(rows[0]["details"]["smart_reason"], "the MCP server marks this tool read-only");
+    let mut names: Vec<_> = rows.as_array().unwrap().iter().map(|r| r["tool_name"].as_str().unwrap()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["mcp__echo__echo", "mcp__echo__peek"], "{rows}");
+    assert!(rows.as_array().unwrap().iter().all(|r| r["details"]["smart_reason"] == "the MCP server marks this tool read-only"), "{rows}");
 }
 
 #[tokio::test]

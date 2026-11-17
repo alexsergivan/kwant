@@ -1,9 +1,10 @@
 //! A tiny stdio MCP server, run with the hidden `kwnt mcp-echo-server` subcommand. It exists so
 //! tests and smoke checks have a real MCP server without Python, Node or network access.
 //!
-//! Tools: `echo {text}`, `add {a, b}`, `sleep {ms}`, `env {name}` (reads its own environment)
-//! and `crash` (exits mid-call). `echo` is marked read-only; `add` claims both read-only and
-//! destructive, so it counts as not read-only.
+//! Tools: `echo {text}`, `add {a, b}`, `sleep {ms}`, `env {name}` (reads its own environment),
+//! `crash` (exits mid-call) and `peek` (a fixed reading). `echo` is marked read-only; `add` is
+//! marked destructive, so it asks; `peek` carries Home Assistant's read-only shape
+//! (`readOnlyHint` and `destructiveHint` both true), which counts as read-only.
 //!
 //! `--home-tools` adds Home Assistant-shaped tools (26f): `homeassistant__GetLiveContext`
 //! (read-only), `intent__HassTurnOn` and `intent__HassTurnOff` `{name, area, domain,
@@ -22,13 +23,16 @@ fn tools() -> Value {
          "annotations": {"readOnlyHint": true}},
         {"name": "add", "description": "Adds two numbers.",
          "inputSchema": obj(json!({"a": {"type": "number"}, "b": {"type": "number"}}), json!(["a", "b"])),
-         "annotations": {"readOnlyHint": true, "destructiveHint": true}},
+         "annotations": {"destructiveHint": true}},
         {"name": "sleep", "description": "Waits for the given milliseconds, then answers.",
          "inputSchema": obj(json!({"ms": {"type": "integer"}}), json!(["ms"]))},
         {"name": "env", "description": "Returns the value of one of this server's environment variables.",
          "inputSchema": obj(json!({"name": {"type": "string"}}), json!(["name"]))},
         {"name": "crash", "description": "Exits the server without answering.",
          "inputSchema": obj(json!({}), json!([]))},
+        {"name": "peek", "description": "Returns a fixed reading, like a sensor.",
+         "inputSchema": obj(json!({}), json!([])),
+         "annotations": {"readOnlyHint": true, "destructiveHint": true, "openWorldHint": false, "idempotentHint": false}},
     ])
 }
 
@@ -77,6 +81,7 @@ async fn call(name: &str, args: &Value) -> Value {
                 Err(_) => text_result(format!("{var} is not set"), true),
             }
         }
+        "peek" => text_result("21.4".into(), false),
         "crash" => {
             eprintln!("mcp-echo-server: crashing on request");
             std::process::exit(3);

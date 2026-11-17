@@ -67,6 +67,8 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.16.** Your **answer to a bot's question** shows once, on its card, and phone chat headers name their buttons.
 - **New in 0.9.17.** A card that puts kwant bots on your phone, a team chip that names the team once, steps that fold under a reply instead of pushing it down, "Pick a repo" that always lands in Repo URL, Allow once for notes that mention a release or a merge, Blocked when a reply asks you to pick after a closing line, Claude bots that stop repeating a command or file read that keeps failing, The island names a file, never its folders, dates and times that read one way everywhere, a bot that asks for a missing file in the chat, Keep going never passes a customer's words on as yours and Writes named like reads keep the full card.
 - **New in 0.9.18.** A team named once, never "… team team", audio files up to 100 MB in the chat, a bot browser preview that never flashes white while a page loads, browser step cards that stop asking for you once they are closed, tidier reply buttons on a phone, a production deploy card that always has a way forward, A refused customer call remembers its chat and A step that keeps failing ends in one Blocked card.
+- **New in 0.9.19.** Bot messages that never read as yours, bot messages that name the bot that sent them, a customer's refused call shown in that customer's chat, short Windows file paths in the chat's step titles, a stopped step that gets its tries back once the bot has fixed something, an island Allow once that no longer covers a deploy typed as plain text, a repeat guard that sees through changing timings, ids and ports, a stopped step that a read-only shell command no longer reopens, customer and bot messages that name who wrote them and requests to OpenRouter that name kwant as the app.
+- **New in 0.9.20.** Needs attention rows that take you to the exact ask, Bots on API engines read files in their own folder, closed browser step cards headed by the step's name in grey, desktop settings that say so when they can't be saved, a Homebrew install for kwnt's server and command line, a bot browser that no longer runs out of connections after a long day, Home Assistant reads that run without asking, ready listings for Render, CasaOS, Umbrel and Coolify and customer and bot messages on the left, in their own bubble.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 
@@ -266,6 +268,14 @@ echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up
 - **kwant's own `execute_shell` tool** runs in per-team Docker containers, so it isn't available inside this stack: that would need the host's Docker socket, which is root on the host. The CLIs' own shell tools work inside the kwnt container.
 - **Upgrading from an older image:** kwnt now runs as uid 10001, not root. If it says `/data isn't writable`, run once: `docker compose run --rm -u root kwnt chown -R 10001:10001 /data`.
 
+### Render, CasaOS, Umbrel and Coolify
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant)
+
+The button reads [`render.yaml`](render.yaml): one web service from the released image with a 1 GB disk on `/data`. **Render keeps files only on a disk, and disks need a paid instance** (Starter or up), so the free plan won't work. Render makes the sign-in token: copy `KWNT_API_TOKEN` from the service's **Environment** page and paste it on the sign-in screen.
+
+For home servers, [`deploy/`](deploy) has a listing for each store, pinned to the release: [CasaOS](deploy/casaos/Kwnt/docker-compose.yml) (sign in with `kwnt token --raw` from the app's **Terminal**), [Umbrel](deploy/umbrel/kwant) (sign in with the password Umbrel shows for kwant) and [Coolify](deploy/coolify/kwnt.yaml) (sign in with `SERVICE_PASSWORD_64_KWNT` from the service's environment variables). Until a store lists kwant, CasaOS can import the file under **Custom Install** and Coolify can run it as a **Docker Compose** resource; Umbrel needs the listing. These run kwnt alone, without Laya or the bots' browser; see [docs/self-host-stores.md](docs/self-host-stores.md).
+
 ### Without Docker: `kwnt setup`
 
 `kwnt setup` installs what kwant needs on this machine: Chromium or Chrome for the bots' browser, Laya (in kwant's data folder, with its own `uv` if you have no Python), and a CLI (`claude` unless you name others with `--clis`). It asks before each step (`--yes` skips the questions), never runs `sudo` itself (it prints the command for you instead), installs into your home folder where it can, skips Docker unless you pass `--docker`, and running it again changes nothing. `--dry-run` shows the plan. The app has the same checklist under **Setup**.
@@ -280,7 +290,7 @@ One line per platform, each followed by `kwnt doctor`:
 | Linux desktop or server | The same clone and `make build`, then `kwnt setup`, or `sh scripts/install-linux-deps.sh --clis claude` on Debian/Ubuntu | Run `kwnt doctor` |
 | VPS with Docker | [Docker Compose](#vps-in-5-minutes-docker-compose) | Run `docker compose exec kwnt kwnt doctor` |
 
-There's no prebuilt `kwnt` binary or Homebrew formula yet, so the command line needs a clone and a build (Rust and Node).
+On Linux (x86_64 or arm64, glibc 2.35+) you can skip the build: `curl -fsSL https://kwant.si/install.sh | sh` installs the prebuilt `kwnt` from the latest release after checking its `.sha256`, and every release also has `kwnt-linux-x86_64.tar.gz` and `kwnt-linux-aarch64.tar.gz`. There's no prebuilt command-line `kwnt` for macOS yet, so on a Mac the command line needs a clone and a build (Rust and Node).
 
 ---
 

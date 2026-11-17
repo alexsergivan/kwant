@@ -515,7 +515,8 @@ async fn ask_card(scope: &TurnScope, lead: &Kwant, question: &str, choices: &[St
     if let Some(m) = card_message(state, &q).await {
         super::asks::set_meta_key(state, &m, key, json!(true)).await;
     }
-    let _ = state.db.close_plain_waiting(&lead.id, scope.channel_id.as_deref(), direct.as_deref(), scope.thread_id.as_deref()).await;
+    let rows = state.db.close_plain_waiting(&lead.id, scope.channel_id.as_deref(), direct.as_deref(), scope.thread_id.as_deref()).await.unwrap_or_default();
+    super::waiting::closed(state, &rows, super::waiting::REASON_REPLACED);
     let hours = super::waiting::follow_up_hours(state).await;
     let item = NewWaitingItem {
         kwant_id: lead.id.clone(),
@@ -527,7 +528,8 @@ async fn ask_card(scope: &TurnScope, lead: &Kwant, question: &str, choices: &[St
         question: q.question.clone(),
         due_at: (hours > 0).then(|| Utc::now() + Duration::hours(hours)),
     };
-    if matches!(state.db.add_waiting(&item).await, Ok(Some(_))) {
+    if let Ok(Some(w)) = state.db.add_waiting(&item).await {
+        super::waiting::opened(state, &w);
         state.scheduler_wake.notify_one();
     }
     Some(q)

@@ -809,7 +809,8 @@ pub fn expired_text(kwant_name: &str, tool_name: &str, hours: i64) -> String {
 /// expired (never, or Retry already ran).
 pub async fn retry_expired(state: &AppState, ticket_id: &str) -> Option<Value> {
     let (approval, chat) = state.db.claim_expired_approval(ticket_id).await.ok().flatten()?;
-    let _ = state.db.close_stopped_for_approval(ticket_id).await;
+    let rows = state.db.close_stopped_for_approval(ticket_id).await.unwrap_or_default();
+    super::waiting::closed(state, &rows, super::waiting::REASON_RESUMED);
     let not_resumed = |why: &str| Some(json!({"ticket_id": ticket_id, "status": "retried", "resumed": false, "reason": why}));
     let Ok(Some(kwant)) = state.db.get_kwant(&approval.kwant_id).await else {
         return not_resumed("the bot no longer exists");

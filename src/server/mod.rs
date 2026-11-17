@@ -48,6 +48,7 @@ pub mod computer;
 pub mod mcp_directory;
 pub mod mcp_suggest;
 pub mod page_source;
+pub mod bot_files;
 pub mod tool_failures;
 pub mod tool_notes;
 pub mod openai_key;
@@ -524,6 +525,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/attachments/:id", get(attachments::get))
         .route("/api/attachments/:id/content", get(attachments::content))
         .route("/api/waiting", get(waiting::list))
+        .route("/api/waiting/:id/dismiss", post(waiting::dismiss))
         .route("/api/questions", get(questions::list))
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))
