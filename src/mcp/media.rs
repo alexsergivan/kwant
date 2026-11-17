@@ -436,7 +436,7 @@ pub fn from_claude(tool_response: &Value, tool_results: Option<&std::path::Path>
     let mut noted = false;
     let mut after_image = false;
     for block in blocks {
-        let was_image = std::mem::replace(&mut after_image, false);
+        let was_image = std::mem::take(&mut after_image);
         let kind = block["type"].as_str().unwrap_or("").to_string();
         match kind.as_str() {
             "image" if block["source"]["type"] == "base64" => {
@@ -883,7 +883,7 @@ mod tests {
         #[cfg(unix)]
         {
             let link = dir.join("mcp-flux-blob-3.wav");
-            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            std::os::unix::fs::symlink(outside.as_path(), &link).unwrap();
             assert_eq!(claude(&line(&link), Some(&sink), Some(&dir)).await, None, "a link in the folder isn't followed");
             // Over the cap: named, not read
             let big = dir.join("mcp-flux-blob-4.mp4");
