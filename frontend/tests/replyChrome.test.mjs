@@ -152,9 +152,10 @@ test('metaHidesApprove: a failed step\'s Blocked keeps the Approve row; any othe
   assert.equal(m.metaHidesApprove({ kind: 'card' }), true);
   assert.equal(m.metaHidesApprove({}), false);
   assert.equal(m.metaHidesApprove(null), false);
-  // ChatView's approveId reads it, instead of its own blocked/question/kind check
+  // ChatView's approveId reads it (through approveRowId, 22r), instead of its own blocked/question/kind check
   const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
-  assert.match(src, /if \(metaHidesApprove\(meta\)\) return null;/);
+  assert.match(src, /approveRowId\(last,/);
+  assert.match(readFileSync(new URL('../src/approvalAsk.ts', import.meta.url), 'utf8'), /if \(metaHidesApprove\(meta\)\) return null;/);
   assert.doesNotMatch(src, /meta\.blocked \|\| meta\.question_id/);
 });
 
