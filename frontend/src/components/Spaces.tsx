@@ -429,7 +429,7 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
           <button
             type="submit"
             disabled={saving}
-            className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-50 flex items-center gap-1.5"
+            className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-50 flex items-center gap-1.5"
           >
             {saving && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             {saving ? 'Creating…' : 'Create space'}

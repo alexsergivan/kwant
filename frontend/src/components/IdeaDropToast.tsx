@@ -80,7 +80,7 @@ export const IdeaDropToast: React.FC<{
           <button
             type="button"
             onClick={onOpenJar}
-            className={`shrink-0 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg text-xs font-semibold text-[#b8adff] hover:bg-violet-500/10 ${focusRing}`}
+            className={`shrink-0 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg text-xs font-semibold text-[#b8adff] hover:bg-sky-500/10 ${focusRing}`}
             data-idea-open-jar
           >
             Open jar

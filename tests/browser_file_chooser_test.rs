@@ -5,6 +5,10 @@
 //! attachment already uploaded through `/api/attachments`, cancelling, and a chooser cleared by
 //! navigation. Skipped when no Chrome is installed. Local delivery only — there's no remote Chrome
 //! in this environment to exercise the base64/DataTransfer path.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -150,7 +154,7 @@ async fn take_control(ws: &mut Ws) {
 #[tokio::test]
 async fn picking_a_visible_input_uploads_and_delivers_the_file() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -183,7 +187,7 @@ async fn picking_a_visible_input_uploads_and_delivers_the_file() {
 #[tokio::test]
 async fn a_tiktok_style_hidden_input_behind_a_button_is_intercepted_too() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -214,7 +218,7 @@ async fn a_tiktok_style_hidden_input_behind_a_button_is_intercepted_too() {
 #[tokio::test]
 async fn cancelling_the_sheet_gets_no_reply_and_leaves_the_page_untouched() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -249,7 +253,7 @@ async fn cancelling_the_sheet_gets_no_reply_and_leaves_the_page_untouched() {
 #[tokio::test]
 async fn retrying_the_same_chooser_after_a_failed_answer_still_delivers_the_file() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -288,7 +292,7 @@ async fn retrying_the_same_chooser_after_a_failed_answer_still_delivers_the_file
 #[tokio::test]
 async fn navigating_away_while_the_sheet_is_open_clears_it() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

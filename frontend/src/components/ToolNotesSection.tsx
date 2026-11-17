@@ -47,7 +47,7 @@ const primaryBtn = `${btn} min-h-[30px] px-3 bg-sky-500 text-zinc-950 hover:bg-s
 const KIND_TAG: Record<ToolNoteKind | 'fixed', string> = {
   broke: 'text-rose-300 border-rose-300/35 bg-rose-300/[0.08]',
   tip: 'text-teal-200 border-teal-400/30 bg-teal-400/[0.08]',
-  missing: 'text-violet-300 border-[#9d8fff]/35 bg-[#9d8fff]/[0.08]',
+  missing: 'text-info border-[#9d8fff]/35 bg-[#9d8fff]/[0.08]',
   fixed: 'text-zinc-400 border-zinc-700 bg-transparent',
 };
 const KIND_ICON: Record<ToolNoteKind | 'fixed', React.ReactNode> = {
@@ -79,7 +79,7 @@ const WhoLine: React.FC<{ n: ToolNote }> = ({ n }) =>
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
       {n.bots.map((b) => (
         <span key={b.id} className="inline-flex items-center gap-1 font-medium text-zinc-300">
-          <span aria-hidden="true" className="inline-grid place-items-center h-3.5 w-3.5 rounded-full bg-[#9d8fff]/25 text-[9px] font-bold text-violet-200">
+          <span aria-hidden="true" className="inline-grid place-items-center h-3.5 w-3.5 rounded-full bg-[#9d8fff]/25 text-[9px] font-bold text-sky-200">
             {b.name.charAt(0).toUpperCase()}
           </span>
           {b.name}

@@ -23,7 +23,7 @@ import { FreshEyesChip } from './dev/FreshEyesChip';
 const TONE: Record<string, string> = {
   amber: 'bg-amber-500/15 text-amber-200 border-amber-500/30',
   rose: 'bg-rose-500/15 text-rose-200 border-rose-500/30',
-  emerald: 'bg-emerald-500/15 text-emerald-200 border-emerald-500/30',
+  emerald: 'bg-teal-400/15 text-teal-200 border-teal-400/30',
   zinc: 'bg-zinc-800 text-zinc-300 border-zinc-700',
 };
 const btn =
@@ -71,7 +71,7 @@ const RiskItem: React.FC<{
       )}
       {open && canResolve && onResolve && (
         <div className="flex flex-wrap gap-2 pt-0.5" data-risk-actions>
-          <button type="button" disabled={busy} onClick={() => onResolve(r, 'resolved')} className={`${btn} bg-emerald-600 text-white hover:bg-emerald-500`}>
+          <button type="button" disabled={busy} onClick={() => onResolve(r, 'resolved')} className={`${btn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`}>
             Resolve
           </button>
           <button type="button" disabled={busy} onClick={() => onResolve(r, 'dismissed')} className={`${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700`}>

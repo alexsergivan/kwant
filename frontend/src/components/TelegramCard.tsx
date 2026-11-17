@@ -32,7 +32,7 @@ export type TelegramApi = typeof telegramApi;
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500';
 const actionBtn = `inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${focusRing}`;
 const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const primaryBtn = `${actionBtn} text-white bg-sky-600 hover:bg-sky-500 shadow-sm`;
+const primaryBtn = `${actionBtn} text-white bg-sky-600 hover:bg-sky-700 shadow-sm`;
 const dangerGhost = `${actionBtn} border border-rose-500/40 text-rose-200 hover:bg-rose-500/10`;
 const dangerBtn = `${actionBtn} text-white bg-rose-600 hover:bg-rose-500`;
 const textBtn = `inline-flex items-center min-h-[44px] max-sm:-my-[13px] align-middle sm:min-h-0 px-1 rounded text-xs font-medium text-sky-300 hover:text-sky-200 hover:underline underline-offset-2 ${focusRing}`;
@@ -726,7 +726,7 @@ export const ConnectedCard: React.FC<ConnectedCardProps> = ({ status, api, onSta
               Telegram
             </h4>
             {status.state === 'paired' ? (
-              <span className="px-1.5 py-px rounded border text-[11px] border-emerald-500/30 bg-emerald-500/10 text-emerald-200">On</span>
+              <span className="px-1.5 py-px rounded border text-[11px] border-teal-400/30 bg-teal-400/10 text-teal-200">On</span>
             ) : (
               <span className="px-1.5 py-px rounded border text-[11px] border-zinc-700 bg-zinc-800 text-zinc-300">Not paired</span>
             )}

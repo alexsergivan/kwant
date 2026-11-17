@@ -79,7 +79,7 @@ test('priority order is Needs you > Working > Queued > Can\'t run > Available', 
 });
 
 test('only Available is green; Working pulses but respects reduced motion', () => {
-  for (const k of s.STATUS_PRIORITY) assert.equal(s.STATUS_DOT[k].includes('emerald'), k === 'available', k);
+  for (const k of s.STATUS_PRIORITY) assert.equal(s.STATUS_DOT[k].includes('teal'), k === 'available', k);
   assert.match(s.STATUS_DOT.working, /animate-pulse/);
   assert.match(s.STATUS_DOT.working, /motion-reduce:animate-none/);
   assert.equal(s.statusText('Editor', 'working'), 'Editor · Working');

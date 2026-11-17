@@ -125,7 +125,7 @@ export const DeleteBotDialog: React.FC<DeleteBotDialogProps> = ({ kwant, busy, o
             {exporting ? 'Exporting…' : `Export ${kwant.name}`}
           </button>
           {exported && (
-            <p role="status" className="text-[11px] text-emerald-300 break-words">
+            <p role="status" className="text-[11px] text-ok break-words">
               Saved {exported}.
             </p>
           )}

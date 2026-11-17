@@ -62,11 +62,11 @@ export const SetupNeededCard: React.FC<Props> = ({ meta, botName, spaceName, can
     <div className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`} data-setup-card={meta.reason}>
       <div
         className={`w-[34px] h-[34px] flex-shrink-0 rounded-full flex items-center justify-center border ${
-          fixed ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-amber-500/10 border-amber-500/40'
+          fixed ? 'bg-teal-400/10 border-teal-400/40' : 'bg-amber-500/10 border-amber-500/40'
         }`}
         aria-hidden="true"
       >
-        {fixed ? <CheckCircle2 size={16} className="text-emerald-300" /> : <AlertTriangle size={16} className="text-amber-300" />}
+        {fixed ? <CheckCircle2 size={16} className="text-ok" /> : <AlertTriangle size={16} className="text-amber-300" />}
       </div>
       <div
         role="status"
@@ -82,7 +82,7 @@ export const SetupNeededCard: React.FC<Props> = ({ meta, botName, spaceName, can
             onClick={onRecheck}
             disabled={rechecking}
             data-setup-recheck
-            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
+            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
           >
             <RefreshCw size={13} aria-hidden="true" className={rechecking ? 'animate-spin motion-reduce:animate-none' : undefined} />
             {rechecking ? 'Checking…' : 'Re-check'}
@@ -92,7 +92,7 @@ export const SetupNeededCard: React.FC<Props> = ({ meta, botName, spaceName, can
           <button
             type="button"
             onClick={onOpenAccounts}
-            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
+            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
           >
             <KeyRound size={13} aria-hidden="true" />
             Add an account

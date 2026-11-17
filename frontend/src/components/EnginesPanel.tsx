@@ -17,12 +17,12 @@ import type { SetupItemId } from '../setupInstall';
 const SETUP_ITEMS: SetupItemId[] = ['claude', 'codex', 'grok'];
 
 const SUMMARY_TEXT = {
-  ok: 'text-emerald-300',
+  ok: 'text-ok',
   warn: 'text-amber-200',
   error: 'text-rose-300',
   muted: 'text-zinc-400',
   busy: 'text-sky-300',
-  info: 'text-cyan-200',
+  info: 'text-sky-200',
 } as const;
 const KIND_ICON = { cli: Cpu, api: Key, local: Server } as const;
 
@@ -109,7 +109,7 @@ export const EngineCard: React.FC<{
                 href={INSTALL_URL[engine.id]}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200 hover:underline underline-offset-2"
+                className="inline-flex items-center gap-1 text-[11px] text-info hover:text-sky-200 hover:underline underline-offset-2"
               >
                 Install {engine.name} <ExternalLink size={10} aria-hidden="true" />
               </a>
@@ -192,7 +192,7 @@ export const RouteSummary: React.FC<{ rows: RouteRow[]; pending: boolean }> = ({
             <span className="w-14 shrink-0 font-semibold text-zinc-100">{r.label}</span>
             <span className="px-1.5 py-0.5 rounded-md bg-zinc-800/80 text-zinc-300">{r.engine}</span>
             <ArrowRight size={11} className="text-zinc-500" aria-label="on" />
-            <span className={`px-1.5 py-0.5 rounded-md font-medium ${r.account.otherProvider || r.note ? 'bg-amber-500/15 text-amber-100' : 'bg-emerald-500/15 text-emerald-100'}`}>
+            <span className={`px-1.5 py-0.5 rounded-md font-medium ${r.account.otherProvider || r.note ? 'bg-amber-500/15 text-amber-100' : 'bg-teal-400/15 text-teal-100'}`}>
               {r.account.name}
             </span>
             {r.account.detail && <span className={r.account.otherProvider ? 'text-amber-200' : 'text-zinc-400'}>{r.account.detail}</span>}

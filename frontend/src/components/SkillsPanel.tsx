@@ -22,7 +22,7 @@ import {
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-200 hover:bg-zinc-700`;
-const goBtn = `${smallBtn} border-emerald-500/40 bg-emerald-600/80 text-white hover:bg-emerald-500`;
+const goBtn = `${smallBtn} border-teal-300/40 bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`;
 const dangerBtn = `${smallBtn} border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20`;
 const inputClass =
   'w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors';
@@ -159,7 +159,7 @@ const SkillChanges: React.FC<{ skill: Skill }> = ({ skill }) => {
   return (
     <div className="space-y-1">
       <p className="text-[10px] text-zinc-500">
-        <span className="text-emerald-300">+{added}</span> <span className="text-rose-300">−{removed}</span> lines
+        <span className="text-ok">+{added}</span> <span className="text-rose-300">−{removed}</span> lines
         {diff.description_changed && diff.base && <> · description was “{diff.base.description}”</>}
       </p>
       <div
@@ -172,7 +172,7 @@ const SkillChanges: React.FC<{ skill: Skill }> = ({ skill }) => {
           <div
             key={i}
             className={`px-2.5 whitespace-pre-wrap break-words ${
-              l.op === 'add' ? 'bg-emerald-500/10 text-emerald-200' : l.op === 'del' ? 'bg-rose-500/10 text-rose-200 line-through decoration-rose-400/40' : 'text-zinc-400'
+              l.op === 'add' ? 'bg-teal-400/10 text-teal-200' : l.op === 'del' ? 'bg-rose-500/10 text-rose-200 line-through decoration-rose-400/40' : 'text-zinc-400'
             }`}
           >
             <span className="select-none inline-block w-3 text-zinc-500" aria-hidden="true">
@@ -196,7 +196,7 @@ const SkillMeta: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, replac
     {shownOf(skill) ? (
       <ShownBadge />
     ) : skill.source === 'agent' ? (
-      <Badge tone="bg-violet-500/10 text-violet-300 border-violet-500/20">
+      <Badge tone="bg-sky-500/10 text-info border-sky-500/20">
         <Bot size={10} aria-hidden="true" /> Proposed
       </Badge>
     ) : (
@@ -486,7 +486,7 @@ export const ActiveSkill: React.FC<{ skill: Skill; initialPending?: boolean }> =
           disabled={busy}
           onClick={() => run(() => skillsApi.patch(skill.id, { enabled: !enabled }))}
           className={`relative shrink-0 mt-0.5 w-8 h-[18px] rounded-full border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-            enabled ? 'bg-emerald-500/70 border-emerald-400/60' : 'bg-zinc-800 border-zinc-700'
+            enabled ? 'bg-sky-600 border-transparent' : 'bg-zinc-800 border-zinc-700'
           }`}
         >
           <span className={`absolute top-[2px] w-3 h-3 rounded-full bg-white transition-all ${enabled ? 'left-[16px]' : 'left-[2px]'}`} aria-hidden="true" />

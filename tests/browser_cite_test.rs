@@ -3,6 +3,10 @@
 //! same-origin frame); the link, opened, scrolls the browser to the quote (Chrome highlights it).
 //! A quote that isn't there, or is there twice, is refused. Blocks: a read with ids, cited by id.
 //! Skipped when no Chrome is installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -195,7 +199,7 @@ async fn open_link(ctrl: &BrowserController, link: &str) -> f64 {
 #[tokio::test]
 async fn a_quote_on_the_page_gets_a_link_that_opens_at_it_and_a_made_up_one_is_refused() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -291,7 +295,7 @@ async fn a_quote_on_the_page_gets_a_link_that_opens_at_it_and_a_made_up_one_is_r
 #[ignore = "needs the network"]
 async fn a_public_page_quote_opens_at_it() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -323,7 +327,7 @@ async fn a_public_page_quote_opens_at_it() {
 #[tokio::test]
 async fn a_lookalike_earlier_on_the_page_never_gets_the_link() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

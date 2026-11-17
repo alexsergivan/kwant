@@ -3,8 +3,8 @@ import { CheckCircle2, AlertCircle, Ban, ShieldCheck, ChevronRight, Wrench } fro
 import { RecordedToolCall, formatArgs, humanizeToolName, parseToolCalls } from '../mcp';
 
 const STATUS: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
-  ok: { icon: <CheckCircle2 size={12} />, label: 'Done', cls: 'text-emerald-300' },
-  allowed: { icon: <ShieldCheck size={12} />, label: 'Allowed', cls: 'text-emerald-300' },
+  ok: { icon: <CheckCircle2 size={12} />, label: 'Done', cls: 'text-ok' },
+  allowed: { icon: <ShieldCheck size={12} />, label: 'Allowed', cls: 'text-ok' },
   error: { icon: <AlertCircle size={12} />, label: 'Failed', cls: 'text-rose-300' },
   denied: { icon: <Ban size={12} />, label: 'Denied', cls: 'text-zinc-400' },
 };

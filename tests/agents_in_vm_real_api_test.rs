@@ -7,6 +7,9 @@
 //! and never printed.
 #![cfg(target_os = "linux")]
 
+#[path = "support/skip.rs"]
+mod skip;
+
 use kwnt::config::AgentsInVmConfig;
 use kwnt::sandbox::agent_vm::{
     broker::{BrokerConfig, Credential, Secret},
@@ -18,8 +21,7 @@ use tokio::process::Command;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_real_turn_and_a_resume_pass_through_kwnts_broker() {
-    let Some(key_file) = std::env::var_os("KWNT_GATE0_KEY_FILE") else {
-        eprintln!("skipped: set KWNT_GATE0_KEY_FILE to run against the real API");
+    let Some(key_file) = skip::opt_in("KWNT_GATE0_KEY_FILE", "the real-API agents-in-VM turn") else {
         return;
     };
     let key = std::fs::read_to_string(&key_file).expect("the key file").trim().to_string();

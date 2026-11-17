@@ -45,7 +45,7 @@ export const FirstRunWelcome: React.FC<Props> = ({ bots, actionLabel, onAction }
     <button
       type="button"
       onClick={onAction}
-      className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white bg-violet-600 hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
+      className="kw-btn-primary kw-focus mt-6 gap-2 px-4 py-2 rounded-lg text-sm motion-reduce:transition-none"
     >
       <KeyRound size={15} aria-hidden="true" />
       {actionLabel}

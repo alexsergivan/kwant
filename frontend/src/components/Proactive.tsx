@@ -48,13 +48,13 @@ export const DecisionChips: React.FC<DecisionChipsProps> = ({ messageId, decisio
         const panelId = `dec-${messageId}-${d.index}`;
         const changed = d.status === 'changed';
         return (
-          <div key={d.index} className={`relative overflow-hidden rounded-xl border border-zinc-700/60 bg-zinc-900/60 py-2.5 pl-4 pr-3 shadow-[var(--kws-shadow)] before:absolute before:inset-y-0 before:left-0 before:w-1 ${changed ? 'before:bg-sky-400' : 'before:bg-emerald-400'}`}>
+          <div key={d.index} className={`relative overflow-hidden rounded-xl border border-zinc-700/60 bg-zinc-900/60 py-2.5 pl-4 pr-3 shadow-[var(--kws-shadow)] before:absolute before:inset-y-0 before:left-0 before:w-1 ${changed ? 'before:bg-sky-400' : 'before:bg-teal-300'}`}>
             <div className="flex items-start gap-2 min-w-0">
               <div className="flex flex-1 flex-wrap items-center gap-x-2 gap-y-1.5 min-w-0">
                 {d.question && <span className="text-xs text-zinc-300 break-words min-w-0">{d.question}</span>}
                 <span
                   className={`inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-full border text-xs font-semibold ${
-                    changed ? 'border-sky-500/40 bg-sky-500/10 text-sky-200' : 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
+                    changed ? 'border-sky-500/40 bg-sky-500/10 text-sky-200' : 'border-teal-400/35 bg-teal-400/10 text-teal-200'
                   }`}
                 >
                   <CheckCircle2 size={12} className="shrink-0" aria-hidden="true" />
@@ -119,18 +119,18 @@ export const DecidingLine: React.FC<{
     <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
       <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
         <span className="text-zinc-200">{botName}</span>
-        <span className="inline-flex items-center gap-1 text-violet-300 text-[10px]">
-          <span className="w-1.5 h-1.5 rounded-full bg-violet-300 animate-ping motion-reduce:animate-none" aria-hidden="true" />
+        <span className="inline-flex items-center gap-1 text-info text-[10px]">
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-300 animate-ping motion-reduce:animate-none" aria-hidden="true" />
           Deciding
         </span>
       </div>
       <div
         role="status"
         aria-live="polite"
-        className="px-4 py-3 rounded-2xl rounded-tl-sm bg-violet-950/20 border border-violet-500/20 text-sm text-zinc-200 shadow-sm w-full"
+        className="px-4 py-3 rounded-2xl rounded-tl-sm bg-sky-950/20 border border-sky-500/20 text-sm text-zinc-200 shadow-sm w-full"
       >
-        <p className="flex items-center gap-2 font-medium text-violet-100">
-          <Users size={15} className="text-violet-300 shrink-0" aria-hidden="true" />
+        <p className="flex items-center gap-2 font-medium text-sky-100">
+          <Users size={15} className="text-info shrink-0" aria-hidden="true" />
           Team is deciding…
         </p>
         <p className="mt-0.5 text-xs text-zinc-400">{decidingDetail(botName, consulted)}</p>
@@ -152,9 +152,9 @@ export const WorkAheadBody: React.FC<{ messageId: string; text: string }> = ({ m
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-start gap-2 text-left rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
       >
-        <Moon size={14} className="mt-0.5 shrink-0 text-indigo-300" aria-hidden="true" />
+        <Moon size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
         <span className="flex-1 min-w-0">
-          <span className="block text-[11px] font-medium uppercase tracking-wide text-indigo-300/90">While you were away</span>
+          <span className="block text-[11px] font-medium uppercase tracking-wide text-sky-300/90">While you were away</span>
           {!open && <span className="block text-sm text-zinc-300 break-words">{workAheadSummary(text)}</span>}
         </span>
         <span className="shrink-0 inline-flex items-center gap-0.5 text-[11px] text-zinc-500">

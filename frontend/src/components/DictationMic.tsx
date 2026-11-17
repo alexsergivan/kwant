@@ -547,9 +547,9 @@ export function MicButton({ d, phone }: { d: Dictation; phone: boolean }) {
   const size = phone ? 'w-11 h-11 ml-1.5 focus-visible:outline-[#b8adff]' : 'w-11 h-11 sm:w-9 sm:h-9 focus-visible:outline-sky-400';
   const look =
     state === 'rec'
-      ? 'bg-violet-500/[0.22] shadow-[inset_0_0_0_1px_rgb(167_139_250/0.55)] text-violet-200'
+      ? 'bg-sky-500/[0.22] shadow-[inset_0_0_0_1px_rgb(167_139_250/0.55)] text-sky-200'
       : state === 'busy'
-        ? 'text-violet-300 cursor-default'
+        ? 'text-info cursor-default'
         : state === 'muted'
           ? d.popOpen
             ? 'bg-white/[0.06] text-zinc-300'
@@ -585,7 +585,7 @@ export function MicButton({ d, phone }: { d: Dictation; phone: boolean }) {
       className={`${size} ${look} rounded-xl flex items-center justify-center flex-shrink-0 transition-colors focus-visible:outline focus-visible:outline-2`}
     >
       {state === 'rec' ? (
-        <Square size={phone ? 13 : 12} fill="#ddd6fe" color="#ddd6fe" aria-hidden="true" />
+        <Square size={phone ? 13 : 12} fill="#d3ccff" color="#d3ccff" aria-hidden="true" />
       ) : state === 'busy' ? (
         <Loader2 size={icon} className="kw-dict-spin" aria-hidden="true" />
       ) : (
@@ -672,7 +672,7 @@ function Level({ levelRef }: { levelRef: RefObject<number> }) {
           ref={(el) => {
             bars.current[i] = el;
           }}
-          className="block w-[3px] h-4 rounded-sm bg-[#c4b5fd] origin-center"
+          className="block w-[3px] h-4 rounded-sm bg-[#b8adff] origin-center"
           style={{ transform: 'scaleY(0.2)' }}
         />
       ))}
@@ -719,7 +719,7 @@ export function DictationLine({ d, phone, botName, reduced }: { d: Dictation; ph
     return (
       <div data-dictation-line="transcribing" className={box}>
         <span className={lead}>
-          <Loader2 size={14} className="kw-dict-spin text-[#c4b5fd] flex-none" aria-hidden="true" />
+          <Loader2 size={14} className="kw-dict-spin text-[#b8adff] flex-none" aria-hidden="true" />
           <b className="font-semibold text-zinc-100 min-w-0">Turning speech into text…</b>
           <span className="tabular-nums text-zinc-400 flex-none whitespace-nowrap">{clock(l.seconds)} recorded</span>
         </span>
@@ -807,7 +807,7 @@ export function DictationSetupPopover({ d, phone, onOpenAccounts }: { d: Dictati
               d.closePopover(false);
               onOpenAccounts?.();
             }}
-            className={`${btn} inline-flex items-center rounded-[10px] bg-accent-gradient text-white font-semibold hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300`}
+            className={`${btn} inline-flex items-center rounded-[10px] bg-accent-gradient kw-hover-deepen text-white font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300`}
           >
             Open Apps &amp; accounts
           </button>

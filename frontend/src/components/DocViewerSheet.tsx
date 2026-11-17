@@ -117,7 +117,7 @@ export const DocViewerSheet: React.FC<{ open: DocViewerOpen; onClose: () => void
       return quote ? (
         <>
           <div className="whitespace-pre-wrap break-words" data-viewer-text>
-            <mark className="rounded-[3px] bg-violet-400/[.22] text-zinc-50 px-0.5 -mx-0.5 shadow-[inset_0_-2px_0_rgb(157_143_255/.65)]" data-viewer-mark>
+            <mark className="rounded-[3px] bg-sky-400/[.22] text-zinc-50 px-0.5 -mx-0.5 shadow-[inset_0_-2px_0_rgb(157_143_255/.65)]" data-viewer-mark>
               {quote}
             </mark>
           </div>
@@ -148,7 +148,7 @@ export const DocViewerSheet: React.FC<{ open: DocViewerOpen; onClose: () => void
           {data.match && (
             <mark
               ref={markRef}
-              className="rounded-[3px] bg-violet-400/[.22] text-zinc-50 px-0.5 -mx-0.5 shadow-[inset_0_-2px_0_rgb(157_143_255/.65)]"
+              className="rounded-[3px] bg-sky-400/[.22] text-zinc-50 px-0.5 -mx-0.5 shadow-[inset_0_-2px_0_rgb(157_143_255/.65)]"
               data-viewer-mark
             >
               {data.match}

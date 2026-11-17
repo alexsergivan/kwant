@@ -6,6 +6,10 @@
 //! what appeared. Ordinary controls are listed before hover controls and cards, which are capped
 //! at 40 each, icon-only buttons are named by their icon word, and the payment check still judges
 //! the same element and label. Skipped when no Chrome is installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -200,7 +204,7 @@ fn lines(page: &Value) -> Vec<String> {
 #[tokio::test]
 async fn a_hover_only_menu_on_a_tile_opens_and_downloads_by_text_and_by_ref() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -269,7 +273,7 @@ async fn a_hover_only_menu_on_a_tile_opens_and_downloads_by_text_and_by_ref() {
 #[tokio::test]
 async fn a_hover_says_what_appeared_and_clicks_nothing() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -301,7 +305,7 @@ async fn a_hover_says_what_appeared_and_clicks_nothing() {
 #[tokio::test]
 async fn cards_are_capped_and_icon_buttons_are_named() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -342,7 +346,7 @@ async fn cards_are_capped_and_icon_buttons_are_named() {
 #[tokio::test]
 async fn the_payment_check_still_judges_the_same_control() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

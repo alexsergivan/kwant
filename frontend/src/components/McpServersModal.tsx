@@ -140,7 +140,7 @@ export const SignInBox: React.FC<{
           type="button"
           onClick={onConnect}
           disabled={isConnecting && !macApp}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-60"
         >
           {isConnecting && !macApp ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
           {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : failure ? 'Retry' : 'Connect'}
@@ -163,7 +163,7 @@ const StatusPill: React.FC<{ server: McpServer; status?: StoredStatus; testing: 
     icon = <PauseCircle size={11} />;
     label = 'Paused';
   } else if (kind === 'ok' && status) {
-    cls = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
+    cls = 'bg-teal-400/10 text-ok border-teal-400/20';
     icon = <CheckCircle2 size={11} />;
     label = `Working · ${status.tools.length} ${status.tools.length === 1 ? 'tool' : 'tools'}`;
   } else if (kind === 'needs_sign_in') {
@@ -531,7 +531,17 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     if (popup) {
       try {
         popup.document.title = 'Signing in…';
-        popup.document.body.style.cssText = 'background:#18181b;color:#a1a1aa;font:14px system-ui;display:grid;place-items:center;height:100vh;margin:0';
+        // The popup has none of the app's CSS: give it kwant's surface, muted text and Inter (its @font-face rules).
+        const css = getComputedStyle(document.documentElement);
+        const faces = [...document.styleSheets]
+          .flatMap((s) => { try { return [...s.cssRules]; } catch { return []; } })
+          .filter((r) => r instanceof CSSFontFaceRule)
+          .map((r) => r.cssText)
+          .join('\n');
+        const st = popup.document.createElement('style');
+        st.textContent = faces;
+        popup.document.head.append(st);
+        popup.document.body.style.cssText = `background:${css.getPropertyValue('--kw-surface-main')};color:${css.getPropertyValue('--kw-muted')};font:14px ${getComputedStyle(document.body).fontFamily};display:grid;place-items:center;height:100vh;margin:0`;
         popup.document.body.textContent = `Opening sign-in for ${server.name}…`;
       } catch {
         // not ours to style; harmless
@@ -818,7 +828,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
               {server.transport === 'stdio' ? 'Runs a command on this machine' : 'Connects to a URL'}
               {secretCount > 0 && <span> · {secretCount} hidden {secretCount === 1 ? 'secret' : 'secrets'}</span>}
               {signedIn && (
-                <span className="text-emerald-300/80">
+                <span className="text-teal-300/80">
                   {' · '}
                   <ShieldCheck size={11} className="inline -mt-px mr-0.5" aria-hidden="true" />
                   Signed in
@@ -1000,7 +1010,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
           <button
             type="button"
             onClick={openCatalog}
-            className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm whitespace-nowrap"
+            className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm whitespace-nowrap"
           >
             <Plus size={14} />
             Add server
@@ -1216,7 +1226,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         <button
           type="submit"
           disabled={saving}
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-60"
         >
           {saving && <Loader2 size={13} className="animate-spin" />}
           {editing === 'new' ? 'Add & test' : 'Save & test'}

@@ -35,7 +35,7 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
     view.kind === 'error'
       ? 'border-amber-500/30 bg-amber-500/10'
       : view.kind === 'updated'
-        ? 'border-emerald-500/30 bg-emerald-500/10'
+        ? 'border-teal-400/30 bg-teal-400/10'
         : 'border-sky-500/30 bg-sky-500/10';
 
   return (
@@ -47,7 +47,7 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
             <Loader2 size={15} className="shrink-0 animate-spin text-sky-300 motion-reduce:animate-none" aria-hidden="true" />
           )}
           {view.kind === 'error' && <AlertTriangle size={15} className="shrink-0 text-amber-300" aria-hidden="true" />}
-          {view.kind === 'updated' && <CheckCircle2 size={15} className="shrink-0 text-emerald-300" aria-hidden="true" />}
+          {view.kind === 'updated' && <CheckCircle2 size={15} className="shrink-0 text-ok" aria-hidden="true" />}
           <span className="min-w-0">
             {view.kind === 'available' && (
               <>
@@ -89,7 +89,7 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
                 <ExternalLink size={13} aria-hidden="true" /> Download manually
               </a>
             )}
-            <button type="button" onClick={onUpdate} className={`${btn} bg-sky-600 text-white hover:bg-sky-500`}>
+            <button type="button" onClick={onUpdate} className={`${btn} bg-sky-600 text-white hover:bg-sky-700`}>
               {view.kind === 'error' ? <RotateCw size={13} aria-hidden="true" /> : <ArrowUpCircle size={13} aria-hidden="true" />}
               {view.kind === 'error' ? 'Try again' : 'Update and restart'}
             </button>
@@ -117,7 +117,7 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
             type="button"
             onClick={onWhatsNew}
             data-see-whats-new
-            className={`${btn} min-h-[28px] h-7 border border-emerald-300/35 px-2.5 text-emerald-200 hover:bg-emerald-500/15 hover:text-emerald-50`}
+            className={`${btn} min-h-[28px] h-7 border border-teal-400/35 px-2.5 text-teal-200 hover:bg-teal-400/15 hover:text-teal-50`}
           >
             See what’s new
           </button>

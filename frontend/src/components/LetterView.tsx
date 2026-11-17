@@ -45,14 +45,14 @@ const input =
 const sectionTitle = 'text-[11px] font-semibold text-zinc-500 uppercase tracking-wider';
 
 const STATE_TONE: Record<string, string> = {
-  confirmed: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  confirmed: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   uncertain: 'border-amber-500/40 bg-amber-500/15 text-amber-200',
   unconfirmed: 'border-zinc-700 bg-zinc-800 text-zinc-300',
   empty: 'border-zinc-800 bg-transparent text-zinc-500',
 };
 const BANNER_TONE = {
   sky: 'border-sky-500/30 bg-sky-500/10 text-sky-100',
-  emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
+  emerald: 'border-teal-400/30 bg-teal-400/10 text-teal-100',
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-100',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-100',
 };
@@ -252,7 +252,7 @@ export const StateBadge: React.FC<{ field: LetterField | null | undefined }> = (
       {s === 'confirmed' && <Check size={11} aria-hidden="true" />}
       {FIELD_STATE_LABEL[s]}
       {auto && (
-        <span className="ml-0.5 px-1 rounded bg-emerald-500/15 text-[10px] font-medium uppercase tracking-wide text-emerald-300/90">
+        <span className="ml-0.5 px-1 rounded bg-teal-400/15 text-[10px] font-medium uppercase tracking-wide text-teal-300/90">
           auto<span className="sr-only">: confirmed automatically, not by you</span>
         </span>
       )}
@@ -338,7 +338,7 @@ export const FieldRow: React.FC<{ fkey: SingleKey; label: string; hint: string; 
           {confirmBlocked && <p className="text-[11px] text-amber-200">{confirmBlocked}</p>}
           <div className="flex flex-wrap gap-2 pt-0.5">
             {field?.value && state !== 'confirmed' && (
-              <button type="button" disabled={busy || !!confirmBlocked} onClick={() => save(confirmBody(fkey))} className={`${actionBtn} bg-emerald-600/90 hover:bg-emerald-500 text-white`}>
+              <button type="button" disabled={busy || !!confirmBlocked} onClick={() => save(confirmBody(fkey))} className={`${actionBtn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`}>
                 <Check size={13} aria-hidden="true" /> Confirm
               </button>
             )}
@@ -477,7 +477,7 @@ export const ListField: React.FC<{ fkey: ListKey; label: string; hint: string; e
                     <div className="flex items-start gap-2 min-w-0">
                       {checklist ? (
                         <label className="flex items-start gap-2 min-w-0 flex-1 cursor-pointer">
-                          <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500" checked={!!it.done} disabled={busy} onChange={(e) => tick(i, e.target.checked)} />
+                          <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-sky-500" checked={!!it.done} disabled={busy} onChange={(e) => tick(i, e.target.checked)} />
                           <span className={`text-xs break-words ${it.done ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}>{it.value}</span>
                         </label>
                       ) : (
@@ -493,7 +493,7 @@ export const ListField: React.FC<{ fkey: ListKey; label: string; hint: string; e
           )}
           <div className="flex flex-wrap gap-2">
             {items.length > 0 && unchecked && (
-              <button type="button" disabled={busy} onClick={() => save(items.map((x) => ({ value: x.value, done: x.done })), true)} className={`${actionBtn} bg-emerald-600/90 hover:bg-emerald-500 text-white`}>
+              <button type="button" disabled={busy} onClick={() => save(items.map((x) => ({ value: x.value, done: x.done })), true)} className={`${actionBtn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`}>
                 <Check size={13} aria-hidden="true" /> Confirm all<span className="sr-only"> {label}</span>
               </button>
             )}
@@ -727,7 +727,7 @@ export const LetterDetail: React.FC<LetterDetailProps> = ({ view, loading, error
           <h2 className="text-sm font-semibold text-zinc-100 truncate">{c?.title ?? 'Letter'}</h2>
           <p className="text-[11px] text-zinc-400 truncate mt-0.5">Loose ends · letter</p>
         </div>
-        {c && closed && <span className="shrink-0 px-1.5 py-px rounded-full border text-[11px] border-emerald-500/30 bg-emerald-500/10 text-emerald-200">{c.status === 'closed' ? 'Done' : 'Dismissed'}</span>}
+        {c && closed && <span className="shrink-0 px-1.5 py-px rounded-full border text-[11px] border-teal-400/30 bg-teal-400/10 text-teal-200">{c.status === 'closed' ? 'Done' : 'Dismissed'}</span>}
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6" aria-busy={loading || reading}>
@@ -818,7 +818,7 @@ export const LetterDetail: React.FC<LetterDetailProps> = ({ view, loading, error
                             <RotateCcw size={13} aria-hidden="true" /> Reopen
                           </button>
                         ) : (
-                          <button type="button" disabled={acting || reading} onClick={onDone} className={`${actionBtn} bg-emerald-600/90 hover:bg-emerald-500 text-white`}>
+                          <button type="button" disabled={acting || reading} onClick={onDone} className={`${actionBtn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`}>
                             <CheckCircle2 size={13} aria-hidden="true" /> Mark done
                           </button>
                         )}

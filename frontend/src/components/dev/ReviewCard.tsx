@@ -51,8 +51,8 @@ import { DismissForm, useDismiss } from './DismissForm';
 import { TicketMatches, itemFinding, matchFindingIds } from './TicketMatches';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
-const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
-const STRIPE: Record<Severity, string> = { critical: 'border-l-rose-500', high: 'border-l-orange-500', medium: 'border-l-amber-500', low: 'border-l-sky-500' };
+const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-rose-300', medium: 'bg-amber-500', low: 'bg-sky-500' };
+const STRIPE: Record<Severity, string> = { critical: 'border-l-rose-500', high: 'border-l-rose-300', medium: 'border-l-amber-500', low: 'border-l-sky-500' };
 const SEV_WORD: Record<Severity, string> = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 // S4 (WCAG 1.4.1): the severity is a word too, not only the dot's colour.
 const SEV_TONE: Record<Severity, string> = { critical: 'text-rose-300', high: 'text-rose-300', medium: 'text-amber-300', low: 'text-teal-300' };
@@ -242,7 +242,7 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act, st =
                     type="button"
                     data-open-task={f.task_id}
                     onClick={() => onOpenTask(f.task_id as string)}
-                    className="inline-flex min-h-[44px] items-center rounded px-1 font-semibold text-violet-300 hover:underline sm:min-h-0 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+                    className="inline-flex min-h-[44px] items-center rounded px-1 font-semibold text-info hover:underline sm:min-h-0 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
                   >
                     Open task ›
                   </button>
@@ -807,7 +807,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
           <button
             type="button"
             onClick={() => openReview(inboxItem.task_id, 'dev')}
-            className="kw-focus inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 rounded-lg text-meta font-semibold bg-violet-500/80 text-white hover:bg-violet-500"
+            className="kw-focus inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 rounded-lg text-meta font-semibold bg-sky-600 text-white hover:bg-sky-700"
           >
             <ShieldCheck size={13} aria-hidden="true" /> Review in Inbox
           </button>

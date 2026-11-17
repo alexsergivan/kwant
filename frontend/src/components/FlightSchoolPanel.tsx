@@ -256,7 +256,7 @@ export const FlightSchoolPanel: React.FC<{
             <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Saving…
           </span>
         ) : note ? (
-          <span className="text-emerald-300">{note}</span>
+          <span className="text-ok">{note}</span>
         ) : null}
       </p>
       {error && (

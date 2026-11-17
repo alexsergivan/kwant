@@ -45,7 +45,7 @@ import { FolderStep, FoundChooseRow, FoundStep, GithubSourceBlock, GithubStep, t
 const btn =
   'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 hover:text-zinc-100 transition-colors disabled:opacity-50';
 const primary =
-  'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50';
+  'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50';
 const danger =
   'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 transition-colors disabled:opacity-50';
 const card = 'rounded-xl border border-zinc-800 bg-zinc-950/60';
@@ -178,7 +178,7 @@ export const PromptStep: React.FC<{
     <div className={`${card} p-3 space-y-2`}>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-medium text-zinc-300" id="import-prompt-label">Message for your bot</p>
-        <button type="button" onClick={onCopy} className={copied ? `${btn} text-emerald-300` : btn}>
+        <button type="button" onClick={onCopy} className={copied ? `${btn} text-ok` : btn}>
           {copied ? <Check size={13} /> : <ClipboardCopy size={13} />} {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
@@ -473,7 +473,7 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
     <div className="space-y-3">
       <div role="status" className="space-y-1">
         <p className="flex items-center gap-2 text-sm text-zinc-100">
-          <Check size={16} className="text-emerald-400" /> Imported {skillsOnly ? plural(c.skills.length, 'skill') : plural(names.length, 'bot')}
+          <Check size={16} className="text-ok" /> Imported {skillsOnly ? plural(c.skills.length, 'skill') : plural(names.length, 'bot')}
         </p>
         {github && (
           <p className="text-[11px] text-zinc-400 break-words" data-github-done>

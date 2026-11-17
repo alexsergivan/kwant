@@ -510,7 +510,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   };
   const statusLine = (
     <p className="text-[11px] text-zinc-400 truncate flex items-center gap-1" aria-live="polite" data-pane-status={status.kind}>
-      {live && <span aria-hidden="true" className="shrink-0 w-[7px] h-[7px] rounded-full bg-emerald-400" />}
+      {live && <span aria-hidden="true" className="shrink-0 w-[7px] h-[7px] rounded-full bg-teal-300" />}
       <span className="truncate">
         {status.text} · @{teamName}
       </span>
@@ -532,7 +532,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           setPointing((p) => !p);
         }}
         className={`${narrow ? 'h-11 flex-1 justify-center' : 'h-8'} px-3 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 border ${
-          pointOn ? 'bg-violet-600 border-violet-400 text-white ring-[3px] ring-violet-500/25' : 'border-[#3f3868] text-zinc-200 hover:bg-white/5'
+          pointOn ? 'bg-sky-600 border-sky-400 text-white ring-[3px] ring-sky-500/25' : 'border-[#3f3868] text-zinc-200 hover:bg-white/5'
         }`}
       >
         <Crosshair size={14} aria-hidden="true" />
@@ -750,7 +750,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     playSfx('click');
                     setActiveTab('vault');
                   }}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 text-[10px] hover:bg-emerald-500/25 transition-colors cursor-pointer flex-shrink-0"
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-400/15 text-ok border border-teal-400/25 text-[10px] hover:bg-teal-400/25 transition-colors cursor-pointer flex-shrink-0"
                   title={`${loginsOnThisPage} saved login${loginsOnThisPage === 1 ? '' : 's'} for this address`}
                 >
                   <Key size={10} />
@@ -783,7 +783,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 role="status"
                 aria-live="polite"
                 className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] ${
-                  solvedNote ? 'border-emerald-500/30 bg-emerald-950/40 text-emerald-300' : 'border-amber-500/30 bg-amber-950/40 text-amber-200'
+                  solvedNote ? 'border-teal-400/30 bg-teal-950/40 text-ok' : 'border-amber-500/30 bg-amber-950/40 text-amber-200'
                 }`}
               >
                 {solvedNote ? <CheckCircle2 size={13} aria-hidden="true" /> : <Puzzle size={13} aria-hidden="true" />}
@@ -855,7 +855,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             )}
 
             {controlError && !botBusy && !heldElsewhere && (
-              <div role="alert" className="px-2.5 py-2 rounded-lg border border-red-500/30 bg-red-950/40 text-xs text-red-300">
+              <div role="alert" className="px-2.5 py-2 rounded-lg border border-rose-500/30 bg-rose-950/40 text-xs text-rose-300">
                 {controlError}
               </div>
             )}
@@ -908,7 +908,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                   )}
                   {!pointOn && !needsYou && !waitingForBot && !waitBot?.gaveUp && (live || finished) && (
                     <span data-pane-pill={live ? 'live' : 'finished'} className="absolute top-2 left-2 h-[22px] px-2 inline-flex items-center gap-1.5 rounded-full bg-[rgb(14_10_33/0.88)] text-[11px] text-zinc-200 pointer-events-none group-hover:opacity-0 group-focus-within:opacity-0 kw-veil-in">
-                      {live && <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
+                      {live && <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-teal-300" />}
                       {live ? 'Live' : 'Finished'}
                     </span>
                   )}
@@ -1020,7 +1020,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                           rel="noopener noreferrer"
                           onClick={touch}
                           title={p.url}
-                          className={`grid grid-cols-[44px_1fr_auto] items-center gap-2.5 px-2.5 py-2 ${narrow ? 'min-h-11' : 'min-h-12'} hover:bg-white/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-300 ${now ? 'bg-emerald-400/5' : ''}`}
+                          className={`grid grid-cols-[44px_1fr_auto] items-center gap-2.5 px-2.5 py-2 ${narrow ? 'min-h-11' : 'min-h-12'} hover:bg-white/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-300 ${now ? 'bg-teal-400/5' : ''}`}
                         >
                           <span className="text-xs text-zinc-400 tabular-nums">{trailTime(p.at)}</span>
                           <span className="min-w-0">
@@ -1028,8 +1028,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                             <span className="block text-xs text-zinc-400 truncate">{p.host}</span>
                           </span>
                           {now ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
-                              <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Now
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-ok">
+                              <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-teal-300" /> Now
                             </span>
                           ) : (
                             <ExternalLink size={14} aria-hidden="true" className="text-zinc-500" />
@@ -1178,7 +1178,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           {isLocal ? (
             <Laptop size={12} className={`shrink-0 ${browserReady || isWindow ? 'text-amber-300/80' : 'text-zinc-500'}`} />
           ) : (
-            <Cpu size={12} className={`shrink-0 ${browserReady ? 'text-emerald-400' : 'text-zinc-500'}`} />
+            <Cpu size={12} className={`shrink-0 ${browserReady ? 'text-ok' : 'text-zinc-500'}`} />
           )}
           <span className="truncate">{browserFooterLabel(computer.state.settings, browserReady, { botName: whoBrowses, browsing: live })}</span>
         </div>

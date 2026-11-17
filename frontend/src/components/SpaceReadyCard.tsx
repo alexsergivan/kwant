@@ -101,7 +101,7 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
             <li key={step.title} className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3" data-step={i + 1}>
               <span
                 className={`mt-0.5 w-5 h-5 shrink-0 rounded-full flex items-center justify-center text-[11px] font-semibold ${
-                  step.done ? 'bg-emerald-500 text-zinc-950' : 'bg-zinc-800 text-zinc-300'
+                  step.done ? 'bg-teal-300 text-zinc-950' : 'bg-zinc-800 text-zinc-300'
                 }`}
                 aria-hidden="true"
               >
@@ -120,7 +120,7 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
                   type="button"
                   onClick={step.action.onClick}
                   className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium ${FOCUS} ${
-                    step.done ? 'text-zinc-200 border border-zinc-700 hover:border-sky-500/50 hover:text-sky-200' : 'text-white bg-sky-600 hover:bg-sky-500'
+                    step.done ? 'text-zinc-200 border border-zinc-700 hover:border-sky-500/50 hover:text-sky-200' : 'text-white bg-sky-600 hover:bg-sky-700'
                   }`}
                 >
                   {step.action.icon}

@@ -1,3 +1,6 @@
+#[path = "support/skip.rs"]
+mod skip;
+
 use axum::{extract::{State, Path, WebSocketUpgrade, ws::Message}, routing::get, Json, Router};
 use futures::{SinkExt, StreamExt};
 use kwnt::{config::Config, db::Database, tools::ToolRunner, broker::PermissionBroker, router::LayaRouter, server::{AppState, create_router}, sandbox::service::BrowserService};
@@ -768,7 +771,7 @@ async fn a_link_to_another_app_is_stopped_or_its_prompt_closed_so_the_tab_keeps_
 
 /// Opt in after building docker/browser.Dockerfile. Uses disposable data and a local HTML page.
 #[tokio::test]
-#[ignore = "requires Docker and the kwnt-browser:v3 image"]
+#[ignore = "requires Docker and the kwnt-browser image (BROWSER_IMAGE)"]
 async fn live_chromium_stream_and_isolated_sessions() {
     let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::WARN).try_init();
     let tmp = tempfile::tempdir().unwrap();
@@ -1357,7 +1360,7 @@ impl Drop for LocalChrome {
 }
 
 /// Starts `KWNT_TEST_CHROME`, or Chrome or Chromium from PATH, and returns its DevTools address.
-/// `None` when there is none, except on Linux CI, which has Chrome and must run these checks.
+/// `None` when there is none (`skip_or_fail`: a failure in CI).
 fn local_chrome(profile: &std::path::Path) -> Option<(LocalChrome, String)> {
     let found = std::env::var("KWNT_TEST_CHROME").ok().or_else(|| {
         ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
@@ -1366,11 +1369,7 @@ fn local_chrome(profile: &std::path::Path) -> Option<(LocalChrome, String)> {
             .map(|p| p.to_string_lossy().into_owned())
     });
     let Some(bin) = found else {
-        assert!(
-            !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
-            "Linux CI has Chrome: set KWNT_TEST_CHROME or put it on PATH"
-        );
-        eprintln!("skipped: no Chrome or Chromium (set KWNT_TEST_CHROME)");
+        skip::skip_or_fail("Chrome or Chromium", "put Chrome or Chromium on PATH, or set KWNT_TEST_CHROME to its binary");
         return None;
     };
     let child = std::process::Command::new(&bin)

@@ -43,7 +43,7 @@ const keyUrlOf = (e: CatalogEntry | undefined) => (e?.key_url && /^https:\/\//.t
 const btn =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
-const primaryBtn = `${btn} bg-sky-600 text-white hover:bg-sky-500`;
+const primaryBtn = `${btn} bg-sky-600 text-white hover:bg-sky-700`;
 const linkBtn =
   'inline-flex items-center gap-1 min-h-[44px] sm:min-h-[32px] text-xs font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const field =
@@ -52,11 +52,11 @@ const sectionTitle = 'text-xs font-semibold text-zinc-300 uppercase tracking-wid
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
-export const AppMark: React.FC<{ name: string; size?: number; tint?: string }> = ({ name, size = 36, tint = 'text-violet-100' }) => (
+export const AppMark: React.FC<{ name: string; size?: number; tint?: string }> = ({ name, size = 36, tint = 'text-sky-100' }) => (
   <span
     aria-hidden="true"
     data-app-mark-tint={tint}
-    className={`shrink-0 inline-flex items-center justify-center rounded-lg font-semibold ${tint} border border-violet-400/20`}
+    className={`shrink-0 inline-flex items-center justify-center rounded-lg font-semibold ${tint} border border-sky-400/20`}
     style={{ background: TILE_BG, width: size, height: size, fontSize: size * 0.36 }}
   >
     {appInitials(name)}
@@ -112,7 +112,7 @@ const Step: React.FC<{ n: 1 | 2 | 3; label?: number | null; title: string; done:
       <span
         aria-hidden="true"
         className={`shrink-0 mt-0.5 w-6 h-6 rounded-full inline-flex items-center justify-center text-[11px] font-semibold ${
-          done ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40' : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
+          done ? 'bg-teal-400/20 text-teal-200 border border-teal-400/40' : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
         }`}
       >
         {done ? <Check size={12} /> : label}
@@ -289,7 +289,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
               <ul className="space-y-1">
                 {(app?.can ?? ['Use the apps you connect on Composio']).map((c) => (
                   <li key={c} className="flex items-start gap-2 text-xs text-zinc-300">
-                    <Check size={13} className="mt-px shrink-0 text-emerald-400" aria-hidden="true" />
+                    <Check size={13} className="mt-px shrink-0 text-ok" aria-hidden="true" />
                     {c}
                   </li>
                 ))}
@@ -342,7 +342,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                       </button>
                     </div>
                     {serverId ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-emerald-300" data-sheet-key-added>
+                      <span className="inline-flex items-center gap-1 text-xs text-ok" data-sheet-key-added>
                         <Check size={13} aria-hidden="true" /> Key added
                       </span>
                     ) : (
@@ -374,7 +374,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                           {signingIn ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ExternalLink size={12} aria-hidden="true" />}
                           {signInOpened ? `Open ${app.name} sign-in again` : `Sign in to ${app.name}`}
                         </button>
-                        {signInOpened && <p className="text-[11px] text-emerald-200">Opened. Finish there, then choose the bots below.</p>}
+                        {signInOpened && <p className="text-[11px] text-teal-200">Opened. Finish there, then choose the bots below.</p>}
                       </>
                     ) : !ready ? (
                       <p className="text-[11px] text-zinc-400">Add your key first, then sign in to {app.name} here.</p>
@@ -636,7 +636,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
         {notice && (
           <p
             className={`flex items-start gap-2 px-3 py-2 rounded-lg border text-xs ${
-              notice.tone === 'ok' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-zinc-700 bg-zinc-900/60 text-zinc-200'
+              notice.tone === 'ok' ? 'border-teal-400/30 bg-teal-400/10 text-teal-100' : 'border-zinc-700 bg-zinc-900/60 text-zinc-200'
             }`}
             data-apps-notice={notice.tone}
           >
@@ -693,7 +693,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
                       <span className="block text-[11px] text-zinc-500 line-clamp-2" title={t.blurb}>{t.blurb}</span>
                     </span>
                   </span>
-                  <span className={`mt-auto text-[11px] font-medium ${connected ? 'text-emerald-300' : unknowable ? 'text-zinc-300' : 'text-sky-300'}`} data-tile-state={connected ? 'connected' : unknowable ? 'unknown' : 'connect'}>
+                  <span className={`mt-auto text-[11px] font-medium ${connected ? 'text-ok' : unknowable ? 'text-zinc-300' : 'text-sky-300'}`} data-tile-state={connected ? 'connected' : unknowable ? 'unknown' : 'connect'}>
                     {load.state === 'loading' ? 'Checking…' : connected ? '✓ Connected · Choose bots' : unknowable ? 'Sign in or choose bots' : 'Connect'}
                     <span className="sr-only"> {t.name}</span>
                   </span>

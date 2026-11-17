@@ -399,7 +399,7 @@ export const MigrateButton: React.FC<{ count: number; onDone: () => void; initia
         </>
       )}
       {result && (
-        <p role="status" className="flex items-start gap-1.5 text-[11px] text-emerald-300 leading-snug">
+        <p role="status" className="flex items-start gap-1.5 text-[11px] text-ok leading-snug">
           <Check size={12} className="flex-shrink-0 mt-px" aria-hidden="true" /> {result}
         </p>
       )}
@@ -492,12 +492,12 @@ export const PasswordStoreBar: React.FC<{
 
   const summary = onBitwarden ? (
     <>
-      {s.locked ? <Lock size={13} className="text-amber-300 flex-shrink-0" aria-hidden="true" /> : <ShieldCheck size={13} className="text-emerald-400 flex-shrink-0" aria-hidden="true" />}
+      {s.locked ? <Lock size={13} className="text-amber-300 flex-shrink-0" aria-hidden="true" /> : <ShieldCheck size={13} className="text-ok flex-shrink-0" aria-hidden="true" />}
       <span className="min-w-0 truncate">
         <span className="text-zinc-200 font-medium">Bitwarden</span>
         <span className="text-zinc-500"> · {bw!.email}</span>
       </span>
-      <span className={`px-1.5 rounded text-[9px] font-mono border flex-shrink-0 ${s.locked ? 'bg-amber-500/10 text-amber-200 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'}`}>
+      <span className={`px-1.5 rounded text-[9px] font-mono border flex-shrink-0 ${s.locked ? 'bg-amber-500/10 text-amber-200 border-amber-500/30' : 'bg-teal-400/10 text-ok border-teal-400/20'}`}>
         {s.locked ? 'Locked' : 'Unlocked'}
       </span>
     </>
@@ -725,7 +725,7 @@ export const MoveToBitwardenFirst: React.FC<{
         </div>
       )}
       {result && (
-        <p role="status" className="flex items-start gap-1.5 text-[11px] text-emerald-300 leading-snug">
+        <p role="status" className="flex items-start gap-1.5 text-[11px] text-ok leading-snug">
           <Check size={12} className="flex-shrink-0 mt-px" aria-hidden="true" /> {result}
         </p>
       )}
@@ -750,7 +750,7 @@ export const ExposedBanner: React.FC<{
   const s = store.status;
   if (!s?.exposed)
     return done ? (
-      <p role="status" className="flex items-start gap-1.5 text-[11px] text-emerald-300 leading-snug" data-exposed-done>
+      <p role="status" className="flex items-start gap-1.5 text-[11px] text-ok leading-snug" data-exposed-done>
         <Check size={12} className="flex-shrink-0 mt-px" aria-hidden="true" /> {done}
       </p>
     ) : null;

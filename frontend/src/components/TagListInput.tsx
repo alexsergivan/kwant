@@ -22,7 +22,7 @@ export const TagListInput: React.FC<{
   const [draft, setDraft] = useState('');
   const [typedError, setError] = useState<string | null>(null);
   const error = typedError ?? serverError ?? null;
-  const chip = tone === 'good' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-amber-500/30 bg-amber-500/10 text-amber-100';
+  const chip = tone === 'good' ? 'border-teal-400/30 bg-teal-400/10 text-teal-100' : 'border-amber-500/30 bg-amber-500/10 text-amber-100';
   const splits = (s: string) => new RegExp(limits.split.source).test(s);
   const plain = limits !== PHRASE_LIMITS; // site names: no capitals or spell check
 

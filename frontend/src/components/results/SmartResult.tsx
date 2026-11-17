@@ -162,8 +162,8 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
         }}
         className={actionClass}
       >
-        {said?.ok ? <Check size={14} className="text-emerald-400" aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}
-        <span className={said?.ok ? 'font-medium text-emerald-400' : said ? 'text-rose-300' : ''}>{said?.ok ? 'Copied' : said ? 'Copy failed' : 'Copy data'}</span>
+        {said?.ok ? <Check size={14} className="text-ok" aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}
+        <span className={said?.ok ? 'font-medium text-ok' : said ? 'text-rose-300' : ''}>{said?.ok ? 'Copied' : said ? 'Copy failed' : 'Copy data'}</span>
         <ChevronDown size={12} aria-hidden="true" />
       </button>
       <span className="sr-only" aria-live="polite">

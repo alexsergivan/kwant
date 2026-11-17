@@ -115,7 +115,7 @@ export const AvatarMoodMark: React.FC<AvatarMoodProps> = ({ mood, size }) => {
   return (
     <span
       className="kw-mood-small pointer-events-none absolute rounded-full"
-      style={{ top: -1, right: -1, width: 6, height: 6, background: MOOD_GLYPHS.needs_you.color, boxShadow: '0 0 0 1.5px var(--kw-avatar-cut, #27272a)' }}
+      style={{ top: -1, right: -1, width: 6, height: 6, background: MOOD_GLYPHS.needs_you.color, boxShadow: '0 0 0 1.5px var(--kw-avatar-cut, var(--kw-surface-side))' }}
       aria-hidden="true"
       data-mood={mood}
       data-mood-dot=""

@@ -72,7 +72,7 @@ export const FileTile: React.FC<{
             e.preventDefault();
             setViewing(true);
           }}
-          className="block cursor-zoom-in focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-violet-400"
+          className="block cursor-zoom-in focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-sky-400"
         >
           <img
             src={attachmentUrl(file.id)}
@@ -204,7 +204,7 @@ export const ImageViewer: React.FC<{
         type="button"
         onClick={onClose}
         aria-label="Close"
-        className="absolute right-2 z-10 inline-flex items-center justify-center w-11 h-11 rounded-full bg-zinc-900/80 text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400"
+        className="absolute right-2 z-10 inline-flex items-center justify-center w-11 h-11 rounded-full bg-zinc-900/80 text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
         style={{ top: 'calc(env(safe-area-inset-top, 0px) + 0.5rem)' }}
       >
         <X size={20} aria-hidden="true" />
@@ -235,7 +235,7 @@ export const ImageViewer: React.FC<{
           href={url}
           target="_blank"
           rel="noopener"
-          className="inline-flex items-center gap-1.5 shrink-0 min-h-[44px] px-3 rounded-lg text-xs font-medium text-sky-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+          className="inline-flex items-center gap-1.5 shrink-0 min-h-[44px] px-3 rounded-lg text-xs font-medium text-sky-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
         >
           <ExternalLink size={14} aria-hidden="true" />
           Open original
@@ -273,7 +273,7 @@ export const EarlierCopies: React.FC<{
         aria-label={open ? `Hide earlier copies of ${fileName}` : `Show ${hidden} earlier ${hidden === 1 ? 'copy' : 'copies'} of ${fileName}`}
         onClick={() => setOpen((o) => !o)}
         // 44 px tall hit area on phones from padding; the text stays 12 px
-        className="block text-left py-3.5 sm:py-1 text-xs text-zinc-400 hover:text-zinc-200 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+        className="block text-left py-3.5 sm:py-1 text-xs text-zinc-400 hover:text-zinc-200 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
       >
         {open ? 'Hide earlier' : `Shared ${hidden + 1} times · Show ${hidden} earlier`}
       </button>
@@ -407,13 +407,13 @@ export const PointRow: React.FC<{ file: AttachmentRef; sharedBy?: string; at?: s
   const fullName = pickTitle(p);
   const picture = p.picture && isInlineImage(file.mime) && !broken;
   return (
-    <div data-point-row="" className="flex items-center gap-2.5 max-w-full sm:max-w-[420px] p-1.5 pr-3 rounded-[10px] border border-violet-400/30 bg-violet-500/[0.08]">
+    <div data-point-row="" className="flex items-center gap-2.5 max-w-full sm:max-w-[420px] p-1.5 pr-3 rounded-[10px] border border-sky-400/30 bg-sky-500/[0.08]">
       {picture ? (
         <button
           type="button"
           onClick={() => setOpen(true)}
           aria-label={`Open the picture of ${name}`}
-          className="shrink-0 w-16 h-[42px] rounded-md overflow-hidden border border-white/10 bg-[#0a0719] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+          className="shrink-0 w-16 h-[42px] rounded-md overflow-hidden border border-white/10 bg-[#0a0719] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         >
           <img src={attachmentUrl(file.id)} alt="" loading="lazy" onError={() => setBroken(true)} className="w-full h-full object-contain" />
         </button>
@@ -447,11 +447,11 @@ export const PointChip: React.FC<{ item: PendingUpload; onRemove: () => void }> 
     <li
       data-point-chip={capturing ? 'capturing' : warn ? 'no-picture' : pick?.frame?.cross_site ? 'frame' : 'ready'}
       className={`relative inline-flex items-center h-10 gap-2 w-full sm:w-auto sm:max-w-[320px] rounded-[10px] border pl-1 pr-1.5 ${
-        warn ? 'border-amber-400/45 bg-amber-500/10' : 'border-violet-400/35 bg-violet-500/10'
+        warn ? 'border-amber-400/45 bg-amber-500/10' : 'border-sky-400/35 bg-sky-500/10'
       }`}
     >
       {capturing ? (
-        <span className="shrink-0 w-11 h-[30px] rounded-md bg-violet-400/20 motion-safe:animate-pulse" aria-hidden="true" />
+        <span className="shrink-0 w-11 h-[30px] rounded-md bg-sky-400/20 motion-safe:animate-pulse" aria-hidden="true" />
       ) : thumb ? (
         <img src={thumb} alt="" className="shrink-0 w-11 h-[30px] rounded-md object-contain bg-[#0a0719] border border-white/10" />
       ) : (
@@ -471,7 +471,7 @@ export const PointChip: React.FC<{ item: PendingUpload; onRemove: () => void }> 
         type="button"
         onClick={onRemove}
         aria-label={removeText(name)}
-        className="relative shrink-0 w-6 h-6 inline-flex items-center justify-center rounded text-zinc-400 hover:text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 before:absolute before:-inset-[10px] before:content-['']"
+        className="relative shrink-0 w-6 h-6 inline-flex items-center justify-center rounded text-zinc-400 hover:text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 before:absolute before:-inset-[10px] before:content-['']"
       >
         <X size={12} aria-hidden="true" />
       </button>

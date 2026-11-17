@@ -94,8 +94,8 @@ export const StartPicker: React.FC<{
                 role="radio"
                 aria-checked={keyCard === p.card}
                 onClick={() => setKeyCard(p.card)}
-                className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
-                  keyCard === p.card ? 'border-violet-500/60 bg-violet-500/15 text-violet-100' : 'border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+                  keyCard === p.card ? 'border-sky-500/60 bg-sky-500/15 text-sky-100' : 'border-zinc-800 text-zinc-400 hover:text-zinc-200'
                 }`}
               >
                 {p.label}
@@ -109,7 +109,7 @@ export const StartPicker: React.FC<{
   };
 
   return (
-    <div data-start-picker="" className="rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-3 space-y-2.5">
+    <div data-start-picker="" className="rounded-xl border border-sky-500/25 bg-sky-500/[0.05] p-3 space-y-2.5">
       <div>
         <h4 className="text-xs font-semibold text-zinc-100">Pick one to start</h4>
         <p className="text-[11px] text-zinc-400">Your bots answer once one of these works. You can add more later.</p>
@@ -126,12 +126,12 @@ export const StartPicker: React.FC<{
               playSfx('click');
               setChoice(id);
             }}
-            className={`text-left rounded-lg border px-3 py-2.5 min-h-[44px] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
-              choice === id ? 'border-violet-500/60 bg-violet-500/10' : 'border-zinc-800 bg-zinc-900/80 hover:border-zinc-700'
+            className={`text-left rounded-lg border px-3 py-2.5 min-h-[44px] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+              choice === id ? 'border-sky-500/60 bg-sky-500/10' : 'border-zinc-800 bg-zinc-900/80 hover:border-zinc-700'
             }`}
           >
             <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-100">
-              <Icon size={13} className="text-violet-300" aria-hidden="true" />
+              <Icon size={13} className="text-info" aria-hidden="true" />
               {title}
             </span>
             <span className="block mt-0.5 text-[11px] text-zinc-500">{hint}</span>

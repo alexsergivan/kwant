@@ -88,7 +88,7 @@ export const ChannelInstructionsModal: React.FC<{
           <button
             type="submit"
             disabled={saving || over}
-            className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
+            className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>

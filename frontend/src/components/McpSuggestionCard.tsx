@@ -94,7 +94,7 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
   };
 
   const border =
-    view.status === 'installed' ? 'border-emerald-500/30' : view.status === 'dismissed' ? 'border-zinc-800' : failure ? 'border-rose-500/40' : 'border-sky-500/35';
+    view.status === 'installed' ? 'border-teal-400/30' : view.status === 'dismissed' ? 'border-zinc-800' : failure ? 'border-rose-500/40' : 'border-sky-500/35';
 
   return (
     <section data-message-id={messageId} aria-labelledby={headingId} className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`}>
@@ -231,7 +231,7 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
                   <KeyRound size={13} aria-hidden="true" /> Installed. Sign in to {view.title} so {kwantName} can use it.
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 text-emerald-300">
+                <span className="inline-flex items-center gap-1.5 text-ok">
                   <CheckCircle2 size={13} aria-hidden="true" /> Ready. {kwantName} can use it from its next reply.
                 </span>
               )

@@ -35,7 +35,7 @@ import { ComposioTile, ComposioTileApi } from './ComposioTile';
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-  emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  emerald: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
   zinc: 'border-zinc-700 bg-zinc-800 text-zinc-300',
 };
@@ -294,7 +294,7 @@ export const ComposioAppSearch: React.FC<{
       <div role="status" aria-live="polite">
         {error && <p className="px-3 py-2 rounded-lg border border-rose-500/20 bg-rose-500/5 text-xs text-rose-300">{error}</p>}
         {opened && (
-          <p className="text-xs text-emerald-200">
+          <p className="text-xs text-teal-200">
             Opened {opened}’s sign-in on Composio in {inDesktopApp() ? 'your browser' : 'a new tab'}. Its tools reach your bots through the Composio server once you finish there.
           </p>
         )}
@@ -540,7 +540,7 @@ export const AddConnectionMenu: React.FC<{ choices: AddChoice[]; disabled?: bool
         disabled={disabled}
         aria-expanded={open}
         aria-controls={`${id}-list`}
-        className="inline-flex items-center gap-1.5 min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-60 shadow-sm whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+        className="inline-flex items-center gap-1.5 min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-60 shadow-sm whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
       >
         <Plus size={14} aria-hidden="true" />
         Add connection
@@ -727,7 +727,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
 
           <div role="status" aria-live="polite">
             {notice && (
-              <p className={`px-3 py-2 rounded-lg border text-xs ${notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'}`}>
+              <p className={`px-3 py-2 rounded-lg border text-xs ${notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-200'}`}>
                 {notice.text}
               </p>
             )}

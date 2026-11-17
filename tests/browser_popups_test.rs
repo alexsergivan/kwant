@@ -2,6 +2,10 @@
 //! `window.open`, the popup posts its answer back to the page that opened it and closes. The bot's
 //! browser tools and the live view both move to the popup while it is open and come back to the
 //! opener when it closes. Skipped when no Chrome is installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use chrome_guard::ChromeGuard;
@@ -96,7 +100,7 @@ async fn click(ctrl: &BrowserController) {
 #[tokio::test]
 async fn a_popup_the_page_opens_is_where_the_bots_tools_act_until_it_closes() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -134,7 +138,7 @@ async fn next_message(ws: &mut Ws, kind: &str, matches: impl Fn(&Value) -> bool)
 #[tokio::test]
 async fn the_live_view_shows_a_popup_the_page_opens_and_comes_back_when_it_closes() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

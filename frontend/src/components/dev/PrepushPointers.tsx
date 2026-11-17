@@ -202,7 +202,7 @@ export const PrepushPointers: React.FC<PrepushPointersProps> = ({ cards, memberI
               )}
             </span>
             {at && <span className="shrink-0 tabular-nums text-zinc-500 max-sm:hidden">{at}</span>}
-            <span aria-hidden="true" className="inline-flex shrink-0 items-center gap-0.5 font-medium text-violet-300">
+            <span aria-hidden="true" className="inline-flex shrink-0 items-center gap-0.5 font-medium text-info">
               Open
               <ChevronRight size={14} />
             </span>
@@ -214,7 +214,7 @@ export const PrepushPointers: React.FC<PrepushPointersProps> = ({ cards, memberI
           type="button"
           data-prepush-pointers-more
           onClick={onOpenInbox}
-          className="inline-flex min-h-11 max-w-[860px] items-center self-start rounded-lg px-3 text-meta font-medium text-violet-300 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-sky-400 sm:min-h-10"
+          className="inline-flex min-h-11 max-w-[860px] items-center self-start rounded-lg px-3 text-meta font-medium text-info outline-none hover:underline focus-visible:ring-2 focus-visible:ring-sky-400 sm:min-h-10"
         >
           +{pick.more} more in the Inbox
         </button>

@@ -3,6 +3,10 @@
 //! for a slow change, and stops a bot whose last 3 actions changed nothing or who asks a 3rd time
 //! in a row for the same action that changed nothing. Opening an address starts over. Skipped when no Chrome is
 //! installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -115,7 +119,7 @@ fn click(label: &str) -> Value {
 #[tokio::test]
 async fn each_action_says_what_changed_and_a_loop_is_stopped() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -187,6 +191,7 @@ async fn each_action_says_what_changed_and_a_loop_is_stopped() {
 #[ignore]
 async fn saucedemo_says_what_changed() {
     if computer::local_chrome_path().is_none() {
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

@@ -84,7 +84,7 @@ export const DisputeCard: React.FC<{
           const f = sides[i];
           const won = !open && d.winner && f?.id === d.winner;
           return (
-            <div key={i} className={`rounded-lg border px-2.5 py-2 space-y-1.5 ${won ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-zinc-800 bg-zinc-950/50'}`} data-side={i === 0 ? 'a' : 'b'}>
+            <div key={i} className={`rounded-lg border px-2.5 py-2 space-y-1.5 ${won ? 'border-teal-400/40 bg-teal-400/5' : 'border-zinc-800 bg-zinc-950/50'}`} data-side={i === 0 ? 'a' : 'b'}>
               {f ? (
                 <>
                   <p className="text-xs text-zinc-100 break-words">
@@ -99,7 +99,7 @@ export const DisputeCard: React.FC<{
                       disabled={busy}
                       onClick={() => onKeep(d, f)}
                       aria-label={`Keep “${f.statement}” and replace the other`}
-                      className={`${btn} w-full sm:w-auto border border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/10`}
+                      className={`${btn} w-full sm:w-auto border border-teal-400/40 text-teal-200 hover:bg-teal-400/10`}
                       data-keep={f.id}
                     >
                       {busy ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={12} aria-hidden="true" />}
@@ -127,7 +127,7 @@ export const DisputeCard: React.FC<{
           <span className="text-[10px] text-zinc-500">Until you choose, bots see both, labelled disputed.</span>
         </div>
       ) : (
-        <p className={`text-[11px] ${d.status === 'resolved' ? 'text-emerald-300' : 'text-zinc-400'}`} data-outcome={d.status}>
+        <p className={`text-[11px] ${d.status === 'resolved' ? 'text-ok' : 'text-zinc-400'}`} data-outcome={d.status}>
           {disputeOutcome(d, sides)}
         </p>
       )}
@@ -232,7 +232,7 @@ const FactDetails: React.FC<{
       )}
       {f.status === 'proposed' && (
         <div className="flex flex-wrap items-center gap-2 pt-0.5" role="group" aria-label={`Unconfirmed: ${f.statement}`}>
-          <button type="button" disabled={busy} onClick={() => void decide(true)} className={`${btn} bg-emerald-600/90 text-white hover:bg-emerald-500`} data-confirm-fact>
+          <button type="button" disabled={busy} onClick={() => void decide(true)} className={`${btn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200`} data-confirm-fact>
             {busy ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={12} aria-hidden="true" />} Confirm
           </button>
           <button type="button" disabled={busy} onClick={() => void decide(false)} className={`${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700`} data-reject-fact>
@@ -240,7 +240,7 @@ const FactDetails: React.FC<{
           </button>
         </div>
       )}
-      <p aria-live="polite" className="text-emerald-300 min-h-0">
+      <p aria-live="polite" className="text-ok min-h-0">
         {note}
       </p>
       {error && (
@@ -564,7 +564,7 @@ export const FactNeedsYouAction: React.FC<{
   if (item.kind !== 'fact_changed') return null;
   if (done)
     return (
-      <span role="status" className="text-[11px] text-emerald-300" data-uncited>
+      <span role="status" className="text-[11px] text-ok" data-uncited>
         Done: this task no longer relies on it.
       </span>
     );

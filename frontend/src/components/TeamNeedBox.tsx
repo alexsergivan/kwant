@@ -188,7 +188,7 @@ export const TeamNeedBox: React.FC<TeamNeedBoxProps> = ({ label, register, autoF
           aria-disabled={busy || undefined}
           data-need-submit
           className={`${btnH} inline-flex items-center justify-center gap-1.5 px-4 rounded-lg text-sm font-medium ${
-            noAccount && !busy ? 'border border-sky-300/40 text-sky-200 hover:bg-sky-300/10' : 'bg-sky-600 hover:bg-sky-500 text-white'
+            noAccount && !busy ? 'border border-sky-300/40 text-sky-200 hover:bg-sky-300/10' : 'bg-sky-600 hover:bg-sky-700 text-white'
           } aria-disabled:opacity-70 aria-disabled:cursor-progress ${FOCUS}`}
         >
           {busy ? (

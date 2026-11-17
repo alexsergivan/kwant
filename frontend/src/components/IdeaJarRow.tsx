@@ -64,7 +64,7 @@ export const IdeaJarRow: React.FC<{
           </span>
           <span className="truncate flex-1">Idea jar</span>
           {count > 0 && (
-            <span className="shrink-0 min-w-[18px] px-1.5 py-px rounded-full bg-violet-500 text-white text-[10px] font-semibold text-center" data-jar-badge>
+            <span className="shrink-0 min-w-[18px] px-1.5 py-px rounded-full bg-sky-600 text-white text-[10px] font-semibold text-center" data-jar-badge>
               {badgeText(count)}
               <span className="sr-only"> {count === 1 ? 'take' : 'takes'} ready</span>
             </span>
@@ -90,7 +90,7 @@ export const IdeaJarRow: React.FC<{
           <label htmlFor={`${id}-in`} className="sr-only">
             Drop an idea in the jar
           </label>
-          <div className="flex items-center gap-2 h-9 px-2.5 rounded-xl border border-violet-400/60 bg-[#120e26] focus-within:border-violet-300">
+          <div className="flex items-center gap-2 h-9 px-2.5 rounded-xl border border-sky-400/60 bg-[#120e26] focus-within:border-sky-400">
             <input
               ref={input}
               id={`${id}-in`}

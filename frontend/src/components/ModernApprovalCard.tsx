@@ -483,7 +483,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
           disabled={disabled}
           onClick={() => handleDecision('allow_once')}
           data-approval-allow=""
-          className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 min-h-[48px] max-sm:!min-h-[48px] sm:min-h-[36px] px-4 rounded-lg bg-[#059669] hover:bg-emerald-500 text-[15px] sm:text-sm font-semibold text-white shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 min-h-[48px] max-sm:!min-h-[48px] sm:min-h-[36px] px-4 rounded-lg bg-teal-300 hover:bg-teal-200 text-[15px] sm:text-sm font-semibold text-zinc-950 shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Check size={16} aria-hidden="true" />
           <span>{waiting ? 'Allow and continue' : 'Allow once'}</span>

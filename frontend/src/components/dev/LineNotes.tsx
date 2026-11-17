@@ -373,14 +373,14 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
           <span>Changes</span>
           <span className="font-mono text-[12px] font-medium normal-case tracking-normal text-zinc-400 max-sm:order-1">{filesWord(stat.files)}</span>
           <DiffStat add={stat.additions} del={stat.deletions} className="max-sm:order-1 max-sm:[&_.dv-bar]:hidden" />
-          {draftCount > 0 && <span className="normal-case tracking-normal text-violet-200">· {draftsWord(draftCount)}</span>}
+          {draftCount > 0 && <span className="normal-case tracking-normal text-sky-200">· {draftsWord(draftCount)}</span>}
         </h4>
         <button
           type="button"
           aria-expanded={open}
           aria-controls={bodyId}
           onClick={() => setOpen((o) => !o)}
-          className={`inline-flex min-h-8 items-center gap-1 self-start rounded-md px-1.5 text-[12px] font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}
+          className={`inline-flex min-h-8 items-center gap-1 self-start rounded-md px-1.5 text-[12px] font-medium text-info hover:text-sky-200 max-sm:min-h-11 ${RING}`}
         >
           {open ? 'Hide' : 'Show'}
           <span className="sr-only"> the changes</span>
@@ -416,7 +416,7 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
               {LOAD_FAILED}
             </span>
             <span className="ml-auto inline-flex flex-wrap items-center gap-3">
-              <button type="button" onClick={() => void fetchAll()} className={`min-h-8 rounded font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}>
+              <button type="button" onClick={() => void fetchAll()} className={`min-h-8 rounded font-medium text-info hover:text-sky-200 max-sm:min-h-11 ${RING}`}>
                 Try again
               </button>
               {prUrl && /^https:\/\//.test(prUrl) && <OutLink href={prUrl}>Open on GitHub</OutLink>}
@@ -481,7 +481,7 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
                 ))}
               </div>
             )}
-            {changes.cut && <p className="mt-2 text-meta text-[#8a8a96]">{cutLine(changes.cut)}</p>}
+            {changes.cut && <p className="mt-2 text-meta text-zinc-500">{cutLine(changes.cut)}</p>}
           </div>
         )}
 
@@ -489,7 +489,7 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
           <p role="status" data-ln-undo className="mt-2 flex items-center gap-2 text-meta text-zinc-300">
             Note deleted
             <span aria-hidden="true">·</span>
-            <button type="button" onClick={() => void undoDelete()} className={`min-h-8 rounded font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}>
+            <button type="button" onClick={() => void undoDelete()} className={`min-h-8 rounded font-medium text-info hover:text-sky-200 max-sm:min-h-11 ${RING}`}>
               Undo
             </button>
           </p>
@@ -756,14 +756,14 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
           </span>
         )}
         {n > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-1 font-sans text-[12px] text-violet-200">
+          <span className="inline-flex shrink-0 items-center gap-1 font-sans text-[12px] text-sky-200">
             <MessageSquare size={12} aria-hidden="true" />
             {notesWord(n)}
           </span>
         )}
-        {omitted === 'binary' && <span className="w-full font-sans text-meta text-[#8a8a96] sm:w-auto">Binary file, not shown</span>}
+        {omitted === 'binary' && <span className="w-full font-sans text-meta text-zinc-500 sm:w-auto">Binary file, not shown</span>}
         {omitted === 'too_large' && (
-          <span className="w-full font-sans text-meta text-[#8a8a96] sm:w-auto">
+          <span className="w-full font-sans text-meta text-zinc-500 sm:w-auto">
             Too big to show here
             {p.prUrl && /^https:\/\//.test(p.prUrl) && (
               <>
@@ -773,7 +773,7 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
             )}
           </span>
         )}
-        {renamedOnly && <span className="w-full font-sans text-meta text-[#8a8a96] sm:w-auto">Renamed, no changes</span>}
+        {renamedOnly && <span className="w-full font-sans text-meta text-zinc-500 sm:w-auto">Renamed, no changes</span>}
         {big && !shown && (
           <button
             type="button"
@@ -781,7 +781,7 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
               setShown(true);
               p.onToggle();
             }}
-            className={`ml-auto min-h-6 rounded font-sans text-[12px] font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}
+            className={`ml-auto min-h-6 rounded font-sans text-[12px] font-medium text-info hover:text-sky-200 max-sm:min-h-11 ${RING}`}
           >
             {showLines(lines.length)}
           </button>
@@ -821,7 +821,7 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
             <div className="sm:w-max sm:min-w-full">
               {f.hunks.map((h, hi) => (
                 <React.Fragment key={hi}>
-                  <div role="row" className="grid grid-cols-[34px_1fr] bg-violet-500/[.06] text-[#8a8a96] sm:grid-cols-[26px_38px_38px_1fr]">
+                  <div role="row" className="grid grid-cols-[34px_1fr] bg-sky-500/[.06] text-zinc-500 sm:grid-cols-[26px_38px_38px_1fr]">
                     <span role="gridcell" className="max-sm:hidden" />
                     <span role="gridcell" className="max-sm:hidden" />
                     <span role="gridcell" />
@@ -938,7 +938,7 @@ const Row: React.FC<RowProps> = React.memo(({ x, selected, noted, active, canNot
       data-ln-kind={l.kind}
       aria-selected={selected || undefined}
       onPointerEnter={onDragOver}
-      className={`group relative grid grid-cols-[34px_1fr] sm:grid-cols-[26px_38px_38px_1fr] ${selected ? 'bg-violet-500/[.14] shadow-[inset_3px_0_0_theme(colors.violet.400)]' : LINE_TONE[l.kind]}`}
+      className={`group relative grid grid-cols-[34px_1fr] sm:grid-cols-[26px_38px_38px_1fr] ${selected ? 'bg-sky-500/[.14] shadow-[inset_3px_0_0_theme(colors.sky.400)]' : LINE_TONE[l.kind]}`}
     >
       <span role="gridcell" className="flex items-center justify-center max-sm:absolute max-sm:inset-0 max-sm:z-10">
         {canNote ? (
@@ -952,19 +952,19 @@ const Row: React.FC<RowProps> = React.memo(({ x, selected, noted, active, canNot
             }}
             onClick={(e) => onPress(e.shiftKey)}
             className={`inline-flex h-[18px] w-5 items-center justify-center rounded-[5px] max-sm:h-full max-sm:w-full max-sm:!min-h-0 max-sm:!min-w-0 max-sm:rounded-none max-sm:opacity-0 ${
-              noted ? 'text-violet-300' : 'bg-violet-600 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+              noted ? 'text-info' : 'bg-sky-600 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
             } ${selected && !noted ? 'opacity-100' : ''} ${RING}`}
           >
             {noted ? <MessageSquare size={13} aria-hidden="true" /> : <Plus size={12} aria-hidden="true" />}
           </button>
         ) : noted ? (
-          <MessageSquare size={13} aria-hidden="true" className="text-violet-300 max-sm:hidden" />
+          <MessageSquare size={13} aria-hidden="true" className="text-info max-sm:hidden" />
         ) : null}
       </span>
-      <span role="gridcell" className="select-none pr-2 text-right text-[#8a8a96] max-sm:hidden" aria-hidden="true">
+      <span role="gridcell" className="select-none pr-2 text-right text-zinc-500 max-sm:hidden" aria-hidden="true">
         {l.old ?? ''}
       </span>
-      <span role="gridcell" className={`select-none pr-2 text-right ${l.kind === 'del' ? 'text-[#8a8a96] max-sm:text-rose-300/70' : 'text-[#8a8a96]'}`} aria-hidden="true">
+      <span role="gridcell" className={`select-none pr-2 text-right ${l.kind === 'del' ? 'text-zinc-500 max-sm:text-rose-300/70' : 'text-zinc-500'}`} aria-hidden="true">
         <span className="max-sm:hidden">{l.new ?? ''}</span>
         <span className="sm:hidden">{shownNo(l)}</span>
       </span>
@@ -984,7 +984,7 @@ Row.displayName = 'Row';
 
 const STATE_BAR: Record<Note['state'], string> = {
   draft: 'border-white/10',
-  sent: 'border-white/10 shadow-[inset_3px_0_0_theme(colors.violet.400)]',
+  sent: 'border-white/10 shadow-[inset_3px_0_0_theme(colors.sky.400)]',
   resolved: 'border-white/10 bg-teal-400/[.04] shadow-[inset_3px_0_0_var(--ok,theme(colors.teal.300))]',
   open: 'border-white/10 shadow-[inset_3px_0_0_theme(colors.zinc.500)]',
 };
@@ -1049,7 +1049,7 @@ const NoteBox: React.FC<NoteBoxProps> = ({ note, bot, editable, folded, onFold, 
             {words}
           </button>
         ) : (
-          <span className={`rounded-full border px-1.5 text-[11px] font-medium ${note.state === 'sent' ? 'border-violet-400/30 text-violet-200' : 'border-zinc-500/40 text-zinc-300'}`}>
+          <span className={`rounded-full border px-1.5 text-[11px] font-medium ${note.state === 'sent' ? 'border-sky-400/30 text-sky-200' : 'border-zinc-500/40 text-zinc-300'}`}>
             {words}
           </span>
         )}
@@ -1079,11 +1079,11 @@ const NoteBox: React.FC<NoteBoxProps> = ({ note, bot, editable, folded, onFold, 
           {goneLine(note.seen_sha)}
           {editable && (
             <>
-              <button type="button" onClick={(e) => onSendOne(e.currentTarget)} className={`rounded font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}>
+              <button type="button" onClick={(e) => onSendOne(e.currentTarget)} className={`rounded font-medium text-info hover:text-sky-200 max-sm:min-h-11 ${RING}`}>
                 Send it anyway
               </button>
               <span aria-hidden="true">·</span>
-              <button type="button" onClick={onDelete} className={`rounded font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}>
+              <button type="button" onClick={onDelete} className={`rounded font-medium text-info hover:text-sky-200 max-sm:min-h-11 ${RING}`}>
                 Delete
               </button>
             </>
@@ -1147,7 +1147,7 @@ const Composer: React.FC<ComposerProps> = ({ writing: w, setWriting, bot, onCanc
   const onKey = useComposerKeys(w, setWriting, onCancel, onSubmit);
   const label = useId();
   return (
-    <div data-ln-writing className="my-1.5 ml-2.5 mr-2.5 rounded-[10px] border border-violet-500 bg-surface-raised px-3 py-2.5 font-sans ring-[3px] ring-violet-500/15 sm:ml-16">
+    <div data-ln-writing className="my-1.5 ml-2.5 mr-2.5 rounded-[10px] border border-sky-500 bg-surface-raised px-3 py-2.5 font-sans ring-[3px] ring-sky-500/15 sm:ml-16">
       <p id={label} className="text-[11.5px] text-zinc-400">
         <span className="font-semibold text-zinc-100">{w.editing ? 'Edit note' : bot ? `Note for ${bot}` : 'Note'}</span> {lineWords(w.start, w.end)}
       </p>
@@ -1160,7 +1160,7 @@ const Composer: React.FC<ComposerProps> = ({ writing: w, setWriting, bot, onCanc
         maxLength={4000}
         onChange={(e) => setWriting((x) => (x ? { ...x, text: e.target.value, asking: false } : x))}
         onKeyDown={onKey}
-        className="mt-1.5 block min-h-[52px] w-full resize-y rounded-lg border border-hairline bg-[var(--dv-code-bg)] px-2.5 py-2 text-[13px] leading-5 text-zinc-100 placeholder:text-[#8a8a96] focus:border-violet-400 focus:outline-none"
+        className="mt-1.5 block min-h-[52px] w-full resize-y rounded-lg border border-hairline bg-[var(--dv-code-bg)] px-2.5 py-2 text-[13px] leading-5 text-zinc-100 placeholder:text-zinc-500 focus:border-sky-400 focus:outline-none"
       />
       {w.error && (
         <p role="alert" className="mt-1.5 text-meta text-rose-300">
@@ -1178,7 +1178,7 @@ const Composer: React.FC<ComposerProps> = ({ writing: w, setWriting, bot, onCanc
           <button type="button" onClick={onCancel} className="kw-btn-ghost !py-1">
             Cancel
           </button>
-          <span className="ml-auto text-[11.5px] text-[#8a8a96] max-sm:hidden">{keyHint()}</span>
+          <span className="ml-auto text-[11.5px] text-zinc-500 max-sm:hidden">{keyHint()}</span>
         </div>
       )}
     </div>
@@ -1226,7 +1226,7 @@ const NoteSheet: React.FC<{ writing: Writing; setWriting: ComposerProps['setWrit
           maxLength={4000}
           onChange={(e) => setWriting((x) => (x ? { ...x, text: e.target.value, asking: false } : x))}
           onKeyDown={onKey}
-          className="mt-2.5 block min-h-[76px] w-full resize-none rounded-xl border border-violet-400/70 bg-[var(--dv-code-bg)] px-3 py-2.5 text-[15px] leading-6 text-zinc-100 placeholder:text-[#8a8a96] focus:outline-none focus:ring-[3px] focus:ring-violet-500/20"
+          className="mt-2.5 block min-h-[76px] w-full resize-none rounded-xl border border-sky-400/70 bg-[var(--dv-code-bg)] px-3 py-2.5 text-[15px] leading-6 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-[3px] focus:ring-sky-500/20"
         />
         {w.error && (
           <p role="alert" className="mt-1.5 text-meta text-rose-300">
@@ -1236,7 +1236,7 @@ const NoteSheet: React.FC<{ writing: Writing; setWriting: ComposerProps['setWrit
         {onExtend && (
           <p className="mt-2 text-[13px] text-zinc-400">
             Tap another line first to note a range.{' '}
-            <button type="button" onClick={onExtend} className={`min-h-11 rounded font-medium text-violet-300 ${RING}`}>
+            <button type="button" onClick={onExtend} className={`min-h-11 rounded font-medium text-info ${RING}`}>
               Extend to line…
             </button>
           </p>
@@ -1321,7 +1321,7 @@ const SendBar: React.FC<SendBarProps> = ({ bar, setBar, drafts, bot, phone, send
             {sentLine(bar.n, bar.bot, bar.at)}
           </span>
           {onOpenChat && bar.botId && (
-            <button type="button" onClick={() => onOpenChat(bar.botId!)} className={`inline-flex min-h-8 items-center gap-0.5 rounded text-[12px] font-medium text-violet-300 hover:text-violet-200 max-sm:min-h-11 ${RING}`}>
+            <button type="button" onClick={() => onOpenChat(bar.botId!)} className={`inline-flex min-h-8 items-center gap-0.5 rounded text-[12px] font-medium text-info hover:text-sky-200 max-sm:min-h-11 ${RING}`}>
               Open {bar.bot}’s chat
               <ChevronRight size={14} aria-hidden="true" />
             </button>

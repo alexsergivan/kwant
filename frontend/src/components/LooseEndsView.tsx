@@ -72,7 +72,7 @@ import {
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-  emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  emerald: 'border-teal-400/30 bg-teal-400/10 text-teal-200',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
   sky: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   zinc: 'border-zinc-700 bg-zinc-800 text-zinc-300',
@@ -267,7 +267,7 @@ export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Dat
               disabled={busy}
               aria-expanded={a === 'snooze' || a === 'dismiss' ? choice === a : undefined}
               onClick={() => press(a)}
-              className={a === 'done' ? `${actionBtn} bg-emerald-600/90 hover:bg-emerald-500 text-white` : quietBtn}
+              className={a === 'done' ? `${actionBtn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-200` : quietBtn}
             >
               {a === 'done' && <CheckCircle2 size={13} aria-hidden="true" />}
               {a === 'draft' && <RefreshCw size={13} aria-hidden="true" />}
@@ -681,7 +681,7 @@ export const GitHubConnectForm: React.FC<{
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {ready && (
-            <p role="status" className="sm:col-span-2 text-xs text-emerald-300" data-save-ready>
+            <p role="status" className="sm:col-span-2 text-xs text-ok" data-save-ready>
               {ready}
             </p>
           )}
@@ -986,7 +986,7 @@ export const LooseSources: React.FC<{
       </div>
       {error && <p className="text-xs text-rose-300">{error}</p>}
       <div role="status" aria-live="polite">
-        {note && <p className={`text-xs ${note.error ? 'text-rose-300' : 'text-emerald-300'}`}>{note.text}</p>}
+        {note && <p className={`text-xs ${note.error ? 'text-rose-300' : 'text-ok'}`}>{note.text}</p>}
       </div>
       {adding && (
         <AddSourceForm
@@ -1262,7 +1262,7 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
 
           <div role="status" aria-live="polite">
             {notice && (
-              <p className={`px-3 py-2 rounded-lg border text-xs ${notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'}`}>
+              <p className={`px-3 py-2 rounded-lg border text-xs ${notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-200'}`}>
                 {notice.text}
               </p>
             )}
@@ -1298,7 +1298,7 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
               <div role="tabpanel" aria-label={current.label}>
                 {shown.length === 0 ? (
                   <div className="py-12 flex flex-col items-center text-center gap-2" data-empty>
-                    <CheckCircle2 size={28} className="text-emerald-400" aria-hidden="true" />
+                    <CheckCircle2 size={28} className="text-ok" aria-hidden="true" />
                     <p className="text-sm font-medium text-zinc-200">{tab === 'open' ? 'No loose ends' : `Nothing ${current.label.toLowerCase()}`}</p>
                     <p className="text-xs text-zinc-500 max-w-xs">{current.empty}</p>
                   </div>
