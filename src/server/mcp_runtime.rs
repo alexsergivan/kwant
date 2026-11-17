@@ -467,6 +467,22 @@ impl BrokerApprover {
             }
             return (ApprovalOutcome::Denied, "denied", None);
         }
+        // 27b: the person already said no to a call like this in this chat. Their no wins over
+        // "not risky", "always allow" and the floors, until they write here again; a late Allow
+        // on an older card is still the person saying yes
+        let families = mcp::declined::families(&req);
+        if let Some(before) = self.broker.declined.check(&req.kwant_id, &self.conversation, &families) {
+            if self.broker.take_grant(&req.kwant_id, &self.conversation, &req.tool_name, &req.arguments).await {
+                return (ApprovalOutcome::Allowed, "approved", None);
+            }
+            tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, declined_before = %before, "refused without a card: the person already said no to this");
+            let mut record = record;
+            record.parameters["declined_before"] = json!(before);
+            if let Err(e) = self.db.save_refused(&record).await {
+                tracing::warn!(error = %e, "could not record a refused call");
+            }
+            return (ApprovalOutcome::DeclinedBefore, "denied", None);
+        }
         if let Some(mcp::SmartVerdict::Allow(why)) = &smart {
             tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, reason = %why, "ran without a card: not risky");
             if let Err(e) = self.db.save_auto_allowed(&record).await {
@@ -563,7 +579,12 @@ impl BrokerApprover {
                 self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
                 ApprovalOutcome::Allowed
             }
-            Ok(Ok(ApprovalDecision::Deny)) | Ok(Err(_)) => ApprovalOutcome::Denied,
+            // 27b: only the person's own no is remembered, not a dropped card
+            Ok(Ok(ApprovalDecision::Deny)) => {
+                self.broker.declined.record(&req.kwant_id, &self.conversation, &families, &ticket);
+                ApprovalOutcome::Denied
+            }
+            Ok(Err(_)) => ApprovalOutcome::Denied,
             // Nobody answered: the card stays up as `waiting`, and a late Allow resumes the work
             // (see `resume_late_approval`)
             Err(_) => {
@@ -678,8 +699,20 @@ fn turn_conversation(state: &AppState, turn_id: &str) -> String {
         .active_turns()
         .into_iter()
         .find(|t| t.turn_id == turn_id)
-        .map(|t| t.thread_id.unwrap_or(t.context_id))
+        .map(|t| conversation_of(t.thread_id, t.context_id))
         .unwrap_or_else(|| format!("turn:{turn_id}"))
+}
+
+/// The conversation of a turn in `thread_id`, else in `context_id` (its channel or direct chat):
+/// what "always allow" and a declined call (27b) are kept for.
+pub(super) fn conversation_of(thread_id: Option<String>, context_id: String) -> String {
+    thread_id.unwrap_or(context_id)
+}
+
+/// 27b: the person wrote to `kwant_id` in the conversation of `thread_id`, else `context_id`, so
+/// what they declined there may be asked again.
+pub(super) fn person_wrote(broker: &PermissionBroker, kwant_id: &str, thread_id: Option<String>, context_id: String) {
+    broker.declined.clear(kwant_id, &conversation_of(thread_id, context_id));
 }
 
 /// The chat a tracked turn runs in, as `{"thread_id"}`, `{"channel_id"}` or
@@ -1658,5 +1691,391 @@ mod expired_tests {
         assert_eq!((p.direct_kwant_id, p.thread_id.as_deref()), (None, Some("t1")));
         let p = expired_place(&json!({"channel_id": "c1"}), "k1");
         assert_eq!((p.direct_kwant_id, p.channel_id.as_deref()), (None, Some("c1")));
+    }
+}
+
+/// 27b: after the person declines a card, a call of the same family in that chat is refused
+/// without a card until they write there again.
+#[cfg(test)]
+mod declined_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::db::{models::NewKwant, spaces::SpaceId};
+    use crate::router::LayaRouter;
+    use crate::tools::ToolRunner;
+    use axum::body::{to_bytes, Body};
+    use tempfile::{tempdir, TempDir};
+    use tower::ServiceExt;
+
+    struct Env {
+        state: AppState,
+        bot: Kwant,
+        general: String,
+        _tmp: TempDir,
+    }
+
+    async fn setup() -> Env {
+        let tmp = tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let config = Config { data_dir: tmp.path().to_path_buf(), ..Config::default() };
+        let state = AppState::new(
+            config.clone(),
+            db,
+            ToolRunner::new(tmp.path().join("workspace")),
+            PermissionBroker::new(),
+            LayaRouter::new(config.laya_url.clone()),
+        );
+        let space = SpaceId::default_space();
+        // The space's one MCP server is a plain http one, so a turn is set up the same on every
+        // OS: the seeded stdio servers can all be dropped by `isolate_stdio_servers` (they are on
+        // Windows), and with no server left `prepare_turn_with_opts` returns None
+        for s in state.db.list_mcp_servers(&space).await.unwrap() {
+            state.db.delete_mcp_server(&s.id).await.unwrap();
+        }
+        state.db.create_mcp_server(&space, &http_server("tools", "http://127.0.0.1:9/mcp")).await.unwrap();
+        let bot = state.db.list_kwants(&space).await.unwrap()[0].clone();
+        let general = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap().id;
+        Env { state, bot, general, _tmp: tmp }
+    }
+
+    fn http_server(name: &str, url: &str) -> McpServer {
+        McpServer {
+            id: format!("s-{name}"),
+            name: name.into(),
+            transport: "http".into(),
+            command: None,
+            args: vec![],
+            url: Some(url.into()),
+            env: Default::default(),
+            headers: Default::default(),
+            enabled: true,
+            timeout_secs: 10,
+            created_at: None,
+        }
+    }
+
+    async fn other_bot(e: &Env) -> Kwant {
+        let input = NewKwant {
+            name: "Other".into(),
+            title: "Tester".into(),
+            persona_prompt: String::new(),
+            soul: String::new(),
+            avatar_sprite: "s".into(),
+            driver_type: "cli".into(),
+            preferred_model: "codex".into(),
+        };
+        e.state.db.create_kwant(&SpaceId::default_space(), &input).await.unwrap()
+    }
+
+    fn approver(e: &Env, conversation: &str, timeout: Duration) -> BrokerApprover {
+        BrokerApprover {
+            db: e.state.db.clone(),
+            data_dir: e.state.config.data_dir.clone(),
+            broker: e.state.broker.clone(),
+            events: e.state.event_sender.clone(),
+            timeout,
+            conversation: conversation.to_string(),
+            chat: None,
+            always_ask: false,
+            strict_ask: false,
+            started_by: None,
+        }
+    }
+
+    fn bash(bot: &Kwant, command: &str) -> ToolApprovalRequest {
+        ToolApprovalRequest {
+            kwant_id: bot.id.clone(),
+            kwant_name: bot.name.clone(),
+            turn_id: "t-27b".into(),
+            tool_name: "Bash".into(),
+            server: String::new(),
+            tool: "Bash".into(),
+            arguments: json!({"command": command}),
+            builtin: Some(mcp::BuiltinCall { cwd: None, outside_folder: false }),
+            smart: None,
+            payment: None,
+        }
+    }
+
+    /// How a card was answered in [`ask`].
+    #[derive(Clone)]
+    enum Answer {
+        Decide(ApprovalDecision),
+        /// Its channel goes away with no decision.
+        Drop,
+        /// Nobody answers before the approver stops waiting.
+        Nothing,
+    }
+
+    /// `a.decide(req)`, answering the card it shows with `answer`: the outcome and the card's
+    /// ticket, `None` when no card went out.
+    async fn ask(e: &Env, a: &BrokerApprover, req: ToolApprovalRequest, answer: Answer) -> (ApprovalOutcome, Option<String>) {
+        let mut events = e.state.event_sender.subscribe();
+        let broker = e.state.broker.clone();
+        let decide = a.decide(req);
+        tokio::pin!(decide);
+        let mut card = None;
+        let outcome = loop {
+            tokio::select! {
+                out = &mut decide => break out,
+                ev = events.recv() => {
+                    if let Ok(RuntimeEvent::ApprovalRequired { id, .. }) = ev {
+                        assert!(card.is_none(), "two cards for one call");
+                        match answer.clone() {
+                            Answer::Decide(d) => assert!(broker.resolve(&id, d).await),
+                            Answer::Drop => assert!(broker.cancel(&id).await),
+                            Answer::Nothing => {}
+                        }
+                        card = Some(id);
+                    }
+                }
+            }
+        };
+        while let Ok(ev) = events.try_recv() {
+            if let RuntimeEvent::ApprovalRequired { id, .. } = ev {
+                panic!("a card went out after the call was settled: {id}");
+            }
+        }
+        (outcome, card)
+    }
+
+    /// The bot's approvals rows: (status, details).
+    async fn approvals_of(e: &Env, bot: &Kwant) -> Vec<(String, Value)> {
+        let rows = e.state.db.list_approvals(&SpaceId::default_space(), None, Some(&bot.id)).await.unwrap();
+        rows.into_iter().map(|r| (r.status, serde_json::from_str(&r.parameters).unwrap())).collect()
+    }
+
+    const DENY: Answer = Answer::Decide(ApprovalDecision::Deny);
+    const ALLOW: Answer = Answer::Decide(ApprovalDecision::AllowOnce);
+
+    #[tokio::test]
+    async fn a_declined_call_s_family_is_refused_without_a_card() {
+        let e = setup().await;
+        let a = approver(&e, &e.general, Duration::from_secs(10));
+        let (out, card) = ask(&e, &a, bash(&e.bot, "gh pr view 12"), DENY).await;
+        assert_eq!(out, ApprovalOutcome::Denied);
+        let declined = card.expect("the first call asks");
+        let rows = approvals_of(&e, &e.bot).await.len();
+
+        // The same family another way: refused at once, no card, and no new ticket to answer
+        let (out, card) = ask(&e, &a, bash(&e.bot, "gh pr view --json title"), ALLOW).await;
+        assert_eq!(out, ApprovalOutcome::DeclinedBefore);
+        assert_eq!(card, None);
+        let after = approvals_of(&e, &e.bot).await;
+        assert_eq!(after.len(), rows + 1, "one closed record, not a card");
+        let (status, details) = after.iter().find(|(_, d)| d["declined_before"].is_string()).expect("the refusal is on record");
+        assert_eq!(status, "denied");
+        assert_eq!(details["declined_before"], json!(declined));
+        assert!(e.state.broker.pending_ids().await.is_empty(), "nothing waits for an answer");
+
+        // Wrapped, piped or behind a cd: still the same family
+        for again in ["cd repo && gh pr view 12 | head", "sudo gh -R o/r pr view 13", "bash -c 'gh pr view 14'"] {
+            let (out, card) = ask(&e, &a, bash(&e.bot, again), ALLOW).await;
+            assert_eq!((out, card), (ApprovalOutcome::DeclinedBefore, None), "{again}");
+        }
+
+        // Another family still asks
+        let (out, card) = ask(&e, &a, bash(&e.bot, "gh issue list"), ALLOW).await;
+        assert_eq!(out, ApprovalOutcome::Allowed);
+        assert!(card.is_some(), "gh issue list asks");
+    }
+
+    #[tokio::test]
+    async fn only_the_person_s_no_is_remembered() {
+        let e = setup().await;
+
+        // Nobody answered: the card is parked, and the next call asks again
+        let a = approver(&e, &e.general, Duration::from_millis(200));
+        let (out, card) = ask(&e, &a, bash(&e.bot, "gh pr view 1"), Answer::Nothing).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Unanswered, true));
+        let (out, card) = ask(&e, &a, bash(&e.bot, "gh pr view 2"), Answer::Nothing).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Unanswered, true), "unanswered isn't a no");
+
+        // The card's channel went away (its turn ended): not a no either
+        let a = approver(&e, &e.general, Duration::from_secs(10));
+        let (out, card) = ask(&e, &a, bash(&e.bot, "docker run x"), Answer::Drop).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Denied, true));
+        let (out, card) = ask(&e, &a, bash(&e.bot, "docker run y"), ALLOW).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Allowed, true), "a dropped card isn't a no");
+
+        // kwnt refusing a call that names its own secrets: no card, and nothing remembered
+        let (out, card) = ask(&e, &a, bash(&e.bot, "gh api --input ~/.kwnt/api-token user"), ALLOW).await;
+        assert_eq!((out, card), (ApprovalOutcome::Denied, None));
+        let (out, card) = ask(&e, &a, bash(&e.bot, "gh api user"), ALLOW).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Allowed, true), "kwnt's refusal isn't the person's no");
+    }
+
+    #[tokio::test]
+    async fn a_no_holds_in_its_own_chat_and_bot_until_the_person_writes_there() {
+        let e = setup().await;
+        let other = other_bot(&e).await;
+        let here = approver(&e, &e.general, Duration::from_secs(10));
+        let (out, _) = ask(&e, &here, bash(&e.bot, "npm publish"), DENY).await;
+        assert_eq!(out, ApprovalOutcome::Denied);
+
+        // Another conversation with the same bot asks
+        let thread = approver(&e, "thread-1", Duration::from_secs(10));
+        let (out, card) = ask(&e, &thread, bash(&e.bot, "npm publish --tag next"), DENY).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Denied, true));
+        // Another bot in the same conversation asks
+        let (out, card) = ask(&e, &here, bash(&other, "npm publish"), ALLOW).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Allowed, true));
+        // This bot here doesn't
+        let (out, card) = ask(&e, &here, bash(&e.bot, "npm publish --dry-run"), ALLOW).await;
+        assert_eq!((out, card), (ApprovalOutcome::DeclinedBefore, None));
+
+        // The person writes to another bot, or to this bot in the thread: still a no here
+        person_wrote(&e.state.broker, &other.id, None, e.general.clone());
+        person_wrote(&e.state.broker, &e.bot.id, Some("thread-1".into()), e.general.clone());
+        let (out, card) = ask(&e, &here, bash(&e.bot, "npm publish"), ALLOW).await;
+        assert_eq!((out, card), (ApprovalOutcome::DeclinedBefore, None));
+        // The thread's no went with the person's message there
+        let (out, card) = ask(&e, &thread, bash(&e.bot, "npm publish"), ALLOW).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Allowed, true));
+
+        // The person writes to this bot here: it asks again
+        person_wrote(&e.state.broker, &e.bot.id, None, e.general.clone());
+        let (out, card) = ask(&e, &here, bash(&e.bot, "npm publish"), ALLOW).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Allowed, true));
+    }
+
+    #[tokio::test]
+    async fn the_approver_s_conversation_is_the_one_a_message_clears() {
+        let e = setup().await;
+        for thread_id in [None, Some("thread-9".to_string())] {
+            let turn_id = uuid::Uuid::new_v4().to_string();
+            e.state.turns.set_turn(super::super::turns::ActiveTurn {
+                turn_id: turn_id.clone(),
+                kwant_id: e.bot.id.clone(),
+                context_id: e.general.clone(),
+                thread_id: thread_id.clone(),
+                state: "running".into(),
+                since: chrono::Utc::now(),
+                purpose: None,
+                audit: None,
+            });
+            assert_eq!(turn_conversation(&e.state, &turn_id), conversation_of(thread_id, e.general.clone()));
+            e.state.turns.end_turn(&turn_id);
+        }
+    }
+
+    /// claude's permission prompt for `tool {input}` in a live turn of the bot in #general, the
+    /// card (if any) answered with `answer`: the permission tool's reply.
+    async fn claude_asks(e: &Env, tool: &str, input: Value, answer: Answer) -> (Value, Option<String>) {
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let folder = tempdir().unwrap();
+        // The turn is registered before its MCP context is built, as `turn_once` does: the
+        // approver takes its conversation from the registry then, and an unregistered turn is a
+        // conversation of its own (`turn:<id>`), so two asks wouldn't share the person's no
+        e.state.turns.set_turn(super::super::turns::ActiveTurn {
+            turn_id: turn_id.clone(),
+            kwant_id: e.bot.id.clone(),
+            context_id: e.general.clone(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+            audit: None,
+        });
+        let (_, token) = prepare_turn_with_opts(&e.state, &e.bot, Some(turn_id.clone()), Some(folder.path().to_path_buf()), None, Default::default())
+            .await
+            .unwrap();
+        let app = super::super::create_router(e.state.clone());
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
+            "arguments": {"tool_name": tool, "input": input, "tool_use_id": "tu_1"}}});
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/api/mcp/permission/{token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let mut events = e.state.event_sender.subscribe();
+        let prompt = app.oneshot(request);
+        tokio::pin!(prompt);
+        let mut card = None;
+        let resp = loop {
+            tokio::select! {
+                resp = &mut prompt => break resp.unwrap(),
+                ev = events.recv() => {
+                    if let Ok(RuntimeEvent::ApprovalRequired { id, .. }) = ev {
+                        if let Answer::Decide(d) = answer.clone() {
+                            assert!(e.state.broker.resolve(&id, d).await);
+                        }
+                        card = Some(id);
+                    }
+                }
+            }
+        };
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: Value = serde_json::from_slice(&bytes).unwrap();
+        finish_turn(&e.state, &token).await;
+        e.state.turns.end_turn(&turn_id);
+        let text = v["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{v}"));
+        (serde_json::from_str(text).unwrap(), card)
+    }
+
+    #[tokio::test]
+    async fn claude_is_told_it_was_already_declined() {
+        let e = setup().await;
+        let (reply, card) = claude_asks(&e, "Bash", json!({"command": "git push origin main"}), DENY).await;
+        assert!(card.is_some());
+        assert_eq!(reply["behavior"], "deny");
+        let (reply, card) = claude_asks(&e, "Bash", json!({"command": "git push --force origin main"}), ALLOW).await;
+        assert_eq!(card, None, "no card the second time");
+        assert_eq!(reply, json!({"behavior": "deny", "message": mcp::DECLINED_BEFORE_TEXT}));
+    }
+
+    #[tokio::test]
+    async fn an_api_bot_s_tool_result_says_it_was_already_declined() {
+        let e = setup().await;
+        // A real MCP server over http for the API engine's tool session: kwnt's own permission
+        // endpoint for a live turn, whose one tool is `approve`
+        let (_, token) = prepare_turn_with_opts(&e.state, &e.bot, Some("t-host".into()), None, None, Default::default()).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = super::super::create_router(e.state.clone());
+        let serve = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let server = http_server("perm", &format!("http://{addr}/api/mcp/permission/{token}"));
+        let ctx = McpTurnContext {
+            servers: vec![server],
+            approver: Arc::new(approver(&e, &e.general, Duration::from_secs(10))),
+            config_dir: std::env::temp_dir(),
+            permission_url: None,
+            gateway: None,
+            max_tool_iterations: 5,
+            approvals: mcp::Approvals::Ask,
+            records: Default::default(),
+            kwnt_only: false,
+        };
+        let (session, problems) = McpToolSession::open(&ctx, None).await;
+        assert!(problems.is_empty(), "{problems:?}");
+        let caller = Caller { kwant_id: e.bot.id.clone(), kwant_name: e.bot.name.clone(), turn_id: "t-api".into() };
+
+        let mut events = e.state.event_sender.subscribe();
+        let first = {
+            let call = session.call(&caller, "c1", "mcp__perm__approve", r#"{"tool_name": "Bash", "input": {}}"#);
+            tokio::pin!(call);
+            loop {
+                tokio::select! {
+                    out = &mut call => break out,
+                    ev = events.recv() => {
+                        if let Ok(RuntimeEvent::ApprovalRequired { id, .. }) = ev {
+                            assert!(e.state.broker.resolve(&id, ApprovalDecision::Deny).await);
+                        }
+                    }
+                }
+            }
+        };
+        assert_eq!((first.status, first.text.as_str()), ("denied", mcp::DENIED_TEXT));
+
+        let second = session.call(&caller, "c2", "mcp__perm__approve", r#"{"tool_name": "Read", "input": {}}"#).await;
+        assert_eq!((second.status, second.text.as_str()), ("denied", mcp::DECLINED_BEFORE_TEXT));
+        assert_eq!(second.record["status"], "denied");
+        while let Ok(ev) = events.try_recv() {
+            assert!(!matches!(ev, RuntimeEvent::ApprovalRequired { .. }), "no card the second time");
+        }
+        session.shutdown().await;
+        finish_turn(&e.state, &token).await;
+        serve.abort();
     }
 }

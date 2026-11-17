@@ -19,6 +19,7 @@ import { PhoneAppTip } from './PhoneAppTip';
 import { trapFocusTarget } from '../imports';
 import { type AttentionRow, type NeedsYouRow, PINNED_RANK, NEEDS_YOU_LABEL, workingIds, directIds, rollupLabel } from '../chatsTab';
 import { askAction, askKind, askLine, isAsk } from '../askHere';
+import { approvalLine } from '../approvals';
 import { localClock } from '../clock';
 import type { InboxItem } from '../api/inbox';
 import { useDevMode } from './DevModeSwitch';
@@ -537,7 +538,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // 22i: a pinned row's line is cut to one line; hover and focus show the whole ask in a small tooltip
     // (design.md §4): "Quant · Stopped · 18:44" over the full line. A native title never shows on focus.
     const rowItem = asked?.item ?? att?.item;
-    const fullLine = pin && busyLine ? (rowItem && isAsk(rowItem) ? askLine(rowItem) || busyLine : busyLine) : undefined;
+    const fullLine = pin && busyLine ? (rowItem && isAsk(rowItem) ? (approvalLine(rowItem) ?? askLine(rowItem)) || busyLine : busyLine) : undefined;
     const tipKind = !att
       ? undefined
       : att.rank === 3

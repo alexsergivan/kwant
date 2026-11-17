@@ -140,7 +140,7 @@ async fn gateway_denied_call_returns_no_output() {
     let mut client = McpClient::connect(&gateway(&base, Some("deny-tok")), None).await.unwrap();
     let out = client.call_tool("echo__echo", json!({"text": "must not run"})).await.unwrap();
     assert!(out.is_error);
-    assert_eq!(out.text, "The user denied this tool call.");
+    assert_eq!(out.text, kwnt::mcp::DENIED_TEXT);
     client.shutdown().await;
 
     let records = ctx.take_records();
