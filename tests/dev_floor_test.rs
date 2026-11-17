@@ -43,11 +43,17 @@ fn request(env: &Env, command: &str) -> ToolApprovalRequest {
     }
 }
 
+/// The card stores the command JSON-escaped, so look for it the way it is stored.
+fn stored(command: &str) -> String {
+    let s = serde_json::to_string(command).unwrap();
+    s[1..s.len() - 1].to_string()
+}
+
 /// Runs one call nobody answers and returns its waiting card.
 async fn unanswered(env: &Env, command: &str) -> (String, Value) {
     assert_eq!(approver(env).decide(request(env, command)).await, ApprovalOutcome::Unanswered);
     let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("waiting"), Some(&env.a)).await.unwrap();
-    let row = rows.into_iter().find(|r| r.parameters.contains(command)).expect("a waiting card");
+    let row = rows.into_iter().find(|r| r.parameters.contains(&stored(command))).expect("a waiting card");
     let details: Value = serde_json::from_str(&row.parameters).unwrap();
     (row.id, details)
 }
@@ -188,9 +194,112 @@ async fn the_floor_still_asks_with_approvals_off_in_a_kwant_started_turn() {
     for command in ["git push origin main", "sqlite3 demo.db 'DROP TABLE demo_auto'"] {
         assert_eq!(started.decide(request(&env, command)).await, ApprovalOutcome::Unanswered, "{command}");
         let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("waiting"), Some(&env.a)).await.unwrap();
-        let row = rows.into_iter().find(|r| r.parameters.contains(command)).expect("a waiting card");
+        let row = rows.into_iter().find(|r| r.parameters.contains(&stored(command))).expect("a waiting card");
         let details: Value = serde_json::from_str(&row.parameters).unwrap();
         assert!(details["prod_floor"].is_object(), "{command}: {details}");
         assert_eq!(details["started_by"], "Loose ends");
     }
+}
+
+/// A bot's own API token for a turn of A (what a bot's `curl` to kwant would carry).
+async fn bot_token(env: &Env) -> String {
+    use kwnt::server::continuity::{SelfScope, TurnOrigin};
+    use kwnt::server::mcp_runtime;
+    let bot = env.state.db.get_kwant(&env.a).await.unwrap().unwrap();
+    let scope = SelfScope {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        origin: Some(TurnOrigin { direct_kwant_id: Some(bot.id.clone()), ..Default::default() }),
+        cancel: Some(tokio_util::sync::CancellationToken::new()),
+        turn_id: Some("turn-floor-bot".into()),
+        sandbox_target: Some(bot.id.clone()),
+        ..Default::default()
+    };
+    mcp_runtime::prepare_turn_with_self(&env.state, &bot, Some("turn-floor-bot".into()), None, Some(scope)).await.unwrap().1
+}
+
+/// 22f (Oleks, Nov 15): a deploy kwant only guesses changes the database is never a dead end. With
+/// no backup command, the person can allow it without a backup (recorded on the card); a bot
+/// can't; and a destructive step or a known migration still can't go without a fresh backup, even
+/// through a hand-made API call.
+#[tokio::test]
+async fn a_guessed_migration_can_be_allowed_without_a_backup_by_the_person_only() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    let resolve = |t: &str| format!("/api/approvals/{t}/resolve");
+
+    // The deploy: a guess, with no backup command
+    let (ticket, details) = unanswered(&env, "ssh deploy@app.example.com 'cd /srv/app && docker compose up -d'").await;
+    let floor = &details["prod_floor"];
+    assert_eq!(floor["kind"], "deploy_migration", "{details}");
+    assert_eq!(floor["migration"], "guess");
+    assert_eq!(floor["backup"]["state"], "no_command");
+
+    // A plain Allow is refused, and says the way forward exists
+    let (s, v) = call(&env.app, "POST", &resolve(&ticket), Some(json!({"decision": "allow_once"}))).await;
+    assert_eq!(s.as_u16(), 409, "{v}");
+    assert_eq!((v["status"].as_str(), v["code"].as_str()), (Some("needs_backup"), Some("needs_backup")));
+    assert_eq!(v["can_allow_without_backup"], true);
+
+    // A bot can't send it: the route is the person's
+    let token = bot_token(&env).await;
+    let auth = format!("Bearer {token}");
+    let (s, v) = call_with(&env.app, "POST", &resolve(&ticket), Some(json!({"decision": "allow_once", "without_backup": true})), &[("authorization", auth.as_str())]).await;
+    assert_eq!(s.as_u16(), 403, "{v}");
+    assert_eq!(env.state.db.get_approval(&ticket).await.unwrap().unwrap().status, "waiting");
+
+    // The backup state reads the same as the card's, for the person only
+    let backup_uri = format!("/api/spaces/{space}/dev/backup");
+    let (s, v) = call(&env.app, "GET", &backup_uri, None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(v, floor["backup"]);
+    let (s, _) = call_with(&env.app, "GET", &backup_uri, None, &[("authorization", auth.as_str())]).await;
+    assert_eq!(s.as_u16(), 403);
+    // Setting a command (the same PUT as Dev mode settings) moves it on
+    let (s, v) = call(&env.app, "PUT", &format!("/api/spaces/{space}/dev_mode"), Some(json!({"backup_command": "pg_dump demo > /tmp/demo.sql"}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(call(&env.app, "GET", &backup_uri, None).await.1["state"], "none");
+
+    // The person's Allow without a backup goes through, and is recorded on the card
+    let (s, v) = call(&env.app, "POST", &resolve(&ticket), Some(json!({"decision": "allow_once", "without_backup": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(v["without_backup"], true);
+    let row = env.state.db.get_approval(&ticket).await.unwrap().unwrap();
+    assert_eq!(row.status, "allowed_once");
+    let saved: Value = serde_json::from_str(&row.parameters).unwrap();
+    let rec = &saved["prod_floor"]["allowed_without_backup"];
+    assert_eq!(rec["line"], "Allowed without a backup by you", "{saved}");
+    assert_eq!((rec["by"].as_str(), rec["via"].as_str()), (Some("person"), Some("app")));
+    assert!(rec["at"].is_string());
+    wait_for("the resumed turn to end", || async { env.state.turns.active_turns().is_empty() }).await;
+
+    // A destructive step and a known migration: a hand-made call with without_backup is refused
+    for cmd in ["ssh deploy@app.example.com 'rm -rf /srv/app/data'", "RAILS_ENV=production bin/rails db:migrate"] {
+        let (ticket, details) = unanswered(&env, cmd).await;
+        assert_eq!(details["prod_floor"]["needs_backup"], true, "{details}");
+        assert_ne!(details["prod_floor"]["migration"], "guess", "{details}");
+        for decision in ["allow_once", "always_allow"] {
+            let (s, v) = call(&env.app, "POST", &resolve(&ticket), Some(json!({"decision": decision, "without_backup": true}))).await;
+            assert_eq!(s.as_u16(), 409, "{cmd}: {v}");
+            assert_eq!((v["status"].as_str(), v["code"].as_str()), (Some("needs_backup"), Some("backup_required")), "{cmd}");
+            assert_eq!(v["can_allow_without_backup"], false);
+        }
+        let row = env.state.db.get_approval(&ticket).await.unwrap().unwrap();
+        assert_eq!(row.status, "waiting", "{cmd}");
+        assert!(!row.parameters.contains("allowed_without_backup"));
+    }
+}
+
+/// 22f: Oleks's own deploy, verbatim: the card names the server `$R` stands for.
+#[tokio::test]
+async fn where_names_the_server_of_olekss_deploy() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    let cmd = r#"set -e; R=root@164.90.207.66; D=/opt/tradebot; timeout 120 ssh -o BatchMode=yes -o ConnectTimeout=15 $R "cd $D && chmod +x catalyst-linux.new && docker compose up -d --no-deps --force-recreate catalyst 2>&1 && docker compose ps catalyst"; echo "exit=$?""#;
+    let (_, details) = unanswered(&env, cmd).await;
+    let blast = details["prod_floor"]["blast"].as_array().unwrap().clone();
+    assert!(blast.contains(&json!(["Where", "root@164.90.207.66"])), "{blast:?}");
+    assert_eq!(details["prod_floor"]["migration"], "guess");
 }

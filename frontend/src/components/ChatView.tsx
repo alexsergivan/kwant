@@ -11,13 +11,13 @@ import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
 import { onContinuity } from '../continuity';
 import { TrialWaitsCard } from './SkillsPanel';
-import { agentSenderLabel } from '../agentConnections';
-import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
+import { agentSenderLabel, messageAbout, otherSenderLabel, senderLetter } from '../agentConnections';
+import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, User, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
-import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
+import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine, teamChipLabel, teamChipTitle } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
@@ -37,8 +37,9 @@ import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, foldedAnswerIds, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
 import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
+import { RefusedCustomerCall } from './RefusedCustomerCall';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
-import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
+import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
@@ -82,7 +83,7 @@ import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSugg
 import { routeReasonText, routeWhyText } from '../routeReason';
 import { useInbox } from '../inboxStore';
 import { doneItemsOf, doneOf } from '../replyDone';
-import { APPROVE_TEXT, asksApproval, changePlaceholder, metaHidesApprove } from '../approvalAsk';
+import { APPROVE_TEXT, asksApproval, changePlaceholder, metaHidesApprove, refocusAfterApprove } from '../approvalAsk';
 import { DoneCheckLine } from './DoneMarker';
 import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
@@ -98,6 +99,7 @@ import { awayApi } from '../away';
 import { parseBudgetNotice } from '../botBudget';
 import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
 import { isSystemNotice, parseExpiredApproval, parseInterruption, retryTargets } from '../interruptions';
+import { ringElement } from '../ring';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
@@ -116,6 +118,7 @@ import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
 import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, useDictation } from './DictationMic';
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
+import type { FloorResolveOpts } from '../dev/types';
 
 export interface ChatMessage {
   id: string;
@@ -208,6 +211,20 @@ export interface RoutingState {
 // One reply row geometry, shared by the live row and the finished one (16a), so a reply lands without a shift:
 // a 36 px avatar column from sm up, a 20 px avatar in the name line on phones, and the same bubble padding.
 const REPLY_AVATAR = 36;
+
+/** 23c: someone else's "user" message (a customer, a bot's chat-API post) gets their letter, never the person's avatar. */
+function SenderLetter({ name }: { name: string }) {
+  const letter = senderLetter(name);
+  return (
+    <span
+      aria-hidden="true"
+      data-sender-letter={letter}
+      className="w-9 h-9 shrink-0 rounded-full bg-zinc-800 border border-zinc-700/60 text-zinc-200 text-sm font-semibold inline-flex items-center justify-center select-none"
+    >
+      {letter || <User size={16} className="text-zinc-400" />}
+    </span>
+  );
+}
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
@@ -239,8 +256,8 @@ export interface ChatViewProps {
   pendingApprovals: PendingApproval[];
   /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
   prepush?: React.ReactNode;
-  /** Approvals answered in Telegram while this chat was open (G4): kept as a resolved row. */
-  settledApprovals?: PendingApproval[];
+  /** Approvals answered in Telegram (G4), kept as a resolved row; `refused` marks a customer's call nobody allowed (22d). */
+  settledApprovals?: (PendingApproval & { refused?: true })[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -249,7 +266,7 @@ export interface ChatViewProps {
   onSendMessage: (text: string, attachments: AttachmentRef[], opts?: SendOptions) => void | Promise<boolean | string | void>;
   /** Saves the person's thumbs on a bot reply; absent hides the thumbs. */
   onReact?: (msg: ChatMessage, reaction: Reaction | null) => Promise<ReactResult> | void;
-  onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
+  onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny', opts?: FloorResolveOpts) => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   /** Prompts offered above an empty chat, made from who is in it; none hides the bar. */
@@ -326,6 +343,12 @@ export interface ChatViewProps {
   focusComposerKey?: number;
   /** A message to scroll to and flash (from search). */
   highlightMessageId?: string | null;
+  /** 22i: also ring what `highlightMessageId` lands on (a Needs-attention row's ask), like a pre-push card. */
+  highlightRing?: boolean;
+  /** 22i: the "Needs you" strip, right above the composer. */
+  needsYouStrip?: React.ReactNode;
+  /** 22i: the strip shows an ask here, so the working line drops its own "Answer ↑". */
+  needsYouOpen?: boolean;
   onHighlightDone?: () => void;
   /** Set while `messages` is an older window (a search hit beyond the latest page). */
   viewingHistory?: boolean;
@@ -602,6 +625,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   pinned = [],
   onEditInstructions,
   highlightMessageId,
+  highlightRing,
+  needsYouStrip,
+  needsYouOpen,
   onContinueFrom,
   threadKind,
   continuedFrom,
@@ -991,7 +1017,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       awaitingAnswer={!!awaitingAnswer}
       awaitingBrowser={!!awaitingBrowser}
       writing={writing}
-      onAnswer={showWaitingCard}
+      // 22i: one ask gets one button. While the Needs-you strip shows it, the strip's Go to … is that button.
+      onAnswer={needsYouOpen ? undefined : showWaitingCard}
       onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       phone={phone}
       audit={liveAudit}
@@ -1054,7 +1081,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Runs after the auto-scroll above, so it wins.
   const [flashId, setFlashId] = useState<string | null>(null);
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
-  const [flashKind, setFlashKind] = useState<'search' | 'quote'>('search');
+  // 22i: a Needs-attention landing ('ask') is the same amber flash as search, tagged so tests tell them apart.
+  const [flashKind, setFlashKind] = useState<'search' | 'quote' | 'ask'>('search');
   useEffect(() => {
     if (!highlightMessageId) return;
     // 0.8.1 F6: an approval's card (a notification names it), not a message
@@ -1063,7 +1091,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       if (!card) return;
       const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-      setFlashKind('search');
+      if (highlightRing) ringElement(card);
+      setFlashKind(highlightRing ? 'ask' : 'search');
       setFlashId(highlightMessageId);
       onHighlightDone?.();
       return;
@@ -1080,10 +1109,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!el) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-    setFlashKind('search');
+    setFlashKind(highlightRing ? 'ask' : 'search');
     setFlashId(highlightMessageId);
     onHighlightDone?.();
-  }, [highlightMessageId, messages, openThoughts, onHighlightDone, pendingApprovals]);
+  }, [highlightMessageId, highlightRing, messages, openThoughts, onHighlightDone, pendingApprovals]);
   useEffect(() => {
     if (!flashId) return;
     const t = setTimeout(() => setFlashId(null), flashKind === 'quote' ? 1600 : 2400);
@@ -1215,12 +1244,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setApproving(msg.id);
     playSfx('click');
     stickRef.current = true;
+    // 18e: remember the row so focus can come back to the composer instead of the page top.
+    const row = (document.activeElement as HTMLElement | null)?.closest?.('[data-approve-row]') ?? null;
     try {
       const sent = await onSendMessage(APPROVE_TEXT, [], { replyTo: msg });
       // A failed send keeps the row (it is still the newest message) and offers the words in the composer.
       if (sent === false) setInputVal((now) => now || APPROVE_TEXT);
     } finally {
       setApproving(null);
+      // After React commits (the row may unmount, the button re-enables), check where focus ended up.
+      setTimeout(() => {
+        const active = document.activeElement;
+        const focusLost = !active || active === document.body || !active.isConnected;
+        const inRow = !!row && row.isConnected && !!active && row.contains(active);
+        if (refocusAfterApprove({ phone, focusLost, inRow })) focusComposer();
+      }, 0);
     }
   };
   const react = async (msg: ChatMessage, reaction: Reaction | null): Promise<boolean> => {
@@ -1748,7 +1786,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ? emptyTrialReplyLine(parsePick(activeKwants.find((k) => k.id === msg.sender_id || k.name === msg.sender_id)?.preferred_model).family)
         : null;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
-    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
+    // 23c: a customer's or a bot's "user" message says who wrote it; the person (Telegram too) and a coding agent as before
+    const otherSender = isUser ? otherSenderLabel(msg.meta, knownBots, msg.sender_id) : null;
+    const displayName = isUser ? otherSender ?? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
     // P4: a share that now sits under its bot's reply reads as part of it, without a second header.
     const underReply = !isUser && filesOnly && (arranged.attached.has(msg.id) || liveShareIds.has(msg.id));
     const olderCopies = filesOnly ? arranged.earlier.get(msg.id) : undefined;
@@ -1763,6 +1803,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       <div
         key={msg.id}
         data-message-id={msg.id}
+        data-flash-kind={flashId === msg.id ? flashKind : undefined}
         tabIndex={-1}
         data-shared-under={underReply ? '' : undefined}
         // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
@@ -1779,13 +1820,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <span className="hidden sm:contents">
           {/* Laya hand-off: a reply she just routed brings the chosen bot's avatar up into the header */}
           <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
-            <ModernAvatar
-              role={isUser ? 'user' : title}
-              name={displayName}
-              size={REPLY_AVATAR}
-              kwantId={replyKwantId}
-              modelBadge={false}
-            />
+            {otherSender ? (
+              <SenderLetter name={otherSender} />
+            ) : (
+              <ModernAvatar
+                role={isUser ? 'user' : title}
+                name={displayName}
+                size={REPLY_AVATAR}
+                kwantId={replyKwantId}
+                modelBadge={false}
+              />
+            )}
           </span>
         </span>
         )}
@@ -1794,8 +1839,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {underReply ? (
             <span className="sr-only">Shared by {displayName}</span>
           ) : isUser ? (
-            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
-              <span className="text-zinc-200 shrink-0">{displayName}</span>
+            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap" data-sender={otherSender ? 'other' : undefined}>
+              <span className={otherSender ? 'text-zinc-200 min-w-0 truncate' : 'text-zinc-200 shrink-0'}>{displayName}</span>
               {fromTelegram(parseMetaObject(msg.meta)) && <ViaTelegram />}
             </div>
           ) : (
@@ -1878,7 +1923,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <div className={isUser ? 'relative w-full max-w-2xl' : 'contents'}>
           {isUser && (() => {
             // The person's message: the overflow sits in the empty gutter left of the bubble, bottom-aligned, no row
-            const more = continueMenu(msg, 'your message', 'end', 'hover');
+            const more = continueMenu(msg, messageAbout(otherSender), 'end', 'hover');
             return more ? <div className="absolute right-full bottom-0 mr-1" data-message-more-gutter="">{more}</div> : null;
           })()}
           <div
@@ -1963,13 +2008,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Action row (reply-chrome part 3): Reply, the thumbs, then Copy as a quiet icon; smart-result actions portal in after Copy */}
           {/* 0.9.8: on a phone the browsed chip gets its own 44 px row above the action row (it would wrap) */}
-          {!isUser && !filesOnly && phone && savedActivity && (
-            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0">
+          {/* 19f: only when the reply opened pages; BrowsedChip draws nothing otherwise, and the 44 px row was an empty gap */}
+          {!isUser && !filesOnly && phone && savedActivity && pagesOfReply(savedActivity.steps).length > 0 && (
+            <div className="mt-1 flex items-center min-h-[44px] max-w-full min-w-0" data-phone-browsed-row="">
               <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} phone onOpen={() => openBrowserFor(msg.id)} />
             </div>
           )}
           {!isUser && !filesOnly && (
-            <div className="mt-2 flex flex-wrap items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0">
+            <>
+            {/* 19f: on a phone the ghost icons keep one row (no wrap) and the smart-result actions get their own row below */}
+            <div
+              className={`mt-2 flex ${phone ? 'flex-nowrap' : 'flex-wrap'} items-center gap-0 sm:gap-1 text-zinc-400 text-xs max-w-full min-w-0`}
+              data-reply-actions={phone ? 'phone' : 'desktop'}
+            >
               {!phone && savedActivity && (
                 <BrowsedChip botName={displayName} steps={savedActivity.steps} live={false} onOpen={() => openBrowserFor(msg.id)} />
               )}
@@ -1988,8 +2039,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
               <CopyGhost copied={copiedId === msg.id} tipId={`copy-tip-${msg.id}`} onCopy={() => handleCopy(text, msg.id)} />
               {continueMenu(msg, `${displayName}'s reply`, 'start')}
-              {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
+              {!phone && msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
+            {phone && msg.results != null && (
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-zinc-400 text-xs max-w-full min-w-0 empty:hidden" data-smart-row="">
+                <SmartActionsSlot messageId={msg.id} />
+              </div>
+            )}
+            </>
           )}
           {continueError?.id === msg.id && <MessageMoreError text={continueError.text} align={isUser ? 'end' : 'start'} />}
         </div>
@@ -2186,6 +2243,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
     el?.focus();
     requestAnimationFrame(() => checkMention(next, next.length));
   };
+
+  // 18f: once the reply has words the steps fold (desktop: the saved reply's row; phone: the compact row as is) and
+  // move below the bubble, into the landed action row's place, so landing moves nothing above the words.
+  const stepsBelow = !!liveActivity && foldLiveSteps({ writing, steps: liveActivity.steps });
+  const liveStepsList = liveActivity ? (
+    <LiveActivityList
+      live={liveActivity}
+      idBase={`live-${liveActivity.turnId}`}
+      compact={phone}
+      folded={stepsBelow}
+      lead={
+        livePages.length > 0 ? (
+          <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
+        ) : undefined
+      }
+    />
+  ) : null;
 
   // 14c: on a phone the header's icon buttons carry a small caption under the icon (no hover there,
   // so a title alone was never seen); from sm up they keep their inline word.
@@ -2523,18 +2597,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && (
-                <LiveActivityList
-                  live={liveActivity}
-                  idBase={`live-${liveActivity.turnId}`}
-                  compact={phone}
-                  lead={
-                    livePages.length > 0 ? (
-                      <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
-                    ) : undefined
-                  }
-                />
-              )}
+              {liveActivity && !stepsBelow && liveStepsList}
 
               {thinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
@@ -2577,6 +2640,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </div>
               )}
 
+              {/* 18f: once words stream, the steps row sits below the bubble, where the landed action row goes */}
+              {liveActivity && stepsBelow && liveStepsList}
+
               {!queued && <QueuedBeside items={queuedBeside} />}
             </div>
           </div>
@@ -2585,10 +2651,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* P4: the running bot's shares, already in the place its saved reply will give them */}
         {liveRowShown && arranged.live.map((m) => renderMessage(m))}
 
-        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
-        {settledApprovals.map((approval) => (
-          <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
-        ))}
+        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload;
+            22d: a customer's call nobody allowed, in that customer's chat */}
+        {settledApprovals.map((approval) =>
+          approval.refused ? (
+            <RefusedCustomerCall key={approval.id} approval={approval} />
+          ) : (
+            <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
+          ),
+        )}
 
         {/* 0.8.0 B3: checks before this bot pushes */}
         {prepush}
@@ -2671,13 +2742,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 data-compact={phone ? '' : undefined}
                 className={
                   phone
-                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
-                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    ? 'kws-hit h-7 shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    : 'shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
                 }
-                title={`Ask whole team @${teamName}`}
+                title={teamChipTitle(teamName)}
+                aria-label={teamChipTitle(teamName)}
+                data-team-chip=""
               >
-                <Users size={12} className="text-sky-400" />
-                <span>@{teamName} (Team)</span>
+                <Users size={12} className="shrink-0 text-sky-400" aria-hidden="true" />
+                <span className="min-w-0 truncate">{teamChipLabel(teamName)}</span>
               </button>
             )}
           </ScrollRow>
@@ -2719,6 +2792,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* Phone and desktop (0.8.1 F4): the quiet line sits inside the composer section, right above the box. */}
         {budgetBanner}
         {workingStrip}
+        {/* 22i: below the working line, right above the box (design.md §2 order). */}
+        {needsYouStrip}
 
         <form
           onSubmit={handleSubmit}
@@ -2987,12 +3062,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
         >
           {showAnswers && (
             <span
-              className={`kw-chip shrink-0 ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''}`}
+              className={`kw-chip min-w-0 ${showHintText ? 'max-w-[min(22rem,60%)]' : 'max-w-full'} ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''}`}
               title={target.detail}
               data-answer-target={target.kind}
             >
-              {target.kind === 'laya' ? <Sparkles size={12} aria-hidden="true" /> : <AtSign size={12} aria-hidden="true" />}
-              <span className="text-zinc-400 font-normal">Answers:</span> {target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}
+              {target.kind === 'laya' ? <Sparkles size={12} className="shrink-0" aria-hidden="true" /> : <AtSign size={12} className="shrink-0" aria-hidden="true" />}
+              <span className="shrink-0 whitespace-nowrap text-zinc-400 font-normal">Answers:</span>
+              <span className="min-w-0 truncate" data-answer-name="">{target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}</span>
             </span>
           )}
           {showHintText && (

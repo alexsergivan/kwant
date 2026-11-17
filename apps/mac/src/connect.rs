@@ -146,9 +146,14 @@ pub async fn remove_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, o
         return Ok(json!({ "removed": false, "revoked": false, "cancelled": false }));
     };
     // the dialog and the sign-out block: a blocking thread, never the main thread
+    let host = origin.host();
     let done = tauri::async_runtime::spawn_blocking(move || crate::confirm_and_remove(&app, &origin))
         .await
         .unwrap_or_default();
+    if done.save_failed {
+        // still listed; the app has said so
+        return Err(error("save_failed", crate::SAVE_FAILED, Some(host)));
+    }
     Ok(json!({ "removed": done.removed, "revoked": done.revoked, "cancelled": done.cancelled }))
 }
 
@@ -162,9 +167,7 @@ pub fn set_this_mac<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, on: bool
             format!("Add a server before you stop kwant on {}.", this_machine()),
             None,
         ),
-        ToggleRefused::SaveFailed => {
-            error("save_failed", "kwant couldn't save the change. Check that ~/.kwnt can be written.", None)
-        }
+        ToggleRefused::SaveFailed => error("save_failed", crate::SAVE_FAILED, None),
     })?;
     Ok(json!({ "this_mac": crate::current(&app).this_mac }))
 }

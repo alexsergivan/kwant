@@ -691,14 +691,28 @@ fn host_of(url: &str) -> String {
         .unwrap_or_else(|| url.to_string())
 }
 
+/// A path separator on any of kwant's platforms: `/`, or `\` on Windows (21c, 22w).
+fn is_path_sep(c: char) -> bool {
+    c == '/' || c == '\\'
+}
+
 /// The last two parts of a path: enough to recognise the file without the whole folder.
+/// Splits on `/` and `\` alike and keeps the path's own separators, so `C:\Users\x\acme\a.md`
+/// is `…\acme\a.md` and `/srv/app/src/main.rs` is `…/src/main.rs`, as before (22w). A bare drive
+/// (`C:\`) stays as it is.
 fn short_path(path: &str) -> String {
-    let parts: Vec<&str> = path.trim_end_matches('/').rsplit('/').take(2).collect();
-    let short = parts.into_iter().rev().collect::<Vec<_>>().join("/");
-    if short.len() < path.trim_end_matches('/').len() {
-        format!("…/{short}")
-    } else {
-        short
+    let trimmed = path.trim_end_matches(is_path_sep);
+    let is_drive = |s: &str| matches!(s.as_bytes(), [d, b':'] if d.is_ascii_alphabetic());
+    if is_drive(trimmed) {
+        return path.to_string();
+    }
+    let Some(last) = trimmed.rfind(is_path_sep) else {
+        return trimmed.to_string();
+    };
+    match trimmed[..last].rfind(is_path_sep) {
+        // Separators are one byte, so `before` is a char boundary; the slice keeps the separator.
+        Some(before) => format!("…{}", &trimmed[before..]),
+        None => trimmed.to_string(),
     }
 }
 
@@ -728,13 +742,25 @@ fn command_line(args: &Value) -> Option<String> {
 }
 
 /// Whether `name` is a tool that runs a shell command (`Bash`, codex's `exec_command`,
-/// `mcp__x__run_shell_command`), ignoring an `mcp__server__` prefix and case. The one list of
+/// `mcp__x__run_shell_command`, an agent's `run_terminal_command`), ignoring an `mcp__server__`
+/// prefix and case. The one list of
 /// shell tools: [`summarize`] titles them "Running `…`", and the desktop island names only their
 /// program (server/activity.rs).
 pub fn is_shell_tool(name: &str) -> bool {
     matches!(
         tool_part(name).to_ascii_lowercase().as_str(),
-        "bash" | "shell" | "exec" | "exec_command" | "command_execution" | "run_terminal_cmd" | "run_shell_command" | "local_shell"
+        "bash"
+            | "shell"
+            | "exec"
+            | "exec_command"
+            | "command_execution"
+            | "run_terminal_cmd"
+            | "run_shell_command"
+            | "local_shell"
+            // 22j: Quant's failed step (2026-11-15), and the other common names for it
+            | "run_terminal_command"
+            | "execute_command"
+            | "run_command"
     )
 }
 
@@ -777,6 +803,72 @@ pub fn island_kind_title(name: &str) -> Option<&'static str> {
     WordsTool::of(&tool_part(name).to_ascii_lowercase()).map(WordsTool::bare)
 }
 
+/// The tools that read, edit or write one file, by what they do. The one list of them: [`summarize`]
+/// titles them with the file's last two parts ("Reading …/src/main.rs"), and the desktop island
+/// with only its name ([`island_file_title`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileTool {
+    Read,
+    Edit,
+    Write,
+}
+
+impl FileTool {
+    /// `tool` is the name without its `mcp__server__` prefix, lowercased.
+    fn of(tool: &str) -> Option<Self> {
+        match tool {
+            "read" | "read_file" | "view" | "cat" => Some(Self::Read),
+            "edit" | "multiedit" | "edit_file" | "str_replace" | "str_replace_based_edit_tool" | "apply_patch" | "file_change"
+            | "notebookedit" => Some(Self::Edit),
+            "write" | "write_file" | "create_file" => Some(Self::Write),
+            _ => None,
+        }
+    }
+
+    /// The title's first word, before the path.
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Read => "Reading",
+            Self::Edit => "Editing",
+            Self::Write => "Writing",
+        }
+    }
+
+    /// The title when the call names no path.
+    fn bare(self) -> &'static str {
+        match self {
+            Self::Read => "Reading a file",
+            Self::Edit => "Editing files",
+            Self::Write => "Writing a file",
+        }
+    }
+}
+
+/// The desktop island's title for a read, edit or write tool (`Read`, `MultiEdit`, `NotebookEdit`,
+/// `apply_patch`, `mcp__x__read_file`), ignoring an `mcp__server__` prefix and case: the step's
+/// chat `title` with its path cut to the file's own name, so "Reading …/src/main.rs" is "Reading
+/// main.rs" and "Editing C:\work\a.md" is "Editing a.md" (21c). Folders can name a client or a
+/// person, and the island sits on shared screens. A title without folders ("Reading a file",
+/// "Reading main.rs") is kept; one that doesn't start with the tool's verb, or whose path has no
+/// name, falls back to the bare title. `None` for every other tool.
+pub fn island_file_title(name: &str, title: &str) -> Option<String> {
+    let kind = FileTool::of(&tool_part(name).to_ascii_lowercase())?;
+    let is_sep = is_path_sep;
+    let Some(path) = title.strip_prefix(kind.verb()).and_then(|r| r.strip_prefix(' ')) else {
+        return Some(kind.bare().to_string());
+    };
+    if path.trim().is_empty() {
+        return Some(kind.bare().to_string());
+    }
+    if !path.contains(is_sep) {
+        return Some(title.to_string());
+    }
+    match path.trim_end_matches(is_sep).rsplit(is_sep).next().map(str::trim).filter(|n| !n.is_empty() && *n != "…") {
+        Some(file) => Some(format!("{} {file}", kind.verb())),
+        None => Some(kind.bare().to_string()),
+    }
+}
+
 /// A tool's name without its `mcp__server__` prefix (`mcp__x__grep` gives `grep`), as
 /// [`summarize`] reads it; `name` itself when it has none.
 fn tool_part(name: &str) -> &str {
@@ -809,11 +901,10 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
         };
         return (title.unwrap_or_else(|| kind.bare().to_string()), None);
     }
+    if let Some(kind) = FileTool::of(&lower) {
+        return (path().map_or(kind.bare().into(), |p| format!("{} {p}", kind.verb())), None);
+    }
     match lower.as_str() {
-        "read" | "read_file" | "view" | "cat" => (path().map_or("Reading a file".into(), |p| format!("Reading {p}")), None),
-        "edit" | "multiedit" | "edit_file" | "str_replace" | "str_replace_based_edit_tool" | "apply_patch" | "file_change"
-        | "notebookedit" => (path().map_or("Editing files".into(), |p| format!("Editing {p}")), None),
-        "write" | "write_file" | "create_file" => (path().map_or("Writing a file".into(), |p| format!("Writing {p}")), None),
         "webfetch" | "fetch" | "web_fetch" | "browser_open" | "browser_navigate" | "navigate" | "open_url" => match url {
             Some(u) => (format!("Opening {}", host_of(u)), Some(u.to_string())),
             None => ("Opening a page".into(), None),
@@ -988,6 +1079,47 @@ mod tests {
         assert_eq!(stopped.iter().map(|s| s.status).collect::<Vec<_>>(), ["stopped", "stopped"]);
     }
 
+    /// 22w: `short_path` keeps the last two parts of a Windows path as it does a Unix one, with the
+    /// path's own separators; every `/` path reads exactly as before.
+    #[test]
+    fn short_path_shortens_windows_paths_too() {
+        let cases = [
+            // Unix: unchanged from 0.9.16.
+            ("/srv/app/src/main.rs", "…/src/main.rs"),
+            ("/home/x/clients/acme/contract.md", "…/acme/contract.md"),
+            ("/tmp/acme.md", "…/tmp/acme.md"),
+            ("/tmp/acme/", "…/tmp/acme"),
+            ("src/main.rs", "src/main.rs"),
+            ("a//b/c.md", "…/b/c.md"),
+            ("a/b//c.md", "…//c.md"),
+            ("/a.md", "/a.md"),
+            ("contract.md", "contract.md"),
+            ("/", ""),
+            ("", ""),
+            // Windows: drive letter and backslashes.
+            ("C:\\Users\\x\\clients\\acme\\contract.md", "…\\acme\\contract.md"),
+            ("C:\\work\\a.md", "…\\work\\a.md"),
+            ("C:\\a.md", "C:\\a.md"),
+            ("C:\\work\\acme\\", "…\\work\\acme"),
+            ("work\\a.md", "work\\a.md"),
+            // A bare drive stays as typed.
+            ("C:\\", "C:\\"),
+            ("d:/", "d:/"),
+            // UNC.
+            ("\\\\server\\share\\clients\\a.md", "…\\clients\\a.md"),
+            ("\\\\server\\a.md", "…\\server\\a.md"),
+            // Mixed separators keep their own.
+            ("C:/work\\acme\\a.md", "…\\acme\\a.md"),
+            ("C:/work/acme\\a.md", "…/acme\\a.md"),
+            ("C:\\work\\acme/a.md", "…\\acme/a.md"),
+            // Non-ASCII names slice on char boundaries.
+            ("C:\\Пользователи\\клиент\\договор.md", "…\\клиент\\договор.md"),
+        ];
+        for (path, want) in cases {
+            assert_eq!(short_path(path), want, "{path}");
+        }
+    }
+
     #[test]
     fn summaries_are_short_and_human() {
         let cases = [
@@ -995,6 +1127,7 @@ mod tests {
             ("command_execution", json!({"command": ["bash", "-lc", "ls -la"]}), "Running `ls -la`"),
             ("command_execution", json!({"command": "bash -lc 'cargo test'"}), "Running `cargo test`"),
             ("Read", json!({"file_path": "/srv/app/src/main.rs"}), "Reading …/src/main.rs"),
+            ("Read", json!({"file_path": "C:\\Users\\x\\clients\\acme\\contract.md"}), "Reading …\\acme\\contract.md"),
             ("Edit", json!({"file_path": "main.rs"}), "Editing main.rs"),
             ("WebFetch", json!({"url": "https://www.github.com/x/y"}), "Opening github.com"),
             ("mcp__kwnt__browser_open", json!({"url": "https://example.com/login"}), "Opening example.com"),
@@ -1018,6 +1151,40 @@ mod tests {
         let s = log.observe(&pending("1", "Bash", json!({"command": long})));
         assert!(s[0].title.chars().count() <= MAX_TITLE);
         assert!(s[0].detail.as_ref().unwrap().chars().count() <= MAX_DETAIL);
+    }
+
+    /// 21c: the island's title for a read, edit or write tool is the chat's title with the path cut
+    /// to the file's own name; the chat's title keeps "…/folder/file". Every other tool has none.
+    #[test]
+    fn island_file_titles_name_the_file_only() {
+        let cases: Vec<(&str, Value, &str, &str)> = vec![
+            ("Read", json!({"file_path": "/home/x/clients/acme/contract.md"}), "Reading …/acme/contract.md", "Reading contract.md"),
+            ("Edit", json!({"file_path": "/tmp/acme.md"}), "Editing …/tmp/acme.md", "Editing acme.md"),
+            ("MultiEdit", json!({"file_path": "/repo/src/main.rs"}), "Editing …/src/main.rs", "Editing main.rs"),
+            ("Write", json!({"file_path": "/srv/clients/acme-layoffs/plan.txt"}), "Writing …/acme-layoffs/plan.txt", "Writing plan.txt"),
+            ("NotebookEdit", json!({"notebook_path": "/work/acme/model.ipynb"}), "Editing …/acme/model.ipynb", "Editing model.ipynb"),
+            ("apply_patch", json!({"path": "/work/acme/a.rs"}), "Editing …/acme/a.rs", "Editing a.rs"),
+            ("mcp__x__read_file", json!({"path": "/work/acme/b.md"}), "Reading …/acme/b.md", "Reading b.md"),
+            ("Read", json!({"file_path": "C:\\work\\a.md"}), "Reading …\\work\\a.md", "Reading a.md"),
+            ("Edit", json!({"file_path": "C:\\Users\\x\\clients\\acme\\contract.md"}), "Editing …\\acme\\contract.md", "Editing contract.md"),
+            ("Read", json!({"file_path": "/tmp/acme/"}), "Reading …/tmp/acme", "Reading acme"),
+            ("Read", json!({"file_path": "contract.md"}), "Reading contract.md", "Reading contract.md"),
+            ("Read", Value::Null, "Reading a file", "Reading a file"),
+            ("Edit", Value::Null, "Editing files", "Editing files"),
+            ("Write", Value::Null, "Writing a file", "Writing a file"),
+        ];
+        for (name, args, chat, island) in cases {
+            let title = summarize(name, &args).0;
+            assert_eq!(title, chat, "{name} {args}");
+            assert_eq!(island_file_title(name, &title).as_deref(), Some(island), "{name} {args}");
+        }
+        // A title that isn't the tool's own falls back to the bare title; a path with no name too
+        assert_eq!(island_file_title("Read", "Reading ").as_deref(), Some("Reading a file"));
+        assert_eq!(island_file_title("Read", "Reading …/").as_deref(), Some("Reading a file"));
+        assert_eq!(island_file_title("Edit", "Looking at /x/acme/y.md").as_deref(), Some("Editing files"));
+        for name in ["Bash", "Grep", "WebFetch", "WebSearch", "mcp__linear__list_issues", "mcp__read"] {
+            assert_eq!(island_file_title(name, "Reading …/acme/contract.md"), None, "{name}");
+        }
     }
 
     /// 19a: the island's bare title per search or helper kind, ignoring an mcp prefix and case;
@@ -1045,6 +1212,18 @@ mod tests {
                 assert_eq!(summarize(name, &Value::Null).0, bare, "{name}");
             }
         }
+    }
+
+    #[test]
+    fn terminal_tools_are_shell_tools() {
+        for name in ["run_terminal_command", "mcp__desktop__run_terminal_command", "execute_command", "Run_Command", "Bash", "run_terminal_cmd"] {
+            assert!(is_shell_tool(name), "{name}");
+        }
+        for name in ["Read", "run_tests", "mcp__x__run_query", "command"] {
+            assert!(!is_shell_tool(name), "{name}");
+        }
+        let cmd = json!({"command": "journalctl -u maker --since 17:18"});
+        assert_eq!(summarize("run_terminal_command", &cmd).0, "Running `journalctl -u maker --since 17:18`");
     }
 
     #[test]

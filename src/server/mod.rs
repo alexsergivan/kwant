@@ -48,6 +48,7 @@ pub mod computer;
 pub mod mcp_directory;
 pub mod mcp_suggest;
 pub mod page_source;
+pub mod bot_files;
 pub mod tool_failures;
 pub mod tool_notes;
 pub mod openai_key;
@@ -331,7 +332,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/dev/landed/seen", post(dev::routes::seen))
         .route("/api/spaces/:id/dev/reviews", get(dev::routes::reviews))
         .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
-        .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
+        .route("/api/spaces/:id/dev/backup", get(dev::routes::backup_state).post(dev::routes::take_backup))
         .route("/api/spaces/:id/dev/worktrees", get(dev::worktrees::list).post(dev::worktrees::create_route))
         .route("/api/dev/worktrees/:id", delete(dev::worktrees::remove_route))
         .route("/api/dev/worktrees/:id/done", post(dev::worktrees::done_route))
@@ -456,6 +457,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/oauth/client.json", get(mcp_oauth::client_document))
         .route("/api/kwants/:id/mcp-servers", get(mcp_routes::get_kwant_servers).put(mcp_routes::set_kwant_servers))
         .route("/api/mcp/permission/:token", post(mcp_runtime::permission_endpoint))
+        .route("/api/mcp/permission/:token/hook", post(mcp_runtime::permission_hook_endpoint))
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
         .route("/api/mcp/self", post(continuity::self_endpoint))
@@ -519,6 +521,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/attachments/:id", get(attachments::get))
         .route("/api/attachments/:id/content", get(attachments::content))
         .route("/api/waiting", get(waiting::list))
+        .route("/api/waiting/:id/dismiss", post(waiting::dismiss))
         .route("/api/questions", get(questions::list))
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))

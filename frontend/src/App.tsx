@@ -11,6 +11,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { focusPhoneApp } from './components/PhoneAppTip';
 import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
@@ -74,7 +75,7 @@ import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToa
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, HelpCircle, Inbox, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
-import { ChatApproval, OpenChat, addSettled, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { ChatApproval, OpenChat, addSettled, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
@@ -153,7 +154,10 @@ import {
   questionsApi,
   turnsAwaitingAnswer,
 } from './questions';
-import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
+import { AwayError, AwayItem, affectsAway, awayApi } from './away';
+import { asksHere, closedId, isHandOff, dismissKind, dropClosed, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
+import { NeedsYouStrip } from './components/NeedsYouStrip';
+import { chainBudgetApi } from './chainBudget';
 import { needsYouRows, attentionRows } from './chatsTab';
 import { Space, eventsUrl, getCurrentSpace, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
@@ -186,6 +190,7 @@ import { ModernAvatar } from './components/ModernAvatar';
 import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
+import type { FloorResolveOpts } from './dev/types';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -499,6 +504,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
+  // 22i: the highlight a Needs-attention row asked for also gets the pre-push ring.
+  const [ringId, setRingId] = useState<string | null>(null);
   // Older messages shown instead of the latest (a search hit beyond them). Kept apart from the
   // cache, which live updates keep current underneath.
   const [historyWindow, setHistoryWindow] = useState<{ ctx: string; messages: ChatMessage[] } | null>(null);
@@ -621,9 +628,23 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // "Needs you" nudges (attention.ts): what waits on the person, the pill, and the "Show nudges" setting.
   const [awayWaiting, setAwayWaiting] = useState(0);
   /** What waits on you right now (approvals, questions), for the phone Chats tab's Needs you. */
-  const [awayItems, setAwayItems] = useState<AwayItem[]>([]);
+  const [awayList, setAwayItems] = useState<AwayItem[]>([]);
   /** H5: unseen failed and finished items (ranks 2 and 3), and whether the first fetch has landed. */
   const [awayDone, setAwayDone] = useState<{ failed: AwayItem[]; finished: AwayItem[] } | null>(null);
+  // 22i: items the person just resolved from the strip go from the row and the strip at once; an id
+  // leaves this set once the server's list no longer has it.
+  const [clearedAsks, setClearedAsks] = useState<ReadonlySet<string>>(() => new Set());
+  const awayItems = useMemo(() => (clearedAsks.size ? awayList.filter((i) => !clearedAsks.has(i.id)) : awayList), [awayList, clearedAsks]);
+  // Rank-2 failed rows, minus any just cleared (a failed hand-off's "Done, clear it").
+  const awayFailed = useMemo(() => (awayDone?.failed ?? []).filter((i) => !clearedAsks.has(i.id)), [awayDone, clearedAsks]);
+  useEffect(() => {
+    setClearedAsks((prev) => {
+      if (!prev.size) return prev;
+      const live = new Set([...awayList, ...(awayDone?.failed ?? [])].map((i) => i.id));
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [awayList, awayDone]);
   /** H5: when the person last opened each bot's chat (a finished item older than that is read). */
   const [openedAt, setOpenedAt] = useState<Record<string, number>>({});
   // H4 (#499): each bot's status from the server; null on an older server (today's lines stay).
@@ -955,6 +976,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
     refreshAwayCount();
     awayApi.approvals('allowed_once').then((rows) => setSettledApprovals((prev) => addSettled(prev, settledFromRecords(rows))), () => undefined);
+    // 22d: a customer's call nobody allowed, as a quiet line in that customer's chat.
+    awayApi.approvals('refused').then((rows) => setSettledApprovals((prev) => addSettled(prev, refusedFromRecords(rows))), () => undefined);
     questionsApi.listOpen().then((list) => {
       // Closed ones seen live stay; open ones come from the server.
       setQuestions((prev) => {
@@ -1270,6 +1293,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     sse.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data);
+        if (event.type === 'waiting_updated' || event.type === 'WaitingUpdated') {
+          // 22i (#700): a closed item leaves Needs attention and the strip now; an open one comes with the refetch.
+          const gone = closedId(event.data);
+          if (gone) {
+            setAwayItems((prev) => dropClosed(prev, gone));
+            setAwayDone((prev) => (prev ? { failed: dropClosed(prev.failed, gone), finished: prev.finished } : prev));
+          }
+        }
         if (affectsAway(event.type)) refreshAwayCount(800);
         if (changesBots(event.type, event.data)) {
           setRosterFresh(false);
@@ -2050,21 +2081,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const handleResolveApproval = async (
     ticketId: string,
-    decision: 'allow_once' | 'always_allow' | 'deny'
+    decision: 'allow_once' | 'always_allow' | 'deny',
+    opts?: FloorResolveOpts
   ) => {
     haptic('tap');
     try {
       const res = await fetch(`/api/approvals/${ticketId}/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision }),
+        // 22f: the person's own "Allow without a backup" on a deploy kwant only guessed changes the database.
+        body: JSON.stringify(opts?.withoutBackup && decision === 'allow_once' ? { decision, without_backup: true } : { decision }),
       });
       // Production floor (Dev mode): Allow without a fresh backup is refused and the card stays waiting.
       if (res.status === 409) {
         const body = await res.clone().json().catch(() => null);
         if (body && typeof body === 'object' && (body as { status?: unknown }).status === 'needs_backup') {
           haptic('warning');
-          pushToast('Back up first', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
+          const b = body as { code?: unknown; error?: unknown };
+          // 22f: `without_backup` refused (a destructive step, a known database change, or a card from before 22f).
+          if (b.code === 'backup_required' && typeof b.error === 'string' && b.error) pushToast('Needs a fresh backup', b.error);
+          else pushToast('Needs a fresh backup', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
           return;
         }
       }
@@ -2262,7 +2298,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               streamStore.show({ text: '', thinking: '' });
             }
           }
-          markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot'));
+          markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot', msg.meta));
         }
       }
       return { ok: true, answered: saved.answered };
@@ -2334,7 +2370,65 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   openPlaceRef.current = openPlace;
 
-  /** Opens the thread, channel or direct chat an away item links to. */
+  // 22i: whether the last open came from the keyboard (Enter or Space), so a row's open focuses the strip.
+  const keyboardOpenRef = useRef(false);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') keyboardOpenRef.current = true;
+    };
+    const pointer = () => {
+      keyboardOpenRef.current = false;
+    };
+    window.addEventListener('keydown', key, true);
+    window.addEventListener('pointerdown', pointer, true);
+    return () => {
+      window.removeEventListener('keydown', key, true);
+      window.removeEventListener('pointerdown', pointer, true);
+    };
+  }, []);
+  const [stripFocusKey, setStripFocusKey] = useState(0);
+  // The messages the chat shows now (the latest page, or a history window), and the pending landing.
+  const shownMessagesRef = useRef<ChatMessage[]>([]);
+  const highlightRef = useRef<string | null>(null);
+  highlightRef.current = highlightMessageId;
+
+  /**
+   * 22i: scrolls to an ask's card or message in the chat on screen and rings it (design.md §1). Loads the
+   * messages around it when it is older than the latest page. False when it can't be found, or (quiet,
+   * when stepping) isn't already rendered.
+   */
+  const findAsk = async (item: AwayItem, quiet = false): Promise<boolean> => {
+    const t = awayLanding(item);
+    const focus = t.focus;
+    if (!focus) return false;
+    const ring = () => {
+      setRingId(focus);
+      setHighlightMessageId(focus);
+      return true;
+    };
+    if (t.focusKind === 'approval') return document.querySelector(`[data-approval-card="${CSS.escape(focus)}"]`) ? ring() : false;
+    if (shownMessagesRef.current.some((m) => m.id === focus)) return ring();
+    if (quiet || t.thread_id) return false;
+    const ctx = t.channel_id ?? t.kwant_id;
+    try {
+      const res = await fetch(`/api/channels/${encodeURIComponent(ctx)}/messages?around=${encodeURIComponent(focus)}`);
+      if (!res.ok) return false;
+      const around: ChatMessage[] = await res.json();
+      if (!around.some((m) => m.id === focus) || selectedIdRef.current !== ctx) return false;
+      setHistoryWindow({ ctx, messages: around });
+      return ring();
+    } catch {
+      return false;
+    }
+  };
+
+  /** 22i: where an away item lands: its exact chat, and its own message or card to ring there. */
+  const awayLanding = (item: AwayItem) =>
+    askOpenTarget(item, {
+      questionMessage: (id) => questionsRef.current[id]?.message_id,
+      stepMessage: (id) => humanStepsRef.current[id]?.message_id,
+    });
+  /** Opens the thread, channel or direct chat an away item links to, scrolled to its ask and ringed. */
   const openAwayItem = (item: AwayItem) => {
     // 0.9.0 P1: a watch item opens its mission's report on the board, where the needs-you line is.
     if (item.kind === 'watch' && item.mission_id) {
@@ -2343,17 +2437,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       showPage('board');
       return;
     }
-    const t = awayTarget(item);
-    // 0.8.1 F6: the same opener as a notification's tap, so a gone chat lands in the bot's 1:1 and
-    // an approval row shows its card
-    openPlace({
-      channel_id: 'channel' in t ? t.channel : null,
-      kwant_id: 'thread' in t ? t.kwant : 'direct' in t ? t.direct : item.kwant_id,
-      thread_id: 'thread' in t ? t.thread : null,
-      card_id: item.kind === 'approval' ? item.id : null,
-    });
+    const t = awayLanding(item);
+    // 0.8.1 F6: the same opener as a notification's tap, so a gone chat lands in the bot's 1:1. 22i:
+    // every kind names its message (a question's or browser step's card, a stopped reply's notice),
+    // not only approvals, and the landing gets the ring.
+    if (!openPlace({ channel_id: t.channel_id, kwant_id: t.kwant_id, thread_id: t.thread_id, card_id: t.focus })) return;
+    setRingId(t.focus);
+    // Enter on a row: focus goes to the strip, so a screen reader reads the ask and Tab reaches its button.
+    if (keyboardOpenRef.current) setStripFocusKey((k) => k + 1);
+    // Older than the latest page: once the chat has loaded, load the messages around it and ring it. Not
+    // found at all: no toast and no scroll, the strip is the landing (design.md §1).
+    const focus = t.focus;
+    if (!focus || t.focusKind === 'approval') return;
+    window.setTimeout(() => {
+      if (highlightRef.current !== focus || shownMessagesRef.current.some((m) => m.id === focus)) return;
+      void findAsk(item).then((found) => {
+        if (found) return;
+        setHighlightMessageId((h) => (h === focus ? null : h));
+        setRingId((r) => (r === focus ? null : r));
+      });
+    }, 700);
   };
-
   /** 0.8.0 B3: a pre-push Inbox item opens the bot's chat at its card. */
   const openPrepush = (c: PrepushCardData) => {
     if (!openTarget({ channel_id: null, kwant_id: c.kwant_id })) return pushToast('That bot no longer exists.');
@@ -3906,6 +4010,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   const viewingHistory = !!historyWindow && historyWindow.ctx === openCtx;
+
+  shownMessagesRef.current = viewingHistory ? historyWindow.messages : messages;
   const errorBar = messagesError ? (
     <div role="alert" className="px-3 sm:px-6 py-2 border-b border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
       <span>{messagesError}</span>
@@ -4053,7 +4159,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     ? attentionRows({
         kwants,
         needs: needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))),
-        failed: awayDone.failed,
+        failed: awayFailed,
         finished: awayDone.finished,
         busy: busyKwants,
         status: botStatus,
@@ -4092,6 +4198,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onSwitchSpace={onSwitchSpace}
       onCreateSpace={onCreateSpace}
       onOpenSpaceSettings={() => openSpaceSettings('general')}
+      onOpenPhoneApp={() => {
+        openAppSettings();
+        focusPhoneApp();
+      }}
       onOpenArchived={onOpenArchived}
       onOpenSearch={() => setIsSearchOpen(true)}
       section={section}
@@ -4196,6 +4306,88 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         wobbleJar();
         announceJar(JAR_DROPPED);
       }}
+    />
+  );
+
+  // 22i: the "Needs you" strip above the composer: the open asks of the chat on screen, from the same
+  // list as the Needs-attention rows, so both go the moment the item closes.
+  const askHere: Here | null =
+    page !== 'chat' || !selectedId ? null : openThreadId ? { thread: openThreadId, kwant: selectedId } : isChannel ? { channel: selectedId } : { direct: selectedId };
+  // A failed hand-off or run also shows on its thread's strip (#700: Retry with a board task, else Done only).
+  const asks = asksHere([...awayItems, ...awayFailed.filter(isHandOff)], askHere);
+  const askHereKey = !askHere ? '' : 'thread' in askHere ? `t:${askHere.thread}` : 'channel' in askHere ? `c:${askHere.channel}` : `d:${askHere.direct}`;
+  const runAsk = async (item: AwayItem, action: AskAction) => {
+    playSfx('click');
+    if (action === 'answer' || action === 'decide') return findAsk(item);
+    if (action === 'browser') {
+      const st = item.human_step_id ? humanStepsRef.current[item.human_step_id] : undefined;
+      if (!st) return findAsk(item);
+      pickPage(st.page_key);
+      setIsVmPaneOpen(true);
+      return;
+    }
+    if (action === 'ask_again') {
+      if (item.retry?.type !== 'approval') throw new Error('this ask has no approval to ask again');
+      await awayApi.retryApproval(item.retry.approval_id);
+    } else if (action === 'continue') {
+      if (!item.message_id) throw new Error('its notice isn’t in this chat anymore');
+      await chainBudgetApi.continue(item.message_id);
+    } else {
+      // Retry (#700 has no /api/waiting/:id/retry): an approval that ran out asks again, a failed task
+      // or run retries its task, a stopped turn or reply sends the person's last message again.
+      const route = retryRoute(item);
+      if (!route) throw new Error('there’s nothing here to run again');
+      if (route.via === 'approval') await awayApi.retryApproval(route.id);
+      else if (route.via === 'task') await awayApi.retryTask(route.id);
+      else {
+        const target = resendTarget(messages, item.message_id);
+        if (!target) throw new Error('there’s no message of yours here to send again');
+        const sent = await handleSendMessage(target.text, target.attachments);
+        if (sent === false) throw new Error('your message wasn’t sent');
+        if (typeof sent === 'string') throw new Error(sent);
+      }
+    }
+    // Sent: the strip waits for the close event (design.md §2); the list refreshes in case it was missed.
+    refreshAwayCount(300);
+  };
+  const dismissAsk = async (item: AwayItem): Promise<{ use: AskAction } | void> => {
+    if (item.human_step_id && item.dismissable === undefined) {
+      // An older server: a browser step clears by marking it done.
+      const err = await answerHumanStep(item.human_step_id, 'done');
+      if (err) throw new Error(err);
+    } else {
+      try {
+        await awayApi.dismiss(item.id, dismissKind(item));
+      } catch (e) {
+        if (!(e instanceof AwayError)) throw e;
+        // 409: it has its own answer, which tells the bot; the strip switches to that button.
+        const use = e.status === 409 ? switchFor(e.code) : null;
+        if (use) return { use };
+        if (e.code === 'person_only') throw new Error('only you can clear it, from your own sign-in');
+        if (e.code === 'not_found') {
+          // Already gone on the server: it leaves the row and the strip now.
+          setClearedAsks((prev) => new Set(prev).add(item.id));
+          refreshAwayCount(300);
+          return;
+        }
+        if (e.status === 404 || e.status === 405) throw new Error('this version can’t clear it yet. Update the app, or resolve it in the chat');
+        throw e;
+      }
+    }
+    // Cleared at once, with its sidebar row, before the server's close event (design.md §2).
+    setClearedAsks((prev) => new Set(prev).add(item.id));
+    refreshAwayCount(300);
+  };
+  const needsYouStrip = (
+    <NeedsYouStrip
+      asks={asks}
+      onAction={runAsk}
+      onDismiss={dismissAsk}
+      onShow={(item, o) => findAsk(item, o?.quiet)}
+      onOpenInbox={() => showPage('inbox', 'new')}
+      focusKey={stripFocusKey}
+      hereKey={askHereKey}
+      phone={isPhone}
     />
   );
 
@@ -4329,7 +4521,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               />
             ) : undefined
           }
-          settledApprovals={approvalsForChat(settledApprovals, openChat)}
+          settledApprovals={settledByTime(approvalsForChat(settledApprovals, openChat))}
           home={chatHome}
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}
@@ -4403,7 +4595,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           continuedFrom={continuedFrom}
           focusComposerKey={focusComposerKey}
           highlightMessageId={highlightMessageId}
-          onHighlightDone={() => setHighlightMessageId(null)}
+          highlightRing={!!ringId && ringId === highlightMessageId}
+          onHighlightDone={() => {
+            setHighlightMessageId(null);
+            setRingId(null);
+          }}
+          needsYouStrip={needsYouStrip}
+          needsYouOpen={asks.length > 0}
           subHeader={subHeader}
           threadLine={isPhone && threadBarProps ? <ThreadPicker {...threadBarProps} /> : undefined}
           notice={

@@ -58,30 +58,28 @@ fn asked_in(msgs: &[Message], fits: impl Fn(&Message) -> bool) -> Option<&Messag
 }
 
 /// `text` (`m`'s text, maybe clipped) as a hand-off passes it on: the person's own words as they
-/// are, anyone else's framed as theirs ([`crate::drivers::user_history_text`] for a customer or
-/// a connected agent, [`crate::drivers::peer_message`] for a bot's chat-API message), so a
-/// customer's message never reaches the next bot as the owner's request. Framed after clipping,
-/// so the frame's end marker is never cut off.
+/// are, anyone else's framed as theirs by [`crate::drivers::user_history_text`] (a customer's, a
+/// connected agent's, a bot's chat-API message), so a customer's message never reaches the next
+/// bot as the owner's request. Framed after clipping, so the frame's end marker is never cut off.
 fn as_asked(m: &Message, text: String) -> String {
     if super::routes::is_persons(m) {
         return text;
     }
-    if !crate::drivers::from_outsider(m) {
-        let name = match m.sender_id.trim() {
-            "" | "user" => "unnamed",
-            id => id,
-        };
-        return crate::drivers::peer_message(name, &text);
-    }
     crate::drivers::user_history_text(&Message { text, ..m.clone() })
 }
 
+/// What was asked among `msgs` (oldest first), as a hand-off's "the user's original request"
+/// passes it on (20b): see [`asked_in`] and [`as_asked`]; `None` when there is no "user" message.
+/// A lead's keep-going hand-off uses it too (22b).
+pub(super) fn asked_text(msgs: &[Message]) -> Option<String> {
+    asked_in(msgs, |_| true).map(|m| as_asked(m, m.text.clone()))
+}
+
 /// What was asked in chat `context`, for a hand-off's "the user's original request" (20b): see
-/// [`asked_in`] and [`as_asked`]; `fallback` (the delegation's task) when the chat has no "user"
-/// message.
+/// [`asked_text`]; `fallback` (the delegation's task) when the chat has no "user" message.
 async fn request_text(state: &AppState, context: &str, fallback: &str) -> String {
     let msgs = state.db.list_messages(context, 100).await.unwrap_or_default();
-    asked_in(&msgs, |_| true).map(|m| as_asked(m, m.text.clone())).unwrap_or_else(|| fallback.to_string())
+    asked_text(&msgs).unwrap_or_else(|| fallback.to_string())
 }
 
 /// A specialist's reply as posted to the origin chat: clipped, saying where the rest is.
@@ -2002,6 +2000,9 @@ mod request_tests {
         assert!(text.starts_with("[Message from bot Scout (another assistant)") && text.ends_with("[End of message from Scout]"), "{text}");
         let anon = msg("user", "user", "Do it.", Some(json!({"sent_by_bot": true})));
         assert!(asked(&[anon]).unwrap().starts_with("[Message from bot unnamed"));
+        // 22q: the name saved from the bot's turn token names it, not the sender id it passed
+        let named = msg("user", "user", "Do it.", Some(json!({"sent_by_bot": true, "sent_by_bot_name": "Scout", "sent_by_kwant_id": "k1"})));
+        assert_eq!(asked(&[named]).unwrap(), crate::drivers::peer_message("Scout", "Do it."));
     }
 
     #[test]

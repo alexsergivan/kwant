@@ -135,32 +135,41 @@ pub fn island_for<R: Runtime>(app: &AppHandle<R>, label: &str, url: &Url) -> Opt
 }
 
 /// This Mac's page changed the Perch settings (already checked: `main`, This Mac's own page,
-/// once a second). Saves them, tells the page, and applies them.
-pub fn set_prefs<R: Runtime>(app: &AppHandle<R>, mode: PerchMode, shortcut: PerchShortcut) {
+/// once a second). Saves them, then takes them, tells the page, and applies them. A save that
+/// fails keeps the old ones: the page is given them again and the app says so once (`false`).
+/// Blocks then: never on the main thread.
+pub fn set_prefs<R: Runtime>(app: &AppHandle<R>, mode: PerchMode, shortcut: PerchShortcut) -> bool {
     let prefs = Prefs { mode, shortcut };
     let data_dir = app.state::<Shared>().data_dir.clone();
-    {
+    let saved = {
         let shared = app.state::<Shared>();
         let mut st = shared.perch.lock().unwrap();
         if st.prefs == prefs {
-            return;
+            return true;
         }
-        st.prefs = prefs;
-        if !prefs.on(st.available) {
-            st.open_by_key = false;
+        let saved = prefs.save(&data_dir);
+        if saved.is_ok() {
+            st.prefs = prefs;
+            if !prefs.on(st.available) {
+                st.open_by_key = false;
+            }
         }
-    }
-    if let Err(e) = prefs.save(&data_dir) {
-        tracing::warn!(error = %e, "couldn't save the Perch settings");
-    }
+        saved
+    };
     if let Some(main) = app.get_webview_window(crate::MAIN) {
         if let Some(js) = main.url().ok().and_then(|url| island_for(app, crate::MAIN, &url)) {
             let _ = main.eval(js.as_str());
         }
     }
+    if let Err(e) = saved {
+        tracing::warn!(error = %e, "couldn't save the Perch settings");
+        crate::say_save_failed(app);
+        return false;
+    }
     apply_shortcut(app);
     refresh(app);
     crate::wake(app);
+    true
 }
 
 /// Registers the shortcut the settings name (and drops the old one). Without the plugin

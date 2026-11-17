@@ -236,7 +236,9 @@ test('ChatView puts the strip inside the composer section, right above the box, 
   const formAt = src.indexOf('<form', at);
   assert.ok(sectionAt > 0 && at > sectionAt, 'inside the composer section');
   assert.ok(src.indexOf('aria-label="Ask a member"', sectionAt) < at, 'below the Ask chips');
-  assert.equal(src.slice(at + '{workingStrip}'.length, formAt).trim(), '', 'directly above the box');
+  // 22i (design.md §2): the Needs-you strip sits between the working line and the box, nothing else
+  const between = src.slice(at + '{workingStrip}'.length, formAt).replace(/\{\/\*[\s\S]*?\*\/\}/g, '').trim();
+  assert.equal(between, '{needsYouStrip}', 'directly above the box, under the Needs-you strip');
   assert.doesNotMatch(src, /\{!?phone && workingStrip\}/, 'no layout-specific place (Rigel: 390 sat outside the section)');
   assert.equal(src.split('{workingStrip}').length - 1, 1, 'rendered once');
   assert.equal(src.match(/<WorkingStrip\b/g).length, 1, 'one element');
@@ -347,11 +349,11 @@ test('Ask chips on a phone: 28 px to look at, 44 px to tap; desktop chips unchan
   const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   const start = src.indexOf('aria-label="Ask a member"');
   const block = src.slice(src.lastIndexOf('<ScrollRow', start), src.indexOf('</ScrollRow>', start));
-  // The exact desktop classes from before 0.7.5, row and both chip kinds.
+  // The exact desktop classes from before 0.7.5, row and both chip kinds (18e: the team chip gains a 14rem cap).
   for (const desk of [
     "'kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none'",
     "'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
-    "'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
+    "'shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
   ])
     assert.ok(block.includes(desk), desk);
   const phoneChips = [...block.matchAll(/\? '(kws-hit[^']*)'/g)].map((x) => x[1]);

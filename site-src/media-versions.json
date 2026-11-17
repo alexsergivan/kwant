@@ -1,11 +1,11 @@
 {
-  "clip-handoff": "0.9.13",
-  "clip-approval": "0.9.13",
-  "clip-v090-point-at-it": "0.9.15",
-  "clip-spaces-routine": "0.9.13",
-  "clip-v090-review-inbox": "0.9.15",
-  "clip-v69-pill": "0.9.13",
-  "clip-v611-react": "0.9.13",
-  "clip-new-bot": "0.9.15",
+  "clip-handoff": "0.9.16",
+  "clip-approval": "0.9.16",
+  "clip-v090-point-at-it": "0.9.16",
+  "clip-spaces-routine": "0.9.16",
+  "clip-v090-review-inbox": "0.9.16",
+  "clip-v69-pill": "0.9.16",
+  "clip-v611-react": "0.9.16",
+  "clip-new-bot": "0.9.16",
   "reel": "0.9.9"
 }
