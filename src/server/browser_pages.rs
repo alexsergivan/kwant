@@ -20,6 +20,18 @@
 //! backoff for up to [`RETRY_WINDOW`], first freeing memory by closing or blanking other idle
 //! pages ([`relieve`]), never the page the bot is using; if it still can't, the bot is told the
 //! problem is temporary ([`crate::sandbox::service::BROWSER_BUSY`]).
+//!
+//! Closing idle connections (#753). A page's controller keeps a DevTools connection open for as
+//! long as it's cached: one for the page itself, plus a download/chooser connection and a
+//! browser-level one each for its site guard and popup watcher. Freezing or blanking a page
+//! doesn't touch any of these, and before this fix nothing ever did for a page that stayed open
+//! (every team page, and a job page short of [`JOB_PAGE_IDLE`]) or even reliably for one that
+//! was closed: on a long-running kwant they piled up until the browser ran out of the OS
+//! resources (processes, threads) they each cost and every `browser_open` failed. A page idle
+//! past [`CONN_IDLE_CLOSE`] now has its connections closed ([`close_idle_connections`]); its
+//! sign-ins and place in the page stay, and its next use reconnects lazily
+//! ([`crate::sandbox::service::BrowserService::open_session`]). Never a page that's watched, held
+//! for a person, or mid-download or -chooser ([`connections_closable`]).
 
 use super::continuity::SelfScope;
 use super::AppState;
@@ -50,6 +62,12 @@ pub const PAGE_WAIT: Duration = Duration::from_secs(60);
 pub const IDLE_FREEZE: Duration = Duration::from_secs(10 * 60);
 /// VM mode: a team page idle this long is sent to about:blank.
 pub const IDLE_BLANK: Duration = Duration::from_secs(2 * 60 * 60);
+/// VM mode: a page idle this long has its DevTools connections closed (#753): the download, site
+/// guard and popups tasks that each hold one of their own, same as [`IDLE_FREEZE`] since a frozen
+/// page has nothing left for them to watch. The page and its sign-ins stay; the next use
+/// reconnects lazily. Never one that's watched, held for a person, or has a download or file
+/// chooser in flight.
+pub const CONN_IDLE_CLOSE: Duration = IDLE_FREEZE;
 /// How long a bot's browser call keeps retrying a browser that doesn't answer (VM mode).
 pub const RETRY_WINDOW: Duration = Duration::from_secs(45);
 /// The first wait between retries; each next one doubles, up to [`RETRY_MAX_DELAY`].
@@ -243,10 +261,66 @@ pub async fn rest_idle(state: &AppState, freeze_after: Duration, blank_after: Du
     (frozen, blanked)
 }
 
-/// The browser stopped answering a call for `keep`: frees memory by closing other idle job pages
-/// and blanking other idle team pages, least recently used first, never `keep` nor a page used
-/// in the last minute, watched, held or in use. Each step is bounded (the browser may be
-/// stalled), and all of it by [`RELIEF_BUDGET`]. Returns how many pages were closed or blanked.
+/// Whether a page's connections may be closed given whether it's [`restable`] and has a download
+/// or file chooser in flight: closing mid-download would drop it, and a chooser the bot hasn't
+/// answered yet would be lost.
+pub fn connection_closable(restable: bool, downloading: bool, chooser_open: bool) -> bool {
+    restable && !downloading && !chooser_open
+}
+
+/// Whether a page's connections may be closed now: see [`connection_closable`].
+async fn connections_closable(state: &AppState, key: &str) -> bool {
+    let restable = restable(state, key).await;
+    if !restable {
+        return false;
+    }
+    let ctrl = state.browser_controllers.lock().await.get(key).cloned();
+    let Some(ctrl) = ctrl else { return true };
+    let downloading = ctrl.peek_download_report().is_some_and(|r| r["status"] == "in_progress");
+    connection_closable(restable, downloading, ctrl.open_chooser_report().is_some())
+}
+
+/// Closes one page's DevTools connections (its controller's download, site guard and popups
+/// tasks) without closing the page itself or its context: the next use reconnects lazily and its
+/// sign-ins stay (`persist_cookies` first, belt and suspenders for a VM container restart; the
+/// browser's own cookie store for the page's context is untouched either way). Whether it was.
+async fn close_connection(state: &AppState, key: &str) -> bool {
+    let ctrl = state.browser_controllers.lock().await.remove(key);
+    if let Some(ctrl) = &ctrl {
+        ctrl.persist_cookies().await;
+    }
+    let dropped_cached = state.browser_service.drop_connection(key).await;
+    ctrl.is_some() || dropped_cached
+}
+
+/// VM mode: closes the DevTools connections of pages idle past [`CONN_IDLE_CLOSE`] (job pages
+/// not yet past [`JOB_PAGE_IDLE`], and team pages, which [`sweep_idle`] never closes at all).
+/// Returns how many.
+pub async fn close_idle_connections(state: &AppState, after: Duration) -> usize {
+    if state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local {
+        return 0;
+    }
+    let now = Instant::now();
+    let mut closed = 0;
+    for (key, at) in state.browser_service.open_pages().await {
+        if now.duration_since(at) < after || !connections_closable(state, &key).await {
+            continue;
+        }
+        if close_connection(state, &key).await {
+            closed += 1;
+            tracing::info!(page = %key, "browser: closed an idle page's connections");
+        }
+    }
+    closed
+}
+
+/// The browser stopped answering a call for `keep`: frees memory and DevTools connections by
+/// closing other idle job pages and blanking and disconnecting other idle team pages, least
+/// recently used first, never `keep` nor a page used in the last minute, watched, held, mid-
+/// download, or otherwise in use. A `BROWSER_BUSY` the resource-exhaustion fix (#753) couldn't
+/// prevent is exactly this: too many of these connections open at once, so relief drops them too,
+/// not just memory, before a retry gives up. Each step is bounded (the browser may be stalled),
+/// and all of it by [`RELIEF_BUDGET`]. Returns how many pages were closed, blanked or disconnected.
 pub async fn relieve(state: &AppState, keep: &str) -> usize {
     if state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local {
         return 0;
@@ -269,14 +343,18 @@ pub async fn relieve(state: &AppState, keep: &str) -> usize {
                 if tokio::time::timeout(REST_STEP, close_page(state, &key)).await.is_ok() {
                     relieved += 1;
                 }
-            } else if state.browser_service.rest_of(&key) != Some(Rest::Blank) && rest_page(state, &key, Rest::Blank).await {
+                continue;
+            }
+            let blanked = state.browser_service.rest_of(&key) != Some(Rest::Blank) && rest_page(state, &key, Rest::Blank).await;
+            let disconnected = connections_closable(state, &key).await && close_connection(state, &key).await;
+            if blanked || disconnected {
                 relieved += 1;
             }
         }
     };
     let _ = tokio::time::timeout(RELIEF_BUDGET, work).await;
     if relieved > 0 {
-        tracing::warn!(page = %keep, "browser: not answering; closed or blanked {relieved} other idle pages to free memory");
+        tracing::warn!(page = %keep, "browser: not answering; closed, blanked or disconnected {relieved} other idle pages to free resources");
     }
     relieved
 }
@@ -354,6 +432,10 @@ pub fn spawn_sweeper(state: AppState, cancel: tokio_util::sync::CancellationToke
             let (frozen, blanked) = rest_idle(&state, IDLE_FREEZE, IDLE_BLANK).await;
             if frozen + blanked > 0 {
                 tracing::info!("browser: froze {frozen} and blanked {blanked} idle pages");
+            }
+            let disconnected = close_idle_connections(&state, CONN_IDLE_CLOSE).await;
+            if disconnected > 0 {
+                tracing::info!("browser: closed {disconnected} idle pages' connections");
             }
         }
     });
@@ -482,6 +564,15 @@ mod tests {
         assert_eq!(rest(false, m(120), None), Some(Rest::Blank));
         assert_eq!(rest(false, m(600), Some(Rest::Blank)), None, "already blank");
         assert_eq!(rest(true, m(600), None), Some(Rest::Frozen), "a job page is never blanked (it is closed)");
+    }
+
+    #[test]
+    fn a_pages_connections_never_close_mid_download_or_chooser_even_if_restable() {
+        assert!(connection_closable(true, false, false));
+        assert!(!connection_closable(false, false, false), "not restable (watched, held, or has a turn)");
+        assert!(!connection_closable(true, true, false), "a download is in progress");
+        assert!(!connection_closable(true, false, true), "a file chooser is open, unanswered");
+        assert!(!connection_closable(true, true, true));
     }
 
     #[test]

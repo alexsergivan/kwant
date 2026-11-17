@@ -13,7 +13,7 @@ use tokio::{process::Command, sync::Mutex, time::{sleep, timeout}};
 /// The VM browser's image. Bump it whenever `docker/browser.Dockerfile` or
 /// `docker/browser-entrypoint.sh` change: kwant builds an image only when its tag is missing, and
 /// replaces a browser container made from another tag, so the bump is what ships the change.
-pub const BROWSER_IMAGE: &str = "kwnt-browser:v4";
+pub const BROWSER_IMAGE: &str = "kwnt-browser:v5";
 const BROWSER_DOCKERFILE: &str = include_str!("../../docker/browser.Dockerfile");
 const BROWSER_ENTRYPOINT: &str = include_str!("../../docker/browser-entrypoint.sh");
 
@@ -753,12 +753,27 @@ impl BrowserService {
         self.rested.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
         let mut lock = self.state.lock().await;
         if let Some(state) = lock.as_mut() {
+            // Drop this page's own cached controller too (#753): otherwise its downloads/site
+            // guard/popups connections to the browser outlive the page they were opened for,
+            // even though `Target.closeTarget` below ends the page itself.
+            state.controllers.remove(key);
             if let Some(session) = state.sessions.remove(key) {
                 let _ = state.browser.send_cdp_command("Target.closeTarget", json!({"targetId": session.target})).await;
                 self.save_sessions(&state.sessions).await?;
             }
         }
         Ok(())
+    }
+
+    /// Drops a page's cached controller without closing its page or context (#753): the next use
+    /// reconnects lazily in [`Self::open_session`]. For a page that stays open but has been idle,
+    /// freeing its DevTools connections (and the download/site-guard/popups tasks that hold them)
+    /// without losing the session, its sign-ins, or its place in the page.
+    pub async fn drop_connection(&self, key: &str) -> bool {
+        match self.state.lock().await.as_mut() {
+            Some(state) => state.controllers.remove(key).is_some(),
+            None => false,
+        }
     }
 
     /// Where a bot's VM-browser cookies are kept between container restarts.
@@ -780,6 +795,10 @@ impl BrowserService {
             *lock = Some(self.connect().await?);
         }
         if let Some(state) = lock.as_mut() {
+            // Its own and its job pages' cached controllers go with the context (#753): their
+            // downloads/site-guard/popups tasks would otherwise outlive the disposed context.
+            state.controllers.remove(id);
+            state.controllers.retain(|k, _| !k.starts_with(&prefix));
             if let Some(session) = state.sessions.remove(id) {
                 if session.context.is_empty() {
                     // a local tab in the shared profile: close just that tab
@@ -978,7 +997,7 @@ mod image_tests {
     use super::{BROWSER_DOCKERFILE, BROWSER_ENTRYPOINT, BROWSER_IMAGE};
     use sha2::{Digest, Sha256};
 
-    /// The browser files `kwnt-browser:v4` was built from. A change to them without a new
+    /// The browser files `kwnt-browser:v5` was built from. A change to them without a new
     /// [`BROWSER_IMAGE`] would never reach a computer that already has the old tag.
     #[test]
     fn the_browser_image_tag_moves_with_its_files() {
@@ -988,7 +1007,7 @@ mod image_tests {
         let hash: String = files.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             (BROWSER_IMAGE, hash.as_str()),
-            ("kwnt-browser:v4", "3de3efce1e8d41e4"),
+            ("kwnt-browser:v5", "67a48c2dc2d62735"),
             "docker/browser files changed: bump BROWSER_IMAGE, then record the new hash here"
         );
     }

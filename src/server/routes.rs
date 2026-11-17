@@ -3024,6 +3024,7 @@ async fn run_kwant_turn_inner(
             workspace: workspace_dir.clone(),
             sandbox_target: Some(sandbox_target.clone()),
             repeats: Default::default(),
+            folder_tools: Default::default(),
         };
         // A replay works in its own scratch browser and asks nobody
         let _turn_on_browser = opts.rehearse.is_none().then(|| state.human_steps.track_turn(&sandbox_target, turn_scope.clone()));
@@ -3458,6 +3459,8 @@ async fn run_kwant_turn_inner(
                     break;
                 }
             };
+            // #715: an API engine has no file tools of its own, so this attempt offers the bot's folder
+            turn_scope.folder_tools.store(driver.needs_folder_tools(), std::sync::atomic::Ordering::Relaxed);
             // The model for the engine this attempt runs on: the pinned one, else the effort's tier
             let runs_on = host_engine.or_else(|| profile.as_ref().and_then(super::profile_turn::profile_engine));
             let custom = profile.as_ref().filter(|p| p.kind == "custom_api");
