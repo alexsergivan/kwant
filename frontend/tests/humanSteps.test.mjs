@@ -194,3 +194,55 @@ test('captcha card: Solve it is the main button and opens solve mode; auto outco
   assert.match(ui.render(props({ meta: cm, live: rec({ kind: 'captcha', status: 'timed_out' }) })), /moved on without it/);
   assert.doesNotMatch(ui.render(props({ meta: cm, live: rec({ kind: 'captcha', status: 'timed_out' }) })), /<button/);
 });
+
+test('a closed card names the step, quietly: noun heading in zinc-300, the open card keeps its ask (22v)', () => {
+  const heading = (html) => html.match(/<h3 id="hs-m1" class="([^"]*)">([^<]*)<\/h3>/);
+  const nouns = { sign_in: 'Sign-in', captcha: 'Human check', two_factor: 'Sign-in code', other: 'Browser step' };
+  const asks = { sign_in: 'Sign in needed', captcha: 'Human check needed', two_factor: 'Sign-in code needed', other: 'Your help is needed' };
+  for (const kind of Object.keys(nouns)) {
+    // Open: unchanged
+    const open = heading(ui.render(props({ meta: h.parseHumanStepMeta(meta({ step_kind: kind })) })));
+    assert.ok(open, `${kind} open: heading`);
+    assert.equal(open[2], asks[kind]);
+    assert.match(open[1], /text-zinc-100/);
+    for (const status of ['done', 'declined', 'timed_out', 'resolved_auto', 'cancelled', 'left_for_message']) {
+      for (const [how, p] of [
+        ['live', props({ meta: h.parseHumanStepMeta(meta({ step_kind: kind })), live: rec({ kind, status }) })],
+        ...(status === 'left_for_message' ? [] : [['meta', props({ meta: h.parseHumanStepMeta(meta({ step_kind: kind, status })) })]]),
+      ]) {
+        const html = ui.render(p);
+        const m = heading(html);
+        assert.ok(m, `${kind} ${status} ${how}: heading`);
+        assert.equal(m[2], nouns[kind], `${kind} ${status} ${how}: noun form`);
+        assert.doesNotMatch(m[1], /zinc-100/, `${kind} ${status} ${how}: not the loud white`);
+        assert.match(m[1], /text-zinc-300/, `${kind} ${status} ${how}: zinc-300`);
+        assert.doesNotMatch(html, /needed/i, `${kind} ${status} ${how}: nothing on a closed card is "needed"`);
+        // Screen readers announce the noun through aria-labelledby
+        assert.match(html, /aria-labelledby="hs-m1"/);
+      }
+    }
+  }
+});
+
+test('a late Done or Skip on a closed step: nothing where the footer says it, words otherwise, never the raw status (22v)', () => {
+  const raw = /timed_out|resolved_auto|left_for_message|declined|cancelled|_/;
+  for (const status of ['done', 'declined', 'cancelled', 'timed_out', 'resolved_auto']) {
+    for (const which of ['done', 'decline']) assert.equal(h.closedStepText(status, which, 'Pixel'), null, `${status} ${which}: the footer says it`);
+  }
+  for (const status of ['done', 'declined', 'cancelled', 'timed_out', 'resolved_auto', 'left_for_message', 'paused_for_x']) {
+    for (const which of ['done', 'decline']) {
+      const t = h.closedStepText(status, which, 'Pixel');
+      assert.notEqual(t, undefined, `${status} ${which}: a closed step has an answer`);
+      if (t !== null) {
+        assert.doesNotMatch(t, raw, `${status} ${which}: "${t}"`);
+        assert.match(t, /^[A-Z].*\.$/, `${status} ${which}: a sentence`);
+      }
+    }
+  }
+  // left_for_message + Done keeps #721's words; Skip lost nothing
+  assert.match(h.closedStepText('left_for_message', 'done', 'Pixel'), /^This closed when you sent a file, so Pixel didn't get your Done\./);
+  assert.equal(h.closedStepText('left_for_message', 'decline', 'Pixel'), null);
+  // Open isn't closed, so the real error shows; an unknown status still reads as a sentence
+  assert.equal(h.closedStepText('open', 'done', 'Pixel'), undefined);
+  assert.equal(h.closedStepText('paused_for_x', 'done', 'Pixel'), 'This step is already closed.');
+});
