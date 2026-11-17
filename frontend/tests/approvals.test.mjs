@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { loadBundled } from './bundle.mjs';
 
 // Sound settings and the chat read localStorage on import.
 globalThis.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
 const a = await loadBundled(`export * from './src/approvals';`);
+const att = await loadBundled(`export * from './src/attention';`);
 const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
@@ -155,4 +157,17 @@ test('approvalLine: a raw "Use <tool> (<server>)" title with no question gives t
   assert.equal(a.approvalLine({ ...gh, title: 'Wants to run a command' }), null);
   // Not an approval: never touched
   assert.equal(a.approvalLine({ kind: 'stopped', id: 's1', kwant_id: 'k', kwant_name: 'Q', title: 'Use the retry', summary: '', status: 'open' }), null);
+});
+
+test('the needs-you pop-up names a Home Assistant lock ask in words, like its Inbox row', () => {
+  const lock = haItem({ name: 'Front door', area: 'Hallway', domain: ['lock'] });
+  lock.link = { thread_id: null, channel_id: null, direct_kwant_id: lock.kwant_id };
+  const text = att.pillText([att.nudgeFromAway(lock, a.awayTitle)]);
+  assert.equal(text.headline, 'House needs your OK');
+  assert.equal(text.detail, 'Unlock Front door');
+  // A question keeps its own words
+  const q = { ...lock, kind: 'question', id: 'q1', title: 'Ship it today?' };
+  assert.equal(att.nudgeFromAway(q, a.awayTitle).title, 'Ship it today?');
+  // The app hands awayTitle to the arrivals tracker that feeds the pill
+  assert.match(readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8'), /createArrivals\(awayTitle\)/);
 });
