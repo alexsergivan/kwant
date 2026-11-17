@@ -84,7 +84,11 @@ async fn four_held_messages_keep_their_order(in_thread: bool, tag: &str) {
     .await;
 
     // The bot asks the person elsewhere, so sends to `chat` are held until the answer
-    ask_in.send(&env, &format!("Ship it? {} REPLYTAG:{tag}q", ask_marker("Which branch should I ship?", &["main", "batch2"]))).await;
+    // The question names the test: the fake CLI runs each CALLTOOL marker once per test binary
+    // (a `called-<sha1>` flag), and both tests run in it together, so a shared marker would open
+    // the question in only one of them.
+    let question = format!("Which branch should I ship ({tag})?");
+    ask_in.send(&env, &format!("Ship it? {} REPLYTAG:{tag}q", ask_marker(&question, &["main", "batch2"]))).await;
     let qid = open_question(&env, &ask_ctx).await;
 
     let mut events = env.state.event_sender.subscribe();
