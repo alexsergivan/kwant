@@ -327,7 +327,7 @@ mod tests {
             E::Error { code: s("x"), message: s("x"), kwant_id: Some(s("k")) },
             E::MemoryChanged { kwant_id: s("k") },
             E::BotStatus { kwant_id: s("k"), status: json!({}) },
-            E::RoutineRun { routine_id: s("r"), run_id: s("x"), status: s("ok") },
+            E::RoutineRun { routine_id: s("r"), run_id: s("x"), status: s("ok"), waiting: false, approval_id: None },
             E::TaskUpdated { task: json!({"id": "t", "space_id": "spc_x"}) },
             E::MissionUpdated { mission: json!({"id": "m", "space_id": "spc_x"}) },
             E::GoalUpdated { id: s("g"), status: s("met"), space_id: s("spc_x") },

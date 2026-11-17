@@ -124,6 +124,7 @@ import {
   streamTarget,
   waitsForOtherBot,
   threadBadge,
+  writingBadge,
   threadsApi,
   turnsIn,
   upsertThread,
@@ -4046,7 +4047,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         openThreadId,
         turns,
         awaiting: awaitingTurns,
-        directBadge: threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns),
+        // 25a: the open chat's badge stays "Working" while its live card is up, so it goes idle with the body
+        directBadge: writingBadge(threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns), !openThreadId && currentKwant.id in live),
+        openWriting: isCurrentContextStreaming,
         showArchived,
         onToggleArchived: () => setShowArchived((v) => !v),
         onOpenDirect: openDirectChat,
@@ -4062,10 +4065,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       {shownThread && (
         <ThreadHeader
           thread={shownThread}
-          badge={threadBadge(
-            { id: shownThread.id, delegation: shownThread.delegation ? delegations[shownThread.delegation.id] ?? shownThread.delegation : null },
-            turns,
-            awaitingTurns,
+          // 25a: "Working" and its Stop stay up while the body still shows the live card; header, body and
+          // composer go idle in the one commit that drops it (clearLive), with the saved reply
+          badge={writingBadge(
+            threadBadge(
+              { id: shownThread.id, delegation: shownThread.delegation ? delegations[shownThread.delegation.id] ?? shownThread.delegation : null },
+              turns,
+              awaitingTurns,
+            ),
+            shownThread.id in live,
           )}
           delegatedBy={kwantName(shownThread.delegation?.lead_kwant_id ?? shownThread.created_by)}
           onBack={openDirectChat}

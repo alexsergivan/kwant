@@ -33,7 +33,7 @@ function scene({ answered = new Set(['ask']) } = {}) {
   let screen = [{ ...USER }, { ...ASK }];
   let live = true; // the 👍 started the turn
   let stream = REPLY.text; // the working line has streamed the reply
-  let turns = { 'turn-1': { turn_id: 'turn-1', context_id: 'c' } };
+  let turns = { 'turn-1': { turn_id: 'turn-1', context_id: 'c', state: 'running', seq: 1 } };
   const server = [{ ...USER }, { ...ASK }];
   const fetches = [];
   const frames = [];
@@ -44,7 +44,10 @@ function scene({ answered = new Set(['ask']) } = {}) {
     const saved = screen.some((m) => m.id === 'pub');
     const streamed = live && stream === REPLY.text;
     const replyShown = saved || streamed;
-    frames.push({ why, ids: screen.map((m) => m.id), live, stream, replyShown, twice: saved && streamed, approve: a.approveRowId(last, null, { busy: live, answered }) });
+    // 25a: the header's badge before (turns only) and now (the open chat's live card too)
+    const oldHeader = t.threadBadge({ id: 'c', delegation: null }, turns)?.kind ?? null;
+    const header = t.writingBadge(t.threadBadge({ id: 'c', delegation: null }, turns), live)?.kind ?? null;
+    frames.push({ why, ids: screen.map((m) => m.id), live, stream, replyShown, twice: saved && streamed, approve: a.approveRowId(last, null, { busy: live, answered }), oldHeader, header });
   };
   const refreshContext = () =>
     loads.run('c', async (isLatest) => {
@@ -204,4 +207,28 @@ test('App loads the chat through ChatLoads.run, so every settle after refreshCon
   assert.doesNotMatch(body, /chatLoadsRef\.current\.start\(/);
   const tc = src.slice(src.indexOf("case 'TurnComplete': {"), src.indexOf("case 'browser_navigated':"));
   assert.match(tc, /settlesOnTurnComplete\(turnsRef\.current, event\.turn_id\) \|\| landedNewReply\(shown, /);
+});
+
+test('25a: through the turn end the header says Working exactly while the body still shows the live card', async () => {
+  const s = scene();
+  const done1 = s.turnComplete();
+  s.server.push({ ...REPLY });
+  const done2 = s.turnEnded(); // the turn is gone from `turns` now; the newest load is still out
+  await s.respond(0);
+  await s.respond(1);
+  await Promise.all([done1, done2]);
+  // the old header went idle a fetch before the body (Mira's header-before-body-390.png)
+  assert.ok(s.frames.some((f) => f.live && f.oldHeader === null), 'the scene reproduces the gap');
+  for (const f of s.frames) assert.equal(f.header === 'working', f.live, `header vs body at "${f.why}" (live ${f.live}, header ${f.header})`);
+  assert.equal(s.frames.at(-1).header, null, 'and idle together once the reply is in');
+});
+
+test('22r N1 (Rigel): clearLive commits the live map with flushSync before it clears the streamed words', async () => {
+  const src = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('const clearLive = '), src.indexOf('const kwantName = ', src.indexOf('const clearLive = ')));
+  const flush = body.indexOf('flushSync(() => setLive(next))');
+  const show = body.indexOf('streamStore.show(');
+  assert.ok(flush >= 0, 'setLive(next) goes through flushSync');
+  assert.ok(show > flush, 'flushSync(() => setLive(next)) comes before streamStore.show');
+  assert.doesNotMatch(body.replace('flushSync(() => setLive(next))', ''), /setLive\(/, 'no plain setLive besides it');
 });

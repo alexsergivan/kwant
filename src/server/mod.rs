@@ -134,6 +134,9 @@ pub struct AppState {
     pub self_tools: Arc<Mutex<HashMap<String, continuity::SelfScope>>>,
     /// Routines with a run in progress; a run that would overlap is skipped.
     pub running_routines: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// How long a turn's tool call waits for its approval card, in ms: always
+    /// [`crate::mcp::APPROVAL_TIMEOUT_SECS`]; only tests shorten it (26b).
+    pub approval_wait_ms: Arc<std::sync::atomic::AtomicU64>,
     /// Wakes the scheduler early when routines change.
     pub scheduler_wake: Arc<tokio::sync::Notify>,
     /// `ask_user` calls waiting for the user's answer.
@@ -212,6 +215,9 @@ impl AppState {
             api_token,
             self_tools: Default::default(),
             running_routines: Default::default(),
+            approval_wait_ms: Arc::new(std::sync::atomic::AtomicU64::new(
+                crate::mcp::APPROVAL_TIMEOUT_SECS * 1000,
+            )),
             scheduler_wake: Default::default(),
             questions: Default::default(),
             human_steps: Default::default(),

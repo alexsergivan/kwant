@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Archive, ArchiveRestore, ArrowLeft, ArrowRightLeft, Check, ChevronDown, HelpCircle, Loader2, MessageSquare, Plus, RotateCw, Square } from 'lucide-react';
-import { Badge, BadgeKind, Thread, TurnMap, sortThreads, threadBadge } from '../threads';
+import { Badge, BadgeKind, Thread, TurnMap, sortThreads, threadBadge, writingBadge } from '../threads';
 
 const BADGE_STYLE: Record<BadgeKind, string> = {
   working: 'text-sky-300 bg-sky-500/10 border-sky-500/30',
@@ -35,6 +35,8 @@ export interface ThreadBarProps {
   awaiting?: ReadonlySet<string>;
   /** Badge for the direct chat itself (working / queued). */
   directBadge: Badge | null;
+  /** 25a: the open conversation's reply is still being written (its live card is up), so it reads "Working". */
+  openWriting?: boolean;
   showArchived: boolean;
   onToggleArchived: () => void;
   onOpenDirect: () => void;
@@ -60,6 +62,7 @@ export const ThreadBar: React.FC<ThreadBarProps> = ({
   turns,
   awaiting,
   directBadge,
+  openWriting,
   showArchived,
   onToggleArchived,
   onOpenDirect,
@@ -117,8 +120,8 @@ export const ThreadBar: React.FC<ThreadBarProps> = ({
         )}
 
         {visible.map((t) => {
-          const badge = threadBadge(t, turns, awaiting);
           const isOpen = openThreadId === t.id;
+          const badge = isOpen ? writingBadge(threadBadge(t, turns, awaiting), !!openWriting) : threadBadge(t, turns, awaiting);
           const delegated = t.kind === 'delegation';
           return (
             <li key={t.id}>
@@ -210,6 +213,7 @@ export const ThreadPicker: React.FC<ThreadBarProps> = ({
   turns,
   awaiting,
   directBadge,
+  openWriting,
   showArchived,
   onToggleArchived,
   onOpenDirect,
@@ -226,7 +230,7 @@ export const ThreadPicker: React.FC<ThreadBarProps> = ({
   const archivedCount = threads?.filter((t) => t.archived).length ?? 0;
   const current = openThreadId ? threads?.find((t) => t.id === openThreadId) : undefined;
   const label = openThreadId ? current?.title ?? 'Conversation' : 'Direct chat';
-  const badge = current ? threadBadge(current, turns, awaiting) : openThreadId ? null : directBadge;
+  const badge = writingBadge(current ? threadBadge(current, turns, awaiting) : openThreadId ? null : directBadge, !!openWriting);
   const dot = statusDot(badge);
 
   const close = () => {
@@ -335,8 +339,8 @@ export const ThreadPicker: React.FC<ThreadBarProps> = ({
                   </li>
                 )}
                 {visible.map((t) => {
-                  const b = threadBadge(t, turns, awaiting);
                   const isOpen = openThreadId === t.id;
+                  const b = isOpen ? writingBadge(threadBadge(t, turns, awaiting), !!openWriting) : threadBadge(t, turns, awaiting);
                   const delegated = t.kind === 'delegation';
                   return (
                     <li key={t.id}>
