@@ -267,20 +267,26 @@ test("ChatView: in a bot's own chat an id row resolves to that bot even before t
 
 // ---- the server's new shape (vega-080-share-screens) --------------------------------------------
 
-const newShare = (id, bot, name, when, auto = false) => ({
+const newShare = (id, bot, name, when, auto = false, made_with = undefined) => ({
   id,
   sender_role: 'kwant',
   sender_id: bot.name,
   text: `Shared a file: ${name}`,
   created_at: when,
-  meta: JSON.stringify({ kind: 'file', attachments: [{ id: fileId(), name, mime: 'image/jpeg', size: sizeOf(name) }], kwant_id: bot.id, kwant_name: bot.name, turn_id: 't1', auto }),
+  meta: JSON.stringify({ kind: 'file', attachments: [{ id: fileId(), name, mime: 'image/jpeg', size: sizeOf(name) }], kwant_id: bot.id, kwant_name: bot.name, turn_id: 't1', auto, made_with }),
 });
 
 test("shareInfo reads kwant_id and auto; a new-shape share follows its bot's reply", () => {
   const s = newShare('n1', bots[0], 'screenshot-booktun.ing.jpg', at('11:00'), true);
-  assert.deepEqual(m.shareInfo(s.meta), { kwantId: FRONTEND, auto: true });
-  assert.deepEqual(m.shareInfo(null), { kwantId: null, auto: false });
-  assert.deepEqual(m.shareInfo('{"kind":"file","auto":"yes"}'), { kwantId: null, auto: false }, 'only a real true counts');
+  assert.deepEqual(m.shareInfo(s.meta), { kwantId: FRONTEND, auto: true, madeWith: null });
+  assert.deepEqual(m.shareInfo(null), { kwantId: null, auto: false, madeWith: null });
+  assert.deepEqual(m.shareInfo('{"kind":"file","auto":"yes"}'), { kwantId: null, auto: false, madeWith: null }, 'only a real true counts');
+  assert.equal(m.shareInfo('{"kind":"file","auto":true,"made_with":" flux "}').madeWith, 'flux');
+  assert.equal(m.shareInfo('{"kind":"file","auto":true,"made_with":"  "}').madeWith, null);
+  assert.equal(m.madeWithCaption(null), 'Shared automatically');
+  assert.equal(m.madeWithCaption('flux'), 'Made with FLUX · saved automatically');
+  assert.equal(m.madeWithCaption('picsart'), 'Made with Picsart · saved automatically');
+  assert.equal(m.madeWithCaption('images'), 'Made with images · saved automatically');
   // A share named after its bot, with the id in meta, follows that bot's reply (by id).
   const msgs = [you('u1', 'show me', at('11:00')), newShare('n2', bots[0], 'screenshot.jpg', at('11:00', 5)), reply('r1', FRONTEND, 'Here it is', at('11:00', 9))];
   assert.deepEqual(m.arrangeSharedFiles(msgs, bots).messages.map((x) => x.id), ['u1', 'r1', 'n2']);
@@ -305,6 +311,23 @@ test('ChatView: a new-shape share shows its bot, and an automatic one says "Shar
   assert.ok(n1.querySelector('[data-shared-auto]'), 'auto share has the hint');
   assert.match(n1.querySelector('[data-shared-auto]').textContent, /^Shared automatically$/);
   assert.equal(log.querySelector('[data-message-id="n2"] [data-shared-auto]'), null, 'a share the bot made itself has no hint');
+  v.unmount();
+});
+
+test('ChatView: a picture an MCP tool made names the app: the preset label, else the server name', async () => {
+  const msgs = [
+    you('u1', 'Make a fox', at('11:20')),
+    reply('r1', 'Growth', 'Here it is.', at('11:20', 20)),
+    newShare('f1', bots[1], 'flux-generate_image-1.png', at('11:20', 21), true, 'flux'),
+    you('u2', 'and another', at('11:21')),
+    reply('r2', 'Growth', 'Done.', at('11:21', 20)),
+    newShare('f2', bots[1], 'images-generate_image-1.png', at('11:21', 21), true, 'images'),
+  ];
+  const v = mount(msgs);
+  await settle();
+  const caption = (id) => v.host.querySelector(`[data-message-id="${id}"] [data-shared-auto]`)?.textContent;
+  assert.equal(caption('f1'), 'Made with FLUX · saved automatically');
+  assert.equal(caption('f2'), 'Made with images · saved automatically', 'a renamed server shows its name as typed');
   v.unmount();
 });
 

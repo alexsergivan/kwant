@@ -397,7 +397,7 @@ export const MCP_PRESETS: McpPreset[] = [
     // Checked 2026-10-24: registration at auth.picsart.com/api/oauth2/register.
     id: 'picsart',
     label: 'Picsart',
-    blurb: 'Generate and edit images and video, remove backgrounds. Sign in after adding.',
+    blurb: 'Make and edit images and video, remove backgrounds. Uses your Picsart credits.',
     category: 'creative',
     needs: ['Sign-in'],
     source: 'https://picsart.github.io/picsart-mcp-cli-docs/guide/mcp-quickstart',
@@ -410,7 +410,7 @@ export const MCP_PRESETS: McpPreset[] = [
     // not yet tried with a real sign-in.
     id: 'flux',
     label: 'FLUX',
-    blurb: 'Make and edit images and video with FLUX. Uses your BFL credits. Sign in after adding.',
+    blurb: 'Make and edit images and video. Uses your Black Forest Labs credits. Sign in after adding.',
     category: 'creative',
     needs: ['Sign-in'],
     source: 'https://github.com/black-forest-labs/flux-mcp',

@@ -313,7 +313,6 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const botName = name ?? mcp?.kwant ?? null;
   const payment = paymentReason(approval);
   const credits = payment ? paymentCredits(approval) : null;
-  const creditTool = typeof approval.details?.tool === 'string' && approval.details.tool.trim() ? approval.details.tool.trim() : payment;
   const tier = payment ? null : tierReason(approval.details);
   const startedBy = payment || tier ? null : startedByNote(approval);
   const time = localClock(approval.asked_at);
@@ -465,9 +464,9 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
             {credits ? (
               <>
                 <p className="text-rose-100 break-words" data-credits>
-                  <span className="font-semibold">This uses your {credits} credits:</span> {creditTool}.
+                  <span className="font-semibold">This uses your {credits} credits.</span>
                 </p>
-                <p className="text-xs leading-[18px] text-zinc-400">Paid generations always ask you, even with approvals off. Allowing covers this one call.</p>
+                <p className="text-xs leading-[18px] text-zinc-400">Anything that spends credits asks you first, even with approvals off. Allowing covers just this one.</p>
               </>
             ) : (
               <>

@@ -119,6 +119,7 @@ async fn flux_pictures_are_saved_in_the_chat_and_named_for_the_model() {
     for (text, meta) in &files {
         assert!(text.starts_with("Shared a file: flux-generate_image-"), "{text}");
         assert_eq!(meta["auto"], true);
+        assert_eq!(meta["made_with"], "flux", "{meta}");
         assert_eq!(meta["turn_id"], "t-media");
         assert_eq!(meta["attachments"][0]["mime"], "image/png", "{meta}");
     }

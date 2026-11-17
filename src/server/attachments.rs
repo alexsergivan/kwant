@@ -1078,7 +1078,7 @@ pub async fn tool_share(state: &AppState, scope: &SelfScope, args: &Value) -> (S
         }
         Err(StoreError::Io) => return ("Could not read or store the file.".into(), true),
     };
-    match post_file(state, scope, stored, &name, false).await {
+    match post_file(state, scope, stored, &name, false, None).await {
         Ok(Posted::New(a)) => (format!("Shared {name} with the user as a download (id {}).", a.id), false),
         Ok(Posted::Already(a)) => (
             format!("{name} is already in this chat (id {}): you shared these exact bytes a few minutes ago, so it wasn't posted again.", a.id),
@@ -1115,9 +1115,17 @@ pub fn is_file_share(m: &crate::db::models::Message) -> bool {
 /// The message is `{sender_role: "kwant", sender_id: <bot name>, text: "Shared a file: <name>"}`,
 /// the way a reply names its bot, with meta
 /// `{"kind": "file", "attachments": [card], "kwant_id", "kwant_name", "turn_id", "auto"}`
-/// (`auto`: the reply guard shared it, the bot didn't ask). An image marks the turn as having
-/// shared one, also when it was already there.
-pub async fn post_file(state: &AppState, scope: &SelfScope, stored: Stored, name: &str, auto: bool) -> Result<Posted, String> {
+/// (`auto`: the reply guard shared it, the bot didn't ask), plus `"made_with": <MCP server name>`
+/// when an MCP tool made the file ([`ChatMedia`]). An image marks the turn as having shared one,
+/// also when it was already there.
+pub async fn post_file(
+    state: &AppState,
+    scope: &SelfScope,
+    stored: Stored,
+    name: &str,
+    auto: bool,
+    made_with: Option<&str>,
+) -> Result<Posted, String> {
     let Some(origin) = &scope.origin else {
         return Err("This turn has no chat to share into.".into());
     };
@@ -1166,7 +1174,7 @@ pub async fn post_file(state: &AppState, scope: &SelfScope, stored: Stored, name
         tool_calls: None,
         tokens_used: 0,
     };
-    let meta = json!({
+    let mut meta = json!({
         "kind": "file",
         "attachments": cards(std::slice::from_ref(&a)),
         "kwant_id": scope.kwant_id,
@@ -1174,6 +1182,9 @@ pub async fn post_file(state: &AppState, scope: &SelfScope, stored: Stored, name
         "turn_id": scope.turn_id,
         "auto": auto,
     });
+    if let Some(server) = made_with.map(str::trim).filter(|s| !s.is_empty()) {
+        meta["made_with"] = json!(server);
+    }
     let extra = MessageExtra { thread_id: origin.thread_id.clone(), meta: Some(meta) };
     let Ok(saved) = state.db.insert_message_with(&msg, &extra).await else {
         return Err("Could not post the file in the chat.".into());
@@ -1199,8 +1210,8 @@ pub async fn post_file(state: &AppState, scope: &SelfScope, stored: Stored, name
 }
 
 /// 26h: where the files an MCP tool returns go ([`crate::mcp::media`]): stored like a share and
-/// posted in the turn's chat as the bot's file (`auto`: kwnt shared it, the bot didn't ask), with
-/// [`post_file`]'s sha256 dedupe.
+/// posted in the turn's chat as the bot's file (`auto`: kwnt shared it, the bot didn't ask;
+/// `made_with`: the MCP server's name), with [`post_file`]'s sha256 dedupe.
 pub struct ChatMedia {
     pub state: AppState,
     pub scope: SelfScope,
@@ -1208,7 +1219,7 @@ pub struct ChatMedia {
 
 #[async_trait::async_trait]
 impl crate::mcp::media::MediaSink for ChatMedia {
-    async fn save(&self, bytes: Vec<u8>, name: &str) -> Result<crate::mcp::media::SavedFile, String> {
+    async fn save(&self, bytes: Vec<u8>, name: &str, server: &str) -> Result<crate::mcp::media::SavedFile, String> {
         let name = clean_name(name);
         let stored = store_bytes(&root(&self.state), &bytes, &name).await.map_err(|e| match e {
             StoreError::TooLarge(Cap::Video) => "the video is larger than 100 MB".to_string(),
@@ -1221,7 +1232,7 @@ impl crate::mcp::media::MediaSink for ChatMedia {
             StoreError::Io => "it could not be stored".to_string(),
         })?;
         let saved = |a: Attachment, already| crate::mcp::media::SavedFile { id: a.id, name: a.name, already };
-        match post_file(&self.state, &self.scope, stored, &name, true).await {
+        match post_file(&self.state, &self.scope, stored, &name, true, Some(server)).await {
             Ok(Posted::New(a)) => Ok(saved(a, false)),
             Ok(Posted::Already(a)) => Ok(saved(a, true)),
             Err(why) => Err(lowercase_first(why.trim_end_matches('.'))),
@@ -1244,7 +1255,7 @@ pub async fn post_screenshot(state: &AppState, scope: &SelfScope, data_b64: &str
         Err(StoreError::Empty) => return Err("The screenshot is empty.".into()),
         Err(StoreError::Io) => return Err("Could not store the screenshot.".into()),
     };
-    post_file(state, scope, stored, &name, auto).await
+    post_file(state, scope, stored, &name, auto, None).await
 }
 
 /// `p` (relative to the workspace, or absolute) opened, with its resolved path for the name;

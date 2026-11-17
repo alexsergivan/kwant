@@ -46,9 +46,10 @@ pub struct SavedFile {
 /// Where a turn's tool files go: the server stores them and posts each as the bot's file share.
 #[async_trait]
 pub trait MediaSink: Send + Sync {
-    /// Stores `bytes` named `name` and posts it in the turn's chat. `Err` says why not, as a
-    /// clause people read ("the image is larger than 20 MB").
-    async fn save(&self, bytes: Vec<u8>, name: &str) -> Result<SavedFile, String>;
+    /// Stores `bytes` named `name` and posts it in the turn's chat, saying it was made with the
+    /// MCP server `server`. `Err` says why not, as a clause people read ("the image is larger
+    /// than 20 MB").
+    async fn save(&self, bytes: Vec<u8>, name: &str, server: &str) -> Result<SavedFile, String>;
 }
 
 /// Hosts a delivery link may be on: `suffix` (`.bfl.ai`) with a first label starting with
@@ -280,7 +281,7 @@ impl Saver<'_> {
         self.named += 1;
         let mime = real_mime(&bytes, declared);
         let name = file_name(self.server, self.tool, self.named, mime);
-        let saved = sink.save(bytes, &name).await?;
+        let saved = sink.save(bytes, &name, self.server).await?;
         self.saved += 1;
         Ok(saved)
     }
@@ -437,7 +438,7 @@ mod tests {
 
     #[async_trait]
     impl MediaSink for Sink {
-        async fn save(&self, bytes: Vec<u8>, name: &str) -> Result<SavedFile, String> {
+        async fn save(&self, bytes: Vec<u8>, name: &str, _server: &str) -> Result<SavedFile, String> {
             if self.max.is_some_and(|m| bytes.len() > m) {
                 return Err("the image is larger than 20 MB".into());
             }
