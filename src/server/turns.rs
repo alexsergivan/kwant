@@ -482,7 +482,8 @@ impl TurnRegistry {
         cancel: &CancellationToken,
         events: &broadcast::Sender<RuntimeEvent>,
     ) -> Option<Slot> {
-        self.acquire_then(tag, one_per_chat, cancel, events, || {}).await
+        // Boxed: callers keep this inline in their turn's future (see `bot_status::HeldPlace`)
+        Box::pin(self.acquire_then(tag, one_per_chat, cancel, events, || {})).await
     }
 
     /// [`Self::acquire`], calling `in_line` as soon as the turn has its place: its slot, or its

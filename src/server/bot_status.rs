@@ -867,7 +867,9 @@ fn held_view(kwant: &crate::db::models::Kwant, r: &HoldReason) -> Value {
 /// when it was stopped first. Either way it is no longer held. A message's place in its chat's
 /// line is given up at once; [`wait_turn`] keeps it until the turn is queued.
 pub async fn wait_released(state: &AppState, item_id: &str, cancel: &CancellationToken) -> bool {
-    wait_turn(state, item_id, cancel).await.is_some()
+    // Boxed: hand-offs wait here inside their turn's future, which a debug-build test thread has
+    // only just room for (see [`HeldPlace`])
+    Box::pin(wait_turn(state, item_id, cancel)).await.is_some()
 }
 
 /// [`wait_released`] for the person's held message (27d): `Some` once it may go, and only after
@@ -882,7 +884,7 @@ pub async fn wait_turn(state: &AppState, item_id: &str, cancel: &CancellationTok
     };
     // Takes it off the board however this ends (stopped, or the wait dropped), so it never holds
     // up the messages after it; once released, it is the place
-    let place = HeldPlace { turns: Some(state.turns.clone()), id: item.id.clone(), kwant_id: item.kwant_id.clone() };
+    let place = HeldPlace(Some(Box::new(Place { turns: state.turns.clone(), id: item.id.clone(), kwant_id: item.kwant_id.clone() })));
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return None,
@@ -917,20 +919,28 @@ pub async fn wait_turn(state: &AppState, item_id: &str, cancel: &CancellationTok
 /// for the same bot and chat wait while it lives. Dropped once the message's turn is in the bot's
 /// line ([`super::turns::TurnRegistry::acquire_then`]), or when the turn ends before that
 /// (stopped, or held back by a spending stop); dropping it takes the send off the board.
+///
+/// One pointer wide on purpose: it rides in [`super::routes::TurnOpts`], which is moved through
+/// every layer of a turn's future, and a debug-build test thread (2 MiB) has only just room for
+/// those (`keep_going_test` overflowed with this inline, as it did with `TurnOpts::audit`).
 #[derive(Default)]
-pub struct HeldPlace {
-    turns: Option<super::turns::TurnRegistry>,
+pub struct HeldPlace(Option<Box<Place>>);
+
+const _: () = assert!(std::mem::size_of::<HeldPlace>() == std::mem::size_of::<usize>(), "HeldPlace stays one pointer wide");
+
+struct Place {
+    turns: super::turns::TurnRegistry,
     id: String,
     kwant_id: String,
 }
 
 impl Drop for HeldPlace {
     fn drop(&mut self) {
-        if let Some(turns) = self.turns.take() {
-            turns.board(|b| {
-                b.held.retain(|h| h.id != self.id);
-                b.releasing.retain(|h| h.id != self.id);
-                b.nudge(&self.kwant_id);
+        if let Some(p) = self.0.take() {
+            p.turns.board(|b| {
+                b.held.retain(|h| h.id != p.id);
+                b.releasing.retain(|h| h.id != p.id);
+                b.nudge(&p.kwant_id);
             });
         }
     }
