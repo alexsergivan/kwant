@@ -333,6 +333,18 @@ export function threadBadge(thread: Pick<Thread, 'id' | 'delegation'>, turns: Tu
   return FINAL_LABEL[st] ?? null;
 }
 
+/**
+ * 25a: the open chat's badge while its reply is still being written (its id is in App's `live`). The turn's
+ * `turn_ended` can land a fetch before the saved reply, and the header must not say "done" while the body
+ * still says "writing", so a missing or final badge reads "Working" until the live card goes. "Waiting for
+ * you" and "Queued" stay as they are. Only for the conversation on screen: other rows keep `threadBadge`.
+ */
+export function writingBadge(badge: Badge | null, writing: boolean): Badge | null {
+  if (!writing) return badge;
+  if (badge && (badge.kind === 'working' || badge.kind === 'waiting' || badge.kind === 'queued')) return badge;
+  return { kind: 'working', label: 'Working' };
+}
+
 export const isOpenDelegation = (d: Pick<Delegation, 'status'> | null | undefined): boolean =>
   !!d && (d.status === 'queued' || d.status === 'running');
 
