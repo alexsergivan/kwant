@@ -215,6 +215,9 @@ pub struct Board {
     sent: HashMap<String, Sent>,
     /// Bots whose status may have changed outside the event bus (a hold, a mark, a snooze).
     nudged: HashSet<String>,
+    /// Tests: how long a held send's work between its release and its queue place takes (the
+    /// delivery plan's model call in a real chat), by send id. Taken once, at the release.
+    pub release_lag: HashMap<String, std::time::Duration>,
 }
 
 impl Board {
@@ -874,6 +877,9 @@ pub async fn wait_released(state: &AppState, item_id: &str, cancel: &Cancellatio
         if free {
             unhold();
             tracing::info!(kwant = %item.kwant_id, kind = item.kind, "held send released");
+            if let Some(lag) = state.turns.board(|b| b.release_lag.remove(item_id)) {
+                tokio::time::sleep(lag).await;
+            }
             return true;
         }
     }
