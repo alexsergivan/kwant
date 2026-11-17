@@ -30,7 +30,7 @@ const OFF: &str = "mcp__house__intent__HassTurnOff";
 const READ: &str = "mcp__house__homeassistant__GetLiveContext";
 const UNLOCKING: &str = "Unlocking the front door now.";
 const CONTINUATION: &str = "[kwnt: one automatic continuation";
-const CHANGE_LINE: &str = "_kwant: nothing in your home changed in this reply. No Home Assistant step ran (see Details)._";
+const CHANGE_LINE: &str = "_kwant: House didn't change anything in your home in this reply. No Home Assistant step made that change (see Details)._";
 
 /// Every chat request the fake model got.
 type Seen = Arc<Mutex<Vec<Value>>>;
@@ -232,7 +232,7 @@ async fn a_claimed_unlock_with_no_tool_is_continued_into_the_lock_card() {
     assert_eq!(replies[0].text, UNLOCKING);
     let asked = continuations(&seen);
     assert_eq!(asked.len(), 1, "one continuation: {asked:?}");
-    assert!(asked[0].contains("Your reply says \"Unlocking the front door now.\", but no Home Assistant tool ran in this turn"), "{}", asked[0]);
+    assert!(asked[0].contains("Your reply says \"Unlocking the front door now.\", but no Home Assistant step changed anything in this turn"), "{}", asked[0]);
     // The continuation called HassTurnOff, the card asked, the person denied: no false claim
     let last = &replies[1].text;
     assert_eq!(last, "You declined the card, so the front door stays locked.");

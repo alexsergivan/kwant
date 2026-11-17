@@ -307,9 +307,10 @@ then reply with the PR or branch link.";
 /// Product copy is Mira's.
 pub fn home_change_prompt(claim: &str) -> String {
     format!(
-        "Your reply says \"{}\", but no Home Assistant tool ran in this turn, so nothing in the home changed. \
-If the person asked for this change, make the call now (unlocking a lock is intent__HassTurnOff with its name; the person \
-gets an approval card for locks, doors and alarms). Otherwise say plainly that nothing changed.",
+        "Your reply says \"{}\", but no Home Assistant step changed anything in this turn, so that change didn't happen. \
+If the person asked for it, make the call now with the device's name (intent__HassTurnOn or intent__HassTurnOff; unlocking \
+a lock is intent__HassTurnOff). The person gets an approval card for locks, doors, garage doors, gates and alarms. \
+Otherwise say plainly that nothing changed.",
         clip(claim.trim(), MAX_QUOTE_CHARS)
     )
 }
@@ -325,12 +326,13 @@ weather in place of a sensor inside."
 }
 
 /// 27e: added to the continuation's reply that still claims a change no Home Assistant step
-/// made. `tried`: a change step ran and didn't work.
-pub fn home_change_line(tried: bool) -> &'static str {
+/// made, naming `bot`. `tried`: a change step ran and didn't work. Both are true whenever the line
+/// is added, even after reads of the home ran: it needs no change step to have worked.
+pub fn home_change_line(bot: &str, tried: bool) -> String {
     if tried {
-        "_kwant: nothing in your home changed in this reply. The Home Assistant step didn't work (see Details)._"
+        format!("_kwant: {bot} didn't change anything in your home in this reply. The Home Assistant step didn't work (see Details)._")
     } else {
-        "_kwant: nothing in your home changed in this reply. No Home Assistant step ran (see Details)._"
+        format!("_kwant: {bot} didn't change anything in your home in this reply. No Home Assistant step made that change (see Details)._")
     }
 }
 
@@ -1044,7 +1046,7 @@ pub fn apply(reply: String, v: &Verdict, bot: &str) -> String {
     // 27e: kwant's own lines about the home
     for line in &v.home_lines {
         let line = match line {
-            HomeLine::Change { tried } => home_change_line(*tried).to_string(),
+            HomeLine::Change { tried } => home_change_line(bot, *tried),
             HomeLine::Read { error } => home_read_line(bot, error.as_deref()),
         };
         reply = format!("{}\n\n{line}", reply.trim_end()).trim_start().to_string();
@@ -1058,7 +1060,7 @@ pub fn continuation_label(missing: &[Missing]) -> &'static str {
     if only(&[Missing::FollowThrough]) {
         "Automatic continuation (once): the last step failed and the reply ended on a plan that didn't run"
     } else if only(&[Missing::HomeChange, Missing::HomeRead, Missing::FollowThrough]) {
-        "Automatic continuation (once): the reply said something about the home that no Home Assistant step backed"
+        "Automatic continuation (once): a Home Assistant step the reply needed didn't run or didn't work"
     } else {
         "Automatic continuation (once): the reply was missing what the person expected"
     }
@@ -1978,10 +1980,12 @@ mod tests {
         assert_eq!(v.missing, [Missing::HomeChange]);
         let prompt = v.continue_with.as_deref().unwrap();
         assert!(prompt.contains("Missing from your last reply: a Home Assistant step for the change you described"), "{prompt}");
-        assert!(prompt.contains("Your reply says \"Unlocking the front door now.\", but no Home Assistant tool ran in this turn"), "{prompt}");
-        assert!(prompt.contains("intent__HassTurnOff with its name"), "{prompt}");
+        assert!(prompt.contains("Your reply says \"Unlocking the front door now.\", but no Home Assistant step changed anything in this turn"), "{prompt}");
+        assert!(prompt.contains("with the device's name (intent__HassTurnOn or intent__HassTurnOff; unlocking a lock is intent__HassTurnOff)"), "{prompt}");
+        assert!(prompt.contains("locks, doors, garage doors, gates and alarms"), "{prompt}");
+        assert!(!prompt.contains("no Home Assistant tool ran"), "{prompt}");
         assert!(v.home_lines.is_empty() && v.outcome.is_none());
-        assert!(continuation_label(&v.missing).contains("about the home"));
+        assert_eq!(continuation_label(&v.missing), "Automatic continuation (once): a Home Assistant step the reply needed didn't run or didn't work");
         // Never a delivery note
         assert!(shows(&explain(), &[Missing::HomeChange]).1.is_empty());
         // A plain chat turn without Home Assistant: nothing, even with the same words
@@ -2000,13 +2004,13 @@ mod tests {
         assert_eq!(v.home_lines, [HomeLine::Change { tried: false }]);
         assert_eq!(
             apply(UNLOCKING.into(), &v, "House"),
-            "Unlocking the front door now.\n\n_kwant: nothing in your home changed in this reply. No Home Assistant step ran (see Details)._"
+            "Unlocking the front door now.\n\n_kwant: House didn't change anything in your home in this reply. No Home Assistant step made that change (see Details)._"
         );
         assert_eq!(meta(&v, None, true).unwrap()["home_line"], true);
         // A change step that ran and failed says so
         let tried = check(UNLOCKING, None, true, &house(json!([turn_off("failed")])));
         assert_eq!(tried.home_lines, [HomeLine::Change { tried: true }]);
-        assert!(apply(UNLOCKING.into(), &tried, "House").ends_with("The Home Assistant step didn't work (see Details)._"));
+        assert!(apply(UNLOCKING.into(), &tried, "House").ends_with("\n\n_kwant: House didn't change anything in your home in this reply. The Home Assistant step didn't work (see Details)._"));
     }
 
     #[test]
@@ -2080,5 +2084,54 @@ mod tests {
         assert!(prompt.contains("Your reply says") && prompt.contains("Your Home Assistant read failed"));
         let then = check(UNLOCKING, None, true, &house(json!([read("failed", SWITCH_MISS)])));
         assert_eq!(then.home_lines.len(), 2);
+    }
+
+    /// 27e round 2 (Mira's design check): every sentence the model and the person get is true
+    /// when a Home Assistant step did run: a read that worked, a read that failed (the report's
+    /// case) and a change step that failed.
+    #[test]
+    fn home_sentences_stay_true_when_a_home_step_ran() {
+        const NO_STEP: &str = "\n\n_kwant: House didn't change anything in your home in this reply. No Home Assistant step made that change (see Details)._";
+        const FAILED_STEP: &str = "\n\n_kwant: House didn't change anything in your home in this reply. The Home Assistant step didn't work (see Details)._";
+        const LABEL: &str = "Automatic continuation (once): a Home Assistant step the reply needed didn't run or didn't work";
+        for (steps, tried, missing) in [
+            (json!([]), false, vec![Missing::HomeChange]),
+            (json!([read("ok", "Front door: locked")]), false, vec![Missing::HomeChange]),
+            (json!([read("failed", SWITCH_MISS)]), false, vec![Missing::HomeChange, Missing::HomeRead]),
+            (json!([read("ok", "Front door: locked"), turn_off("failed")]), true, vec![Missing::HomeChange]),
+        ] {
+            let v = check(UNLOCKING, None, false, &house(steps.clone()));
+            assert_eq!(v.missing, missing, "{steps}");
+            let prompt = v.continue_with.as_deref().unwrap();
+            assert!(
+                prompt.contains(
+                    "Your reply says \"Unlocking the front door now.\", but no Home Assistant step changed anything in this turn, \
+so that change didn't happen. If the person asked for it, make the call now with the device's name (intent__HassTurnOn or \
+intent__HassTurnOff; unlocking a lock is intent__HassTurnOff). The person gets an approval card for locks, doors, garage \
+doors, gates and alarms. Otherwise say plainly that nothing changed."
+                ),
+                "{steps}: {prompt}"
+            );
+            assert!(!prompt.contains("no Home Assistant tool ran"), "{steps}: {prompt}");
+            assert_eq!(continuation_label(&v.missing), LABEL, "{steps}");
+            // Still claimed after the continuation: kwant's line never says no step ran
+            let then = check(UNLOCKING, None, true, &house(steps.clone()));
+            assert_eq!(then.home_lines[0], HomeLine::Change { tried }, "{steps}");
+            let saved = apply(UNLOCKING.into(), &then, "House");
+            assert!(saved.starts_with(&format!("{UNLOCKING}{}", if tried { FAILED_STEP } else { NO_STEP })), "{steps}: {saved}");
+            assert!(!saved.contains("No Home Assistant step ran") && !saved.contains("nothing in your home changed"), "{saved}");
+            // ...and kwant's own line is never read as a claim
+            assert_eq!(claimed_change(&saved[UNLOCKING.len()..]), None, "{saved}");
+        }
+        // A read miss alone, even when the reply honestly said the check failed, gets the same label
+        let v = check("The check failed: Home Assistant said no switches matched.", None, false, &house(json!([read("failed", SWITCH_MISS)])));
+        assert_eq!(v.missing, [Missing::HomeRead]);
+        assert_eq!(continuation_label(&v.missing), LABEL);
+        assert!(!LABEL.contains("backed") && !LABEL.contains("said something"));
+        // The bot's name is the one it's given
+        assert_eq!(
+            home_change_line("Casa", false),
+            "_kwant: Casa didn't change anything in your home in this reply. No Home Assistant step made that change (see Details)._"
+        );
     }
 }

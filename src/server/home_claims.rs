@@ -178,7 +178,9 @@ mod tests {
             "`turned off` is what the log says.",
             "```\nUnlocking the front door now.\n```",
             "The light turned off by itself at 10.",
-            "Nothing in your home changed. No Home Assistant step ran.",
+            "House didn't change anything in your home in this reply. No Home Assistant step made that change (see Details).",
+            "House didn't change anything in your home in this reply. The Home Assistant step didn't work (see Details).",
+            "_kwant: House didn't change anything in your home in this reply. No Home Assistant step made that change (see Details)._",
         ] {
             assert_eq!(claimed_change(reply), None, "{reply}");
         }

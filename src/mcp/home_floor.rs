@@ -180,11 +180,12 @@ pub fn decide(kind: ServerKind, tool: &str, args: &Value, read_only: Option<bool
     sensitive_args(args)
 }
 
-/// 27e: said to the model (never in Details) after a `GetLiveContext` with a name, area or domain
-/// that Home Assistant answered with an error ("No exposed entities found in domain(s): switch"):
-/// a 7B model answered "There are no switches left on" while two lights were on. Product copy is
-/// Mira's.
-pub const READ_MISS_HINT: &str = "Nothing matched that filter, so you haven't seen the home yet. Call GetLiveContext \
+/// 27e: said to the model (never in Details) after every `GetLiveContext` with a name, area or
+/// domain that ended with an error: Home Assistant's own miss ("No exposed entities found in
+/// domain(s): switch"), where a 7B model answered "There are no switches left on" while two lights
+/// were on, but also bad arguments or Home Assistant being down, and even after an earlier whole
+/// read worked (it is per call). The wording is true in all of those. Product copy is Mira's.
+pub const READ_MISS_HINT: &str = "That filtered read didn't work, and a filter can miss devices. Call GetLiveContext \
 again with no arguments: it lists every device and sensor you can use, with their real names. Answer only from that list.";
 
 /// 27e: said to the model (never in Details) after a `GetLiveContext` with a filter that worked:
@@ -320,5 +321,23 @@ mod tests {
         assert_eq!(live_context_hint(read, &json!({"domain": ["light"]}), "denied"), None);
         assert_eq!(live_context_hint("intent__HassTurnOff", &json!({"domain": ["light"]}), "error"), None);
         assert_eq!(live_context_hint("homeassistant__GetDateTime", &json!({"name": "x"}), "ok"), None);
+    }
+
+    /// 27e round 2 (Mira): the miss hint goes with every filtered read that ended in an error
+    /// (Home Assistant's own "No exposed entities…", bad arguments, Home Assistant down) and with
+    /// each call, even after a whole read worked, so it claims only what all of those share.
+    #[test]
+    fn the_miss_hint_is_true_for_every_error() {
+        assert_eq!(
+            READ_MISS_HINT,
+            "That filtered read didn't work, and a filter can miss devices. Call GetLiveContext again with no arguments: \
+it lists every device and sensor you can use, with their real names. Answer only from that list."
+        );
+        assert!(!READ_MISS_HINT.contains("Nothing matched") && !READ_MISS_HINT.contains("haven't seen"));
+        // The record's status is all it goes by: the same hint whatever the error says
+        let read = "homeassistant__GetLiveContext";
+        for args in [json!({"domain": ["switch"]}), json!({"name": 7}), json!({"area": "kitchen"})] {
+            assert_eq!(live_context_hint(read, &args, "error"), Some(READ_MISS_HINT), "{args}");
+        }
     }
 }
