@@ -12,6 +12,9 @@
 //!
 //! Without it those tests pass without doing anything (and say so).
 
+#[path = "support/skip.rs"]
+mod skip;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -164,11 +167,7 @@ async fn vault_routes_are_the_persons_only() {
 }
 
 fn server() -> Option<String> {
-    let s = std::env::var("KWNT_TEST_VAULTWARDEN").ok().filter(|s| !s.is_empty());
-    if s.is_none() {
-        eprintln!("KWNT_TEST_VAULTWARDEN is not set: skipping the live Bitwarden test");
-    }
-    s
+    skip::opt_in("KWNT_TEST_VAULTWARDEN", "the live Bitwarden test")
 }
 
 const MASTER: &str = "DUMMY-master-pw-kwnt-test";

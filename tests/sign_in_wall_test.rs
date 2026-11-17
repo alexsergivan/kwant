@@ -7,6 +7,9 @@
 //! browser through the shell API (curl) like a bot without kwnt's tools. Its own test binary: it
 //! changes PATH. Skipped when no Chrome or Chromium is installed.
 
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "common/exe.rs"]
 mod exe;
 #[path = "support/chrome_guard.rs"]
@@ -116,7 +119,7 @@ struct Env {
 async fn setup() -> Option<Env> {
     behave_dir();
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return None;
     }
     let tmp = tempfile::tempdir().unwrap();

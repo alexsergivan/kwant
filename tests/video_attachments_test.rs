@@ -3,6 +3,9 @@
 //! they can't be accepted, play inline, are shared by agents, and read as a few frames.
 //! Fixtures are 2–3 s ffmpeg `testsrc` clips (synthetic, no real footage).
 
+#[path = "support/skip.rs"]
+mod skip;
+
 mod common;
 
 use axum::{
@@ -208,7 +211,7 @@ async fn agents_share_videos_and_see_them_as_frames() {
 
     let r = self_call(&env, "tok-ws", "read_attachment", json!({"id": id})).await;
     if kwnt::server::video::tools().is_none() {
-        eprintln!("no ffmpeg here: checking the no-ffmpeg answer only");
+        skip::skip_or_fail("ffmpeg and ffprobe (for the frames part)", "install ffmpeg, e.g. `apt install ffmpeg`");
         assert_eq!(r["isError"], false);
         assert!(text_of(&r).ends_with(kwnt::server::video::NO_FFMPEG), "{r}");
         return;
@@ -236,7 +239,7 @@ async fn agents_share_videos_and_see_them_as_frames() {
 #[tokio::test]
 async fn a_damaged_video_reads_as_a_clear_error() {
     if kwnt::server::video::tools().is_none() {
-        eprintln!("no ffmpeg here: skipped");
+        skip::skip_or_fail("ffmpeg and ffprobe", "install ffmpeg, e.g. `apt install ffmpeg`");
         return;
     }
     let env = setup().await;
