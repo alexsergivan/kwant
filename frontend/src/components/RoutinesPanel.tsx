@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { routineRunNote } from '../spendStop';
-import { applyRunWait, liveWaitOf, runRowState, type RunTone, type RunWait } from '../routineRow';
+import { liveWaitOf, runRowState, runWaitsNow, subscribeRunWaits, type RunTone, type RunWait } from '../routineRow';
 import type { NotifiedChat } from '../chatTarget';
 import { useUndoableDelete } from '../undoDelete';
 import { UndoNotice } from './UndoNotice';
@@ -698,8 +698,9 @@ export const RoutinesPanel: React.FC<{
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Routine | 'new' | null>(null);
   const [tick, setTick] = useState(0);
-  // 26d: which runs wait on an approval card right now (from the live `routine_run` events), by run id.
-  const [waits, setWaits] = useState<Record<string, RunWait>>({});
+  // 26d: which runs wait on an approval card right now, by run id. App records the live `routine_run` events even
+  // while this panel is closed (routineRow.recordRunWait), so a wait that began earlier still shows.
+  const waits = useSyncExternalStore(subscribeRunWaits, runWaitsNow, runWaitsNow);
 
   const reload = useCallback(async () => {
     try {
@@ -713,8 +714,7 @@ export const RoutinesPanel: React.FC<{
 
   useEffect(() => {
     reload();
-    return onContinuity('routine_run', (data) => {
-      setWaits((w) => applyRunWait(w, data));
+    return onContinuity('routine_run', () => {
       reload();
       setTick((t) => t + 1);
     });

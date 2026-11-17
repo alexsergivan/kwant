@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { recordRunWait } from './routineRow';
 import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
@@ -1561,6 +1562,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'routine_run':
           case 'RoutineRun':
+            recordRunWait(event.data);
             emitContinuity({ type: 'routine_run', data: event.data });
             break;
           case 'notify':

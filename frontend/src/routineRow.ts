@@ -84,3 +84,21 @@ export function applyRunWait(
 /** The wait of a routine's run that waits right now, for the routine card's last-run badge; null when none. */
 export const liveWaitOf = (waits: Record<string, RunWait>, routineId: string): RunWait | null =>
   Object.values(waits).find((w) => w.waiting && w.routine_id === routineId) ?? null;
+
+// 26d (Rigel's D2): live waits outlive the Routines panel. App records every `routine_run` event here, so opening
+// Routines after a run started waiting still shows "Waiting for you" and its card link.
+let runWaits: Record<string, RunWait> = {};
+const runWaitSubs = new Set<() => void>();
+export function recordRunWait(data: Parameters<typeof applyRunWait>[1]): void {
+  const next = applyRunWait(runWaits, data);
+  if (next === runWaits) return;
+  runWaits = next;
+  runWaitSubs.forEach((fn) => fn());
+}
+export function subscribeRunWaits(fn: () => void): () => void {
+  runWaitSubs.add(fn);
+  return () => {
+    runWaitSubs.delete(fn);
+  };
+}
+export const runWaitsNow = (): Record<string, RunWait> => runWaits;

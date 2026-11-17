@@ -10,7 +10,7 @@ globalThis.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem
 const o = await loadBundled(`
   export * from './src/replyOutcome';
   export { parseActivityMeta, activitySummary, statusLabel } from './src/activity';
-  export { runRowState, applyRunWait, liveWaitOf } from './src/routineRow';
+  export { runRowState, applyRunWait, liveWaitOf, recordRunWait, subscribeRunWaits, runWaitsNow } from './src/routineRow';
   export { routineRunNote } from './src/spendStop';
 `);
 const ui = await loadBundled(`
@@ -54,6 +54,10 @@ test('replyOutcome: recovery needs a later ok of the same tool', () => {
   assert.equal(o.replyOutcome([step('s1', 'failed', 'a'), step('s2', 'ok', 'b')]).kind, 'failed', 'another tool does not count');
   assert.equal(o.replyOutcome([step('s1', 'failed', undefined), step('s2', 'ok', undefined)]).kind, 'failed', 'no tool name never recovers');
   assert.equal(o.replyOutcome([step('s1', 'failed', 'a'), step('s2', 'declined', 'a')]).kind, 'failed', 'declined is not a success');
+  // Rigel's D1: an approved approval card for the same tool is permission, not the retry working
+  const approved = { id: 's2', kind: 'approval', status: 'done', title: 'Allow Bash?', tool: 'Bash', started_at: T0 };
+  assert.equal(o.replyOutcome([step('s1', 'failed', 'Bash'), approved]).kind, 'failed', 'an approved card alone does not recover');
+  assert.equal(o.replyOutcome([step('s1', 'failed', 'Bash'), approved, step('s3', 'ok', 'Bash')]).kind, 'recovered', 'the approved retry that ran does');
   const two = o.replyOutcome([step('s1', 'failed', 'a'), step('s2', 'failed', 'a'), step('s3', 'ok', 'a')]);
   assert.deepEqual(two, { kind: 'recovered', count: 2, stepId: 's1' });
   // One recovered and one stuck: the stuck one wins and Details opens at it
@@ -217,4 +221,20 @@ test('RunRow: waiting links to the card; needs_you and incomplete read in words'
 test('routineRunNote: needs_you has no note; incomplete keeps its reason', () => {
   assert.equal(o.routineRunNote({ status: 'needs_you', error: 'A step is waiting for your approval, so it didn\'t run' }), null);
   assert.deepEqual(o.routineRunNote({ status: 'incomplete', error: 'Bash failed' }), { text: 'Bash failed', quiet: false });
+});
+
+test('run waits outlive the Routines panel (Rigel D2): App records them, the panel reads them when it opens', () => {
+  let calls = 0;
+  const off = o.subscribeRunWaits(() => calls++);
+  o.recordRunWait({ routine_id: 'r9', run_id: 'run9', status: 'running', waiting: true, approval_id: 'ap9' });
+  assert.equal(calls, 1);
+  assert.equal(o.liveWaitOf(o.runWaitsNow(), 'r9')?.approval_id, 'ap9');
+  const before = o.runWaitsNow();
+  o.recordRunWait({ routine_id: 'r9', run_id: 'run9', status: 'running', waiting: true, approval_id: 'ap9' });
+  assert.equal(o.runWaitsNow(), before, 'the same event changes nothing');
+  assert.equal(calls, 1);
+  off();
+  o.recordRunWait({ routine_id: 'r9', run_id: 'run9', status: 'needs_you', waiting: false });
+  assert.equal(calls, 1, 'unsubscribed');
+  assert.equal(o.runRowState({ status: 'needs_you' }, o.runWaitsNow().run9).cardId, 'ap9', 'the card id outlives the wait');
 });

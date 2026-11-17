@@ -11,11 +11,14 @@ export type ReplyOutcome =
   /** Every failed step was followed by a step of the same tool that worked; `count` failed steps. */
   | { kind: 'recovered'; count: number; stepId: string };
 
-const worked = (s: ActivityStep) => s.status === 'ok' || s.status === 'done';
+// Only a tool step that worked is a retry that worked. An approval step names its tool too and settles ok/done
+// when the person says yes, but that is permission, not the call succeeding (Rigel's D1).
+const worked = (s: ActivityStep) => s.kind === 'tool' && (s.status === 'ok' || s.status === 'done');
 
 /**
  * What the reply's steps add up to, or null when nothing failed or went unanswered. A failed step counts as
- * recovered only when a later step names the same tool and worked; a step with no tool name never recovers.
+ * recovered only when a later tool step names the same tool and worked (an approved approval card doesn't count);
+ * a step with no tool name never recovers.
  * `stepId` is the step Details opens to: the first unanswered or failed-for-good step, else the first failed.
  */
 export function replyOutcome(steps: readonly ActivityStep[] | null | undefined): ReplyOutcome | null {
