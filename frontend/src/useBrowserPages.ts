@@ -14,7 +14,7 @@ export const PAGES_WAIT_MS = 1_500;
  * `at` is when the list was asked for, so a page picked after that isn't judged closed by it.
  * An older server without the route leaves it null (no strip).
  * `checked` (28l) is false from the moment the pane shows until the first answer since then, so the
- * pane knows whether to wait for the list or use its older fallback; a list from before is dropped.
+ * pane knows whether to wait for the list or use its older fallback; the list is dropped when it hides.
  */
 // 28l: teams whose server answered with no pages list (an older server): the pane doesn't wait for it again
 const noPagesRoute = new Set<string>();
@@ -57,9 +57,6 @@ export function useBrowserPages(team: string | undefined, visible: boolean) {
 
   useEffect(() => {
     if (!live) return;
-    // A list from the last time the pane showed is stale (a run may have moved pages since): start over
-    setList(null);
-    setChecked(noPagesRoute.has(team));
     load();
     // A slow answer must not keep the pane waiting: after this, the older fallback
     const giveUp = setTimeout(() => setChecked(true), PAGES_WAIT_MS);
@@ -77,6 +74,11 @@ export function useBrowserPages(team: string | undefined, visible: boolean) {
       off();
       clearTimeout(soon);
       clearTimeout(giveUp);
+      // The pane closed: its list goes stale (a run may move pages before it opens again), so the next
+      // open starts with none and waits for a fresh one, rather than showing this one for a moment
+      seq.current++;
+      setList(null);
+      setChecked(!!team && noPagesRoute.has(team));
       clearInterval(tick);
     };
   }, [live, team, load]);

@@ -35,7 +35,7 @@ import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 import { PointLayer, PointSink } from './PointLayer';
 import { POINT_COPY, footerText } from '../point';
-import { choosePage, noteTitle, pageTeam, pageTitleOf, restingPage, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
+import { choosePage, noteTitle, pageOpened, pageTeam, pageTitleOf, restingPage, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
 import { secondsText } from '../clock';
@@ -230,13 +230,18 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // A list asked for before the pick can't know the picked page yet
   const knownPages = pageKeys && (!picked || (pages.list?.at ?? 0) >= picked.at) ? pageKeys : null;
   const openStep = humanStep?.status === 'open' ? humanStep : captchaStep?.status === 'open' ? captchaStep : null;
-  // 28l: with nothing chosen, the page the pane already shows, kept while it is open and no run is going
-  // (during a run it follows the server's default, the page the bot uses). Once the list is known,
-  // this is never null, so the stream always names its page and never shows another page's picture.
+  // 28l: with nothing chosen, the page the pane already shows, kept while it is open. It lets go when a
+  // page opens (a bot's open or navigate step), then rests on the server's default, the page just used.
+  // Once the list is known this is never null, so the stream always names its page.
   const [heldPage, setHeldPage] = useState<string | null>(null);
+  const lastList = useRef(pages.list);
+  const opened = pages.list !== lastList.current && pageOpened(lastList.current, pages.list);
   const chosenPage =
     choosePage({ picked: picked?.page ?? null, stepPage: stepPage(openStep), pages: knownPages }) ??
-    restingPage(running ? null : heldPage, pages.list);
+    restingPage(opened ? null : heldPage, pages.list);
+  useEffect(() => {
+    lastList.current = pages.list;
+  }, [pages.list]);
   useEffect(() => setHeldPage(isOpen ? chosenPage : null), [isOpen, chosenPage]);
   // Until the first list answers, the stream waits (a stream to the default, then to the named page, blinks)
   const pagesKnown = pages.checked || !teamId || teamId === 'default';

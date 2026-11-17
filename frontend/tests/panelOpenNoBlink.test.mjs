@@ -3,7 +3,7 @@
 // With nothing chosen, the pane followed the server's default page (`live`), which still pointed at Ben's job
 // page and flipped back to the team page a moment later, and with no named page the picture could be the
 // app-level screenshot (Ben's last shot) under any tab. Now, once the pages list is known, the pane always
-// names its page (restingPage): the one it already shows, while it is listed and no run is going.
+// names its page (restingPage): the one it already shows, while it is listed, until a page opens (pageOpened).
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -59,7 +59,7 @@ const pane = await loadBundled(`
   export { createRoot } from 'react-dom/client';
   export { flushSync } from 'react-dom';
   export { VirtualMachinePane } from './src/components/VirtualMachinePane';
-  export { notifyBrowserPages, restingPage } from './src/browserPages';
+  export { notifyBrowserPages, pageOpened, restingPage } from './src/browserPages';
 `);
 const settle = async (ms = 0) => { for (let i = 0; i < 30; i++) await new Promise((r) => setTimeout(r, 0)); if (ms) await new Promise((r) => setTimeout(r, ms)); };
 
@@ -160,26 +160,70 @@ test('the page it rests on closes: it moves to the default', async () => {
   }
 });
 
-test('during a run it still follows the default (the page the bot uses)', async () => {
+test('pageOpened: a new page or a new address; not a page only used, closed or retitled', () => {
+  const k = teamPages('u');
+  const before = { pages: [k.SHARED, k.BEN] };
+  assert.equal(pane.pageOpened(null, before), false);
+  assert.equal(pane.pageOpened(before, null), false);
+  assert.equal(pane.pageOpened(before, { pages: [k.BEN, k.SHARED] }), false, 'reordered');
+  assert.equal(pane.pageOpened(before, { pages: [k.SHARED] }), false, 'closed');
+  assert.equal(pane.pageOpened(before, { pages: [k.SHARED, { ...k.BEN, title: 'Other', idle_seconds: 0 }] }), false, 'retitled, used');
+  assert.equal(pane.pageOpened(before, { pages: [k.SHARED, { ...k.BEN, url: 'about:blank' }] }), false, 'blanked');
+  assert.equal(pane.pageOpened(before, { pages: [k.SHARED, { ...k.BEN, url: 'https://shop.example.com/trail/cart' }] }), true, 'navigated');
+  assert.equal(pane.pageOpened({ pages: [k.SHARED] }, before), true, 'new page');
+});
+
+test('a bot opens a page while the pane is open: it follows; the default moving back later does not', async () => {
   const k = teamPages('k4');
-  answer = k.MOMENT_LATER;
+  answer = { team_id: 'k4', live: 'k4', max_job_pages: 4, pages: [k.SHARED] };
   const m = mount({ running: true, teamId: 'k4' });
   try {
     await settle();
-    assert.equal(currentTab(m.host), 'k4');
+    assert.match(sockets.at(-1).url, /page=k4(&|$)/, 'one page (no strip yet): the team page');
     answer = k.AFTER_RUN;
     pane.notifyBrowserPages('k4');
     await settle(300);
     assert.equal(currentTab(m.host), 'k4#ben#c1', 'the bot opened its page: the pane follows it');
     assert.match(sockets.at(-1).url, /page=k4%23ben%23c1/);
-    // The run ends; the default moves back: the pane stays
+    // The run ends; the default moves back to the team page: the pane stays
     m.render({ running: false });
     answer = k.MOMENT_LATER;
     pane.notifyBrowserPages('k4');
     await settle(300);
-    assert.equal(currentTab(m.host), 'k4#ben#c1', 'after the run it rests on the page it showed');
+    assert.equal(currentTab(m.host), 'k4#ben#c1', 'the default moved, nothing opened: it stays');
+    // The team page navigates (a bot opens a page there): it follows
+    answer = { ...k.MOMENT_LATER, pages: [{ ...k.SHARED, url: 'https://shop.example.com/' }, k.BEN] };
+    pane.notifyBrowserPages('k4');
+    await settle(300);
+    assert.equal(currentTab(m.host), 'k4', 'a page opened on Shared: it follows');
   } finally {
     m.done();
+  }
+});
+
+test('reopened after a run: no strip or picture from the last time it was open, then the fresh list', async () => {
+  const k = teamPages('k5');
+  answer = k.MOMENT_LATER;
+  const m = mount({ running: false, teamId: 'k5' });
+  try {
+    await settle();
+    assert.equal(currentTab(m.host), 'k5');
+    m.render({ isOpen: false });
+    await settle();
+    // Ben ran meanwhile; the person opens the panel while the new list is on its way
+    answer = k.AFTER_RUN;
+    let open;
+    gate = new Promise((r) => { open = r; });
+    m.render({ isOpen: true });
+    assert.equal(m.host.querySelector('[data-page-tab]'), null, 'no tab strip from before');
+    await settle();
+    assert.equal(m.host.querySelector('[data-page-tab]'), null, 'still none while the list loads');
+    open(); gate = null;
+    await settle();
+    assert.equal(currentTab(m.host), 'k5#ben#c1', 'the fresh list: the default, Ben\'s page');
+  } finally {
+    m.done();
+    gate = null;
   }
 });
 
