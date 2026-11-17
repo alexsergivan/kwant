@@ -1502,4 +1502,102 @@ mod tests {
         let failed = json!({"status": "error", "error": "x"});
         assert_eq!(with_page_title(failed.clone(), "browser_open", &page), failed);
     }
+
+    /// The CLI's result for a call the person said no to (28b).
+    fn denied(id: &str) -> RuntimeEvent {
+        RuntimeEvent::ToolCallCompleted {
+            id: id.into(),
+            result: json!({"status": "error", "error": crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT)}),
+        }
+    }
+
+    /// 28b: a Deny on the card ends the tool step `declined`, in the person's words, whether the
+    /// card or the tool step started first.
+    #[test]
+    fn a_deny_on_the_card_ends_the_tool_step_declined() {
+        // The card first, then the tool step
+        let mut log = ActivityLog::default();
+        log.wait("approval", "t1", "Waiting for your approval: Running `rm -rf build`", Some("Bash"));
+        log.settle("t1", "declined");
+        log.observe(&pending("a", "Bash", json!({"command": "rm -rf build"})));
+        let ended = log.observe(&denied("a"));
+        assert_eq!(
+            (ended[0].kind, ended[0].status, ended[0].detail.as_deref()),
+            ("tool", "declined", Some("You said no; nothing ran"))
+        );
+        assert_eq!(crate::mcp::DENIED_STEP_DETAIL, "You said no; nothing ran");
+        // The tool step first (as the CLI usually sends it), then the card
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "Bash", json!({"command": "rm -rf build"})));
+        log.wait("approval", "t1", "Waiting for your approval: Running `rm -rf build`", Some("Bash"));
+        log.settle("t1", "declined");
+        let ended = log.observe(&denied("a"));
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("declined", Some(crate::mcp::DENIED_STEP_DETAIL))
+        );
+        let saved: Vec<_> = log.steps().iter().map(|s| (s.kind, s.status)).collect();
+        assert_eq!(saved, vec![("tool", "declined"), ("approval", "declined")]);
+    }
+
+    /// 28b: a denial with no declined card (kwnt refused a call naming its own secret files, or a
+    /// ticket couldn't be stored) wasn't the person's no: it stays `failed` with the CLI's text.
+    /// A card for another tool, or one the person allowed, doesn't count either.
+    #[test]
+    fn a_denial_without_a_declined_card_stays_failed() {
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "Bash", json!({"command": "cat ~/.kwnt/secrets"})));
+        let ended = log.observe(&denied("a"));
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("failed", Some(crate::mcp::DENIED_TEXT))
+        );
+        log.wait("approval", "t1", "Waiting for your approval: Fetching", Some("WebFetch"));
+        log.settle("t1", "declined");
+        log.wait("approval", "t2", "Waiting for your approval: Running `ls`", Some("Bash"));
+        log.settle("t2", "ok");
+        log.observe(&pending("b", "Bash", json!({"command": "ls"})));
+        let ended = log.observe(&denied("b"));
+        assert_eq!(ended[0].status, "failed");
+        // Another failure is never read as a no, even with a declined card for that tool
+        log.wait("approval", "t3", "Waiting for your approval: Running `ls`", Some("Bash"));
+        log.settle("t3", "declined");
+        log.observe(&pending("c", "Bash", json!({"command": "make"})));
+        let ended = log.observe(&RuntimeEvent::ToolCallCompleted {
+            id: "c".into(),
+            result: json!({"status": "error", "error": "exit 2"}),
+        });
+        assert_eq!((ended[0].status, ended[0].detail.as_deref()), ("failed", Some("exit 2")));
+    }
+
+    /// 28b: one Deny ends one tool step: two denied Bash calls and one declined card give one
+    /// `declined` step and one `failed` step.
+    #[test]
+    fn one_declined_card_ends_one_tool_step() {
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "Bash", json!({"command": "rm a"})));
+        log.wait("approval", "t1", "Waiting for your approval: Running `rm a`", Some("Bash"));
+        log.settle("t1", "declined");
+        log.observe(&denied("a"));
+        log.observe(&pending("b", "Bash", json!({"command": "rm b"})));
+        log.observe(&denied("b"));
+        let tools: Vec<_> = log
+            .steps()
+            .iter()
+            .filter(|s| s.kind == "tool")
+            .map(|s| (s.status, s.detail.as_deref()))
+            .collect();
+        assert_eq!(
+            tools,
+            vec![
+                ("declined", Some(crate::mcp::DENIED_STEP_DETAIL)),
+                ("failed", Some(crate::mcp::DENIED_TEXT)),
+            ]
+        );
+        // A second Deny pairs with the second call
+        log.wait("approval", "t2", "Waiting for your approval: Running `rm c`", Some("Bash"));
+        log.settle("t2", "declined");
+        log.observe(&pending("c", "Bash", json!({"command": "rm c"})));
+        assert_eq!(log.observe(&denied("c"))[0].status, "declined");
+    }
 }

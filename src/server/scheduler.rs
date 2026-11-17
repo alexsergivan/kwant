@@ -1241,7 +1241,7 @@ mod run_outcome_tests {
             vec![
                 step("ha__turn_on", "unanswered", None),
                 step("web__get", "failed", Some("502")),
-                step("mail__send", "failed", Some("mail__send was denied")),
+                step("mail__send", "failed", Some("You said no to mail__send; nothing ran")),
                 step("Bash", "unanswered", None),
                 step("Bash", "failed", Some("exit 1")),
                 step("Bash", "ok", None),
@@ -1295,5 +1295,27 @@ mod run_outcome_tests {
                 ..
             }
         ));
+    }
+
+    /// 28b: a routine whose only step the person said no to on its card isn't ok: it stays
+    /// `incomplete`, and its reason says so in the person's words. A Deny on a kwnt tool reads
+    /// the same.
+    #[test]
+    fn a_no_ends_the_run_incomplete_in_the_persons_words() {
+        let meta = json!({"activity": {"steps": [
+            {"kind": "tool", "status": "declined", "tool": "Bash", "detail": crate::mcp::DENIED_STEP_DETAIL},
+            {"kind": "approval", "status": "declined", "tool": "Bash"},
+        ]}});
+        let seen = steps_seen(None, Some(&meta));
+        assert_eq!(seen, vec![step("Bash", "failed", Some("You said no to Bash; nothing ran"))]);
+        assert_eq!(
+            run_outcome(&seen),
+            ("incomplete", Some("You said no to Bash; nothing ran".into()))
+        );
+        let calls = json!([{"name": "mail__send", "status": "denied", "result": crate::mcp::DENIED_TEXT}]);
+        assert_eq!(
+            run_outcome(&steps_seen(Some(&calls), None)),
+            ("incomplete", Some("You said no to mail__send; nothing ran".into()))
+        );
     }
 }

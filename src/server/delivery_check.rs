@@ -1715,4 +1715,16 @@ mod tests {
         assert_eq!(FailedBefore::of_turn(None, page), page);
         assert_eq!(FailedBefore::of_turn(reads.as_ref(), page), none);
     }
+
+    /// 28b: a tool step the person said no to counts as declined, with or without a card (#781's
+    /// no-card refusal has none), and isn't a failed step to follow through.
+    #[test]
+    fn a_declined_tool_step_counts_as_declined() {
+        let activity = json!({"steps": [
+            {"kind": "tool", "tool": "Bash", "title": "Running `rm -rf build`", "status": "declined", "detail": "You said no; nothing ran"},
+        ]});
+        let (_, failed, declined) = tool_steps_in(Some(&activity));
+        assert!(declined);
+        assert_eq!(failed, None);
+    }
 }
