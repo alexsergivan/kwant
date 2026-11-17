@@ -64,7 +64,7 @@ const ROW: Record<RowTone, string> = {
 const LEAD: Record<RowTone, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', neutral: 'text-zinc-300', info: 'text-sky-200' };
 
 const BTN = 'flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors min-h-[44px] sm:min-h-0 max-sm:w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed';
-const AMBER = `${BTN} bg-amber-600 text-white shadow-sm hover:bg-amber-500`;
+const AMBER = `${BTN} bg-amber-500 text-zinc-950 shadow-sm hover:bg-amber-400`;
 const PLAIN = `${BTN} bg-zinc-800 text-zinc-300 hover:bg-zinc-700`;
 const QUIET = `${BTN} text-zinc-300 hover:bg-white/[.06] hover:text-zinc-100`;
 const FIELD = 'w-full rounded-lg border border-white/[0.14] bg-zinc-950/60 px-2.5 py-2 font-mono text-[12px] text-zinc-100 placeholder:text-zinc-500 focus:border-sky-400/60 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400 max-sm:text-[16px]';

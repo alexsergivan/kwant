@@ -127,7 +127,7 @@ export const OffConfirm: React.FC<{
           type="button"
           onClick={() => onConfirm(mustMove)}
           disabled={busy || checking}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50"
           data-off-confirm={mustMove ? 'accept-risk' : 'off'}
         >
           {(busy || checking) && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
