@@ -150,7 +150,7 @@ session" on such a card allows that one call.
 
 ## A no stays a no
 
-When the person presses Deny, the bot is told not to try the same thing another way, and for the
+When the person presses Deny, the bot is told not to try it again or another way, and for the
 rest of that conversation (a thread, else the channel or direct chat) kwnt refuses a call of the
 same family from that bot at once, with no card. A family is a shell program and its first
 subcommand (`gh pr`, `git push`), or a URL program and its host (`curl` to `api.github.com`); a

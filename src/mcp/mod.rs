@@ -463,15 +463,15 @@ pub enum ApprovalOutcome {
 }
 
 /// What the bot is told when the person refused a call: that, and [`NOT_ANOTHER_WAY_TEXT`].
-pub const DENIED_TEXT: &str = "The user denied this tool call. Don't try the same thing another way unless the person asks.";
+pub const DENIED_TEXT: &str = "The user denied this tool call. Don't try it again or another way unless the person asks.";
 /// 27b: the end of [`DENIED_TEXT`], for the bot only; a step's detail leaves it out.
-pub const NOT_ANOTHER_WAY_TEXT: &str = "Don't try the same thing another way unless the person asks.";
+pub const NOT_ANOTHER_WAY_TEXT: &str = "Don't try it again or another way unless the person asks.";
 /// 27b: what the bot is told when kwant refused a call because the person already said no to one
 /// like it in this chat ([`ApprovalOutcome::DeclinedBefore`]).
-pub const DECLINED_BEFORE_TEXT: &str = "The person already said no to this in this chat, so kwant didn't ask again. \
-Don't try it again or another way. In your reply, say what you couldn't do and what the person can do if they want it.";
+pub const DECLINED_BEFORE_TEXT: &str = "The person already said no to a call like this in this chat, so kwant didn't run it or ask again. \
+Don't try it again or another way. In your reply, say what you couldn't do; if the person still wants it, they can say so in this chat and you can try again.";
 /// 27b: the step detail of a call refused as [`ApprovalOutcome::DeclinedBefore`].
-pub const DECLINED_BEFORE_STEP_DETAIL: &str = "You said no to this earlier in this chat; kwant didn't ask again";
+pub const DECLINED_BEFORE_STEP_DETAIL: &str = "You said no to a call like this earlier in this chat; kwant didn't ask again";
 /// What the bot is told when nobody answered the card in time.
 pub const UNANSWERED_TEXT: &str = "No one has answered the approval card for this call yet, so it did not run. \
 The card stays open: if the person allows it later, you will be started again to make this same call and continue. \
