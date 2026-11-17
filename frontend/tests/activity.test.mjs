@@ -228,8 +228,18 @@ test('28a: the summary says "you said no to 1", never "failed", for a plain Deny
   assert.equal(sum, '2 steps · you said no to 1');
   const two = saved([tool('t1', 'failed', 'Bash', CLI_DENIED), card('c1', 'declined', 'Bash'), tool('t2', 'failed', 'Read', CLI_DENIED), card('c2', 'declined', 'Read')]);
   assert.match(a.activitySummary({ steps: two, dropped: 0 }), /you said no to 2$/);
-  // The steps row: neutral icon (no rose), and the tool row a grey "Skipped" with the person's words
+  // The steps row: neutral icon (no rose)
   const html = ui.saved({ activity: { steps, dropped: 0 }, idBase: 'r1' });
   assert.doesNotMatch(html, /text-rose/);
   assert.match(html, /you said no to 1/);
+  // The command row says "You said no" in words (a neutral mark, Mira); the approval row keeps "Denied", no mark
+  assert.equal(a.statusLabel(steps[0]), 'You said no');
+  assert.equal(a.statusLabel(steps[1]), 'Denied');
+  const open = ui.saved({ activity: { steps, dropped: 0 }, idBase: 'r1', defaultOpen: true });
+  const marks = [...open.matchAll(/data-step-mark="declined" class="([^"]*)">([^<]*)</g)];
+  assert.equal(marks.length, 1, 'one mark: on the command, not the approval row');
+  assert.equal(marks[0][2], 'You said no');
+  assert.match(marks[0][1], /text-zinc-300 border-zinc-500\/40/);
+  // Its detail is a sentence in the sans face, in the grey box
+  assert.match(open, /<pre class="[^"]*font-sans text-xs[^"]*text-zinc-300 bg-zinc-950\/80[^"]*">You said no; nothing ran<\/pre>/);
 });

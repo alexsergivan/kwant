@@ -246,7 +246,7 @@ export function statusLabel(s: ActivityStep): string {
     case 'failed':
       return 'Failed';
     case 'declined':
-      return s.kind === 'approval' ? 'Denied' : 'Skipped';
+      return s.kind === 'approval' ? 'Denied' : 'You said no';
     case 'stopped':
       return 'Stopped';
     case 'unanswered':

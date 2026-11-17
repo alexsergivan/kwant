@@ -283,9 +283,10 @@ test('28a: ChatView after a Deny: no rose toggle, no check line; a real failure 
   assert.match(part('m3'), /Details · a step failed/);
   assert.match(part('m3'), /data-reply-check="failed"/);
   assert.match(part('m4'), /Details · a step failed/);
-  // Open, the tool row is a grey "Skipped" in the person's words, not a rose "Failed"
+  // Open, the tool row is a grey "You said no" in the person's words, not a rose "Failed"
   const open = ui.steps({ activity: { steps: read(DENY), dropped: 0 }, idBase: 'm1', defaultOpen: true });
-  assert.match(open, /aria-label="Skipped"/);
+  assert.match(open, /aria-label="You said no"/);
+  assert.match(open, /data-step-mark="declined"[^>]*>You said no</);
   assert.match(open, /You said no; nothing ran/);
   assert.doesNotMatch(open, /The user denied|aria-label="Failed"|text-rose/);
 });
