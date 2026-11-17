@@ -102,8 +102,9 @@ const FAILED_DELEGATIONS: &str = "d.status IN ('failed', 'interrupted')
       AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'delegation' AND x.ref_id = d.id)";
 const FINISHED_RUNS: &str = "r.status = 'ok'";
 /// 22i close rules for a failed routine run: its bot or channel is gone, a later run of the same
-/// routine started (Run now or the next schedule), or it is in `attention_closed`.
-const FAILED_RUNS: &str = "r.status = 'error'
+/// routine started (Run now or the next schedule), or it is in `attention_closed`. 26b: a run whose
+/// step waits on the person (`needs_you`) or failed (`incomplete`) didn't finish either.
+const FAILED_RUNS: &str = "r.status IN ('error', 'incomplete', 'needs_you')
       AND k.id IS NOT NULL
       AND (rt.channel_id IS NULL OR EXISTS (SELECT 1 FROM channels c WHERE c.id = rt.channel_id))
       AND NOT EXISTS (SELECT 1 FROM routine_runs r2 WHERE r2.routine_id = r.routine_id
@@ -288,7 +289,7 @@ impl Database {
     pub async fn attention_item_owner(&self, kind: &str, ref_id: &str) -> Result<Option<String>, DbError> {
         let sql = match kind {
             "delegation" => "SELECT specialist_kwant_id FROM delegations WHERE id = ? AND status IN ('failed', 'interrupted', 'running')",
-            "routine_run" => "SELECT rt.kwant_id FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id WHERE r.id = ? AND r.status = 'error'",
+            "routine_run" => "SELECT rt.kwant_id FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id WHERE r.id = ? AND r.status IN ('error', 'incomplete', 'needs_you')",
             _ => return Ok(None),
         };
         Ok(sqlx::query_scalar(sql).bind(ref_id).fetch_optional(&self.pool).await?)
@@ -380,7 +381,7 @@ impl Database {
             // A routine posts in its channel's main chat, or its bot's direct chat when it has none
             let ids: Vec<String> = sqlx::query_scalar(
                 "SELECT r.id FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id
-                 WHERE rt.kwant_id = ?1 AND r.status = 'error'
+                 WHERE rt.kwant_id = ?1 AND r.status IN ('error', 'incomplete', 'needs_you')
                    AND ((?2 IS NOT NULL AND rt.channel_id = ?2) OR (?2 IS NULL AND rt.channel_id IS NULL AND ?3 = ?1))
                    AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'routine_run' AND x.ref_id = r.id)",
             )

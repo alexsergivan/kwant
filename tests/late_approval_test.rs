@@ -286,3 +286,79 @@ async fn an_expired_card_says_so_once_and_retry_asks_again() {
     assert_eq!(s.as_u16(), 409);
     assert_eq!(env.state.db.get_approval(&fresh).await.unwrap().unwrap().status, "waiting");
 }
+
+/// 26b: a real turn whose call nobody answered saves that step as `unanswered` (not ok, not
+/// stopped) and tells the bot once not to claim it worked; the card stays open for a late answer.
+#[tokio::test]
+async fn an_unanswered_call_is_saved_as_unanswered_in_the_chat() {
+    let env = setup().await;
+    env.state
+        .db
+        .set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask")
+        .await
+        .unwrap();
+    env.state
+        .approval_wait_ms
+        .store(300, std::sync::atomic::Ordering::Relaxed);
+    // A shell command always asks (kwnt's own tools never get a card in a person's turn); the fake
+    // CLI asks for it as Bash and shows claude's own tool_use / tool_result lines
+    let marker = call_tool_marker(
+        "bash",
+        json!({"command": "touch LATE26B_MARK", "description": "make a file"}),
+    );
+    send_direct(
+        &env,
+        &env.a,
+        &format!("Save this {marker} ASKFIRST ASKAS:Bash REPLYTAG:late26b"),
+        json!({}),
+    )
+    .await;
+    let reply = wait_reply(&env, &env.a, "answer late26b").await;
+
+    let meta: Value = reply
+        .meta
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(Value::Null);
+    let steps = meta["activity"]["steps"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let step = steps
+        .iter()
+        .find(|s| s["kind"] == "approval")
+        .unwrap_or_else(|| panic!("{meta}"));
+    assert_eq!(step["status"], "unanswered", "{step}");
+    assert_eq!(step["detail"], kwnt::mcp::UNANSWERED_STEP_DETAIL, "{step}");
+    // claude's own step for the call reads the same, not "failed" and never the reminder
+    let tool = steps
+        .iter()
+        .find(|s| s["kind"] == "tool" && s["tool"] == "Bash")
+        .unwrap_or_else(|| panic!("{meta}"));
+    assert_eq!(tool["status"], "unanswered", "{tool}");
+    assert_eq!(tool["detail"], kwnt::mcp::UNANSWERED_STEP_DETAIL, "{tool}");
+    assert!(
+        reply
+            .text
+            .contains(UNANSWERED_TEXT.split(". ").next().unwrap()),
+        "{}",
+        reply.text
+    );
+    assert_eq!(
+        reply.text.matches(kwnt::mcp::NO_FALSE_CLAIMS_TEXT).count(),
+        1,
+        "{}",
+        reply.text
+    );
+    let waiting = env
+        .state
+        .db
+        .list_approvals(
+            &kwnt::db::spaces::SpaceId::default_space(),
+            Some("waiting"),
+            Some(&env.a),
+        )
+        .await
+        .unwrap();
+    assert_eq!(waiting.len(), 1, "the card stays open");
+}
