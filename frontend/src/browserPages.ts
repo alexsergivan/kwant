@@ -55,6 +55,19 @@ export function choosePage(input: { picked: string | null; stepPage: string | nu
   return null;
 }
 
+/**
+ * 28l: the page the pane rests on when nothing is chosen (no pick, no open step), once the pages
+ * list is known. It stays on `held`, the page it was already showing, while that page is still
+ * listed, so the server's default moving a moment after a run (from the bot's page back to the
+ * team page) never swaps the tab under the person. Else the server's default. With no list (an
+ * older server with no pages route, or before the first answer) it is null: the old fallback.
+ */
+export function restingPage(held: string | null, list: Pick<BrowserPageList, 'live' | 'pages'> | null): string | null {
+  if (!list) return null;
+  if (held && list.pages.some((p) => p.page === held)) return held;
+  return list.live;
+}
+
 /** The page the pane is showing: the chosen one, else the server's default, else the team page. */
 export function shownPage(chosen: string | null, list: BrowserPageList | null, team: string | undefined): string | null {
   return chosen ?? list?.live ?? team ?? null;
