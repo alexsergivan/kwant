@@ -318,6 +318,9 @@ impl BrokerApprover {
         if req.payment.is_some() || mcp::payment_floor::reason(req, None).is_some() {
             return None;
         }
+        if home_floor(&self.db, req).await {
+            return None;
+        }
         if self.tier_gate(req).await.is_some() || super::dev::floor::for_call(&self.db, req).await.is_some() {
             return None;
         }
@@ -364,7 +367,10 @@ impl BrokerApprover {
         // (a deploy, a push to the watched branch, a migration, a marked connection) always asks,
         // and "always allow" covers just that call.
         let floor = super::dev::floor::for_call(&self.db, &req).await;
-        let forced = payment.is_some() || tier.is_some() || floor.is_some();
+        // 26f: on a Home Assistant server, a lock, a door, a garage door, a gate or an alarm
+        // always asks, in every mode, and "always allow" covers just that call
+        let home = home_floor(&self.db, &req).await;
+        let forced = payment.is_some() || tier.is_some() || floor.is_some() || home;
         // The two audit calls only record the audit in kwnt (risks the person closes), so they
         // follow approvals off even in an always-asking audit turn; its other tools still ask
         let audit_call = req.server == mcp::SELF_SERVER_NAME
@@ -414,6 +420,11 @@ impl BrokerApprover {
         if let Some((_, card)) = &floor {
             details["prod_floor"] = card.clone();
         }
+        // Its own field: `always_ask` means a turn kwnt started on its own (Ada, Nov 16)
+        if home {
+            details["home_always_ask"] = json!(true);
+            details["home_reason"] = json!(mcp::home_floor::REASON);
+        }
         // Telegram keeps these cards link-only (Q-G6), each with its own line: a turn that read
         // outside text (an injected request is likeliest there), and a turn kwant started on its
         // own rather than from the person's message.
@@ -460,6 +471,8 @@ impl BrokerApprover {
             tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, reason = ?payment, "a payment: asking whatever the approvals say");
         } else if let Some((f, _)) = &floor {
             tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, kind = ?f.kind, "can reach production: asking whatever the approvals say");
+        } else if home {
+            tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, "a lock, a door or an alarm: asking whatever the approvals say");
         } else if !off && !self.always_ask && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
             return (ApprovalOutcome::Allowed, "allowed", None);
         }
@@ -537,6 +550,8 @@ impl BrokerApprover {
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) if payment.is_some() => ApprovalOutcome::Allowed,
             // So does a production step's
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) if floor.is_some() => ApprovalOutcome::Allowed,
+            // And a lock's, a door's or an alarm's (26f)
+            Ok(Ok(ApprovalDecision::AlwaysAllowSession)) if home => ApprovalOutcome::Allowed,
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) => {
                 self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
                 ApprovalOutcome::Allowed
@@ -575,6 +590,49 @@ impl BrokerApprover {
         let class = if outcome.allowed() { "approved" } else { "denied" };
         (outcome, class, Some(ticket))
     }
+}
+
+/// 26f: whether `req` acts on a lock, a door, a garage door, a gate or an alarm on a Home
+/// Assistant server ([`mcp::home_floor`]), so it always asks. What the server is comes from what
+/// it said on kwnt's last connection to it in this run, else from what its last test stored; one
+/// learned in this run is stored too. A server kwnt never heard from counts as Home Assistant's
+/// (the safe side), and only for a call whose arguments name one of those things.
+pub async fn home_floor(db: &Database, req: &ToolApprovalRequest) -> bool {
+    if req.builtin.is_some() || req.server.is_empty() || req.server == mcp::SELF_SERVER_NAME {
+        return false;
+    }
+    // Cheap first: most calls name no lock, door or alarm
+    if !mcp::home_floor::sensitive_args(&req.arguments) {
+        return false;
+    }
+    let server = match db.list_active_mcp_servers_for_kwant(&req.kwant_id).await {
+        Ok(servers) => servers.into_iter().find(|s| s.name == req.server),
+        // Can't tell which server it is: ask
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the bot's MCP servers; a lock or a door asks");
+            return true;
+        }
+    };
+    let Some(server) = server else { return false };
+    let seen = mcp::home_floor::seen(&server.id);
+    let stored = db.mcp_reported_name(&server.id).await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "could not read what the MCP server said it is");
+        None
+    });
+    if let Some(s) = &seen {
+        if stored.as_ref() != Some(&s.reported) {
+            if let Err(e) = db.save_mcp_reported_name(&server.id, s.reported.as_deref()).await {
+                tracing::warn!(error = %e, "could not store what the MCP server said it is");
+            }
+        }
+    }
+    let kind = match (&seen, &stored) {
+        (Some(s), _) => mcp::home_floor::ServerKind::of(s.reported.as_deref()),
+        (None, Some(name)) => mcp::home_floor::ServerKind::of(name.as_deref()),
+        (None, None) => mcp::home_floor::ServerKind::Unknown,
+    };
+    let read_only = seen.and_then(|s| s.read_only).map(|tools| tools.contains(&req.tool));
+    mcp::home_floor::decide(kind, &req.tool, &req.arguments, read_only)
 }
 
 fn max_tool_iterations(setting: Option<String>) -> usize {
@@ -665,7 +723,11 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     let conversation = thread_id.clone().or_else(|| channel_id.clone()).or_else(|| chat["direct_kwant_id"].as_str().map(str::to_string)).unwrap_or_else(|| kwant.id.clone());
     state.broker.grant_once(&kwant.id, &conversation, &approval.tool_name, &arguments).await;
     // A payment's "always allow" covers the one call (the payment floor, D8). So does a production step's (plan §3.5)
-    if decision == ApprovalDecision::AlwaysAllowSession && details.get("payment_reason").is_none() && details.get("prod_floor").is_none() {
+    if decision == ApprovalDecision::AlwaysAllowSession
+        && details.get("payment_reason").is_none()
+        && details.get("prod_floor").is_none()
+        && details.get("home_always_ask").is_none()
+    {
         state.broker.allow_for_session(&kwant.id, &conversation, &approval.tool_name).await;
     }
     let depth = match &thread_id {
@@ -1220,6 +1282,14 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool, grant: O
                     Some(read_only) => mcp::session::read_only_verdict(read_only),
                     None => mcp::SmartVerdict::Ask("kwnt couldn't check whether this MCP tool is read-only".into()),
                 });
+            }
+            // 26f: a call that names a lock, a door or an alarm needs to know what the server is;
+            // kwnt connects to it once in this turn to hear it say so
+            if server != mcp::SELF_SERVER_NAME
+                && mcp::home_floor::sensitive_args(&input)
+                && session.ctx.servers.iter().any(|s| s.name == server && mcp::home_floor::seen(&s.id).is_none())
+            {
+                let _ = session.tool_session().await;
             }
             (server, tool, None)
         }

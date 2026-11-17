@@ -122,6 +122,13 @@ pub async fn update_server(
         // Tokens and registrations belong to the old address
         state.db.clear_mcp_oauth(&id).await.map_err(db_err)?;
     }
+    if updated.is_some()
+        && (server.url != existing.url || server.transport != existing.transport || server.command != existing.command || server.args != existing.args)
+    {
+        // Another address or program may be another server: what it said it was is asked again (26f)
+        state.db.forget_mcp_server_facts(&id).await.map_err(db_err)?;
+        mcp::home_floor::forget(&id);
+    }
     match updated {
         Some(s) => Ok(Json(view(&state, &s).await)),
         None => Err(err(StatusCode::NOT_FOUND, "MCP server not found")),
@@ -130,6 +137,7 @@ pub async fn update_server(
 
 pub async fn delete_server(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     if state.db.delete_mcp_server(&id).await.map_err(db_err)? {
+        mcp::home_floor::forget(&id);
         Ok(Json(json!({ "status": "deleted" })))
     } else {
         Err(err(StatusCode::NOT_FOUND, "MCP server not found"))
@@ -203,6 +211,13 @@ pub(super) async fn run_test(state: &AppState, stored: &McpServer) -> Value {
         super::mcp_runtime::remove_mcp_cwd(state, &token).await;
     }
 
+    if let Ok((server_info, _)) = &result {
+        // 26f: stored with the server, so its locks ask also before kwnt next connects to it
+        let reported = mcp::home_floor::reported_name(server_info);
+        if let Err(e) = state.db.save_mcp_reported_name(id, reported.as_deref()).await {
+            tracing::warn!(error = %e, server = %stored.name, "could not store what the MCP server said it is");
+        }
+    }
     let mut outcome = match result {
         Ok((server_info, tools)) => json!({ "ok": true, "server_info": server_info, "tools": tools }),
         Err((McpError::Unauthorized { .. }, _)) if token_use != TokenUse::UserHeader => {

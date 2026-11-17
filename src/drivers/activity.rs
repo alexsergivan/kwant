@@ -967,9 +967,26 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
                 Some(s) => format!("Using {tool} ({s})"),
                 None => format!("Using {tool}"),
             };
-            (shown, url.map(str::to_string))
+            (shown, home_target(tool, args).or_else(|| url.map(str::to_string)))
         }
     }
+}
+
+/// 26f: what a Home Assistant intent tool (`intent__Hass*`, or `homeassistant__*` other than
+/// `GetLiveContext`) acts on, as a step's detail: its `name`, else its `area`, else its `domain`
+/// (the first one of a list). Plain text, at most 60 characters.
+fn home_target(tool: &str, args: &Value) -> Option<String> {
+    let intent = tool.starts_with("intent__Hass")
+        || tool.strip_prefix("homeassistant__").is_some_and(|t| t != "GetLiveContext");
+    if !intent {
+        return None;
+    }
+    fn text(v: &Value) -> Option<&str> {
+        v.as_str().or_else(|| v.as_array()?.first()?.as_str()).map(str::trim).filter(|t| !t.is_empty())
+    }
+    let target = text(&args["name"]).or_else(|| text(&args["area"])).or_else(|| text(&args["domain"]))?;
+    let plain: String = target.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    Some(plain.chars().take(60).collect())
 }
 
 /// What an engine can't show of its thinking, as the note opening a turn's steps; `None` when
@@ -987,6 +1004,18 @@ pub fn thinking_note(engine: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 26f: a Home Assistant step says what it acts on.
+    #[test]
+    fn home_assistant_steps_name_what_they_act_on() {
+        let detail = |tool: &str, args: Value| summarize(&format!("mcp__house__{tool}"), &args).1;
+        assert_eq!(detail("intent__HassTurnOff", json!({"name": "Living room lamp"})).as_deref(), Some("Living room lamp"));
+        assert_eq!(detail("intent__HassTurnOn", json!({"area": "Kitchen", "domain": ["light"]})).as_deref(), Some("Kitchen"));
+        assert_eq!(detail("intent__HassTurnOff", json!({"domain": ["light"]})).as_deref(), Some("light"));
+        assert_eq!(detail("homeassistant__GetLiveContext", json!({"name": "x"})), None);
+        assert_eq!(detail("intent__HassTurnOff", json!({"name": "a".repeat(80)})).map(|d| d.chars().count()), Some(60));
+        assert_eq!(detail("other_tool", json!({"name": "Living room lamp"})), None);
+    }
 
     /// Rigel's B1 on #294: the hold is cut on char boundaries for any script. Every prefix of
     /// mixed CJK, accented Latin, emoji, NBSP and U+3000 text around `key:`, `password = "a b"`

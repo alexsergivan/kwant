@@ -99,6 +99,9 @@ enum Transport {
 
 pub struct McpClient {
     pub server_name: String,
+    /// The stored server's id, for what kwnt notes about it ([`super::home_floor`]); empty for
+    /// a server that isn't stored.
+    server_id: String,
     pub server_info: Value,
     timeout: Duration,
     next_id: AtomicI64,
@@ -158,6 +161,7 @@ impl McpClient {
         };
         let mut client = Self {
             server_name: server.name.clone(),
+            server_id: server.id.clone(),
             server_info: Value::Null,
             timeout,
             next_id: AtomicI64::new(1),
@@ -294,6 +298,8 @@ impl McpClient {
             )
             .await?;
         self.server_info = result.get("serverInfo").cloned().unwrap_or(Value::Null);
+        // 26f: what the server says it is decides whether its locks always ask
+        super::home_floor::note_server_info(&self.server_id, &self.server_info);
         if let Transport::Http(ref http) = self.transport {
             let version = result["protocolVersion"].as_str().unwrap_or(PROTOCOL_VERSION).to_string();
             *http.protocol_version.lock().unwrap() = Some(version);
@@ -325,6 +331,7 @@ impl McpClient {
                 break;
             }
         }
+        super::home_floor::note_tools(&self.server_id, tools.iter().map(|t| (t.name.as_str(), t.read_only)));
         Ok(tools)
     }
 

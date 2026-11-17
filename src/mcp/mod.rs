@@ -8,6 +8,7 @@ pub mod client;
 pub mod composio;
 pub mod echo_server;
 pub mod fetch_risk;
+pub mod home_floor;
 pub mod oauth;
 pub mod payment_floor;
 pub mod prod_floor;

@@ -450,7 +450,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
               type="button"
               disabled={disabled}
               onClick={() => handleDecision('always_allow')}
-              title={perSession ? 'Allow this tool for this bot in this conversation' : mcp ? 'Allow this tool for this bot until the app restarts' : undefined}
+              title={perSession ? 'Allow this tool for this bot in this conversation' : mcp ? 'Allow this tool for this bot in this conversation, also after kwant restarts' : undefined}
               className={secondary}
             >
               <CheckCheck size={14} aria-hidden="true" />
