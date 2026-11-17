@@ -19,7 +19,7 @@ import {
 import { playSfx } from '../audio/chiptune';
 import { BOT_BUSY_TEXT, HELD_BY_PERSON_TEXT, useBrowserStream } from '../useBrowserStream';
 import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, SignInLine, useComputerMode } from './ComputerModeSwitch';
-import { useSteadyFrame } from '../steadyFrame';
+import { paneFrame, useSteadyFrame } from '../steadyFrame';
 import { browserFooterLabel, browserOwnerWord, isBlankPage, showsLocalWindow } from '../computerMode';
 import { paneStatus } from '../browserPanel';
 import { ModernAvatar } from './ModernAvatar';
@@ -251,7 +251,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const touch = useCallback(() => onTouch?.(), [onTouch]);
 
   // Interactive Remote Control State
-  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending, chosenPage);
+  const streaming = isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending;
+  const stream = useBrowserStream(teamId, streaming, chosenPage);
   const isControlMode = stream.controlling;
   const isInteracting = stream.busy;
   const narrow = useNarrow();
@@ -270,7 +271,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const shownTitle = stream.location ? stream.location.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
   // A blank light frame from Chrome (a page committing) waits behind the last good picture: no grey flash
   const steady = useSteadyFrame(stream.frame, stream.acknowledgeFrame);
-  const currentScreenshot = isBlankPage(pageUrl) ? null : steady.frame?.image || screenshotBase64;
+  const controlError = stream.error || (!stream.connected ? browserError : null);
+  // A live stream is ready; otherwise trust isRunning only while no error says the service is down.
+  const browserReady = stream.connected || (isRunning && !controlError);
+  // 28e: after a switch to another page's tab, the dark pane until that page's own frame, never another picture
+  const panePicture = paneFrame({ blank: isBlankPage(pageUrl), frame: steady.frame, holding: steady.holding, streaming: streaming && browserReady, streamPage: stream.page, chosenPage, screenshot: screenshotBase64 });
+  const currentScreenshot = 'image' in panePicture ? panePicture.image : null;
   const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
   const blankFrameId = isBlankPage(pageUrl) ? stream.frame?.id : undefined;
@@ -278,9 +284,6 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   useEffect(() => {
     if (blankFrameId !== undefined) acknowledgeFrame(blankFrameId);
   }, [blankFrameId, acknowledgeFrame]);
-  const controlError = stream.error || (!stream.connected ? browserError : null);
-  // A live stream is ready; otherwise trust isRunning only while no error says the service is down.
-  const browserReady = stream.connected || (isRunning && !controlError);
   useEffect(() => {
     if (stream.location?.url) setInputUrl(stream.location.url);
   }, [stream.location]);
@@ -965,7 +968,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     </button>
                   )}
                 </>
-              ) : steady.holding && !isBlankPage(pageUrl) ? (
+              ) : 'hold' in panePicture ? (
                 /* The first picture of this view is blank or still being checked: the dark pane, not "Browser idle" */
                 <div data-frame-holding="" aria-hidden="true" className="absolute inset-0" />
               ) : (

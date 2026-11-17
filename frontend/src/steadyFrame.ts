@@ -114,3 +114,33 @@ export function useSteadyFrame(
   // While a frame is checked or held, the last good picture of this stream stays up (or the dark pane)
   return { frame: shown, holding: !shown };
 }
+
+/** What the browser pane shows: a picture, the dark pane while one is on its way, or the idle card. */
+export type PaneFrame = { image: string } | { hold: true } | { idle: true };
+
+/**
+ * 28e: the picture for the pane. After a switch to another page's tab the new stream has no frame for
+ * a moment; the app-level screenshot (not tied to any page, often the blank one dimmed to grey) used
+ * to fill that gap. While a chosen page's stream hasn't shown its own good frame, the dark pane holds.
+ * `streaming`: the page stream is in use (not a real window, not one on its way). Without a chosen page,
+ * or with no stream, the app-level screenshot is still the fallback, as before.
+ */
+export function paneFrame(input: {
+  blank: boolean;
+  frame: BrowserFrame | null;
+  holding: boolean;
+  streaming: boolean;
+  streamPage: string | null;
+  chosenPage: string | null;
+  screenshot: string | null | undefined;
+}): PaneFrame {
+  const { blank, frame, holding, streaming, streamPage, chosenPage, screenshot } = input;
+  if (blank) return { idle: true };
+  if (streaming && chosenPage !== null) {
+    // Only this page's own picture: never the app-level screenshot, never the last page's frame
+    return frame?.image && streamPage === chosenPage ? { image: frame.image } : { hold: true };
+  }
+  const image = frame?.image || screenshot;
+  if (image) return { image };
+  return holding ? { hold: true } : { idle: true };
+}
