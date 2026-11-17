@@ -6,6 +6,7 @@ slug: control-home-assistant-with-a-self-hosted-bot
 card_title: Control Home Assistant from a self-hosted bot
 card: The 0.9.21 walkthrough: Connect sheet, the Home team, and locks that always ask.
 card_art: scene
+image: assets/og/docs-home-assistant.png
 draft: no
 ---
 
@@ -50,8 +51,6 @@ Device-control tools (the same ones Assist uses, including `HassTurnOn`, `HassTu
 
 In Home Assistant, open **Settings → Voice assistants** and use the **Expose** (exposed entities) page. Expose the lights, sensors and other devices you actually want the bot to read or control.
 
-  <div class="frame"><img src="{{root}}assets/media/ha-guide-expose.webp" width="1440" height="804" loading="lazy" decoding="async" alt="The Home Assistant Expose page, listing Front door, Kitchen light, Living room lamp, Living room temperature, Porch light and Shopping list as exposed to Assist"></div>
-
 You can leave locks, garage doors, gates and alarms unexposed if you don't want them in the tool list at all. If you do expose them, kwant still always shows an approval card before a bot can unlock, open or disarm them — even with approvals turned off. That card offers no **Always allow**.
 
 If a later prompt fails with "No entities matched", this is the first place to check: the friendly name must be exposed, and the bot must use that name, not the `entity_id` (`light.living_room_lamp` is not the same as `Living room lamp`). A query for the name `temperature` will miss a sensor called **Living room temperature**.
@@ -78,9 +77,7 @@ The sheet has two fields:
 
 Two notes sit under the fields: bots can reach every device unless you limit them in Home Assistant, and locks, doors, garage doors, gates and alarms always ask you first.
 
-  <div class="frame"><img src="{{root}}assets/media/ha-guide-connect-sheet.webp" width="1440" height="804" loading="lazy" decoding="async" alt="The Connect Home Assistant sheet, with Address set and the help line &quot;kwant will connect to http://127.0.0.1:8123/api/mcp&quot;, a hidden access token, and the Make one in Home Assistant link"></div>
-
-The address in this shot is a local test instance (`127.0.0.1:8123`). On your own network you'll usually type `homeassistant.local:8123` or Home Assistant's LAN IP.
+The official shot uses `homeassistant.local`. On your own network you'll usually type `homeassistant.local:8123` or Home Assistant's LAN IP.
 
 Press **Connect**. The sheet tests the connection and reports the result in plain words:
 
@@ -93,7 +90,10 @@ Press **Connect**. The sheet tests the connection and reports the result in plai
 | **This address answered, but it isn't Home Assistant.** | The URL is reachable, but it didn't identify itself as Home Assistant's MCP server. Check the address. |
 | **Couldn't connect to Home Assistant.** | Something else went wrong. Check that the address opens Home Assistant in a browser, then try again. |
 
-  <div class="frame"><img src="{{root}}assets/media/ha-guide-connect-ok.webp" width="1440" height="804" loading="lazy" decoding="async" alt="The same sheet after a successful connect: &quot;Connected · 21 actions&quot; with a Tested sticker, and &quot;House can use it now.&quot;"></div>
+<figure>
+  <div class="frame">{{shot:v0921-home-assistant|The Connect Home Assistant sheet after a successful connect: Address homeassistant.local, "kwant will connect to http://homeassistant.local:8123/api/mcp", Connected · 14 actions with a Tested sticker, and "House can use it now."}}</div>
+  <figcaption>Official 0.9.21 product shot from the <a href="{{root}}features.html#connect-home-assistant">features page</a>.</figcaption>
+</figure>
 
 The token field clears after every Connect. Leaving it empty on a later try keeps the saved token (the sheet says **Saved. Paste a new one to replace it.**).
 
@@ -101,13 +101,14 @@ The token field clears after every Connect. Leaving it empty on a later try keep
 
 The new **Home** team is the intended starting point. Open **New team** in the sidebar (or the **Get started** card) and look under **From a template**. The Home tile shows **1 bot**.
 
-  <div class="frame"><img src="{{root}}assets/media/ha-guide-home-team-picker.webp" width="1440" height="804" loading="lazy" decoding="async" alt="The Create New Team sheet, with a From a template row that includes Home (1 bot)"></div>
-
 If you don't have an AI account in this space yet, the sheet says **Add an AI account first**. Add one, then come back to the template.
 
 Open the Home preview and press **Create team · 1 bot**. The preview lists House, what the team needs, and what it will never do without you:
 
-  <div class="frame"><img src="{{root}}assets/media/ha-guide-home-team-preview.webp" width="1440" height="804" loading="lazy" decoding="async" alt="The Home team preview: House (Home Helper) as lead, team handle @home, a required Connect Home Assistant need, an optional A local model need, Never without you, the Check the house skill, and Lights out off, every day at 22:00"></div>
+<figure>
+  <div class="frame">{{shot:v0921-home-team|The Home team after creation: House as lead, Connect Home Assistant already connected with 14 actions, an optional A local model need, and suggested asks}}</div>
+  <figcaption>Official 0.9.21 product shot. The Create team sheet lists Home under From a template (1 bot); this is the team once it exists.</figcaption>
+</figure>
 
 That gives you:
 
@@ -129,8 +130,6 @@ Once House is connected and an account can run it, name the room or device. Thes
 Use the friendly names your house uses, not entity ids.
 
 Vague asks were unreliable on this 7B model, even though the Home team suggests them. **Is anything left on?** called `GetLiveContext` with domain `switch` (the test house has lights, not switches) and got `{"error": "No exposed entities found in domain(s): switch"}`, then replied as if nothing was on — while the kitchen and porch lights were on. Adding "Check the lights" still only looked at the living room and answered "The living room light is off." **How warm is it inside?** queried a sensor named `temperature`, missed **Living room temperature**, and answered with outside weather for Berlin instead.
-
-  <div class="frame"><img src="{{root}}assets/media/ha-guide-house-chat.webp" width="1440" height="804" loading="lazy" decoding="async" alt="House answering &quot;Is anything left on? Check the lights.&quot; with only &quot;The living room light is off.&quot; — incomplete: the kitchen and porch lights were on"></div>
 
 If you want House to handle those broader questions, pin a cloud account or a larger local model.
 
@@ -160,8 +159,6 @@ Test approvals on a lamp you don't mind toggling before you point a bot at anyth
 The Home team comes with a **Lights out** routine. It starts **off** (the Routines page shows it paused). When you turn it on, it runs every day at 22:00 (`0 22 * * *`) and tells House:
 
 > Turn off every light that's still on, then tell me which ones you turned off. Use the Check the house skill.
-
-  <div class="frame"><img src="{{root}}assets/media/ha-guide-lights-out.webp" width="1440" height="804" loading="lazy" decoding="async" alt="The Routines page, with Lights out paused, prompt visible, and the schedule &quot;Custom rule 0 22 * * *&quot;"></div>
 
 The skill reads the live state first, turns off only the lights that are on, leaves doors, locks and alarms alone, and never claims a light is off unless Home Assistant said so. On a 7B model, review the first runs carefully: a vague "what's still on?" step can miss lights, as above.
 
