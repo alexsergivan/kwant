@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { ChevronsUpDown, Info } from 'lucide-react';
 import {
   ELSEWHERE_EVENT,
+  ISLAND_EVENT,
   PERCH_COPY,
   chipAriaLabel,
   elsewhereCount,
@@ -136,6 +137,15 @@ export const PerchSettingsCard: React.FC<{ initial?: PerchSettings | null }> = (
   const [s, setS] = useState<PerchSettings | null>(start);
   const gate = useMemo(() => onceEvery(1000), []);
   const options = useMemo(() => shortcutOptions(), []);
+  // The app answers each change with the settings it kept: a change it couldn't save comes back as the old ones.
+  useEffect(() => {
+    const on = () => {
+      const kept = perchSettings();
+      if (kept) setS(kept);
+    };
+    window.addEventListener(ISLAND_EVENT, on);
+    return () => window.removeEventListener(ISLAND_EVENT, on);
+  }, []);
   if (!s) return null;
   const off = !s.available;
   const write = (mode: PerchMode, shortcut: PerchShortcut) => {

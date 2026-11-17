@@ -170,7 +170,7 @@ async fn model_lists_and_calls_mcp_tools() {
     assert_eq!(requests.len(), 2);
     let names: Vec<_> = requests[0]["tools"].as_array().unwrap().iter().map(|t| t["function"]["name"].as_str().unwrap()).collect();
     // The read-back tool for trimmed results comes last, on OpenAI-style endpoints
-    assert_eq!(names, ["mcp__echo__echo", "mcp__echo__add", "mcp__echo__sleep", "mcp__echo__env", "mcp__echo__crash", "kwnt_read_tool_result"]);
+    assert_eq!(names, ["mcp__echo__echo", "mcp__echo__add", "mcp__echo__sleep", "mcp__echo__env", "mcp__echo__crash", "mcp__echo__peek", "kwnt_read_tool_result"]);
     assert_eq!(requests[0]["tools"][0]["function"]["parameters"]["required"], json!(["text"]));
     // Second request carries the assistant tool call and its result
     let msgs = requests[1]["messages"].as_array().unwrap();
