@@ -5,6 +5,9 @@
 //! gaps: the retry `Idempotency-Key` and the drift scan's limits. Its own test binary: it changes
 //! PATH and listens on a real port the stand-in CLI calls back on.
 
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "common/exe.rs"]
 mod exe;
 
@@ -613,7 +616,7 @@ async fn an_unreadable_folder_fails_the_checkpoint_but_not_the_turn() {
     if std::fs::read_dir(&dir).is_ok() {
         // Running as root: permissions don't stop reads, so there is nothing to test
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        eprintln!("skipped: the folder stays readable (root?)");
+        skip::skip_or_fail("a user that file modes apply to (the folder stays readable: root?)", "run the tests as a normal user");
         return;
     }
     let tid = &ids[0];

@@ -9,6 +9,9 @@ use serde_json::{json, Value};
 use std::{sync::{atomic::{AtomicUsize, Ordering}, Arc}, time::{Duration, Instant}};
 use tokio::{net::TcpListener, sync::Mutex};
 
+#[path = "support/skip.rs"]
+mod skip;
+
 /// A DevTools endpoint that can stop answering for a while, the way an overloaded Chrome does:
 /// its `/json` requests hang and its sockets take commands without replying.
 #[derive(Clone, Default)]
@@ -259,7 +262,7 @@ async fn eval(ctrl: &kwnt::sandbox::BrowserController, expression: &str) -> Valu
 #[tokio::test]
 #[ignore]
 async fn real_capped_browser_keeps_the_driven_page_working() {
-    let Ok(endpoint) = std::env::var("KWNT_REAL_CDP") else { return };
+    let Some(endpoint) = skip::opt_in("KWNT_REAL_CDP", "the real capped browser run") else { return };
     let tmp = tempfile::tempdir().unwrap();
     let (state, id, _port, app_task) = server(endpoint, &tmp).await;
     let steady = |key: String| { let state = state.clone(); async move {

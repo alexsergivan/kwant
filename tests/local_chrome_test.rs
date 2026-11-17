@@ -1,6 +1,10 @@
 //! Local mode against a real Chrome/Chromium: it runs without a window, pages render and take
 //! input at the viewer's 1280x800 size, and the window switch reopens the same page in a real
-//! window and back. Skipped when no Chrome is installed; the window part needs Xvfb on Linux.
+//! window and back. Without Chrome it skips (and fails in CI); the window part needs Xvfb on Linux.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use chrome_guard::ChromeGuard;
@@ -60,7 +64,7 @@ async fn local_chrome_runs_windowless_and_can_open_as_a_window() {
     std::env::remove_var("DISPLAY");
     std::env::remove_var("WAYLAND_DISPLAY");
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -140,7 +144,7 @@ async fn local_chrome_runs_windowless_and_can_open_as_a_window() {
         let _ = xvfb.kill();
         let _ = xvfb.wait();
     } else {
-        eprintln!("window part skipped: no Xvfb");
+        skip::skip_or_fail("Xvfb (for the window part)", "install Xvfb, e.g. `apt install xvfb`");
     }
 
     // leaving local mode closes the windowless Chrome, since nothing would show it

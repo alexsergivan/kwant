@@ -527,6 +527,9 @@ async fn remove_profile(profile: &Path) {
 }
 
 #[cfg(test)]
+use crate::test_skip as skip;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -603,7 +606,7 @@ mod tests {
             super::super::computer::local_chrome_path()
         };
         let Some(chrome) = chrome else {
-            eprintln!("skipped: no Chrome or Chromium installed");
+            skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
             return;
         };
         let profile = tmp.path().join("p1");

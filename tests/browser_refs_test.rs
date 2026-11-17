@@ -4,6 +4,10 @@
 //! covered clicks nothing and says why, with a fresh list. Payments are judged on the element
 //! the ref points to. Skipped when no Chrome is installed. `saucedemo_by_refs` (ignored, needs
 //! the network) shops a real demo store by refs.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -140,7 +144,7 @@ async fn eval(ctrl: &kwnt::sandbox::BrowserController, js: &str) {
 #[tokio::test]
 async fn a_click_by_ref_hits_that_control_or_nothing() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -209,7 +213,7 @@ async fn a_click_by_ref_hits_that_control_or_nothing() {
 #[tokio::test]
 async fn a_payment_is_judged_on_the_element_a_ref_points_to() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -235,6 +239,7 @@ async fn a_payment_is_judged_on_the_element_a_ref_points_to() {
 #[ignore]
 async fn saucedemo_by_refs() {
     if computer::local_chrome_path().is_none() {
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -263,7 +268,7 @@ fn marked(page: &Value) -> Vec<String> {
 #[tokio::test]
 async fn controls_that_just_appeared_are_marked_new_and_nothing_else() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

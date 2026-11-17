@@ -3,6 +3,10 @@
 //! bot causes (opening an address, a link click, a redirect, a new tab), while the person's own
 //! clicks are never held to them. With no rules the guard doesn't run at all. Skipped when no
 //! Chrome is installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -135,7 +139,7 @@ async fn href(ctrl: &kwnt::sandbox::BrowserController) -> String {
 #[tokio::test]
 async fn a_bots_site_rules_hold_on_every_navigation_it_causes() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
