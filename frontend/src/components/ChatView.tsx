@@ -420,6 +420,11 @@ export interface ChatViewProps {
   onEditBot?: (botName: string) => void;
   /** Whether anything can run a bot in this space now (null while unknown). */
   canRun?: boolean | null;
+  /** Whether Ollama answers now (null while unknown), for a bot's "Ollama isn't answering" card. */
+  ollamaReady?: boolean | null;
+  /** Checks the engines again, from that card's Re-check button. */
+  onRecheckEngines?: () => void;
+  recheckingEngines?: boolean;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
   awaitingAnswer?: boolean;
   /** …and the pause is a browser step (sign-in, CAPTCHA) rather than a question. */
@@ -670,6 +675,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onChangeTeamFolder,
   onEditBot,
   canRun = null,
+  ollamaReady = null,
+  onRecheckEngines,
+  recheckingEngines,
   awaitingAnswer,
   awaitingBrowser,
   awaitingBot,
@@ -1686,6 +1694,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
             spaceName={spaceName ?? 'this space'}
             canRun={canRun}
             onOpenAccounts={onOpenAccounts}
+            ollamaReady={ollamaReady}
+            onRecheck={onRecheckEngines}
+            rechecking={recheckingEngines}
             flash={flashId === msg.id}
           />
         </div>

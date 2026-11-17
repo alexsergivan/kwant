@@ -88,7 +88,8 @@ pub async fn set_enabled(
     Ok(Json(EnginesResponse { engines: with_accounts(&state, &space, state.engines.snapshot()).await }))
 }
 
-/// Checks every engine in the background, so the first turns after startup see real status.
+/// Checks every engine in the background, so the first turns after startup see real status, then
+/// keeps looking at a failed Ollama on a backoff (see `EngineRegistry::watch_ollama`).
 pub fn spawn_startup_check(state: AppState) {
     tokio::spawn(async move {
         let engines = recheck_all(&state, &SpaceId::default_space()).await;
@@ -98,5 +99,8 @@ pub fn spawn_startup_check(state: AppState) {
             .map(|e| e.name.as_str())
             .collect();
         tracing::info!(ready = ?ready, "engine checks finished");
+        // An Ollama that came up after this check is found without anyone pressing Re-check
+        let engines = state.engines.clone();
+        engines.watch_ollama(&crate::drivers::engines::OLLAMA_BACKOFF, || probe_env(&state)).await;
     });
 }
