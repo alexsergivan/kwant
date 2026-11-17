@@ -1,7 +1,8 @@
 //! Steps only the person can do in the bot browser (`request_human_step`): sign in, solve a
 //! CAPTCHA, or something else. A step is `open` until the person marks it done or declines it,
 //! or its turn is stopped (`cancelled`). A CAPTCHA step also closes by itself when the check
-//! is gone from the page (`resolved_auto`) or nobody solved it in time (`timed_out`).
+//! is gone from the page (`resolved_auto`) or nobody solved it in time (`timed_out`). A file
+//! the person sends in the chat while a turn waits on the step closes it as `left_for_message`.
 
 use super::models::{Message, MessageExtra, NewMessage};
 use super::{Database, DbError};
@@ -17,8 +18,9 @@ pub const MAX_OPEN_PER_KWANT: i64 = 5;
 
 pub const HUMAN_STEP_KINDS: [&str; 4] = ["sign_in", "captcha", "two_factor", "other"];
 /// "open", "done", "declined", "cancelled" (its turn was stopped), "resolved_auto" (the
-/// CAPTCHA went away on its own or the person solved it without pressing Done) or "timed_out".
-pub const HUMAN_STEP_STATUSES: [&str; 6] = ["open", "done", "declined", "cancelled", "resolved_auto", "timed_out"];
+/// CAPTCHA went away on its own or the person solved it without pressing Done), "timed_out" or
+/// "left_for_message" (22m: the person sent a file while a turn waited on it, so it ended).
+pub const HUMAN_STEP_STATUSES: [&str; 7] = ["open", "done", "declined", "cancelled", "resolved_auto", "timed_out", "left_for_message"];
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
 pub struct HumanStep {
@@ -166,6 +168,12 @@ fn same_sign_in([kwant, channel, direct, thread, browser, site]: [&str; 6]) -> S
     )
 }
 
+/// Every column of `human_steps`, as [`CREATE_HUMAN_STEPS`] makes it.
+const HUMAN_STEP_COLUMNS: [&str; 17] = [
+    "id", "kwant_id", "channel_id", "direct_kwant_id", "thread_id", "turn_id", "kind", "reason", "url", "sandbox_target",
+    "target", "source", "status", "message_id", "created_at", "closed_at", "page_key",
+];
+
 const CREATE_HUMAN_STEPS: &str = "CREATE TABLE IF NOT EXISTS human_steps (
     id TEXT PRIMARY KEY,
     kwant_id TEXT NOT NULL,
@@ -179,7 +187,7 @@ const CREATE_HUMAN_STEPS: &str = "CREATE TABLE IF NOT EXISTS human_steps (
     sandbox_target TEXT,
     target TEXT,
     source TEXT NOT NULL CHECK (source IN ('bot', 'auto')),
-    status TEXT NOT NULL CHECK (status IN ('open', 'done', 'declined', 'cancelled', 'resolved_auto', 'timed_out')),
+    status TEXT NOT NULL CHECK (status IN ('open', 'done', 'declined', 'cancelled', 'resolved_auto', 'timed_out', 'left_for_message')),
     message_id TEXT,
     created_at TIMESTAMP NOT NULL,
     closed_at TIMESTAMP,
@@ -189,13 +197,15 @@ const CREATE_HUMAN_STEPS: &str = "CREATE TABLE IF NOT EXISTS human_steps (
 impl Database {
     pub(super) async fn migrate_human_steps(&self) -> Result<(), DbError> {
         sqlx::query(CREATE_HUMAN_STEPS).execute(&self.pool).await?;
-        // Tables made before CAPTCHA auto-resolve lack `target` and the two new statuses, which
-        // a CHECK can't gain in place: rebuild them once
+        // Tables made before a status was added (CAPTCHA auto-resolve's two, 22m's
+        // `left_for_message`) can't gain it in their CHECK in place: rebuild them once, keeping
+        // every row and every column they have
         let sql: Option<(String,)> = sqlx::query_as("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'human_steps'")
             .fetch_optional(&self.pool)
             .await?;
-        if sql.is_some_and(|(sql,)| !sql.contains("'timed_out'")) {
-            let columns = "id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, message_id, created_at, closed_at";
+        if sql.is_some_and(|(sql,)| !sql.contains("'left_for_message'")) {
+            let had: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('human_steps')").fetch_all(&self.pool).await?;
+            let columns = HUMAN_STEP_COLUMNS.iter().filter(|c| had.iter().any(|h| h == *c)).copied().collect::<Vec<_>>().join(", ");
             let mut tx = self.pool.begin().await?;
             sqlx::query("DROP INDEX IF EXISTS human_steps_by_status").execute(&mut *tx).await?;
             sqlx::query("ALTER TABLE human_steps RENAME TO human_steps_old").execute(&mut *tx).await?;
@@ -563,6 +573,44 @@ mod tests {
         let (s, ..) = db.create_human_step_with_card(&place, "captcha", "Solve", None, None, "auto", |_| None).await.unwrap();
         assert!(db.close_human_step(&s.id, "timed_out").await.unwrap());
         assert!(serde_json::to_value(db.get_human_step(&s.id).await.unwrap().unwrap()).unwrap()["target"].is_null());
+    }
+
+    /// 22m: a table as 0.9.17 left it (every column, no `left_for_message`) is rebuilt once and
+    /// keeps its rows whole, the CAPTCHA box and the held page included.
+    #[tokio::test]
+    async fn a_table_before_left_for_message_gains_it_and_keeps_every_column() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        sqlx::query("DROP TABLE human_steps").execute(&db.pool).await.unwrap();
+        let before = CREATE_HUMAN_STEPS.replace(", 'left_for_message'", "");
+        assert_ne!(before, CREATE_HUMAN_STEPS);
+        sqlx::query(&before).execute(&db.pool).await.unwrap();
+        let target = r#"{"kind":"tiktok","x":1,"y":2,"width":30,"height":40}"#;
+        sqlx::query(
+            "INSERT INTO human_steps (id, kwant_id, channel_id, thread_id, turn_id, kind, reason, url, sandbox_target, target, source, status, message_id, created_at, page_key)
+             VALUES ('old', 'k', 'c', 'th', 'tu', 'captcha', 'Solve', 'https://x.com/', 't', ?, 'auto', 'open', 'm1', ?, 't#k#th')",
+        )
+        .bind(target)
+        .bind(Utc::now())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        // Reopened, as kwnt starts (see the page test below for why not under this pool)
+        db.pool.close().await;
+        let db = Database::init(tmp.path()).await.unwrap();
+        db.migrate_human_steps().await.unwrap();
+        let old = db.get_human_step("old").await.unwrap().unwrap();
+        assert_eq!(
+            (old.channel_id.as_deref(), old.thread_id.as_deref(), old.turn_id.as_deref(), old.message_id.as_deref(), old.page_key.as_deref()),
+            (Some("c"), Some("th"), Some("tu"), Some("m1"), Some("t#k#th"))
+        );
+        assert_eq!(serde_json::to_value(&old).unwrap()["target"]["width"], 30);
+        assert!(db.close_human_step("old", "left_for_message").await.unwrap());
+        assert_eq!(db.get_human_step("old").await.unwrap().unwrap().status, "left_for_message");
+        let (sql,): (String,) = sqlx::query_as("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'human_steps'").fetch_one(&db.pool).await.unwrap();
+        assert!(sql.contains("'left_for_message'"));
+        let bogus = sqlx::query("UPDATE human_steps SET status = 'bogus' WHERE id = 'old'").execute(&db.pool).await;
+        assert!(bogus.is_err(), "the CHECK still refuses unknown statuses");
     }
 
     /// 0.9.3: a step holds only its own page; a step saved before pages (no page key, as an
