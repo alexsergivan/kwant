@@ -96,6 +96,46 @@ pub fn is_home_assistant(name: &str) -> bool {
     name.trim().eq_ignore_ascii_case(HOME_ASSISTANT)
 }
 
+/// 28m: the paths Home Assistant serves its MCP server at: `/api/mcp` (streamable HTTP) and
+/// `/mcp_server/sse` (the older SSE endpoint).
+const PATHS: &[&str] = &["/api/mcp", "/mcp_server/sse"];
+
+/// 28m: whether `address` is an `http(s)` URL at Home Assistant's own MCP path ([`PATHS`]), also
+/// under a prefix a proxy adds (`https://example.com/ha/api/mcp`); a trailing `/`, the query and
+/// the fragment don't matter. Only a hint, for a server kwnt never heard from: what a server says
+/// it is always wins.
+pub fn at_home_assistant_path(address: &str) -> bool {
+    let Some((scheme, rest)) = address.trim().split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let Some(slash) = rest.find('/') else {
+        return false;
+    };
+    let path = rest[slash..].trim_end_matches('/');
+    PATHS.iter().any(|p| path.len().checked_sub(p.len()).and_then(|at| path.get(at..)).is_some_and(|end| end.eq_ignore_ascii_case(p)))
+}
+
+/// 28m: whether a server counts as Home Assistant's for the delivery check. `heard` is what kwnt
+/// heard it say it is (on a connection in this run, else at its last test): `Some(None)` when it
+/// gave no name, `None` when kwnt never heard from it. A server kwnt never heard from counts when
+/// its address is at Home Assistant's MCP path: its `url`, or, for a `stdio` server (a proxy such
+/// as `mcp-proxy`), one of its arguments (`--url=…` too). Counting a server that isn't means at
+/// most one "did that change really happen?" continuation, the safe side; missing one lets a
+/// false "Unlocking the front door now." through.
+pub fn counts_as_home_assistant(heard: Option<Option<&str>>, transport: &str, url: Option<&str>, args: &[String]) -> bool {
+    match heard {
+        Some(name) => name.is_some_and(is_home_assistant),
+        None if transport == "stdio" => {
+            args.iter().any(|a| at_home_assistant_path(a) || a.split_once('=').is_some_and(|(_, v)| at_home_assistant_path(v)))
+        }
+        None => url.is_some_and(at_home_assistant_path),
+    }
+}
+
 /// Whether `tool` (the name after the server, `intent__HassTurnOff`) is one of Home Assistant's
 /// own reads ([`READS`]), with or without its `homeassistant__` prefix.
 pub fn is_home_read(tool: &str) -> bool {
@@ -321,6 +361,67 @@ mod tests {
         assert_eq!(live_context_hint(read, &json!({"domain": ["light"]}), "denied"), None);
         assert_eq!(live_context_hint("intent__HassTurnOff", &json!({"domain": ["light"]}), "error"), None);
         assert_eq!(live_context_hint("homeassistant__GetDateTime", &json!({"name": "x"}), "ok"), None);
+    }
+
+    /// 28m: Home Assistant's own MCP paths, also behind a proxy's prefix; other paths aren't.
+    #[test]
+    fn home_assistants_mcp_path_is_known_by_its_address() {
+        for address in [
+            "http://homeassistant.local:8123/api/mcp",
+            "http://192.168.1.20:8123/api/mcp/",
+            "https://abcd1234.ui.nabu.casa/api/mcp",
+            "HTTPS://ha.example.com/API/MCP?x=1",
+            "https://example.com/homeassistant/api/mcp#top",
+            "http://homeassistant.local:8123/mcp_server/sse",
+            "  http://localhost:8123/api/mcp  ",
+        ] {
+            assert!(at_home_assistant_path(address), "{address}");
+        }
+        for address in [
+            "http://homeassistant.local:8123/",
+            "http://homeassistant.local:8123",
+            "http://127.0.0.1:7777/api/mcp/gateway",
+            "http://127.0.0.1:7777/api/mcp/self",
+            "https://mcp.notion.com/mcp",
+            "https://example.com/xapi/mcp",
+            "https://example.com/?next=/api/mcp",
+            "ftp://ha.local/api/mcp",
+            "/api/mcp",
+            "api/mcp",
+            "",
+            "http://ha.local/ápi/mcp",
+            "http://ha.local/é/ab/mcp",
+        ] {
+            assert!(!at_home_assistant_path(address), "{address}");
+        }
+    }
+
+    /// 28m: what a server said it is always wins; only one kwnt never heard from goes by its
+    /// address (its url, or a proxy's argument for a stdio server).
+    #[test]
+    fn a_server_never_heard_from_counts_by_its_address() {
+        let ha = Some("http://homeassistant.local:8123/api/mcp");
+        let other = Some("https://mcp.notion.com/mcp");
+        let none: &[String] = &[];
+        // Never heard from: the address decides
+        assert!(counts_as_home_assistant(None, "http", ha, none));
+        assert!(!counts_as_home_assistant(None, "http", other, none));
+        assert!(!counts_as_home_assistant(None, "http", None, none));
+        // Heard from: what it said, whatever its address
+        assert!(counts_as_home_assistant(Some(Some("home-assistant")), "http", other, none));
+        assert!(counts_as_home_assistant(Some(Some(" Home-Assistant ")), "http", None, none));
+        assert!(!counts_as_home_assistant(Some(Some("kwnt-echo")), "http", ha, none));
+        assert!(!counts_as_home_assistant(Some(None), "http", ha, none), "it gave no name: not counted");
+        // A stdio proxy to Home Assistant (mcp-proxy, as Home Assistant's docs set it up)
+        let proxy: Vec<String> = ["--transport=streamablehttp", "--stateless", "http://localhost:8123/api/mcp"].map(String::from).into();
+        assert!(counts_as_home_assistant(None, "stdio", None, &proxy));
+        let flag: Vec<String> = ["--url=http://localhost:8123/mcp_server/sse"].map(String::from).into();
+        assert!(counts_as_home_assistant(None, "stdio", None, &flag));
+        let notes: Vec<String> = ["mcp-server-notes", "--root", "/home/me/api/mcp"].map(String::from).into();
+        assert!(!counts_as_home_assistant(None, "stdio", None, &notes));
+        assert!(!counts_as_home_assistant(Some(Some("mcp-proxy")), "stdio", None, &proxy), "heard from: what it said");
+        // A stdio server's url field isn't its address
+        assert!(!counts_as_home_assistant(None, "stdio", ha, none));
     }
 
     /// 27e round 2 (Mira): the miss hint goes with every filtered read that ended in an error

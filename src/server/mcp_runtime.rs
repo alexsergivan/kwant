@@ -594,15 +594,19 @@ impl BrokerApprover {
 
 /// 27e: the names (in kwant) of the turn's `servers` that are Home Assistant's: by what each
 /// said on kwnt's last connection to it in this run, else by what its last test stored. A server
-/// kwnt never heard from isn't counted (the delivery check only adds a continuation for them).
+/// kwnt never heard from counts when its address is Home Assistant's MCP path (28m: on the Claude
+/// CLI the CLI connects, not kwnt, so a new server is often one kwnt never heard from), see
+/// [`mcp::home_floor::counts_as_home_assistant`]. The delivery check only adds a continuation.
 pub async fn home_server_names(db: &Database, servers: &[McpServer]) -> Vec<String> {
     let mut names = Vec::new();
     for server in servers.iter().filter(|s| s.name != mcp::SELF_SERVER_NAME && s.name != mcp::RESERVED_SERVER_NAME) {
-        let reported = match mcp::home_floor::seen(&server.id) {
-            Some(seen) => seen.reported,
-            None => db.mcp_reported_name(&server.id).await.ok().flatten().flatten(),
+        let heard = match mcp::home_floor::seen(&server.id) {
+            Some(seen) => Some(seen.reported),
+            // A read that failed is a server kwnt can't place: its address decides (the safe side)
+            None => db.mcp_reported_name(&server.id).await.ok().flatten(),
         };
-        if reported.is_some_and(|n| mcp::home_floor::is_home_assistant(&n)) {
+        let heard = heard.as_ref().map(Option::as_deref);
+        if mcp::home_floor::counts_as_home_assistant(heard, &server.transport, server.url.as_deref(), &server.args) {
             names.push(server.name.clone());
         }
     }
