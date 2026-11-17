@@ -3079,7 +3079,8 @@ async fn run_kwant_turn_inner(
         // A replay opens no page: the bot's browser isn't its scratch folder
         let target_url_opt = if opts.rehearse.is_some() || opts.no_tools { None } else { opts.nav_target() };
         // 13a: the request's link couldn't be opened before the turn (it didn't load, or a site rule
-        // refused it). A failed first step that isn't in the turn's activity
+        // refused it). 28g: the open is saved as the turn's first step, but follow-through reads the
+        // turn's activity without it, so this stays the only signal for it
         let mut page_failed = false;
 
         if let Some(target_url) = target_url_opt {
@@ -3089,10 +3090,13 @@ async fn run_kwant_turn_inner(
             )));
             if let Some(ctrl) = get_or_create_browser_controller(state, &turn_page).await {
                 ctrl.site_guard.set_driver(&target_kwant.id);
+                // 28g: the open is a step on the reply ("Opening <host>"), live and saved
+                event_broadcast.activity.link_open_start(&target_url);
                 let navigated = match guard_bot_action(state, &ctrl, &turn_page).await {
                     Ok(()) => ctrl.navigate(&target_url).await,
                     Err(e) => Err(e),
                 };
+                event_broadcast.activity.link_open_end(&super::activity::LinkOpen::of(&navigated));
                 match navigated {
                 Ok(nav) => {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
@@ -3997,13 +4001,15 @@ async fn run_kwant_turn_inner(
                 // ...against the same plan the prompt's "[What to deliver]" hint came from
                 let expect = plan.as_ref().and_then(super::delivery_check::Expect::from_plan);
                 let checked = opts.delivery_checked();
+                // What the bot's own tools did: kwnt's link open before the turn counts only as `page_failed` (28g)
+                let own_steps = super::activity::without_link_open(activity.as_ref());
                 let verdict = if checked {
                     // Follow-through (0.9.4): the turn's last tool step, if it failed, and a declined card
-                    let (ran_tools, failed_step, declined) = super::delivery_check::tool_steps_in(activity.as_ref());
+                    let (ran_tools, failed_step, declined) = super::delivery_check::tool_steps_in(own_steps.as_ref());
                     let own = super::delivery_check::Seen {
                         image_shared: pictures.shared_image,
                         has_shot: pictures.last_shot.is_some(),
-                        pushed: super::delivery_check::pushed_in(activity.as_ref()),
+                        pushed: super::delivery_check::pushed_in(own_steps.as_ref()),
                         ran_tools,
                         failed_step,
                         declined,
@@ -4079,7 +4085,7 @@ async fn run_kwant_turn_inner(
                 let blocked = super::keep_going::blocked_line(&asst_msg.text)
                     .map(|text| serde_json::json!({ "text": text }))
                     .or_else(|| {
-                        let text = super::delivery_check::failed_step_blocked(&asst_msg.text, activity.as_ref(), before).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
+                        let text = super::delivery_check::failed_step_blocked(&asst_msg.text, own_steps.as_ref(), before).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
                         Some(serde_json::json!({ "text": text, "from": "failed_step" }))
                     })
                     // 22j: the one continuation still ended on a promise after the step failed again
@@ -4090,7 +4096,7 @@ async fn run_kwant_turn_inner(
                         Some(serde_json::json!({ "text": super::delivery_check::blocked_text(&target_kwant.name, step), "from": "follow_through" }))
                     });
                 // ...and if this reply is held, its decided reply (a new turn) counts what this one left
-                let failed_before = super::delivery_check::FailedBefore::of_turn(activity.as_ref(), before);
+                let failed_before = super::delivery_check::FailedBefore::of_turn(own_steps.as_ref(), before);
                 if let Some(blocked) = blocked {
                     meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = blocked;
                 }
