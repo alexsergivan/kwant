@@ -1,0 +1,29 @@
+{
+  "version": "0.9.20",
+  "date": "2026-11-17",
+  "highlights": [
+    {
+      "id": "attention-shows-the-ask",
+      "title": "Needs attention takes you straight to the ask",
+      "text": "Click a Needs-attention row and kwant opens the right chat at the exact ask. A Needs you bar above the message box says it in full with one button, and the row clears itself once it's handled.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "closed-card-heading-settles",
+      "title": "Closed browser steps say what they were",
+      "text": "Once a sign-in or human check in the browser is done, skipped or timed out, its card is headed by a quiet grey name like Sign-in instead of still saying Sign in needed.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Bots on API engines can read the files in their own folder (read_file and list_dir), and nothing outside it.",
+    "A desktop setting that can't be saved keeps its old value and says \"kwant couldn't save the change. Check that ~/.kwnt can be written.\"",
+    "kwnt's server and command line install on Mac and Linux with `brew install alexsergivan/kwant/kwnt`.",
+    "Bots no longer lose their browser after a long day: kwant closes the browser connections it isn't using (thanks @calintro, #753).",
+    "Home Assistant's read-only tools run without asking in \"Ask only when risky\", and a home-network http sign-in says to use a token header.",
+    "A Deploy to Render button and ready files for CasaOS, Umbrel and Coolify; a store install's sign-in screen says where its password is.",
+    "A customer's or another bot's message now sits on the left in an outlined bubble, so only your own messages sit on your side."
+  ]
+}

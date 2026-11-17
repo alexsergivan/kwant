@@ -8,6 +8,7 @@ pub mod client;
 pub mod composio;
 pub mod echo_server;
 pub mod fetch_risk;
+pub mod home_floor;
 pub mod oauth;
 pub mod payment_floor;
 pub mod prod_floor;
@@ -44,7 +45,8 @@ pub const DEFAULT_TIMEOUT_SECS: i64 = 30;
 pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 25;
 /// Longest tool result kept in a message's `tool_calls` record.
 pub const RECORD_RESULT_MAX_CHARS: usize = 4000;
-/// How long an MCP tool call waits for the user's approval before it is denied.
+/// How long a tool call waits for the person's approval card. After that the call is `unanswered`:
+/// it didn't run, the card stays open (a late Allow starts a new turn to make it) and the bot is told so.
 pub const APPROVAL_TIMEOUT_SECS: u64 = 300;
 /// kwnt's permission-prompt tool for the claude CLI, called as `mcp__kwnt__approve`.
 pub const PERMISSION_TOOL: &str = "approve";
@@ -462,6 +464,37 @@ pub const DENIED_TEXT: &str = "The user denied this tool call.";
 pub const UNANSWERED_TEXT: &str = "No one has answered the approval card for this call yet, so it did not run. \
 The card stays open: if the person allows it later, you will be started again to make this same call and continue. \
 Don't retry it now. Finish what you can without it, then end your turn saying what you were about to do and why.";
+/// Said once per turn, with the first tool result that failed or didn't run (error, denied,
+/// unanswered), so the model's final reply doesn't claim what didn't happen (26b).
+pub const NO_FALSE_CLAIMS_TEXT: &str =
+    "A step failed or wasn't approved. Don't say it worked or that you checked something you didn't.";
+/// The step detail of a call nobody answered: the wait is [`APPROVAL_TIMEOUT_SECS`].
+pub const UNANSWERED_STEP_DETAIL: &str = "Waited 5 minutes for your answer; nothing ran";
+/// The step detail of a call a Skill Foundry replay recorded instead of running.
+pub const REHEARSED_STEP_DETAIL: &str = "Dry run: kwant recorded this call instead of running it";
+
+/// Whether a tool call record's `status` means the call failed or didn't run, so the turn's
+/// reply must not say it worked: `error`, `failed`, `denied`, `cancelled` or `unanswered`.
+/// A `rehearsed` call (a dry run) isn't one: the bot is told to say what it would have done.
+pub fn missed_status(status: &str) -> bool {
+    matches!(
+        status,
+        "error" | "failed" | "denied" | "cancelled" | "unanswered"
+    )
+}
+
+/// Whether a call that ended with record `status` gets the once-per-turn
+/// [`NO_FALSE_CLAIMS_TEXT`] reminder (26b): a failed or unanswered result. A plain denial
+/// doesn't: the person said no and the bot is already told so ([`DENIED_TEXT`]).
+pub fn reminds(status: &str) -> bool {
+    missed_status(status) && status != "denied"
+}
+
+/// `text` with [`NO_FALSE_CLAIMS_TEXT`] after it, on its own line.
+pub fn with_no_false_claims(text: &str) -> String {
+    format!("{}\n\n{NO_FALSE_CLAIMS_TEXT}", text.trim_end())
+}
+
 /// What the bot is told in a Skill Foundry replay when a call could change something.
 pub const REHEARSED_TEXT: &str = "This is a dry run on a scratch copy of an earlier task: calls that could change \
 anything outside the scratch folder (send, publish, sign in, pay, run commands, write elsewhere, other servers' tools) \
@@ -577,6 +610,18 @@ impl McpTurnContext {
         if let Ok(mut r) = self.records.lock() {
             r.push(record);
         }
+    }
+
+    /// Whether a call this turn already failed or went unanswered (see [`reminds`]): the
+    /// [`NO_FALSE_CLAIMS_TEXT`] reminder went with that one, so it isn't said again.
+    pub fn had_miss(&self) -> bool {
+        self.records
+            .lock()
+            .map(|r| {
+                r.iter()
+                    .any(|c| c["status"].as_str().is_some_and(reminds))
+            })
+            .unwrap_or(true)
     }
 
     pub fn take_records(&self) -> Vec<Value> {
@@ -730,5 +775,19 @@ mod tests {
         assert_eq!(split_tool_name("Bash"), None);
         assert_eq!(namespaced_tool_name("gh", "x"), "mcp__gh__x");
         assert_eq!(truncate_text("héllo", 2), "hé… [truncated]");
+    }
+
+    /// 26b: the reminder goes with a failed or unanswered result, never a plain denial (the bot
+    /// is told it was denied) or a call that ran or was a dry run. `had_miss` reads the same rule,
+    /// so a denial alone doesn't use up the turn's one reminder.
+    #[test]
+    fn the_reminder_goes_with_failed_or_unanswered_calls_only() {
+        for status in ["error", "failed", "cancelled", "unanswered"] {
+            assert!(reminds(status), "{status}");
+        }
+        for status in ["denied", "ok", "rehearsed", "allowed", ""] {
+            assert!(!reminds(status), "{status}");
+        }
+        assert!(missed_status("denied"), "a denial still didn't run");
     }
 }

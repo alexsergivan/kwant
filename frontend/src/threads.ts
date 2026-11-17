@@ -137,6 +137,7 @@ export function reloadOnTurnEnd(_turnId: string | null | undefined): boolean {
  */
 export class ChatLoads {
   private seq: Record<string, number> = {};
+  private newest: Record<string, Promise<void>> = {};
 
   start(ctx: string): number {
     this.seq[ctx] = (this.seq[ctx] ?? 0) + 1;
@@ -146,6 +147,50 @@ export class ChatLoads {
   isLatest(ctx: string, n: number): boolean {
     return this.seq[ctx] === n;
   }
+
+  /**
+   * Runs one load of a chat; `load` may only touch the screen while `isLatest()` holds. The promise resolves
+   * once the newest load of that chat has landed, never earlier: a load a newer one replaced waits for that one.
+   * 22r: TurnComplete's load was replaced by turn_ended's, came back first, and its follow-up ended the turn
+   * (dropped the working line) while the list without the reply was still on screen, so the asked-for OK was
+   * the newest message again and "… is waiting for your OK" came back for a few frames.
+   */
+  run(ctx: string, load: (isLatest: () => boolean) => Promise<void>): Promise<void> {
+    const n = this.start(ctx);
+    const p = load(() => this.isLatest(ctx, n));
+    this.newest[ctx] = p;
+    return this.landed(ctx, p);
+  }
+
+  private async landed(ctx: string, p: Promise<void>): Promise<void> {
+    await p.catch(() => undefined);
+    const next = this.newest[ctx];
+    if (next && next !== p) return this.landed(ctx, next);
+  }
+}
+
+/**
+ * Whether TurnComplete's load may settle the chat (clear the streamed text, drop the working line). Not while that
+ * turn is still running: TurnComplete comes before kwnt saves the reply, so its load can come back without it, and
+ * clearing the stream then blanks the reply for a few frames before it lands (22r). turn_ended settles it instead,
+ * after the load that has the reply. A TurnComplete with no turn id, or one that arrives after turn_ended, settles.
+ */
+export function settlesOnTurnComplete(turns: TurnMap, turnId: unknown): boolean {
+  return !(typeof turnId === 'string' && turnId in turns);
+}
+
+/**
+ * Whether a load brought a saved bot reply the list on screen didn't have: its newest message is the bot's, saved
+ * (not temp-) and new. Then TurnComplete may clear the streamed text even while the turn is still running, so the
+ * saved reply and its streamed copy are never on screen together (22r).
+ */
+export function landedNewReply(
+  before: readonly { id: string; sender_role?: string }[] | undefined,
+  after: readonly { id: string; sender_role?: string }[] | undefined,
+): boolean {
+  const last = after?.[after.length - 1];
+  if (!last || last.sender_role !== 'kwant' || last.id.startsWith('temp-')) return false;
+  return !(before ?? []).some((m) => m.id === last.id);
 }
 
 /** Applies one SSE event; returns the same map when the event isn't about turns. */
@@ -286,6 +331,18 @@ export function threadBadge(thread: Pick<Thread, 'id' | 'delegation'>, turns: Tu
   if (st === 'running') return { kind: 'working', label: 'Working' };
   if (st === 'queued') return { kind: 'queued', label: 'Queued' };
   return FINAL_LABEL[st] ?? null;
+}
+
+/**
+ * 25a: the open chat's badge while its reply is still being written (its id is in App's `live`). The turn's
+ * `turn_ended` can land a fetch before the saved reply, and the header must not say "done" while the body
+ * still says "writing", so a missing or final badge reads "Working" until the live card goes. "Waiting for
+ * you" and "Queued" stay as they are. Only for the conversation on screen: other rows keep `threadBadge`.
+ */
+export function writingBadge(badge: Badge | null, writing: boolean): Badge | null {
+  if (!writing) return badge;
+  if (badge && (badge.kind === 'working' || badge.kind === 'waiting' || badge.kind === 'queued')) return badge;
+  return { kind: 'working', label: 'Working' };
 }
 
 export const isOpenDelegation = (d: Pick<Delegation, 'status'> | null | undefined): boolean =>

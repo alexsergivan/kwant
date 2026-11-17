@@ -19,6 +19,19 @@ passwords, a new space starts on `ask` instead (see below). An unknown bot alway
 Whatever the mode, a call that looks like a payment shows a card, even when `smart` finds it
 safe or "Always this session" was given: see [payments.md](payments.md).
 
+Whatever the mode, on a Home Assistant MCP server (it answers `initialize` with `serverInfo.name`
+`home-assistant`), a call that acts on a lock, a door, a garage door, a gate or an alarm shows a
+card (since 0.9.21), approvals `off` included, the way payments do: a `domain` of `lock` or
+`alarm_control_panel`; `cover` with a `device_class` of garage, door or gate, or none; or any
+string argument (a name, an area, a `schedule_command` command) with the whole word lock, unlock,
+door, garage, gate, alarm or disarm, plurals too, in any case. "Always this session" on such a card,
+and an earlier one for the tool, cover that one call; the lights still run on their grant. Reads
+(tools the server marks read-only, and `GetLiveContext`) never ask for this. The card carries
+`details.home_always_ask: true` and `details.home_reason` ("Locks, doors, garage doors, gates and alarms always ask. Always allow isn’t offered for them.").
+What the server is comes from what it said on kwnt's own connections, stored at its test
+(`POST /api/mcp/servers/:id/test`) so it holds after a restart, never from its address; a server
+kwnt never heard from asks for these calls.
+
 Whatever the mode, a call that names kwnt's own secret files (the vault, its key, the API token)
 is refused and recorded as `denied`. Calls that run without a card are recorded as
 `auto_allowed` (`GET /api/approvals?status=auto_allowed`); under `smart` the row's
@@ -112,8 +125,9 @@ earlier in the same turn. Choose `ask` for bots or folders you don't trust.
   Known gaps, left as they are: options that follow symlinks (`grep -R`, `rg -L`, `find -L`,
   `ls -R`, `zip -r`) run without a card, so a symlink already in the folder that points out of
   it can be read through them.
-- **MCP tools** the server marks `readOnlyHint: true` without `destructiveHint: true`. That is
-  the server's own claim. If kwnt can't check it, the call asks.
+- **MCP tools** the server marks `readOnlyHint: true`. As the MCP spec says, `destructiveHint`
+  counts only when `readOnlyHint` is false, so a tool marked both (Home Assistant's reads, like
+  GetLiveContext) runs too. That is the server's own claim. If kwnt can't check it, the call asks.
 
 **kwnt itself always asks.** kwnt's person-only routes take no token from this computer, so a
 request to kwnt from a bot could turn approvals off or answer its own cards. A curl, wget or
@@ -128,12 +142,13 @@ Writes and edits outside the folder and unknown tools still ask. Under every mod
 ## "Always this session"
 
 Under `ask` and `smart`, "Always this session" on a claude tool's card allows that tool (e.g. all
-`Bash`) for that bot and conversation until kwnt restarts. Under `smart`, API drivers'
+`Bash`) for that bot and conversation, also after kwnt restarts (table `always_allowed`), until the
+person takes it back (`DELETE /api/kwants/:id/always-allowed`, see [mcp-api.md](mcp-api.md)). Under `smart`, API drivers'
 `execute_shell` is remembered the same way, per conversation; under `ask` it covers that one
-command only. Neither covers a payment, and "Always this session" on a payment's card allows that
-one call.
+command only. Neither covers a payment or a Home Assistant lock, door or alarm, and "Always this
+session" on such a card allows that one call.
 
 ## Tests
 
-`cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test --test payment_floor_test`
+`cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test --test payment_floor_test --test home_locks_always_ask_test`
 and the classifier tables in `src/mcp/shell_risk.rs` (`cargo test --lib shell_risk`).

@@ -203,8 +203,10 @@ test('ChatView puts ⋯ right after Copy, the line before the messages, and keep
   const copy = src.indexOf('<CopyGhost copied=');
   const more = src.indexOf("continueMenu(msg, `${displayName}'s reply`, 'start')");
   assert.ok(copy > 0 && more > copy && more - copy < 200, '⋯ sits next to Copy');
-  assert.match(src, /continueMenu\(msg, 'your message', 'end', 'hover'\)/);
-  assert.match(src, /absolute right-full bottom-0 mr-1" data-message-more-gutter/, 'the person’s ⋯ sits in the gutter, no row of its own');
+  // 23c: "your message" for the person, "<name>'s message" for a customer or a bot (messageAbout)
+  // 25b: yours opens from the left gutter ('end'), a customer's or a bot's (now on the left) from the right one ('start')
+  assert.match(src, /continueMenu\(msg, messageAbout\(otherSender\), onYourSide \? 'end' : 'start', 'hover'\)/);
+  assert.match(src, /onYourSide \? 'absolute right-full bottom-0 mr-1' : 'absolute left-full bottom-0 ml-1'\} data-message-more-gutter/, 'the ⋯ sits in the gutter, no row of its own');
   assert.equal(/mt-1 flex justify-end">\{more\}/.test(src), false, 'no ⋯ row under the person’s bubble');
   assert.ok(src.indexOf('<ContinuedLine') > 0);
   assert.equal(/handleCopy\([^)]*continued/i.test(src), false);

@@ -113,10 +113,24 @@ pub fn title(text: &str, max: usize) -> String {
     format!("{}…", cut.trim_end())
 }
 
-/// Records the ask (clients refresh Needs you on the notice's message, posted with it).
+/// 22i: whether a stop may become a Needs-you item. Only with its notice saved in the chat: the
+/// row opens that chat, and the notice is what says what is needed and carries Retry or
+/// Continue. An item without one (Quant's case: "The model sent nothing…" pinned, the chat it
+/// opened showing nothing to do) is worse than none. An expired approval is the exception: its
+/// Retry runs from Needs you itself (`POST /api/approvals/:id/retry`).
+pub(super) fn may_ask(message_id: Option<&str>, resume: &Resume) -> bool {
+    message_id.is_some_and(|m| !m.is_empty()) || matches!(resume, Resume::Approval { .. })
+}
+
+/// Records the ask and says so live (`waiting_updated`), closing the chat's earlier stop or plain
+/// ask it replaces. `None`, with no item, when its notice wasn't saved ([`may_ask`]).
 pub async fn ask(state: &AppState, place: &Place, message_id: Option<&str>, line: &str, resume: Resume) -> Option<WaitingItem> {
+    if !may_ask(message_id, &resume) {
+        tracing::warn!(kwant_id = %place.kwant_id, "a bot's work stopped but its notice wasn't saved: no Needs-you item, it would open a chat with nothing to do");
+        return None;
+    }
     let line: String = line.chars().take(MAX_LINE_CHARS + 120).collect();
-    let item = state
+    let (item, replaced) = state
         .db
         .add_stopped(
             &place.kwant_id,
@@ -130,15 +144,19 @@ pub async fn ask(state: &AppState, place: &Place, message_id: Option<&str>, line
         .await
         .ok()?;
     tracing::info!(waiting_id = %item.id, kwant_id = %place.kwant_id, "a bot's work stopped: asked the person to resume it");
+    super::waiting::closed(state, &replaced, super::waiting::REASON_REPLACED);
+    super::waiting::opened(state, &item);
     Some(item)
 }
 
-/// A reply of the bot in that chat finished: whatever stopped there before has moved on.
+/// A reply of the bot in that chat finished: whatever stopped there before has moved on, and so
+/// has a failed hand-off or routine run of this bot there (22i). Each close is said live.
 pub async fn recovered(state: &AppState, place: &Place) {
-    let _ = state
-        .db
-        .close_stopped(&place.kwant_id, place.channel_id.as_deref(), place.direct_kwant_id.as_deref(), place.thread_id.as_deref())
-        .await;
+    let (channel, direct, thread) = (place.channel_id.as_deref(), place.direct_kwant_id.as_deref(), place.thread_id.as_deref());
+    let rows = state.db.close_stopped(&place.kwant_id, channel, direct, thread).await.unwrap_or_default();
+    super::waiting::closed(state, &rows, super::waiting::REASON_LATER_REPLY);
+    let failed = state.db.close_failed_in_chat(&place.kwant_id, channel, direct, thread).await.unwrap_or_default();
+    super::waiting::closed_failed(state, &place.kwant_id, (channel, direct, thread), &failed, super::waiting::REASON_LATER_REPLY);
 }
 
 /// Whether a turn that stopped gets a Needs-you item of its own: only a person's chat (depth 0)
@@ -161,6 +179,18 @@ pub fn gave_up_meta(meta: Option<Value>, resumes_itself: bool) -> Option<Value> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 22i (Quant's case): no Needs-you item for a stop whose notice wasn't saved; the chat the
+    /// row opens would show nothing to do. An expired approval's Retry works from the row itself.
+    #[test]
+    fn a_stop_becomes_an_item_only_with_its_notice_saved() {
+        assert!(may_ask(Some("m1"), &Resume::ResendMessage));
+        assert!(may_ask(Some("m1"), &Resume::Continue));
+        assert!(!may_ask(None, &Resume::ResendMessage));
+        assert!(!may_ask(Some(""), &Resume::ResendMessage));
+        assert!(!may_ask(None, &Resume::Continue));
+        assert!(may_ask(None, &Resume::Approval { approval_id: "a1".into() }));
+    }
 
     #[test]
     fn lines_are_short_and_drop_the_bot_tag() {

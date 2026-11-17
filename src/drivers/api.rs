@@ -67,22 +67,53 @@ async fn api_model_name(
 
 /// The provider's chat models, from `GET /v1/models` beside the chat endpoint `url`.
 async fn list_api_models(engine: super::engines::EngineId, url: &str, key: &str) -> Vec<super::engines::EngineModel> {
-    let base = url.split("/v1/").next().unwrap_or(url);
     let Ok(client) = Client::builder().timeout(Duration::from_secs(10)).build() else {
         return Vec::new();
     };
-    let req = client.get(format!("{base}/v1/models"));
-    let req = if is_anthropic(url) {
-        req.header("x-api-key", key).header("anthropic-version", ANTHROPIC_VERSION)
-    } else {
-        req.bearer_auth(key)
-    };
-    match req.send().await {
+    match models_request(&client, url, key).send().await {
         Ok(r) if r.status().is_success() => match r.json::<Value>().await {
             Ok(body) => super::engines::parse_api_models(engine, &body),
             Err(_) => Vec::new(),
         },
         _ => Vec::new(),
+    }
+}
+
+/// `list_api_models`' `GET /v1/models` beside the chat endpoint `url`, built but not sent.
+fn models_request(client: &Client, url: &str, key: &str) -> reqwest::RequestBuilder {
+    let base = url.split("/v1/").next().unwrap_or(url);
+    let models = format!("{base}/v1/models");
+    let req = client.get(&models);
+    let req = if is_anthropic(url) {
+        req.header("x-api-key", key).header("anthropic-version", ANTHROPIC_VERSION)
+    } else {
+        req.bearer_auth(key)
+    };
+    with_attribution(req, &models)
+}
+
+/// The site kwant names itself by in OpenRouter's app attribution (`HTTP-Referer`).
+const KWANT_SITE: &str = "https://kwant.si";
+/// The app title kwant names itself by in OpenRouter's app attribution (`X-OpenRouter-Title`).
+const KWANT_APP_TITLE: &str = "kwant";
+
+/// Whether `url` goes to OpenRouter: its parsed host is `openrouter.ai` or a subdomain of it.
+/// Matched on the host only, so `openrouter.ai.example.com` or a path naming it never count.
+fn is_openrouter(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.trim_end_matches('.').to_ascii_lowercase()))
+        .is_some_and(|h| h == "openrouter.ai" || h.ends_with(".openrouter.ai"))
+}
+
+/// Adds OpenRouter's app-attribution headers when `url` goes to OpenRouter, so kwant's usage
+/// counts on its apps page and rankings. They name the app only, never the person, space or bot.
+/// Requests to any other server are returned unchanged.
+pub(crate) fn with_attribution(req: reqwest::RequestBuilder, url: &str) -> reqwest::RequestBuilder {
+    if is_openrouter(url) {
+        req.header("HTTP-Referer", KWANT_SITE).header("X-OpenRouter-Title", KWANT_APP_TITLE)
+    } else {
+        req
     }
 }
 
@@ -429,7 +460,7 @@ const DEFER_TOOLS_ABOVE_CHARS: usize = 12_000;
 const UPFRONT_TOOLS_CHARS: usize = 8_000;
 /// kwnt's own tools a turn always gets in full: talking to the person, memory, teammates, the
 /// browser and files. The rest (routines, bots, spaces, settings, …) are a lookup away.
-const CORE_SELF_TOOLS: [&str; 13] = [
+const CORE_SELF_TOOLS: [&str; 15] = [
     "ask_user",
     "search_history",
     "memory_add",
@@ -443,6 +474,8 @@ const CORE_SELF_TOOLS: [&str; 13] = [
     "list_attachments",
     "read_attachment",
     "share_file",
+    "read_file",
+    "list_dir",
 ];
 const FIND_TOOLS: &str = "kwnt_find_tools";
 const CALL_TOOL: &str = "kwnt_call_tool";
@@ -1059,21 +1092,24 @@ impl ApiDriver {
 }
 
 impl ApiDriver {
-    /// Sends one model call; `Err` for no answer or an error status, with the provider's message.
-    async fn send_chat(&self, request: &ChatRequest<'_>, body: &Value) -> Result<reqwest::Response, ApiError> {
-        let mut req = self
-            .client
-            .post(request.url)
-            .json(body)
-            .timeout(Duration::from_secs(300));
-        if let Some(key) = request.api_key {
-            req = if is_anthropic(request.url) {
+    /// One model call's request to `url`, built but not sent: the key, and OpenRouter's app
+    /// attribution when `url` goes there (see [`with_attribution`]).
+    fn chat_request(&self, url: &str, api_key: Option<&str>, body: &Value) -> reqwest::RequestBuilder {
+        let mut req = self.client.post(url).json(body).timeout(Duration::from_secs(300));
+        if let Some(key) = api_key {
+            req = if is_anthropic(url) {
                 req.header("x-api-key", key)
                     .header("anthropic-version", ANTHROPIC_VERSION)
             } else {
                 req.header("Authorization", format!("Bearer {}", key))
             };
         }
+        with_attribution(req, url)
+    }
+
+    /// Sends one model call; `Err` for no answer or an error status, with the provider's message.
+    async fn send_chat(&self, request: &ChatRequest<'_>, body: &Value) -> Result<reqwest::Response, ApiError> {
+        let req = self.chat_request(request.url, request.api_key, body);
         let resp = req.send().await.map_err(|e| ApiError {
             status: None,
             message: match (&self.custom_base, e.is_timeout()) {
@@ -1373,7 +1409,7 @@ impl ApiDriver {
                         ),
                     })
                     .await;
-                results.push(&mut messages, id, name, outcome.text, outcome.status == "ok");
+                results.push(&mut messages, id, name, outcome.model_text(), outcome.status == "ok");
             }
         }
         Err(ApiError {
@@ -1629,6 +1665,97 @@ impl Driver for ApiDriver {
             tokens_used: tokens,
             ..Default::default()
         })
+    }
+
+    /// An API turn's only tools are kwant's and its MCP servers': no shell, no file reads (#715)
+    fn needs_folder_tools(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    const OPENROUTER_CHAT: &str = "https://openrouter.ai/api/v1/chat/completions";
+
+    /// The request `send_chat` would send to `url` with key `sk-test`, built with no network.
+    fn chat(url: &str) -> reqwest::Request {
+        ApiDriver::for_custom(Some("sk-test".into()), url.into(), url.into())
+            .chat_request(url, Some("sk-test"), &json!({"model": "m", "messages": []}))
+            .build()
+            .unwrap()
+    }
+
+    fn header<'a>(req: &'a reqwest::Request, name: &str) -> Option<&'a str> {
+        req.headers().get(name).map(|v| v.to_str().unwrap())
+    }
+
+    fn assert_attributed(req: &reqwest::Request) {
+        assert_eq!(header(req, "HTTP-Referer"), Some("https://kwant.si"), "{}", req.url());
+        assert_eq!(header(req, "X-OpenRouter-Title"), Some("kwant"), "{}", req.url());
+        assert_eq!(header(req, "X-Title"), None, "only the current title header is sent");
+    }
+
+    fn assert_not_attributed(req: &reqwest::Request) {
+        for name in ["HTTP-Referer", "Referer", "X-OpenRouter-Title", "X-Title"] {
+            assert_eq!(header(req, name), None, "{name} on {}", req.url());
+        }
+    }
+
+    #[test]
+    fn openrouter_chat_requests_name_kwant_with_the_key_unchanged() {
+        let req = chat(OPENROUTER_CHAT);
+        assert_attributed(&req);
+        assert_eq!(header(&req, "Authorization"), Some("Bearer sk-test"));
+        assert_eq!(req.url().as_str(), OPENROUTER_CHAT);
+        // Same for any openrouter.ai subdomain and any letter case
+        assert_attributed(&chat("https://eu.OpenRouter.ai/api/v1/chat/completions"));
+    }
+
+    #[test]
+    fn openrouter_model_list_requests_name_kwant() {
+        let client = Client::new();
+        let req = models_request(&client, OPENROUTER_CHAT, "sk-test").build().unwrap();
+        assert_eq!(req.url().as_str(), "https://openrouter.ai/api/v1/models");
+        assert_attributed(&req);
+        assert_eq!(header(&req, "Authorization"), Some("Bearer sk-test"));
+    }
+
+    #[test]
+    fn no_other_server_gets_attribution_headers() {
+        let others = [
+            "https://api.openai.com/v1/chat/completions",
+            "https://api.anthropic.com/v1/messages",
+            "https://api.x.ai/v1/chat/completions",
+            "http://localhost:1234/v1/chat/completions",
+            "http://127.0.0.1:23333/api/openai/v1/chat/completions",
+            "https://openrouter.ai.example.com/v1/chat/completions",
+            "https://example.com/openrouter.ai/v1/chat/completions",
+            "https://example.com/v1/chat/completions?u=openrouter.ai",
+            "https://notopenrouter.ai/v1",
+            "https://notopenrouter.ai/v1/chat/completions",
+        ];
+        let client = Client::new();
+        for url in others {
+            let req = chat(url);
+            assert_not_attributed(&req);
+            assert!(header(&req, if is_anthropic(url) { "x-api-key" } else { "Authorization" }).is_some());
+            assert_not_attributed(&models_request(&client, url, "sk-test").build().unwrap());
+        }
+    }
+
+    #[test]
+    fn openrouter_is_matched_on_the_parsed_host() {
+        assert!(is_openrouter("https://openrouter.ai/api/v1"));
+        assert!(is_openrouter("https://openrouter.ai./api/v1"));
+        assert!(is_openrouter("https://api.openrouter.ai/v1"));
+        assert!(!is_openrouter("https://openrouter.ai.example.com/v1"));
+        assert!(!is_openrouter("https://notopenrouter.ai/v1"));
+        assert!(!is_openrouter("https://example.com/openrouter.ai"));
+        assert!(!is_openrouter("https://openrouter.ai@example.com/v1"));
+        assert!(!is_openrouter("openrouter.ai/api/v1"));
+        assert!(!is_openrouter(""));
     }
 }
 

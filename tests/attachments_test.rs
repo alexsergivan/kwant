@@ -614,6 +614,62 @@ async fn a_message_a_bot_sends_is_marked_as_the_bots() {
     assert!(meta("person-sent").get("sent_by_bot").is_none());
 }
 
+/// 22q: a bot's chat-API message is saved with the name and id of the bot whose turn token sent
+/// it, whatever `sender_id` it passed, in a direct chat and in a thread, so every frame names that
+/// bot; the person's own message gets neither key, and a bearer that is no live turn's gets the
+/// bot mark but no name.
+#[tokio::test]
+async fn a_bots_chat_api_message_is_saved_with_the_name_from_its_token() {
+    let env = setup().await;
+    direct_turn(&env, "turn-token-named", &env.b, None).await;
+    let bearer = [("authorization", "Bearer turn-token-named")];
+    let body = json!({"prompt": "post the draft REPLYTAG:named-direct", "sender_id": "user", "kwant_id": env.a});
+    let (s, v) = call_with(&env.app, "POST", "/api/chat/send", Some(body), &bearer).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // It can't pick another bot's name through sender_id either
+    let body = json!({"prompt": "post it REPLYTAG:named-spoof", "sender_id": "Ada", "kwant_id": env.a});
+    let (s, v) = call_with(&env.app, "POST", "/api/chat/send", Some(body), &bearer).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let thread = env.state.db.create_thread(&env.a, "Drafts", "chat", None, "user").await.unwrap();
+    let body = json!({"prompt": "post it here REPLYTAG:named-thread", "sender_id": "user", "thread_id": thread.id});
+    let (s, v) = call_with(&env.app, "POST", "/api/chat/send", Some(body), &bearer).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    send_direct(&env, &env.a, "my own words REPLYTAG:named-person", json!({})).await;
+
+    let mut msgs = messages(&env, &env.a).await;
+    msgs.extend(messages(&env, &thread.id).await);
+    let find = |needle: &str| msgs.iter().find(|m| m.sender_role == "user" && m.text.contains(needle)).unwrap_or_else(|| panic!("no {needle}")).clone();
+    let meta = |m: &kwnt::db::models::Message| -> Value { m.meta.as_deref().map(|s| serde_json::from_str(s).unwrap()).unwrap_or(Value::Null) };
+    for tag in ["named-direct", "named-spoof", "named-thread"] {
+        let m = find(tag);
+        let meta = meta(&m);
+        assert_eq!(meta["sent_by_bot"], true, "{tag}: {meta}");
+        assert_eq!(meta["sent_by_bot_name"], "K", "{tag}: {meta}");
+        assert_eq!(meta["sent_by_kwant_id"], env.b.as_str(), "{tag}: {meta}");
+        let framed = kwnt::drivers::user_history_text(&m);
+        assert!(framed.starts_with("[Message from bot K (another assistant)."), "{tag}: {framed}");
+        assert!(framed.ends_with("[End of message from K]"), "{tag}: {framed}");
+    }
+    let mine = meta(&find("named-person"));
+    for key in ["sent_by_bot", "sent_by_bot_name", "sent_by_kwant_id"] {
+        assert!(mine.get(key).is_none(), "{key}: {mine}");
+    }
+
+    // A bearer that is no live turn's (the turn ended): still not the person's, but nothing names it
+    env.state.self_tools.lock().await.remove("turn-token-named");
+    let body = json!({"prompt": "late REPLYTAG:named-ended", "sender_id": "user", "kwant_id": env.a});
+    let (s, v) = call_with(&env.app, "POST", "/api/chat/send", Some(body), &bearer).await;
+    if s == StatusCode::OK {
+        let m = messages(&env, &env.a).await.into_iter().find(|m| m.text.contains("named-ended")).unwrap();
+        let meta = meta(&m);
+        assert_eq!(meta["sent_by_bot"], true, "{meta}");
+        assert!(meta.get("sent_by_bot_name").is_none() && meta.get("sent_by_kwant_id").is_none(), "{meta}");
+        assert!(kwnt::drivers::user_history_text(&m).starts_with("[Message from bot unnamed"));
+    } else {
+        assert!(s == StatusCode::UNAUTHORIZED || s == StatusCode::FORBIDDEN, "{s} {v}");
+    }
+}
+
 /// A part of the page the person pointed at in Watch live (G3), stored as `point_pick` stores it.
 async fn pointed(env: &Env, n: u8, picture: bool, html: &str) -> String {
     pointed_in(env, n, picture, html, Value::Null).await

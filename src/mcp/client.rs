@@ -50,8 +50,9 @@ pub struct McpTool {
     pub name: String,
     pub description: Option<String>,
     pub input_schema: Value,
-    /// The server marks it read-only (`readOnlyHint: true`, not `destructiveHint: true`). The
-    /// server's own claim: kwnt can't check it.
+    /// The server marks it read-only (`readOnlyHint: true`). As the MCP spec says,
+    /// `destructiveHint` means something only when `readOnlyHint` is false, so it's ignored here
+    /// (Home Assistant sends both on every read). The server's own claim: kwnt can't check it.
     #[serde(default)]
     pub read_only: bool,
 }
@@ -60,6 +61,16 @@ pub struct McpTool {
 pub struct ToolCallResult {
     pub text: String,
     pub is_error: bool,
+}
+
+/// One `tools/list` entry, or `None` when it has no name.
+fn tool_from_list_entry(t: &Value) -> Option<McpTool> {
+    Some(McpTool {
+        name: t["name"].as_str()?.to_string(),
+        description: t["description"].as_str().map(str::to_string),
+        input_schema: t.get("inputSchema").cloned().unwrap_or_else(|| json!({"type": "object"})),
+        read_only: t["annotations"]["readOnlyHint"].as_bool() == Some(true),
+    })
 }
 
 type Pending = Arc<StdMutex<HashMap<i64, oneshot::Sender<Value>>>>;
@@ -88,6 +99,9 @@ enum Transport {
 
 pub struct McpClient {
     pub server_name: String,
+    /// The stored server's id, for what kwnt notes about it ([`super::home_floor`]); empty for
+    /// a server that isn't stored.
+    server_id: String,
     pub server_info: Value,
     timeout: Duration,
     next_id: AtomicI64,
@@ -147,6 +161,7 @@ impl McpClient {
         };
         let mut client = Self {
             server_name: server.name.clone(),
+            server_id: server.id.clone(),
             server_info: Value::Null,
             timeout,
             next_id: AtomicI64::new(1),
@@ -283,6 +298,8 @@ impl McpClient {
             )
             .await?;
         self.server_info = result.get("serverInfo").cloned().unwrap_or(Value::Null);
+        // 26f: what the server says it is decides whether its locks always ask
+        super::home_floor::note_server_info(&self.server_id, &self.server_info);
         if let Transport::Http(ref http) = self.transport {
             let version = result["protocolVersion"].as_str().unwrap_or(PROTOCOL_VERSION).to_string();
             *http.protocol_version.lock().unwrap() = Some(version);
@@ -308,21 +325,13 @@ impl McpClient {
             };
             let result = self.request("tools/list", params).await?;
             let page = result["tools"].as_array().ok_or_else(|| McpError::Protocol("tools/list without tools".into()))?;
-            for t in page {
-                let Some(name) = t["name"].as_str() else { continue };
-                tools.push(McpTool {
-                    name: name.to_string(),
-                    description: t["description"].as_str().map(str::to_string),
-                    input_schema: t.get("inputSchema").cloned().unwrap_or_else(|| json!({"type": "object"})),
-                    read_only: t["annotations"]["readOnlyHint"].as_bool() == Some(true)
-                        && t["annotations"]["destructiveHint"].as_bool() != Some(true),
-                });
-            }
+            tools.extend(page.iter().filter_map(tool_from_list_entry));
             cursor = result["nextCursor"].as_str().map(str::to_string);
             if cursor.is_none() {
                 break;
             }
         }
+        super::home_floor::note_tools(&self.server_id, tools.iter().map(|t| (t.name.as_str(), t.read_only)));
         Ok(tools)
     }
 
@@ -498,5 +507,40 @@ impl Drop for StdioTransport {
         for task in &self.tasks {
             task.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tools(fixture: &str) -> Vec<McpTool> {
+        let v: Value = serde_json::from_str(fixture).unwrap();
+        v["tools"].as_array().unwrap().iter().filter_map(tool_from_list_entry).collect()
+    }
+
+    fn read_only(tools: &[McpTool], name: &str) -> bool {
+        tools.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("no {name}")).read_only
+    }
+
+    #[test]
+    fn home_assistant_reads_are_read_only_even_with_destructive_hint() {
+        let ha = tools(include_str!("../../tests/fixtures/mcp/home-assistant-tools.json"));
+        assert!(read_only(&ha, "GetLiveContext"), "readOnlyHint wins over destructiveHint (MCP spec)");
+        assert!(read_only(&ha, "HassGetState"));
+        assert!(!read_only(&ha, "HassTurnOn"), "no readOnlyHint asks");
+        assert!(!read_only(&ha, "HassTurnOff"), "idempotent isn't read-only");
+    }
+
+    #[test]
+    fn only_a_true_read_only_hint_counts() {
+        let t = tools(r#"{"tools": [
+            {"name": "a", "annotations": {"readOnlyHint": "true"}},
+            {"name": "b", "annotations": {"readOnlyHint": false, "destructiveHint": false}},
+            {"name": "c"},
+            {"description": "no name"}
+        ]}"#);
+        assert_eq!(t.len(), 3);
+        assert!(t.iter().all(|t| !t.read_only), "{t:?}");
     }
 }

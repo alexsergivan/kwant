@@ -1,0 +1,282 @@
+name: packaging
+
+# Tests the package-manager manifests in packaging/ before they go upstream: the Homebrew formula
+# (homebrew-core), the winget manifests (microsoft/winget-pkgs) and the Scoop manifest
+# (ScoopInstaller/Extras). Each job installs kwant the way that package manager would, runs it, and
+# runs the checks that project's own CI runs on a new package.
+#
+# - homebrew (macOS and Linux, both run in homebrew-core's CI): the formula goes into a shallow
+#   homebrew/core tap, so `brew audit --new` runs the same new-formula checks a homebrew-core PR gets.
+#   Then a from-source install, `brew test`, `brew style` and `brew livecheck`.
+# - windows: `winget validate` and a silent `winget install --manifest`, then a Scoop install from
+#   packaging/scoop/kwant.json, the installed app's /api/health, and checkver plus an autoupdate dry
+#   run to an older release (its URL and hash must match that release's own files).
+#
+# Pull requests that change packaging/** or this file, and Run workflow. Nothing here publishes,
+# signs or pushes anything.
+on:
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/packaging.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  homebrew:
+    name: homebrew (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_FROM_API: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+      HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Homebrew on PATH (Linux)
+        if: runner.os == 'Linux'
+        run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+      - name: The formula in a homebrew/core tap
+        run: |
+          set -euo pipefail
+          brew --version
+          core="$(brew --repository)/Library/Taps/homebrew/homebrew-core"
+          if [ ! -d "$core/.git" ]; then
+            rm -rf "$core"
+            git clone --depth 1 https://github.com/Homebrew/homebrew-core "$core"
+          fi
+          mkdir -p "$core/Formula/k"
+          cp packaging/homebrew/kwnt.rb "$core/Formula/k/kwnt.rb"
+      - name: brew style
+        run: brew style kwnt
+      - name: brew install --build-from-source
+        run: brew install --build-from-source --verbose kwnt
+      - name: brew test
+        run: brew test --verbose kwnt
+      - name: kwnt runs
+        run: |
+          set -euo pipefail
+          kwnt --version
+          brew linkage --test kwnt
+      - name: brew audit --new --strict --online
+        # One audit problem is allowed until Nov 22, 2026 only: homebrew-core turns away a GitHub
+        # repository under 30 days old (kwant's was created Oct 22, 2026). Every other problem fails.
+        run: |
+          set -uo pipefail
+          # The step shell is `bash -e`: catch the exit status so the findings are always printed
+          status=0
+          brew audit --new --strict --online kwnt > audit.log 2>&1 || status=$?
+          echo "brew audit exit status: $status"
+          cat audit.log
+          [ "$status" -eq 0 ] && exit 0
+          if [ "$(date -u +%Y%m%d)" -lt 20261122 ]; then
+            other=$(grep -E '^[[:space:]]*\* ' audit.log | grep -v 'GitHub repository too new' || true)
+            if [ -z "$other" ] && grep -q 'GitHub repository too new' audit.log; then
+              echo "::warning::brew audit: only 'GitHub repository too new' (allowed until 2026-11-22)"
+              exit 0
+            fi
+          fi
+          echo "::error::brew audit found problems"
+          exit 1
+      - name: brew livecheck finds the newest mac-v release
+        run: |
+          set -euo pipefail
+          brew livecheck --json kwnt | tee livecheck.json
+          latest=$(ruby -rjson -e 'puts JSON.parse(File.read("livecheck.json"))[0]["version"]["latest"]')
+          if ! printf '%s\n' "$latest" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::livecheck found '$latest', not an X.Y.Z version"; exit 1
+          fi
+
+  windows:
+    name: winget and scoop (windows)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: WinGet client
+        # The runner image's own winget. The manifests use schema 1.10.0, which it validates and
+        # winget-pkgs accepts, so nothing is installed or upgraded here.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Error "winget isn't on the image"; exit 1 }
+          winget --version
+          if ($LASTEXITCODE -ne 0) { Write-Error "winget isn't usable"; exit 1 }
+          winget --info
+      - name: winget validate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dirs = Get-ChildItem -Directory packaging/winget/manifests/a/alexsergivan/kwant
+          if ($dirs.Count -ne 1) { Write-Error "expected one version folder, found $($dirs.Count)"; exit 1 }
+          "MANIFEST=$($dirs[0].FullName)" >> $env:GITHUB_ENV
+          "VERSION=$($dirs[0].Name)" >> $env:GITHUB_ENV
+          winget validate --manifest $dirs[0].FullName --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { Write-Error "winget validate exited with $LASTEXITCODE"; exit 1 }
+      - name: winget install --manifest (silent), the Apps and features entry, uninstall
+        # Its own limit, so a hang fails here in minutes with the details printed, not at the job's limit.
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          winget settings --enable LocalManifestFiles
+          $winget = (Get-Command winget).Source
+          function Get-Tree([int]$Root) {
+            $all = @(Get-CimInstance Win32_Process)
+            $ids = [System.Collections.Generic.List[int]]::new(); $ids.Add($Root)
+            for ($i = 0; $i -lt $ids.Count; $i++) {
+              $all | Where-Object { $_.ParentProcessId -eq $ids[$i] -and $_.ProcessId -ne $ids[$i] } | ForEach-Object { $ids.Add([int]$_.ProcessId) }
+            }
+            $all | Where-Object { $ids.Contains([int]$_.ProcessId) }
+          }
+          # What a hung install is waiting on: its processes, any window on the desktop (a prompt nobody
+          # can click), the downloaded installer's zone (Mark of the Web) and winget's own log
+          function Show-Hang([int]$Root) {
+            "--- processes under winget (pid $Root)"
+            Get-Tree $Root | Format-Table -AutoSize -Wrap ProcessId, ParentProcessId, Name, CommandLine | Out-String -Width 400
+            "--- windows open on the desktop"
+            Get-Process | Where-Object { $_.MainWindowTitle } | Format-Table -AutoSize Id, ProcessName, MainWindowTitle | Out-String -Width 400
+            "--- installers winget downloaded, with their zone"
+            Get-ChildItem (Join-Path $env:TEMP 'WinGet') -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+              $z = Get-Content -LiteralPath $_.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue
+              "$($_.FullName)  $($_.Length) bytes  zone: $(if ($z) { $z -join ' ' } else { 'none' })"
+            }
+            "--- winget log (last 80 lines)"
+            $logs = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir'
+            Get-ChildItem $logs -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 |
+              ForEach-Object { Get-Content $_.FullName -Tail 80 }
+            Get-Tree $Root | Sort-Object ProcessId -Descending | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+          # Runs winget install; returns its exit code, or $null (after printing Show-Hang) if it hasn't returned in time
+          function Install-WithDeadline([int]$Minutes, [string]$Label) {
+            $out = Join-Path $env:RUNNER_TEMP "winget-$Label.out"
+            $p = Start-Process -FilePath $winget -NoNewWindow -PassThru -RedirectStandardOutput $out -ArgumentList @(
+              'install', '--manifest', "`"$env:MANIFEST`"", '--silent', '--verbose-logs',
+              '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+            $null = $p.Handle
+            $done = $p.WaitForExit($Minutes * 60000)
+            # the output without winget's spinner and progress bars
+            (Get-Content -Raw $out -ErrorAction SilentlyContinue) -split "[`r`n]+" |
+              Where-Object { $_.Trim() -notmatch '^[-\\|/]?$' -and $_ -notmatch '[\u2588\u2592]' } | Out-Host
+            if (-not $done) {
+              Write-Host "winget install ($Label) hadn't returned after $Minutes minutes"
+              Show-Hang $p.Id | Out-Host
+              return $null
+            }
+            $p.WaitForExit()
+            return $p.ExitCode
+          }
+          $code = Install-WithDeadline 4 'as-downloaded'
+          if ($null -eq $code) {
+            # winget marks the installer it downloads as from the internet and starts it through the shell,
+            # so Windows asks before running our unsigned installer, and on a runner nobody answers. People
+            # who install kwant with winget see that prompt and answer it. CI only: stop zone-marking downloads
+            # and treat .exe as low risk for this user, then install again.
+            $attach = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments'
+            $assoc = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Associations'
+            New-Item -Force $attach, $assoc | Out-Null
+            Set-ItemProperty $attach -Name SaveZoneInformation -Value 1 -Type DWord
+            Set-ItemProperty $assoc -Name LowRiskFileTypes -Value '.exe' -Type String
+            $code = Install-WithDeadline 8 'no-zone'
+            if ($null -eq $code) { Write-Error "winget install hung again without the zone prompt; see above"; exit 1 }
+            "The first install hung and the second, without zone-marking, returned $code"
+          }
+          if ($code -ne 0) { Write-Error "winget install exited with $code"; exit 1 }
+          $app = Join-Path $env:LOCALAPPDATA 'kwant\kwant.exe'
+          if (-not (Test-Path $app)) { Write-Error "kwant.exe isn't at $app"; exit 1 }
+          $fv = (Get-Item $app).VersionInfo
+          "kwant.exe ProductVersion $($fv.ProductVersion)"
+          if (-not "$($fv.ProductVersion)".StartsWith($env:VERSION)) { Write-Error "kwant.exe is $($fv.ProductVersion), not $env:VERSION"; exit 1 }
+          # winget-pkgs checks these against the manifest's PackageName, Publisher and PackageVersion
+          $arp = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+            Where-Object { $_.DisplayName -like 'kwant*' }
+          if (-not $arp) { Write-Error "no Apps and features entry for kwant"; exit 1 }
+          $arp | Format-List DisplayName, DisplayVersion, Publisher, PSChildName, UninstallString
+          $locale = Get-Content (Join-Path $env:MANIFEST 'alexsergivan.kwant.locale.en-US.yaml')
+          $publisher = ($locale | Select-String '^Publisher: (.+)$').Matches[0].Groups[1].Value
+          $name = ($locale | Select-String '^PackageName: (.+)$').Matches[0].Groups[1].Value
+          if ($arp.DisplayName -ne $name) { Write-Error "Apps and features says '$($arp.DisplayName)', the manifest '$name'"; exit 1 }
+          if ($arp.Publisher -ne $publisher) { Write-Error "Apps and features publisher is '$($arp.Publisher)', the manifest's '$publisher'"; exit 1 }
+          if ($arp.DisplayVersion -ne $env:VERSION) { Write-Error "Apps and features version is '$($arp.DisplayVersion)', not $env:VERSION"; exit 1 }
+          Get-Process kwant -ErrorAction SilentlyContinue | Stop-Process -Force
+          $u = Start-Process -FilePath (Join-Path $env:LOCALAPPDATA 'kwant\uninstall.exe') -ArgumentList '/S' -PassThru
+          if (-not $u.WaitForExit(120000)) { Write-Error "the uninstaller hadn't finished after 2 minutes"; exit 1 }
+          "uninstall exit code: $($u.ExitCode)"
+      - name: Scoop
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-Expression "& {$(Invoke-RestMethod -Uri https://get.scoop.sh)} -RunAsAdmin"
+          Join-Path $env:USERPROFILE 'scoop\shims' >> $env:GITHUB_PATH
+      - name: scoop install from the manifest, start it, /api/health
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          scoop install .\packaging\scoop\kwant.json
+          if ($LASTEXITCODE -ne 0) { Write-Error "scoop install exited with $LASTEXITCODE"; exit 1 }
+          $dir = Join-Path $env:USERPROFILE 'scoop\apps\kwant\current'
+          Get-ChildItem -Recurse $dir | Select-Object -ExpandProperty FullName
+          foreach ($bad in @('uninstall.exe', '$PLUGINSDIR')) {
+            if (Test-Path -LiteralPath (Join-Path $dir $bad)) { Write-Error "$bad is left in $dir"; exit 1 }
+          }
+          $app = Join-Path $dir 'kwant.exe'
+          $version = (Get-Content packaging\scoop\kwant.json | ConvertFrom-Json).version
+          $fv = (Get-Item $app).VersionInfo
+          if (-not "$($fv.ProductVersion)".StartsWith($version)) { Write-Error "kwant.exe is $($fv.ProductVersion), not $version"; exit 1 }
+          $proc = Start-Process -FilePath $app -PassThru
+          $health = $null
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and -not $health) {
+            if ($proc.HasExited) { break }
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 'http://127.0.0.1:8799/api/health'
+              if ($r.StatusCode -eq 200) { $health = $r.Content }
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $health) {
+            "app exited: $($proc.HasExited)"
+            $log = Join-Path $env:USERPROFILE '.kwnt\desktop-app.log'
+            if (Test-Path $log) { Get-Content $log -Tail 80 }
+            Write-Error "kwant installed by Scoop never answered /api/health"; exit 1
+          }
+          "/api/health: $health"
+          $json = $health | ConvertFrom-Json
+          if ($json.version -ne $version) { Write-Error "kwnt in the app reports $($json.version), not $version"; exit 1 }
+          Get-Process kwant -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          scoop uninstall kwant
+      - name: scoop checkver, and an autoupdate dry run to an older release
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = Join-Path $env:USERPROFILE 'scoop\apps\scoop\current\bin'
+          & "$bin\checkver.ps1" -App kwant -Dir packaging\scoop -ThrowError
+          # Autoupdate a copy to 0.9.16: the URL and hash must be that release's own
+          $tmp = Join-Path $env:RUNNER_TEMP 'scoop-autoupdate'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item packaging\scoop\kwant.json $tmp
+          & "$bin\checkver.ps1" -App kwant -Dir $tmp -ForceUpdate -Version 0.9.16 -ThrowError
+          $m = Get-Content (Join-Path $tmp 'kwant.json') | ConvertFrom-Json
+          $want = 'https://github.com/alexsergivan/kwant/releases/download/mac-v0.9.16/kwant_0.9.16_windows_x64_beta_setup.exe'
+          $sha = ((Invoke-RestMethod "$want.sha256") -split '\s+')[0].ToLower()
+          "version $($m.version)  url $($m.architecture.'64bit'.url)  hash $($m.architecture.'64bit'.hash)"
+          if ($m.version -ne '0.9.16') { Write-Error "autoupdate wrote version $($m.version)"; exit 1 }
+          if ($m.architecture.'64bit'.url -ne "$want#/dl.7z") { Write-Error "autoupdate wrote url $($m.architecture.'64bit'.url)"; exit 1 }
+          if ($m.architecture.'64bit'.hash -ne $sha) { Write-Error "autoupdate wrote hash $($m.architecture.'64bit'.hash), the release says $sha"; exit 1 }

@@ -21,6 +21,8 @@ pub mod hires;
 pub mod imports;
 pub mod team_templates;
 pub mod approval_modes;
+pub mod always_allowed;
+pub mod mcp_server_facts;
 pub mod parked;
 pub mod waiting;
 pub mod decisions;
@@ -243,6 +245,9 @@ impl Database {
         db.migrate_spend().await?;
         // 0.9.0 G2: per-bot monthly budgets (add-only; after usage, parked and routines)
         db.migrate_bot_budget().await?;
+        // 26b: routine runs can end `needs_you` or `incomplete` (rebuilds `routine_runs` once;
+        // after the step that adds its `note` column)
+        db.migrate_run_statuses().await?;
         // 0.9.0 P5: tool notes (add-only)
         db.migrate_tool_notes().await?;
         // 0.9.0 P1: mission watches and their checks (add-only)
@@ -305,6 +310,12 @@ impl Database {
         // 0.9.6: the model badge's resting value (add-only). Last, after every step that can
         // rebuild `kwants`
         db.migrate_last_ran_on().await?;
+        // 0.9.21 25e: "Always allow" kept across restarts (add-only, outside exports). After every
+        // step that can rebuild `kwants`, `threads` or `channels`, which would drop its triggers
+        db.migrate_always_allowed().await?;
+        // 0.9.21 26f: what each MCP server says it is (add-only). After every step that can
+        // rebuild `mcp_servers`, which would drop its trigger
+        db.migrate_mcp_server_facts().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal
@@ -1087,7 +1098,7 @@ impl Database {
     /// connection, so the cascade is done here rather than trusted to SQLite.
     pub async fn delete_mcp_server(&self, id: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
-        for table in ["kwant_mcp_disabled", "kwant_mcp_servers", "mcp_oauth_tokens", "mcp_oauth_clients"] {
+        for table in ["kwant_mcp_disabled", "kwant_mcp_servers", "mcp_oauth_tokens", "mcp_oauth_clients", "mcp_server_facts"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE server_id = ?"))
                 .bind(id)
                 .execute(&mut *tx)

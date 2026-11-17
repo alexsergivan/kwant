@@ -374,6 +374,22 @@ async fn refuse_agents(state: &AppState, headers: &HeaderMap) -> Result<(), Resp
     refuse_agent_tokens(state, headers, "only the person can install or dismiss suggested MCP servers").await
 }
 
+/// The bot whose live turn token the request carries (its own tools' token or its MCP session's,
+/// the same token in both maps): its id and name. `None` for the person, the API token, and a
+/// bearer that is no live turn's (an ended turn's, a made-up one).
+pub(super) async fn calling_bot(state: &AppState, headers: &HeaderMap) -> Option<(String, String)> {
+    for token in headers.get_all(header::AUTHORIZATION).iter().filter_map(|v| v.to_str().ok()) {
+        let token = token.strip_prefix("Bearer ").unwrap_or(token).trim();
+        if let Some(s) = state.self_tools.lock().await.get(token) {
+            return Some((s.kwant_id.clone(), s.kwant_name.clone()));
+        }
+        if let Some(s) = state.mcp_sessions.lock().await.get(token) {
+            return Some((s.kwant_id.clone(), s.kwant_name.clone()));
+        }
+    }
+    None
+}
+
 /// 403 `refusal` when the request carries an agent's turn token or any bearer that isn't the API
 /// token. A request with no token at all passes, as everywhere else (auth decides that).
 #[allow(clippy::result_large_err)]

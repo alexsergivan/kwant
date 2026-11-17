@@ -23,8 +23,14 @@ pub struct ApprovalRequest {
 pub struct PermissionBroker {
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>,
     /// (kwant_id, conversation, tool_name) the user chose "always allow" for: that bot may use
-    /// that tool again in that one conversation, until kwnt restarts.
+    /// that tool again in that one conversation. The fast path: each one is also written to the
+    /// `always_allowed` table once a database is attached, and loaded from it after a restart.
     always_allowed: Arc<Mutex<HashSet<(String, String, String)>>>,
+    /// Where "always allow" answers are kept across restarts (see [`attach_store`](Self::attach_store)).
+    /// None: they last until kwnt restarts (a broker made on its own, in tests).
+    store: Arc<std::sync::OnceLock<crate::db::Database>>,
+    /// The stored answers were read into `always_allowed` (once per broker).
+    loaded: Arc<tokio::sync::OnceCell<()>>,
     /// Calls the person allowed after their turn had stopped waiting: the resumed turn's same
     /// call runs once without a new card, until the grant lapses.
     grants: Arc<Mutex<Vec<Grant>>>,
@@ -60,7 +66,36 @@ impl PermissionBroker {
             pending: Arc::new(Mutex::new(HashMap::new())),
             always_allowed: Arc::new(Mutex::new(HashSet::new())),
             grants: Default::default(),
+            store: Default::default(),
+            loaded: Default::default(),
         }
+    }
+
+    /// Keeps "always allow" answers in `db` from now on, and reads the ones stored there before
+    /// the first lookup. The first database attached wins. [`AppState::new`](crate::server::AppState::new)
+    /// attaches its own.
+    pub fn attach_store(&self, db: crate::db::Database) {
+        let _ = self.store.set(db);
+    }
+
+    /// Reads the stored "always allow" answers into memory, once; how many were read (0 on the
+    /// later calls). kwnt calls it at startup; every lookup and change makes sure of it first.
+    pub async fn load_saved(&self) -> usize {
+        let mut read = 0;
+        self.loaded
+            .get_or_init(|| async {
+                let Some(db) = self.store.get() else { return };
+                match db.all_always_allowed().await {
+                    Ok(rows) => {
+                        read = rows.len();
+                        self.always_allowed.lock().await.extend(rows);
+                    }
+                    // The answers in memory still hold for this run; a later start tries again
+                    Err(e) => tracing::warn!(error = %e, "could not read the stored \"always allow\" answers"),
+                }
+            })
+            .await;
+        read
     }
 
     /// Lets one later call of `tool_name` with these `arguments` by this kwant, in this
@@ -148,8 +183,15 @@ impl PermissionBroker {
     }
 
     /// Remembers an "always allow" answer for this kwant and tool in one conversation (a thread,
-    /// else the channel or direct chat). Another conversation with the same bot asks again.
+    /// else the channel or direct chat), also after kwnt restarts. Another conversation with the
+    /// same bot asks again. If it can't be stored it still holds until kwnt restarts.
     pub async fn allow_for_session(&self, kwant_id: &str, conversation: &str, tool_name: &str) {
+        self.load_saved().await;
+        if let Some(db) = self.store.get() {
+            if let Err(e) = db.save_always_allowed(kwant_id, conversation, tool_name).await {
+                tracing::warn!(kwant = %kwant_id, tool = %tool_name, error = %e, "could not store an \"always allow\": it lasts until kwnt restarts");
+            }
+        }
         self.always_allowed.lock().await.insert((
             kwant_id.to_string(),
             conversation.to_string(),
@@ -157,17 +199,98 @@ impl PermissionBroker {
         ));
     }
 
-    /// Forgets a deleted bot's "always allow" answers.
+    /// The person takes back one "always allow": the next call asks again. True when it was
+    /// there, in memory or stored.
+    pub async fn revoke(&self, kwant_id: &str, conversation: &str, tool_name: &str) -> Result<bool, crate::db::DbError> {
+        self.load_saved().await;
+        // Memory first: it stops working at once, even if the stored row can't be removed
+        let in_memory = self.always_allowed.lock().await.remove(&(
+            kwant_id.to_string(),
+            conversation.to_string(),
+            tool_name.to_string(),
+        ));
+        let stored = match self.store.get() {
+            Some(db) => db.delete_always_allowed(kwant_id, conversation, tool_name).await?,
+            None => false,
+        };
+        Ok(in_memory || stored)
+    }
+
+    /// The person takes back all of a bot's "always allow" answers; how many there were.
+    pub async fn revoke_all(&self, kwant_id: &str) -> Result<u64, crate::db::DbError> {
+        self.load_saved().await;
+        let in_memory = {
+            let mut set = self.always_allowed.lock().await;
+            let before = set.len();
+            set.retain(|(k, _, _)| k != kwant_id);
+            (before - set.len()) as u64
+        };
+        let stored = match self.store.get() {
+            Some(db) => db.delete_all_always_allowed(kwant_id).await?,
+            None => 0,
+        };
+        Ok(in_memory.max(stored))
+    }
+
+    /// Forgets a deleted bot's "always allow" answers (its stored rows go with the bot).
     pub async fn forget_kwant(&self, kwant_id: &str) {
+        self.load_saved().await;
         self.always_allowed.lock().await.retain(|(k, _, _)| k != kwant_id);
         self.grants.lock().await.retain(|g| g.kwant_id != kwant_id);
+        if let Some(db) = self.store.get() {
+            if let Err(e) = db.delete_all_always_allowed(kwant_id).await {
+                tracing::warn!(kwant = %kwant_id, error = %e, "could not forget a deleted bot's \"always allow\" answers");
+            }
+        }
+    }
+
+    /// Forgets the "always allow" answers in a deleted thread or channel.
+    pub async fn forget_conversation(&self, conversation: &str) {
+        self.load_saved().await;
+        self.always_allowed.lock().await.retain(|(_, c, _)| c != conversation);
+        self.grants.lock().await.retain(|g| g.conversation != conversation);
+        if let Some(db) = self.store.get() {
+            if let Err(e) = db.delete_always_allowed_in(conversation).await {
+                tracing::warn!(conversation, error = %e, "could not forget a deleted conversation's \"always allow\" answers");
+            }
+        }
     }
 
     pub async fn is_allowed_for_session(&self, kwant_id: &str, conversation: &str, tool_name: &str) -> bool {
+        self.load_saved().await;
         self.always_allowed.lock().await.contains(&(
             kwant_id.to_string(),
             conversation.to_string(),
             tool_name.to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn without_a_store_an_answer_lasts_for_this_broker_only() {
+        let b = PermissionBroker::new();
+        b.allow_for_session("k1", "th1", "Bash").await;
+        assert!(b.is_allowed_for_session("k1", "th1", "Bash").await);
+        assert!(!b.is_allowed_for_session("k1", "th2", "Bash").await);
+        assert!(!PermissionBroker::new().is_allowed_for_session("k1", "th1", "Bash").await);
+        assert!(b.revoke("k1", "th1", "Bash").await.unwrap());
+        assert!(!b.is_allowed_for_session("k1", "th1", "Bash").await);
+        assert!(!b.revoke("k1", "th1", "Bash").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn revoke_all_counts_one_bots_answers_only() {
+        let b = PermissionBroker::new();
+        b.allow_for_session("k1", "th1", "Bash").await;
+        b.allow_for_session("k1", "th2", "Write").await;
+        b.allow_for_session("k2", "th1", "Bash").await;
+        assert_eq!(b.revoke_all("k1").await.unwrap(), 2);
+        assert!(b.is_allowed_for_session("k2", "th1", "Bash").await);
+        b.forget_conversation("th1").await;
+        assert!(!b.is_allowed_for_session("k2", "th1", "Bash").await);
     }
 }

@@ -1162,6 +1162,10 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
               <p className="mt-1.5 text-[11px] text-zinc-500">
                 Servers that need sign-in (like Notion) don’t need a header. Use <span className="text-zinc-300">Connect</span> on the server after saving.
               </p>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                On your home network (Home Assistant on http://…), sign-in won’t work: add{' '}
+                <span className="text-zinc-300 font-mono">Authorization = Bearer &lt;your token&gt;</span> here instead.
+              </p>
             </div>
           </>
         )}

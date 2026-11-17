@@ -44,6 +44,7 @@ import { AppsAccounts } from './AppsAccounts';
 import { PhoneAppCard } from './PhoneAppCard';
 import { editorProps, useEscapeLayer } from '../escape';
 import { devTeamRefs } from '../devMode';
+import type { NotifiedChat } from '../chatTarget';
 
 export type { SettingsScope, SpaceSettingsTab };
 
@@ -96,6 +97,8 @@ interface Props {
   routineFocus?: RoutineFocus | null;
   /** 0.9.5 F: a routine run's History row opens its answer in the chat. */
   onOpenRunResult?: (t: MessageTarget) => void;
+  /** 26d: a waiting routine run's "Open the card". */
+  onOpenRunCard?: (t: NotifiedChat) => void;
   /** Phones get a full-screen dialog; desktop keeps the space rail beside Settings. */
   isPhone?: boolean;
   /** After an import or its undo: load bots, teams and chats again. */
@@ -262,7 +265,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
               {tab === 'teams' && <TeamsTab {...p} />}
               {tab === 'docs' && <SpaceDocsTab key={space.id} spaceId={space.id} spaceName={space.name} isPhone={p.isPhone} />}
               {tab === 'skills' && <SkillsTab {...p} />}
-              {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={toApp} onOpenRunResult={p.onOpenRunResult} />}
+              {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={toApp} onOpenRunResult={p.onOpenRunResult} onOpenRunCard={p.onOpenRunCard} />}
               {tab === 'import' && <ImportTab {...tp} />}
             </>
           )}

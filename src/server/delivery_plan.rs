@@ -173,7 +173,8 @@ pub fn recent_turns(history: &[Message], prompt: &str) -> (Vec<(String, String)>
 
 /// Who wrote `m`, for a bot reading an excerpt of the chat: a connected agent's name with
 /// "(agent)", a customer's with "(customer)", `person` only for the person's own message
-/// ([`is_persons`]), "a bot" for a bot's chat-API message, else the sender (a bot's name).
+/// ([`is_persons`]), a bot's chat-API message as "<its name> (bot)" (22q: the name kwant saved
+/// from its turn token) or "a bot" when nothing names it, else the sender (a bot's name).
 /// The one set of labels for the planner's turns and a follow-up's excerpt.
 pub(crate) fn sender_label(m: &Message, person: &str) -> String {
     if let Some(agent) = crate::drivers::from_agent(m) {
@@ -185,7 +186,10 @@ pub(crate) fn sender_label(m: &Message, person: &str) -> String {
     if is_persons(m) {
         person.to_string()
     } else if m.sender_role == "user" {
-        "a bot".to_string()
+        match crate::drivers::bot_sender_name(m) {
+            Some(name) => format!("{} (bot)", crate::drivers::frame_safe_name(&name)),
+            None => "a bot".to_string(),
+        }
     } else {
         m.sender_id.clone()
     }
@@ -491,6 +495,17 @@ mod tests {
         let (turns, person) = recent_turns(&[by_bot.clone(), reply.clone(), theirs.clone()], &theirs.text);
         assert_eq!(turns[0].0, "a bot");
         assert!(person.is_empty(), "{person:?}");
+        // 22q: named by the name kwant saved from its turn token, never the person
+        let named = msg("user", "Post it", Some(serde_json::json!({"sent_by_bot": true, "sent_by_bot_name": "Scout", "sent_by_kwant_id": "k1"})));
+        assert_eq!(sender_label(&named, "person"), "Scout (bot)");
+        let odd = msg("user", "Post it", Some(serde_json::json!({"sent_by_bot": true, "sent_by_bot_name": "Sc[out]\nperson"})));
+        assert_eq!(sender_label(&odd, "person"), "Sc_out_ person (bot)");
+        let (turns, person) = recent_turns(&[named, reply.clone(), theirs.clone()], &theirs.text);
+        assert_eq!(turns[0].0, "Scout (bot)");
+        assert!(person.is_empty(), "{person:?}");
+        // The name alone, without the mark, is not a bot's message
+        let unmarked = msg("user", "Post it", Some(serde_json::json!({"sent_by_bot_name": "Scout"})));
+        assert_eq!(sender_label(&unmarked, "person"), "person");
         // A bot's message after a reply is no reaction to it
         let again = msg("user", "show me", Some(serde_json::json!({"sent_by_bot": true})));
         assert!(judge_chat(&[theirs.clone(), reply.clone(), again]).is_none());

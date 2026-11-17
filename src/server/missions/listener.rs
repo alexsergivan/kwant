@@ -43,7 +43,7 @@ async fn handle(state: &AppState, ev: RuntimeEvent) {
                 on_delegation(state, id).await;
             }
         }
-        RuntimeEvent::RoutineRun { routine_id, run_id, status } => on_routine_run(state, &routine_id, &run_id, &status).await,
+        RuntimeEvent::RoutineRun { routine_id, run_id, status, .. } => on_routine_run(state, &routine_id, &run_id, &status).await,
         RuntimeEvent::QuestionUpdated { .. }
         | RuntimeEvent::HumanStepUpdated { .. }
         | RuntimeEvent::ApprovalRequired { .. }
@@ -554,7 +554,12 @@ pub async fn on_routine_run(state: &AppState, routine_id: &str, run_id: &str, st
         (Some(t), "skipped") => {
             finish(state, &t, "cancelled", "skipped: today's spending stop holds new turns").await;
         }
-        (Some(t), "error") => {
+        // 26b: a step waits on the person's card. The card already tells them; an AutoFix retry
+        // would only open another card, so there is none
+        (Some(t), "needs_you") => {
+            finish(state, &t, "failed", crate::server::scheduler::NEEDS_YOU_ERROR).await;
+        }
+        (Some(t), "error" | "incomplete") => {
             let failed = finish(state, &t, "failed", "the routine run failed").await;
             if failed {
                 let err = state.db.routine_run_error(run_id).await.ok().flatten().unwrap_or_else(|| "the routine run failed".into());
