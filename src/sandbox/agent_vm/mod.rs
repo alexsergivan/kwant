@@ -1185,7 +1185,8 @@ impl Drop for IsolatedTurn {
     }
 }
 
-#[cfg(test)]
+// Only the Linux real-container test uses it; elsewhere the import would be unused (clippy -D warnings)
+#[cfg(all(test, target_os = "linux"))]
 use crate::test_skip as skip;
 
 #[cfg(test)]
