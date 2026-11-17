@@ -180,6 +180,56 @@ pub fn decide(kind: ServerKind, tool: &str, args: &Value, read_only: Option<bool
     sensitive_args(args)
 }
 
+/// 27e: said to the model (never in Details) after a `GetLiveContext` with a name, area or domain
+/// that Home Assistant answered with an error ("No exposed entities found in domain(s): switch"):
+/// a 7B model answered "There are no switches left on" while two lights were on. Product copy is
+/// Mira's.
+pub const READ_MISS_HINT: &str = "Nothing matched that filter, so you haven't seen the home yet. Call GetLiveContext \
+again with no arguments: it lists every device and sensor you can use, with their real names. Answer only from that list.";
+
+/// 27e: said to the model (never in Details) after a `GetLiveContext` with a filter that worked:
+/// "Check the lights" read one room and House said "The living room light is off".
+pub const READ_PART_HINT: &str =
+    "This list only covers that filter. If the person asked about the whole home, call GetLiveContext again with no arguments.";
+
+/// The filters Home Assistant's `GetLiveContext` takes.
+const FILTERS: &[&str] = &["name", "area", "floor", "domain", "device_class"];
+
+/// Whether `tool` is Home Assistant's `GetLiveContext`, with or without its `homeassistant__`
+/// prefix.
+pub fn is_live_context(tool: &str) -> bool {
+    tool.rsplit("__").next().unwrap_or(tool) == "GetLiveContext"
+}
+
+/// Whether a read's `args` narrow it: a non-empty name, area, floor, domain or device class.
+pub fn filtered(args: &Value) -> bool {
+    FILTERS.iter().any(|k| match &args[*k] {
+        Value::String(s) => !s.trim().is_empty(),
+        Value::Array(items) => items.iter().any(|i| i.as_str().is_some_and(|s| !s.trim().is_empty())),
+        Value::Null => false,
+        _ => true,
+    })
+}
+
+/// The hint the model gets after Home Assistant's `GetLiveContext` (`tool`, the name after the
+/// server) with `args` ended with record `status` ("ok" or "error"): [`READ_MISS_HINT`] after a
+/// filtered miss, [`READ_PART_HINT`] after a filtered read that worked, none for a read with no
+/// filter, another tool or a call that didn't run. The caller checks that the server is Home
+/// Assistant's.
+pub fn live_context_hint(tool: &str, args: &Value, status: &str) -> Option<&'static str> {
+    if !is_live_context(tool) || !filtered(args) {
+        return None;
+    }
+    match status {
+        "error" => Some(READ_MISS_HINT),
+        "ok" => Some(READ_PART_HINT),
+        _ => None,
+    }
+}
+
+/// Both hints, for what shows the person a step (they are the model's, never Details').
+pub const HINTS: &[&str] = &[READ_MISS_HINT, READ_PART_HINT];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +302,23 @@ mod tests {
         assert_eq!(seen("srv-unit-1").unwrap().read_only, None);
         forget("srv-unit-1");
         assert_eq!(seen("srv-unit-1"), None);
+    }
+
+    #[test]
+    fn a_filtered_read_gets_a_hint_and_a_whole_read_does_not() {
+        let read = "homeassistant__GetLiveContext";
+        // HA 2026.11.1's misses from the report
+        assert_eq!(live_context_hint(read, &json!({"area": "", "domain": ["switch"]}), "error"), Some(READ_MISS_HINT));
+        assert_eq!(live_context_hint(read, &json!({"domain": "sensor", "name": "temperature"}), "error"), Some(READ_MISS_HINT));
+        assert_eq!(live_context_hint("GetLiveContext", &json!({"area": "common", "domain": "switch"}), "error"), Some(READ_MISS_HINT));
+        assert_eq!(live_context_hint(read, &json!({"area": "living_room", "domain": ["light"]}), "ok"), Some(READ_PART_HINT));
+        // No filter: nothing to widen
+        assert_eq!(live_context_hint(read, &json!({}), "ok"), None);
+        assert_eq!(live_context_hint(read, &json!({}), "error"), None);
+        assert_eq!(live_context_hint(read, &json!({"area": "", "domain": []}), "error"), None);
+        // A call that didn't run, or another tool
+        assert_eq!(live_context_hint(read, &json!({"domain": ["light"]}), "denied"), None);
+        assert_eq!(live_context_hint("intent__HassTurnOff", &json!({"domain": ["light"]}), "error"), None);
+        assert_eq!(live_context_hint("homeassistant__GetDateTime", &json!({"name": "x"}), "ok"), None);
     }
 }

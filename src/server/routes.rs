@@ -2159,10 +2159,8 @@ pub struct NextTurn {
     pub prompt: String,
     /// The plan it is checked against: none for a follow-through continuation without one.
     pub plan: Option<crate::router::delivery::DeliveryPlan>,
-    /// It is only a follow-through continuation: the last step failed and the reply ended on a
-    /// plan it didn't carry out (see [`super::delivery_check::promise_line`]), and nothing the
-    /// plan wanted is missing. Its label says so.
-    pub follow_through: bool,
+    /// What its reasoning line says it is for (see [`super::delivery_check::continuation_label`]).
+    pub label: &'static str,
 }
 
 impl TurnOpts {
@@ -2273,11 +2271,11 @@ pub(super) async fn try_kwant_turn(
     opts.delivery_seen = Some(DeliverySeen::default());
     let carried = Carried::of(&opts);
     let first = try_kwant_turn_once(scope, target_kwant, prompt, opts).await;
-    let Some(NextTurn { prompt, plan, follow_through }) = next.and_then(|n| n.lock().ok().and_then(|mut n| n.take())) else {
+    let Some(NextTurn { prompt, plan, label }) = next.and_then(|n| n.lock().ok().and_then(|mut n| n.take())) else {
         return first;
     };
-    tracing::info!(kwant = %target_kwant.id, follow_through, "reply missed what the person expected: one automatic continuation");
-    let again = |prompt: String| try_kwant_turn_once(scope, target_kwant, prompt, carried.continuation(plan, follow_through, handover));
+    tracing::info!(kwant = %target_kwant.id, label, "reply missed what the person expected: one automatic continuation");
+    let again = |prompt: String| try_kwant_turn_once(scope, target_kwant, prompt, carried.continuation(plan, label, handover));
     super::delivery_check::after_turn(first, Some(prompt), scope.cancel_token.is_cancelled(), again).await
 }
 
@@ -2382,14 +2380,9 @@ impl Carried {
     /// (kwant's continuation prompt never makes a new one), and never continued again. It starts
     /// on the first turn's chat slot when `handover` holds it (see [`TurnOpts::chat_handover`]),
     /// and counts what the delivery's earlier turns did (see [`TurnOpts::delivery_seen`]).
-    /// `follow_through`: it only continues after a failed step the reply promised to get past.
-    fn continuation(self, plan: Option<crate::router::delivery::DeliveryPlan>, follow_through: bool, handover: Option<ChatHandover>) -> TurnOpts {
+    /// `label` says why it runs (see [`super::delivery_check::continuation_label`]).
+    fn continuation(self, plan: Option<crate::router::delivery::DeliveryPlan>, label: &'static str, handover: Option<ChatHandover>) -> TurnOpts {
         let delivery_seen = self.delivery_seen.clone();
-        let label = if follow_through {
-            "Automatic continuation (once): the last step failed and the reply ended on a plan that didn't run"
-        } else {
-            "Automatic continuation (once): the reply was missing what the person expected"
-        };
         TurnOpts {
             label: Some(label.into()),
             delivery: plan,
@@ -3903,6 +3896,11 @@ async fn run_kwant_turn_inner(
         if let Some(w) = &failure_watch {
             w.0.finish().await;
         }
+        // 27e: which of the turn's servers are Home Assistant's, for the delivery check
+        let home_servers = match &mcp_ctx {
+            Some(c) if opts.delivery_checked() => super::mcp_runtime::home_server_names(&state.db, &c.servers).await,
+            _ => Vec::new(),
+        };
         let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
         // Ends what still runs; kept on the reply so the steps show after a reload
         let activity = event_broadcast.activity.finish();
@@ -4007,6 +4005,7 @@ async fn run_kwant_turn_inner(
                         ran_tools,
                         failed_step,
                         declined,
+                        home: super::delivery_check::home_steps_in(activity.as_ref(), &home_servers),
                     };
                     // ...counting what the delivery's earlier turns did (F1)
                     let seen = match opts.delivery_seen.as_ref().map(|d| d.lock()) {
@@ -4152,11 +4151,12 @@ async fn run_kwant_turn_inner(
                     if let (Some(prompt), Some(next)) = (&verdict.continue_with, &opts.delivery_next) {
                         use super::delivery_check::Missing;
                         let follow = verdict.missing.contains(&Missing::FollowThrough);
-                        let follow_through = follow && verdict.missing.iter().all(|m| *m == Missing::FollowThrough);
-                        // A plan's misses continue only with that plan; follow-through needs none
-                        if plan.is_some() || follow {
+                        let home = verdict.missing.iter().any(|m| matches!(m, Missing::HomeChange | Missing::HomeRead));
+                        let label = super::delivery_check::continuation_label(&verdict.missing);
+                        // A plan's misses continue only with that plan; follow-through and the home need none
+                        if plan.is_some() || follow || home {
                             if let Ok(mut next) = next.lock() {
-                                *next = Some(NextTurn { prompt: prompt.clone(), plan: plan.clone(), follow_through });
+                                *next = Some(NextTurn { prompt: prompt.clone(), plan: plan.clone(), label });
                             }
                         }
                     }
@@ -7572,7 +7572,7 @@ mod tests {
         let first = person_turn();
         assert!(first.continuation_slot().is_some());
         let ideas = turn_plan(&first, Some(&saved("user", "user", "What cool feature can we add?", None)), &[], true, "").unwrap();
-        let next = Carried::of(&first).continuation(Some(ideas.clone()), false, None);
+        let next = Carried::of(&first).continuation(Some(ideas.clone()), crate::server::delivery_check::continuation_label(&[crate::server::delivery_check::Missing::Link]), None);
         assert_eq!(next.delivery.as_ref(), Some(&ideas));
         assert!(next.delivery_continued && next.continuation_slot().is_none(), "continued once at most");
         // kwant's continuation prompt can't make a plan of its own
@@ -7587,7 +7587,8 @@ mod tests {
     /// make one), says why it runs, and is never continued again.
     #[test]
     fn a_follow_through_continuation_has_no_plan_and_never_continues_again() {
-        let next = Carried::of(&person_turn()).continuation(None, true, None);
+        let label = crate::server::delivery_check::continuation_label(&[crate::server::delivery_check::Missing::FollowThrough]);
+        let next = Carried::of(&person_turn()).continuation(None, label, None);
         assert_eq!(next.delivery, None);
         assert!(next.label.as_deref().is_some_and(|l| l.contains("the last step failed")), "{:?}", next.label);
         assert!(next.delivery_continued && next.continuation_slot().is_none());

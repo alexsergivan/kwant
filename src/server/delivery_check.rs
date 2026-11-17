@@ -19,11 +19,19 @@
 //!   naming the step and its error) instead of looping through keep-going turns. A step the
 //!   person declined on an approval card is never pushed again. Follow-through is never a
 //!   delivery note.
+//! - Home (27e): on a turn with Home Assistant's tools, a reply that says a device changed
+//!   ("Unlocking the front door now.", see [`super::home_claims`]) when no Home Assistant step
+//!   that changes something worked, or a reply after reads of the home that all failed, gets the
+//!   same one continuation ([`Missing::HomeChange`], [`Missing::HomeRead`]). If the continuation
+//!   still claims the change, or still read nothing, its reply gets kwant's own line
+//!   ([`home_change_line`], [`home_read_line`]). A change waiting on, unanswered on or declined on
+//!   an approval card is never a miss. Never a delivery note.
 //!
 //! What the person expected comes from the turn's one `DeliveryPlan` (`src/router/delivery.rs`),
 //! the same plan the prompt's "[What to deliver]" hint renders, read through [`Expect::from_plan`].
 //! The continuation carries that plan; it never makes a new one from kwant's own prompt.
 
+use super::home_claims::claimed_change;
 use super::picture_claims::claims_picture;
 use crate::router::delivery::{DeliveryPlan, Show};
 use serde_json::Value;
@@ -66,6 +74,93 @@ pub struct Seen {
     pub failed_step: Option<FailedStep>,
     /// The person declined an approval card in it: that step is never pushed again.
     pub declined: bool,
+    /// 27e: what it did with Home Assistant (see [`home_steps_in`]); `None` when it had no Home
+    /// Assistant server.
+    pub home: Option<HomeSeen>,
+}
+
+/// 27e: what a turn (or a delivery) did with a Home Assistant server's tools.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HomeSeen {
+    /// A Home Assistant call that can change something worked (anything but its reads).
+    pub changed: bool,
+    /// Such a call ran and didn't work.
+    pub change_failed: bool,
+    /// Such a call waited on, went unanswered on or was declined on an approval card: the card
+    /// is the answer, so it is never a miss.
+    pub on_card: bool,
+    /// How many of its reads (`GetLiveContext`, `GetDateTime`) ended.
+    pub reads: u32,
+    /// One of them worked.
+    pub read_ok: bool,
+    /// The first failed read's error (see [`FailedStep::error`]).
+    pub read_error: Option<String>,
+}
+
+impl HomeSeen {
+    fn join(&mut self, other: &HomeSeen) {
+        self.changed |= other.changed;
+        self.change_failed |= other.change_failed;
+        self.on_card |= other.on_card;
+        self.reads += other.reads;
+        self.read_ok |= other.read_ok;
+        if self.read_error.is_none() {
+            self.read_error = other.read_error.clone();
+        }
+    }
+}
+
+/// The Home Assistant tool a step's `tool` names, when it is one of `servers`' (the turn's Home
+/// Assistant servers, by their names in kwant): `mcp__house__intent__HassTurnOff` and codex's
+/// `mcp__kwnt__house__intent__HassTurnOff` are `intent__HassTurnOff`.
+fn home_tool<'a>(tool: &'a str, servers: &[String]) -> Option<&'a str> {
+    let rest = tool.strip_prefix("mcp__").unwrap_or(tool);
+    let rest = rest.strip_prefix(crate::mcp::RESERVED_SERVER_NAME).and_then(|r| r.strip_prefix("__")).unwrap_or(rest);
+    servers.iter().filter(|s| !s.is_empty()).find_map(|s| {
+        let after = rest.strip_prefix(s.as_str())?;
+        after.strip_prefix("__").or_else(|| after.strip_prefix('-')).filter(|t| !t.is_empty())
+    })
+}
+
+/// Whether a Home Assistant tool only reads the home.
+fn home_read(tool: &str) -> bool {
+    crate::mcp::home_floor::is_home_read(tool) || ["GetLiveContext", "GetDateTime"].iter().any(|r| tool.ends_with(r))
+}
+
+/// 27e: what the turn did with the Home Assistant servers named `servers`, from its saved
+/// activity (`{"steps": [...]}`). `None` when the turn had none.
+pub fn home_steps_in(activity: Option<&Value>, servers: &[String]) -> Option<HomeSeen> {
+    if servers.is_empty() {
+        return None;
+    }
+    let mut home = HomeSeen::default();
+    let steps = activity.and_then(|a| a["steps"].as_array()).map(Vec::as_slice).unwrap_or_default();
+    for step in steps {
+        let Some(tool) = step["tool"].as_str().and_then(|t| home_tool(t, servers)) else { continue };
+        let status = step["status"].as_str().unwrap_or("");
+        let read = home_read(tool);
+        match (step["kind"].as_str(), read, status) {
+            (Some("approval"), false, "waiting" | "declined" | "unanswered" | "stopped") => home.on_card = true,
+            (Some("tool"), false, "ok" | "done") => home.changed = true,
+            (Some("tool"), false, "unanswered" | "waiting") => home.on_card = true,
+            (Some("tool"), false, "failed") => home.change_failed = true,
+            (Some("tool"), true, "ok" | "done") => {
+                home.reads += 1;
+                home.read_ok = true;
+            }
+            (Some("tool"), true, "failed") => {
+                home.reads += 1;
+                if home.read_error.is_none() {
+                    let detail = step["detail"].as_str().unwrap_or("");
+                    // Home Assistant answers a miss as `{"error": "No exposed entities…"}`
+                    let detail = serde_json::from_str::<Value>(detail).ok().and_then(|v| v["error"].as_str().map(str::to_string)).unwrap_or_else(|| detail.to_string());
+                    home.read_error = FailedStep { tool: tool.into(), title: String::new(), detail }.error();
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(home)
 }
 
 /// A tool step that failed or was refused: the tool's name, the step's short title and (22j) its
@@ -121,6 +216,9 @@ impl Seen {
         so_far.image_shared |= self.image_shared;
         so_far.pushed |= self.pushed;
         so_far.declined |= self.declined;
+        if let Some(home) = &self.home {
+            so_far.home.get_or_insert_with(HomeSeen::default).join(home);
+        }
         if self.ran_tools {
             so_far.ran_tools = true;
             so_far.failed_step = self.failed_step;
@@ -132,6 +230,7 @@ impl Seen {
             ran_tools: so_far.ran_tools,
             failed_step: so_far.failed_step.clone(),
             declined: so_far.declined,
+            home: so_far.home.clone(),
         }
     }
 }
@@ -147,6 +246,11 @@ pub enum Missing {
     /// The last tool step failed or was refused, and the reply ends on a plan it didn't carry
     /// out. Never a delivery note (see [`shows`]).
     FollowThrough,
+    /// 27e: the reply says a device in the home changed, and no Home Assistant step that changes
+    /// something worked. Never a delivery note.
+    HomeChange,
+    /// 27e: every read of the home failed, and nothing else worked. Never a delivery note.
+    HomeRead,
 }
 
 /// A delivery note's verdict.
@@ -177,6 +281,18 @@ pub struct Verdict {
     /// The failed step behind [`Verdict::follow_line`] (22j): the save step stores
     /// [`blocked_text`] for it, so the chain is Blocked, not stalled.
     pub stuck_on: Option<FailedStep>,
+    /// 27e: kwant's own lines for the continuation's reply that still claims a change no step
+    /// made, or still read nothing of the home.
+    pub home_lines: Vec<HomeLine>,
+}
+
+/// 27e: one of kwant's own lines under a reply about the home (see [`apply`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HomeLine {
+    /// [`home_change_line`]: `tried` says a change step ran and didn't work.
+    Change { tried: bool },
+    /// [`home_read_line`], with the first failed read's error.
+    Read { error: Option<String> },
 }
 
 /// The P9 continuation for a missing image (Ada's wording).
@@ -186,6 +302,53 @@ take a screenshot with share: true, and reply.";
 /// The P10 continuation for a missing link.
 pub const LINK_PROMPT: &str = "You were asked for a change, and your reply has no link to it. Commit and push your work, \
 then reply with the PR or branch link.";
+
+/// 27e: the continuation for a claimed change no Home Assistant step made, quoting the claim.
+/// Product copy is Mira's.
+pub fn home_change_prompt(claim: &str) -> String {
+    format!(
+        "Your reply says \"{}\", but no Home Assistant tool ran in this turn, so nothing in the home changed. \
+If the person asked for this change, make the call now (unlocking a lock is intent__HassTurnOff with its name; the person \
+gets an approval card for locks, doors and alarms). Otherwise say plainly that nothing changed.",
+        clip(claim.trim(), MAX_QUOTE_CHARS)
+    )
+}
+
+/// 27e: the continuation after reads of the home that all failed, with the first error.
+pub fn home_read_prompt(error: Option<&str>) -> String {
+    let error = error.map(|e| format!(" ({e})")).unwrap_or_default();
+    format!(
+        "Your Home Assistant read failed{error}, so you haven't seen the home yet. Call homeassistant__GetLiveContext with \
+no arguments now and answer from what it returns. If it fails again, say the check failed and why. Never use outside \
+weather in place of a sensor inside."
+    )
+}
+
+/// 27e: added to the continuation's reply that still claims a change no Home Assistant step
+/// made. `tried`: a change step ran and didn't work.
+pub fn home_change_line(tried: bool) -> &'static str {
+    if tried {
+        "_kwant: nothing in your home changed in this reply. The Home Assistant step didn't work (see Details)._"
+    } else {
+        "_kwant: nothing in your home changed in this reply. No Home Assistant step ran (see Details)._"
+    }
+}
+
+/// 27e: added to the continuation's reply when still no read of the home worked.
+pub fn home_read_line(bot: &str, error: Option<&str>) -> String {
+    match error {
+        Some(e) => format!("_kwant: {bot} couldn't read your home in this reply ({}). See Details._", e.replace(['_', '*', '`'], " ")),
+        None => format!("_kwant: {bot} couldn't read your home in this reply. See Details._"),
+    }
+}
+
+/// 27e: what a turn's Home Assistant steps left unbacked: the claimed change and the failed
+/// reads' first error, for [`continuation_prompt`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HomeMiss {
+    pub claim: Option<String>,
+    pub read_failed: Option<Option<String>>,
+}
 
 /// Longest promise or step title quoted in the follow-through prompt (characters).
 const MAX_QUOTE_CHARS: usize = 200;
@@ -246,16 +409,31 @@ pub fn check(reply: &str, expect: Option<&Expect>, continued: bool, seen: &Seen)
     if follow.is_some() {
         v.missing.push(Missing::FollowThrough);
     }
+    // 27e: a change in the home no step made, or a home answered from reads that all failed
+    let home = home_miss(reply, seen);
+    if home.claim.is_some() {
+        v.missing.push(Missing::HomeChange);
+    }
+    if home.read_failed.is_some() {
+        v.missing.push(Missing::HomeRead);
+    }
     let firm = expect.is_some_and(|e| e.firm);
-    // What one continuation would ask for: a firm plan's misses, and follow-through
+    // What one continuation would ask for: a firm plan's misses, follow-through and the home
     let mut asks: Vec<Missing> = if firm { planned.clone() } else { vec![] };
     if follow.is_some() {
         asks.push(Missing::FollowThrough);
     }
+    asks.extend(v.missing.iter().filter(|m| matches!(m, Missing::HomeChange | Missing::HomeRead)));
     if !asks.is_empty() && !continued {
         let done_when = expect.map(|e| e.done_when.as_slice()).unwrap_or_default();
-        v.continue_with = Some(continuation_prompt(&asks, done_when, follow));
+        v.continue_with = Some(continuation_prompt(&asks, done_when, follow, &home));
     } else {
+        if home.claim.is_some() {
+            v.home_lines.push(HomeLine::Change { tried: seen.home.as_ref().is_some_and(|h| h.change_failed) });
+        }
+        if let Some(error) = home.read_failed {
+            v.home_lines.push(HomeLine::Read { error });
+        }
         v.no_picture_line = !image && (claims || (wants_image && firm));
         v.outcome = expect.map(|_| if planned.is_empty() { Outcome::Hit } else { Outcome::Miss });
         v.follow_line = follow.as_ref().map(|(step, _)| step.tool.clone());
@@ -264,15 +442,29 @@ pub fn check(reply: &str, expect: Option<&Expect>, continued: bool, seen: &Seen)
     v
 }
 
+/// 27e: what `seen`'s Home Assistant steps don't back in `reply`: a claimed change when no
+/// change step worked (and none waits on, went unanswered on or was declined on a card), and
+/// reads that all failed when nothing else worked.
+pub fn home_miss(reply: &str, seen: &Seen) -> HomeMiss {
+    let Some(home) = &seen.home else { return HomeMiss::default() };
+    let claim = (!home.changed && !home.on_card && !seen.declined).then(|| claimed_change(reply)).flatten();
+    let read_failed = (home.reads > 0 && !home.read_ok && !home.changed).then(|| home.read_error.clone());
+    HomeMiss { claim, read_failed }
+}
+
 /// The continuation's prompt: what is missing, how to deliver it, and the plan's checks.
-/// `follow` is the failed step and the reply's promise, for [`Missing::FollowThrough`].
-pub fn continuation_prompt(missing: &[Missing], done_when: &[String], follow: Option<(&FailedStep, String)>) -> String {
+/// `follow` is the failed step and the reply's promise, for [`Missing::FollowThrough`]; `home`
+/// the claimed change and the failed reads' error, for [`Missing::HomeChange`] and
+/// [`Missing::HomeRead`].
+pub fn continuation_prompt(missing: &[Missing], done_when: &[String], follow: Option<(&FailedStep, String)>, home: &HomeMiss) -> String {
     let what: Vec<&str> = missing
         .iter()
         .map(|m| match m {
             Missing::Image => "an image in the chat",
             Missing::Link => "a PR or branch link",
             Missing::FollowThrough => "another try after the failed step",
+            Missing::HomeChange => "a Home Assistant step for the change you described",
+            Missing::HomeRead => "a read of the home that worked",
         })
         .collect();
     let mut out = format!("[kwnt: one automatic continuation. Missing from your last reply: {}.]", what.join(" and "));
@@ -285,6 +477,11 @@ pub fn continuation_prompt(missing: &[Missing], done_when: &[String], follow: Op
                 Some((step, promise)) => out.push_str(&follow_prompt(step, promise)),
                 None => continue,
             },
+            Missing::HomeChange => match &home.claim {
+                Some(claim) => out.push_str(&home_change_prompt(claim)),
+                None => continue,
+            },
+            Missing::HomeRead => out.push_str(&home_read_prompt(home.read_failed.as_ref().and_then(|e| e.as_deref()))),
         }
     }
     let checks: Vec<String> = done_when
@@ -807,7 +1004,7 @@ fn shows(expect: &Expect, missing: &[Missing]) -> (Vec<Show>, Vec<Show>) {
     let show = |m: &Missing| match m {
         Missing::Image => Some(Show::Image),
         Missing::Link => Some(Show::Link),
-        Missing::FollowThrough => None,
+        Missing::FollowThrough | Missing::HomeChange | Missing::HomeRead => None,
     };
     let mut wanted = Vec::new();
     if expect.image {
@@ -840,16 +1037,38 @@ where
 /// [`follow_line`] (naming `bot`) when the verdict says so.
 pub fn apply(reply: String, v: &Verdict, bot: &str) -> String {
     let reply = if v.no_picture_line { super::picture_claims::with_no_picture_line(&reply) } else { reply };
-    match &v.follow_line {
+    let mut reply = match &v.follow_line {
         Some(tool) => format!("{}\n\n{}", reply.trim_end(), follow_line(tool, bot)).trim_start().to_string(),
         None => reply,
+    };
+    // 27e: kwant's own lines about the home
+    for line in &v.home_lines {
+        let line = match line {
+            HomeLine::Change { tried } => home_change_line(*tried).to_string(),
+            HomeLine::Read { error } => home_read_line(bot, error.as_deref()),
+        };
+        reply = format!("{}\n\n{line}", reply.trim_end()).trim_start().to_string();
+    }
+    reply
+}
+
+/// 27e: what the continuation after `missing` is labelled with (the reply's reasoning line).
+pub fn continuation_label(missing: &[Missing]) -> &'static str {
+    let only = |set: &[Missing]| !missing.is_empty() && missing.iter().all(|m| set.contains(m));
+    if only(&[Missing::FollowThrough]) {
+        "Automatic continuation (once): the last step failed and the reply ended on a plan that didn't run"
+    } else if only(&[Missing::HomeChange, Missing::HomeRead, Missing::FollowThrough]) {
+        "Automatic continuation (once): the reply said something about the home that no Home Assistant step backed"
+    } else {
+        "Automatic continuation (once): the reply was missing what the person expected"
     }
 }
 
 /// The reply's `meta.delivery`, when the check ran (`checked`) and did something or had an
 /// expectation: `{"missing": [...], "auto_shared": bool, "no_picture": bool, "continues": bool,
-/// "outcome": "hit"|"miss", "lean": bool, "follow_line": bool}` (`lean`: the plan only leaned, so it didn't continue;
-/// `follow_line`: [`follow_line`] was added). A turn the check skips (see `TurnOpts::delivery_checked`) has none.
+/// "outcome": "hit"|"miss", "lean": bool, "follow_line": bool, "home_line": bool}` (`lean`: the
+/// plan only leaned, so it didn't continue; `follow_line`: [`follow_line`] was added;
+/// `home_line`: one of kwant's lines about the home was, see [`HomeLine`]). A turn the check skips (see `TurnOpts::delivery_checked`) has none.
 pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value> {
     if !checked || (*v == Verdict::default() && expect.is_none()) {
         return None;
@@ -862,6 +1081,7 @@ pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value
         "outcome": v.outcome,
         "lean": expect.is_some_and(|e| !e.firm),
         "follow_line": v.follow_line.is_some(),
+        "home_line": !v.home_lines.is_empty(),
     }))
 }
 
@@ -882,7 +1102,7 @@ mod tests {
     fn explain() -> Expect {
         Expect::default()
     }
-    const NOTHING: Seen = Seen { image_shared: false, has_shot: false, pushed: false, ran_tools: false, failed_step: None, declined: false };
+    const NOTHING: Seen = Seen { image_shared: false, has_shot: false, pushed: false, ran_tools: false, failed_step: None, declined: false, home: None };
     const SHARED: Seen = Seen { image_shared: true, has_shot: true, ..NOTHING };
     const SHOT: Seen = Seen { has_shot: true, ..NOTHING };
 
@@ -1714,5 +1934,151 @@ mod tests {
         // ...and a link that didn't open carries over the same way, unless a tool ran after it
         assert_eq!(FailedBefore::of_turn(None, page), page);
         assert_eq!(FailedBefore::of_turn(reads.as_ref(), page), none);
+    }
+
+    /// 27e: a turn on the Home Assistant server "house" with these activity steps.
+    fn house(steps: Value) -> Seen {
+        let activity = json!({ "steps": steps });
+        Seen { ran_tools: true, home: home_steps_in(Some(&activity), &["house".to_string()]), ..NOTHING }
+    }
+    const UNLOCKING: &str = "Unlocking the front door now.";
+    const SWITCH_MISS: &str = r#"{"error": "No exposed entities found in domain(s): switch"}"#;
+    fn read(status: &str, detail: &str) -> Value {
+        json!({ "kind": "tool", "tool": "mcp__house__homeassistant__GetLiveContext", "status": status, "title": "GetLiveContext", "detail": detail })
+    }
+    fn turn_off(status: &str) -> Value {
+        json!({ "kind": "tool", "tool": "mcp__house__intent__HassTurnOff", "status": status, "title": "HassTurnOff" })
+    }
+
+    #[test]
+    fn home_steps_are_told_apart_by_server_and_tool() {
+        let servers = ["house".to_string()];
+        assert_eq!(home_tool("mcp__house__intent__HassTurnOff", &servers), Some("intent__HassTurnOff"));
+        assert_eq!(home_tool("mcp__kwnt__house__homeassistant__GetLiveContext", &servers), Some("homeassistant__GetLiveContext"));
+        assert_eq!(home_tool("house-intent__HassTurnOff", &servers), Some("intent__HassTurnOff"));
+        assert_eq!(home_tool("mcp__housekeeper__intent__HassTurnOff", &servers), None);
+        assert_eq!(home_tool("Bash", &servers), None);
+        assert!(home_read("homeassistant__GetLiveContext") && home_read("GetDateTime") && !home_read("intent__HassTurnOff"));
+        // No Home Assistant server on the turn: nothing to check
+        assert_eq!(home_steps_in(Some(&json!({ "steps": [turn_off("ok")] })), &[]), None);
+        assert_eq!(home_steps_in(None, &servers), Some(HomeSeen::default()));
+        // Home Assistant's miss is JSON: its error is what the line quotes
+        let miss = house(json!([read("failed", SWITCH_MISS)])).home.unwrap();
+        assert_eq!((miss.reads, miss.read_ok), (1, false));
+        assert_eq!(miss.read_error.as_deref(), Some("No exposed entities found in domain(s): switch"));
+        let other = house(json!([{ "kind": "tool", "tool": "mcp__notes__intent__HassTurnOff", "status": "ok" }])).home.unwrap();
+        assert_eq!(other, HomeSeen::default(), "another server's tool isn't the home's");
+    }
+
+    /// The tester's report (issue.md): "Unlocking the front door now." after a turn that ran no
+    /// tool gets one continuation that asks for the call or for a plain "nothing changed".
+    #[test]
+    fn a_claimed_change_with_no_home_step_continues_once() {
+        let v = check(UNLOCKING, None, false, &house(json!([])));
+        assert_eq!(v.missing, [Missing::HomeChange]);
+        let prompt = v.continue_with.as_deref().unwrap();
+        assert!(prompt.contains("Missing from your last reply: a Home Assistant step for the change you described"), "{prompt}");
+        assert!(prompt.contains("Your reply says \"Unlocking the front door now.\", but no Home Assistant tool ran in this turn"), "{prompt}");
+        assert!(prompt.contains("intent__HassTurnOff with its name"), "{prompt}");
+        assert!(v.home_lines.is_empty() && v.outcome.is_none());
+        assert!(continuation_label(&v.missing).contains("about the home"));
+        // Never a delivery note
+        assert!(shows(&explain(), &[Missing::HomeChange]).1.is_empty());
+        // A plain chat turn without Home Assistant: nothing, even with the same words
+        let none = check(UNLOCKING, None, false, &Seen { ran_tools: true, ..NOTHING });
+        assert!(none.missing.is_empty() && none.continue_with.is_none() && none.home_lines.is_empty());
+        // ...and a reply that claims nothing: nothing
+        let honest = check("I can't unlock the front door on my own.", None, false, &house(json!([])));
+        assert!(honest.missing.is_empty() && honest.continue_with.is_none());
+    }
+
+    #[test]
+    fn a_continuation_that_still_claims_the_change_gets_kwants_line() {
+        let v = check(UNLOCKING, None, true, &house(json!([])));
+        assert_eq!(v.missing, [Missing::HomeChange]);
+        assert_eq!(v.continue_with, None, "a continuation never continues again");
+        assert_eq!(v.home_lines, [HomeLine::Change { tried: false }]);
+        assert_eq!(
+            apply(UNLOCKING.into(), &v, "House"),
+            "Unlocking the front door now.\n\n_kwant: nothing in your home changed in this reply. No Home Assistant step ran (see Details)._"
+        );
+        assert_eq!(meta(&v, None, true).unwrap()["home_line"], true);
+        // A change step that ran and failed says so
+        let tried = check(UNLOCKING, None, true, &house(json!([turn_off("failed")])));
+        assert_eq!(tried.home_lines, [HomeLine::Change { tried: true }]);
+        assert!(apply(UNLOCKING.into(), &tried, "House").ends_with("The Home Assistant step didn't work (see Details)._"));
+    }
+
+    #[test]
+    fn a_change_step_that_worked_backs_the_claim() {
+        let v = check("Turned off Living room lamp.", None, false, &house(json!([read("ok", "Living room lamp: off"), turn_off("ok")])));
+        assert!(v.missing.is_empty() && v.continue_with.is_none() && v.home_lines.is_empty(), "{v:?}");
+        // ...in an earlier turn of the same delivery too
+        let mut delivery = NOTHING;
+        let _ = house(json!([turn_off("ok")])).with_earlier(&mut delivery);
+        let then = house(json!([])).with_earlier(&mut delivery);
+        assert!(check("I've turned off the living room lamp.", None, true, &then).home_lines.is_empty());
+    }
+
+    /// A lock card is the answer: a call waiting on it, unanswered on it or declined on it is
+    /// never a miss.
+    #[test]
+    fn a_change_on_a_card_is_never_a_miss() {
+        let approval = |status: &str| json!({ "kind": "approval", "tool": "mcp__house__intent__HassTurnOff", "status": status, "title": "Waiting for your approval" });
+        for steps in [json!([approval("waiting")]), json!([approval("unanswered")]), json!([turn_off("unanswered")]), json!([approval("declined")])] {
+            let seen = house(steps.clone());
+            assert!(seen.home.as_ref().unwrap().on_card, "{steps}");
+            let v = check(UNLOCKING, None, false, &seen);
+            assert!(v.missing.is_empty() && v.continue_with.is_none() && v.home_lines.is_empty(), "{steps}");
+        }
+        // A declined card anywhere in the turn
+        let declined = Seen { declined: true, ..house(json!([])) };
+        assert!(check(UNLOCKING, None, false, &declined).missing.is_empty());
+    }
+
+    #[test]
+    fn reads_that_all_failed_continue_once_then_get_kwants_line() {
+        let failed = house(json!([read("failed", SWITCH_MISS)]));
+        let v = check("No switches are on in your home.", None, false, &failed);
+        assert_eq!(v.missing, [Missing::HomeRead]);
+        let prompt = v.continue_with.as_deref().unwrap();
+        assert!(prompt.contains("Missing from your last reply: a read of the home that worked"), "{prompt}");
+        assert!(
+            prompt.contains("Your Home Assistant read failed (No exposed entities found in domain(s): switch), so you haven't seen the home yet."),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Call homeassistant__GetLiveContext with no arguments now") && prompt.contains("Never use outside weather"));
+        assert!(shows(&explain(), &[Missing::HomeRead]).1.is_empty());
+        // Still nothing after the continuation: kwant's line, with the bot's name and the error
+        let v = check("It's 13 °C outside.", None, true, &failed);
+        assert_eq!(v.home_lines, [HomeLine::Read { error: Some("No exposed entities found in domain(s): switch".into()) }]);
+        assert!(apply("It's 13 °C outside.".into(), &v, "House")
+            .ends_with("_kwant: House couldn't read your home in this reply (No exposed entities found in domain(s): switch). See Details._"));
+        assert_eq!(home_read_line("House", None), "_kwant: House couldn't read your home in this reply. See Details._");
+    }
+
+    #[test]
+    fn a_read_that_worked_after_a_failed_one_is_enough() {
+        let v = check("The kitchen light and the porch light are on.", None, false, &house(json!([read("failed", SWITCH_MISS), read("ok", "Kitchen light: on")])));
+        assert!(v.missing.is_empty() && v.continue_with.is_none() && v.home_lines.is_empty());
+        // ...or in the continuation: the delivery read the home
+        let mut delivery = NOTHING;
+        let _ = house(json!([read("failed", SWITCH_MISS)])).with_earlier(&mut delivery);
+        let then = house(json!([read("ok", "Kitchen light: on")])).with_earlier(&mut delivery);
+        assert!(check("The kitchen light is on.", None, true, &then).home_lines.is_empty());
+        // No read at all isn't a failed read
+        assert!(check("The kitchen light is on.", None, false, &house(json!([]))).missing.is_empty());
+    }
+
+    /// Several misses in one turn get one continuation that names them all.
+    #[test]
+    fn a_claim_and_a_failed_read_get_one_continuation() {
+        let v = check(UNLOCKING, None, false, &house(json!([read("failed", SWITCH_MISS)])));
+        assert_eq!(v.missing, [Missing::HomeChange, Missing::HomeRead]);
+        let prompt = v.continue_with.as_deref().unwrap();
+        assert!(prompt.contains("a Home Assistant step for the change you described and a read of the home that worked"), "{prompt}");
+        assert!(prompt.contains("Your reply says") && prompt.contains("Your Home Assistant read failed"));
+        let then = check(UNLOCKING, None, true, &house(json!([read("failed", SWITCH_MISS)])));
+        assert_eq!(then.home_lines.len(), 2);
     }
 }

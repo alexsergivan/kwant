@@ -100,15 +100,23 @@ pub struct CallOutcome {
     /// 26b: this is the turn's first call that failed or didn't run, so the model's copy of
     /// `text` gets [`super::NO_FALSE_CLAIMS_TEXT`] (see [`CallOutcome::model_text`]).
     pub remind: bool,
+    /// 27e: a hint for the model after Home Assistant's `GetLiveContext` with a filter (see
+    /// [`super::home_floor::live_context_hint`]). Never in the record or in Details.
+    pub hint: Option<&'static str>,
 }
 
 impl CallOutcome {
-    /// What goes back to the model: `text`, plus the once-per-turn reminder when `remind`.
+    /// What goes back to the model: `text`, plus the 27e hint, plus the once-per-turn reminder
+    /// when `remind`.
     pub fn model_text(&self) -> String {
+        let text = match self.hint {
+            Some(hint) => format!("{}\n\n{hint}", self.text.trim_end()),
+            None => self.text.clone(),
+        };
         if self.remind {
-            super::with_no_false_claims(&self.text)
+            super::with_no_false_claims(&text)
         } else {
-            self.text.clone()
+            text
         }
     }
 }
@@ -269,6 +277,7 @@ impl McpToolSession {
                 status: "error",
                 record,
                 remind,
+                hint: None,
             };
         }
         let offered = self.tools.iter().find(|t| t.name == name);
@@ -337,11 +346,16 @@ impl McpToolSession {
             record["result"] = json!(truncate_text(&text, RECORD_RESULT_MAX_CHARS));
         }
         self.ctx.record(record.clone());
+        // 27e: a filtered read of the home says how to see all of it
+        let hint = offered
+            .filter(|t| super::home_floor::reported_name(&self.clients[t.server_index].1.server_info).is_some_and(|n| super::home_floor::is_home_assistant(&n)))
+            .and_then(|t| super::home_floor::live_context_hint(&t.tool.name, &arguments, status));
         CallOutcome {
             text,
             status,
             record,
             remind,
+            hint,
         }
     }
 
