@@ -78,6 +78,9 @@
 </ul>
 <p>Click <strong>Connect</strong> to test it: kwant starts the server, lists its tools and shuts it down again, and shows what the server printed if something fails.</p>
 
+<h2 id="home-assistant">Home Assistant</h2>
+<p>From 0.9.21, Home Assistant has its own <strong>Connect Home Assistant</strong> sheet and a <strong>Home</strong> team, rather than the generic Add server form. The docs page is <a href="/docs/home-assistant">Connect Home Assistant</a>. A longer walkthrough, with screenshots and what we saw on a 7B local model, is in the blog: <a href="/blog/control-home-assistant-with-a-self-hosted-bot">Control Home Assistant from a self-hosted AI bot</a>.</p>
+
 <h2 id="access">Which bots see which tools</h2>
 <p>A bot only ever sees the servers assigned to it, never the host user's own MCP configuration. Pick a bot's servers under <strong>Tools this bot can use</strong>. A disabled server is kept but offered to no bot. Tool names look like <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>.</p>
 
