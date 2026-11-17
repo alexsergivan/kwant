@@ -102,10 +102,10 @@ test('a late Done or Skip on a closed step reads as a sentence, never the raw st
     "This closed when you sent a file, so Pixel didn't get your Done. If you finished, say so in the chat.",
   );
   assert.equal(h.closedStepText('left_for_message', 'decline', 'Pixel'), null);
-  // The existing lines are unchanged
-  assert.equal(h.closedStepText('done', 'done', 'Pixel'), 'This was already marked done.');
-  assert.equal(h.closedStepText('declined', 'decline', 'Pixel'), 'This was already skipped.');
-  assert.equal(h.closedStepText('cancelled', 'done', 'Pixel'), 'This was closed: the reply was stopped.');
+  // Other closed statuses show nothing: the card's footer already says how it ended (22v)
+  assert.equal(h.closedStepText('done', 'done', 'Pixel'), null);
+  assert.equal(h.closedStepText('declined', 'decline', 'Pixel'), null);
+  assert.equal(h.closedStepText('cancelled', 'done', 'Pixel'), null);
   // An open step isn't closed: the caller keeps the real error
   assert.equal(h.closedStepText('open', 'done', 'Pixel'), undefined);
 });

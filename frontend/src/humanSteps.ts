@@ -58,33 +58,6 @@ const STATUSES: HumanStepStatus[] = ['open', 'done', 'declined', 'cancelled', 'r
 const kindOf = (v: unknown): HumanStepKind => (STEP_KINDS.includes(v as HumanStepKind) ? (v as HumanStepKind) : 'other');
 const statusOf = (v: unknown): HumanStepStatus => (STATUSES.includes(v as HumanStepStatus) ? (v as HumanStepStatus) : 'open');
 
-/**
- * What a Done or Skip that came too late says, for a step that is already closed (the 409 path).
- * A string is shown under the card, `null` shows nothing, and `undefined` means the step isn't closed.
- * Never the raw status: "left_for_message" is not a sentence (22m round 2).
- */
-export function closedStepText(status: HumanStepStatus, which: 'done' | 'decline', kwantName: string): string | null | undefined {
-  switch (status) {
-    case 'done':
-      return 'This was already marked done.';
-    case 'declined':
-      return 'This was already skipped.';
-    case 'cancelled':
-      return 'This was closed: the reply was stopped.';
-    case 'left_for_message':
-      // Skip lost nothing, and the card's own line already says what happened
-      return which === 'done'
-        ? `This closed when you sent a file, so ${kwantName} didn't get your Done. If you finished, say so in the chat.`
-        : null;
-    case 'resolved_auto':
-      return 'This was already solved.';
-    case 'timed_out':
-      return 'This closed: nobody solved it in time.';
-    case 'open':
-      return undefined;
-  }
-}
-
 /** A usable widget box (finite, non-empty), else null. */
 export function parseCaptchaTarget(raw: unknown): CaptchaTarget | null {
   if (!raw || typeof raw !== 'object') return null;
