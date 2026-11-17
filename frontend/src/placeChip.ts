@@ -125,6 +125,10 @@ export function perchSettings(w: unknown = win()): PerchSettings | null {
   };
 }
 
+/** Rust fires it on window after each `__KWANT_ISLAND__` it sets: the saved settings, or the old ones again
+ *  when it couldn't save a change (apps/mac perch_window::set_prefs). */
+export const ISLAND_EVENT = 'kwant-island';
+
 /** The settings URL, or null for any value outside the whitelist. */
 export function islandUrl(mode: unknown, shortcut: unknown): string | null {
   if (!isMode(mode) || !isShortcut(shortcut)) return null;

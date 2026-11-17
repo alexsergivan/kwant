@@ -84,4 +84,6 @@ We did not test any of the three side by side, and we have not measured speed, c
 
 If you are choosing one assistant and want it in your chat apps, start with OpenClaw. If you want an agent that learns and can live on several backends, start with Hermes Agent. If you want a team of bots with approvals on your own machine, try kwant. They don't exclude each other.
 
+Already using one of them? kwant can import an [OpenClaw workspace](https://kwant.si/alternatives/openclaw) or your [Hermes Agent home and profiles](https://kwant.si/alternatives/hermes-agent), and those pages say exactly what comes across.
+
 A note on the name: "kwant" here is the open-source AI agent team at kwant.si, not the Kwant physics package or Kwant.ai. It isn't affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. See also [self-hosted AI agents](https://kwant.si/self-hosted-ai-agents) for what running your own agent team involves.

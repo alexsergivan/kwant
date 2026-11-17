@@ -81,6 +81,7 @@
 // the place of the window that asks. Try again (retry_start) re-checks only this window's place.
 // Remove this server… calls remove_server {origin} and waits. The app shows the one native confirm
 // (design.md §4.1) and any "Removed {host}" message itself, then answers {removed, revoked, cancelled}.
+// A server list it couldn't save keeps the server: the app says so itself and answers save_failed.
 // The page builds no confirm and shows nothing more.
 // The page never reads its own URL.
 (function () {

@@ -146,6 +146,23 @@ impl Asker {
         }
     }
 
+    /// One OK, as a warning (a change that couldn't be saved). Blocks: never on the main thread.
+    fn warn<R: Runtime>(&self, app: &AppHandle<R>, title: &str, message: &str) {
+        match self {
+            Asker::Native => {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                app.dialog()
+                    .message(message)
+                    .title(title)
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCustom("OK".into()))
+                    .blocking_show();
+            }
+            #[cfg(test)]
+            Asker::Fixed { said, .. } => said.lock().unwrap().push((title.into(), message.into())),
+        }
+    }
+
     /// One OK. Blocks: never on the main thread.
     fn tell<R: Runtime>(&self, app: &AppHandle<R>, title: &str, message: &str) {
         match self {
@@ -164,12 +181,30 @@ impl Asker {
     }
 }
 
+/// What a setting that couldn't be saved says, wherever it was changed: the pages get it as
+/// `save_failed`, the tray, the menus and the Perch settings as one warning.
+pub(crate) const SAVE_FAILED: &str = "kwant couldn't save the change. Check that ~/.kwnt can be written.";
+const SAVE_FAILED_TITLE: &str = "kwant";
+
+/// The one warning for a change that couldn't be saved. Blocks: never on the main thread.
+pub(crate) fn say_save_failed<R: Runtime>(app: &AppHandle<R>) {
+    app.state::<Asker>().warn(app, SAVE_FAILED_TITLE, SAVE_FAILED);
+}
+
+/// The same, from the main thread (a menu click): the warning waits on its own thread.
+fn say_save_failed_later<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    std::thread::spawn(move || say_save_failed(&app));
+}
+
 /// What one Remove did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct Removed {
     cancelled: bool,
     removed: bool,
     revoked: bool,
+    /// The server list couldn't be saved: the server is still listed, and the app said so.
+    save_failed: bool,
 }
 
 /// The running server, when this app started one (not when it attached to another kwant).
@@ -993,29 +1028,36 @@ fn add_place<R: Runtime>(app: &AppHandle<R>, origin: Origin, link: Option<Url>) 
     Ok(added)
 }
 
-/// Takes a server out: its sign-in cookie, its window, its line in the file. With no place
-/// left, This Mac comes back on. Never on the main thread (cookies are read there).
-fn remove_place<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
+/// Takes a server's line out of the file first: with no place left, This Mac comes back on.
+/// `Ok(None)`: it wasn't listed. `Ok(Some(back_here))`: saved. `Err`: the file couldn't be
+/// written, and the list is as it was (nothing else is touched).
+fn unlist<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> std::io::Result<Option<bool>> {
+    let shared = app.state::<Shared>();
+    let mut places = shared.places.lock().unwrap();
+    let before = places.clone();
+    if !places.remove_server(origin) {
+        return Ok(None);
+    }
+    let back_here = places.all().is_empty();
+    if back_here {
+        places.set_this_mac(true);
+    }
+    if let Err(e) = places.save(&shared.data_dir) {
+        *places = before;
+        return Err(e);
+    }
+    Ok(Some(back_here))
+}
+
+/// Then lets an unlisted server go: its sign-in cookie, its window; This Mac's window when it
+/// came back on. Never on the main thread (cookies are read there).
+fn let_go<R: Runtime>(app: &AppHandle<R>, origin: &Origin, back_here: bool) {
     let label = Place::Server(origin.clone()).window_label();
     clear_token(app, origin);
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.destroy();
     }
     let shared = app.state::<Shared>();
-    let (removed, back_here) = {
-        let mut places = shared.places.lock().unwrap();
-        let removed = places.remove_server(origin);
-        let back_here = removed && places.all().is_empty();
-        if back_here {
-            places.set_this_mac(true);
-        }
-        if removed {
-            if let Err(e) = places.save(&shared.data_dir) {
-                tracing::warn!(error = %e, "couldn't save the server list");
-            }
-        }
-        (removed, back_here)
-    };
     shared.reach.lock().unwrap().remove(&origin.as_str());
     {
         let mut last = shared.last_focused.lock().unwrap();
@@ -1023,15 +1065,12 @@ fn remove_place<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
             *last = None;
         }
     }
-    if removed {
-        tracing::info!(host = %origin.host(), "removed a server");
-    }
+    tracing::info!(host = %origin.host(), "removed a server");
     if back_here {
         open_place(app, &Place::ThisMac, Goto::Stay);
     }
     refresh_titles(app);
     wake(app);
-    removed
 }
 
 /// Why "Run kwant on this Mac" didn't change.
@@ -1139,9 +1178,11 @@ fn unreachable_now<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
     by_window || shared.unreachable.lock().unwrap().contains(&Place::Server(origin.clone()).key())
 }
 
-/// Every Remove (tray or page): the native confirm, then the server sign-out, then the remove;
-/// a sign-out the server didn't confirm is said once. Blocks: never on the main thread or on
-/// an async task (it waits for the sign-out).
+/// Every Remove (tray or page): the native confirm, then the server's line out of the file,
+/// then the server sign-out and the rest of the remove; a sign-out the server didn't confirm is
+/// said once. A list that couldn't be saved keeps the server (signed in, its window open) and
+/// is said once instead. Blocks: never on the main thread or on an async task (it waits for
+/// the sign-out).
 fn confirm_and_remove<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Removed {
     let places = current(app);
     if !places.servers.contains(origin) {
@@ -1154,13 +1195,22 @@ fn confirm_and_remove<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Remove
     if !asker.confirm(app, &words.title, &words.message) {
         return Removed { cancelled: true, ..Removed::default() };
     }
+    let back_here = match unlist(app, origin) {
+        Ok(Some(back_here)) => back_here,
+        Ok(None) => return Removed::default(),
+        Err(e) => {
+            tracing::warn!(error = %e, "couldn't save the server list");
+            say_save_failed(app);
+            return Removed { save_failed: true, ..Removed::default() };
+        }
+    };
     let revoked = tauri::async_runtime::block_on(sign_out_of(app, origin));
-    let removed = remove_place(app, origin);
-    if removed && !revoked && !words.says_unreachable {
+    let_go(app, origin, back_here);
+    if !revoked && !words.says_unreachable {
         let (title, message) = removed_words(&host);
         asker.tell(app, &title, message);
     }
-    Removed { cancelled: false, removed, revoked }
+    Removed { cancelled: false, removed: true, revoked, save_failed: false }
 }
 
 /// Signs this app out of a server with the cookie it keeps for it (`DELETE /api/auth/session`).
@@ -1236,6 +1286,12 @@ fn apply_menu(app: &AppHandle, tray: &TrayIcon, shown: &mut TrayMenu, entries: V
     }
     for (i, entry) in entries.into_iter().enumerate() {
         if shown.entries[i] == entry {
+            // a click ticks a check item natively; a refused change (a save that failed) ticks it back
+            if let (Handle::Check(item), menu::Entry::Check { checked, .. }) = (&shown.handles[i], &entry) {
+                if item.is_checked().is_ok_and(|now| now != *checked) {
+                    let _ = item.set_checked(*checked);
+                }
+            }
             continue;
         }
         match (&shown.handles[i], &entry) {
@@ -1280,6 +1336,22 @@ fn set_window_menu(app: &AppHandle, places: &[Place]) {
     }
 }
 
+/// The tray's Show nudges: saves the other choice, then takes it. A save that fails keeps the
+/// old one (the menu's poll ticks the item back to it).
+fn toggle_nudges<R: Runtime>(app: &AppHandle<R>) -> Result<bool, ToggleRefused> {
+    let state = app.state::<Nudges>();
+    let on = !state.show.load(Ordering::Relaxed);
+    let saved = (nudge::Prefs { show_nudges: on }).save(&state.data_dir);
+    if saved.is_ok() {
+        state.show.store(on, Ordering::Relaxed);
+    }
+    wake(app);
+    saved.map(|()| on).map_err(|e| {
+        tracing::warn!(error = %e, "couldn't save Show nudges");
+        ToggleRefused::SaveFailed
+    })
+}
+
 /// Every menu click: the tray's and the Window menu's.
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
@@ -1296,13 +1368,9 @@ fn on_menu(app: &AppHandle, id: &str) {
             show_last(app);
         }
         "nudges" => {
-            let state = app.state::<Nudges>();
-            let on = !state.show.load(Ordering::Relaxed);
-            state.show.store(on, Ordering::Relaxed);
-            if let Err(e) = (nudge::Prefs { show_nudges: on }).save(&state.data_dir) {
-                tracing::warn!(error = %e, "couldn't save Show nudges");
+            if toggle_nudges(app).is_err() {
+                say_save_failed_later(app);
             }
-            wake(app);
         }
         "perch" => {
             let app = app.clone();
@@ -1313,6 +1381,9 @@ fn on_menu(app: &AppHandle, id: &str) {
             let on = !current(app).this_mac;
             if let Err(e) = set_local(app, on) {
                 tracing::info!(?e, "Run kwant on this Mac unchanged");
+                if e == ToggleRefused::SaveFailed {
+                    say_save_failed_later(app);
+                }
             }
             wake(app);
         }
@@ -2273,7 +2344,8 @@ mod tests {
         places.add_server(origin.clone());
         places.set_this_mac(false);
         let (app, _window, data_dir) = app_with("remove-last", "connect", places);
-        assert!(remove_place(app.handle(), &origin));
+        assert_eq!(unlist(app.handle(), &origin).unwrap(), Some(true), "This Mac comes back");
+        let_go(app.handle(), &origin, true);
         let after = current(app.handle());
         assert!(after.servers.is_empty());
         assert!(after.this_mac);
@@ -2491,4 +2563,113 @@ mod tests {
         let _ = std::fs::remove_dir_all(data_dir2);
     }
 
+
+    /// The one sentence every setting that couldn't be saved says (connect.rs's set_this_mac).
+    const SAVE_FAILED_WORDS: &str = "kwant couldn't save the change. Check that ~/.kwnt can be written.";
+
+    /// A data dir made read-only (0500), like a ~/.kwnt that a `sudo` run left behind. Made
+    /// writable again and removed on drop, so a failing test cleans up too.
+    #[cfg(unix)]
+    struct ReadOnly(PathBuf);
+
+    #[cfg(unix)]
+    impl ReadOnly {
+        /// `None` when writes still work there (root ignores the mode): the test can't tell.
+        fn new(dir: &std::path::Path) -> Option<ReadOnly> {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+            let guard = ReadOnly(dir.to_path_buf());
+            let probe = dir.join(".write-probe");
+            if std::fs::write(&probe, b"").is_ok() {
+                let _ = std::fs::remove_file(probe);
+                eprintln!("{} is still writable (running as root?): skipped", dir.display());
+                return None;
+            }
+            Some(guard)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReadOnly {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Show nudges with a data dir that can't be written: it stays as it was (in memory, so the
+    /// tray's tick, and in the file) and the toggle says it wasn't saved.
+    #[cfg(unix)]
+    #[test]
+    fn show_nudges_that_can_t_be_saved_stays_as_it_was() {
+        let (app, _window, data_dir) = app("nudges-read-only");
+        let handle = app.handle();
+        nudge::Prefs { show_nudges: true }.save(&data_dir).unwrap();
+        let file = std::fs::read(nudge::prefs_path(&data_dir)).unwrap();
+        let Some(_dir) = ReadOnly::new(&data_dir) else { return };
+        assert_eq!(toggle_nudges(handle), Err(ToggleRefused::SaveFailed));
+        assert!(handle.state::<Nudges>().show.load(Ordering::Relaxed), "still on in memory");
+        assert_eq!(std::fs::read(nudge::prefs_path(&data_dir)).unwrap(), file, "the file as before");
+        assert!(nudge::Prefs::load(&data_dir).show_nudges);
+    }
+
+    /// With a data dir that can be written, Show nudges saves each change as before.
+    #[test]
+    fn show_nudges_saves_each_change() {
+        let (app, _window, data_dir) = app("nudges-writable");
+        let handle = app.handle();
+        assert_eq!(toggle_nudges(handle), Ok(false));
+        assert!(!handle.state::<Nudges>().show.load(Ordering::Relaxed));
+        assert!(!nudge::Prefs::load(&data_dir).show_nudges);
+        assert_eq!(toggle_nudges(handle), Ok(true));
+        assert!(nudge::Prefs::load(&data_dir).show_nudges);
+        assert!(said(&app).is_empty(), "nothing to say");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// Perch settings from This Mac's page with a data dir that can't be written: the old ones
+    /// stay (in memory and in the file), the page is given them again, and the app says so once.
+    #[cfg(unix)]
+    #[test]
+    fn perch_settings_that_can_t_be_saved_stay_as_they_were() {
+        let (app, window, data_dir) = app("island-read-only");
+        let handle = app.handle();
+        window.navigate("http://127.0.0.1:1/settings".parse().unwrap()).unwrap();
+        let before = handle.state::<Shared>().perch.lock().unwrap().prefs;
+        before.save(&data_dir).unwrap();
+        let file = std::fs::read(nudge::prefs_path(&data_dir)).unwrap();
+        let Some(_dir) = ReadOnly::new(&data_dir) else { return };
+        let mode = if before.mode == switcher::PerchMode::Always { switcher::PerchMode::Off } else { switcher::PerchMode::Always };
+        assert!(picker::island(handle, mode, switcher::PerchShortcut::Space), "it came from This Mac's page");
+        assert_eq!(handle.state::<Shared>().perch.lock().unwrap().prefs, before, "unchanged in memory");
+        assert_eq!(std::fs::read(nudge::prefs_path(&data_dir)).unwrap(), file, "the file as before");
+        assert_eq!(said(&app), vec![("kwant".to_string(), SAVE_FAILED_WORDS.to_string())]);
+    }
+
+    /// Remove a server with a data dir that can't be written: the server stays listed (in
+    /// memory and in the file), the page gets save_failed, and the app says so after the confirm.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_can_t_be_unlisted_stays_listed() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, window, data_dir) = app_with("remove-read-only", MAIN, places.clone());
+        places.save(&data_dir).unwrap();
+        let file = std::fs::read(places::places_path(&data_dir)).unwrap();
+        let Some(_dir) = ReadOnly::new(&data_dir) else { return };
+        let page = connect::bundled("index.html").to_string();
+        let answer = invoke(&window, "remove_server", &page, serde_json::json!({ "origin": origin.as_str() }));
+        let refused = answer.expect_err("save_failed");
+        assert_eq!(refused["code"], "save_failed");
+        assert_eq!(refused["message"], SAVE_FAILED_WORDS);
+        assert_eq!(current(app.handle()).servers, vec![origin.clone()], "still listed in memory");
+        assert_eq!(std::fs::read(places::places_path(&data_dir)).unwrap(), file, "the file as before");
+        let said = said(&app);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said[0].0, "Remove kwant.example.com?");
+        assert_eq!(said[1], ("kwant".to_string(), SAVE_FAILED_WORDS.to_string()));
+    }
 }
