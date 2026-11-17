@@ -596,22 +596,40 @@ mod tests {
     }
 
     /// A local file host: `/png` is a picture, `/away` redirects off the list, `/hop` redirects
-    /// to `/png`, `/slow` never finishes, `/big` claims 200 MB.
+    /// to `/png`, `/missing` is a 404. [`big_host`] claims 200 MB.
     async fn file_host() -> String {
-        use axum::{response::IntoResponse, routing::get, Router};
+        use axum::{routing::get, Router};
         let app = Router::new()
             .route("/png", get(|| async { ([("content-type", "image/png")], PNG.to_vec()) }))
             .route("/hop", get(|| async { axum::response::Redirect::temporary("/png") }))
             .route("/away", get(|| async { axum::response::Redirect::temporary("http://localhost:1/png") }))
-            .route(
-                "/big",
-                get(|| async { ([("content-length", (200 * 1024 * 1024).to_string())], "x").into_response() }),
-            )
             .route("/missing", get(|| async { axum::http::StatusCode::NOT_FOUND }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.ok() });
         format!("http://{addr}")
+    }
+
+    /// A raw host whose every answer declares 200 MB but sends one byte. hyper refuses to serve a
+    /// body shorter than its own content-length header (a debug-build panic that drops the
+    /// connection), so this one writes the response by hand.
+    async fn big_host() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = [0u8; 4096];
+                    let _ = socket.read(&mut request).await;
+                    let head = format!("HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: {}\r\n\r\nx", 200 * 1024 * 1024);
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    // Held open: the client must refuse on the header, not on a short body
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                });
+            }
+        });
+        format!("http://{addr}/big")
     }
 
     fn local_rule() -> DeliveryRule {
@@ -639,12 +657,11 @@ mod tests {
     async fn a_delivery_link_that_cant_be_saved_stays_with_the_reason() {
         let base = file_host().await;
         let sink = Sink::default();
-        for (path, why) in [
-            ("away", "it redirects off the app's file hosts"),
-            ("big", "it is larger than 100 MB"),
-            ("missing", "the file host answered 404"),
+        for (link, why) in [
+            (format!("{base}/away"), "it redirects off the app's file hosts"),
+            (big_host().await, "it is larger than 100 MB"),
+            (format!("{base}/missing"), "the file host answered 404"),
         ] {
-            let link = format!("{base}/{path}");
             let r = result(json!([{"type": "text", "text": format!("image: {link}")}]));
             let text = finish_with(&r, "flux", "generate_image", Some(&sink), Some(&local_rule())).await;
             assert_eq!(text, format!("image: {link}\nThe file at {link} couldn't be saved in this chat: {why}. The link expires soon."));
