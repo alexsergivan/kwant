@@ -70,6 +70,23 @@ pub enum Commands {
     /// List channels stored in the local database
     Channels,
 
+    /// Read back what bots ran and list what the approvals log should never show: a step that
+    /// should have asked first but ran with no card. Read only: no model calls, no network
+    RunCheck {
+        /// How far back to look: 24h, 7d or all
+        #[arg(long, default_value = "7d", value_parser = |s: &str| s.parse::<kwnt::run_check::Since>())]
+        since: kwnt::run_check::Since,
+        /// Only this bot (name or id)
+        #[arg(long)]
+        bot: Option<String>,
+        /// Print JSON instead of sentences
+        #[arg(long)]
+        json: bool,
+        /// Exit 1 when anything is found (for scripts and CI)
+        #[arg(long)]
+        strict: bool,
+    },
+
     /// Print a new one-time sign-in link for another device, like `kwnt signin-link` (`--raw`: just
     /// the API token, for scripts). Only reads the existing token; never creates one
     Token {
@@ -195,6 +212,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Agents) => print_agents(&config).await?,
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
+        Some(Commands::RunCheck { since, bot, json, strict }) => {
+            let opts = kwnt::run_check::Options { since, bot, json, strict };
+            std::process::exit(kwnt::run_check::run_cli(&config.data_dir, opts).await);
+        }
         Some(Commands::Token { raw }) => {
             // Read only: a token created here (wrong user, wrong data dir) would be rejected.
             let token = match kwnt::server::auth::env_token()
