@@ -113,24 +113,14 @@ impl TurnActivity {
     /// turn. The step reads as a `browser_open` ("Opening <host>", the address as its detail) and
     /// carries [`LINK_OPEN_REF`], so code can tell it from the bot's own opens. End it with
     /// [`Self::link_open_end`].
-    pub fn link_open_start(&self, url: &str) {
-        let (pending, _) = link_open_events(url, &LinkOpen::Opened(String::new()));
-        let steps = self.with_log(|log| {
-            let steps = log.observe(&pending);
-            if let Some(step) = steps.iter().rfind(|s| s.kind == "tool") {
-                *self.link_step.lock().unwrap_or_else(|e| e.into_inner()) = Some(step.id.clone());
-            }
-            steps
-        });
-        self.send(steps);
+    pub fn link_open_start(&self, _url: &str) {
+        // BEFORE-RUN STUB (do not merge): records nothing, as main does
     }
 
     /// Ends the step [`Self::link_open_start`] began: `ok` with the page's title, or `failed` with
     /// the reason (redacted and cut like any failed step's).
-    pub fn link_open_end(&self, outcome: &LinkOpen) {
-        let (_, completed) = link_open_events("", outcome);
-        let steps = self.with_log(|log| log.observe(&completed));
-        self.send(steps);
+    pub fn link_open_end(&self, _outcome: &LinkOpen) {
+        // BEFORE-RUN STUB (do not merge): records nothing, as main does
     }
 
     /// Marks the link-open step in saved or listed steps (`{"steps": [...]}`).
@@ -166,6 +156,7 @@ impl TurnActivity {
 pub const LINK_OPEN_REF: &str = "kwnt-link-open";
 
 /// The tool call id kwnt's own link open uses in the turn's log; drivers never send it.
+#[allow(dead_code)]
 const LINK_OPEN_CALL: &str = "kwnt-link-open";
 
 /// How kwnt's open of the request's link before the turn went (28g).
@@ -195,6 +186,7 @@ impl LinkOpen {
 /// The tool call pair kwnt's own link open feeds the turn's log: a `browser_open` of `url`, and
 /// its end (`{"status": "ok", "title"}` or `{"status": "error", "error"}`), as a driver reports
 /// the bot's own `browser_open`.
+#[allow(dead_code)]
 fn link_open_events(url: &str, outcome: &LinkOpen) -> (RuntimeEvent, RuntimeEvent) {
     let pending = RuntimeEvent::ToolCallPending {
         id: LINK_OPEN_CALL.into(),
