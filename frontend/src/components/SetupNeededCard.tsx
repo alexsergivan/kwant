@@ -82,7 +82,7 @@ export const SetupNeededCard: React.FC<Props> = ({ meta, botName, spaceName, can
             onClick={onRecheck}
             disabled={rechecking}
             data-setup-recheck
-            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
+            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
           >
             <RefreshCw size={13} aria-hidden="true" className={rechecking ? 'animate-spin motion-reduce:animate-none' : undefined} />
             {rechecking ? 'Checking…' : 'Re-check'}
