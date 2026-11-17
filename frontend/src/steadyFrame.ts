@@ -122,7 +122,8 @@ export type PaneFrame = { image: string } | { hold: true } | { idle: true };
  * 28e: the picture for the pane. After a switch to another page's tab the new stream has no frame for
  * a moment; the app-level screenshot (not tied to any page, often the blank one dimmed to grey) used
  * to fill that gap. While a chosen page's stream hasn't shown its own good frame, the dark pane holds.
- * `streaming`: the page stream is in use (not a real window, not one on its way). Without a chosen page,
+ * `streaming`: the page stream is in use (not a real window, not one on its way). `switching`: the
+ * chosen page changed and the stream still belongs to the last one. Without a chosen page,
  * or with no stream, the app-level screenshot is still the fallback, as before.
  */
 export function paneFrame(input: {
@@ -130,11 +131,15 @@ export function paneFrame(input: {
   frame: BrowserFrame | null;
   holding: boolean;
   streaming: boolean;
+  /** The chosen page changed and the stream hasn't reconnected for it yet. */
+  switching: boolean;
   streamPage: string | null;
   chosenPage: string | null;
   screenshot: string | null | undefined;
 }): PaneFrame {
-  const { blank, frame, holding, streaming, streamPage, chosenPage, screenshot } = input;
+  const { blank, frame, holding, streaming, switching, streamPage, chosenPage, screenshot } = input;
+  // The renders right after the click still have the last page's stream (its address, its frame): hold
+  if (streaming && switching) return { hold: true };
   if (blank) return { idle: true };
   if (streaming && chosenPage !== null) {
     // Only this page's own picture: never the app-level screenshot, never the last page's frame

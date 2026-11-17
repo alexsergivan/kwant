@@ -253,6 +253,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // Interactive Remote Control State
   const streaming = isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending;
   const stream = useBrowserStream(teamId, streaming, chosenPage);
+  // 28e: the page the stream belongs to. Until the stream reconnects, it still shows the last page.
+  const [streamFor, setStreamFor] = useState(chosenPage);
+  useEffect(() => setStreamFor(chosenPage), [chosenPage]);
   const isControlMode = stream.controlling;
   const isInteracting = stream.busy;
   const narrow = useNarrow();
@@ -275,7 +278,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // A live stream is ready; otherwise trust isRunning only while no error says the service is down.
   const browserReady = stream.connected || (isRunning && !controlError);
   // 28e: after a switch to another page's tab, the dark pane until that page's own frame, never another picture
-  const panePicture = paneFrame({ blank: isBlankPage(pageUrl), frame: steady.frame, holding: steady.holding, streaming: streaming && browserReady, streamPage: stream.page, chosenPage, screenshot: screenshotBase64 });
+  const panePicture = paneFrame({ blank: isBlankPage(pageUrl), frame: steady.frame, holding: steady.holding, streaming: streaming && browserReady, switching: streamFor !== chosenPage, streamPage: stream.page, chosenPage, screenshot: screenshotBase64 });
   const currentScreenshot = 'image' in panePicture ? panePicture.image : null;
   const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.

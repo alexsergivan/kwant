@@ -87,6 +87,7 @@ test('a switch to another page\'s tab: the dark pane until that page\'s own fram
   assert.ok(ben && /^Ben's page:/.test(ben.getAttribute('aria-label')), "Ben's tab is in the strip");
   ben.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
+  assert.equal(showsOnly(host).appShot, false, 'right after the click: no app-level screenshot');
 
   const second = sockets.at(-1);
   assert.notEqual(second, first, "the pane reconnected to Ben's page");
@@ -146,7 +147,7 @@ test('with no page stream, the app-level screenshot is still the picture', async
 test('paneFrame: the decision, case by case', () => {
   assert.equal(typeof steady.paneFrame, 'function', 'steadyFrame.ts exports paneFrame');
   const f = (image, id = 1) => ({ id, image, width: 1280, height: 800 });
-  const base = { blank: false, frame: null, holding: false, streaming: true, streamPage: null, chosenPage: BEN_PAGE, screenshot: APP_SHOT };
+  const base = { blank: false, frame: null, holding: false, streaming: true, switching: false, streamPage: null, chosenPage: BEN_PAGE, screenshot: APP_SHOT };
   const pf = (o) => steady.paneFrame({ ...base, ...o });
 
   // A switch, with a screenshot and no stream frame yet: hold
@@ -157,6 +158,10 @@ test('paneFrame: the decision, case by case', () => {
   assert.deepEqual(pf({ frame: f(OLD), streamPage: TEAM }), { hold: true });
   // Ben's own first good frame: shown
   assert.deepEqual(pf({ frame: f(SHOP), streamPage: BEN_PAGE }), { image: SHOP });
+  // The render right after the click: the last page's stream is still there, blank or not: hold, not "Browser idle"
+  assert.deepEqual(pf({ switching: true, blank: true, frame: f(OLD), streamPage: TEAM }), { hold: true });
+  assert.deepEqual(pf({ switching: true, blank: true }), { hold: true }, 'the last page sent no frame (blank Shared): still hold');
+  assert.deepEqual(pf({ switching: true, chosenPage: null, screenshot: APP_SHOT }), { hold: true }, 'to the server default page: hold too');
   // An about:blank page: idle, as before
   assert.deepEqual(pf({ blank: true, frame: f(SHOP), streamPage: BEN_PAGE }), { idle: true });
 
