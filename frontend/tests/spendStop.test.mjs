@@ -263,6 +263,14 @@ test('a routine run the stop skipped reads plainly, not as an error', () => {
   assert.equal(m.routineRunNote({ status: 'ok', error: null }), null);
 });
 
+test('28f: a routine run the person said no to has a grey note; a denied or failed step stays rose', () => {
+  const said = 'You said no to Bash; nothing ran';
+  assert.deepEqual(m.routineRunNote({ status: 'incomplete', error: said }), { text: said, quiet: true });
+  assert.deepEqual(m.routineRunNote({ status: 'incomplete', error: 'Bash was denied' }), { text: 'Bash was denied', quiet: false });
+  assert.deepEqual(m.routineRunNote({ status: 'incomplete', error: 'Bash failed' }), { text: 'Bash failed', quiet: false });
+  assert.deepEqual(m.routineRunNote({ status: 'error', error: said }), { text: said, quiet: false }, 'only an incomplete run');
+});
+
 test('mission task lines for the stop', () => {
   const ev = (kind, detail, to_state = null) => ({ id: 1, task_id: 't', mission_id: null, kind, actor: 'kwant', actor_name: null, from_state: null, to_state, detail, created_at: '2026-11-07T00:00:00Z' });
   assert.equal(m.eventText(ev('skipped', { reason: 'spend_stopped', why: 'x' })), 'Skipped for now: today’s spending stop is on');
