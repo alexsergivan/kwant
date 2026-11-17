@@ -386,7 +386,18 @@ bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHin
    and stores the ticket in `approvals`.
 2. The UI resolves it with the existing `POST /api/approvals/:id/resolve`
    `{"decision": "allow_once" | "always_allow" | "deny"}`.
-   `always_allow` allows that tool for that kwant until kwnt restarts.
+   `always_allow` lets that kwant use that tool in that conversation (the thread, else the channel,
+   else the direct chat) without asking again, also after kwnt restarts (table `always_allowed`,
+   kept out of exports and imports). Never for a payment, a production step, a shell card or an
+   always-ask tool. The person sees each one, and takes it back, in the bot's settings; both
+   routes are person-only:
+   - `GET /api/kwants/:id/always-allowed` →
+     `[{"tool_name","conversation","conversation_kind":"thread"|"channel"|"direct"|"unknown","conversation_label","created_at"}]`,
+     newest first (`conversation_label` is the thread's title, `#<channel>` or `your chat`).
+   - `DELETE /api/kwants/:id/always-allowed` with `{"conversation","tool_name"}` takes back that
+     one, with `{}` all of them → `{"revoked": <count>, "always_allowed": [...what is left]}`.
+     An empty body or only one of the two fields is `400`. The next call asks again, no restart
+     needed. Deleting the bot, or its thread or channel, removes its answers too.
    With Flight School on (`flight_school`), a bot below `act` for the task it works gets a card for calls
    its tier doesn't allow even with approvals `off` or a smart Allow, with `details.tier_reason`; see
    [mission-control.md](mission-control.md) §14.
