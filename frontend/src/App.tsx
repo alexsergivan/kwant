@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { flushSync } from 'react-dom';
+import { recordRunWait } from './routineRow';
 import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
@@ -1573,6 +1574,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'routine_run':
           case 'RoutineRun':
+            recordRunWait(event.data);
             emitContinuity({ type: 'routine_run', data: event.data });
             break;
           case 'notify':
@@ -3005,6 +3007,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   /** 0.9.5 F: a done item's Open in chat, and a routine run's History row: the chat, at the answer. */
+  // 26d: a waiting routine run's "Open the card" lands on its approval card in the routine's chat.
+  const openRunCard = (n: NotifiedChat) => {
+    if (spaceSettingsTab) closeSpaceSettings();
+    openPlace(n);
+  };
+
   const openRunResult = (t: MessageTarget) => {
     if (spaceSettingsTab) closeSpaceSettings();
     if (t.thread_id) {
@@ -5032,6 +5040,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           routineFocus={routineFocus}
           onOpenRunResult={openRunResult}
+          onOpenRunCard={openRunCard}
           isPhone={isPhone}
           onApprovalsChanged={refreshRoster}
           onImported={reloadAfterImport}
