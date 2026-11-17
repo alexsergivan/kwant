@@ -96,7 +96,14 @@ pub enum Commands {
 
     /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
     #[command(hide = true)]
-    McpEchoServer,
+    McpEchoServer {
+        /// The name it answers `initialize` with (`home-assistant` to pass for Home Assistant's)
+        #[arg(long)]
+        server_name: Option<String>,
+        /// Also serve Home Assistant-shaped tools (intent__HassTurnOff and the rest)
+        #[arg(long)]
+        home_tools: bool,
+    },
 
     /// Run an OAuth-protected mock MCP server over HTTP (for tests and smoke checks)
     #[command(hide = true)]
@@ -115,9 +122,9 @@ pub enum Commands {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     // Before logging starts: stdout carries the MCP protocol
-    if matches!(cli.command, Some(Commands::McpEchoServer)) {
+    if let Some(Commands::McpEchoServer { server_name, home_tools }) = &cli.command {
         // A test helper that holds nothing: left dumpable so tests can find it by its environment
-        kwnt::mcp::echo_server::run_stdio().await?;
+        kwnt::mcp::echo_server::run_stdio(server_name.as_deref(), *home_tools).await?;
         return Ok(());
     }
     kwnt::harden_process();
@@ -230,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
-        Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
+        Some(Commands::McpEchoServer { .. }) => unreachable!("handled before config loading"),
         Some(Commands::McpOauthMockServer { .. }) => unreachable!("handled before config loading"),
         None => {
             println!("⚡ kwant bots: your team of super-intelligent bots");

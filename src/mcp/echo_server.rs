@@ -5,6 +5,12 @@
 //! `crash` (exits mid-call) and `peek` (a fixed reading). `echo` is marked read-only; `add` is
 //! marked destructive, so it asks; `peek` carries Home Assistant's read-only shape
 //! (`readOnlyHint` and `destructiveHint` both true), which counts as read-only.
+//!
+//! `--home-tools` adds Home Assistant-shaped tools (26f): `homeassistant__GetLiveContext`
+//! (read-only), `intent__HassTurnOn` and `intent__HassTurnOff` `{name, area, domain,
+//! device_class}`, and `homeassistant__schedule_command {command}`; each answers that it did it.
+//! `--server-name home-assistant` makes the server say it is Home Assistant's; it says
+//! `kwnt-echo` otherwise.
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -30,12 +36,34 @@ fn tools() -> Value {
     ])
 }
 
+fn home_tools_list() -> Vec<Value> {
+    let target = json!({
+        "name": {"type": "string"}, "area": {"type": "string"},
+        "domain": {"type": "array", "items": {"type": "string"}},
+        "device_class": {"type": "array", "items": {"type": "string"}},
+    });
+    let obj = |props: Value| json!({"type": "object", "properties": props});
+    json!([
+        {"name": "homeassistant__GetLiveContext", "description": "Reads the current state of the house.",
+         "inputSchema": obj(json!({})), "annotations": {"readOnlyHint": true}},
+        {"name": "intent__HassTurnOn", "description": "Turns on, opens or locks a device.", "inputSchema": obj(target.clone())},
+        {"name": "intent__HassTurnOff", "description": "Turns off, closes or unlocks a device.", "inputSchema": obj(target)},
+        {"name": "homeassistant__schedule_command", "description": "Runs a command later.",
+         "inputSchema": obj(json!({"command": {"type": "string"}}))},
+    ])
+    .as_array()
+    .cloned()
+    .unwrap_or_default()
+}
+
 fn text_result(text: String, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
 async fn call(name: &str, args: &Value) -> Value {
     match name {
+        "homeassistant__GetLiveContext" => text_result("Live context: the lights are on, the front door is locked".into(), false),
+        "intent__HassTurnOn" | "intent__HassTurnOff" | "homeassistant__schedule_command" => text_result(format!("done: {name} {args}"), false),
         "echo" => text_result(args["text"].as_str().unwrap_or("").to_string(), false),
         "add" => {
             let sum = args["a"].as_f64().unwrap_or(0.0) + args["b"].as_f64().unwrap_or(0.0);
@@ -62,8 +90,17 @@ async fn call(name: &str, args: &Value) -> Value {
     }
 }
 
-/// Serves MCP on stdin/stdout until stdin closes.
-pub async fn run_stdio() -> std::io::Result<()> {
+/// Serves MCP on stdin/stdout until stdin closes, saying it is `server_name` (default
+/// `kwnt-echo`), with the Home Assistant-shaped tools too when `home_tools`.
+pub async fn run_stdio(server_name: Option<&str>, home_tools: bool) -> std::io::Result<()> {
+    let server_name = server_name.unwrap_or("kwnt-echo");
+    let listed = {
+        let mut all = tools();
+        if home_tools {
+            all.as_array_mut().unwrap().extend(home_tools_list());
+        }
+        all
+    };
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.next_line().await? {
@@ -73,10 +110,10 @@ pub async fn run_stdio() -> std::io::Result<()> {
             "initialize" => json!({
                 "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(super::client::PROTOCOL_VERSION),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "kwnt-echo", "version": env!("CARGO_PKG_VERSION")},
+                "serverInfo": {"name": server_name, "version": env!("CARGO_PKG_VERSION")},
             }),
             "ping" => json!({}),
-            "tools/list" => json!({"tools": tools()}),
+            "tools/list" => json!({"tools": listed}),
             "tools/call" => call(msg["params"]["name"].as_str().unwrap_or(""), &msg["params"]["arguments"]).await,
             _ => {
                 let err = json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "method not found"}});
