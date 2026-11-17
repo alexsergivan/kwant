@@ -190,13 +190,43 @@ export function turnsAwaitingStep(map: Record<string, HumanStep>): Set<string> {
   return out;
 }
 
-/** Heading and the Done button's words for each kind. */
-export const KIND_TEXT: Record<HumanStepKind, { heading: string; done: string }> = {
-  sign_in: { heading: 'Sign in needed', done: 'Done, I’m signed in' },
-  captcha: { heading: 'Human check needed', done: 'Done, I solved it' },
-  two_factor: { heading: 'Sign-in code needed', done: 'Done, I entered the code' },
-  other: { heading: 'Your help is needed', done: 'Done' },
+/**
+ * Heading and the Done button's words for each kind. `closedHeading` is the step's name once it's closed:
+ * a noun, so a finished card doesn't read (or get announced) as an open request (22v).
+ */
+export const KIND_TEXT: Record<HumanStepKind, { heading: string; closedHeading: string; done: string }> = {
+  sign_in: { heading: 'Sign in needed', closedHeading: 'Sign-in', done: 'Done, I’m signed in' },
+  captcha: { heading: 'Human check needed', closedHeading: 'Human check', done: 'Done, I solved it' },
+  two_factor: { heading: 'Sign-in code needed', closedHeading: 'Sign-in code', done: 'Done, I entered the code' },
+  other: { heading: 'Your help is needed', closedHeading: 'Browser step', done: 'Done' },
 };
+
+/**
+ * What a Done or Skip that came too late says, for a step that is already closed (the 409 path).
+ * A string is shown under the card, `null` shows nothing, and `undefined` means the step isn't closed.
+ * Null where the card's footer already says how it ended. Never the raw status id (22v). Same shape as #721's helper, which adds `left_for_message`.
+ */
+export function closedStepText(status: string, which: 'done' | 'decline', kwantName: string): string | null | undefined {
+  switch (status) {
+    case 'open':
+      return undefined;
+    case 'done':
+    case 'declined':
+    case 'cancelled':
+    case 'timed_out':
+    case 'resolved_auto':
+      // The card's own footer already says how it ended (and announces it); a second line would repeat it (22v round 2)
+      return null;
+    case 'left_for_message':
+      // Skip lost nothing, and the card's own line already says what happened (#721's words)
+      return which === 'done'
+        ? `This closed when you sent a file, so ${kwantName} didn't get your Done. If you finished, say so in the chat.`
+        : null;
+    default:
+      // A status this app doesn't know yet: still a sentence, never the id
+      return 'This step is already closed.';
+  }
+}
 
 /** Only the host of a step's address ("github.com"), so the card never shows paths. */
 export function domainOf(url: string | null | undefined): string | null {

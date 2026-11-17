@@ -110,8 +110,9 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
             {open ? ' needs you in the browser' : ' asked for you in the browser'}
             {view.source === 'auto' && ' · spotted automatically'}
           </p>
-          <h3 id={headingId} className="text-sm font-semibold text-zinc-100">
-            {text.heading}
+          {/* Closed: the step's name, quieter, so it reads (and is announced) as done, not as an ask (22v). */}
+          <h3 id={headingId} className={`text-sm font-semibold ${open ? 'text-zinc-100' : 'text-zinc-300'}`}>
+            {open ? text.heading : text.closedHeading}
           </h3>
           {view.reason && <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words leading-snug">{view.reason}</p>}
           {domain && (
