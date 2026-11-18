@@ -571,7 +571,8 @@ pub fn failed_reason(result: &Value) -> Option<Option<&str>> {
 /// in time is `unanswered` and a dry-run call `rehearsed`, never "ok": by the result's status
 /// (kwnt's own tools) or by the refusal kwnt gave the engine (the claude CLI reports both as an
 /// error carrying that text). Otherwise `failed` with its reason, as [`failed_reason`], or "ok".
-/// The once-per-turn reminder to the model ([`crate::mcp::NO_FALSE_CLAIMS_TEXT`]) never shows.
+/// The once-per-turn reminder to the model ([`crate::mcp::NO_FALSE_CLAIMS_TEXT`]) never shows, nor
+/// (27e) a Home Assistant read hint ([`crate::mcp::home_floor::HINTS`]).
 pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
     let said = |marker: &str| {
         ["error", "content", "message"]
@@ -605,8 +606,14 @@ pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
         Some(why) => (
             "failed",
             why.map(|w| {
-                w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
-                    .replace(crate::mcp::NOT_ANOTHER_WAY_TEXT, "")
+                // 27e: nor the Home Assistant read hints
+                crate::mcp::home_floor::HINTS
+                    .iter()
+                    .fold(
+                        w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
+                            .replace(crate::mcp::NOT_ANOTHER_WAY_TEXT, ""),
+                        |w, h| w.replace(h, ""),
+                    )
                     .trim()
                     .to_string()
             })
@@ -1177,6 +1184,25 @@ mod tests {
             result: json!({"status": "error", "error": crate::mcp::REHEARSED_TEXT}),
         });
         assert_eq!(ended[0].status, "rehearsed");
+    }
+
+    /// 27e: the Home Assistant read hints reach the model (the gateway sends `model_text` to an
+    /// agent CLI, which reports it back as the step's result) but never show in Details.
+    #[test]
+    fn the_home_read_hints_stay_out_of_details() {
+        use crate::mcp::{home_floor, session::CallOutcome};
+        let miss = r#"{"error": "No exposed entities found in domain(s): switch"}"#;
+        for (status, hint, remind) in [("error", home_floor::READ_MISS_HINT, true), ("error", home_floor::READ_MISS_HINT, false)] {
+            let outcome = CallOutcome { text: miss.into(), status, record: json!({}), remind, hint: Some(hint) };
+            let model = outcome.model_text();
+            assert!(model.starts_with(miss) && model.contains(hint), "{model}");
+            assert_eq!(model.contains(crate::mcp::NO_FALSE_CLAIMS_TEXT), remind, "{model}");
+            let (shown, why) = step_end(&json!({"status": "error", "content": model}));
+            assert_eq!((shown, why.as_deref()), ("failed", Some(miss)));
+        }
+        let part = CallOutcome { text: "Living room lamp: off".into(), status: "ok", record: json!({}), remind: false, hint: Some(home_floor::READ_PART_HINT) };
+        assert!(part.model_text().ends_with(home_floor::READ_PART_HINT));
+        assert_eq!(step_end(&json!({"status": "ok", "content": part.model_text()})), ("ok", None));
     }
 
     /// 26b: the reminder to the model never shows as a step's reason; a denial stays "failed".
