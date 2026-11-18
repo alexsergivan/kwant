@@ -318,8 +318,8 @@ const SayWhy: React.FC<{ botName: string | null; disabled: boolean; onDeny: (rea
               setWhy(null);
               ref.current?.focus();
             }}
-            aria-label={`Why you’re denying this, for ${tellWho}`}
-            placeholder="What should it do instead? (optional)"
+            aria-label={`Tell ${tellWho} why you’re denying this`}
+            placeholder="What should it do instead?"
             enterKeyHint="send"
             autoComplete="off"
             className="min-w-0 w-full sm:flex-1 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg border border-[#3f3868] bg-zinc-950/70 text-base sm:text-sm text-[#ecebfa] placeholder:text-[#a39dcc] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50"

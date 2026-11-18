@@ -139,7 +139,8 @@ test('29p: Say why opens a focused, labelled field; its button denies and tells 
   assert.equal(sayWhy(host).getAttribute('aria-controls'), form.id);
   const input = form.querySelector('input');
   assert.equal(document.activeElement, input, 'opening it focuses the field');
-  assert.match(input.getAttribute('aria-label'), /TechLead/);
+  assert.equal(input.getAttribute('aria-label'), 'Tell TechLead why you’re denying this');
+  assert.equal(input.getAttribute('placeholder'), 'What should it do instead?');
   assert.equal(input.getAttribute('maxlength'), '500');
   assert.match(form.querySelector('[data-approval-deny-why]').textContent, /^Deny and tell TechLead$/);
   await type(input, '  Open it on the staging repo instead  ');
@@ -173,6 +174,7 @@ test('29p: no bot name says "the bot"', async () => {
   const host = await mount(m.ModernApprovalCard, { approval: { id: 'n1', tool_name: 'write_file', details: { path: '/tmp/a.txt' } }, onResolve() {} });
   await click(sayWhy(host));
   assert.match(host.querySelector('[data-approval-deny-why]').textContent, /^Deny and tell the bot$/);
+  assert.equal(host.querySelector('[data-approval-why] input').getAttribute('aria-label'), 'Tell the bot why you’re denying this');
 });
 
 test('29p: not on a waiting card, not on the production-floor card', () => {
