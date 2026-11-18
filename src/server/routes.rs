@@ -2439,6 +2439,11 @@ pub(super) async fn turn_once(
     // Only the person's own message carries a nav prompt (hand-offs, routines, missions and Jira
     // tasks never do), so this is how the stop knows it held the person's message
     let person_turn = opts.nav_prompt.is_some();
+    // 27b: the person wrote again, so what they declined in this conversation may be asked again.
+    // A turn kwant starts on its own (follow-through, keep-going, a hand-off, a routine) keeps it
+    if person_turn {
+        super::mcp_runtime::person_wrote(&scope.state.broker, &target_kwant.id, tag.thread_id.clone(), tag.context_id.clone());
+    }
     super::spend_stop::gate(scope, target_kwant, quiet_stop, person_turn).await?;
     // Then the bot's own monthly budget (G2): daily stop, mission budget (checked by the mission
     // runner before it asks for a turn), bot budget; the first one hit holds the turn. A turn that
@@ -3205,18 +3210,19 @@ async fn run_kwant_turn_inner(
             purpose: opts.purpose.clone(),
             every_call: opts.every_call,
         };
-        // A no-tools turn starts no MCP server, kwant's own included
+        // A no-tools turn starts no MCP server, kwant's own included. Boxed (26h): inline, its
+        // future (now with the chat's media sink) grew this turn's past the test thread's stack
         let mcp_turn = if opts.no_tools {
             None
         } else {
-            super::mcp_runtime::prepare_turn_with_opts(
+            Box::pin(super::mcp_runtime::prepare_turn_with_opts(
                 state,
                 target_kwant,
                 Some(tag.turn_id.clone()),
                 workspace_dir.clone(),
                 self_scope,
                 card_opts,
-            )
+            ))
             .await
         };
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());

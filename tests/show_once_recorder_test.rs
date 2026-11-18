@@ -3,6 +3,10 @@
 //! parser. Covers S-F2 (a field a script filled and the person then edited is masked) and S-F5
 //! (a field left by kwnt's own navigation, with no blur, is committed first, masked). Skipped
 //! when no Chrome is installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use chrome_guard::ChromeGuard;
@@ -88,7 +92,7 @@ async fn the_recorder_masks_any_field_whose_text_is_not_all_the_persons_own_typi
     std::env::remove_var("DISPLAY");
     std::env::remove_var("WAYLAND_DISPLAY");
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -191,7 +195,7 @@ async fn a_pick_in_the_drawn_list_is_a_select_step_and_a_wrapping_label_names_th
     std::env::remove_var("DISPLAY");
     std::env::remove_var("WAYLAND_DISPLAY");
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -273,7 +277,7 @@ async fn leaving_by_the_address_bar_with_no_blur_records_the_secret_fields_maske
     std::env::remove_var("DISPLAY");
     std::env::remove_var("WAYLAND_DISPLAY");
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
