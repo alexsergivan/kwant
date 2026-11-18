@@ -64,6 +64,8 @@ test('on a phone the summary wraps to two lines between its parts, left-aligned,
   assert.ok(parts.includes('you said no to 1'));
   const button = /<button type="button" aria-expanded="false" class="([^"]*)"/.exec(html)[1].split(' ');
   assert.ok(button.includes('max-sm:items-start'), 'chevron and icon top-aligned on a phone');
+  assert.ok(button.includes('max-sm:grid'), 'a one-row grid on a phone');
+  assert.ok(button.includes('max-sm:content-center'), 'a one-line row is centred in the 44 px touch box');
   assert.ok(button.includes('items-center'), 'centred from sm up');
   assert.equal((html.match(/max-sm:mt-\[1\.5px\]/g) ?? []).length, 2, 'both icons line up with the first line');
 });

@@ -256,9 +256,11 @@ const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: nu
 };
 
 /** The saved reply's steps row (and the live one once it folds, 18f): one class string, so both are the same height. */
-// 28z: on a phone the saved summary may wrap to two lines, so both rows keep their icons on the first line (max-sm:items-start + 1.5px).
+// 28z: on a phone the saved summary may wrap to two lines, so both rows keep their icons on the first line (items-start + 1.5px).
+// Below sm the three children (icon, text, chevron) are a one-row grid centred in the 44 px touch box (content-center),
+// so a one-line row still sits 14/14 and a two-line row fills the box (Mira, 28z round 2).
 export const STEPS_ROW_BUTTON =
-  'max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 max-sm:items-start';
+  'max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 max-sm:grid max-sm:grid-cols-[auto_minmax(0,1fr)_auto] max-sm:content-center max-sm:items-start';
 /** The list the steps row opens to. */
 export const STEPS_ROW_LIST = 'mt-1.5 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]';
 
