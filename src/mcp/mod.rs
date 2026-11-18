@@ -747,6 +747,37 @@ mod folder_file_tests {
 mod tests {
     use super::*;
 
+    /// 29o round 2 red proof: the same ActivityLog test as on #840, fed the reasoned text #840
+    /// sent at 9158b791 ("The user denied this tool call and said why: ..."). It fails here: the
+    /// step ends `failed` with the whole text, not `declined` / "You said no; nothing ran".
+    #[test]
+    fn a_deny_with_a_reason_still_ends_the_step_declined() {
+        use crate::drivers::activity::ActivityLog;
+        use crate::drivers::events::RuntimeEvent;
+        let said = "The user denied this tool call and said why: \"push without --force\". Don't make this same call again. \
+If what they said points to another way, you may try that; it will ask them again. Otherwise say in your reply what you couldn't do.".to_string();
+        for text in [with_no_false_claims(&said), said.clone()] {
+            let mut log = ActivityLog::default();
+            log.wait("approval", "t1", "Waiting for your approval: Running `git push --force`", Some("Bash"));
+            log.settle("t1", "declined");
+            log.observe(&RuntimeEvent::ToolCallPending {
+                id: "a".into(),
+                name: "Bash".into(),
+                args: serde_json::json!({"command": "git push --force"}),
+            });
+            let ended = log.observe(&RuntimeEvent::ToolCallCompleted {
+                id: "a".into(),
+                result: serde_json::json!({"status": "error", "error": text}),
+            });
+            assert_eq!(
+                (ended[0].kind, ended[0].status, ended[0].detail.as_deref()),
+                ("tool", "declined", Some(DENIED_STEP_DETAIL))
+            );
+            let shown = serde_json::to_string(log.steps()).unwrap();
+            assert!(!shown.contains("without --force") && !shown.contains("said why"), "{shown}");
+        }
+    }
+
     /// 27b: a first no tells the bot not to try another way; a call refused because of an earlier
     /// no says so, and is recorded as a denial (no extra reminder, nothing claimed done).
     #[test]

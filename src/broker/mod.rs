@@ -181,6 +181,11 @@ impl PermissionBroker {
         }
     }
 
+    /// PROOF STUB (29o, do not merge): 8888ee7b keeps no Deny reasons.
+    pub fn deny_reasons_held(&self) -> usize {
+        0
+    }
+
     /// Drops a pending ticket without a decision; its waiter sees the channel close.
     pub async fn cancel(&self, ticket_id: &str) -> bool {
         self.pending.lock().await.remove(ticket_id).is_some()
