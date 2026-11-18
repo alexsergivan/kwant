@@ -47,7 +47,7 @@ const btn =
 const primary =
   'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50';
 const danger =
-  'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 transition-colors disabled:opacity-50';
+  'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-700 transition-colors disabled:opacity-50';
 const card = 'rounded-xl border border-zinc-800 bg-zinc-950/60';
 
 /** One line under each source in "Bring a bot from…". */
