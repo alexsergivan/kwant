@@ -191,8 +191,19 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
   // 28r: what was last written into the address field, and for which tab (see `fieldKey` below)
-  // 28x: `typed` marks the person's own text, which only a real change of address may replace
-  const [written, setWritten] = useState<{ key: string; url: string; typed?: boolean } | null>(null);
+  const [written, setWritten] = useState<{ key: string; url: string } | null>(null);
+  // 29f: what the person typed, per tab (same keys), apart from what a stream wrote, so another tab's stream
+  // never reaches it (Rigel's Q4). Only a new url (or page) from that tab's own stream replaces it (28x/28y).
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  const dropTyped = useCallback((key: string) => setTyped((t) => {
+    if (!(key in t)) return t;
+    const rest = { ...t };
+    delete rest[key];
+    return rest;
+  }), []);
+  // 29f: the url each tab's own stream last reported since the pane opened. A tab you come back to reports
+  // its address again on a new socket; the same url is not a change, so what you typed there stays.
+  const heard = useRef(new Map<string, string>());
   // No event fires when the browser catches a login, so a new screenshot or page loads the list again.
   const passwords = useSavedPasswords(teamId, `${activeUrl}|${screenshotBase64?.length ?? 0}|${screenshotBase64?.slice(-32) ?? ''}`);
   const savedCount = passwords.logins.length;
@@ -319,20 +330,49 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [fieldSeen, setFieldSeen] = useState(fieldKey);
   if (fieldSeen !== fieldKey) {
     setFieldSeen(fieldKey);
-    if (written && !written.typed && written.key === fieldSeen) setWritten(null);
+    if (written && written.key === fieldSeen) setWritten(null);
   }
-  const inputUrl = written?.key === fieldKey
+  const inputUrl = typed[fieldKey] ?? (written?.key === fieldKey
     ? written.url
-    : chosenPage ? (isBlankPage(pageInfo?.url) ? '' : pageInfo?.url ?? '') : pagesKnown ? activeUrl : '';
-  const setInputUrl = (url: string) => setWritten({ key: fieldKey, url, typed: true });
+    : chosenPage ? (isBlankPage(pageInfo?.url) ? '' : pageInfo?.url ?? '') : pagesKnown ? activeUrl : '');
+  const setInputUrl = (url: string) => setTyped((t) => ({ ...t, [fieldKey]: url }));
   // Then the stream takes over, but only the chosen page's own: a late message from the page just left
   // never writes its address. A blank tab's own about:blank keeps the field empty (28u), as its chip says
   // "nothing open"; pageUrl keeps the raw value for the blank check and the picture. 28y: only a new url or page
   // writes it; a title that changes on its own ("(3) Inbox") never reaches the field or what the person typed.
   useEffect(() => {
-    if (stream.location?.url && stream.location.page === chosenPage) setWritten({ key: fieldKey, url: isBlankPage(stream.location.url) ? '' : stream.location.url });
+    const url = stream.location?.url;
+    if (!url || stream.location?.page !== chosenPage) return;
+    setWritten({ key: fieldKey, url: isBlankPage(url) ? '' : url });
+    if (heard.current.get(fieldKey) !== url) dropTyped(fieldKey);
+    heard.current.set(fieldKey, url);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream.location?.url, stream.location?.page]);
+  // 29f: a closed pane starts over (a reopened stream writes the address, as 28x/28y decided); a closed page's
+  // typed text goes with it, and another team's pane remembers nothing of this one.
+  useEffect(() => {
+    if (!isOpen) heard.current.clear();
+  }, [isOpen]);
+  useEffect(() => {
+    if (!pageKeys) return;
+    const open = new Set(pageKeys.map((p) => `page:${p}`));
+    for (const key of [...heard.current.keys()]) if (key.startsWith('page:') && !open.has(key)) heard.current.delete(key);
+    setTyped((t) => {
+      const gone = Object.keys(t).filter((key) => key.startsWith('page:') && !open.has(key));
+      if (!gone.length) return t;
+      const rest = { ...t };
+      for (const key of gone) delete rest[key];
+      return rest;
+    });
+  }, [pageKeys]);
+  const typedTeam = useRef(teamId);
+  useEffect(() => {
+    if (typedTeam.current === teamId) return;
+    typedTeam.current = teamId;
+    heard.current.clear();
+    setTyped({});
+    setWritten(null);
+  }, [teamId]);
   // The pane's own stream knows each page's title too, so the trail can name pages the bot opened
   useEffect(() => {
     noteTitle(stream.location?.url, stream.location?.title);
@@ -341,7 +381,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // The app's last known address is any bot's, not the selected tab's: it writes the field only when no
   // page is chosen (an older server with no pages route)
   useEffect(() => {
-    if (!chosenPage && pagesKnown) setWritten({ key: fieldKey, url: activeUrl });
+    if (!chosenPage && pagesKnown) {
+      setWritten({ key: fieldKey, url: activeUrl });
+      dropTyped(fieldKey);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeUrl]);
 
@@ -791,6 +834,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     }
                     if (isControlMode) stream.send({ action: 'navigate', url: target }, true);
                     else onNavigate(target, chosenPage);
+                    // 29f (Rigel's Q2): the field goes back to the page and shows the full address it was sent to,
+                    // even when the page was already there and no new url comes
+                    setWritten({ key: fieldKey, url: target });
+                    dropTyped(fieldKey);
                   }
                 }}
                 placeholder="https://..."

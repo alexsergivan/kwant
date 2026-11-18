@@ -5,6 +5,8 @@
 // stream-written address until its own stream spoke again.
 // 28y title-change-keeps-typing (Mira, typed-address-stays/design-check.md:19; Rigel's Q1): a page whose title
 // changes on its own no longer wipes what the person types; only a new url or page writes the field.
+// 29f typed-text-own-tab (Rigel's Q4 and R6; his Q2): typed text belongs to its tab, so another tab's stream never
+// wipes it; Enter hands the field back to the page and shows the full address it was sent to.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -214,5 +216,98 @@ test('text the person typed is kept when they leave the tab and come back', asyn
     await settle();
     click(m.host, 'x4#ben#c1');
     assert.equal(field(m.host).value, 'booktun.ing', 'the typed text is still there on return');
+  } finally { m.done(); }
+});
+
+test("29f Q4: typed on Ben, Ann's own stream reports, back on Ben: the typed text is still there", async () => {
+  const k = threeTabs('x6');
+  answer = k.LIST;
+  const m = mount({ teamId: 'x6', browsingBot: 'Ben', botNames: NAMES, activeUrl: OTHER, onNavigate: () => {} });
+  try {
+    await settle();
+    assert.equal(currentTab(m.host), 'x6#ben#c1');
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/cart', 'Cart');
+    setVal(field(m.host), 'booktun.ing');
+    click(m.host, 'x6#ann#c2');
+    await settle();
+    await tick(sockets.at(-1), 'https://news.example.com/today', 'News today');
+    assert.equal(field(m.host).value, 'https://news.example.com/today', "Ann's own address under her tab");
+    click(m.host, 'x6#ben#c1');
+    assert.equal(field(m.host).value, 'booktun.ing', 'the tap render shows what was typed on Ben');
+    await settle();
+    // Ben's new socket reports where Ben still is: the same url is no change, the typed text stays
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/cart', 'Cart');
+    assert.equal(field(m.host).value, 'booktun.ing', "Ben's own same-url report keeps it");
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/cart', 'Cart');
+    assert.equal(field(m.host).value, 'booktun.ing', 'and so does the 2 s tick');
+    // A new url from Ben's own stream still replaces it
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/checkout', 'Checkout');
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail/checkout');
+  } finally { m.done(); }
+});
+
+test("29f: Ben's page moved while the person was on Ann: back on Ben, his new url replaces the typed text", async () => {
+  const k = threeTabs('x7');
+  answer = k.LIST;
+  const m = mount({ teamId: 'x7', browsingBot: 'Ben', botNames: NAMES, activeUrl: OTHER, onNavigate: () => {} });
+  try {
+    await settle();
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/cart', 'Cart');
+    setVal(field(m.host), 'booktun.ing');
+    click(m.host, 'x7#ann#c2');
+    await settle();
+    await tick(sockets.at(-1), 'https://news.example.com/', 'News');
+    click(m.host, 'x7#ben#c1');
+    await settle();
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/paid', 'Paid');
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail/paid', 'a new url from his own stream wins');
+  } finally { m.done(); }
+});
+
+test("29f: a closed page forgets what was typed on it", async () => {
+  const k = threeTabs('x8');
+  answer = k.LIST;
+  const m = mount({ teamId: 'x8', browsingBot: 'Ben', botNames: NAMES, activeUrl: OTHER, onNavigate: () => {} });
+  try {
+    await settle();
+    click(m.host, 'x8#ann#c2');
+    await settle();
+    setVal(field(m.host), 'booktun.ing');
+    click(m.host, 'x8#ben#c1');
+    await settle();
+    // Ann's page closes, then a page with the same key opens again: it starts from its own address
+    answer = { ...k.LIST, pages: [k.SHARED, k.BEN] };
+    pane.notifyBrowserPages('x8');
+    await settle(400);
+    answer = k.LIST;
+    pane.notifyBrowserPages('x8');
+    await settle(400);
+    click(m.host, 'x8#ann#c2');
+    assert.equal(field(m.host).value, 'https://news.example.com/', 'no typed text left from the closed page');
+  } finally { m.done(); }
+});
+
+test("29f Q2: Enter on the page's own address without https shows the full address, and the tick keeps it", async () => {
+  const k = threeTabs('x9');
+  answer = k.LIST;
+  const went = [];
+  const m = mount({ teamId: 'x9', browsingBot: 'Ben', botNames: NAMES, activeUrl: OTHER, onNavigate: (url, page) => went.push([url, page]) });
+  try {
+    await settle();
+    const ben = sockets.at(-1);
+    await tick(ben, 'https://shop.example.com/trail/ridgeline-2p', 'Ridgeline 2P Tent');
+    setVal(field(m.host), 'shop.example.com/trail/ridgeline-2p');
+    pane.flushSync(() => field(m.host).dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    assert.deepEqual(went, [['https://shop.example.com/trail/ridgeline-2p', 'x9#ben#c1']]);
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail/ridgeline-2p', 'the full address right after Enter');
+    // The page was already there: the 2 s tick brings the same url, and the field stays in step
+    await tick(ben, 'https://shop.example.com/trail/ridgeline-2p', 'Ridgeline 2P Tent');
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail/ridgeline-2p');
+    // Enter to a new place: the page's own report of where it landed shows
+    setVal(field(m.host), 'shop.example.com/trail');
+    pane.flushSync(() => field(m.host).dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail');
+    await tick(ben, 'https://shop.example.com/trail/', 'Trail');
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail/');
   } finally { m.done(); }
 });
