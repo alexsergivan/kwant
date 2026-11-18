@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.24] - 2026-11-18
+
+kwant 0.9.24: a Deny that reads as your no, not as a failed step, replies that keep the order you sent your messages in, no grey flash when the bot browser switches pages, a read-only check of what your bots ran without asking and address bars that show their own tab's page.
+
+### Added
+- **kwnt run-check** (new): one read-only command that looks through your own history and lists any tool step a bot ran with no approval card, and any card a bot asked again after you said no with nothing from you since. It reads only and changes nothing. It covers the last 7 days by default; `--since`, `--bot`, `--json` and `--strict` (exit 1 when it finds something) narrow it or put it in a script. (#798)
+
+### Changed
+- **Your no reads as a no.** When you press **Deny** on an approval card, the step you refused now reads **You said no** in calm grey, with the reason **You said no; nothing ran**, and the reply's Details say **you said no to 1** instead of "1 failed". A plain Deny no longer turns the reply's Details rose with "a step failed" or adds "A step failed, so check this before relying on it." under the reply. Real failures look the same as before, and replies saved before the update read the same way. (#790)
+
+### Fixed
+- **Replies keep your order.** Messages you send to a bot while it waits on an approval card are now answered in the order you sent them, in a chat or a thread, and also when the card times out. Before, the replies could come back shuffled, so a short answer like "Teal." didn't say which question it answered. Nothing is lost or merged, as before. (#787)
+- Switching the bot browser to another page's tab no longer shows an empty light-grey "Finished" card for a moment first: the pane stays dark until that page's own picture arrives, then shows the page. (#795)
+- Each browser tab's address bar shows its own page's address, never the other tab's (#810)
+
 ## [Mac 0.9.23] - 2026-11-18
 
 kwant 0.9.23: pictures from your tools saved in the chat, a Deny that holds until you write again, clearer Home Assistant asks and a tidier Home Assistant sheet on a phone, buttons that stay readable on hover and in amber and House no longer claims a home change that didn't happen.
