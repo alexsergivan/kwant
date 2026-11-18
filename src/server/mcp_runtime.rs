@@ -557,14 +557,7 @@ impl BrokerApprover {
         let decision = tokio::time::timeout(self.timeout, rx).await;
         guard.id = None;
         super::scheduler::approval_wait(&self.events, &req.kwant_id, &chat_key, None);
-        let answered = match &decision {
-            Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => {
-                Some("ok")
-            }
-            Ok(_) => Some("declined"),
-            Err(_) => None,
-        };
-        if let Some(settled) = answered {
+        if let Some(settled) = card_settles(&decision) {
             super::activity::approval_settled(&req.turn_id, &ticket, settled);
         }
         let outcome = match decision {
@@ -584,6 +577,8 @@ impl BrokerApprover {
                 self.broker.declined.record(&req.kwant_id, &self.conversation, &families, &ticket);
                 ApprovalOutcome::Denied
             }
+            // The card was withdrawn or its channel dropped (28k): nothing runs, but it wasn't
+            // the person's no, so its step settled `stopped` above
             Ok(Err(_)) => ApprovalOutcome::Denied,
             // Nobody answered: the card stays up as `waiting`, and a late Allow resumes the work
             // (see `resume_late_approval`)
@@ -654,6 +649,19 @@ pub async fn home_server_names(db: &Database, servers: &[McpServer]) -> Vec<Stri
         }
     }
     names
+}
+
+/// How an approval card's step settles once its wait ends with `decision`: "ok" on an Allow,
+/// "declined" only on the person's Deny, and "stopped" when the card was withdrawn or its
+/// channel dropped with no answer (28k: nobody pressed Deny, so it isn't the person's no). `None`
+/// when the wait ran out: the timeout path settles it (`unanswered` or `stopped`).
+fn card_settles<E, T>(decision: &Result<Result<ApprovalDecision, E>, T>) -> Option<&'static str> {
+    match decision {
+        Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => Some("ok"),
+        Ok(Ok(ApprovalDecision::Deny)) => Some("declined"),
+        Ok(Err(_)) => Some("stopped"),
+        Err(_) => None,
+    }
 }
 
 /// 26f: whether `req` acts on a lock, a door, a garage door, a gate or an alarm on a Home
@@ -1525,13 +1533,19 @@ pub async fn permission_endpoint(
                     None => Ok(Default::default()),
                 },
             };
+            // 28k: the gate's refusal is its own text to the bot, and "Blocked before push" on the step
+            let held = || super::activity::refused(&session.turn_id, tool_name, mcp::PREPUSH_BLOCKED_STEP_DETAIL);
             let decision = match prepush {
-                Err(why) => json!({"behavior": "deny", "message": why}),
+                Err(why) => {
+                    held();
+                    json!({"behavior": "deny", "message": why})
+                }
                 Ok(pass) => {
                     let mut decision = decide(&session, args, smart, pass.grant.as_ref()).await;
                     if decision["behavior"] == "allow" {
                         // The override goes with the push that runs, never one the person declined
                         if let Some(why) = super::dev::prepush::use_up(&state, &pass).await {
+                            held();
                             decision = json!({"behavior": "deny", "message": why});
                         } else if let (Some(pinned), Some(input)) = (pass.pinned, decision.get_mut("updatedInput").and_then(Value::as_object_mut)) {
                             // What goes is the commit kwant checked, even if a parallel call commits
@@ -2095,5 +2109,54 @@ mod declined_tests {
         session.shutdown().await;
         finish_turn(&e.state, &token).await;
         serve.abort();
+    }
+}
+
+#[cfg(test)]
+mod card_settles_tests {
+    use super::*;
+
+    /// 28k: only the person's Deny settles a card `declined`. A card that was withdrawn, or whose
+    /// channel dropped, settles `stopped`: nobody pressed Deny. The bot's outcome is `Denied`
+    /// either way (nothing runs), and it hears the same text.
+    #[tokio::test]
+    async fn a_withdrawn_card_settles_stopped_and_only_a_deny_settles_declined() {
+        let broker = PermissionBroker::new();
+        let ask = |id: &str| ApprovalRequest {
+            id: id.into(),
+            kwant_id: "k1".into(),
+            tool_name: "Bash".into(),
+            details: Value::Null,
+        };
+        let wait = |rx: tokio::sync::oneshot::Receiver<ApprovalDecision>| tokio::time::timeout(Duration::from_secs(5), rx);
+
+        // Withdrawn: the broker drops the ticket with no decision
+        let rx = broker.request_approval(ask("apr_withdrawn")).await;
+        assert!(broker.cancel("apr_withdrawn").await);
+        let withdrawn = wait(rx).await;
+        assert!(matches!(withdrawn, Ok(Err(_))), "the waiter sees the channel close");
+        assert_eq!(card_settles(&withdrawn), Some("stopped"));
+
+        // The person pressed Deny
+        let rx = broker.request_approval(ask("apr_deny")).await;
+        assert!(broker.resolve("apr_deny", ApprovalDecision::Deny).await);
+        assert_eq!(card_settles(&wait(rx).await), Some("declined"));
+
+        // Allow, once or for the session
+        for d in [ApprovalDecision::AllowOnce, ApprovalDecision::AlwaysAllowSession] {
+            let rx = broker.request_approval(ask("apr_ok")).await;
+            assert!(broker.resolve("apr_ok", d).await);
+            assert_eq!(card_settles(&wait(rx).await), Some("ok"));
+        }
+
+        // The wait ran out: the timeout path settles it, not this
+        let rx = broker.request_approval(ask("apr_slow")).await;
+        let ran_out = tokio::time::timeout(Duration::from_millis(1), rx).await;
+        assert!(ran_out.is_err());
+        assert_eq!(card_settles(&ran_out), None);
+
+        // What the bot hears doesn't change: a withdrawn card and a Deny are both `Denied`
+        assert_eq!(ApprovalOutcome::Denied.refusal_text(), mcp::DENIED_TEXT);
+        assert_eq!(ApprovalOutcome::Denied.record_status(), "denied");
     }
 }
