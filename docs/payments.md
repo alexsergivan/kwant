@@ -29,6 +29,25 @@ every MCP tool, through claude's permission prompt and the MCP gateway), in
   `search`, …): Stripe, PayPal, Square, Wise, Coinbase, Braintree, Adyen, Revolut, Mollie,
   Paddle, Lemon Squeezy, Razorpay, GoCardless, Klarna, Venmo, Cash App, Chargebee, Recurly,
   Payoneer, Checkout.com, Authorize.net, Plaid, MoonPay, Kraken, Binance.
+- Paid generations (since 26h): a tool that spends the person's credits on an image and video app.
+  The app is known by the server's name or its address, never by the tool name alone, so a
+  shop's or a local model's `generate_image` doesn't ask.
+  - Black Forest Labs (FLUX): a server named `flux`, `bfl` or `black-forest-labs`, or at
+    `mcp.bfl.ai` or any other `*.bfl.ai` address. `generate_image`, `generate_variations`, `vto`,
+    `generate_video`, `enhance_video`, `upscale_video`, `edit_video`, and any new tool there that
+    doesn't start with a read verb.
+  - Picsart: a server named `picsart`, or at `api.picsart.com` or any other `*.picsart.com`
+    address. `picsart_generate`, `picsart_remove_bg`, `picsart_change_bg`, `picsart_enhance`,
+    `picsart_vectorize`, `picsart_media_contact_sheet` and `picsart_media_export`. Its scene edits
+    (`picsart_media_apply_*`) and drive cost nothing and don't ask.
+  - Reads never ask: `get_credits`, `get_history`, `get_result`, `list_skills`, `get_skill`,
+    `request_upload_url`; `picsart_credits`, `picsart_job_status`, `picsart_list_models`,
+    `picsart_model_catalog`, `picsart_model_params`, `picsart_preflight`.
+
+  The card says whose credits the call uses ("This uses your Black Forest Labs credits:
+  generate_image", `details.credits`) and never shows a price: kwnt doesn't know it. A server
+  someone renamed (say `images` at `mcp.bfl.ai`) is still known by its address, also when an
+  agent CLI asks for the call (`credit_floor` looks the bot's server up).
 - Any other tool whose name has a pay word (`pay`, `payment`, `payout`, `purchase`, `checkout`
   or `check_out`, `buy`, `charge`, `donate`, …), a money move (`send`/`transfer`/`withdraw` with
   `money`, `funds`, `cash`, `crypto`, `btc`, `usdc`, `usd`, `stablecoin`, …), or an order step
@@ -158,6 +177,7 @@ store's `set_limit {token: "<32-character base58 key>", value: 100}`). That's ac
 
 ## Tests
 
-`cargo test --test payment_floor_test`, `cargo test --test browser_pay_gate_test` (a real
+`cargo test --test payment_floor_test`, `cargo test --test mcp_media_test` (paid generations on
+an offline FLUX-shaped server), `cargo test --test browser_pay_gate_test` (a real
 Chrome on local card pages; `-- --ignored` also walks saucedemo.com to "Finish") and the tables in `src/mcp/payment_floor.rs`
 (`cargo test --lib payment_floor`).

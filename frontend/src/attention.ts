@@ -51,14 +51,20 @@ export function awayCtx(item: Pick<AwayItem, 'kwant_id' | 'link'>): string {
   return 'thread' in t ? t.thread : 'channel' in t ? t.channel : t.direct;
 }
 
-export function nudgeFromAway(item: AwayItem): Nudge | null {
+/** How an away item's title reads in the pill. The app passes awayTitle (approvals.ts) so an approval says
+ * what it does ("Unlock Front door") instead of the server's "Use <tool> (<server>)"; it's passed in
+ * so this file stays free of the approval card and its imports. */
+export type TitleOf = (item: AwayItem) => string;
+const rawTitle: TitleOf = (item) => item.title;
+
+export function nudgeFromAway(item: AwayItem, titleOf: TitleOf = rawTitle): Nudge | null {
   if (item.kind !== 'question' && item.kind !== 'approval') return null;
   return {
     key: `${item.kind}:${item.id}`,
     kind: item.kind,
     kwantId: item.kwant_id,
     kwantName: item.kwant_name,
-    title: item.title,
+    title: titleOf(item),
     ctx: awayCtx(item),
     away: item,
   };
@@ -87,14 +93,14 @@ export function shouldPill(n: Pick<Nudge, 'ctx'>, view: AttentionView): boolean 
  * app opens is shown by the badge, title and Inbox, not by a pill); after that only ids it has
  * never seen are arrivals.
  */
-export function createArrivals() {
+export function createArrivals(titleOf: TitleOf = rawTitle) {
   let primed = false;
   const seen = new Set<string>();
   const steps = new Map<string, number>();
   return {
     /** The waiting list from /api/away: the new items, in the server's order (newest first). */
     fromAway(items: readonly AwayItem[]): Nudge[] {
-      const nudges = items.map(nudgeFromAway).filter((n): n is Nudge => !!n);
+      const nudges = items.map((i) => nudgeFromAway(i, titleOf)).filter((n): n is Nudge => !!n);
       const fresh = primed ? nudges.filter((n) => !seen.has(n.key)) : [];
       for (const n of nudges) seen.add(n.key);
       primed = true;

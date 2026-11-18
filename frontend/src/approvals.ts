@@ -2,7 +2,7 @@
 // reconnect, by `GET /api/away`'s waiting items, so a card never depends on the page having been
 // open when the bot asked. Pure helpers, shared by the app and the node tests.
 
-import { approvalAction, type PendingApproval } from './components/ModernApprovalCard';
+import { approvalAction, homeView, type PendingApproval } from './components/ModernApprovalCard';
 import type { AwayItem, AwayLink } from './away';
 
 /** A card plus where it belongs: the asking bot and, when the server knows it, the conversation. */
@@ -48,6 +48,23 @@ export function awayTitle(item: AwayItem): string {
   if (item.kind !== 'approval') return item.title;
   const action = approvalAction(approvalFromAway(item));
   return action.charAt(0).toUpperCase() + action.slice(1);
+}
+
+/**
+ * The one-line ask for an approval in the Needs-you strip and the sidebar pin tip: the card's own
+ * sentence ("House wants to unlock Front door"). A Home Assistant call always reads this way; any
+ * other approval only when the server sent its raw "Use <tool> (<server>)" title and no question.
+ * Null means the caller keeps its usual line (askLine).
+ */
+export function approvalLine(item: AwayItem): string | null {
+  if (item.kind !== 'approval') return null;
+  const approval = approvalFromAway(item);
+  const home = homeView(approval) !== null;
+  const raw = !(item.question ?? '').trim() && /^Use\s+\S/.test((item.title ?? '').trim());
+  if (!home && !raw) return null;
+  const action = approvalAction(approval);
+  const bot = (item.kwant_name ?? '').trim();
+  return bot ? `${bot} wants to ${action}` : action.charAt(0).toUpperCase() + action.slice(1);
 }
 
 /**

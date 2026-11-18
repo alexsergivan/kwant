@@ -5,7 +5,7 @@
     {
       "id": "home-assistant",
       "title": "Connect Home Assistant in two fields",
-      "text": "Paste your Home Assistant's address and an access token, and your bots can see and switch the devices you share with Assist. If it doesn't connect, the sheet says why in plain words.",
+      "text": "Paste your Home Assistant's address and an access token, and your bots can see and switch your devices. If it doesn't connect, the sheet says why in plain words.",
       "image": "home-assistant.webp",
       "open": null
     },
