@@ -785,7 +785,7 @@ pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, mut held: Held) -> 
     let mut opts = TurnOpts::default();
     (opts.quiet_failure, opts.purpose, opts.hook) = (true, Some(PURPOSE.into()), Some(hook.clone()));
     // The decided reply is the one the person sees: it delivers what their message asked for
-    opts.delivery = held.delivery.clone();
+    opts.delivery = held.delivery.clone().map(Box::new);
     opts.delivery_next = held.delivery_next.clone();
     opts.delivery_seen = held.delivery_seen.clone();
     opts.failed_before = held.failed_before;
