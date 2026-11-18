@@ -216,6 +216,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
         Some(Commands::RunCheck { since, bot, json, strict }) => {
+            // kwnt's own port, so a WebFetch of it reads as kwnt's (as `serve` sets it)
+            kwnt::mcp::shell_risk::set_serve_port(config.port);
             let opts = kwnt::run_check::Options { since, bot, json, strict };
             std::process::exit(kwnt::run_check::run_cli(&config.data_dir, opts).await);
         }

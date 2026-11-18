@@ -86,20 +86,36 @@ export const toolAction = (name: string, server?: string | null): string => verb
 const cap = (t: string) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 
 /**
+ * 28h: how an approval step reads once the card was answered. A card that was never answered, or a reply that
+ * stopped, doesn't claim a choice: its chip or icon already says what happened.
+ */
+const SETTLED_APPROVAL: Record<string, string> = {
+  ok: 'You said OK',
+  declined: 'You said no',
+  unanswered: 'Asked for your OK',
+  stopped: 'Asked for your OK',
+};
+
+/**
  * A step title from the server, with a raw tool name made readable. The server writes an unknown
  * tool as "Using create_pull_request (github)", and an approval as "Waiting for your approval: <that>";
- * every other title (already in words) comes back unchanged.
+ * every other title (already in words) comes back unchanged. Pass the step's status so an answered
+ * approval says what the person chose ("You said OK: running a command"), not that it still waits.
  */
-export function readableStepTitle(title: string): string {
+export function readableStepTitle(title: string, status?: string): string {
   const using = /^Using `?([A-Za-z0-9_.:-]+)`?(?: \(([^)]+)\))?$/;
   const approval = /^Waiting for your approval: (.+)$/.exec(title);
   if (approval) {
-    const inner = using.exec(approval[1].trim());
     const rest = approval[1].trim();
-    if (inner) {
-      const ha = homeAction(inner[1]);
-      if (ha) return `Waiting for your OK to ${homePhrase(ha, 'base')}`;
+    const inner = using.exec(rest);
+    const ha = inner ? homeAction(inner[1]) : null;
+    const settled = status ? SETTLED_APPROVAL[status] : undefined;
+    if (settled) {
+      // Always the -ing phrase, so every settled row reads "<what you chose>: <what it was>".
+      const what = ha ? homePhrase(ha, 'ing') : inner ? toolLabel(inner[1], inner[2]) : `${rest.charAt(0).toLowerCase()}${rest.slice(1)}`;
+      return `${settled}: ${what}`;
     }
+    if (ha) return `Waiting for your OK to ${homePhrase(ha, 'base')}`;
     return inner ? `Waiting for your OK to ${toolAction(inner[1], inner[2])}` : `Waiting for your OK: ${rest.charAt(0).toLowerCase()}${rest.slice(1)}`;
   }
   const m = using.exec(title.trim());

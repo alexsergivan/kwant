@@ -8,6 +8,7 @@ globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 const m = await loadBundled(`
   export { isBlankPage, browserFooterLabel } from './src/computerMode';
   export { VirtualMachinePane, chosenPaneTab, rememberPaneTab } from './src/components/VirtualMachinePane';
+  export { noteNoPagesRoute } from './src/useBrowserPages';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createElement } from 'react';
 `);
@@ -19,6 +20,9 @@ const settings = (mode, visible = false) => ({
   window: { visible, available: true, reason: null },
   isolates: ['browser', 'kwnt_shell'],
 });
+// One static render runs no effects, so no pages list ever answers. 28l: until it does, the pane holds the dark
+// pane; these tests are about the picture without page streams, so team k1 is an older server with no pages route.
+m.noteNoPagesRoute('k1');
 const pane = (props) =>
   m.renderToStaticMarkup(m.createElement(m.VirtualMachinePane, { isOpen: true, onClose: () => {}, teamId: 'k1', screenshotBase64: 'AAAA', ...props }));
 
