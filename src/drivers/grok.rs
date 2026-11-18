@@ -397,17 +397,23 @@ impl StreamParser {
         }
         let status = value["status"].as_str().unwrap_or_default();
         if matches!(status, "completed" | "failed" | "cancelled") && self.running.remove(&id) {
-            let error = (status != "completed").then(|| {
-                value["rawOutput"]["error"]
-                    .as_str()
-                    .or_else(|| value["error"].as_str())
-                    .unwrap_or(status)
-                    .to_string()
-            });
+            let error = (status != "completed").then(|| tool_end_reason(&value, status));
             events.push(StreamEvent::ToolEnd { id, ok: status == "completed", error });
         }
         events
     }
+}
+
+/// Why a tool grok ended as `failed` or `cancelled`: the first non-empty reason in the update,
+/// else the status word. grok 1.0.62 puts an MCP tool's error under `rawOutput.output.Error`.
+fn tool_end_reason(update: &serde_json::Value, status: &str) -> String {
+    let raw = &update["rawOutput"];
+    let output = &raw["output"];
+    [&raw["error"], &output["Error"], &output["error"], output, &update["error"]]
+        .into_iter()
+        .find_map(|v| v.as_str().map(str::trim).filter(|r| !r.is_empty()))
+        .unwrap_or(status)
+        .to_string()
 }
 
 fn parse_line(line: &str) -> Option<StreamEvent> {
@@ -659,6 +665,60 @@ include_only = ["*"]
                 "End { stop_reason: Some(\"end_turn\") }",
             ]
         );
+    }
+
+    /// The tool ends the parser reports for `lines`, as (ok, error).
+    fn tool_ends(lines: &[&str]) -> Vec<(bool, Option<String>)> {
+        let mut parser = StreamParser::default();
+        let mut events = Vec::new();
+        for line in lines {
+            events.extend(parser.push(&format!("{line}\n")));
+        }
+        events.extend(parser.finish());
+        events
+            .into_iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolEnd { ok, error, .. } => Some((ok, error)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_grok_tool_step_says_why() {
+        // Recorded from a real grok 1.0.62 run (29g probe, use_tool.ndjson lines 5-7): an MCP
+        // tool's error comes under `rawOutput.output.Error`.
+        let recorded = [
+            r#"{"type":"tool_call","toolCallId":"call_66a7b5ea","title":"use_tool","kind":"use_tool","status":"pending","toolName":"use_tool","rawInput":{"tool_name":"kwnt__github-create_or_update_file","tool_input":{"path":"a.md","content":"x"}},"content":[],"locations":[]}"#,
+            r#"{"type":"tool_call_update","toolCallId":"call_66a7b5ea","status":null,"content":[],"rawOutput":null,"locations":[]}"#,
+            r#"{"type":"tool_call_update","toolCallId":"call_66a7b5ea","status":"failed","content":[],"rawOutput":{"type":"MCP","tool_name":"github-create_or_update_file","server_name":"kwnt","output":{"Error":"kwant is checking this push (held by the pre-push gate)."},"is_error":true},"locations":[]}"#,
+        ];
+        assert_eq!(
+            tool_ends(&recorded),
+            [(false, Some("kwant is checking this push (held by the pre-push gate).".to_string()))]
+        );
+
+        let start = r#"{"type":"tool_call","toolCallId":"c","toolName":"t","status":"pending"}"#;
+        let end_of = |update: &str| {
+            let ends = tool_ends(&[start, update]);
+            assert_eq!(ends.len(), 1, "{update}");
+            ends.into_iter().next().unwrap()
+        };
+        let failed = |reason: &str| (false, Some(reason.to_string()));
+        // The shapes read before still give their reason, and `rawOutput.error` still comes first
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"failed","rawOutput":{"error":"exit status 101"}}"#), failed("exit status 101"));
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"failed","rawOutput":{"error":"first","output":{"Error":"second"}}}"#), failed("first"));
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"failed","error":"top level"}"#), failed("top level"));
+        // `output.Error`, then `output.error`, then `output` itself when it is text
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"failed","rawOutput":{"output":{"error":"lower"}}}"#), failed("lower"));
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"cancelled","rawOutput":{"output":"  stopped by the person  "},"error":"later"}"#), failed("stopped by the person"));
+        // An empty reason is skipped; with none at all the step says its status, as before
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"failed","rawOutput":{"error":" ","output":{"Error":""}},"error":"top level"}"#), failed("top level"));
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"failed","rawOutput":{"output":{"content":[]}}}"#), failed("failed"));
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"cancelled","rawOutput":null}"#), failed("cancelled"));
+        // A tool that worked has no error, whatever its output says
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"completed","rawOutput":{"output":"Error: none"}}"#), (true, None));
+        assert_eq!(end_of(r#"{"type":"tool_call_update","toolCallId":"c","status":"completed","rawOutput":{"output":{"Error":"x"}}}"#), (true, None));
     }
 
     #[test]

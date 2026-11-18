@@ -1,6 +1,7 @@
 // Today's spending stop (0.7.4): two optional daily limits, fresh tokens and dollars, in the person's
 // time zone. Past either, kwnt holds every new turn until the person presses Continue today, raises a
 // limit, or the day ends. The numbers on screen are the server's; nothing here adds or estimates spend.
+import { saidNoRun } from './routineRow';
 import { usdText } from './missions';
 import { compactTokens } from './modelUsage';
 
@@ -233,6 +234,8 @@ export function routineRunNote(r: { status: string; error: string | null }): { t
   // 26d: the run row's badge already says a needs_you run waited on your approval and nothing ran.
   if (r.status === 'needs_you') return null;
   if (r.status === 'skipped' && isSpendStopReason(r.error)) return { text: ROUTINE_SKIPPED_TEXT, quiet: true };
+  // 28f: the person's own no is grey, like its badge; only a real failure's reason is rose.
+  if (r.status === 'incomplete' && saidNoRun(r.error)) return { text: r.error, quiet: true };
   return { text: r.error, quiet: false };
 }
 

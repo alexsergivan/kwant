@@ -557,14 +557,7 @@ impl BrokerApprover {
         let decision = tokio::time::timeout(self.timeout, rx).await;
         guard.id = None;
         super::scheduler::approval_wait(&self.events, &req.kwant_id, &chat_key, None);
-        let answered = match &decision {
-            Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => {
-                Some("ok")
-            }
-            Ok(_) => Some("declined"),
-            Err(_) => None,
-        };
-        if let Some(settled) = answered {
+        if let Some(settled) = card_settles(&decision) {
             super::activity::approval_settled(&req.turn_id, &ticket, settled);
         }
         let outcome = match decision {
@@ -579,11 +572,15 @@ impl BrokerApprover {
                 self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
                 ApprovalOutcome::Allowed
             }
-            // 27b: only the person's own no is remembered, not a dropped card
+            // 27b: only the person's own no is remembered, not a dropped card. A card that was
+            // withdrawn or whose channel dropped (28k) runs nothing either, but it wasn't the
+            // person's no, so its step settled `stopped` above
             Ok(Ok(ApprovalDecision::Deny)) => {
                 self.broker.declined.record(&req.kwant_id, &self.conversation, &families, &ticket);
                 ApprovalOutcome::Denied
             }
+            // The card was withdrawn or its channel dropped (28k): nothing runs, but it wasn't
+            // the person's no, so its step settled `stopped` above
             Ok(Err(_)) => ApprovalOutcome::Denied,
             // Nobody answered: the card stays up as `waiting`, and a late Allow resumes the work
             // (see `resume_late_approval`)
@@ -641,19 +638,36 @@ pub async fn credit_floor(db: &Database, req: &ToolApprovalRequest) -> Option<St
 
 /// 27e: the names (in kwant) of the turn's `servers` that are Home Assistant's: by what each
 /// said on kwnt's last connection to it in this run, else by what its last test stored. A server
-/// kwnt never heard from isn't counted (the delivery check only adds a continuation for them).
+/// kwnt never heard from counts when its address is Home Assistant's MCP path (28m: on the Claude
+/// CLI the CLI connects, not kwnt, so a new server is often one kwnt never heard from), see
+/// [`mcp::home_floor::counts_as_home_assistant`]. The delivery check only adds a continuation.
 pub async fn home_server_names(db: &Database, servers: &[McpServer]) -> Vec<String> {
     let mut names = Vec::new();
     for server in servers.iter().filter(|s| s.name != mcp::SELF_SERVER_NAME && s.name != mcp::RESERVED_SERVER_NAME) {
-        let reported = match mcp::home_floor::seen(&server.id) {
-            Some(seen) => seen.reported,
-            None => db.mcp_reported_name(&server.id).await.ok().flatten().flatten(),
+        let heard = match mcp::home_floor::seen(&server.id) {
+            Some(seen) => Some(seen.reported),
+            // A read that failed is a server kwnt can't place: its address decides (the safe side)
+            None => db.mcp_reported_name(&server.id).await.ok().flatten(),
         };
-        if reported.is_some_and(|n| mcp::home_floor::is_home_assistant(&n)) {
+        let heard = heard.as_ref().map(Option::as_deref);
+        if mcp::home_floor::counts_as_home_assistant(heard, &server.transport, server.url.as_deref(), &server.args) {
             names.push(server.name.clone());
         }
     }
     names
+}
+
+/// How an approval card's step settles once its wait ends with `decision`: "ok" on an Allow,
+/// "declined" only on the person's Deny, and "stopped" when the card was withdrawn or its
+/// channel dropped with no answer (28k: nobody pressed Deny, so it isn't the person's no). `None`
+/// when the wait ran out: the timeout path settles it (`unanswered` or `stopped`).
+fn card_settles<E, T>(decision: &Result<Result<ApprovalDecision, E>, T>) -> Option<&'static str> {
+    match decision {
+        Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => Some("ok"),
+        Ok(Ok(ApprovalDecision::Deny)) => Some("declined"),
+        Ok(Err(_)) => Some("stopped"),
+        Err(_) => None,
+    }
 }
 
 /// 26f: whether `req` acts on a lock, a door, a garage door, a gate or an alarm on a Home
@@ -1525,13 +1539,22 @@ pub async fn permission_endpoint(
                     None => Ok(Default::default()),
                 },
             };
+            // 28k: the gate's refusal is its own text to the bot, and "Blocked before push" on the step.
+            // 28q: keyed to this call's own tool-use id (the id claude puts on the step), so a
+            // neighbouring call of the same tool that failed on its own keeps its own reason
+            let call = args["tool_use_id"].as_str();
+            let held = || super::activity::refused(&session.turn_id, tool_name, call, &args["input"], mcp::PREPUSH_BLOCKED_STEP_DETAIL);
             let decision = match prepush {
-                Err(why) => json!({"behavior": "deny", "message": why}),
+                Err(why) => {
+                    held();
+                    json!({"behavior": "deny", "message": why})
+                }
                 Ok(pass) => {
                     let mut decision = decide(&session, args, smart, pass.grant.as_ref()).await;
                     if decision["behavior"] == "allow" {
                         // The override goes with the push that runs, never one the person declined
                         if let Some(why) = super::dev::prepush::use_up(&state, &pass).await {
+                            held();
                             decision = json!({"behavior": "deny", "message": why});
                         } else if let (Some(pinned), Some(input)) = (pass.pinned, decision.get_mut("updatedInput").and_then(Value::as_object_mut)) {
                             // What goes is the commit kwant checked, even if a parallel call commits
@@ -1611,6 +1634,12 @@ pub async fn gateway_grok_endpoint(
     gateway_rpc(&state, &headers, msg, GatewayNaming::Grok).await
 }
 
+/// The engine's own id for a gateway `tools/call` (28q): Claude Code sends its tool-use id, which
+/// its activity step carries, as `_meta["claudecode/toolUseId"]`. `None` when the engine sends none.
+fn engine_call_id(msg: &Value) -> Option<&str> {
+    msg["params"]["_meta"]["claudecode/toolUseId"].as_str().map(str::trim).filter(|id| !id.is_empty())
+}
+
 async fn gateway_rpc(
     state: &AppState,
     headers: &HeaderMap,
@@ -1647,6 +1676,7 @@ async fn gateway_rpc(
             };
             let arguments = msg["params"].get("arguments").cloned().unwrap_or_else(|| json!({}));
             let call_id = format!("gw_{}", uuid::Uuid::new_v4().simple());
+            let step_id = engine_call_id(&msg);
             let Some(tools) = session.tool_session().await else {
                 return StatusCode::UNAUTHORIZED.into_response();
             };
@@ -1657,7 +1687,7 @@ async fn gateway_rpc(
             // Dropping the call withdraws its card (or stops the forwarded call) when the turn ends
             let (caller, raw_arguments) = (session.caller(), arguments.to_string());
             let outcome = tokio::select! {
-                outcome = tools.call(&caller, &call_id, &tool_name, &raw_arguments) => outcome,
+                outcome = tools.call_step(&caller, &call_id, step_id, &tool_name, &raw_arguments) => outcome,
                 _ = session.ended.cancelled() => {
                     let (server, tool) = mcp::split_tool_name(&tool_name).unwrap_or(("", name));
                     session.ctx.record(cancelled_record(&call_id, &tool_name, server, tool, &arguments));
@@ -1708,6 +1738,23 @@ mod expired_tests {
         assert_eq!((p.direct_kwant_id, p.thread_id.as_deref()), (None, Some("t1")));
         let p = expired_place(&json!({"channel_id": "c1"}), "k1");
         assert_eq!((p.direct_kwant_id, p.channel_id.as_deref()), (None, Some("c1")));
+    }
+}
+
+#[cfg(test)]
+mod engine_call_id_tests {
+    use super::*;
+
+    /// 28q: the gateway keys a held push's step note to Claude Code's tool-use id, which it sends
+    /// on `tools/call` as `_meta["claudecode/toolUseId"]`; an engine that sends none gives `None`.
+    #[test]
+    fn the_gateway_reads_the_engines_own_call_id() {
+        let call = |meta: Value| json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "github__push", "arguments": {}, "_meta": meta}});
+        assert_eq!(engine_call_id(&call(json!({"claudecode/toolUseId": "toolu_01AbC"}))), Some("toolu_01AbC"));
+        assert_eq!(engine_call_id(&call(json!({"progressToken": 1}))), None);
+        assert_eq!(engine_call_id(&call(json!({"claudecode/toolUseId": " "}))), None);
+        assert_eq!(engine_call_id(&call(json!({"claudecode/toolUseId": 7}))), None);
+        assert_eq!(engine_call_id(&json!({"method": "tools/call", "params": {"name": "github__push"}})), None);
     }
 }
 
@@ -2095,5 +2142,54 @@ mod declined_tests {
         session.shutdown().await;
         finish_turn(&e.state, &token).await;
         serve.abort();
+    }
+}
+
+#[cfg(test)]
+mod card_settles_tests {
+    use super::*;
+
+    /// 28k: only the person's Deny settles a card `declined`. A card that was withdrawn, or whose
+    /// channel dropped, settles `stopped`: nobody pressed Deny. The bot's outcome is `Denied`
+    /// either way (nothing runs), and it hears the same text.
+    #[tokio::test]
+    async fn a_withdrawn_card_settles_stopped_and_only_a_deny_settles_declined() {
+        let broker = PermissionBroker::new();
+        let ask = |id: &str| ApprovalRequest {
+            id: id.into(),
+            kwant_id: "k1".into(),
+            tool_name: "Bash".into(),
+            details: Value::Null,
+        };
+        let wait = |rx: tokio::sync::oneshot::Receiver<ApprovalDecision>| tokio::time::timeout(Duration::from_secs(5), rx);
+
+        // Withdrawn: the broker drops the ticket with no decision
+        let rx = broker.request_approval(ask("apr_withdrawn")).await;
+        assert!(broker.cancel("apr_withdrawn").await);
+        let withdrawn = wait(rx).await;
+        assert!(matches!(withdrawn, Ok(Err(_))), "the waiter sees the channel close");
+        assert_eq!(card_settles(&withdrawn), Some("stopped"));
+
+        // The person pressed Deny
+        let rx = broker.request_approval(ask("apr_deny")).await;
+        assert!(broker.resolve("apr_deny", ApprovalDecision::Deny).await);
+        assert_eq!(card_settles(&wait(rx).await), Some("declined"));
+
+        // Allow, once or for the session
+        for d in [ApprovalDecision::AllowOnce, ApprovalDecision::AlwaysAllowSession] {
+            let rx = broker.request_approval(ask("apr_ok")).await;
+            assert!(broker.resolve("apr_ok", d).await);
+            assert_eq!(card_settles(&wait(rx).await), Some("ok"));
+        }
+
+        // The wait ran out: the timeout path settles it, not this
+        let rx = broker.request_approval(ask("apr_slow")).await;
+        let ran_out = tokio::time::timeout(Duration::from_millis(1), rx).await;
+        assert!(ran_out.is_err());
+        assert_eq!(card_settles(&ran_out), None);
+
+        // What the bot hears doesn't change: a withdrawn card and a Deny are both `Denied`
+        assert_eq!(ApprovalOutcome::Denied.refusal_text(), mcp::DENIED_TEXT);
+        assert_eq!(ApprovalOutcome::Denied.record_status(), "denied");
     }
 }
