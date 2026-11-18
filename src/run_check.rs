@@ -1,6 +1,9 @@
 //! `kwnt run-check`: reads back what bots ran and points out what the approvals log should
 //! never show. Rule 1, "ran with no card": a tool step that should have gone through kwnt's
-//! approval gate, with no approvals row for it.
+//! approval gate, with no approvals row for it. Rule 2, "asked again after a no": a card (or a
+//! call that ran without one) for a bot in a chat whose kind of call ([`families`]) the person
+//! declined there before, with no message from the person in between. That is the rule 27b's
+//! gate keeps; this shows whether it held.
 //!
 //! Read only: the database is opened read-only, nothing is written, and there are no model
 //! calls and no network. [`check`] is pure: the loader ([`load`]) and the printing
@@ -15,9 +18,12 @@
 //!   step's time window, for the same bot, tool and chat. A read-only command claude didn't ask
 //!   about, a late Allow used by the resumed turn (within the grant's 30 minutes) and a tool the
 //!   person chose "Always allow" for earlier in the same chat don't count as findings.
+//!
+//! [`families`]: crate::mcp::declined::families
 
 use crate::drivers::activity::redact;
 use crate::mcp::builtin_tools::{self, ToolGroup};
+use crate::mcp::{declined, BuiltinCall, ToolApprovalRequest};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
@@ -79,12 +85,27 @@ pub struct Approval {
     pub at: DateTime<Utc>,
     /// From `resume`; rows saved with no `resume` take it from a row of the same turn.
     pub chat: Option<String>,
+    /// How the chat reads in the output; filled like `chat`.
+    pub chat_label: Option<String>,
+    /// The bot's name.
+    pub bot: String,
+    /// A card the person was shown: saved with a `resume` chat. Rows kwnt closed itself (ran
+    /// without asking, refused, a customer's refused call) have none.
+    pub card: bool,
+}
+
+impl Approval {
+    /// The person said no on this card (not a call kwnt refused on its own).
+    fn persons_no(&self) -> bool {
+        self.card && self.status == "denied" && self.parameters.get("declined_before").is_none()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Rule {
     RanWithNoCard,
+    AskedAgainAfterNo,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -95,9 +116,18 @@ pub struct Finding {
     pub bot_id: String,
     pub chat: String,
     pub tool: String,
-    /// Redacted, at most [`MAX_TITLE`] characters.
+    /// Redacted, at most [`MAX_TITLE`] characters. Rule 2: the call's command, address or path.
     pub title: String,
+    /// Rule 1: the reply the step is in.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub reply_id: String,
+    /// Rule 2: the approvals row asked again, and the earlier card the person said no on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declined_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declined_at: Option<DateTime<Utc>>,
 }
 
 /// Steps that ran without a card on purpose, by reason.
@@ -132,6 +162,8 @@ pub struct Report {
     pub steps: usize,
     /// Of those, the ones an approvals row covers.
     pub with_card: usize,
+    /// Cards the person said no on in the window (rule 2 looks after each).
+    pub nos: usize,
     pub by_design: ByDesign,
     pub findings: Vec<Finding>,
 }
@@ -210,9 +242,21 @@ fn row_command(row: &Approval) -> Option<&str> {
     row.parameters.pointer("/arguments/command").and_then(Value::as_str)
 }
 
-/// Rule 1 over already-loaded rows. `replies` are the ones to judge; `approvals` should hold every
-/// row (earlier "Always allow" choices and late Allows count).
-pub fn check(replies: &[Reply], _person_messages: &[PersonMessage], approvals: &[Approval]) -> Report {
+/// Both rules over already-loaded rows, with every approvals row looked at. `replies` are the
+/// ones to judge; `approvals` should hold every row (earlier "Always allow" choices, late Allows
+/// and earlier nos count).
+pub fn check(replies: &[Reply], person_messages: &[PersonMessage], approvals: &[Approval]) -> Report {
+    check_since(replies, person_messages, approvals, None, None)
+}
+
+/// [`check`], with rule 2 judging only the rows at or after `since`, and of bot `bot_id`.
+pub fn check_since(
+    replies: &[Reply],
+    person_messages: &[PersonMessage],
+    approvals: &[Approval],
+    since: Option<DateTime<Utc>>,
+    bot_id: Option<&str>,
+) -> Report {
     let mut rows = approvals.to_vec();
     fill_chats(&mut rows);
     let mut used = vec![false; rows.len()];
@@ -344,8 +388,15 @@ pub fn check(replies: &[Reply], _person_messages: &[PersonMessage], approvals: &
             tool: step.tool.clone().unwrap_or_default(),
             title: clean_title(&step.title),
             reply_id: reply.id.clone(),
+            approval_id: None,
+            declined_id: None,
+            declined_at: None,
         });
     }
+
+    let judged = |row: &Approval| since.is_none_or(|c| row.at >= c) && bot_id.is_none_or(|b| row.bot_id == b);
+    let nos = rows.iter().filter(|r| r.persons_no() && judged(r)).count();
+    found.extend(asked_again(&rows, person_messages).into_iter().filter(|(i, _)| judged(&rows[*i])).map(|(_, f)| f));
     found.sort_by(|a, b| (a.at, &a.bot).cmp(&(b.at, &b.bot)));
 
     Report {
@@ -353,9 +404,92 @@ pub fn check(replies: &[Reply], _person_messages: &[PersonMessage], approvals: &
         replies: replies.len(),
         steps,
         with_card,
+        nos,
         by_design,
         findings: found,
     }
+}
+
+/// Rule 2 over chat-filled rows: each row (a card, or a call that ran without asking) whose
+/// families overlap an earlier no by the person to the same bot in the same chat, with no message
+/// from the person in that chat after the no. With the index of the row asked again.
+///
+/// The no's time is its card's: the table keeps no answer time, so a message the person wrote
+/// while the card waited counts as after the no.
+fn asked_again(rows: &[Approval], person_messages: &[PersonMessage]) -> Vec<(usize, Finding)> {
+    let families: Vec<Vec<String>> = rows.iter().map(row_families).collect();
+    let mut out = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        // Rows kwnt refused on its own (27b's own refusal, kwnt's secrets) are the rule holding
+        let asked = row.card || row.status == "auto_allowed";
+        let Some(chat) = row.chat.as_deref().filter(|_| asked && !families[i].is_empty()) else { continue };
+        let no = rows
+            .iter()
+            .enumerate()
+            .filter(|(j, e)| {
+                e.persons_no()
+                    && e.at < row.at
+                    && e.bot_id == row.bot_id
+                    && e.chat.as_deref() == Some(chat)
+                    && families[*j].iter().any(|f| families[i].contains(f))
+                    && !person_messages.iter().any(|m| m.chat == chat && m.at > e.at && m.at <= row.at)
+            })
+            .max_by_key(|(_, e)| e.at);
+        let Some((_, no)) = no else { continue };
+        out.push((
+            i,
+            Finding {
+                rule: Rule::AskedAgainAfterNo,
+                at: row.at,
+                bot: row.bot.clone(),
+                bot_id: row.bot_id.clone(),
+                chat: row.chat_label.clone().unwrap_or_else(|| "a chat".into()),
+                tool: row.tool.clone(),
+                title: clean_title(&row_summary(row, &families[i])),
+                reply_id: String::new(),
+                approval_id: Some(row.id.clone()),
+                declined_id: Some(no.id.clone()),
+                declined_at: Some(no.at),
+            },
+        ));
+    }
+    out
+}
+
+/// What a "no" to this row's call covers, as 27b's gate reads it: the [`ToolApprovalRequest`]
+/// is rebuilt from the row's tool name and saved parameters.
+fn row_families(row: &Approval) -> Vec<String> {
+    let p = &row.parameters;
+    let text = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    let builtin = (text("source") == "claude_builtin").then(|| BuiltinCall {
+        cwd: p.get("cwd").and_then(Value::as_str).map(str::to_string),
+        outside_folder: p.get("outside_folder").and_then(Value::as_bool).unwrap_or(false),
+    });
+    let tool = Some(text("tool")).filter(|t| !t.is_empty()).unwrap_or_else(|| row.tool.clone());
+    let req = ToolApprovalRequest {
+        kwant_id: row.bot_id.clone(),
+        kwant_name: row.bot.clone(),
+        turn_id: row.turn_id.clone().unwrap_or_default(),
+        tool_name: row.tool.clone(),
+        server: if builtin.is_some() { String::new() } else { text("server") },
+        tool,
+        arguments: p.get("arguments").cloned().unwrap_or(Value::Null),
+        builtin,
+        smart: None,
+        payment: None,
+    };
+    declined::families(&req)
+}
+
+/// A row's call in a few words: its command, address or file, else what a no to it covers.
+fn row_summary(row: &Approval, families: &[String]) -> String {
+    let args = row.parameters.get("arguments").unwrap_or(&Value::Null);
+    let named = ["command", "cmd", "url", "file_path", "path"].iter().find_map(|k| match &args[*k] {
+        Value::String(s) => Some(s.clone()),
+        Value::Array(words) => Some(words.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
+        _ => None,
+    });
+    named.unwrap_or_else(|| families.join(", "))
 }
 
 /// What claude runs without asking kwnt: a command that only reads. kwnt's own list
@@ -433,8 +567,17 @@ fn fill_chats(rows: &mut [Approval]) {
             by_turn.entry(turn.clone()).or_insert_with(|| chat.clone());
         }
     }
+    let mut labels: HashMap<String, String> = HashMap::new();
+    for row in rows.iter() {
+        if let (Some(chat), Some(label)) = (&row.chat, &row.chat_label) {
+            labels.entry(chat.clone()).or_insert_with(|| label.clone());
+        }
+    }
     for row in rows.iter_mut().filter(|r| r.chat.is_none()) {
         row.chat = row.turn_id.as_ref().and_then(|t| by_turn.get(t)).cloned();
+    }
+    for row in rows.iter_mut().filter(|r| r.chat_label.is_none()) {
+        row.chat_label = row.chat.as_ref().and_then(|c| labels.get(c)).cloned();
     }
 }
 
@@ -623,15 +766,19 @@ async fn read_all(pool: &sqlx::SqlitePool, cutoff: Option<DateTime<Utc>>) -> Res
         .filter_map(|(id, turn_id, bot_id, tool, parameters, status, at, resume)| {
             let resume: Value = resume.as_deref().and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default();
             let field = |k: &str| resume.get(k).and_then(Value::as_str);
+            let chat = chat_key(field("thread_id"), field("channel_id"), field("direct_kwant_id"));
             Some(Approval {
+                bot: name_of.get(bot_id.as_str()).map_or_else(|| bot_id.clone(), |n| n.to_string()),
                 id,
                 turn_id,
                 bot_id,
                 tool,
                 parameters: parameters.as_deref().and_then(|p| serde_json::from_str(p).ok()).unwrap_or_default(),
+                card: chat.is_some() && !matches!(status.as_str(), "auto_allowed" | crate::db::approval_modes::CUSTOMER_REFUSED),
                 status,
                 at: parse_time(&at)?,
-                chat: chat_key(field("thread_id"), field("channel_id"), field("direct_kwant_id")),
+                chat_label: chat.as_deref().map(label),
+                chat,
             })
         })
         .collect();
@@ -671,13 +818,28 @@ pub fn render_text(report: &Report) -> String {
     if !parts.is_empty() {
         out.push_str(&format!("No card needed: {}.\n", parts.join(", ")));
     }
+    if report.nos > 0 {
+        out.push_str(&format!("The person said no on {}.\n", plural(report.nos, "card", "cards")));
+    }
     if report.findings.is_empty() {
         out.push_str(&format!("Nothing to flag since {since}.\n"));
         return out;
     }
-    out.push_str(&format!("\nRan with no card ({})\n", report.findings.len()));
-    for f in &report.findings {
-        out.push_str(&format!("  {} · {} · {} · {} · {}\n", when(f.at), f.bot, f.chat, f.tool, f.title));
+    let of = |rule: Rule| report.findings.iter().filter(move |f| f.rule == rule);
+    let no_card = of(Rule::RanWithNoCard).count();
+    if no_card > 0 {
+        out.push_str(&format!("\nRan with no card ({no_card})\n"));
+        for f in of(Rule::RanWithNoCard) {
+            out.push_str(&format!("  {} · {} · {} · {} · {}\n", when(f.at), f.bot, f.chat, f.tool, f.title));
+        }
+    }
+    let again = of(Rule::AskedAgainAfterNo).count();
+    if again > 0 {
+        out.push_str(&format!("\nAsked again after a no ({again})\n"));
+        for f in of(Rule::AskedAgainAfterNo) {
+            let no = f.declined_at.map(|t| t.format("%H:%M:%S").to_string()).unwrap_or_default();
+            out.push_str(&format!("  {} · {} · {} · {} · {} · no at {no}, nothing from the person since\n", when(f.at), f.bot, f.chat, f.tool, f.title));
+        }
     }
     out
 }
@@ -706,6 +868,7 @@ pub async fn run_cli(data_dir: &Path, opts: Options) -> i32 {
             return 2;
         }
     };
+    let mut bot_id = None;
     if let Some(want) = opts.bot.as_deref().map(str::trim) {
         let Some((id, _)) = loaded.bots.iter().find(|(id, name)| id == want || name.eq_ignore_ascii_case(want)) else {
             eprintln!("kwnt run-check: no bot named {want}");
@@ -713,8 +876,9 @@ pub async fn run_cli(data_dir: &Path, opts: Options) -> i32 {
         };
         let id = id.clone();
         loaded.replies.retain(|r| r.bot_id == id);
+        bot_id = Some(id);
     }
-    let mut report = check(&loaded.replies, &loaded.person_messages, &loaded.approvals);
+    let mut report = check_since(&loaded.replies, &loaded.person_messages, &loaded.approvals, cutoff, bot_id.as_deref());
     report.since = cutoff.or_else(|| loaded.replies.iter().map(|r| r.at).min());
     if opts.json {
         println!("{}", render_json(&report));
@@ -773,6 +937,9 @@ mod tests {
             status: status.into(),
             at: t(at),
             chat: chat.map(str::to_string),
+            chat_label: chat.map(|_| "chat with Forge".to_string()),
+            bot: "Forge".into(),
+            card: chat.is_some() && status != "auto_allowed",
         }
     }
 
@@ -962,6 +1129,76 @@ mod tests {
         for bad in ["", "d", "0d", "-1d", "7w", "1.5d", "99999d", "7é"] {
             assert!(bad.parse::<Since>().is_err(), "{bad}");
         }
+    }
+
+    fn shell_row(id: &str, command: &str, status: &str, at: &str) -> Approval {
+        let mut r = row(id, "Bash", status, at, Some("direct:b1"));
+        r.parameters = json!({"source": "claude_builtin", "tool": "Bash", "arguments": {"command": command}, "cwd": "/work"});
+        r
+    }
+
+    fn said(at: &str) -> PersonMessage {
+        PersonMessage { chat: "direct:b1".into(), at: t(at) }
+    }
+
+    #[test]
+    fn a_row_s_families_are_27b_s() {
+        assert_eq!(row_families(&shell_row("a", "cd x && /usr/bin/gh pr view 3", "denied", "2026-11-06 18:30:00")), vec!["sh:gh pr"]);
+        let mut mcp = row("m", "mcp__github__merge_pr", "denied", "2026-11-06 18:30:00", Some("direct:b1"));
+        mcp.parameters = json!({"source": "mcp", "server": "github", "tool": "merge_pr", "arguments": {"pr": 1}});
+        assert_eq!(row_families(&mcp), vec!["mcp:github/merge_pr"]);
+        let mut write = row("w", "Write", "denied", "2026-11-06 18:30:00", Some("direct:b1"));
+        write.parameters = json!({"source": "claude_builtin", "tool": "Write", "arguments": {"file_path": "../etc/hosts"}, "cwd": "/work"});
+        assert_eq!(row_families(&write), vec!["file:write:/etc/hosts"]);
+        // A row saved before 27b with only the arguments still reads by its tool name
+        let mut old = row("o", "Bash", "denied", "2026-11-06 18:30:00", Some("direct:b1"));
+        old.parameters = json!({"arguments": {"command": "git push"}});
+        assert_eq!(row_families(&old), vec!["sh:git push"]);
+    }
+
+    #[test]
+    fn asked_again_after_a_no_until_the_person_writes() {
+        let rows = vec![
+            shell_row("no", "gh pr view 12", "denied", "2026-11-06 18:30:26"),
+            shell_row("again", "gh pr view 12 --json title", "denied", "2026-11-06 18:33:23"),
+            shell_row("after", "gh pr view 12", "allowed_once", "2026-11-06 18:35:00"),
+        ];
+        let report = check(&[], &[said("2026-11-06 18:30:23"), said("2026-11-06 18:34:56")], &rows);
+        assert_eq!(report.nos, 2);
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        let f = &report.findings[0];
+        assert_eq!((f.rule, f.at), (Rule::AskedAgainAfterNo, t("2026-11-06 18:33:23")));
+        assert_eq!((f.approval_id.as_deref(), f.declined_id.as_deref()), (Some("again"), Some("no")));
+        assert_eq!(f.title, "gh pr view 12 --json title");
+
+        // `since` and the bot pick which rows are judged; an earlier no still counts
+        let later = check_since(&[], &[said("2026-11-06 18:34:56")], &rows, Some(t("2026-11-06 18:33:00")), None);
+        assert_eq!((later.nos, later.findings.len()), (1, 1));
+        assert!(check_since(&[], &[], &rows, None, Some("b2")).findings.is_empty());
+    }
+
+    #[test]
+    fn only_the_person_s_no_on_a_card_counts_and_only_a_call_is_asked() {
+        let no = shell_row("no", "git push", "denied", "2026-11-06 18:30:00");
+        // Another bot, another chat, another kind: not the same no
+        let mut other_bot = shell_row("b", "git push", "allowed_once", "2026-11-06 18:31:00");
+        other_bot.bot_id = "b2".into();
+        let mut other_chat = shell_row("c", "git push", "allowed_once", "2026-11-06 18:31:00");
+        other_chat.chat = Some("thread:t9".into());
+        let other_kind = shell_row("k", "git status", "allowed_once", "2026-11-06 18:31:00");
+        // kwnt's own refusal (27b, kwnt's secrets): closed, no `resume`
+        let mut refused = row("r", "Bash", "denied", "2026-11-06 18:31:00", None);
+        refused.parameters = json!({"arguments": {"command": "git push -f"}, "declined_before": "no"});
+        let report = check(&[], &[], &[no.clone(), other_bot, other_chat, other_kind, refused.clone()]);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+
+        // A refused row is no "no" either; a call that ran without asking after a no is flagged
+        let mut ran = shell_row("ran", "git push", "auto_allowed", "2026-11-06 18:32:00");
+        ran.card = false;
+        assert!(check(&[], &[], &[refused.clone(), ran.clone()]).findings.is_empty());
+        let report = check(&[], &[], &[no, ran]);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].approval_id.as_deref(), Some("ran"));
     }
 
     #[test]

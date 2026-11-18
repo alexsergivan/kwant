@@ -281,3 +281,97 @@ async fn since_leaves_out_older_replies() {
     assert_eq!(v["replies"], 1, "{v}");
     assert_eq!(v["findings"][0]["bot"], "Pebble");
 }
+
+/// A call 27b's gate refused on its own (`declined_before`): a closed row with no `resume`.
+async fn refused(dir: &Path, id: &str, bot: &str, command: &str, before: &str, at: &str) {
+    exec(
+        dir,
+        &format!(
+            "INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status, created_at) VALUES ('{id}', 'turn-{id}', '{bot}', 'Bash', '{}', 'denied', '{at}')",
+            json!({"source": "claude_builtin", "tool": "Bash", "arguments": {"command": command}, "declined_before": before})
+        ),
+    )
+    .await;
+}
+
+/// The Compass trial's Forge chat (trial-copy.db): a no to `git push`, the person writes, then
+/// three denied `gh pr view` cards. The second comes with nothing from the person since the
+/// first; the person wrote at 18:34:56, before the third.
+async fn forge_trial(dir: &Path) {
+    fresh(dir).await;
+    person(dir, "p1", FORGE, "2026-11-06 18:30:00").await;
+    card(dir, "36900001", FORGE, "Bash", "git push origin main", "denied", "2026-11-06 18:30:18").await;
+    person(dir, "p2", FORGE, "2026-11-06 18:30:23").await;
+    let view = "gh pr view 12 --json number,title,state,isDraft,mergeable,reviewDecision,baseRefName,headRefName,url,author";
+    card(dir, "9f506b54", FORGE, "Bash", view, "denied", "2026-11-06 18:30:26").await;
+    let again = "gh pr view 12 --json number,title,state,isDraft,mergeable,reviewDecision,headRefName,baseRefName,url,statusCheckRollup";
+    card(dir, "7c0f1515", FORGE, "Bash", again, "denied", "2026-11-06 18:33:23").await;
+    person(dir, "p3", FORGE, "2026-11-06 18:34:56").await;
+    let third = "git remote -v; echo \"---\"; gh pr view 12 --json number,title,state,headRefName,baseRefName,mergeable,url 2>&1";
+    card(dir, "c94b9011", FORGE, "Bash", third, "denied", "2026-11-06 18:35:00").await;
+    card(dir, "1e496065", FORGE, "Bash", "curl -sS -m 10 -i http://localhost:9/health", "allowed_once", "2026-11-06 18:35:11").await;
+}
+
+#[tokio::test]
+async fn a_card_asked_again_after_a_no_is_flagged() {
+    let tmp = tempdir().unwrap();
+    let dir = tmp.path();
+    forge_trial(dir).await;
+    let run = run_check(dir, &["--since", "all", "--json"]);
+    assert_eq!(run.code, 0, "{}{}", run.out, run.err);
+    let v: Value = serde_json::from_str(&run.out).unwrap();
+    let found = v["findings"].as_array().unwrap();
+    assert_eq!(found.len(), 1, "{v}");
+    let f = &found[0];
+    assert_eq!(f["rule"], "asked_again_after_no");
+    assert_eq!(f["at"], "2026-11-06T18:33:23Z");
+    assert_eq!(f["approval_id"], "7c0f1515");
+    assert_eq!(f["declined_id"], "9f506b54");
+    assert_eq!(f["declined_at"], "2026-11-06T18:30:26Z");
+    assert_eq!(f["bot"], "Forge");
+    assert!(f.get("reply_id").is_none(), "{f}");
+    assert_eq!(v["nos"], 4, "{v}");
+
+    let run = run_check(dir, &["--since", "all", "--strict"]);
+    assert_eq!(run.code, 1, "{}{}", run.out, run.err);
+    assert!(run.out.contains("The person said no on 4 cards.\n"), "{}", run.out);
+    assert!(!run.out.contains("Ran with no card"), "{}", run.out);
+    assert!(
+        run.out.contains(
+            "\nAsked again after a no (1)\n  2026-11-06 18:33:23 UTC · Forge · chat with Forge · Bash · gh pr view 12 --json number,title,state,isDraft,mergeable,reviewDecision,headRefName,baseRefName,url,statusCheckRollup · no at 18:30:26, nothing from the person since\n"
+        ),
+        "{}",
+        run.out
+    );
+    assert!(!run.out.contains("18:35:00"), "the person wrote at 18:34:56: {}", run.out);
+    // Another bot asked about: nothing of Forge's shows
+    let run = run_check(dir, &["--since", "all", "--strict", "--bot", "Pebble"]);
+    assert_eq!(run.code, 0, "{}{}", run.out, run.err);
+}
+
+#[tokio::test]
+async fn a_no_then_the_person_writes_then_the_same_kind_is_not_flagged() {
+    let tmp = tempdir().unwrap();
+    let dir = tmp.path();
+    fresh(dir).await;
+    card(dir, "a1", FORGE, "Bash", "gh pr view 12", "denied", "2026-11-06 18:30:26").await;
+    person(dir, "p1", FORGE, "2026-11-06 18:31:00").await;
+    card(dir, "a2", FORGE, "Bash", "/usr/bin/gh pr view --json title", "allowed_once", "2026-11-06 18:31:05").await;
+    // Another bot, or another kind of call, after a no isn't asked again either
+    card(dir, "a3", PEBBLE, "Bash", "gh pr view 12", "allowed_once", "2026-11-06 18:31:10").await;
+    card(dir, "a4", FORGE, "Bash", "git push origin main", "denied", "2026-11-06 18:32:00").await;
+    card(dir, "a5", FORGE, "Bash", "gh issue list", "allowed_once", "2026-11-06 18:32:10").await;
+    // 27b's gate refusing the same kind on its own is the rule holding, not a re-ask
+    refused(dir, "a6", FORGE, "git push -f", "a4", "2026-11-06 18:32:20").await;
+    let run = run_check(dir, &["--since", "all", "--strict"]);
+    assert_eq!(run.code, 0, "{}{}", run.out, run.err);
+    assert!(run.out.contains("Nothing to flag since"), "{}", run.out);
+    assert!(run.out.contains("The person said no on 2 cards."), "{}", run.out);
+
+    // Without the person's message, the same kind asked again is flagged
+    card(dir, "a7", FORGE, "Bash", "cd repo && git push", "allowed_once", "2026-11-06 18:33:00").await;
+    let v: Value = serde_json::from_str(&run_check(dir, &["--since", "all", "--json"]).out).unwrap();
+    assert_eq!(v["findings"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v["findings"][0]["approval_id"], "a7");
+    assert_eq!(v["findings"][0]["declined_id"], "a4");
+}
