@@ -1,0 +1,25 @@
+{
+  "version": "0.9.24",
+  "date": "2026-11-18",
+  "highlights": [
+    {
+      "id": "a-no-reads-as-a-no",
+      "title": "Your no reads as a no",
+      "text": "Press Deny and the step reads \"You said no; nothing ran\" in calm grey, not a red failed step. Real failures still stand out.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "held-messages-keep-order",
+      "title": "Replies come back in the order you asked",
+      "text": "Send a few messages while a bot waits on an approval card, and the answers now come back in the order you sent them, so each one lines up with its question.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Switching the bot browser to another page's tab goes straight to that page, with no grey empty \"Finished\" card in between.",
+    "New kwnt run-check tells you whether any bot ran something without asking, or asked again after you said no.",
+    "Each browser tab's address bar shows its own page's address and title, even while the bot browses in another tab."
+  ]
+}
