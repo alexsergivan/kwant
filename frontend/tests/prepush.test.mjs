@@ -238,7 +238,7 @@ test('P5 push anyway: required, autofocused, labelled; disabled under 10 charact
   assert.match(hint.textContent, /at least 10 characters\. This push only; next time the checks run again\./);
   assert.doesNotMatch(text(form), /pull request/, 'the reason is not copied into the PR yet (contract q10)');
   const go = [...form.querySelectorAll('button')].find((b) => text(b) === 'Push anyway');
-  assert.match(go.className, /bg-amber-600/);
+  assert.match(go.className, /bg-amber-500 text-zinc-950/); // dark ink on amber (26g-2): 8.76:1
   assert.equal(go.disabled, true);
   await type(area, '   short   ');
   assert.equal(go.disabled, true, '"short" trimmed is under 10');

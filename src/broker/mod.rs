@@ -34,6 +34,9 @@ pub struct PermissionBroker {
     /// Calls the person allowed after their turn had stopped waiting: the resumed turn's same
     /// call runs once without a new card, until the grant lapses.
     grants: Arc<Mutex<Vec<Grant>>>,
+    /// 27b: what the person declined, per bot and conversation, until they write there again.
+    /// In memory only.
+    pub declined: crate::mcp::declined::Declines,
 }
 
 /// How long a late Allow waits for the resumed turn to make its call again.
@@ -66,6 +69,7 @@ impl PermissionBroker {
             pending: Arc::new(Mutex::new(HashMap::new())),
             always_allowed: Arc::new(Mutex::new(HashSet::new())),
             grants: Default::default(),
+            declined: Default::default(),
             store: Default::default(),
             loaded: Default::default(),
         }
@@ -237,6 +241,7 @@ impl PermissionBroker {
         self.load_saved().await;
         self.always_allowed.lock().await.retain(|(k, _, _)| k != kwant_id);
         self.grants.lock().await.retain(|g| g.kwant_id != kwant_id);
+        self.declined.forget_kwant(kwant_id);
         if let Some(db) = self.store.get() {
             if let Err(e) = db.delete_all_always_allowed(kwant_id).await {
                 tracing::warn!(kwant = %kwant_id, error = %e, "could not forget a deleted bot's \"always allow\" answers");
@@ -249,6 +254,7 @@ impl PermissionBroker {
         self.load_saved().await;
         self.always_allowed.lock().await.retain(|(_, c, _)| c != conversation);
         self.grants.lock().await.retain(|g| g.conversation != conversation);
+        self.declined.forget_conversation(conversation);
         if let Some(db) = self.store.get() {
             if let Err(e) = db.delete_always_allowed_in(conversation).await {
                 tracing::warn!(conversation, error = %e, "could not forget a deleted conversation's \"always allow\" answers");

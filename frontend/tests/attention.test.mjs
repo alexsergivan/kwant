@@ -109,6 +109,16 @@ test('the words: who and what for one, a count for several', () => {
   assert.equal(a.pillText([]).headline, '');
 });
 
+test('the pill title comes from the titleOf the app passes; without one it keeps the server title', () => {
+  const titleOf = (i) => (i.kind === 'approval' ? `Words for ${i.id}` : i.title);
+  assert.equal(a.nudgeFromAway(item('a1', 'approval'), titleOf).title, 'Words for a1');
+  assert.equal(a.nudgeFromAway(item('q1'), titleOf).title, 'Title q1');
+  assert.equal(a.nudgeFromAway(item('a1', 'approval')).title, 'Title a1');
+  const arr = a.createArrivals(titleOf);
+  arr.fromAway([]);
+  assert.deepEqual(arr.fromAway([item('a2', 'approval')]).map((n) => n.title), ['Words for a2']);
+});
+
 const env = ({ stored = null, reduced = false, nav } = {}) => {
   const store = new Map(stored === null ? [] : [[a.NUDGES_KEY, stored]]);
   const events = [];

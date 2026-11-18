@@ -97,6 +97,8 @@ const ROLES: Role[] = [
   { match: /\bteacher\b|\btutor\b|\beducat|\binstructor\b/i, asks: ['explain this topic simply', 'quiz me on this'] },
   { match: /\b(travel|trip)( planner| agent)?\b/i, asks: ['plan a weekend trip', 'make a packing list'] },
   { match: /\bproduct (manager|owner|lead)\b|\bpm\b/i, asks: ['turn this idea into a short spec', 'prioritise these features'] },
+  // House ("Home Helper", "…through Home Assistant") is tested before the assistant role below.
+  { match: /\bhome assistant\b|\bsmart home\b|\bhome (helper|automation)\b/i, asks: ['is anything left on?', 'turn off all the lights'] },
   { match: /\bassistant\b|\bsecretary\b|\bplanner\b|\bscheduler\b|\borgani[sz]er\b/i, asks: ['plan my week', 'turn these notes into a to-do list'] },
   { match: /\bvideo( editor)?\b|\bfilm\b|\byoutube\b|\btiktok\b/i, asks: ['script a 30-second video', 'suggest video ideas for this week'] },
   { match: /\bphotograph|\billustrat|\bartist\b|\bgraphic design(er)?\b|\bcover design(er)?\b/i, asks: ['describe a cover image idea', 'critique this image'] },
