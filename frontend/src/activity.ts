@@ -236,8 +236,20 @@ export function activitySummary(a: SavedActivity): string {
   return parts.join(' · ');
 }
 
+/** 28n: a human step nobody finished in time (server `timed_out`, kept in `outcome` by 28j). */
+const timedOutHumanStep = (s: ActivityStep) => s.kind === 'human_step' && s.outcome === 'timed_out';
+
+/**
+ * The status a step is drawn with (icon, chip). 28n: a human step nobody finished in time looks like an approval
+ * nobody answered (⏱, amber) instead of ✓ Done. `status` itself stays `ok`, so counts and follow-through are as before.
+ */
+export function shownStatus(s: ActivityStep): StepStatus {
+  return timedOutHumanStep(s) ? 'unanswered' : s.status;
+}
+
 /** What a step's status reads as, for screen readers and the row's label. */
 export function statusLabel(s: ActivityStep): string {
+  if (timedOutHumanStep(s)) return 'Not done in time';
   switch (s.status) {
     case 'running':
       return s.kind === 'thinking' ? 'Thinking' : 'Running';

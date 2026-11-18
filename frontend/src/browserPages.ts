@@ -63,10 +63,28 @@ export function choosePage(input: { picked: string | null; stepPage: string | nu
  * default. With no list (an older server with no pages route, or before the first answer) it is
  * null: the old fallback. The pane lets go of `held` when a page opens (see pageOpened).
  */
-export function restingPage(held: string | null, list: Pick<BrowserPageList, 'live' | 'pages'> | null): string | null {
+export function restingPage(held: string | null, list: Pick<BrowserPageList, 'live' | 'pages'> | null, first: string | null = null): string | null {
   if (!list) return null;
-  if (held && list.pages.some((p) => p.page === held)) return held;
+  const listed = (key: string | null): key is string => !!key && list.pages.some((p) => p.page === key);
+  if (listed(held)) return held;
+  // 28o: the first resting page of an open pane, decided once (see ownNewestPage)
+  if (listed(first)) return first;
   return list.live;
+}
+
+/**
+ * 28o: the newest listed page owned by the bot whose panel it is (`bot` is its name, as the header
+ * shows it, matched the way the strip names tabs with pageOwner), else null. The pane rests on it
+ * first when it opens with nothing chosen, so "Ben's browser" opens on Ben's tab, not an idle Shared.
+ */
+export function ownNewestPage(
+  list: Pick<BrowserPageList, 'pages'> | null,
+  bot: string | null | undefined,
+  botName: (id: string) => string | undefined,
+): string | null {
+  if (!list || !bot) return null;
+  // The list is newest first
+  return list.pages.find((p) => p.job && !!p.kwant_id && pageOwner(p, botName) === bot)?.page ?? null;
 }
 
 /**
@@ -146,10 +164,15 @@ export function onBrowserPagesChanged(l: Listener): () => void {
   };
 }
 
-/** The team's pages, or null when the server has none to list (an older server, or no browser yet). */
+/**
+ * The team's pages, or null when the server has none to list (an older server: a 404, or an answer
+ * that isn't a list). 28o: any other failed answer (a 5xx, an auth blip) throws, as a network error
+ * does, so one bad moment is never read as "this server has no pages route".
+ */
 export async function fetchBrowserPages(team: string, signal?: AbortSignal): Promise<BrowserPageList | null> {
   const res = await fetch(`/api/sandbox/${encodeURIComponent(team)}/pages`, { signal });
-  if (!res.ok) return null;
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`pages: ${res.status}`);
   return parsePageList(await res.json().catch(() => null));
 }
 

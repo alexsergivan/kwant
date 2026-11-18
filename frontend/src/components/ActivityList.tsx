@@ -8,6 +8,7 @@ import {
   formatDuration,
   isOpenStep,
   plainTitle,
+  shownStatus,
   statusLabel,
   thinkingText,
 } from '../activity';
@@ -31,7 +32,7 @@ const Title: React.FC<{ text: string }> = ({ text }) => (
 const StatusIcon: React.FC<{ step: ActivityStep }> = ({ step }) => {
   const label = statusLabel(step);
   const icon = (() => {
-    switch (step.status) {
+    switch (shownStatus(step)) {
       case 'running':
         return step.kind === 'thinking' ? (
           <Brain size={13} className="text-info animate-pulse motion-reduce:animate-none" />
@@ -134,7 +135,8 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   // 26d: a step that failed or wasn't approved in time says so in words, not only by its icon, even when a later
   // step worked. The icon's label already names it for screen readers, so the mark is hidden from them.
   // The approval row keeps its icon only: the mark belongs on the command the person said no to.
-  const mark = step.status === 'declined' && step.kind === 'approval' ? undefined : STEP_MARK[step.status];
+  const shown = shownStatus(step);
+  const mark = step.status === 'declined' && step.kind === 'approval' ? undefined : STEP_MARK[shown];
   const head = (
     <>
       <StatusIcon step={step} />
@@ -142,7 +144,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
         {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title, step.outcome ?? step.status)} />}
       </span>
       {mark && (
-        <span aria-hidden="true" data-step-mark={step.status} className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark}`}>
+        <span aria-hidden="true" data-step-mark={shown} className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark}`}>
           {statusLabel(step)}
         </span>
       )}
