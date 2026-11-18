@@ -23,6 +23,8 @@ export interface ActivityStep {
   started_at: string;
   ended_at?: string;
   duration_ms?: number;
+  /** 28j: a human step's own settled word when `status` can't hold it ("resolved_auto", "timed_out"); words only. */
+  outcome?: string;
 }
 
 export interface SavedActivity {
@@ -49,6 +51,7 @@ export function parseStep(raw: unknown): ActivityStep | null {
   if (typeof s.id !== 'string' || typeof s.title !== 'string') return null;
   const kind = KINDS.includes(s.kind as StepKind) ? (s.kind as StepKind) : 'note';
   const status = STATUSES.includes(s.status as StepStatus) ? (s.status as StepStatus) : 'ok';
+  const outcome = kind === 'human_step' && typeof s.status === 'string' && s.status !== status ? s.status : undefined;
   return {
     id: s.id,
     kind,
@@ -62,6 +65,7 @@ export function parseStep(raw: unknown): ActivityStep | null {
     started_at: typeof s.started_at === 'string' ? s.started_at : '',
     ended_at: str(s.ended_at),
     duration_ms: typeof s.duration_ms === 'number' ? s.duration_ms : undefined,
+    ...(outcome ? { outcome } : {}),
   };
 }
 

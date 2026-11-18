@@ -72,10 +72,12 @@ const TONE: Record<RunTone, string> = {
   skipped: 'bg-zinc-700/30 text-zinc-400 border-zinc-700',
   waiting: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
   needs_you: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
+  // 28f: the person's own no is grey, as 28a's "You said no" mark in the chat.
+  said_no: 'bg-zinc-700/30 text-zinc-300 border-zinc-500/40',
 };
 
-const StatusBadge: React.FC<{ status: string; wait?: RunWait | null }> = ({ status, wait }) => {
-  const st = runRowState({ status }, wait);
+const StatusBadge: React.FC<{ status: string; error?: string | null; wait?: RunWait | null }> = ({ status, error, wait }) => {
+  const st = runRowState({ status, error }, wait);
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${TONE[st.tone]}`} data-run-badge={st.tone}>
       {st.tone === 'running' && <Loader2 size={9} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
@@ -470,7 +472,7 @@ export const RunRow: React.FC<{
   const link = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200';
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400" data-run-row={r.id} data-run-state={st.tone}>
-      <StatusBadge status={r.status} wait={wait} />
+      <StatusBadge status={r.status} error={r.error} wait={wait} />
       <span>{formatWhen(r.started_at)}</span>
       <span className="text-zinc-400">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
       {/* Mira re-check 6: on a phone the links always sit on their own line under the badge. */}
@@ -618,7 +620,7 @@ export const RoutineRow: React.FC<{
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className={`text-xs font-medium break-words ${routine.enabled ? 'text-zinc-100' : 'text-zinc-400'}`}>{routine.name}</span>
             {routine.origin === 'discovery' && <SuggestedBadge />}
-            {routine.last_status && <StatusBadge status={routine.last_status} wait={liveWaitOf(waits, routine.id)} />}
+            {routine.last_status && <StatusBadge status={routine.last_status} error={routine.last_error ?? null} wait={liveWaitOf(waits, routine.id)} />}
           </div>
           {/* Routines setup F: what it does, then when it runs next, then the schedule, bot and place. */}
           {what.line && (
