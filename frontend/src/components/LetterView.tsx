@@ -833,7 +833,7 @@ export const LetterDetail: React.FC<LetterDetailProps> = ({ view, loading, error
                         <div role="group" aria-label="Delete this letter" className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 space-y-2" data-confirm-delete>
                           <p className="text-xs text-rose-100">Delete this letter, its pages, everything read from it and its reminders? This can’t be undone.</p>
                           <div className="flex flex-wrap gap-2">
-                            <button type="button" disabled={acting} onClick={() => (setConfirmDelete(false), onDelete())} className={`${actionBtn} bg-rose-600 hover:bg-rose-500 text-white`}>
+                            <button type="button" disabled={acting} onClick={() => (setConfirmDelete(false), onDelete())} className={`${actionBtn} bg-rose-600 hover:bg-rose-700 text-white`}>
                               <Trash2 size={13} aria-hidden="true" /> Delete it
                             </button>
                             <button type="button" onClick={() => setConfirmDelete(false)} className={quietBtn}>

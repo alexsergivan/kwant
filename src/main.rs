@@ -120,6 +120,9 @@ pub enum Commands {
         /// Also serve Home Assistant-shaped tools (intent__HassTurnOff and the rest)
         #[arg(long)]
         home_tools: bool,
+        /// Also serve FLUX-shaped tools that return pictures (generate_image and the rest)
+        #[arg(long)]
+        media_tools: bool,
     },
 
     /// Run an OAuth-protected mock MCP server over HTTP (for tests and smoke checks)
@@ -139,9 +142,9 @@ pub enum Commands {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     // Before logging starts: stdout carries the MCP protocol
-    if let Some(Commands::McpEchoServer { server_name, home_tools }) = &cli.command {
+    if let Some(Commands::McpEchoServer { server_name, home_tools, media_tools }) = &cli.command {
         // A test helper that holds nothing: left dumpable so tests can find it by its environment
-        kwnt::mcp::echo_server::run_stdio(server_name.as_deref(), *home_tools).await?;
+        kwnt::mcp::echo_server::run_stdio(server_name.as_deref(), *home_tools, *media_tools).await?;
         return Ok(());
     }
     kwnt::harden_process();

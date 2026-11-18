@@ -239,7 +239,7 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
               onClick={turnOn}
               disabled={!canTurnOn}
               data-dv-turn-on
-              className="inline-flex items-center gap-1.5 rounded-xl bg-accent-gradient px-3.5 min-h-[44px] sm:min-h-[36px] text-meta font-semibold text-white disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-accent-gradient kw-hover-deepen px-3.5 min-h-[44px] sm:min-h-[36px] text-meta font-semibold text-white disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
             >
               {saving && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
               Turn on Dev mode
