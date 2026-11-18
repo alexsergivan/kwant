@@ -571,7 +571,8 @@ pub fn failed_reason(result: &Value) -> Option<Option<&str>> {
 /// in time is `unanswered` and a dry-run call `rehearsed`, never "ok": by the result's status
 /// (kwnt's own tools) or by the refusal kwnt gave the engine (the claude CLI reports both as an
 /// error carrying that text). Otherwise `failed` with its reason, as [`failed_reason`], or "ok".
-/// The once-per-turn reminder to the model ([`crate::mcp::NO_FALSE_CLAIMS_TEXT`]) never shows.
+/// The once-per-turn reminder to the model ([`crate::mcp::NO_FALSE_CLAIMS_TEXT`]) never shows, nor
+/// (27e) a Home Assistant read hint ([`crate::mcp::home_floor::HINTS`]).
 pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
     let said = |marker: &str| {
         ["error", "content", "message"]
@@ -593,12 +594,26 @@ pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
             Some(crate::mcp::REHEARSED_STEP_DETAIL.to_string()),
         );
     }
+    // 27b: refused with no card, because the person already said no to one like it
+    if refused && said(first_sentence(crate::mcp::DECLINED_BEFORE_TEXT)) {
+        return (
+            "declined",
+            Some(crate::mcp::DECLINED_BEFORE_STEP_DETAIL.to_string()),
+        );
+    }
     match failed_reason(result) {
         None => ("ok", None),
         Some(why) => (
             "failed",
             why.map(|w| {
-                w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
+                // 27e: nor the Home Assistant read hints
+                crate::mcp::home_floor::HINTS
+                    .iter()
+                    .fold(
+                        w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
+                            .replace(crate::mcp::NOT_ANOTHER_WAY_TEXT, ""),
+                        |w, h| w.replace(h, ""),
+                    )
                     .trim()
                     .to_string()
             })
@@ -1171,6 +1186,25 @@ mod tests {
         assert_eq!(ended[0].status, "rehearsed");
     }
 
+    /// 27e: the Home Assistant read hints reach the model (the gateway sends `model_text` to an
+    /// agent CLI, which reports it back as the step's result) but never show in Details.
+    #[test]
+    fn the_home_read_hints_stay_out_of_details() {
+        use crate::mcp::{home_floor, session::CallOutcome};
+        let miss = r#"{"error": "No exposed entities found in domain(s): switch"}"#;
+        for (status, hint, remind) in [("error", home_floor::READ_MISS_HINT, true), ("error", home_floor::READ_MISS_HINT, false)] {
+            let outcome = CallOutcome { text: miss.into(), status, record: json!({}), remind, hint: Some(hint) };
+            let model = outcome.model_text();
+            assert!(model.starts_with(miss) && model.contains(hint), "{model}");
+            assert_eq!(model.contains(crate::mcp::NO_FALSE_CLAIMS_TEXT), remind, "{model}");
+            let (shown, why) = step_end(&json!({"status": "error", "content": model}));
+            assert_eq!((shown, why.as_deref()), ("failed", Some(miss)));
+        }
+        let part = CallOutcome { text: "Living room lamp: off".into(), status: "ok", record: json!({}), remind: false, hint: Some(home_floor::READ_PART_HINT) };
+        assert!(part.model_text().ends_with(home_floor::READ_PART_HINT));
+        assert_eq!(step_end(&json!({"status": "ok", "content": part.model_text()})), ("ok", None));
+    }
+
     /// 26b: the reminder to the model never shows as a step's reason; a denial stays "failed".
     #[test]
     fn the_reminder_to_the_model_stays_out_of_details() {
@@ -1181,9 +1215,10 @@ mod tests {
         let (status, why) = step_end(
             &json!({"status": "error", "error": crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT)}),
         );
+        // 27b: the "don't try another way" sentence is for the bot too
         assert_eq!(
             (status, why.as_deref()),
-            ("failed", Some(crate::mcp::DENIED_TEXT))
+            ("failed", Some("The user denied this tool call."))
         );
         assert_eq!(
             step_end(&json!({"status": "ok", "content": "fine"})),
@@ -1193,6 +1228,20 @@ mod tests {
             step_end(&json!({"status": "error", "content": crate::mcp::NO_FALSE_CLAIMS_TEXT})),
             ("failed", None)
         );
+    }
+
+    /// 27b: a call refused because the person already said no ends `declined`, with the step
+    /// detail for the person, however the engine reports it.
+    #[test]
+    fn a_call_refused_for_an_earlier_no_shows_as_declined() {
+        let want = ("declined", Some(crate::mcp::DECLINED_BEFORE_STEP_DETAIL.to_string()));
+        // claude CLI: the permission route's deny message comes back as the error
+        assert_eq!(step_end(&json!({"status": "error", "error": crate::mcp::DECLINED_BEFORE_TEXT})), want);
+        // API engine: kwnt's own record, status `denied`
+        assert_eq!(step_end(&json!({"status": "denied", "content": crate::mcp::DECLINED_BEFORE_TEXT})), want);
+        assert_eq!(step_end(&json!({"status": "error", "content": crate::mcp::with_no_false_claims(crate::mcp::DECLINED_BEFORE_TEXT)})), want);
+        // An ok result quoting it is still ok
+        assert_eq!(step_end(&json!({"status": "ok", "content": crate::mcp::DECLINED_BEFORE_TEXT})).0, "ok");
     }
 
     #[test]
