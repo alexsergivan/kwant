@@ -15,6 +15,7 @@ pub mod parallel;
 pub mod profiles;
 pub mod router;
 pub mod routines;
+pub mod run_check;
 pub mod sandbox;
 pub mod serve;
 pub mod setup;
