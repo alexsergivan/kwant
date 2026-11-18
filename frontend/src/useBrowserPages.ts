@@ -12,7 +12,7 @@ export const PAGES_WAIT_MS = 1_500;
  * The team's browser pages (0.9.3), for the pane's strip: loaded while `visible`, again on every
  * BrowserNavigated, SandboxStatusChanged and human_step_updated for the team, and every 10 s.
  * `at` is when the list was asked for, so a page picked after that isn't judged closed by it.
- * An older server without the route leaves it null (no strip).
+ * An older server without the route (a 404) leaves it null (no strip); any other failure keeps the last list.
  * `checked` (28l) is false from the moment the pane shows until the first answer since then, so the
  * pane knows whether to wait for the list or use its older fallback; the list is dropped when it hides.
  */
@@ -50,8 +50,8 @@ export function useBrowserPages(team: string | undefined, visible: boolean) {
         setChecked(true);
       })
       .catch(() => {
-        // offline for a moment: keep the last list until the next refresh
-        if (n === seq.current) setChecked(true);
+        // 28o: offline or a failed answer for a moment: keep the last list until the next refresh, and
+        // don't judge the server. A wait for the first list still ends at PAGES_WAIT_MS.
       });
   }, [team]);
 

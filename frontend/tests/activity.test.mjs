@@ -68,7 +68,7 @@ test('durations and the summary line', () => {
   assert.equal(a.activitySummary({ steps, dropped: 10 }), 'Worked 0:41 · 12 steps · 1 failed');
   assert.equal(a.activitySummary({ steps: [steps[0]], dropped: 0 }), 'Worked 0:10 · 1 step');
   assert.equal(a.plainTitle('Running `ls`'), 'Running ls');
-  assert.equal(a.statusLabel(step({ kind: 'approval', status: 'declined' })), 'Denied');
+  assert.equal(a.statusLabel(step({ kind: 'approval', status: 'declined' })), 'You said no');
 });
 
 test('live list: steps, mono command, waits announced, reduced motion', () => {
@@ -232,11 +232,12 @@ test('28a: the summary says "you said no to 1", never "failed", for a plain Deny
   const html = ui.saved({ activity: { steps, dropped: 0 }, idBase: 'r1' });
   assert.doesNotMatch(html, /text-rose/);
   assert.match(html, /you said no to 1/);
-  // The command row says "You said no" in words (a neutral mark, Mira); the approval row keeps "Denied", no mark
+  // The command row says "You said no" in words (a neutral mark, Mira); 28s: so does the approval row's label, and
+  // in Details the card folds into the command row, so the answer shows once
   assert.equal(a.statusLabel(steps[0]), 'You said no');
-  assert.equal(a.statusLabel(steps[1]), 'Denied');
+  assert.equal(a.statusLabel(steps[1]), 'You said no');
   const open = ui.saved({ activity: { steps, dropped: 0 }, idBase: 'r1', defaultOpen: true });
-  const marks = [...open.matchAll(/data-step-mark="declined" class="([^"]*)">([^<]*)</g)];
+  const marks = [...open.matchAll(/data-step-mark="declined" class="([^"]*)"[^>]*>([^<]*)</g)];
   assert.equal(marks.length, 1, 'one mark: on the command, not the approval row');
   assert.equal(marks[0][2], 'You said no');
   assert.match(marks[0][1], /text-zinc-300 border-zinc-500\/40/);
