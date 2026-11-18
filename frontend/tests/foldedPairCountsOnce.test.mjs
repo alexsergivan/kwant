@@ -1,5 +1,5 @@
 // 28t (autonomy/folded-pair-counts-once/brief.md): since 28s folds a settled approval card into its command row,
-// the step count says what Details draws: a folded card and its command count once. "didn't run", "you said no to"
+// the step count and "didn't run" say what Details draws: a folded card and its command count once. "you said no to"
 // and "failed" counts stay as they were. Tests marked "fails on 44bd873d" fail there.
 process.env.TZ = 'UTC';
 import assert from 'node:assert/strict';
@@ -42,13 +42,13 @@ const RIG_RAW = () => [
   hs('h5', 'done', 25),
 ];
 
-test('the 28s reply reads "8 steps · 2 didn’t run · you said no to 1", over 8 rows (fails on 44bd873d)', () => {
+test('the 28s reply reads "8 steps · 1 didn’t run · you said no to 1", over 8 rows (fails on 44bd873d)', () => {
   const a = parse(RIG_RAW());
   assert.equal(a.steps.length, 11, 'saved steps are all kept');
-  assert.equal(m.activitySummary(a), 'Worked 26:00 · 8 steps · 2 didn’t run · you said no to 1');
+  assert.equal(m.activitySummary(a), 'Worked 26:00 · 8 steps · 1 didn’t run · you said no to 1');
   const html = m.saved({ activity: a, idBase: 'r1', defaultOpen: true });
   assert.equal(rows(html), 8, 'Details draws 8 rows');
-  assert.match(html, /8 steps · 2 didn’t run · you said no to 1/);
+  assert.match(html, /8 steps · 1 didn’t run · you said no to 1/);
 });
 
 test('a run with no approvals counts as before', () => {
@@ -56,10 +56,14 @@ test('a run with no approvals counts as before', () => {
   assert.equal(m.activitySummary(a), 'Worked 2:30 · 3 steps · 1 failed', 'the note still doesn’t count');
 });
 
-test('an approval with no matching command still counts once', () => {
+test('an approval with no matching command still counts once; a command and its unanswered card count once (fails on 5195ef80)', () => {
   // kwnt held the call: nobody answered, nothing ran
   const held = parse([ap('tk1', 'unanswered', 0, 'Bash', LATE)]);
   assert.equal(m.activitySummary(held), 'Worked 0:12 · 1 step · 1 didn’t run');
+  // a command nobody approved and its card are one row, one step and one "didn't run" (fails on 5195ef80)
+  const pair = parse([tool('t1', 'unanswered', 'Running `git push origin main`', 0, LATE), ap('tk1', 'unanswered', 0.01, 'Bash', LATE)]);
+  assert.equal(m.activitySummary(pair), 'Worked 0:30 · 1 step · 1 didn’t run');
+  assert.equal(rows(m.saved({ activity: pair, idBase: 'r1', defaultOpen: true })), 1);
   // a card for another tool doesn't fold into this command
   const other = parse([ap('tk1', 'ok', 0, 'Write'), tool('t1', 'ok', 'Running `ls`', 0.2)]);
   assert.equal(m.activitySummary(other), 'Worked 0:42 · 2 steps');
@@ -70,10 +74,10 @@ test('dropped still adds, on top of the folded count (fails on 44bd873d)', () =>
   assert.equal(m.activitySummary(a), 'Worked 0:42 · 11 steps');
 });
 
-test('"didn’t run", "you said no to" and "failed" counts are unchanged by the fold (its step count fails on 44bd873d)', () => {
+test('"didn’t run" counts the folded pair once; "you said no to" and "failed" are unchanged (fails on 5195ef80)', () => {
   const a = parse(RIG_RAW());
   const s = m.activitySummary(a);
-  assert.match(s, /2 didn’t run/, 'the card and the call both still count here, as before');
+  assert.match(s, /· 1 didn’t run ·/, 'the card and its command count once');
   assert.match(s, /you said no to 1$/);
   const failedAfterOk = parse([ap('tk1', 'ok', 0), tool('t1', 'failed', 'Running `npm test`', 0.2)]);
   assert.equal(m.activitySummary(failedAfterOk), 'Worked 0:42 · 1 step · 1 failed');
