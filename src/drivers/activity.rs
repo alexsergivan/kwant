@@ -282,7 +282,8 @@ impl ActivityLog {
 
     /// Masks secrets in a driver event before it is broadcast: thinking text, a tool call's
     /// arguments and a finished tool's result (every string in them). Reply text passes as is.
-    /// A failed tool's `error` is then cut to [`LIVE_ERROR_MAX`]: drivers send it whole.
+    /// A failed tool's `error` is then cut to [`LIVE_ERROR_MAX`], and a tool's `content` (the API
+    /// driver's) to [`crate::mcp::RECORD_RESULT_MAX_CHARS`]: drivers send both whole.
     pub fn redact_event(&self, event: &RuntimeEvent) -> RuntimeEvent {
         match event {
             RuntimeEvent::ThinkingDelta(text) => RuntimeEvent::ThinkingDelta(self.redact(text)),
@@ -294,6 +295,10 @@ impl ActivityLog {
                 // 29k: cut only after masking, so a secret across the cut is masked whole
                 if let Some(Value::String(why)) = result.get_mut("error") {
                     *why = crate::mcp::truncate_text(why, LIVE_ERROR_MAX);
+                }
+                // 29n: the API driver's `content` too, at the length it was cut to before
+                if let Some(Value::String(text)) = result.get_mut("content") {
+                    *text = crate::mcp::truncate_text(text, crate::mcp::RECORD_RESULT_MAX_CHARS);
                 }
                 RuntimeEvent::ToolCallCompleted { id: id.clone(), result }
             }
