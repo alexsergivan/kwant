@@ -354,7 +354,7 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
 
       {item.kind === 'approval' && (
         <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
-          <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} onResolve={(_, d, opts) => onResolve(item, d as ApprovalDecision, opts?.withoutBackup, opts?.reason)} />
+          <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} stackWhy onResolve={(_, d, opts) => onResolve(item, d as ApprovalDecision, opts?.withoutBackup, opts?.reason)} />
         </div>
       )}
 

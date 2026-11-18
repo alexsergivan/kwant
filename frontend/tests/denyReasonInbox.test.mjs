@@ -29,6 +29,7 @@ const m = await loadBundled(`
   export * as fx from './src/doneAwayFixture';
   export * as store from './src/inboxStore';
   export { InboxNew } from './src/components/InboxNew';
+  export { ModernApprovalCard } from './src/components/ModernApprovalCard';
 `);
 const { React, createRoot, fx, store: s } = m;
 const h = React.createElement;
@@ -120,4 +121,27 @@ test('29q: the Inbox approval card keeps the 54 px indent from sm up only, so a 
   const cls = wrap.className.split(/\s+/);
   assert.ok(cls.includes('sm:pl-[54px]'));
   assert.equal(cls.includes('pl-[54px]'), false, 'no 54 px indent below sm');
+});
+
+test('29q: in the Inbox list the Say why field stacks at every width; the chat card keeps its one-line row from sm up', async () => {
+  const row = await mountInbox(true);
+  await click(row.querySelector('[data-approval-say-why]'));
+  const form = row.querySelector('[data-approval-why]');
+  const has = (el, c) => el.className.split(/\s+/).includes(c);
+  assert.equal(has(form, 'sm:flex-row'), false, 'Inbox: no side-by-side field and button');
+  assert.equal(has(form.querySelector('input'), 'sm:flex-1'), false);
+  assert.equal(has(form.querySelector('[data-approval-deny-why]'), 'sm:w-auto'), false, 'Inbox: the button stays full width');
+  // The chat card (no stackWhy) is unchanged.
+  const { ModernApprovalCard } = m;
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+  const r2 = createRoot(el);
+  r2.render(h(ModernApprovalCard, { approval: { id: 'ap9', tool_name: 'mcp__github__create_pull_request', details: { source: 'mcp', server: 'github', tool: 'create_pull_request', kwant_name: 'TechLead', arguments: { repo: 'acme/site' } } }, onResolve: () => {} }));
+  await settle();
+  await click(el.querySelector('[data-approval-say-why]'));
+  const f2 = el.querySelector('[data-approval-why]');
+  assert.ok(has(f2, 'sm:flex-row'));
+  assert.ok(has(f2.querySelector('input'), 'sm:flex-1'));
+  assert.ok(has(f2.querySelector('[data-approval-deny-why]'), 'sm:w-auto'));
+  r2.unmount();
 });
