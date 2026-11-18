@@ -223,11 +223,14 @@ fn gate(engine: Option<&str>, tool: &str, key: &str, step: &Step) -> Gate {
     }
 }
 
-/// The address a WebFetch step opened: its `detail` (the whole URL, redacted and cut), else the
-/// host in its title ("Opening 10.0.0.5"), which has lost the port and path. `None` when the step
-/// keeps neither ("Opening a page").
+/// The address a WebFetch step opened: its `detail` (the URL as the call gave it, redacted and cut),
+/// else the host in its title ("Opening 10.0.0.5"), which has lost the port and path. `None` when
+/// the step keeps neither ("Opening a page"). A failed step's `detail` is usually the failure reason
+/// ("Request failed with status code 404"; drivers/activity.rs `step_end`), so there it counts only
+/// while it still reads as a URL.
 fn fetch_address(step: &Step) -> Option<String> {
-    if let Some(url) = step.detail.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+    let still_url = |d: &&str| step.status != "failed" || (d.contains("://") && !d.contains(char::is_whitespace));
+    if let Some(url) = step.detail.as_deref().map(str::trim).filter(|d| !d.is_empty()).filter(still_url) {
         return Some(url.to_string());
     }
     let host = step.title.strip_prefix("Opening ")?.trim();
@@ -1155,6 +1158,32 @@ mod tests {
         let report = check(&[codex], &[], &[]);
         assert!(report.findings.is_empty());
         assert_eq!(report.by_design.other_engines, 1);
+    }
+
+    #[test]
+    fn a_failed_fetch_is_judged_by_its_address_not_its_failure_reason() {
+        let failed = |at: &str, detail: Option<&str>, title: &str| Step { status: "failed".into(), ..fetch(at, detail, title) };
+        let public = vec![
+            failed("2026-11-06T18:30:00.000Z", Some("Request failed with status code 404"), "Opening example.com"),
+            failed("2026-11-06T18:30:01.000Z", Some("fetch failed"), "Opening example.org"),
+            failed("2026-11-06T18:30:02.000Z", Some("timeout"), "Opening example.net"),
+        ];
+        let report = check(&[reply("2026-11-06T18:30:00.000Z", "claude", public)], &[], &[]);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.by_design.lookups, 3);
+        let local = vec![
+            // The reason replaced the URL: the title's host still shows a private IP
+            failed("2026-11-06T18:30:00.000Z", Some("Request failed with status code 404"), "Opening 10.0.0.5"),
+            // A failure with no reason keeps the URL
+            failed("2026-11-06T18:30:01.000Z", Some("http://127.0.0.1:8799/api/settings"), "Opening 127.0.0.1"),
+        ];
+        let report = check(&[reply("2026-11-06T18:30:00.000Z", "claude", local)], &[], &[]);
+        let titles: Vec<&str> = report.findings.iter().map(|f| f.title.as_str()).collect();
+        assert_eq!(titles, ["Opening 10.0.0.5", "Opening 127.0.0.1"]);
+        assert_eq!(report.by_design.lookups, 0);
+        // The lenient limit: a failed loopback fetch whose URL was replaced reads as the dev server
+        let s = failed("2026-11-06T18:30:00.000Z", Some("fetch failed"), "Opening 127.0.0.1");
+        assert_eq!(fetch_address(&s).as_deref(), Some("http://127.0.0.1/"));
     }
 
     #[test]
