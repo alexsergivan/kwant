@@ -186,6 +186,11 @@
   :is(button, [role='button'], [role='tab'], [role='menuitem'], [role='option'], select, summary):not([role='switch'], [data-compact], .prose *) {
     min-height: 44px;
   }
+  /* A 44 px fold keeps its title in the middle of the row, not stuck to the top (plain block summaries;
+     flex ones centre themselves with items-center) */
+  summary {
+    align-content: center;
+  }
   /* Icon-only buttons get the width too, with the icon centred */
   button:not([role='switch'], [role='menuitem'], [data-compact], .hidden, .w-full, :has(> :not(svg, img, .sr-only, .hidden))):has(> svg, > img) {
     min-width: 44px;
