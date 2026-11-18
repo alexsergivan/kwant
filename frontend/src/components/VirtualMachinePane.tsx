@@ -191,7 +191,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
   // 28r: what was last written into the address field, and for which tab (see `fieldKey` below)
-  const [written, setWritten] = useState<{ key: string; url: string } | null>(null);
+  // 28x: `typed` marks the person's own text, which only a real change of address may replace
+  const [written, setWritten] = useState<{ key: string; url: string; typed?: boolean } | null>(null);
   // No event fires when the browser catches a login, so a new screenshot or page loads the list again.
   const passwords = useSavedPasswords(teamId, `${activeUrl}|${screenshotBase64?.length ?? 0}|${screenshotBase64?.slice(-32) ?? ''}`);
   const savedCount = passwords.logins.length;
@@ -313,10 +314,17 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // render as the pick, so the old tab's address never shows under the new one. While the list is still on
   // its way nothing is chosen yet: empty, not another bot's last address. No page chosen: as before.
   const fieldKey = chosenPage ? `page:${chosenPage}` : pagesKnown ? 'default' : 'waiting';
+  // 28x (Rigel's 28r P1): leaving a tab drops what its stream wrote, so coming back shows the newer listed
+  // address, not the old one; text the person typed stays. Set during render, so the tap render is right.
+  const [fieldSeen, setFieldSeen] = useState(fieldKey);
+  if (fieldSeen !== fieldKey) {
+    setFieldSeen(fieldKey);
+    if (written && !written.typed && written.key === fieldSeen) setWritten(null);
+  }
   const inputUrl = written?.key === fieldKey
     ? written.url
     : chosenPage ? (isBlankPage(pageInfo?.url) ? '' : pageInfo?.url ?? '') : pagesKnown ? activeUrl : '';
-  const setInputUrl = (url: string) => setWritten({ key: fieldKey, url });
+  const setInputUrl = (url: string) => setWritten({ key: fieldKey, url, typed: true });
   // Then the stream takes over, but only the chosen page's own: a late message from the page just left
   // never writes its address. A blank tab's own about:blank keeps the field empty (28u), as its chip says
   // "nothing open"; pageUrl keeps the raw value for the blank check and the picture.

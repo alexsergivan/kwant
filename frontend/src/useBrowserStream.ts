@@ -125,7 +125,13 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
             setFrame({ id: message.id, image: message.image, width, height });
             break;
           }
-          case 'location': setLocation({ url: message.url || '', title: message.title || '', page: page ?? null }); break;
+          case 'location': {
+            // 28x: the server re-reads the address every 2 s; an unchanged one keeps the same object, so
+            // nothing downstream (the address field) is rewritten by a tick
+            const url = message.url || '', title = message.title || '', at = page ?? null;
+            setLocation((prev) => prev && prev.url === url && prev.title === title && prev.page === at ? prev : { url, title, page: at });
+            break;
+          }
           case 'signin':
             setSignIn(typeof message.text === 'string' && message.text
               ? { text: message.text, action: typeof message.action === 'string' ? message.action : null }
