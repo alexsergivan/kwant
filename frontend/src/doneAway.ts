@@ -5,6 +5,7 @@
 // lacks are listed in release-095/inbox-away/impl.md for Vega's part B; nothing here invents a number.
 
 import { parseActivityMeta, plainTitle } from './activity';
+import { readableStepTitle } from './toolLabel';
 import type { DoneTrailStep, InboxGroup, InboxItem, InboxResponse, ReviewItem, TeamMember } from './api/inbox';
 import { isReview } from './api/inbox';
 import { type Routine, type RoutineRun, type Schedule, WEEKDAYS, monthDaysText } from './continuity';
@@ -306,7 +307,7 @@ export function trailFrom(msg: DoneMessage | null, place: string | null): TrailR
     .filter((s) => s.kind !== 'thinking' && s.kind !== 'note')
     .map((s) => ({
       at: hms(s.started_at),
-      what: plainTitle(s.title),
+      what: readableStepTitle(plainTitle(s.title), s.status),
       detail: s.detail ? plainTitle(s.detail) : null,
       failed: s.status === 'failed',
     }));
