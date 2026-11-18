@@ -30,6 +30,7 @@ pub mod continue_chat;
 pub mod keep_going;
 pub mod parked;
 pub mod attachments;
+pub mod home_claims;
 pub mod picture_claims;
 pub mod point;
 pub mod delivery_check;

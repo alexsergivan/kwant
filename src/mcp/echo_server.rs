@@ -8,7 +8,11 @@
 //!
 //! `--home-tools` adds Home Assistant-shaped tools (26f): `homeassistant__GetLiveContext`
 //! (read-only), `intent__HassTurnOn` and `intent__HassTurnOff` `{name, area, domain,
-//! device_class}`, and `homeassistant__schedule_command {command}`; each answers that it did it.
+//! device_class}`, and `homeassistant__schedule_command {command}`; each change answers that it
+//! did it. `GetLiveContext` answers like Home Assistant 2026.11.1 (27e): with no arguments it lists
+//! the whole home ([`HOME`]); a `name`, `area` or `domain` filter that matches nothing is an error
+//! (`isError: true`, `{"error": "No exposed entities found in domain(s): switch"}`), as on the
+//! tester's install, where switches are lights.
 //! `--server-name home-assistant` makes the server say it is Home Assistant's; it says
 //! `kwnt-echo` otherwise.
 //!
@@ -51,7 +55,7 @@ fn home_tools_list() -> Vec<Value> {
     let obj = |props: Value| json!({"type": "object", "properties": props});
     json!([
         {"name": "homeassistant__GetLiveContext", "description": "Reads the current state of the house.",
-         "inputSchema": obj(json!({})), "annotations": {"readOnlyHint": true}},
+         "inputSchema": obj(target.clone()), "annotations": {"readOnlyHint": true}},
         {"name": "intent__HassTurnOn", "description": "Turns on, opens or locks a device.", "inputSchema": obj(target.clone())},
         {"name": "intent__HassTurnOff", "description": "Turns off, closes or unlocks a device.", "inputSchema": obj(target)},
         {"name": "homeassistant__schedule_command", "description": "Runs a command later.",
@@ -116,13 +120,59 @@ pub fn sample_png(n: u8) -> Vec<u8> {
     png
 }
 
+/// The home `GetLiveContext` reads (27e): name, domain, area and state.
+const HOME: &[(&str, &str, &str, &str)] = &[
+    ("Living room lamp", "light", "Living room", "off"),
+    ("Kitchen light", "light", "Kitchen", "on"),
+    ("Porch light", "light", "Porch", "on"),
+    ("Living room temperature", "sensor", "Living room", "21.4 °C"),
+    ("Front door", "lock", "Hallway", "locked"),
+];
+
+/// A filter's values: a string or an array of strings; none when it is missing or empty.
+fn filter_values(v: &Value) -> Vec<String> {
+    match v {
+        Value::String(s) if !s.trim().is_empty() => vec![s.trim().to_lowercase()],
+        Value::Array(a) => a.iter().filter_map(Value::as_str).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect(),
+        _ => vec![],
+    }
+}
+
+/// `GetLiveContext` as Home Assistant 2026.11.1 answers it (see the module docs).
+fn live_context(args: &Value) -> Value {
+    let (names, domains, areas) = (filter_values(&args["name"]), filter_values(&args["domain"]), filter_values(&args["area"]));
+    let found: Vec<_> = HOME
+        .iter()
+        .filter(|(n, d, a, _)| {
+            (names.is_empty() || names.contains(&n.to_lowercase()))
+                && (domains.is_empty() || domains.contains(&d.to_string()))
+                && (areas.is_empty() || areas.contains(&a.to_lowercase()))
+        })
+        .collect();
+    if found.is_empty() {
+        let error = if !names.is_empty() {
+            format!("No exposed entities matched name '{}'", names.join("', '"))
+        } else if !domains.is_empty() {
+            format!("No exposed entities found in domain(s): {}", domains.join(", "))
+        } else {
+            format!("No exposed entities found in area(s): {}", areas.join(", "))
+        };
+        return text_result(json!({ "error": error }).to_string(), true);
+    }
+    let mut text = String::from("Live Context: An overview of the areas and the devices in this smart home:");
+    for (name, domain, area, state) in found {
+        text.push_str(&format!("\n- names: {name}\n  domain: {domain}\n  state: '{state}'\n  areas: {area}"));
+    }
+    text_result(json!({ "success": true, "result": text }).to_string(), false)
+}
+
 fn text_result(text: String, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
 async fn call(name: &str, args: &Value) -> Value {
     match name {
-        "homeassistant__GetLiveContext" => text_result("Live context: the lights are on, the front door is locked".into(), false),
+        "homeassistant__GetLiveContext" => live_context(args),
         "intent__HassTurnOn" | "intent__HassTurnOff" | "homeassistant__schedule_command" => text_result(format!("done: {name} {args}"), false),
         "echo" => text_result(args["text"].as_str().unwrap_or("").to_string(), false),
         "add" => {

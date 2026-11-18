@@ -639,6 +639,23 @@ pub async fn credit_floor(db: &Database, req: &ToolApprovalRequest) -> Option<St
     mcp::payment_floor::credits_reason(&server.name, server.url.as_deref(), &req.tool)
 }
 
+/// 27e: the names (in kwant) of the turn's `servers` that are Home Assistant's: by what each
+/// said on kwnt's last connection to it in this run, else by what its last test stored. A server
+/// kwnt never heard from isn't counted (the delivery check only adds a continuation for them).
+pub async fn home_server_names(db: &Database, servers: &[McpServer]) -> Vec<String> {
+    let mut names = Vec::new();
+    for server in servers.iter().filter(|s| s.name != mcp::SELF_SERVER_NAME && s.name != mcp::RESERVED_SERVER_NAME) {
+        let reported = match mcp::home_floor::seen(&server.id) {
+            Some(seen) => seen.reported,
+            None => db.mcp_reported_name(&server.id).await.ok().flatten().flatten(),
+        };
+        if reported.is_some_and(|n| mcp::home_floor::is_home_assistant(&n)) {
+            names.push(server.name.clone());
+        }
+    }
+    names
+}
+
 /// 26f: whether `req` acts on a lock, a door, a garage door, a gate or an alarm on a Home
 /// Assistant server ([`mcp::home_floor`]), so it always asks. What the server is comes from what
 /// it said on kwnt's last connection to it in this run, else from what its last test stored; one

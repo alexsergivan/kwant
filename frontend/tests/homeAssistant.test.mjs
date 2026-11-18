@@ -107,6 +107,15 @@ test('the Home template: House on the home sprite, Lights out off by default', (
   assert.equal(home.routine.enabled, false);
 });
 
+test('27e: the Home template says what a 7B model handles, and Check the house reads the whole home first', () => {
+  const home = m.TEMPLATES_WIRE.find((t) => t.id === 'home');
+  const model = home.needs.find((n) => n.id === 'local_model');
+  assert.equal(model.why, 'Keeps what happens at home on your own computer. A 7B model handles named devices ("Turn off the living room lamp"); for questions like "Is anything left on?" a larger or cloud model is more reliable.');
+  const check = home.skills.find((s) => s.name === 'Check the house');
+  assert.match(check.body, /1\. Read the live state once with GetLiveContext and no arguments \(Look at your home\)\. If it fails, say the check failed and why, and stop\./);
+  assert.deepEqual(home.first_prompts, ['Is anything left on?', 'How warm is it inside?', 'Turn off all the lights']);
+});
+
 test('New tags: home-team and home-assistant are new in 0.9.21; older ids keep their version', () => {
   assert.equal(m.newKey('home-team'), 'kwant:new:0.9.21:home-team');
   assert.equal(m.newKey('home-assistant'), 'kwant:new:0.9.21:home-assistant');
