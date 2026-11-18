@@ -2046,6 +2046,7 @@ mod declined_tests {
             approvals: mcp::Approvals::Ask,
             records: Default::default(),
             kwnt_only: false,
+            media: None,
         };
         let (session, problems) = McpToolSession::open(&ctx, None).await;
         assert!(problems.is_empty(), "{problems:?}");
