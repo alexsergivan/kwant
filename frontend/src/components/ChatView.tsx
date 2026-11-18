@@ -72,7 +72,7 @@ import type { PointSink } from './PointLayer';
 import { DropRecipient, FOLDER_NOTE, dragHasFiles, dropAnnouncement, dropCard, leaveMs, modalOpen, previewDrag, splitDrop, windowDragWatch } from '../dragPreview';
 import { DropBot, DropLayer, DropPhase } from './DropLayer';
 import { EarlierCopies, FileTiles, PointChip, UploadChip } from './Attachments';
-import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
+import { arrangeSharedFiles, botDisplayName, botOf, madeWithCaption, shareInfo } from '../sharedFiles';
 import { parseToolNoteMeta } from '../toolNotes';
 import { ToolFailureLine } from './ToolFailureLine';
 import { parseToolFailureMeta } from '../toolFailures';
@@ -1989,9 +1989,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {files.length > 0 && <FileTiles files={files} align={onYourSide ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
           {isUser && heldNotes?.[msg.id]}
           {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (
-            // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared
+            // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared.
+            // 26h: a file an MCP tool made names the app (its preset label, else the server name as typed).
             <p data-shared-auto="" className="mt-1 text-[11px] text-zinc-500">
-              Shared automatically
+              {madeWithCaption(shareInfo(msg.meta).madeWith)}
             </p>
           )}
           {olderCopies && olderCopies.length > 0 && (

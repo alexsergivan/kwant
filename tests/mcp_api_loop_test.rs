@@ -93,6 +93,7 @@ fn ctx(approver: Arc<dyn ToolApprover>, timeout_secs: i64, max: usize) -> McpTur
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
         kwnt_only: false,
+        media: None,
     }
 }
 
@@ -193,7 +194,7 @@ async fn denied_call_is_not_run_and_model_is_told() {
     let c = ctx(Arc::new(FixedApprover(false)), 10, 8);
     let (out, _) = run(url, input(Some(c.clone()))).await;
     assert_eq!(out.text, "ok, no tool");
-    assert_eq!(tool_message(&mock, 1)["content"], "The user denied this tool call.");
+    assert_eq!(tool_message(&mock, 1)["content"], kwnt::mcp::DENIED_TEXT);
     let records = c.take_records();
     assert_eq!(records[0]["status"], "denied");
     assert!(records[0].get("result").is_none());
@@ -329,7 +330,7 @@ async fn anthropic_tool_calls_go_through_the_approver() {
     assert_eq!(out.text, "ok, no tool");
     let requests = mock.requests.lock().unwrap().clone();
     let last = requests[1]["messages"].as_array().unwrap().last().unwrap().clone();
-    assert_eq!(last["content"][0]["content"], "The user denied this tool call.");
+    assert_eq!(last["content"][0]["content"], kwnt::mcp::DENIED_TEXT);
     assert_eq!(c.take_records()[0]["status"], "denied");
 }
 

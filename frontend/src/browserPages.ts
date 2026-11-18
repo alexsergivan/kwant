@@ -55,6 +55,33 @@ export function choosePage(input: { picked: string | null; stepPage: string | nu
   return null;
 }
 
+/**
+ * 28l: the page the pane rests on when nothing is chosen (no pick, no open step), once the pages
+ * list is known. It stays on `held`, the page it was already showing, while that page is still
+ * listed, so the server's default moving after a run (from the bot's page back to the team page, or
+ * the other way when a page is merely used) never swaps the tab under the person. Else the server's
+ * default. With no list (an older server with no pages route, or before the first answer) it is
+ * null: the old fallback. The pane lets go of `held` when a page opens (see pageOpened).
+ */
+export function restingPage(held: string | null, list: Pick<BrowserPageList, 'live' | 'pages'> | null): string | null {
+  if (!list) return null;
+  if (held && list.pages.some((p) => p.page === held)) return held;
+  return list.live;
+}
+
+/**
+ * 28l: whether a page opened between two lists: a page that is new, or one at a new address (a bot's
+ * open or navigate step). Then the pane follows the server's default again, the page just used.
+ * A page that was only used, closed or retitled doesn't count.
+ */
+export function pageOpened(before: Pick<BrowserPageList, 'pages'> | null, after: Pick<BrowserPageList, 'pages'> | null): boolean {
+  if (!before || !after) return false;
+  const was = new Map(before.pages.map((p) => [p.page, p.url]));
+  return after.pages.some((p) => !was.has(p.page) || (p.url !== was.get(p.page) && !isBlankUrl(p.url)));
+}
+
+const isBlankUrl = (url: string | null) => !url || url === 'about:blank';
+
 /** The page the pane is showing: the chosen one, else the server's default, else the team page. */
 export function shownPage(chosen: string | null, list: BrowserPageList | null, team: string | undefined): string | null {
   return chosen ?? list?.live ?? team ?? null;

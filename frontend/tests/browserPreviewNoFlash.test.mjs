@@ -111,7 +111,9 @@ test('a sparse white page: after the first picture, typing frames show at once',
 test('every browser view gets its picture through the steady frame, on the dark surface', () => {
   const src = readFileSync(new URL('../src/components/VirtualMachinePane.tsx', import.meta.url), 'utf8');
   assert.match(src, /const steady = useSteadyFrame\(stream\.frame, stream\.acknowledgeFrame\)/);
-  assert.match(src, /const currentScreenshot = isBlankPage\(pageUrl\) \? null : steady\.frame\?\.image/);
+  // 28e: the picture goes through paneFrame, which gets the steady frame (never the raw one) and its holding
+  assert.match(src, /const panePicture = paneFrame\(\{ blank: isBlankPage\(pageUrl\), frame: steady\.frame, holding: steady\.holding,/);
+  assert.match(src, /const currentScreenshot = 'image' in panePicture \? panePicture\.image : null/);
   assert.match(src, /paneFrameId\.current = steady\.frame\?\.id/);
   assert.doesNotMatch(src, /stream\.frame\?\.image/, 'no view reads the raw frame picture');
   const watch = src.slice(src.indexOf('data-browser-watch'), src.indexOf('data-browser-watch') + 400);
