@@ -807,7 +807,7 @@ fn delivery_item(meta: &Value) -> Option<CheckItem> {
     let strs = |v: &Value| v.as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
     let missing = strs(&d["missing"]);
     let shown = strs(&meta[super::delivery_plan::META_KEY]["show"]);
-    let names: Vec<&str> = if hit { shown.iter().map(String::as_str).collect() } else { missing.iter().map(String::as_str).filter(|m| *m != "follow_through").collect() };
+    let names: Vec<&str> = if hit { shown.iter().map(String::as_str).collect() } else { missing.iter().map(String::as_str).filter(|m| !matches!(*m, "follow_through" | "home_change" | "home_read")).collect() };
     let thing = delivery_thing(&names);
     let evidence = match (hit, d["auto_shared"].as_bool() == Some(true)) {
         (true, true) => "kwant shared the bot's last screenshot under the reply".to_string(),

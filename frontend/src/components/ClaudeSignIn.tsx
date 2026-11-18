@@ -394,7 +394,7 @@ export const ClaudeSignOut: React.FC<{ onSignedOut: (engines: EngineInfo[]) => v
                 type="button"
                 onClick={confirm}
                 disabled={busy}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-400"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-400"
               >
                 {busy && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
                 {busy ? 'Signing out…' : 'Sign out'}

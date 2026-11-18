@@ -181,7 +181,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
     >
       {step.detail ? (
         <details className="group" open={opened || undefined}>
-          <summary className="flex items-start gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
+          <summary className="flex items-start [@media(max-width:767px)_and_(pointer:coarse)]:items-center gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
             {head}
             <ChevronRight size={13} className="mt-px flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
           </summary>

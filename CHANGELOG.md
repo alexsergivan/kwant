@@ -8,6 +8,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.24] - 2026-11-18
+
+kwant 0.9.24: a Deny that reads as your no, not as a failed step, replies that keep the order you sent your messages in, no grey flash when the bot browser switches pages, a read-only check of what your bots ran without asking and address bars that show their own tab's page.
+
+### Added
+- **kwnt run-check** (new): one read-only command that looks through your own history and lists any tool step a bot ran with no approval card, and any card a bot asked again after you said no with nothing from you since. It reads only and changes nothing. It covers the last 7 days by default; `--since`, `--bot`, `--json` and `--strict` (exit 1 when it finds something) narrow it or put it in a script. (#798)
+
+### Changed
+- **Your no reads as a no.** When you press **Deny** on an approval card, the step you refused now reads **You said no** in calm grey, with the reason **You said no; nothing ran**, and the reply's Details say **you said no to 1** instead of "1 failed". A plain Deny no longer turns the reply's Details rose with "a step failed" or adds "A step failed, so check this before relying on it." under the reply. Real failures look the same as before, and replies saved before the update read the same way. (#790)
+
+### Fixed
+- **Replies keep your order.** Messages you send to a bot while it waits on an approval card are now answered in the order you sent them, in a chat or a thread, and also when the card times out. Before, the replies could come back shuffled, so a short answer like "Teal." didn't say which question it answered. Nothing is lost or merged, as before. (#787)
+- Switching the bot browser to another page's tab no longer shows an empty light-grey "Finished" card for a moment first: the pane stays dark until that page's own picture arrives, then shows the page. (#795)
+- Each browser tab's address bar shows its own page's address, never the other tab's (#810)
+
+## [Mac 0.9.23] - 2026-11-18
+
+kwant 0.9.23: pictures from your tools saved in the chat, a Deny that holds until you write again, clearer Home Assistant asks and a tidier Home Assistant sheet on a phone, buttons that stay readable on hover and in amber and House no longer claims a home change that didn't happen.
+
+### Added
+- **Pictures from tools land in the chat.** When a connected tool (an MCP server) returns a picture, a sound or another file, kwant saves it in the chat with a caption like **Made with FLUX · saved automatically**, and the bot gets the file's name instead of the raw data. Up to 10 files per call (pictures up to 20 MB, other files up to 100 MB); anything past that is named in the chat as not saved. Not yet: bots on Ollama don't save tool files in the chat, and on the Claude engine a tool result over about 25 MB doesn't come through (Claude's own limit). A tool that spends Black Forest Labs or Picsart credits always asks first, even with approvals off: the card says **This uses your Black Forest Labs credits.**, and Allow covers just that one call. Reading your balance or history never asks. **Tools › Find a tool** has a new **FLUX** preset: add it, then sign in. (#780)
+
+### Changed
+- **A no stays a no.** When you press **Deny** on an approval card, the bot is told not to try it again or another way unless you ask. Until you write in that chat again, kwant also refuses the same kind of step at once, with no new card: the same program and subcommand, the same website, the same file or the same tool. The step shows as declined: “You said no to a call like this earlier in this chat; kwant didn't ask again”. A message from you clears it; so does a restart. (#781)
+
+### Fixed
+- Home Assistant polish: on a phone the sheet's address wraps at a "/" instead of mid-word, the Needs-you strip and the pinned chat's tip say what House wants in words ("House wants to unlock Front door") instead of the raw tool call, House's suggested asks are about your home, and kwant.si and What's new now say bots can reach every device unless you limit them in Home Assistant. (#784)
+- Button colours: red delete and revoke buttons darken on hover instead of washing out, the amber "Push anyway" and production-floor buttons use dark text so you can read them, the blue gradient buttons fade a shade deeper on hover, and the Spaces unread badges are easier to read. (#785)
+- Home Assistant bots no longer say they unlocked a door or switched something off when no Home Assistant step ran: kwant sends the bot back once to make the call or say plainly that nothing changed, and if it still claims the change, kwant adds its own line under the reply. A filtered home check that fails now makes the bot read the whole home again instead of answering from the error. (#782)
+
+## [Mac 0.9.22] - 2026-11-17
+
+kwant 0.9.22: one green and one purple across the app and Ollama bots that work again on their own when Ollama starts after kwant.
+
+### Changed
+- kwant now uses one green and one purple everywhere. About 120 screens still had an older green and an older purple next to kwant's own teal and lavender (approval buttons, Ready chips, Documents, the Start picker, Hiring); they now match. Buttons with white text no longer get lighter and harder to read on hover, the main button's light corner is a little deeper, and "Allow once" is easier to read. Every button now reads at 4.5:1 or better. A build check stops off-palette colours from coming back. (#767)
+
+### Fixed
+- If Ollama starts after kwant does, your Ollama bots now work on their own, within about 15 seconds or at your next message, with no Re-check. Before, they kept saying "No account can run bots here yet" until someone pressed Re-check. A bot set to an Ollama model that still can't reach Ollama now says "Ollama isn't answering at <address>. Start it, then try again." with a Re-check button that tells you if it's still down, instead of asking you to add an account. A space that runs only on Ollama now counts it in its subtitle, as the sidebar already did. (#764)
+
 ## [Mac 0.9.21] - 2026-11-17
 
 kwant 0.9.21: Home Assistant in two fields with a new Home team, Home Assistant locks, doors and alarms that always ask, a list of what each bot may do without asking, files that reach a bot waiting in the browser at once, a turn end that goes straight to the saved reply, a thread header that stays on Working until the reply appears, closed browser step cards that always say what's next, Needs-attention rows that land on an old ask in a thread, routine runs that say when a step waited for your approval or failed, instead of counting as done and replies whose Details say which step failed or didn't run.
