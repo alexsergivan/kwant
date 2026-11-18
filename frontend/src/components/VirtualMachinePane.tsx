@@ -289,8 +289,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // Once the chosen page's own stream reports where the tab is, trust it; before that, that page's listed
   // address; with no page chosen, the last URL the app heard of (28r: one rule, shared with the field).
   const pageUrl = addressToShow({ location: stream.location, chosen: chosenPage, listedUrl: pageInfo?.url, activeUrl });
-  // The same for the title: a new page's empty title must not fall back to the previous page's.
-  const shownTitle = stream.location ? stream.location.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
+  // The same for the title: a new page's empty title must not fall back to the previous page's, and (28u)
+  // only the chosen page's own stream names it, so the tab just left never lends its title for a render.
+  const ownLocation = stream.location && stream.location.page === chosenPage ? stream.location : null;
+  const shownTitle = ownLocation ? ownLocation.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
   // A blank light frame from Chrome (a page committing) waits behind the last good picture: no grey flash
   const steady = useSteadyFrame(stream.frame, stream.acknowledgeFrame);
   const controlError = stream.error || (!stream.connected ? browserError : null);
@@ -316,9 +318,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     : chosenPage ? (isBlankPage(pageInfo?.url) ? '' : pageInfo?.url ?? '') : pagesKnown ? activeUrl : '';
   const setInputUrl = (url: string) => setWritten({ key: fieldKey, url });
   // Then the stream takes over, but only the chosen page's own: a late message from the page just left
-  // never writes its address
+  // never writes its address. A blank tab's own about:blank keeps the field empty (28u), as its chip says
+  // "nothing open"; pageUrl keeps the raw value for the blank check and the picture.
   useEffect(() => {
-    if (stream.location?.url && stream.location.page === chosenPage) setWritten({ key: fieldKey, url: stream.location.url });
+    if (stream.location?.url && stream.location.page === chosenPage) setWritten({ key: fieldKey, url: isBlankPage(stream.location.url) ? '' : stream.location.url });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream.location]);
   // The pane's own stream knows each page's title too, so the trail can name pages the bot opened
