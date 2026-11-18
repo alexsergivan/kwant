@@ -108,6 +108,8 @@ const ThinkingBox: React.FC<{ text: string; live: boolean; id: string }> = ({ te
 const STEP_MARK: Partial<Record<ActivityStep['status'], string>> = {
   failed: 'text-rose-300 border-rose-500/30',
   unanswered: 'text-amber-300 border-amber-500/30',
+  // 28a: a call the person said no to says so in words too, neutral (their choice, not a failure).
+  declined: 'text-zinc-300 border-zinc-500/40',
 };
 
 const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean }> = ({ step, live, now, listId, opened = false }) => {
@@ -131,7 +133,8 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   const waiting = step.status === 'waiting';
   // 26d: a step that failed or wasn't approved in time says so in words, not only by its icon, even when a later
   // step worked. The icon's label already names it for screen readers, so the mark is hidden from them.
-  const mark = STEP_MARK[step.status];
+  // The approval row keeps its icon only: the mark belongs on the command the person said no to.
+  const mark = step.status === 'declined' && step.kind === 'approval' ? undefined : STEP_MARK[step.status];
   const head = (
     <>
       <StatusIcon step={step} />
@@ -183,9 +186,10 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
             <ChevronRight size={13} className="mt-px flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
           </summary>
           <pre
-            className={`mt-1 ml-5 font-mono text-[11px] whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border px-2 py-1.5 max-h-40 overflow-y-auto ${
-              step.status === 'failed' ? 'text-rose-200 bg-rose-950/30 border-rose-500/20' : 'text-zinc-300 bg-zinc-950/80 border-zinc-800'
-            }`}
+            className={`mt-1 ml-5 whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border px-2 py-1.5 max-h-40 overflow-y-auto ${
+              // 28a: the person's no is a sentence, not output, so it isn't set in mono.
+              step.status === 'declined' ? 'font-sans text-xs' : 'font-mono text-[11px]'
+            } ${step.status === 'failed' ? 'text-rose-200 bg-rose-950/30 border-rose-500/20' : 'text-zinc-300 bg-zinc-950/80 border-zinc-800'}`}
           >
             {step.detail}
           </pre>

@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.23] - 2026-11-18
+
+kwant 0.9.23: pictures from your tools saved in the chat, a Deny that holds until you write again, clearer Home Assistant asks and a tidier Home Assistant sheet on a phone, buttons that stay readable on hover and in amber and House no longer claims a home change that didn't happen.
+
+### Added
+- **Pictures from tools land in the chat.** When a connected tool (an MCP server) returns a picture, a sound or another file, kwant saves it in the chat with a caption like **Made with FLUX · saved automatically**, and the bot gets the file's name instead of the raw data. Up to 10 files per call (pictures up to 20 MB, other files up to 100 MB); anything past that is named in the chat as not saved. Not yet: bots on Ollama don't save tool files in the chat, and on the Claude engine a tool result over about 25 MB doesn't come through (Claude's own limit). A tool that spends Black Forest Labs or Picsart credits always asks first, even with approvals off: the card says **This uses your Black Forest Labs credits.**, and Allow covers just that one call. Reading your balance or history never asks. **Tools › Find a tool** has a new **FLUX** preset: add it, then sign in. (#780)
+
+### Changed
+- **A no stays a no.** When you press **Deny** on an approval card, the bot is told not to try it again or another way unless you ask. Until you write in that chat again, kwant also refuses the same kind of step at once, with no new card: the same program and subcommand, the same website, the same file or the same tool. The step shows as declined: “You said no to a call like this earlier in this chat; kwant didn't ask again”. A message from you clears it; so does a restart. (#781)
+
+### Fixed
+- Home Assistant polish: on a phone the sheet's address wraps at a "/" instead of mid-word, the Needs-you strip and the pinned chat's tip say what House wants in words ("House wants to unlock Front door") instead of the raw tool call, House's suggested asks are about your home, and kwant.si and What's new now say bots can reach every device unless you limit them in Home Assistant. (#784)
+- Button colours: red delete and revoke buttons darken on hover instead of washing out, the amber "Push anyway" and production-floor buttons use dark text so you can read them, the blue gradient buttons fade a shade deeper on hover, and the Spaces unread badges are easier to read. (#785)
+- Home Assistant bots no longer say they unlocked a door or switched something off when no Home Assistant step ran: kwant sends the bot back once to make the call or say plainly that nothing changed, and if it still claims the change, kwant adds its own line under the reply. A filtered home check that fails now makes the bot read the whole home again instead of answering from the error. (#782)
+
 ## [Mac 0.9.22] - 2026-11-17
 
 kwant 0.9.22: one green and one purple across the app and Ollama bots that work again on their own when Ollama starts after kwant.

@@ -1583,6 +1583,8 @@ impl Driver for CliDriver {
         let mut _mcp_config: Option<crate::mcp::cli_config::ConfigFile> = None;
         // 21d: the curl config claude's repeat-guard hooks post through; lives as long as the CLI
         let mut repeat_hook: Option<crate::mcp::cli_config::ConfigFile> = None;
+        // 26h D3: which hooks that config serves (claude's own tools; the bot's MCP tools' files)
+        let (mut builtins_hook, mut media_hook) = (false, false);
         // Whether this computer's `--settings` already went in (claude: before its prompt)
         let mut settings_added = false;
 
@@ -1832,7 +1834,14 @@ impl Driver for CliDriver {
                             // repeat guard, which refuses the 4th identical failing call. Only on this
                             // computer: a VM turn's claude gets none of these settings
                             let builtins = !input.no_tools && !ctx.kwnt_only;
-                            if let (true, true, Some(url)) = (file.is_some(), builtins, ctx.permission_url.as_deref()) {
+                            // 26h D3: and the bot's own MCP tools hand their files to kwnt, which
+                            // saves them in the chat (claude calls those servers itself)
+                            let media = !input.no_tools
+                                && ctx.media.is_some()
+                                && ctx.servers.iter().any(|s| crate::mcp::cli_hooks::saves_media_for(&s.name));
+                            media_hook = media;
+                            builtins_hook = builtins;
+                            if let (true, true, Some(url)) = (file.is_some(), builtins || media, ctx.permission_url.as_deref()) {
                                 match crate::mcp::cli_hooks::write_curl_config(&ctx.config_dir, url) {
                                     Ok(f) => repeat_hook = Some(f),
                                     Err(e) => tracing::warn!(error = %e, "couldn't write the repeat guard's hook config; claude's own tools run unguarded"),
@@ -1863,7 +1872,7 @@ impl Driver for CliDriver {
                     let mut settings = self.local_settings_args(cfg!(target_os = "macos"));
                     if let Some(hook) = &repeat_hook {
                         // 21d: in the same one `--settings`, joined with any hooks already there
-                        super::mac_local::merge_settings_arg(&mut settings, crate::mcp::cli_hooks::settings(&hook.path));
+                        super::mac_local::merge_settings_arg(&mut settings, crate::mcp::cli_hooks::settings(&hook.path, builtins_hook, media_hook));
                     }
                     cmd.args(settings);
                     settings_added = true;
@@ -2720,6 +2729,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 approvals: crate::mcp::Approvals::Ask,
                 records: Default::default(),
                 kwnt_only: false,
+                media: None,
             }
         }
 

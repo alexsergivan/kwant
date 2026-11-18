@@ -10,6 +10,7 @@ pub mod declined;
 pub mod echo_server;
 pub mod fetch_risk;
 pub mod home_floor;
+pub mod media;
 pub mod oauth;
 pub mod payment_floor;
 pub mod prod_floor;
@@ -596,6 +597,10 @@ pub struct McpTurnContext {
     /// CLIs run with none of their built-in tools, so their own allow rules have nothing to let
     /// through without a card. A CLI that can't be held to that runs the turn with no tools.
     pub kwnt_only: bool,
+    /// 26h: where pictures, audio and video an MCP tool returns are saved and shown in the
+    /// turn's chat ([`media::MediaSink`]). `None` (no chat to post into): the model is told a
+    /// file came back but couldn't be saved.
+    pub media: Option<Arc<dyn media::MediaSink>>,
 }
 
 /// Where an agent CLI reaches this turn's MCP gateway. The token is sent as a bearer token.
@@ -654,6 +659,7 @@ impl std::fmt::Debug for McpTurnContext {
             .field("permission_url", &self.permission_url.as_ref().map(|_| "<set>"))
             .field("gateway", &self.gateway)
             .field("max_tool_iterations", &self.max_tool_iterations)
+            .field("media", &self.media.as_ref().map(|_| "<set>"))
             .finish()
     }
 }

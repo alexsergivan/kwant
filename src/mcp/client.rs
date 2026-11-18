@@ -61,6 +61,9 @@ pub struct McpTool {
 pub struct ToolCallResult {
     pub text: String,
     pub is_error: bool,
+    /// 26h: the whole `tools/call` result, so the caller can save the files in it
+    /// ([`super::media`]); `text` stands each of them in as `[image: <mime>]`.
+    pub raw: Value,
 }
 
 /// One `tools/list` entry, or `None` when it has no name.
@@ -126,8 +129,18 @@ fn response_id(msg: &Value) -> Option<i64> {
 
 /// Text an agent can read from a `tools/call` result.
 fn result_text(result: &Value) -> String {
+    result_text_with(result, |_| None)
+}
+
+/// [`result_text`], with `instead(i)` standing in for the `i`th content part when it gives a line
+/// (26h: what became of a picture kwnt saved).
+pub(crate) fn result_text_with(result: &Value, instead: impl Fn(usize) -> Option<String>) -> String {
     let mut parts = Vec::new();
-    for item in result["content"].as_array().into_iter().flatten() {
+    for (i, item) in result["content"].as_array().into_iter().flatten().enumerate() {
+        if let Some(line) = instead(i) {
+            parts.push(line);
+            continue;
+        }
         match item["type"].as_str().unwrap_or("") {
             "text" => parts.push(item["text"].as_str().unwrap_or("").to_string()),
             "image" => parts.push(format!("[image: {}]", item["mimeType"].as_str().unwrap_or("?"))),
@@ -341,6 +354,7 @@ impl McpClient {
         Ok(ToolCallResult {
             text: result_text(&result),
             is_error: result["isError"].as_bool().unwrap_or(false),
+            raw: result,
         })
     }
 

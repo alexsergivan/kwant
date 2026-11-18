@@ -71,7 +71,48 @@ export function parseActivityMeta(raw: unknown): SavedActivity | null {
   if (!a || typeof a !== 'object' || !Array.isArray((a as { steps?: unknown }).steps)) return null;
   const steps = ((a as { steps: unknown[] }).steps).map(parseStep).filter((s): s is ActivityStep => !!s);
   const dropped = Number((a as { dropped?: unknown }).dropped) || 0;
-  return steps.length || dropped ? { steps, dropped } : null;
+  return steps.length || dropped ? { steps: readDenials(steps), dropped } : null;
+}
+
+/** What the claude CLI tells the bot (and kwnt saved as a failed step) when the person pressed Deny (server DENIED_TEXT). */
+const CLI_DENIED = 'The user denied this tool call';
+/** How a step the person said no to reads (28a); the same words as the server's DENIED_STEP_DETAIL (28b). */
+export const DENIED_STEP_DETAIL = 'You said no; nothing ran';
+
+const deniedFailure = (s: ActivityStep) => s.kind === 'tool' && s.status === 'failed' && !!s.detail?.startsWith(CLI_DENIED);
+const readAsDenied = (s: ActivityStep) => s.kind === 'tool' && s.status === 'declined' && s.detail === DENIED_STEP_DETAIL;
+
+/**
+ * 28a: the person's Deny reads as their no, not a failure. Before 28b (and in every older saved reply) a Deny
+ * leaves two steps: the card's approval step `declined` and the tool step `failed` with the CLI's "The user denied
+ * this tool call." Each declined approval step turns at most one such tool step of the same tool into `declined`,
+ * "You said no; nothing ran" (the nearest one, in either order: the CLI's tool step usually starts first). A step
+ * already in that shape (28b's server) takes its card too, so this is idempotent. With no declined card (kwnt
+ * refused the call itself) the step stays `failed`: that wasn't the person's no. Returns `steps` when nothing changes.
+ */
+export function readDenials(steps: ActivityStep[]): ActivityStep[] {
+  const cards = steps.map((s, i) => [s, i] as const).filter(([s]) => s.kind === 'approval' && s.status === 'declined' && s.tool);
+  if (!cards.length) return steps;
+  const usedCards = new Set<number>();
+  const usedSteps = new Set<number>();
+  const turn = new Set<number>();
+  // Steps already read as denied take their card first, so a second call of the same tool isn't paired with it again.
+  for (const pass of [readAsDenied, deniedFailure]) {
+    for (const [card, ci] of cards) {
+      if (usedCards.has(ci)) continue;
+      let best = -1;
+      steps.forEach((s, i) => {
+        if (s.tool !== card.tool || usedSteps.has(i) || !pass(s)) return;
+        if (best < 0 || Math.abs(i - ci) < Math.abs(best - ci)) best = i;
+      });
+      if (best < 0) continue;
+      usedCards.add(ci);
+      usedSteps.add(best);
+      if (pass === deniedFailure) turn.add(best);
+    }
+  }
+  if (!turn.size) return steps;
+  return steps.map((s, i) => (turn.has(i) ? { ...s, status: 'declined', detail: DENIED_STEP_DETAIL } : s));
 }
 
 export const isOpenStep = (s: ActivityStep) => s.status === 'running' || s.status === 'waiting';
@@ -92,7 +133,7 @@ export function applyActivity(prev: LiveActivity | undefined, turnId: string, st
   // A settled step doesn't go back to running (an out-of-order event loses).
   if (i >= 0 && !isOpenStep(base.steps[i]) && isOpenStep(step)) return base;
   const steps = i >= 0 ? base.steps.map((s, j) => (j === i ? step : s)) : [...base.steps, step];
-  return { ...base, steps };
+  return { ...base, steps: readDenials(steps) };
 }
 
 /**
@@ -175,8 +216,8 @@ export function formatClock(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
 
-/** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when any failed and
- *  "· 1 didn't run" when an approval went unanswered (26d). */
+/** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when any failed,
+ *  "· 1 didn't run" when an approval went unanswered (26d) and "· you said no to 1" when the person denied a call (28a). */
 export function activitySummary(a: SavedActivity): string {
   const n = counted(a.steps).length + a.dropped;
   const steps = `${n} ${n === 1 ? 'step' : 'steps'}`;
@@ -186,6 +227,8 @@ export function activitySummary(a: SavedActivity): string {
   if (failed) parts.push(`${failed} failed`);
   const unanswered = a.steps.filter((s) => s.status === 'unanswered').length;
   if (unanswered) parts.push(`${unanswered} didn’t run`);
+  const declined = a.steps.filter((s) => s.kind === 'tool' && s.status === 'declined').length;
+  if (declined) parts.push(`you said no to ${declined}`);
   return parts.join(' · ');
 }
 
@@ -203,7 +246,7 @@ export function statusLabel(s: ActivityStep): string {
     case 'failed':
       return 'Failed';
     case 'declined':
-      return s.kind === 'approval' ? 'Denied' : 'Skipped';
+      return s.kind === 'approval' ? 'Denied' : 'You said no';
     case 'stopped':
       return 'Stopped';
     case 'unanswered':

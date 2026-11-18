@@ -315,7 +315,7 @@ impl BrokerApprover {
     /// payment floor, Flight School or the production floor wants a card (exactly as in
     /// [`Self::classified`]), it names kwnt's secrets, or the grant was used or expired.
     async fn granted(&self, req: &ToolApprovalRequest, grant: &mcp::PrepushGrant) -> Option<Option<String>> {
-        if req.payment.is_some() || mcp::payment_floor::reason(req, None).is_some() {
+        if req.payment.is_some() || mcp::payment_floor::reason(req, None).is_some() || credit_floor(&self.db, req).await.is_some() {
             return None;
         }
         if home_floor(&self.db, req).await {
@@ -356,7 +356,10 @@ impl BrokerApprover {
         let mode = self.db.kwant_approvals(&req.kwant_id).await.ok();
         // The payment floor (D8): a call that pays always gets a card, whatever the approvals,
         // "Ask only when risky" or "always allow" say. Allowing it covers this one call.
-        let payment = req.payment.clone().or_else(|| mcp::payment_floor::reason(&req, None));
+        let payment = match req.payment.clone().or_else(|| mcp::payment_floor::reason(&req, None)) {
+            Some(why) => Some(why),
+            None => credit_floor(&self.db, &req).await,
+        };
         // Flight School (C3): the bot's tier for this task can add a card, never remove one. It
         // skips approvals off and smart Allow; a session "always allow" still counts (D9).
         let tier = match payment {
@@ -413,6 +416,10 @@ impl BrokerApprover {
         }
         if let Some(why) = &payment {
             details["payment_reason"] = json!(why);
+            // 26h: the card says whose credits it uses instead of "a payment"
+            if let Some(app) = mcp::payment_floor::CreditApp::of_reason(why) {
+                details["credits"] = json!(app.label());
+            }
         }
         if let Some(why) = &tier {
             details["tier_reason"] = json!(why);
@@ -611,6 +618,42 @@ impl BrokerApprover {
         let class = if outcome.allowed() { "approved" } else { "denied" };
         (outcome, class, Some(ticket))
     }
+}
+
+/// 26h: why a call to a renamed credit app (FLUX, Picsart) asks: the bot's stored server with
+/// this name is at the app's address ([`mcp::payment_floor::credits_reason`]). Calls kwnt runs
+/// itself already carry the address in `req.payment`; this covers the ones an agent CLI asks
+/// about by name only. `None` for kwnt's own and claude's built-in tools.
+pub async fn credit_floor(db: &Database, req: &ToolApprovalRequest) -> Option<String> {
+    if req.builtin.is_some() || req.server.is_empty() || req.server == mcp::SELF_SERVER_NAME {
+        return None;
+    }
+    let servers = match db.list_active_mcp_servers_for_kwant(&req.kwant_id).await {
+        Ok(servers) => servers,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the bot's MCP servers for the credit check");
+            return None;
+        }
+    };
+    let server = servers.into_iter().find(|s| s.name == req.server)?;
+    mcp::payment_floor::credits_reason(&server.name, server.url.as_deref(), &req.tool)
+}
+
+/// 27e: the names (in kwant) of the turn's `servers` that are Home Assistant's: by what each
+/// said on kwnt's last connection to it in this run, else by what its last test stored. A server
+/// kwnt never heard from isn't counted (the delivery check only adds a continuation for them).
+pub async fn home_server_names(db: &Database, servers: &[McpServer]) -> Vec<String> {
+    let mut names = Vec::new();
+    for server in servers.iter().filter(|s| s.name != mcp::SELF_SERVER_NAME && s.name != mcp::RESERVED_SERVER_NAME) {
+        let reported = match mcp::home_floor::seen(&server.id) {
+            Some(seen) => seen.reported,
+            None => db.mcp_reported_name(&server.id).await.ok().flatten().flatten(),
+        };
+        if reported.is_some_and(|n| mcp::home_floor::is_home_assistant(&n)) {
+            names.push(server.name.clone());
+        }
+    }
+    names
 }
 
 /// 26f: whether `req` acts on a lock, a door, a garage door, a gate or an alarm on a Home
@@ -1162,6 +1205,14 @@ pub async fn prepare_turn_with_opts(
     // A dry run writes nothing, so it needs no pre-push card
     let approver: Arc<dyn ToolApprover> =
         if opts.rehearse.is_some() { approver } else { Arc::new(PrepushApprover { inner: approver, state: state.clone() }) };
+    // 26h: files a tool returns are saved in the turn's chat (not in a dry run, which writes nothing)
+    let media = match (&self_scope, &opts.rehearse) {
+        (Some(scope), None) if scope.origin.is_some() => Some(Arc::new(super::attachments::ChatMedia {
+            state: state.clone(),
+            scope: scope.clone(),
+        }) as Arc<dyn mcp::media::MediaSink>),
+        _ => None,
+    };
     let ctx = McpTurnContext {
         servers,
         approver,
@@ -1183,6 +1234,7 @@ pub async fn prepare_turn_with_opts(
         },
         records: Default::default(),
         kwnt_only: opts.every_call,
+        media,
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
@@ -1496,15 +1548,36 @@ pub async fn permission_endpoint(
     }
 }
 
+/// 26h D3: the largest hook payload kwnt reads. A claude PostToolUse for an MCP tool carries the
+/// pictures it returned as base64 (a 20 MB image is ~27 MB); past this the hook gets a 413, which
+/// its `curl -f` turns into no output, and claude keeps its own output (nothing is saved).
+pub const HOOK_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
 /// `POST /api/mcp/permission/:token/hook`: claude's PreToolUse, PostToolUse and
 /// PostToolUseFailure hooks for this turn's built-in tools ([`mcp::cli_hooks`]). Answers a
 /// PreToolUse deny when the same call already failed 3 times the same way, and nothing otherwise
 /// (204). An unknown token is a 404, which the hook's `curl -f` turns into no output: the call runs.
+/// 26h D3: a PostToolUse for one of the bot's MCP tools saves the files in its result in the
+/// turn's chat ([`mcp::media::finish_claude`]) and answers the text the model reads instead.
 pub async fn permission_hook_endpoint(State(state): State<AppState>, Path(token): Path<String>, Json(msg): Json<Value>) -> Response {
     let session = state.mcp_sessions.lock().await.get(&token).cloned();
     let Some(session) = session else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if let Some((server, tool)) = mcp::cli_hooks::mcp_call(&msg) {
+        let Some(cfg) = session.ctx.servers.iter().find(|s| s.name == server && mcp::cli_hooks::saves_media_for(server)) else {
+            return StatusCode::NO_CONTENT.into_response();
+        };
+        let dir = mcp::cli_hooks::tool_results_dir(&msg);
+        let media = session.ctx.media.as_deref();
+        return match mcp::media::finish_claude(&msg["tool_response"], server, cfg.url.as_deref(), tool, media, dir.as_deref()).await {
+            Some(text) => {
+                tracing::info!(kwant = %session.kwant_id, turn = %session.turn_id, %server, %tool, "saved a claude MCP tool's files in the chat");
+                Json(mcp::cli_hooks::replace_output(&text)).into_response()
+            }
+            None => StatusCode::NO_CONTENT.into_response(),
+        };
+    }
     match mcp::cli_hooks::on_event(&session.repeats, &msg) {
         Some(out) => {
             tracing::info!(kwant = %session.kwant_id, turn = %session.turn_id, "repeat guard: a claude tool call was denied");
@@ -1990,6 +2063,7 @@ mod declined_tests {
             approvals: mcp::Approvals::Ask,
             records: Default::default(),
             kwnt_only: false,
+            media: None,
         };
         let (session, problems) = McpToolSession::open(&ctx, None).await;
         assert!(problems.is_empty(), "{problems:?}");

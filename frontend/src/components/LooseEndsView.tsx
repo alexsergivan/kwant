@@ -1029,7 +1029,7 @@ export const LooseSources: React.FC<{
                     </button>
                     {confirmRemove === s.id ? (
                       <>
-                        <button type="button" disabled={busy !== null} onClick={() => run(s, 'remove')} className={`${actionBtn} bg-rose-600 hover:bg-rose-500 text-white`}>
+                        <button type="button" disabled={busy !== null} onClick={() => run(s, 'remove')} className={`${actionBtn} bg-rose-600 hover:bg-rose-700 text-white`}>
                           <Trash2 size={13} aria-hidden="true" /> Remove it and its cases
                         </button>
                         <button type="button" onClick={() => setConfirmRemove(null)} className={quietBtn}>

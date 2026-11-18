@@ -291,6 +291,11 @@ pub fn page_reason(action: &str, key: Option<&str>, page: &PageSignals) -> Optio
 /// An MCP tool (incl. Composio): by its name and server, the Composio slugs it runs, and for
 /// browser-type tools, the label it clicks or the card number it types.
 fn mcp_reason(server: &str, tool: &str, args: &Value) -> Option<String> {
+    // 26h: a generation on an app that bills the person's own credits (by its server name here;
+    // [`credits_reason`] with the server's address also knows a renamed one)
+    if let Some(why) = credits_reason(server, None, tool) {
+        return Some(why);
+    }
     let mut names = vec![tool.to_string()];
     collect_slugs(args, &mut names, 0);
     for name in &names {
@@ -328,6 +333,119 @@ fn mcp_reason(server: &str, tool: &str, args: &Value) -> Option<String> {
         }
     }
     None
+}
+
+/// 26h: an MCP app whose tools spend the person's own credits there (a picture or a video made
+/// with their account). kwnt never resells credits and never knows a price: the card only says
+/// whose credits a call uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreditApp {
+    /// Black Forest Labs' FLUX server (`https://mcp.bfl.ai`).
+    Bfl,
+    /// Picsart's GenAI server (`https://api.picsart.com/gen-ai/mcp`).
+    Picsart,
+}
+
+impl CreditApp {
+    pub const ALL: [CreditApp; 2] = [CreditApp::Bfl, CreditApp::Picsart];
+
+    /// The name the card uses: "uses your <label> credits".
+    pub fn label(self) -> &'static str {
+        match self {
+            CreditApp::Bfl => "Black Forest Labs",
+            CreditApp::Picsart => "Picsart",
+        }
+    }
+
+    /// Server names that are this app, compared without case, `-`, `_`, spaces or a trailing
+    /// number (`flux`, `FLUX`, `black-forest-labs`, `picsart-2`).
+    fn names(self) -> &'static [&'static str] {
+        match self {
+            CreditApp::Bfl => &["flux", "bfl", "blackforestlabs"],
+            CreditApp::Picsart => &["picsart"],
+        }
+    }
+
+    /// Hosts that are this app's server: the domain itself or any name under it.
+    fn domains(self) -> &'static [&'static str] {
+        match self {
+            CreditApp::Bfl => &["bfl.ai"],
+            CreditApp::Picsart => &["picsart.com"],
+        }
+    }
+
+    /// Tools that make something with the person's credits (checked against the servers' own
+    /// tool lists, Nov 17 2026: BFL's README and Picsart's listing, whose generate, edit, upscale
+    /// and render tools say they spend credits).
+    fn spends(self) -> &'static [&'static str] {
+        match self {
+            CreditApp::Bfl => &[
+                "generate_image", "generate_variations", "vto", "generate_video", "enhance_video", "upscale_video", "edit_video",
+            ],
+            CreditApp::Picsart => &[
+                "picsart_generate", "picsart_remove_bg", "picsart_change_bg", "picsart_enhance", "picsart_vectorize",
+                "picsart_media_contact_sheet", "picsart_media_export",
+            ],
+        }
+    }
+
+    /// Tools that only read (a balance, a job's status, a catalog, a guide, an upload address).
+    fn reads(self) -> &'static [&'static str] {
+        match self {
+            CreditApp::Bfl => &["get_credits", "get_history", "get_result", "list_skills", "get_skill", "request_upload_url"],
+            CreditApp::Picsart => &[
+                "picsart_credits", "picsart_job_status", "picsart_list_models", "picsart_model_catalog", "picsart_model_params",
+                "picsart_preflight",
+            ],
+        }
+    }
+
+    /// Whether a tool this list doesn't name spends credits unless its name only reads. BFL's
+    /// server is all generation apart from its reads, so a new tool there asks; Picsart's also
+    /// edits scenes locally and keeps a drive, which cost nothing, so only its listed tools ask.
+    fn unlisted_spend(self) -> bool {
+        matches!(self, CreditApp::Bfl)
+    }
+
+    /// Which credit app the MCP server `name` (at `url`, when known) is.
+    pub fn of_server(name: &str, url: Option<&str>) -> Option<CreditApp> {
+        let plain: String = name.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+        let plain = plain.trim_end_matches(|c: char| c.is_ascii_digit());
+        let host = url
+            .and_then(|u| url::Url::parse(u).ok())
+            .and_then(|u| u.host_str().map(|h| h.trim_end_matches('.').to_ascii_lowercase()));
+        Self::ALL.into_iter().find(|app| {
+            app.names().contains(&plain)
+                || host.as_deref().is_some_and(|h| app.domains().iter().any(|d| h == *d || h.ends_with(&format!(".{d}"))))
+        })
+    }
+
+    /// Whether `tool` on this app uses the person's credits.
+    pub fn spends_on(self, tool: &str) -> bool {
+        let tool = tool.to_ascii_lowercase();
+        if self.reads().contains(&tool.as_str()) {
+            return false;
+        }
+        self.spends().contains(&tool.as_str()) || (self.unlisted_spend() && !reads_only(&words(&tool)))
+    }
+
+    /// The payment reason a credit call carries; [`CreditApp::of_reason`] reads it back.
+    fn reason(self, tool: &str) -> String {
+        format!("{tool} uses your {} credits", self.label())
+    }
+
+    /// The credit app a payment reason names, for the card's "Uses your … credits" heading.
+    pub fn of_reason(why: &str) -> Option<CreditApp> {
+        Self::ALL.into_iter().find(|app| why.ends_with(&format!(" uses your {} credits", app.label())))
+    }
+}
+
+/// Why a call to `tool` on the MCP server `server` (at `url`, when known) asks as a payment: it
+/// spends the person's credits on a credit app ([`CreditApp`]). Matched on the server's name or
+/// its address, never on the tool alone: a shop's `generate_image` isn't a payment.
+pub fn credits_reason(server: &str, url: Option<&str>, tool: &str) -> Option<String> {
+    let app = CreditApp::of_server(server, url)?;
+    app.spends_on(tool).then(|| app.reason(tool))
 }
 
 /// A tool or slug name that pays: any write tool of a money-only app, or a money verb with a
@@ -811,6 +929,60 @@ mod tests {
         assert!(mcp("drive", "transfer_ownership", json!({})).is_none());
         assert!(mcp("github", "create_issue", json!({})).is_none());
         assert!(mcp("shop", "get_order", json!({})).is_none());
+    }
+
+    /// 26h: a generation that spends the person's FLUX or Picsart credits always asks; the
+    /// apps' reads don't, and the same tool name on another server isn't a payment.
+    #[test]
+    fn credit_generations_ask_and_reads_dont() {
+        let flux = mcp("flux", "generate_image", json!({"prompt": "a cat"}));
+        assert_eq!(flux.as_deref(), Some("generate_image uses your Black Forest Labs credits"));
+        for tool in ["generate_variations", "vto", "generate_video", "enhance_video", "upscale_video", "edit_video"] {
+            assert!(mcp("flux", tool, json!({})).is_some(), "flux {tool} asks");
+        }
+        for tool in ["get_credits", "get_history", "get_result", "list_skills", "get_skill", "request_upload_url"] {
+            assert_eq!(mcp("flux", tool, json!({})), None, "flux {tool} only reads");
+        }
+        // BFL's server is all generation: a tool it adds later asks unless its name only reads
+        assert!(mcp("flux", "inpaint_image", json!({})).is_some());
+        assert_eq!(mcp("flux", "list_models", json!({})), None);
+        // Other names it goes by
+        for server in ["bfl", "FLUX", "black-forest-labs", "Black Forest Labs", "flux-2"] {
+            assert!(mcp(server, "generate_image", json!({})).is_some(), "{server}");
+        }
+        assert_eq!(
+            mcp("picsart", "picsart_generate", json!({"model": "flux-dev"})).as_deref(),
+            Some("picsart_generate uses your Picsart credits")
+        );
+        for tool in ["picsart_remove_bg", "picsart_change_bg", "picsart_enhance", "picsart_vectorize", "picsart_media_contact_sheet"] {
+            assert!(mcp("picsart", tool, json!({})).is_some(), "picsart {tool} asks");
+        }
+        for tool in ["picsart_credits", "picsart_job_status", "picsart_list_models", "picsart_preflight", "picsart_drive", "picsart_media_patch_scene"] {
+            assert_eq!(mcp("picsart", tool, json!({})), None, "picsart {tool} spends nothing");
+        }
+        // Not a credit app: the old rules, unchanged
+        assert_eq!(mcp("shop", "generate_image", json!({})), None, "a shop's generate_image isn't a payment");
+        assert_eq!(mcp("comfyui", "generate_image", json!({})), None);
+        assert!(mcp("stripe", "create_charge", json!({})).is_some(), "stripe still asks");
+        assert_eq!(mcp("github", "create_issue", json!({})), None, "github still doesn't");
+    }
+
+    /// A renamed server is still known by its address; a lookalike host isn't.
+    #[test]
+    fn credit_apps_are_known_by_address() {
+        let at = |url: &str| credits_reason("images", Some(url), "generate_image");
+        assert!(at("https://mcp.bfl.ai").is_some());
+        assert!(at("https://mcp.bfl.ai/mcp").is_some());
+        assert!(at("https://eu.mcp.bfl.ai/").is_some());
+        assert_eq!(at("https://bfl.ai.example.com/mcp"), None, "only the domain itself or names under it");
+        assert_eq!(at("https://notbfl.ai/mcp"), None);
+        assert_eq!(at("not a url"), None);
+        assert!(credits_reason("design", Some("https://api.picsart.com/gen-ai/mcp"), "picsart_generate").is_some());
+        assert_eq!(credits_reason("design", Some("https://api.picsart.com/gen-ai/mcp"), "picsart_credits"), None);
+        assert_eq!(credits_reason("images", None, "generate_image"), None);
+        assert_eq!(CreditApp::of_reason("generate_image uses your Black Forest Labs credits"), Some(CreditApp::Bfl));
+        assert_eq!(CreditApp::of_reason("picsart_generate uses your Picsart credits"), Some(CreditApp::Picsart));
+        assert_eq!(CreditApp::of_reason("stripe create_charge looks like a payment"), None);
     }
 
     #[test]
