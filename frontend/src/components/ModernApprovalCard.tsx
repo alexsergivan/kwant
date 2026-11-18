@@ -1,5 +1,5 @@
-import React, { useId, useState } from 'react';
-import { ShieldAlert, Check, CheckCheck, X, FileText, Clock, CreditCard, GraduationCap, ChevronDown, Lock } from 'lucide-react';
+import React, { useId, useRef, useState } from 'react';
+import { ShieldAlert, Check, CheckCheck, X, MessageSquare, FileText, Clock, CreditCard, GraduationCap, ChevronDown, Lock } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { formatArgs, parseMcpToolName } from '../mcp';
 import { tierReason } from '../flightSchool';
@@ -8,6 +8,7 @@ import { localClock } from '../clock';
 import { isPhoneLayout } from '../layout';
 import { parseProdFloor, type BackupResult, type FloorBackup, type FloorResolveOpts } from '../dev/types';
 import { ProdFloorCard } from './dev/ProdFloorCard';
+import { DENY_REASON_MAX } from '../away';
 
 export interface PendingApproval {
   id: string;
@@ -263,6 +264,76 @@ const ApprovalDetails: React.FC<{ phone?: boolean; children: React.ReactNode }> 
   );
 };
 
+/** The card's secondary button (Deny, Always allow, Deny and tell). */
+const SECONDARY =
+  'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg border border-[#3f3868] bg-[#231d4b] text-sm font-medium text-[#ecebfa] hover:bg-[#2c2552] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed';
+
+/**
+ * 29p "Say why": a quiet button in the action row that opens a one-line field under it, with "Deny and tell
+ * <bot>". Its own component so the card itself keeps no state. Fragment children of the action row: the form
+ * takes a whole line of its own (basis-full) on a wide screen and comes last on a phone.
+ */
+const SayWhy: React.FC<{ botName: string | null; disabled: boolean; onDeny: (reason: string) => void }> = ({ botName, disabled, onDeny }) => {
+  // null while closed, else the reason typed so far.
+  const [why, setWhy] = useState<string | null>(null);
+  const id = useId();
+  const ref = useRef<HTMLButtonElement>(null);
+  const tellWho = botName ?? 'the bot';
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        disabled={disabled}
+        aria-expanded={why !== null}
+        aria-controls={id}
+        onClick={() => setWhy((w) => (w === null ? '' : null))}
+        data-approval-say-why=""
+        className="self-start sm:self-auto sm:mr-auto -ml-2 sm:ml-0 inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-sm text-[#a39dcc] hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <MessageSquare size={14} aria-hidden="true" />
+        <span>Say why</span>
+      </button>
+      {why !== null && (
+        <form
+          id={id}
+          data-approval-why=""
+          className="sm:basis-full flex flex-col gap-2 sm:flex-row sm:items-center"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onDeny(why);
+          }}
+        >
+          <input
+            type="text"
+            autoFocus
+            value={why}
+            maxLength={DENY_REASON_MAX}
+            disabled={disabled}
+            onChange={(e) => setWhy(e.target.value.slice(0, DENY_REASON_MAX))}
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return;
+              e.preventDefault();
+              e.stopPropagation();
+              setWhy(null);
+              ref.current?.focus();
+            }}
+            aria-label={`Why you’re denying this, for ${tellWho}`}
+            placeholder="What should it do instead? (optional)"
+            enterKeyHint="send"
+            autoComplete="off"
+            className="min-w-0 w-full sm:flex-1 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg border border-[#3f3868] bg-zinc-950/70 text-base sm:text-sm text-[#ecebfa] placeholder:text-[#a39dcc] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50"
+          />
+          <button type="submit" disabled={disabled} data-approval-deny-why="" className={`${SECONDARY} w-full sm:w-auto sm:max-w-[50%] min-w-0`}>
+            <X size={14} aria-hidden="true" className="shrink-0" />
+            <span className="min-w-0 break-words [overflow-wrap:anywhere] text-left">Deny and tell {tellWho}</span>
+          </button>
+        </form>
+      )}
+    </>
+  );
+};
+
 const PRE = 'font-mono text-xs leading-[18px] whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-h-[240px] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950/70 p-2';
 
 export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
@@ -303,6 +374,13 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
     playSfx('click');
     onResolve(approval.id, decision);
   };
+  // 29p: Deny with the person's words, so the bot hears why at once. An empty field is a plain Deny.
+  const denyWithReason = (text: string) => {
+    if (disabled) return;
+    playSfx('click');
+    const reason = text.trim();
+    onResolve(approval.id, 'deny', reason ? { reason } : undefined);
+  };
   const mcp = mcpView(approval);
   const shell = localShellView(approval);
   const builtin = shell || mcp ? null : builtinView(approval);
@@ -322,6 +400,8 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   // 26f: a lock, door, garage door, gate or alarm call always asks; its own field, not `always_ask`.
   const homeAlwaysAsk = approval.details?.home_always_ask === true;
   const offerAlways = !shell && !waiting && !payment && !alwaysAsk && !homeAlwaysAsk;
+  // 29p: a `waiting` card's turn has stopped, so nobody would hear the reason; plain Deny only there.
+  const offerWhy = !waiting;
 
   const bot = botName ? <strong className="font-semibold text-zinc-50">{botName}</strong> : 'A bot';
   // "<Bot> wants to open a pull request on <Server>", the server in bold.
@@ -390,8 +470,6 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
     </>
   );
 
-  const secondary =
-    'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg border border-[#3f3868] bg-[#231d4b] text-sm font-medium text-[#ecebfa] hover:bg-[#2c2552] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed';
 
   return (
     <div
@@ -498,7 +576,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
           screen they sit in one row, right-aligned, with Allow last. Local shell approvals are never
           remembered, a late answer only lets that one call run, and a payment or a turn kwant
           started on its own always asks again, so none of them gets an "always". */}
-      <div data-approval-actions className="mt-3 flex flex-col gap-2 sm:flex-row-reverse sm:items-center sm:justify-start">
+      <div data-approval-actions className="mt-3 flex flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:items-center sm:justify-start">
         <button
           type="button"
           disabled={disabled}
@@ -510,7 +588,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
           <span>{waiting ? 'Allow and continue' : 'Allow once'}</span>
         </button>
         <div className={`grid gap-2 sm:flex ${offerAlways ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          <button type="button" disabled={disabled} onClick={() => handleDecision('deny')} className={secondary}>
+          <button type="button" disabled={disabled} onClick={() => handleDecision('deny')} className={SECONDARY}>
             <X size={14} aria-hidden="true" />
             <span>Deny</span>
           </button>
@@ -520,13 +598,15 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
               disabled={disabled}
               onClick={() => handleDecision('always_allow')}
               title={perSession ? 'Allow this tool for this bot in this conversation' : mcp ? 'Allow this tool for this bot in this conversation, also after kwant restarts' : undefined}
-              className={secondary}
+              className={SECONDARY}
             >
               <CheckCheck size={14} aria-hidden="true" />
               <span>{perSession ? 'Always this session' : 'Always allow'}</span>
             </button>
           )}
         </div>
+        {/* 29p: quiet, next to Deny (left of it on a wide screen, under the buttons on a phone). Deny itself stays one tap. */}
+        {offerWhy && <SayWhy botName={botName} disabled={disabled} onDeny={denyWithReason} />}
       </div>
     </div>
   );

@@ -52,7 +52,7 @@ export interface AwayViewProps {
   onBack?: () => void;
   onOpen: (item: AwayItem) => void;
   onAnswer: (item: AwayItem, choice: number) => void;
-  onResolve: (item: AwayItem, decision: ApprovalDecision, withoutBackup?: boolean) => void;
+  onResolve: (item: AwayItem, decision: ApprovalDecision, withoutBackup?: boolean, reason?: string) => void;
   /** Above the lists: what holds every bot (today's spending stop), not one bot's item. */
   top?: React.ReactNode;
 }
@@ -115,7 +115,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
 
         {item.kind === 'approval' && (
           <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
-            <ModernApprovalCard approval={approvalFromAway(item)} disabled={disabled} onResolve={(_, decision, opts) => onResolve(item, decision as ApprovalDecision, opts?.withoutBackup)} />
+            <ModernApprovalCard approval={approvalFromAway(item)} disabled={disabled} onResolve={(_, decision, opts) => onResolve(item, decision as ApprovalDecision, opts?.withoutBackup, opts?.reason)} />
           </div>
         )}
 
@@ -325,9 +325,9 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       top={top}
       onOpen={onOpen}
       onAnswer={(item, choice) => act(item, () => awayApi.answer(item.id, choice))}
-      onResolve={(item, decision, withoutBackup) =>
+      onResolve={(item, decision, withoutBackup, reason) =>
         // Lapsed meanwhile: the chat's card is stale too (but not on a backup refusal: it is still waiting).
-        act(item, () => resolveFromList(item.id, onApprovalResolved, () => awayApi.resolve(item.id, decision, withoutBackup)), decision === 'deny')
+        act(item, () => resolveFromList(item.id, onApprovalResolved, () => awayApi.resolve(item.id, decision, withoutBackup, reason)), decision === 'deny')
       }
     />
   );

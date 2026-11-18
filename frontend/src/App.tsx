@@ -160,7 +160,7 @@ import {
   questionsApi,
   turnsAwaitingAnswer,
 } from './questions';
-import { AwayError, AwayItem, affectsAway, awayApi } from './away';
+import { AwayError, AwayItem, affectsAway, awayApi, resolveBody } from './away';
 import { asksHere, closedId, isHandOff, dismissKind, dropClosed, loadAskWindow, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
 import { NeedsYouStrip } from './components/NeedsYouStrip';
 import { chainBudgetApi } from './chainBudget';
@@ -2110,7 +2110,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // 22f: the person's own "Allow without a backup" on a deploy kwant only guessed changes the database.
-        body: JSON.stringify(opts?.withoutBackup && decision === 'allow_once' ? { decision, without_backup: true } : { decision }),
+        // 29p: a Deny with words from "Say why" carries them as `reason`.
+        body: JSON.stringify(resolveBody(decision, opts)),
       });
       // Production floor (Dev mode): Allow without a fresh backup is refused and the card stays waiting.
       if (res.status === 409) {

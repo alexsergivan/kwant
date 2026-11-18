@@ -92,7 +92,7 @@ test('approval card on a phone: header, one sentence, two key facts, details clo
   assert.doesNotMatch(html, /data-approval-details=""/);
   assert.doesNotMatch(html, /&quot;head&quot;/);
   const b = buttons(html);
-  assert.deepEqual(b.map((x) => x.label), ['Show details', 'Allow once', 'Deny', 'Always allow']);
+  assert.deepEqual(b.map((x) => x.label), ['Show details', 'Allow once', 'Deny', 'Always allow', 'Say why']); // 29p: Say why after Deny's row
   assert.match(b[0].attrs, /aria-expanded="false"/);
   assert.match(b[0].attrs, /min-h-\[44px\]/);
   assert.match(b[1].attrs, /w-full/);
@@ -119,7 +119,7 @@ test('approval card on desktop: details open, the JSON wraps between words, neve
 test('a payment card offers no Always allow on a phone either: its second row is just Deny', () => {
   const payment = pr({ details: { ...pr().details, payment_reason: 'stripe create payment is a money action' } });
   const html = m.card({ approval: payment, onResolve: noop, phone: true });
-  assert.deepEqual(buttons(html).map((x) => x.label), ['Show details', 'Allow once', 'Deny']);
+  assert.deepEqual(buttons(html).map((x) => x.label), ['Show details', 'Allow once', 'Deny', 'Say why']);
   assert.match(html, /<div class="grid gap-2 sm:flex grid-cols-1">/);
   assert.doesNotMatch(html, /Always/);
 });

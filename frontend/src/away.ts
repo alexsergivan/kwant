@@ -300,12 +300,29 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 
 const enc = encodeURIComponent;
 
+/** 29p: the longest reason a Deny carries (the card's field stops at this too). */
+export const DENY_REASON_MAX = 500;
+
+/**
+ * The body of `POST /api/approvals/:id/resolve`, for the chat card and the Inbox alike. `without_backup` only
+ * with Allow once (22f); `reason` only with a Deny that has text (29p, trimmed, cut to 500). Every other answer
+ * sends just `{ decision }`, as before.
+ */
+export function resolveBody(
+  decision: ApprovalDecision,
+  opts: { withoutBackup?: boolean; reason?: string } = {},
+): { decision: ApprovalDecision; without_backup?: true; reason?: string } {
+  if (opts.withoutBackup && decision === 'allow_once') return { decision, without_backup: true };
+  const reason = decision === 'deny' && typeof opts.reason === 'string' ? opts.reason.trim().slice(0, DENY_REASON_MAX).trim() : '';
+  return reason ? { decision, reason } : { decision };
+}
+
 export const awayApi = {
   get: (since?: string) => call<AwayResponse>('GET', `/api/away${since ? `?since=${enc(since)}` : ''}`).then(normalizeAway),
   seen: () => call<{ last_seen: string }>('POST', '/api/away/seen'),
   answer: (id: string, choice: number) => call<unknown>('POST', `/api/questions/${enc(id)}/answer`, { choice }),
-  resolve: (id: string, decision: ApprovalDecision, withoutBackup = false) =>
-    call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, withoutBackup && decision === 'allow_once' ? { decision, without_backup: true } : { decision }),
+  resolve: (id: string, decision: ApprovalDecision, withoutBackup = false, reason?: string) =>
+    call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, resolveBody(decision, { withoutBackup, reason })),
   /** Approval records with this stored status, newest first (`answered_via` says where). */
   approvals: (status: string) => call<unknown>('GET', `/api/approvals?status=${enc(status)}`),
   /** 0.9.5: ask again for an approval that expired unanswered (starts a new turn; grants nothing). */
