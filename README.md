@@ -72,6 +72,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.21.** **Connect Home Assistant** with its address and an access token, and start the new **Home** team with House. Home Assistant locks, doors, gates and alarms always ask first, in every approval mode. **Always allow** lasts after a restart, and a bot's settings list each one under **Allowed without asking** with **Take back**.
 - **New in 0.9.22.** One green and one purple across the app and Ollama bots that work again on their own when Ollama starts after kwant.
 - **New in 0.9.23.** **Pictures from your tools** (like the new **FLUX** preset) are saved in the chat, and anything that spends credits asks first.
+- **New in 0.9.24.** A Deny that reads as your no, not as a failed step, replies that keep the order you sent your messages in, no grey flash when the bot browser switches pages, a read-only check of what your bots ran without asking and address bars that show their own tab's page.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 

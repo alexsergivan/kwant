@@ -238,6 +238,8 @@ pub struct RoutineRow {
     pub last_run_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub last_status: Option<String>,
+    /// The last run's error (28b round 2); `None` with no run or none recorded.
+    pub last_error: Option<String>,
     /// Its kwant's space; the channel, when set, is in the same one.
     pub space_id: String,
     /// Delivers into this thread of its kwant (then `channel_id` is empty).
@@ -294,7 +296,8 @@ pub struct NewRoutine {
 const ROUTINE_SELECT: &str = "SELECT r.id, r.kwant_id, r.channel_id, r.name, r.instructions, r.schedule, r.enabled, \
      r.next_run_at, r.last_run_at, r.created_at, r.space_id, r.thread_id, r.context_message_id, \
      r.origin, r.suggestion_id, r.task_class, r.acceptance, r.checks, \
-     (SELECT status FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_status \
+     (SELECT status FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_status, \
+     (SELECT error FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_error \
      FROM routines r";
 
 impl Database {
