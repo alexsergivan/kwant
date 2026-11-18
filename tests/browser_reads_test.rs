@@ -3,6 +3,10 @@
 //! the HTTP API, per turn for `browser_page`), and a page with many controls lists 40, the ones
 //! matching the bot's `find` words first, with their refs kept. Skipped when no Chrome is
 //! installed.
+
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use axum::{
@@ -123,7 +127,7 @@ async fn tool(e: &Env, token: &str, name: &str, args: Value) -> Value {
 #[tokio::test]
 async fn an_unchanged_page_is_not_sent_again_and_a_long_list_puts_matches_first() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -198,7 +202,7 @@ async fn an_unchanged_page_is_not_sent_again_and_a_long_list_puts_matches_first(
 #[ignore = "needs the network"]
 async fn saucedemo_reads_are_cheaper() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

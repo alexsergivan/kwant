@@ -20,6 +20,7 @@ const m = await loadBundled(`
   export { flushSync } from 'react-dom';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export * from './src/askHere';
+  export { approvalLine } from './src/approvals';
   export { NeedsYouStrip } from './src/components/NeedsYouStrip';
   export { Sidebar } from './src/components/Sidebar';
   export { needsYouRows, attentionRows } from './src/chatsTab';
@@ -569,4 +570,36 @@ test('fixes 2, 7, 8: phone browser step stacks, icons never shrink, compact step
   r = mount({ asks: [stopped, item('question', { id: 'q2' })], phone: true });
   for (const l of ['Previous ask', 'Next ask']) assert.ok(r.host.querySelector(`[aria-label="${l}"]`).hasAttribute('data-compact'));
   r.unmount();
+});
+
+// ha-sheet-polish (b): a Home Assistant lock ask in the strip and the pin tip says the card's sentence.
+const lockAsk = item('approval', {
+  id: 'h1', kwant_id: 'house', kwant_name: 'House', title: 'Use intent__HassTurnOff (home-assistant)',
+  tool_name: 'mcp__home-assistant__intent__HassTurnOff', link: link({ direct_kwant_id: 'house' }),
+  details: { source: 'mcp', server: 'home-assistant', tool: 'intent__HassTurnOff', arguments: { name: 'Front door', area: 'Hallway', domain: ['lock'] } },
+});
+
+test('strip: a Home Assistant lock ask reads "House wants to unlock Front door", not the raw tool call', () => {
+  const d = parse(h(m.NeedsYouStrip, { asks: [lockAsk], onAction: noop, onDismiss: async () => {}, onShow: noop, now: NOW }));
+  const line = d.querySelector('[data-strip-line]').textContent;
+  assert.equal(line, 'House wants to unlock Front door');
+  assert.ok(!/intent__|home-assistant|^Use /.test(line));
+  // Other approvals keep their line (askLine): the question, or a title already in words
+  const q = item('approval', { title: 'Wants to run a command', question: 'Run “deploy.sh prod”?' });
+  assert.equal(m.approvalLine(q) ?? m.askLine(q), 'Run “deploy.sh prod”?');
+  const w = item('approval', { title: 'Wants to run a command' });
+  assert.equal(m.approvalLine(w) ?? m.askLine(w), 'Wants to run a command');
+});
+
+test('pinned row tooltip: a Home Assistant lock ask says the card sentence too', () => {
+  const kwants = [bot('house', 'House')];
+  const needs = m.needsYouRows([lockAsk], {}, new Set(['house']));
+  const html = m.renderToStaticMarkup(h(m.Sidebar, {
+    space, spaces: [space], onSwitchSpace: noop, onCreateSpace: noop, onOpenSpaceSettings: noop, onOpenArchived: noop, onOpenSearch: noop,
+    kwants, channels: [], teams: [], selectedId: null, isChannel: false, onSelectKwant: noop, onSelectChannel: noop, onSelectTeam: noop,
+    onSummonKwant: noop, onCreateTeam: noop, onOpenInbox: noop, onOpenNeedsYou: noop, busyKwants: {}, botStatus: {},
+    attention: m.attentionRows({ kwants, needs, now: Date.parse('2026-11-15T17:45:00Z') }),
+  }));
+  const d = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  assert.equal(d.querySelector('#pin-tip-house span:last-child').textContent, 'House wants to unlock Front door');
 });

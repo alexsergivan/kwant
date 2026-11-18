@@ -1,5 +1,5 @@
 //! 20g: a vm-mode bot's download from kwant's own browser container lands in the bot's own
-//! `downloads/`, against real Chromium in the `kwnt-browser:v3` image. Run with
+//! `downloads/`, against real Chromium in the `kwnt-browser` image (`BROWSER_IMAGE`). Run with
 //! `cargo test --test browser_container_download_test -- --ignored` on a host with Docker and that
 //! image. Ignored by default so CI and ordinary test runs never start a container.
 //!
@@ -157,7 +157,7 @@ fn app_state(data_dir: &std::path::Path, db: Database, cdp_url: Option<String>) 
 }
 
 #[tokio::test]
-#[ignore = "needs Docker and the kwnt-browser:v3 image; starts a real container"]
+#[ignore = "needs Docker and the kwnt-browser image (BROWSER_IMAGE); starts a real container"]
 async fn a_vm_bots_download_from_the_browser_container_lands_in_its_own_folder() {
     std::env::set_var(kwnt::sandbox::computer::MODE_ENV, "vm");
     std::env::remove_var("KWNT_BROWSER_CDP_URL");

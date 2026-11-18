@@ -2,6 +2,9 @@
 //! tool answering a page's own file picker with a file from that folder or a chat attachment.
 //! Runs a real windowless Chrome in Local mode and is skipped when none is installed.
 
+#[path = "support/skip.rs"]
+mod skip;
+
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
 use chrome_guard::ChromeGuard;
@@ -188,7 +191,7 @@ async fn wait_for_download(app: &Router, token: &str) -> Value {
 #[tokio::test]
 async fn a_download_lands_in_the_bots_own_folder() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -221,7 +224,7 @@ async fn a_download_lands_in_the_bots_own_folder() {
 #[tokio::test]
 async fn a_second_download_with_the_same_name_never_overwrites_the_first() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -250,7 +253,7 @@ async fn a_second_download_with_the_same_name_never_overwrites_the_first() {
 #[tokio::test]
 async fn a_download_in_one_bots_session_never_reaches_another() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -292,7 +295,7 @@ async fn a_download_in_one_bots_session_never_reaches_another() {
 #[tokio::test]
 async fn browser_upload_answers_the_pages_own_picker_with_a_workspace_file() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -326,7 +329,7 @@ async fn browser_upload_answers_the_pages_own_picker_with_a_workspace_file() {
 #[tokio::test]
 async fn browser_upload_answers_the_pages_own_picker_with_a_chat_attachment() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -364,7 +367,7 @@ async fn browser_upload_answers_the_pages_own_picker_with_a_chat_attachment() {
 #[tokio::test]
 async fn browser_upload_refuses_an_attachment_from_another_chat() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -410,7 +413,7 @@ async fn browser_upload_refuses_an_attachment_from_another_chat() {
 #[tokio::test]
 async fn browser_upload_fills_a_multiple_file_input_in_one_call() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;
@@ -444,7 +447,7 @@ async fn browser_upload_fills_a_multiple_file_input_in_one_call() {
 #[tokio::test]
 async fn browser_upload_is_refused_with_no_picker_open() {
     if computer::local_chrome_path().is_none() {
-        eprintln!("skipped: no Chrome or Chromium installed");
+        skip::skip_or_fail("Chrome or Chromium", skip::CHROME_FIX);
         return;
     }
     let e = setup().await;

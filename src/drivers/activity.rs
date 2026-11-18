@@ -11,7 +11,7 @@
 use super::events::{RuntimeEvent, TurnTag};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 /// Most steps kept on one reply; later ones are counted in `dropped`.
@@ -88,6 +88,9 @@ pub struct ActivityLog {
     /// Thinking text not yet streamed, per scope (the `Scoped` tags around it; none for the turn
     /// itself), sent with that scope's next chunk or when the thinking step ends.
     held: Vec<(Vec<TurnTag>, String)>,
+    /// Indexes of `declined` approval steps already paired with the tool step they refused (28b),
+    /// so one Deny ends one tool step `declined`.
+    paired: HashSet<usize>,
 }
 
 fn now() -> String {
@@ -203,6 +206,7 @@ impl ActivityLog {
                 changed.extend(self.close_thinking());
                 if let Some(i) = self.tools.remove(id) {
                     let (status, why) = step_end(result);
+                    let card = self.declined_card_for(i, status, why.as_deref());
                     if let Some(why) = why {
                         self.steps[i].detail = Some(cut(&self.redact(&why), MAX_DETAIL));
                     }
@@ -213,12 +217,41 @@ impl ActivityLog {
                             .filter(|t| !t.is_empty())
                             .map(|t| cut(&self.redact(t), MAX_TITLE));
                     }
+                    let status = match card {
+                        Some(card) => {
+                            self.paired.insert(card);
+                            self.steps[i].detail = Some(crate::mcp::DENIED_STEP_DETAIL.to_string());
+                            "declined"
+                        }
+                        None => status,
+                    };
                     changed.push(self.end(i, status));
                 }
             }
             _ => {}
         }
         changed
+    }
+
+    /// The person's Deny behind tool step `i`, which [`step_end`] ended `status` with reason `why`
+    /// (28b): when the step failed with the CLI's denial ([`denial_shown`]) and this
+    /// turn has a `declined` approval step for the same tool not yet paired with a tool step, that
+    /// approval step's index. The card settles before the denial reaches the engine, but the tool
+    /// step usually started first, so step order isn't read. A denial with no declined card (kwnt
+    /// refused a call that names its own secret files, or a ticket couldn't be stored) wasn't the
+    /// person's no: `None`, and the step stays `failed`.
+    fn declined_card_for(&self, i: usize, status: &str, why: Option<&str>) -> Option<usize> {
+        if status != "failed" || !why.is_some_and(|w| w.starts_with(denial_shown())) {
+            return None;
+        }
+        let tool = self.steps[i].tool.as_deref()?;
+        (0..self.steps.len()).find(|j| {
+            let s = &self.steps[*j];
+            s.kind == "approval"
+                && s.status == "declined"
+                && s.tool.as_deref() == Some(tool)
+                && !self.paired.contains(j)
+        })
     }
 
     /// A note from kwnt itself, such as which engine can't show its thinking.
@@ -550,6 +583,15 @@ pub fn with_page_title(mut result: Value, tool: &str, text: &str) -> Value {
     result
 }
 
+/// The part of [`crate::mcp::DENIED_TEXT`] a failed step shows, the CLI's own denial: [`step_end`]
+/// leaves out [`crate::mcp::NOT_ANOTHER_WAY_TEXT`] (27b), so a Deny is matched on what's left (28b).
+fn denial_shown() -> &'static str {
+    crate::mcp::DENIED_TEXT
+        .strip_suffix(crate::mcp::NOT_ANOTHER_WAY_TEXT)
+        .unwrap_or(crate::mcp::DENIED_TEXT)
+        .trim_end()
+}
+
 /// A finished tool call's result: `None` when it went fine, `Some(why)` when its step is
 /// `failed` (error, failed, denied or cancelled), with the reason it gave, trimmed, if any. The
 /// one rule for "a tool failed", shared with the chat's failure line (`server::tool_failures`).
@@ -594,6 +636,13 @@ pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
             Some(crate::mcp::REHEARSED_STEP_DETAIL.to_string()),
         );
     }
+    // 27b: refused with no card, because the person already said no to one like it
+    if refused && said(first_sentence(crate::mcp::DECLINED_BEFORE_TEXT)) {
+        return (
+            "declined",
+            Some(crate::mcp::DECLINED_BEFORE_STEP_DETAIL.to_string()),
+        );
+    }
     match failed_reason(result) {
         None => ("ok", None),
         Some(why) => (
@@ -602,7 +651,11 @@ pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
                 // 27e: nor the Home Assistant read hints
                 crate::mcp::home_floor::HINTS
                     .iter()
-                    .fold(w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, ""), |w, h| w.replace(h, ""))
+                    .fold(
+                        w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
+                            .replace(crate::mcp::NOT_ANOTHER_WAY_TEXT, ""),
+                        |w, h| w.replace(h, ""),
+                    )
                     .trim()
                     .to_string()
             })
@@ -1204,9 +1257,10 @@ mod tests {
         let (status, why) = step_end(
             &json!({"status": "error", "error": crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT)}),
         );
+        // 27b: the "don't try another way" sentence is for the bot too
         assert_eq!(
             (status, why.as_deref()),
-            ("failed", Some(crate::mcp::DENIED_TEXT))
+            ("failed", Some("The user denied this tool call."))
         );
         assert_eq!(
             step_end(&json!({"status": "ok", "content": "fine"})),
@@ -1216,6 +1270,20 @@ mod tests {
             step_end(&json!({"status": "error", "content": crate::mcp::NO_FALSE_CLAIMS_TEXT})),
             ("failed", None)
         );
+    }
+
+    /// 27b: a call refused because the person already said no ends `declined`, with the step
+    /// detail for the person, however the engine reports it.
+    #[test]
+    fn a_call_refused_for_an_earlier_no_shows_as_declined() {
+        let want = ("declined", Some(crate::mcp::DECLINED_BEFORE_STEP_DETAIL.to_string()));
+        // claude CLI: the permission route's deny message comes back as the error
+        assert_eq!(step_end(&json!({"status": "error", "error": crate::mcp::DECLINED_BEFORE_TEXT})), want);
+        // API engine: kwnt's own record, status `denied`
+        assert_eq!(step_end(&json!({"status": "denied", "content": crate::mcp::DECLINED_BEFORE_TEXT})), want);
+        assert_eq!(step_end(&json!({"status": "error", "content": crate::mcp::with_no_false_claims(crate::mcp::DECLINED_BEFORE_TEXT)})), want);
+        // An ok result quoting it is still ok
+        assert_eq!(step_end(&json!({"status": "ok", "content": crate::mcp::DECLINED_BEFORE_TEXT})).0, "ok");
     }
 
     #[test]
@@ -1524,5 +1592,104 @@ mod tests {
         assert_eq!(with_page_title(json!({"status": "ok"}), "WebFetch", &page), json!({"status": "ok"}));
         let failed = json!({"status": "error", "error": "x"});
         assert_eq!(with_page_title(failed.clone(), "browser_open", &page), failed);
+    }
+
+    /// The CLI's result for a call the person said no to (28b).
+    fn denied(id: &str) -> RuntimeEvent {
+        RuntimeEvent::ToolCallCompleted {
+            id: id.into(),
+            result: json!({"status": "error", "error": crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT)}),
+        }
+    }
+
+    /// 28b: a Deny on the card ends the tool step `declined`, in the person's words, whether the
+    /// card or the tool step started first.
+    #[test]
+    fn a_deny_on_the_card_ends_the_tool_step_declined() {
+        // The card first, then the tool step
+        let mut log = ActivityLog::default();
+        log.wait("approval", "t1", "Waiting for your approval: Running `rm -rf build`", Some("Bash"));
+        log.settle("t1", "declined");
+        log.observe(&pending("a", "Bash", json!({"command": "rm -rf build"})));
+        let ended = log.observe(&denied("a"));
+        assert_eq!(
+            (ended[0].kind, ended[0].status, ended[0].detail.as_deref()),
+            ("tool", "declined", Some("You said no; nothing ran"))
+        );
+        assert_eq!(crate::mcp::DENIED_STEP_DETAIL, "You said no; nothing ran");
+        // The tool step first (as the CLI usually sends it), then the card
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "Bash", json!({"command": "rm -rf build"})));
+        log.wait("approval", "t1", "Waiting for your approval: Running `rm -rf build`", Some("Bash"));
+        log.settle("t1", "declined");
+        let ended = log.observe(&denied("a"));
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("declined", Some(crate::mcp::DENIED_STEP_DETAIL))
+        );
+        let saved: Vec<_> = log.steps().iter().map(|s| (s.kind, s.status)).collect();
+        assert_eq!(saved, vec![("tool", "declined"), ("approval", "declined")]);
+    }
+
+    /// 28b: a denial with no declined card (kwnt refused a call naming its own secret files, or a
+    /// ticket couldn't be stored) wasn't the person's no: it stays `failed` with the CLI's text.
+    /// A card for another tool, or one the person allowed, doesn't count either.
+    #[test]
+    fn a_denial_without_a_declined_card_stays_failed() {
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "Bash", json!({"command": "cat ~/.kwnt/secrets"})));
+        let ended = log.observe(&denied("a"));
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("failed", Some("The user denied this tool call."))
+        );
+        assert_eq!(denial_shown(), "The user denied this tool call.");
+        log.wait("approval", "t1", "Waiting for your approval: Fetching", Some("WebFetch"));
+        log.settle("t1", "declined");
+        log.wait("approval", "t2", "Waiting for your approval: Running `ls`", Some("Bash"));
+        log.settle("t2", "ok");
+        log.observe(&pending("b", "Bash", json!({"command": "ls"})));
+        let ended = log.observe(&denied("b"));
+        assert_eq!(ended[0].status, "failed");
+        // Another failure is never read as a no, even with a declined card for that tool
+        log.wait("approval", "t3", "Waiting for your approval: Running `ls`", Some("Bash"));
+        log.settle("t3", "declined");
+        log.observe(&pending("c", "Bash", json!({"command": "make"})));
+        let ended = log.observe(&RuntimeEvent::ToolCallCompleted {
+            id: "c".into(),
+            result: json!({"status": "error", "error": "exit 2"}),
+        });
+        assert_eq!((ended[0].status, ended[0].detail.as_deref()), ("failed", Some("exit 2")));
+    }
+
+    /// 28b: one Deny ends one tool step: two denied Bash calls and one declined card give one
+    /// `declined` step and one `failed` step.
+    #[test]
+    fn one_declined_card_ends_one_tool_step() {
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "Bash", json!({"command": "rm a"})));
+        log.wait("approval", "t1", "Waiting for your approval: Running `rm a`", Some("Bash"));
+        log.settle("t1", "declined");
+        log.observe(&denied("a"));
+        log.observe(&pending("b", "Bash", json!({"command": "rm b"})));
+        log.observe(&denied("b"));
+        let tools: Vec<_> = log
+            .steps()
+            .iter()
+            .filter(|s| s.kind == "tool")
+            .map(|s| (s.status, s.detail.as_deref()))
+            .collect();
+        assert_eq!(
+            tools,
+            vec![
+                ("declined", Some(crate::mcp::DENIED_STEP_DETAIL)),
+                ("failed", Some(denial_shown())),
+            ]
+        );
+        // A second Deny pairs with the second call
+        log.wait("approval", "t2", "Waiting for your approval: Running `rm c`", Some("Bash"));
+        log.settle("t2", "declined");
+        log.observe(&pending("c", "Bash", json!({"command": "rm c"})));
+        assert_eq!(log.observe(&denied("c"))[0].status, "declined");
     }
 }

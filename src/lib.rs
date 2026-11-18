@@ -15,6 +15,7 @@ pub mod parallel;
 pub mod profiles;
 pub mod router;
 pub mod routines;
+pub mod run_check;
 pub mod sandbox;
 pub mod serve;
 pub mod setup;
@@ -22,6 +23,11 @@ pub mod server;
 pub mod teams;
 pub mod tools;
 pub mod zombie;
+
+/// tests/support/skip.rs, once for the whole lib: a missing test precondition skips locally and fails in CI.
+#[cfg(test)]
+#[path = "../tests/support/skip.rs"]
+pub(crate) mod test_skip;
 
 pub use broker::{ApprovalDecision, ApprovalRequest, PermissionBroker};
 pub use config::{Config, ConfigError};

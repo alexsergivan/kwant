@@ -945,12 +945,15 @@ fn strip_leads(mut s: &str) -> &str {
 
 /// The turn's tool steps, from its saved activity (`{"steps": [...]}`): whether it ran any, its
 /// last one when that one failed (a refused tool call is a failed step too), and whether the
-/// person declined an approval card in it.
+/// person declined an approval card in it, or said no to a tool step (28b: a `declined` tool step,
+/// with or without a card).
 pub fn tool_steps_in(activity: Option<&Value>) -> (bool, Option<FailedStep>, bool) {
     let Some(steps) = activity.and_then(|a| a["steps"].as_array()) else {
         return (false, None, false);
     };
-    let declined = steps.iter().any(|s| s["kind"] == "approval" && s["status"] == "declined");
+    let declined = steps
+        .iter()
+        .any(|s| matches!(s["kind"].as_str(), Some("approval" | "tool")) && s["status"] == "declined");
     let last = steps.iter().rfind(|s| s["kind"] == "tool" && !matches!(s["status"].as_str(), Some("running" | "waiting")));
     let failed = last.filter(|s| s["status"] == "failed").map(|s| FailedStep {
         tool: s["tool"].as_str().unwrap_or("a tool").to_string(),
@@ -1977,6 +1980,18 @@ mod tests {
         assert_eq!(FailedBefore::of_turn(reads.as_ref(), page), none);
     }
 
+    /// 28b: a tool step the person said no to counts as declined, with or without a card (#781's
+    /// no-card refusal has none), and isn't a failed step to follow through.
+    #[test]
+    fn a_declined_tool_step_counts_as_declined() {
+        let activity = json!({"steps": [
+            {"kind": "tool", "tool": "Bash", "title": "Running `rm -rf build`", "status": "declined", "detail": "You said no; nothing ran"},
+        ]});
+        let (_, failed, declined) = tool_steps_in(Some(&activity));
+        assert!(declined);
+        assert_eq!(failed, None);
+    }
+
     /// 27e: a turn on the Home Assistant server "house" with these activity steps.
     fn house(steps: Value) -> Seen {
         let activity = json!({ "steps": steps });
@@ -2077,6 +2092,20 @@ mod tests {
         // A declined card anywhere in the turn
         let declined = Seen { declined: true, ..house(json!([])) };
         assert!(check(UNLOCKING, None, false, &declined).missing.is_empty());
+    }
+
+    /// 28b x 27e: a Home Assistant change the person said no to (a `declined` tool step, with or
+    /// without a card) is never a miss: the turn counts as declined the way routes.rs builds it.
+    #[test]
+    fn a_home_change_the_person_said_no_to_is_never_a_miss() {
+        let steps = json!([{ "kind": "tool", "tool": "mcp__house__intent__HassTurnOff", "status": "declined", "title": "HassTurnOff", "detail": "You said no; nothing ran" }]);
+        let (_, failed, declined) = tool_steps_in(Some(&json!({ "steps": steps.clone() })));
+        assert!(declined && failed.is_none());
+        let seen = Seen { declined, ..house(steps) };
+        let v = check(UNLOCKING, None, false, &seen);
+        assert!(v.missing.is_empty() && v.continue_with.is_none() && v.home_lines.is_empty(), "{v:?}");
+        let then = check(UNLOCKING, None, true, &seen);
+        assert!(then.home_lines.is_empty(), "{then:?}");
     }
 
     #[test]

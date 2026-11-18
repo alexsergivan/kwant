@@ -14,9 +14,12 @@
 //! * I. (#17) the real key is in no log, no `docker inspect` and no process list.
 //!
 //! Needs Docker and the agent image (`docker build -f docker/agent.Dockerfile --build-arg
-//! CLAUDE_VERSION=… -t kwnt-agent:v1-claude-…`). Without them it says so and passes, unless
-//! `KWNT_AGENT_TEST_REQUIRE=1` (QA runs) makes that a failure.
+//! CLAUDE_VERSION=… -t kwnt-agent:v1-claude-…`, or `scripts/ci_docker_tests.sh images`). Without
+//! them it skips, except in CI or with `KWNT_TEST_REQUIRE=1`, where it fails (`skip_or_fail`).
 #![cfg(target_os = "linux")]
+
+#[path = "support/skip.rs"]
+mod skip;
 
 use axum::{body::Bytes, http::HeaderMap, response::IntoResponse, Router};
 use kwnt::sandbox::agent_vm::{
@@ -151,8 +154,7 @@ async fn probe(container: &str, script: &Path, host_paths: &str, extra: &[&str],
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_three_attacks_fail_in_a_shell_and_in_the_agents_own_bash() {
     if !docker_ok() {
-        assert!(std::env::var("KWNT_AGENT_TEST_REQUIRE").is_err(), "Docker or the agent image {} is missing", image_tag());
-        eprintln!("skipped: needs Docker and the agent image {}", image_tag());
+        skip::skip_or_fail(&format!("Docker or the agent image {}", image_tag()), skip::AGENT_IMAGE_FIX);
         return;
     }
     let data = tempfile::tempdir().unwrap();
@@ -351,8 +353,7 @@ fn size(p: &Path) -> u64 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nothing_the_bot_started_outlives_the_containers_last_turn() {
     if !docker_ok() {
-        assert!(std::env::var("KWNT_AGENT_TEST_REQUIRE").is_err(), "Docker or the agent image {} is missing", image_tag());
-        eprintln!("skipped: needs Docker and the agent image {}", image_tag());
+        skip::skip_or_fail(&format!("Docker or the agent image {}", image_tag()), skip::AGENT_IMAGE_FIX);
         return;
     }
     let data = tempfile::tempdir().unwrap();
@@ -485,6 +486,7 @@ async fn approval_turn(name: &str, answer: bool) -> (Vec<String>, bool, usize, S
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
         kwnt_only: false,
+        media: None,
     };
     state
         .mcp_sessions
@@ -517,8 +519,7 @@ async fn approval_turn(name: &str, answer: bool) -> (Vec<String>, bool, usize, S
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_approval_goes_through_kwnt_and_both_answers_work() {
     if !docker_ok() {
-        assert!(std::env::var("KWNT_AGENT_TEST_REQUIRE").is_err(), "Docker or the agent image {} is missing", image_tag());
-        eprintln!("skipped: needs Docker and the agent image {}", image_tag());
+        skip::skip_or_fail(&format!("Docker or the agent image {}", image_tag()), skip::AGENT_IMAGE_FIX);
         return;
     }
     let (asked, ran, calls, said) = approval_turn("allow", true).await;

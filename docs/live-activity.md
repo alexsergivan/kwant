@@ -42,7 +42,7 @@ turn's list (keyed by `turn_id`); append it if it's new.
 |---|---|
 | `id` | `s1`, `s2`, … in start order, unique within the turn |
 | `kind` | `thinking`, `tool`, `approval`, `human_step`, `note` |
-| `status` | `running` (thinking/tool), `waiting` (approval/human_step), `ok`, `failed`, `done`, `declined`, `stopped` (the turn ended while it was open, or an approval timed out) |
+| `status` | `running` (thinking/tool), `waiting` (approval/human_step), `ok`, `failed`, `done`, `declined`, `stopped` (the turn ended while it was open, or an approval timed out). A `tool` step the person said no to on its card ends `declined` with the detail "You said no; nothing ran" (0.9.24; before, `failed` with "The user denied this tool call.") |
 | `title` | short, human, already redacted: "Running `cargo test`", "Opening github.com", "Reading …/src/main.rs", "Searching the web for “rust sse”", "Using tool (github)", "Waiting for your approval: Running `rm -rf build`", "Waiting for you: Log in to GitHub" |
 | `tool` | optional. The raw tool name (`Bash`, `mcp__github__create_issue`, `command_execution`) |
 | `detail` | optional. The full command or address, or why the tool failed (redacted, ≤500 chars) |
