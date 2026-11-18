@@ -212,14 +212,30 @@ pub struct Board {
     pub signals: HashMap<String, TurnSignals>,
     pub marks: HashMap<String, BotMarks>,
     pub held: Vec<HeldItem>,
+    /// 27d: held messages released but not in their bot's line yet (see [`HeldPlace`]), oldest
+    /// first. Not shown as held: the bot can take them, they only keep their place.
+    releasing: Vec<HeldItem>,
     sent: HashMap<String, Sent>,
     /// Bots whose status may have changed outside the event bus (a hold, a mark, a snooze).
     nudged: HashSet<String>,
+    /// Tests: how long a held send's work between its release and its queue place takes (the
+    /// delivery plan's model call in a real chat), by send id. Taken once, at the release.
+    pub release_lag: HashMap<String, std::time::Duration>,
 }
 
 impl Board {
     pub fn nudge(&mut self, kwant_id: &str) {
         self.nudged.insert(kwant_id.to_string());
+    }
+
+    /// 27d: an older held message of the person to the same bot in the same chat hasn't taken its
+    /// place in the bot's line yet (still held, or released and on its way there), so `item` waits
+    /// for it: the person's messages are answered in the order they sent them. Hand-offs keep
+    /// their own way (never in this line, never waiting on it).
+    fn older_message_first(&self, item: &HeldItem) -> bool {
+        let same = |h: &HeldItem| h.kind == "message" && h.kwant_id == item.kwant_id && h.context_id == item.context_id;
+        item.kind == "message"
+            && (self.releasing.iter().any(same) || self.held.iter().take_while(|h| h.id != item.id).any(same))
     }
 
     /// 0.9.5 (no silent stops): the person writing to `kwant_id` in the chat where it gave up after
@@ -848,33 +864,84 @@ fn held_view(kwant: &crate::db::models::Kwant, r: &HoldReason) -> Value {
 }
 
 /// Waits until the held send `item_id` may go: `true` then (or when it wasn't held), `false`
-/// when it was stopped first. Either way it is no longer held.
+/// when it was stopped first. Either way it is no longer held. A message's place in its chat's
+/// line is given up at once; [`wait_turn`] keeps it until the turn is queued.
 pub async fn wait_released(state: &AppState, item_id: &str, cancel: &CancellationToken) -> bool {
+    // Boxed: hand-offs wait here inside their turn's future, which a debug-build test thread has
+    // only just room for (see [`HeldPlace`])
+    Box::pin(wait_turn(state, item_id, cancel)).await.is_some()
+}
+
+/// [`wait_released`] for the person's held message (27d): `Some` once it may go, and only after
+/// the older messages they held for the same bot in the same chat have their places in the bot's
+/// line. The [`HeldPlace`] keeps this one's place until its turn has one too (pass it to the
+/// turn as [`super::routes::TurnOpts`]'s `held_place`), so the next message is released only
+/// then, however long the work in between takes (the delivery plan's model call, up to ~3 s).
+/// `None` when it was stopped first. Either way it is no longer held.
+pub async fn wait_turn(state: &AppState, item_id: &str, cancel: &CancellationToken) -> Option<HeldPlace> {
     let Some(item) = state.turns.board(|b| b.held.iter().find(|h| h.id == item_id).cloned()) else {
-        return true;
+        return Some(HeldPlace::default());
     };
-    let unhold = || {
-        state.turns.board(|b| {
-            b.held.retain(|h| h.id != item_id);
-            b.nudge(&item.kwant_id);
-        })
-    };
+    // Takes it off the board however this ends (stopped, or the wait dropped), so it never holds
+    // up the messages after it; once released, it is the place
+    let place = HeldPlace(Some(Box::new(Place { turns: state.turns.clone(), id: item.id.clone(), kwant_id: item.kwant_id.clone() })));
     loop {
         tokio::select! {
-            _ = cancel.cancelled() => {
-                unhold();
-                return false;
-            }
+            _ = cancel.cancelled() => return None,
             _ = tokio::time::sleep(HOLD_POLL) => {}
+        }
+        if state.turns.board(|b| b.older_message_first(&item)) {
+            continue;
         }
         let free = match input_of(state, &item.kwant_id).await {
             Some(input) => hold_reason(&input, &item.context_id, Utc::now()).is_none(),
             None => true,
         };
         if free {
-            unhold();
+            let lag = state.turns.board(|b| {
+                if let Some(at) = b.held.iter().position(|h| h.id == item_id) {
+                    let h = b.held.remove(at);
+                    b.releasing.push(h);
+                }
+                b.nudge(&item.kwant_id);
+                b.release_lag.remove(item_id)
+            });
             tracing::info!(kwant = %item.kwant_id, kind = item.kind, "held send released");
-            return true;
+            if let Some(lag) = lag {
+                tokio::time::sleep(lag).await;
+            }
+            return Some(place);
+        }
+    }
+}
+
+/// 27d: a held message's place in its chat's line (see [`wait_turn`]): the younger messages held
+/// for the same bot and chat wait while it lives. Dropped once the message's turn is in the bot's
+/// line ([`super::turns::TurnRegistry::acquire_then`]), or when the turn ends before that
+/// (stopped, or held back by a spending stop); dropping it takes the send off the board.
+///
+/// One pointer wide on purpose: it rides in [`super::routes::TurnOpts`], which is moved through
+/// every layer of a turn's future, and a debug-build test thread (2 MiB) has only just room for
+/// those (`keep_going_test` overflowed with this inline, as it did with `TurnOpts::audit`).
+#[derive(Default)]
+pub struct HeldPlace(Option<Box<Place>>);
+
+const _: () = assert!(std::mem::size_of::<HeldPlace>() == std::mem::size_of::<usize>(), "HeldPlace stays one pointer wide");
+
+struct Place {
+    turns: super::turns::TurnRegistry,
+    id: String,
+    kwant_id: String,
+}
+
+impl Drop for HeldPlace {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            p.turns.board(|b| {
+                b.held.retain(|h| h.id != p.id);
+                b.releasing.retain(|h| h.id != p.id);
+                b.nudge(&p.kwant_id);
+            });
         }
     }
 }
@@ -1347,6 +1414,43 @@ mod tests {
     }
 
     // H3
+
+    /// 27d: a held message of the person waits for the older ones in its chat to the same bot, held
+    /// or released and not in the bot's line yet; other chats, other bots and hand-offs don't wait.
+    #[test]
+    fn a_held_message_goes_after_the_older_ones_in_its_chat() {
+        let item = |kind: &'static str, id: &str, kwant: &str, ctx: &str| HeldItem {
+            kind,
+            id: id.into(),
+            kwant_id: kwant.into(),
+            since: at(0),
+            reason_code: "waits_on_you",
+            context_id: ctx.into(),
+        };
+        let mut b = Board {
+            held: vec![
+            item("handoff", "d1", "k1", "c1"),
+            item("message", "m1", "k1", "c1"),
+            item("message", "m2", "k1", "c1"),
+            item("message", "x1", "k1", "c2"),
+            item("message", "y1", "k2", "c1"),
+            item("handoff", "d2", "k1", "c1"),
+            ],
+            ..Default::default()
+        };
+        let waits = |b: &Board, id: &str| b.older_message_first(&b.held.iter().find(|h| h.id == id).unwrap().clone());
+        assert!(!waits(&b, "m1"), "the oldest message goes first; an older hand-off doesn't hold it");
+        assert!(waits(&b, "m2"), "m2 waits for m1");
+        assert!(!waits(&b, "x1"), "another chat of the bot doesn't wait");
+        assert!(!waits(&b, "y1"), "another bot in the chat doesn't wait");
+        assert!(!waits(&b, "d2"), "a hand-off never waits in the line");
+        // m1 released, not in the bot's line yet: m2 still waits; once it is, m2 goes
+        let m1 = b.held.remove(1);
+        b.releasing.push(m1);
+        assert!(waits(&b, "m2"), "m2 waits while m1 is on its way to the line");
+        b.releasing.clear();
+        assert!(!waits(&b, "m2"));
+    }
 
     #[test]
     fn a_send_to_a_stuck_bot_is_held() {
