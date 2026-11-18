@@ -1023,10 +1023,13 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
-        // H3: a message held for a stuck or waiting bot starts its turn once the bot can take it
+        // H3: a message held for a stuck or waiting bot starts its turn once the bot can take it,
+        // after the older ones the person held in this chat (27d: answered in the order sent)
+        let mut held_place = super::bot_status::HeldPlace::default();
         if let Some(id) = &held {
-            if !super::bot_status::wait_released(&scope.state, id, &scope.cancel_token).await {
-                return;
+            match Box::pin(super::bot_status::wait_turn(&scope.state, id, &scope.cancel_token)).await {
+                Some(place) => held_place = place,
+                None => return,
             }
         }
         // P10: what the person expects and how best to deliver it, planned once before the bot
@@ -1045,7 +1048,7 @@ fn execute_single_turn(
             super::delivery_plan::remember(&scope.job_id, &message_id, plan);
         }
         // A full link in the person's own message may open the bot browser first
-        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), ..TurnOpts::default() };
+        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), held_place, ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
             // Several bots asked the person something: one list of it all (when the chain is over)
@@ -2141,7 +2144,13 @@ pub(super) struct TurnOpts {
     /// reply's plan, though its prompt is kwant's; the delivery check's continuation keeps the
     /// first turn's, and is checked against it). `None`: the plan comes from the person's own
     /// message, or there is none (see [`crate::router::delivery::plan_for_turn`]).
-    pub(super) delivery: Option<crate::router::delivery::DeliveryPlan>,
+    /// Boxed, like `audit` and `held_place`: `TurnOpts` rides in every layer of a turn's future.
+    pub(super) delivery: Option<Box<crate::router::delivery::DeliveryPlan>>,
+    /// 27d: a released held message's place in its chat's line, given up once this turn has its
+    /// own place in the bot's line (see [`super::bot_status::wait_turn`]). Only the first attempt
+    /// carries it. Empty for every turn that wasn't held. One pointer wide (see
+    /// [`super::bot_status::HeldPlace`]).
+    pub(super) held_place: super::bot_status::HeldPlace,
 }
 
 /// See [`TurnOpts::chat_handover`].
@@ -2316,7 +2325,8 @@ fn turn_plan(opts: &TurnOpts, current: Option<&Message>, recent: &[&str], git_re
         fresh_eyes: opts.fresh_eyes,
         carried: opts
             .delivery
-            .clone()
+            .as_deref()
+            .cloned()
             .or_else(|| person.and_then(|m| super::delivery_plan::plan_for_answer(job_id, Some(m.id.as_str())))),
         person_message: person_words(opts.nav_prompt.is_some(), current),
         recent,
@@ -2385,7 +2395,7 @@ impl Carried {
         let delivery_seen = self.delivery_seen.clone();
         TurnOpts {
             label: Some(label.into()),
-            delivery: plan,
+            delivery: plan.map(Box::new),
             delivery_continued: true,
             chat_handover: handover,
             delivery_seen,
@@ -2425,7 +2435,7 @@ pub(super) async fn turn_once(
     scope: &TurnScope,
     target_kwant: &Kwant,
     prompt: String,
-    opts: TurnOpts,
+    mut opts: TurnOpts,
 ) -> Result<String, String> {
     let tag = crate::drivers::events::TurnTag {
         turn_id: uuid::Uuid::new_v4().to_string(),
@@ -2473,9 +2483,16 @@ pub(super) async fn turn_once(
     // A delivery continuation starts on the slot its first turn handed over (see
     // [`TurnOpts::chat_handover`]); every other turn takes one
     let handed = opts.chat_handover.as_ref().and_then(|h| h.lock().ok()?.take());
+    // 27d: a released held message keeps its chat's line until this turn is in the bot's line
+    let place = std::mem::take(&mut opts.held_place);
     let slot = match handed {
-        Some(slot) => slot,
-        None => match turns.acquire(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender).await {
+        Some(slot) => {
+            drop(place);
+            slot
+        }
+        // Boxed, like the place itself: turn_once's future is part of every turn's (see
+        // [`super::bot_status::HeldPlace`])
+        None => match Box::pin(turns.acquire_then(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender, move || drop(place))).await {
             Some(slot) => slot,
             None => return Err("stopped by the user".into()),
         },
@@ -2974,7 +2991,7 @@ async fn run_kwant_turn_inner(
                 no_tools: opts.no_tools,
                 read_only,
                 fresh_eyes: opts.fresh_eyes,
-                carried: opts.delivery.clone().or_else(|| job_plan.clone()),
+                carried: opts.delivery.as_deref().cloned().or_else(|| job_plan.clone()),
                 person_message: answered.map(|m| m.text.as_str()),
                 recent: &[],
                 git_repo: workspace_dir.as_deref().is_some_and(crate::router::delivery::in_git_repo),
@@ -5089,7 +5106,7 @@ async fn send_to_thread(
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
-    let opts = TurnOpts {
+    let mut opts = TurnOpts {
         nav_prompt: Some(payload.prompt.clone()),
         source: Some(super::bot_status::TurnSource::sender(from_person)),
         ..TurnOpts::default()
@@ -5102,9 +5119,11 @@ async fn send_to_thread(
     let held_id = held.as_ref().map(|_| saved.id.clone());
     tokio::spawn(async move {
         let _job = job;
+        // After the older messages the person held in this thread (27d)
         if let Some(id) = &held_id {
-            if !super::bot_status::wait_released(&scope.state, id, &scope.cancel_token).await {
-                return;
+            match Box::pin(super::bot_status::wait_turn(&scope.state, id, &scope.cancel_token)).await {
+                Some(place) => opts.held_place = place,
+                None => return,
             }
         }
         run_kwant_turn(&scope, &target, prompt, opts).await;
@@ -7579,7 +7598,7 @@ mod tests {
         assert!(first.continuation_slot().is_some());
         let ideas = turn_plan(&first, Some(&saved("user", "user", "What cool feature can we add?", None)), &[], true, "").unwrap();
         let next = Carried::of(&first).continuation(Some(ideas.clone()), crate::server::delivery_check::continuation_label(&[crate::server::delivery_check::Missing::Link]), None);
-        assert_eq!(next.delivery.as_ref(), Some(&ideas));
+        assert_eq!(next.delivery.as_deref(), Some(&ideas));
         assert!(next.delivery_continued && next.continuation_slot().is_none(), "continued once at most");
         // kwant's continuation prompt can't make a plan of its own
         let prompt = saved("user", "user", "Commit and push your work, then reply with the PR link", None);
@@ -7613,9 +7632,9 @@ mod tests {
             TurnOpts { no_tools: true, ..person_turn() },
             TurnOpts { fresh_eyes: true, ..person_turn() },
             TurnOpts { purpose: brief.clone(), ..person_turn() },
-            TurnOpts { no_tools: true, delivery: carried.clone(), ..Default::default() },
-            TurnOpts { fresh_eyes: true, delivery: carried.clone(), ..Default::default() },
-            TurnOpts { purpose: brief.clone(), delivery: carried.clone(), ..Default::default() },
+            TurnOpts { no_tools: true, delivery: carried.clone().map(Box::new), ..Default::default() },
+            TurnOpts { fresh_eyes: true, delivery: carried.clone().map(Box::new), ..Default::default() },
+            TurnOpts { purpose: brief.clone(), delivery: carried.clone().map(Box::new), ..Default::default() },
         ] {
             assert_eq!(plan_of(&opts, &m, true), None, "no_tools={} fresh_eyes={} purpose={:?}", opts.no_tools, opts.fresh_eyes, opts.purpose);
         }
