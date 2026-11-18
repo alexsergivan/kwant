@@ -930,7 +930,7 @@ fn tool_part(name: &str) -> &str {
 }
 
 /// A short title for a tool call, and the detail to show when the step is opened (the whole
-/// command, address or query). Neither is redacted here.
+/// command, address, query or file path). Neither is redacted here.
 pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
     if is_shell_tool(name) {
         return match command_line(args) {
@@ -945,7 +945,7 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
         None => (None, name),
     };
     let lower = tool.to_ascii_lowercase();
-    let path = || arg(args, &["file_path", "path", "filePath", "notebook_path", "target_file"]).map(short_path);
+    let path = arg(args, &["file_path", "path", "filePath", "notebook_path", "target_file"]);
     let url = arg(args, &["url", "href", "uri"]);
     if let Some(kind) = WordsTool::of(&lower) {
         let title = match kind {
@@ -956,7 +956,10 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
         return (title.unwrap_or_else(|| kind.bare().to_string()), None);
     }
     if let Some(kind) = FileTool::of(&lower) {
-        return (path().map_or(kind.bare().into(), |p| format!("{} {p}", kind.verb())), None);
+        // 29c: the whole path is the detail (the title keeps the last two parts), so the step
+        // opens to it and `kwnt run-check` can tell a file inside the bot's folder from one outside
+        let title = path.map(short_path).map_or(kind.bare().into(), |p| format!("{} {p}", kind.verb()));
+        return (title, path.map(str::to_string));
     }
     match lower.as_str() {
         "webfetch" | "fetch" | "web_fetch" | "browser_open" | "browser_navigate" | "navigate" | "open_url" => match url {
@@ -1297,6 +1300,42 @@ mod tests {
         for (path, want) in cases {
             assert_eq!(short_path(path), want, "{path}");
         }
+    }
+
+    /// 29c: a read, edit or write step keeps its whole path as the detail (Unix and Windows, any
+    /// of the path arguments), so the step opens to it and run-check can judge it; the title keeps
+    /// the last two parts as before, and a call with no path keeps no detail.
+    #[test]
+    fn file_steps_keep_their_whole_path_as_detail() {
+        let unix = "/home/maus/clients/acme-layoffs/plan.txt";
+        let win = "C:\\Users\\ann\\clients\\acme\\contract.md";
+        let cases = [
+            ("Read", json!({"file_path": unix}), unix, "Reading …/acme-layoffs/plan.txt"),
+            ("Write", json!({"file_path": unix, "content": "x"}), unix, "Writing …/acme-layoffs/plan.txt"),
+            ("Edit", json!({"file_path": win, "old_string": "a", "new_string": "b"}), win, "Editing …\\acme\\contract.md"),
+            ("MultiEdit", json!({"file_path": unix, "edits": []}), unix, "Editing …/acme-layoffs/plan.txt"),
+            ("NotebookEdit", json!({"notebook_path": "/srv/nb/acme/model.ipynb"}), "/srv/nb/acme/model.ipynb", "Editing …/acme/model.ipynb"),
+            ("apply_patch", json!({"path": win}), win, "Editing …\\acme\\contract.md"),
+            ("mcp__files__read_file", json!({"path": unix}), unix, "Reading …/acme-layoffs/plan.txt"),
+            ("Write", json!({"file_path": "notes.md"}), "notes.md", "Writing notes.md"),
+        ];
+        for (name, args, path, title) in cases {
+            assert_eq!(summarize(name, &args), (title.to_string(), Some(path.to_string())), "{name}");
+        }
+        assert_eq!(summarize("Write", &json!({"content": "x"})), ("Writing a file".to_string(), None));
+        assert_eq!(summarize("Read", &Value::Null), ("Reading a file".to_string(), None));
+        // Search tools keep no detail, as before
+        assert_eq!(summarize("Grep", &json!({"pattern": "x", "path": unix})).1, None);
+        assert_eq!(summarize("Glob", &json!({"pattern": "*.md", "path": unix})).1, None);
+        // Saved like every detail: redacted and cut to MAX_DETAIL
+        let mut log = ActivityLog::default();
+        let long = format!("/srv/{}/a.md", "d".repeat(600));
+        let s = log.observe(&pending("1", "Write", json!({"file_path": long})));
+        let detail = s[0].detail.clone().unwrap();
+        assert_eq!(detail.chars().count(), MAX_DETAIL);
+        assert!(detail.ends_with('…'));
+        let s = log.observe(&pending("2", "Read", json!({"file_path": unix})));
+        assert_eq!(s[0].detail.as_deref(), Some(unix));
     }
 
     #[test]

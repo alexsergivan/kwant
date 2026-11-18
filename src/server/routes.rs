@@ -4073,6 +4073,12 @@ async fn run_kwant_turn_inner(
                 if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref(), checked) {
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
                 }
+                // 29c: the folder kwnt's gate judged this turn's file tools against, so `kwnt run-check`
+                // can tell a file step outside it from one inside (only a turn that ran steps with tools)
+                let ran_steps = activity.as_ref().and_then(|a| a["steps"].as_array()).is_some_and(|s| !s.is_empty());
+                if let Some(folder) = mcp_turn.as_ref().filter(|_| ran_steps).and_then(|_| crate::mcp::builtin_tools::canonical_folder(workspace_dir.as_deref())) {
+                    meta.get_or_insert_with(|| serde_json::json!({}))[crate::mcp::builtin_tools::GATE_FOLDER_KEY] = serde_json::json!(folder.display().to_string());
+                }
                 // 0.9.4: a reply that ends with `Blocked: <what>. <what unblocks it>` says so in its meta
                 // 13a: with no such line, a turn whose last tool step failed (or was declined, or whose
                 // link didn't open and it ran no tool) and whose reply ends waiting on the person in
