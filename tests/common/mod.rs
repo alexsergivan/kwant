@@ -25,6 +25,11 @@
 //! - `FAILSTEP:<tag>` / `BLOCKSTEP:<tag>` / `WAITSTEP:<tag>` in the current request (not the
 //!   history): run a Bash tool step that fails, then end on a plan ("I'll retry the render…") / on a
 //!   `Blocked:` line / waiting on the person in prose ("If you approve the command, …").
+//! - `MCPHOOK:<base64 json>` (`{"server", "tool", "response"}`, [`mcp_hook_marker`]): as claude
+//!   does after the bot's MCP tool ran, run each `PostToolUse` hook in `--settings` whose matcher
+//!   fits `mcp__<server>__<tool>`, with claude's payload (`tool_response` = `response`) on stdin,
+//!   and reply `HOOKS[<n run>] MODELSAW[<what the model reads: the hook's updatedMCPToolOutput, or
+//!   the response>]`; once per marker.
 //! - `STREAMLINES:<base64 text>`: print that text (claude `stream-json` lines: an init line, tool
 //!   calls and their results) before the reply; once per marker.
 //!
@@ -169,6 +174,31 @@ if tt:
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": " ".join(out)}))
     sys.exit(0)
 reply = []
+# MCPHOOK:<base64 json>: claude's PostToolUse hooks for one of the bot's MCP tools, once per marker
+mh = re.findall(r"MCPHOOK:([A-Za-z0-9+/=]+)", prompt)
+if mh:
+    import hashlib, subprocess
+    mh_flag = os.path.join(os.path.dirname(out_dir), "hooked-" + hashlib.sha1(mh[-1].encode()).hexdigest())
+    if not os.path.exists(mh_flag):
+        open(mh_flag, "w").close()
+        c = json.loads(base64.b64decode(mh[-1]))
+        name = "mcp__%s__%s" % (c["server"], c["tool"])
+        payload = {"session_id": "s1", "transcript_path": c.get("transcript_path", ""), "cwd": os.getcwd(),
+            "hook_event_name": "PostToolUse", "tool_name": name, "tool_input": {}, "tool_response": c["response"],
+            "tool_use_id": "toolu_mcphook", "mcp_server": {"name": c["server"], "source": "dynamic"}}
+        settings = json.loads(args[args.index("--settings") + 1]) if "--settings" in args else {}
+        seen, ran = c["response"], 0
+        for entry in settings.get("hooks", {}).get("PostToolUse", []):
+            if re.search(entry.get("matcher", ""), name):
+                for h in entry["hooks"]:
+                    ran += 1
+                    out = subprocess.run(h["command"], shell=True, input=json.dumps(payload).encode(),
+                        capture_output=True, timeout=h.get("timeout", 60)).stdout
+                    if out.strip():
+                        o = json.loads(out).get("hookSpecificOutput", {})
+                        seen = o.get("updatedMCPToolOutput", seen)
+        reply.append("HOOKS[%d]" % ran)
+        reply.append("MODELSAW[" + "|".join(p.get("text", p.get("type", "")) for p in seen) + "]")
 m = ([None] + list(re.finditer(r"CALLTOOL:([a-z_]+):([A-Za-z0-9+/=]+)", prompt)))[-1]
 done = None
 if m:
@@ -270,6 +300,14 @@ pub fn invocations_with(marker: &str) -> Vec<String> {
 pub fn call_tool_marker(tool: &str, args: Value) -> String {
     use base64::Engine;
     format!("CALLTOOL:{tool}:{}", base64::engine::general_purpose::STANDARD.encode(args.to_string()))
+}
+
+/// A prompt marker that makes the fake CLI run its `PostToolUse` hooks for `mcp__<server>__<tool>`
+/// with claude's `tool_response` `response` (26h D3).
+pub fn mcp_hook_marker(server: &str, tool: &str, response: Value) -> String {
+    use base64::Engine;
+    let c = json!({"server": server, "tool": tool, "response": response});
+    format!("MCPHOOK:{}", base64::engine::general_purpose::STANDARD.encode(c.to_string()))
 }
 
 /// A prompt marker that makes the fake CLI print these `stream-json` lines before its reply.
