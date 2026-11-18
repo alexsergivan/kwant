@@ -1,0 +1,25 @@
+{
+  "version": "0.9.23",
+  "date": "2026-11-18",
+  "highlights": [
+    {
+      "id": "tool-pictures-in-chat",
+      "title": "Pictures from your tools show up in the chat",
+      "text": "When a tool like FLUX makes a picture, kwant saves it in the chat with a Made with caption. Anything that spends your credits asks you first, even with approvals off.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "a-no-stays-a-no",
+      "title": "A no stays a no",
+      "text": "Press Deny and the bot won't try the same thing another way. Until you write in that chat again, it can't ask for it again, so you won't see the same card twice.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "The Home Assistant address wraps cleanly on a phone, and the strip above the chat says what House wants, like unlocking a door.",
+    "Red delete buttons darken on hover instead of washing out, and the amber \"Push anyway\" buttons now use dark, readable text.",
+    "House no longer says it unlocked or switched something off when nothing ran, and doesn't answer from a home check that failed."
+  ]
+}

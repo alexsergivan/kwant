@@ -30,6 +30,25 @@ export function openHomeAssistant(req: HomeAssistantRequest): void {
   window.dispatchEvent(new window.CustomEvent<HomeAssistantRequest>(HA_EVENT, { detail: req }));
 }
 
+/**
+ * A URL that wraps only after a "/" on a narrow screen ("…:8123/ | api/ | mcp"), never mid-word.
+ * The scheme's "//" is one break point, so it never splits between the two slashes.
+ */
+export function urlWithBreaks(url: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let rest = url;
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(rest);
+  if (scheme) {
+    out.push(scheme[0], <wbr key="s" />);
+    rest = rest.slice(scheme[0].length);
+  }
+  rest.split(/(?<=\/)/).forEach((part, i, all) => {
+    out.push(part);
+    if (i < all.length - 1 && part.endsWith('/')) out.push(<wbr key={i} />);
+  });
+  return out;
+}
+
 const readError = async (res: Response) => {
   try {
     const body = await res.json();
@@ -329,7 +348,7 @@ export const HomeAssistantSheet: React.FC<HomeAssistantSheetProps> = ({ req, onC
                   'That doesn’t look like an address. Try homeassistant.local:8123.'
                 ) : parsed ? (
                   <>
-                    kwant will connect to <span className="font-mono text-zinc-300 break-all">{parsed.url}</span>
+                    kwant will connect to <span className="font-mono text-zinc-300 break-words" data-ha-url>{urlWithBreaks(parsed.url)}</span>
                   </>
                 ) : (
                   <>

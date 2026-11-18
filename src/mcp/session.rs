@@ -100,15 +100,23 @@ pub struct CallOutcome {
     /// 26b: this is the turn's first call that failed or didn't run, so the model's copy of
     /// `text` gets [`super::NO_FALSE_CLAIMS_TEXT`] (see [`CallOutcome::model_text`]).
     pub remind: bool,
+    /// 27e: a hint for the model after Home Assistant's `GetLiveContext` with a filter (see
+    /// [`super::home_floor::live_context_hint`]). Never in the record or in Details.
+    pub hint: Option<&'static str>,
 }
 
 impl CallOutcome {
-    /// What goes back to the model: `text`, plus the once-per-turn reminder when `remind`.
+    /// What goes back to the model: `text`, plus the 27e hint, plus the once-per-turn reminder
+    /// when `remind`.
     pub fn model_text(&self) -> String {
+        let text = match self.hint {
+            Some(hint) => format!("{}\n\n{hint}", self.text.trim_end()),
+            None => self.text.clone(),
+        };
         if self.remind {
-            super::with_no_false_claims(&self.text)
+            super::with_no_false_claims(&text)
         } else {
-            self.text.clone()
+            text
         }
     }
 }
@@ -269,6 +277,7 @@ impl McpToolSession {
                 status: "error",
                 record,
                 remind,
+                hint: None,
             };
         }
         let offered = self.tools.iter().find(|t| t.name == name);
@@ -277,6 +286,7 @@ impl McpToolSession {
             Some(_) if !arguments.is_object() => ("error", "Tool arguments must be a JSON object.".to_string()),
             Some(t) => {
                 let (server, client) = &self.clients[t.server_index];
+                let server_url = self.ctx.servers.iter().find(|s| &s.name == server).and_then(|s| s.url.as_deref());
                 let req = ToolApprovalRequest {
                     kwant_id: caller.kwant_id.clone(),
                     kwant_name: caller.kwant_name.clone(),
@@ -287,7 +297,8 @@ impl McpToolSession {
                     arguments: arguments.clone(),
                     builtin: None,
                     smart: Some(read_only_verdict(t.tool.read_only)),
-                    payment: None,
+                    // 26h: a paid generation (FLUX, Picsart credits) always asks, also by its address
+                    payment: super::payment_floor::credits_reason(server, server_url, &t.tool.name),
                 };
                 // B2: a write to a GitHub branch waits for its pre-push card before any card or rule
                 match self.ctx.approver.prepush_gate(&req).await {
@@ -305,7 +316,8 @@ impl McpToolSession {
                         } else {
                             match client.call_tool(&t.tool.name, arguments.clone()).await {
                                 Ok(r) if r.is_error => ("error", r.text),
-                                Ok(r) => ("ok", r.text),
+                                // 26h: files it returned are saved in the chat and named, never sent as base64
+                                Ok(r) => ("ok", super::media::finish(&r, server, server_url, &t.tool.name, self.ctx.media.as_deref()).await),
                                 Err(e) => ("error", format!("Tool call failed: {e}")),
                             }
                         }
@@ -337,11 +349,16 @@ impl McpToolSession {
             record["result"] = json!(truncate_text(&text, RECORD_RESULT_MAX_CHARS));
         }
         self.ctx.record(record.clone());
+        // 27e: a filtered read of the home says how to see all of it
+        let hint = offered
+            .filter(|t| super::home_floor::reported_name(&self.clients[t.server_index].1.server_info).is_some_and(|n| super::home_floor::is_home_assistant(&n)))
+            .and_then(|t| super::home_floor::live_context_hint(&t.tool.name, &arguments, status));
         CallOutcome {
             text,
             status,
             record,
             remind,
+            hint,
         }
     }
 
