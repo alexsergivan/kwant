@@ -1,10 +1,13 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Brain, Check, ChevronRight, CircleDashed, CircleSlash, Hand, Info, ListTree, Loader2, ShieldQuestion, TimerOff, X } from 'lucide-react';
 import {
+  ANSWER_LABEL,
   ActivityStep,
+  CardAnswer,
   LiveActivity,
   SavedActivity,
   activitySummary,
+  foldAnswers,
   formatDuration,
   isOpenStep,
   plainTitle,
@@ -113,7 +116,29 @@ const STEP_MARK: Partial<Record<ActivityStep['status'], string>> = {
   declined: 'text-zinc-300 border-zinc-500/40',
 };
 
-const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean }> = ({ step, live, now, listId, opened = false }) => {
+/**
+ * The row's chip: its words, style and whether a screen reader hears it. 28s: a command row whose card folded into
+ * it carries the card's answer ("You said OK" in the same neutral grey as "You said no"), unless the command then
+ * failed: "Failed" stays the chip and the answer is read out after it. A human step the person said no to has no
+ * chip (its title says "You said no: …"), nor does a card that said no on its own row (its title says so too).
+ */
+function stepMark(step: ActivityStep, answer: CardAnswer | undefined): { text: string; cls: string; kind: string; heard: boolean; also?: string } | null {
+  const shown = shownStatus(step);
+  if (answer && shown !== 'failed') return { text: ANSWER_LABEL[answer], cls: STEP_MARK[answer === 'ok' ? 'declined' : answer]!, kind: answer, heard: answer === 'ok' };
+  if (step.status === 'declined' && (step.kind === 'approval' || step.kind === 'human_step')) return null;
+  const cls = STEP_MARK[shown];
+  if (!cls) return null;
+  return { text: statusLabel(step), cls, kind: shown, heard: false, also: answer ? ANSWER_LABEL[answer] : undefined };
+}
+
+const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean; answer?: CardAnswer }> = ({
+  step,
+  live,
+  now,
+  listId,
+  opened = false,
+  answer,
+}) => {
   const time = stepTime(step, now);
   const running = step.kind === 'thinking' && step.status === 'running';
   const text = step.kind === 'thinking' ? thinkingText(step, live) : '';
@@ -135,8 +160,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   // 26d: a step that failed or wasn't approved in time says so in words, not only by its icon, even when a later
   // step worked. The icon's label already names it for screen readers, so the mark is hidden from them.
   // The approval row keeps its icon only: the mark belongs on the command the person said no to.
-  const shown = shownStatus(step);
-  const mark = step.status === 'declined' && step.kind === 'approval' ? undefined : STEP_MARK[shown];
+  const mark = stepMark(step, answer);
   const head = (
     <>
       <StatusIcon step={step} />
@@ -144,10 +168,16 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
         {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title, step.outcome ?? step.status)} />}
       </span>
       {mark && (
-        <span aria-hidden="true" data-step-mark={shown} className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark}`}>
-          {statusLabel(step)}
+        <span
+          aria-hidden={mark.heard ? undefined : 'true'}
+          data-step-mark={mark.kind}
+          className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark.cls}`}
+          data-answer={answer}
+        >
+          {mark.text}
         </span>
       )}
+      {mark?.also && <span className="sr-only">{mark.also}</span>}
       {time && <span className="flex-shrink-0 font-mono text-[10px] text-zinc-400 tabular-nums">{time}</span>}
     </>
   );
@@ -205,10 +235,13 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
 
 const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null }> = ({ steps, live, dropped = 0, id, openStep = null }) => {
   const now = useNow(steps.some(isOpenStep));
+  // 28s: one row per answer. A settled card folds into its command row; draw time only.
+  const { rows, answers, foldedInto } = useMemo(() => foldAnswers(steps), [steps]);
+  const opened = openStep ? foldedInto.get(openStep) ?? openStep : null;
   return (
     <ol id={id} aria-label="Steps" className="divide-y divide-zinc-700/40">
-      {steps.map((s) => (
-        <StepRow key={s.id} step={s} live={live} now={now} listId={id} opened={s.id === openStep} />
+      {rows.map((s) => (
+        <StepRow key={s.id} step={s} live={live} now={now} listId={id} opened={s.id === opened} answer={answers.get(s.id)} />
       ))}
       {dropped > 0 && (
         <li className="px-3 py-1.5 text-xs text-zinc-400">
@@ -362,10 +395,11 @@ export const SavedActivityList: React.FC<{
   }, [openRequest, focusStep]);
   useEffect(() => {
     if (!openRequest || !focusStep) return;
-    const el = document.getElementById(`${listId}-${focusStep}`);
+    // 28s: a card that folded into its command row is focused there.
+    const el = document.getElementById(`${listId}-${foldAnswers(activity.steps).foldedInto.get(focusStep) ?? focusStep}`);
     el?.focus({ preventScroll: true });
     el?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-  }, [openRequest, focusStep, listId, open]);
+  }, [openRequest, focusStep, listId, open, activity.steps]);
   const failed = activity.steps.some((s) => s.status === 'failed');
   const unanswered = activity.steps.some((s) => s.status === 'unanswered');
   return (

@@ -121,6 +121,59 @@ export function readDenials(steps: ActivityStep[]): ActivityStep[] {
 
 export const isOpenStep = (s: ActivityStep) => s.status === 'running' || s.status === 'waiting';
 
+/** The answer a settled approval card gave, as its command row says it (28s). */
+export type CardAnswer = 'ok' | 'declined' | 'unanswered';
+/** 28s: the command row's chip for the answer its folded card gave. */
+export const ANSWER_LABEL: Record<CardAnswer, string> = { ok: 'You said OK', declined: 'You said no', unanswered: 'Not approved in time' };
+
+/** Which tool steps a settled card of each answer can stand for: the command it let run, or the one it held. */
+const answeredBy: Record<CardAnswer, (s: ActivityStep) => boolean> = {
+  declined: (s) => s.status === 'declined',
+  unanswered: (s) => s.status === 'unanswered',
+  ok: (s) => s.status !== 'declined' && s.status !== 'unanswered' && s.status !== 'waiting',
+};
+
+export interface FoldedSteps {
+  /** The rows Details draws: `steps` without the approval steps that folded into their command row. */
+  rows: ActivityStep[];
+  /** Command step id → the answer its card gave. */
+  answers: Map<string, CardAnswer>;
+  /** Folded approval step id → the command step id that now carries it (so a link to the card lands on its row). */
+  foldedInto: Map<string, string>;
+}
+
+/**
+ * 28s one-row-per-answer: Details says each answer once. A settled approval step (OK, no, not answered in time)
+ * pairs with the nearest tool step of the same tool, in either order, the way `readDenials` pairs (each card at
+ * most one step, each step at most one card); the approval row is hidden and the command row carries the answer.
+ * A card with no such command row (kwnt held the call, nothing ran, or it is still open) stays its own row.
+ * Draw time only: saved steps, `activitySummary` and follow-through read the steps as they are.
+ */
+export function foldAnswers(steps: readonly ActivityStep[]): FoldedSteps {
+  const answers = new Map<string, CardAnswer>();
+  const foldedInto = new Map<string, string>();
+  const used = new Set<number>();
+  steps.forEach((card, ci) => {
+    if (card.kind !== 'approval' || !card.tool || !(card.status in answeredBy)) return;
+    const fits = answeredBy[card.status as CardAnswer];
+    // Nearest by place; on a tie (one before, one after), the one that started closest in time to the card.
+    const gap = (i: number) => [Math.abs(i - ci), Math.abs(Date.parse(steps[i].started_at) - Date.parse(card.started_at)) || 0] as const;
+    let best = -1;
+    steps.forEach((s, i) => {
+      if (s.kind !== 'tool' || s.tool !== card.tool || used.has(i) || !fits(s)) return;
+      if (best < 0) return void (best = i);
+      const [a, b] = [gap(i), gap(best)];
+      if (a[0] < b[0] || (a[0] === b[0] && a[1] < b[1])) best = i;
+    });
+    if (best < 0) return;
+    used.add(best);
+    answers.set(steps[best].id, card.status as CardAnswer);
+    foldedInto.set(card.id, steps[best].id);
+  });
+  if (!foldedInto.size) return { rows: steps as ActivityStep[], answers, foldedInto };
+  return { rows: steps.filter((s) => !foldedInto.has(s.id)), answers, foldedInto };
+}
+
 /**
  * Whether the live steps card folds to one row (18f): once the reply has words, the row moves below the bubble,
  * into the landed action row's place, so landing moves nothing above the words. A step waiting for the person
@@ -262,7 +315,7 @@ export function statusLabel(s: ActivityStep): string {
     case 'failed':
       return 'Failed';
     case 'declined':
-      return s.kind === 'approval' ? 'Denied' : 'You said no';
+      return 'You said no';
     case 'stopped':
       return 'Stopped';
     case 'unanswered':

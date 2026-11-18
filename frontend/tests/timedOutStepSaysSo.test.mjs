@@ -51,7 +51,7 @@ test('Details: timed out gets the timer icon and the amber "Not done in time" ch
   assert.deepEqual(t, { label: 'Not done in time', mark: 'unanswered', chip: 'Not done in time', timer: true, check: false, amberChip: true });
 });
 
-test('guard: done and resolved_auto keep ✓ Done, declined and stopped as before', () => {
+test('guard: done and resolved_auto keep ✓ Done, declined and stopped as before (28s: declined has no chip)', () => {
   const a = parse([hs('s0', 'done'), hs('s1', 'resolved_auto'), hs('s2', 'declined'), hs('s4', 'stopped')]);
   const html = m.steps({ activity: a, idBase: 'r1', defaultOpen: true });
   for (const id of ['s0', 's1']) {
@@ -61,7 +61,8 @@ test('guard: done and resolved_auto keep ✓ Done, declined and stopped as befor
     assert.equal(r.mark, null, id);
   }
   assert.equal(look(row(html, 's2')).label, 'You said no');
-  assert.equal(look(row(html, 's2')).chip, 'You said no');
+  // 28s (Mira's follow-up 2): a declined human step drops its chip; its title says "You said no: …"
+  assert.equal(look(row(html, 's2')).chip, null);
   assert.equal(look(row(html, 's4')).label, 'Stopped');
   assert.equal(look(row(html, 's4')).mark, null);
 });
