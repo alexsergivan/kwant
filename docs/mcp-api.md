@@ -439,6 +439,24 @@ The kwant's reply message stores its MCP calls in `tool_calls` (JSON array, `nul
 4000 characters. For CLI agents kwnt only sees the approval step, so their records have
 status `allowed` or `denied` and no `result`.
 
+### Pictures and files a tool returns (26h)
+
+A successful call's `image` and `audio` parts and `resource` parts with a `blob` are decoded,
+stored and posted in the turn's chat as the bot's file (`meta.kind: "file"`, `auto: true`; the
+same bytes again within 10 minutes aren't posted twice). The model and `result` get one line
+per file instead of the base64: `Image saved in this chat as flux-generate_image-1.png (id …);
+the person sees it there.` The usual caps hold (20 MB, videos and audio 100 MB); the first 10
+files of a call are saved and later ones are named as not saved. A file that can't be saved
+keeps its `[image: image/png]` stand-in with the reason, and the others still save. A turn with
+no chat (a dry run, a routine without one) says the file came back but couldn't be saved.
+
+FLUX (Black Forest Labs) results can also come as expiring links on `delivery*.bfl.ai`. kwnt
+downloads those right after the call and puts the saved file (`kwnt-file:<id> (<name>)`) in the
+link's place, in the model's text and in `result`. The download is HTTPS only, to that host list
+only (kept per app; a redirect off it stops the download), to public addresses only, within 60
+seconds and 100 MB. If it fails, the link stays with the reason. Picsart's result links aren't
+downloaded yet: their file host isn't on a list.
+
 ## Deployment notes
 
 - Nothing beyond kwnt itself is required: stdio servers are plain child processes, so whatever

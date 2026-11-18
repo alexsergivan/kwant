@@ -77,7 +77,7 @@ import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToa
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, HelpCircle, Inbox, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
-import { ChatApproval, OpenChat, addSettled, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { ChatApproval, OpenChat, addSettled, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, awayTitle, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
@@ -682,7 +682,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   nudgesOnRef.current = nudgesOn;
   const pageRef = useRef(page);
   pageRef.current = page;
-  const arrivalsRef = useRef(createArrivals());
+  const arrivalsRef = useRef(createArrivals(awayTitle));
   const offerNudges = (arrivals: Nudge[]) => {
     const view = { openCtx: pageRef.current === 'chat' ? openCtxRef.current : null, onInbox: pageRef.current === 'inbox', hidden: document.hidden, enabled: nudgesOnRef.current };
     const shown = arrivals.filter((n) => shouldPill(n, view));

@@ -46,13 +46,13 @@ fn is_guard(w: &str) -> bool {
 
 /// One word, with whether punctuation followed it before the next word.
 #[derive(Debug)]
-struct Word {
-    text: String,
-    stop_after: bool,
+pub(super) struct Word {
+    pub(super) text: String,
+    pub(super) stop_after: bool,
 }
 
 /// Lowercased words of one sentence; curly apostrophes become straight ones.
-fn words(sentence: &str) -> Vec<Word> {
+pub(super) fn words(sentence: &str) -> Vec<Word> {
     let mut out: Vec<Word> = Vec::new();
     let mut cur = String::new();
     for c in sentence.chars() {
@@ -80,7 +80,7 @@ fn words(sentence: &str) -> Vec<Word> {
 }
 
 /// The reply's sentences, without code: a fenced block or inline code is never a claim.
-fn sentences(text: &str) -> Vec<String> {
+pub(super) fn sentences(text: &str) -> Vec<String> {
     let mut prose = String::new();
     let mut fenced = false;
     for line in text.lines() {

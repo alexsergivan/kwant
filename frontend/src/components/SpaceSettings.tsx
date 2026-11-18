@@ -362,7 +362,7 @@ const ImportTab: React.FC<TabProps> = ({ space, kwants, onOpenImport, onImported
             </p>
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => setConfirm(null)} className={rowBtn}>Keep them</button>
-              <button type="button" onClick={() => undo(confirm.record, true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500">
+              <button type="button" onClick={() => undo(confirm.record, true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-700">
                 Undo anyway
               </button>
             </div>
@@ -530,7 +530,7 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
                 type="button"
                 onClick={archive}
                 disabled={archiving}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50"
               >
                 {archiving && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" />}
                 Archive {space.name}
