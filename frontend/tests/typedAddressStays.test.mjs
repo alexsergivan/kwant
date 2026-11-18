@@ -3,6 +3,8 @@
 // `location` each time, even when nothing changed; each one rewrote the address field, so text the person was
 // typing was wiped. Plus Rigel's 28r P1 (address-follows-the-tab/qa.md:48): a revisited tab showed its old
 // stream-written address until its own stream spoke again.
+// 28y title-change-keeps-typing (Mira, typed-address-stays/design-check.md:19; Rigel's Q1): a page whose title
+// changes on its own no longer wipes what the person types; only a new url or page writes the field.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -121,7 +123,7 @@ test('typing on a blank tab survives two identical location ticks', async () => 
   } finally { m.done(); }
 });
 
-test('typing on a tab with a real url survives identical ticks; a new url or title still lands', async () => {
+test('typing on a tab with a real url survives identical ticks and title-only changes; a new url still lands', async () => {
   const k = threeTabs('x2');
   answer = k.LIST;
   const m = mount({ teamId: 'x2', browsingBot: 'Ben', botNames: NAMES, activeUrl: OTHER, onNavigate: () => {} });
@@ -137,10 +139,42 @@ test('typing on a tab with a real url survives identical ticks; a new url or tit
     assert.equal(field(m.host).value, 'booktun.ing', 'two identical ticks: typing kept');
     await tick(ben, 'https://shop.example.com/trail/checkout', 'Checkout');
     assert.equal(field(m.host).value, 'https://shop.example.com/trail/checkout', 'a new url replaces it');
-    // Same url, new title: the location changed, so the field is written again (with the same url)
+    // 28y: same url, new title (a page that renames itself, "(3) Inbox"): typed text stays, the title line follows
     setVal(field(m.host), 'booktun.ing');
     await tick(ben, 'https://shop.example.com/trail/checkout', 'Checkout - step 2');
-    assert.equal(field(m.host).value, 'https://shop.example.com/trail/checkout');
+    assert.equal(field(m.host).value, 'booktun.ing', 'a title-only change keeps typed text');
+    assert.ok(m.host.textContent.includes('Checkout - step 2'), 'the title line shows the new title');
+    await tick(ben, 'https://shop.example.com/trail/checkout', '(3) Checkout - step 2');
+    assert.equal(field(m.host).value, 'booktun.ing', 'a second title change keeps it too');
+    assert.ok(m.host.textContent.includes('(3) Checkout - step 2'));
+    await tick(ben, 'https://shop.example.com/trail/done', 'Done');
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail/done', 'a new url still replaces it');
+  } finally { m.done(); }
+});
+
+test('28y: after a stream reset the first location with the same url still writes the field', async () => {
+  const k = threeTabs('x5');
+  answer = k.LIST;
+  const m = mount({ teamId: 'x5', browsingBot: 'Ben', botNames: NAMES, activeUrl: OTHER, onNavigate: () => {} });
+  try {
+    await settle();
+    assert.equal(currentTab(m.host), 'x5#ben#c1');
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/cart', 'Cart');
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail/cart');
+    setVal(field(m.host), 'booktun.ing');
+    // Close and reopen the pane: the stream resets (location null) and a new socket opens on the same page
+    const before = sockets.length;
+    m.render({ isOpen: false });
+    await settle();
+    m.render({ isOpen: true });
+    await settle();
+    assert.ok(sockets.length > before, 'a new socket after the reset');
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/cart', 'Cart');
+    assert.equal(field(m.host).value, 'https://shop.example.com/trail/cart', 'null -> same url writes the address again');
+    // and the 2 s tick after it is still quiet
+    setVal(field(m.host), 'booktun.ing');
+    await tick(sockets.at(-1), 'https://shop.example.com/trail/cart', 'Cart');
+    assert.equal(field(m.host).value, 'booktun.ing');
   } finally { m.done(); }
 });
 

@@ -327,11 +327,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const setInputUrl = (url: string) => setWritten({ key: fieldKey, url, typed: true });
   // Then the stream takes over, but only the chosen page's own: a late message from the page just left
   // never writes its address. A blank tab's own about:blank keeps the field empty (28u), as its chip says
-  // "nothing open"; pageUrl keeps the raw value for the blank check and the picture.
+  // "nothing open"; pageUrl keeps the raw value for the blank check and the picture. 28y: only a new url or page
+  // writes it; a title that changes on its own ("(3) Inbox") never reaches the field or what the person typed.
   useEffect(() => {
     if (stream.location?.url && stream.location.page === chosenPage) setWritten({ key: fieldKey, url: isBlankPage(stream.location.url) ? '' : stream.location.url });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream.location]);
+  }, [stream.location?.url, stream.location?.page]);
   // The pane's own stream knows each page's title too, so the trail can name pages the bot opened
   useEffect(() => {
     noteTitle(stream.location?.url, stream.location?.title);
