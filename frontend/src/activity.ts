@@ -280,16 +280,16 @@ export function formatClock(ms: number): string {
  *  "· 1 didn't run" when an approval went unanswered (26d) and "· you said no to 1" when the person denied a call (28a).
  *  Counts read the rows Details draws: a folded card and its command count once (28t). */
 export function activitySummary(a: SavedActivity): string {
-  // Counts read the rows Details draws: a folded card and its command count once (28t).
-  const rows = foldAnswers(a.steps).rows;
-  const n = rows.filter((s) => s.kind !== 'note').length + a.dropped;
+  // One step rule for the saved summary and the live "Working · N steps" (28z): shownStepCount.
+  const n = shownStepCount(a.steps) + a.dropped;
   const steps = `${n} ${n === 1 ? 'step' : 'steps'}`;
   const span = activitySpan(a.steps);
   const parts = span !== null && span >= 1000 ? [`Worked ${formatClock(span)}`, steps] : [steps];
   const failed = a.steps.filter((s) => s.status === 'failed').length;
   if (failed) parts.push(`${failed} failed`);
   // Raw status, not shownStatus: a human step nobody finished in time (28n) doesn't count here.
-  const unanswered = rows.filter((s) => s.status === 'unanswered').length;
+  // Read the folded rows Details draws, so a card and its command count once (28t).
+  const unanswered = foldAnswers(a.steps).rows.filter((s) => s.status === 'unanswered').length;
   if (unanswered) parts.push(`${unanswered} didn’t run`);
   const declined = a.steps.filter((s) => s.kind === 'tool' && s.status === 'declined').length;
   if (declined) parts.push(`you said no to ${declined}`);

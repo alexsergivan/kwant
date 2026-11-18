@@ -256,8 +256,9 @@ const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: nu
 };
 
 /** The saved reply's steps row (and the live one once it folds, 18f): one class string, so both are the same height. */
+// 28z: on a phone the saved summary may wrap to two lines, so both rows keep their icons on the first line (max-sm:items-start + 1.5px).
 export const STEPS_ROW_BUTTON =
-  'max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
+  'max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 max-sm:items-start';
 /** The list the steps row opens to. */
 export const STEPS_ROW_LIST = 'mt-1.5 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]';
 
@@ -340,10 +341,10 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
       <section aria-label="What the bot is doing" data-steps-folded="" className="mt-2 max-w-full">
         <div className="flex max-w-full min-w-0 items-center gap-2">
           <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={open ? listId : undefined} className={STEPS_ROW_BUTTON}>
-            <ListTree size={13} className="text-sky-400/80" aria-hidden="true" />
+            <ListTree size={13} className="flex-shrink-0 max-sm:mt-[1.5px] text-sky-400/80" aria-hidden="true" />
             {/* No time while running, as in the card */}
             <span className="truncate min-w-0">Working · {work} {work === 1 ? 'step' : 'steps'}</span>
-            <ChevronRight size={13} className={`flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
+            <ChevronRight size={13} className={`flex-shrink-0 max-sm:mt-[1.5px] text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
           </button>
           {lead && <div className="min-w-0 shrink">{lead}</div>}
         </div>
@@ -414,9 +415,9 @@ export const SavedActivityList: React.FC<{
         aria-controls={open ? listId : undefined}
         className={STEPS_ROW_BUTTON}
       >
-        <ListTree size={13} className={unanswered ? 'text-amber-300' : failed ? 'text-rose-300' : 'text-sky-400/80'} aria-hidden="true" />
-        <span className="truncate min-w-0">{activitySummary(activity)}</span>
-        <ChevronRight size={13} className={`flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
+        <ListTree size={13} className={`flex-shrink-0 max-sm:mt-[1.5px] ${unanswered ? 'text-amber-300' : failed ? 'text-rose-300' : 'text-sky-400/80'}`} aria-hidden="true" />
+        <span className="min-w-0 break-words max-sm:line-clamp-2 sm:truncate" data-steps-summary="">{activitySummary(activity)}</span>
+        <ChevronRight size={13} className={`flex-shrink-0 max-sm:mt-[1.5px] text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
       </button>
       {open && (
         <div className={STEPS_ROW_LIST}>
