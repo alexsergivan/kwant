@@ -139,7 +139,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
     <>
       <StatusIcon step={step} />
       <span className={`min-w-0 flex-1 break-words ${step.status === 'stopped' ? 'text-zinc-400' : waiting ? 'text-amber-100' : 'text-zinc-200'}`}>
-        {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title)} />}
+        {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title, step.status)} />}
       </span>
       {mark && (
         <span aria-hidden="true" data-step-mark={step.status} className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark}`}>
@@ -181,7 +181,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
     >
       {step.detail ? (
         <details className="group" open={opened || undefined}>
-          <summary className="flex items-start gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
+          <summary className="flex items-start [@media(max-width:767px)_and_(pointer:coarse)]:items-center gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
             {head}
             <ChevronRight size={13} className="mt-px flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
           </summary>
