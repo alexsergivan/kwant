@@ -14,6 +14,12 @@
 //       tailwind.config.js. It is #745bef now. The rgb(122 98 240 / a) tints are a different thing and stay.
 // emerald and violet (Mira's ruling, audit section C, roadmap 26g): emerald is teal / ok and violet is kwant's
 // sky (lavender), so their classes and stock hex fail too. scripts/retint-emerald-violet.mjs does the mapping.
+// 26g-2 (Rigel's finding 5 on #767): rose and amber are Tailwind's stock families in kwant, so
+//   (f) text-white on an opaque bg-rose-50..500 or bg-amber-50..600 fails too (rose-500 3.67:1, amber-600 3.19:1),
+//       hover: included; /alpha tints are fine. Use bg-rose-600 hover:bg-rose-700, or dark ink on amber.
+//   (g) class lists split across lines (className="…", className={`…`}, const X = `…`) and CSS @apply statements
+//       get the (c)/(f) checks on the whole string, reported at the line where it starts, and
+//   (h) stock Tailwind red and orange hex / rgb() fail like their class names (use rose / amber).
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -31,9 +37,12 @@ const STOCK = {
   sky: '#f0f9ff #e0f2fe #bae6fd #7dd3fc #38bdf8 #0ea5e9 #0284c7 #0369a1 #075985 #0c4a6e #082f49',
   emerald: '#ecfdf5 #d1fae5 #a7f3d0 #6ee7b7 #34d399 #10b981 #059669 #047857 #065f46 #064e3b #022c22',
   violet: '#f5f3ff #ede9fe #ddd6fe #c4b5fd #a78bfa #8b5cf6 #7c3aed #6d28d9 #5b21b6 #4c1d95 #2e1065',
+  // (h) from tailwindcss/colors 3.4. Not rose or amber: those are kwant's own (stock) families, e.g. #be123c is rose-700.
+  red: '#fef2f2 #fee2e2 #fecaca #fca5a5 #f87171 #ef4444 #dc2626 #b91c1c #991b1b #7f1d1d #450a0a',
+  orange: '#fff7ed #ffedd5 #fed7aa #fdba74 #fb923c #f97316 #ea580c #c2410c #9a3412 #7c2d12 #431407',
 };
 // The kwant family each stock family's hex should become.
-const KWANT = { zinc: 'zinc', sky: 'sky', emerald: 'teal', violet: 'sky' };
+const KWANT = { zinc: 'zinc', sky: 'sky', emerald: 'teal', violet: 'sky', red: 'rose', orange: 'amber' };
 const HEX = new Map();
 for (const [fam, list] of Object.entries(STOCK)) list.split(' ').forEach((h, i) => HEX.set(h, `${fam}-${SHADES[i]}`));
 const rgbOf = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -83,6 +92,12 @@ function* walk(dir) {
 const whiteRe = /(?<![\w-])text-white(?![\w-])/;
 const lightSkyRe = /(?<![\w-])((?:[\w-]+:)*)bg-sky-(50|100|200|300|400|500)(?![\w/-])/g;
 const brightRe = /(?<![\w-])((?:[\w-]+:)*hover:)brightness-(\d+)(?![\w-])/g;
+// (f) stock rose and amber: white text needs rose-600 (4.70:1) or darker, amber-700 (5.02:1) or darker.
+const warmRe = /(?<![\w-])((?:[\w-]+:)*)bg-(rose|amber)-(50|[1-9]00)(?![\w/-])/g;
+const WHITE_ON = {
+  rose: { 50: '1.10', 100: '1.20', 200: '1.41', 300: '1.89', 400: '2.69', 500: '3.67' },
+  amber: { 50: '1.04', 100: '1.11', 200: '1.25', 300: '1.44', 400: '1.67', 500: '2.15', 600: '3.19' },
+};
 const WHITE_EXEMPT = [
   // None. List a real exemption here as { at: 'src/x.tsx:12', why: '...' }.
 ];
@@ -95,6 +110,42 @@ export function whiteOnLight(line) {
   }
   for (const m of line.matchAll(brightRe)) {
     if (+m[2] > 100) out.push(`${m[0]} next to text-white lightens the fill under white text (3.66:1 on the accent gradient): use kw-hover-deepen (or hover:bg-sky-700 on a flat bg-sky-600)`);
+  }
+  for (const m of line.matchAll(warmRe)) {
+    const ratio = WHITE_ON[m[2]][m[3]];
+    if (!ratio) continue;
+    const hover = /hover:/.test(m[1]);
+    out.push(m[2] === 'rose'
+      ? `${m[0]} under text-white is ${ratio}:1: ${hover ? `use ${m[1]}bg-rose-700 (6.29:1), so hover deepens` : 'use bg-rose-600 (4.70:1) with hover:bg-rose-700 (6.29:1), or dark ink: text-zinc-950 (5.12:1 on rose-500)'}`
+      : `${m[0]} under text-white is ${ratio}:1: use dark ink on amber, bg-amber-500 text-zinc-950 hover:bg-amber-400 (8.76:1, 11.27:1), or bg-amber-700 hover:bg-amber-800 with white (5.02:1, 7.09:1)`);
+  }
+  return out;
+}
+
+// (g) Whole class strings that span lines, and CSS @apply statements (which can span lines too). Each gets
+// whiteOnLight on its whitespace-collapsed text and is reported at the line where it starts. One-line strings
+// are already covered by the per-line scan, so only multi-line ones are returned here (no double reports).
+const CLASS_STRING_RES = [
+  /className=(["'])([\s\S]*?)\1/g, // className="…"
+  /className=\{\s*`([^`]*)`/g, // className={`…`}
+  /\bconst\s+[\w$]+\s*=\s*`([^`]*)`/g, // const X = `…`
+];
+export function multiLineClassStrings(text) {
+  const out = [];
+  for (const re of CLASS_STRING_RES)
+    for (const m of text.matchAll(re)) {
+      const body = m[m.length - 1];
+      if (!body.includes('\n')) continue;
+      const line = text.slice(0, m.index).split('\n').length;
+      for (const msg of whiteOnLight(body.replace(/\s+/g, ' '))) out.push({ line, msg });
+    }
+  return out;
+}
+export function cssApplyWhite(text) {
+  const out = [];
+  for (const m of text.matchAll(/@apply\b([^;{}]*);/g)) {
+    const line = text.slice(0, m.index).split('\n').length;
+    for (const msg of whiteOnLight(m[1].replace(/\s+/g, ' '))) out.push({ line, msg: `@apply ${msg}` });
   }
   return out;
 }
@@ -130,7 +181,12 @@ export function scan() {
   for (const p of walk(src)) {
     const file = relative(root, p).split('\\').join('/');
     const text = readFileSync(p, 'utf8');
-    if (file.endsWith('.css')) for (const h of cssBrightHovers(text)) out.push(`${file}:${h.line} ${h.msg}`);
+    if (file.endsWith('.css')) {
+      for (const h of cssBrightHovers(text)) out.push(`${file}:${h.line} ${h.msg}`);
+      for (const h of cssApplyWhite(text)) if (!WHITE_EXEMPT.some((e) => e.at === `${file}:${h.line}`)) out.push(`${file}:${h.line} ${h.msg}`);
+    } else {
+      for (const h of multiLineClassStrings(text)) if (!WHITE_EXEMPT.some((e) => e.at === `${file}:${h.line}`)) out.push(`${file}:${h.line} ${h.msg}`);
+    }
     text.split('\n').forEach((line, i) => {
       const at = `${file}:${i + 1}`;
       out.push(...retired(at, line));
@@ -139,7 +195,8 @@ export function scan() {
         if (HEX.has(h) && !exempt(file, h)) {
           const [stock, n] = HEX.get(h).split('-');
           const fam = KWANT[stock];
-          out.push(`${at} stock Tailwind ${HEX.get(h)} ${m[0]}: use kwant's ${fam}-${n} (class ${fam}-${n}, theme('colors.${fam}.${n}')) or a --kw-* token`);
+          if (stock === 'red' || stock === 'orange') out.push(`${at} stock Tailwind ${HEX.get(h)} ${m[0]} is outside kwant's palette: use ${OFF[stock]} (${fam}-${n}, theme('colors.${fam}.${n}'))`);
+          else out.push(`${at} stock Tailwind ${HEX.get(h)} ${m[0]}: use kwant's ${fam}-${n} (class ${fam}-${n}, theme('colors.${fam}.${n}')) or a --kw-* token`);
         }
       }
       for (const m of line.matchAll(rgbRe)) {
@@ -185,6 +242,27 @@ test('the guard itself catches what it should and lets kwant tokens through', ()
   // (d) CSS hovers that brighten white text
   const css = `.a { color: #fff; background: x; }\n.a:hover { filter: brightness(1.08); }\n.b { color: #fff; }\n.b:hover:not(:disabled) { filter: brightness(108%); }\n.c:hover { filter: brightness(1.1); }\n.d { color: #fff; }\n.d:hover { filter: brightness(1); }\n.e { @apply text-white; }\n.e:hover { filter: saturate(1.2) brightness(1.2); }`;
   assert.deepEqual(cssBrightHovers(css).map((h) => h.line), [2, 4, 9], 'white base + brightness > 1 only');
+  // (f) white text on light stock rose and amber; tints, dark ink and rose-600+/amber-700+ are fine
+  assert.equal(whiteOnLight('bg-rose-600 text-white hover:bg-rose-500').length, 1, 'rose hover that lightens');
+  assert.equal(whiteOnLight('bg-rose-600 text-white hover:bg-rose-700').length, 0);
+  assert.equal(whiteOnLight('bg-amber-600 text-white shadow-sm hover:bg-amber-500').length, 2, 'amber rest and hover');
+  assert.equal(whiteOnLight('bg-amber-500 text-zinc-950 hover:bg-amber-400').length, 0, 'dark ink on amber');
+  assert.equal(whiteOnLight('bg-amber-700 text-white hover:bg-amber-800').length, 0);
+  assert.equal(whiteOnLight('bg-rose-500 text-zinc-950 hover:bg-rose-400').length, 0, 'dark ink on rose');
+  assert.equal(whiteOnLight('text-white hover:bg-rose-500/10 bg-amber-400/20').length, 0, 'alpha tints are fine');
+  assert.equal(whiteOnLight('dark:hover:bg-rose-300 text-white').length, 1, 'any variant prefix');
+  assert.equal(whiteOnLight('bg-[#be123c] hover:bg-rose-800 text-white').length, 0);
+  // (g) a class list split across lines, and @apply in CSS
+  const tsx = "const ok = 1;\nconst B = `px-3 text-white\n  bg-rose-600 hover:bg-rose-500`;\n<div className=\"a\n  bg-amber-600 text-white\" />\n<b className={`text-white\n bg-sky-500`} />\n<i className=\"text-white bg-rose-500\" />";
+  assert.deepEqual(multiLineClassStrings(tsx).map((h) => h.line), [4, 6, 2], 'multi-line strings, at their first line; one-liners are left to the line scan');
+  assert.deepEqual(multiLineClassStrings('const B = `bg-rose-600 text-white\n hover:bg-rose-700`;'), []);
+  const applyCss = '.a { @apply bg-sky-500\n  text-white; }\n.b { @apply bg-rose-600 text-white hover:bg-rose-700; }\n.c { @apply text-white; background: red; }\n.d { @apply bg-amber-500 text-zinc-950; }';
+  assert.deepEqual(cssApplyWhite(applyCss).map((h) => h.line), [1]);
+  // (h) stock red and orange hex point to rose and amber; rose and amber hex are kwant's own
+  assert.equal(HEX.get('#ef4444'), 'red-500');
+  assert.equal(HEX.get('#ea580c'), 'orange-600');
+  assert.equal(RGB.get('220,38,38'), '#dc2626');
+  assert.ok(!HEX.has('#be123c') && !HEX.has('#f59e0b'), 'rose and amber hex stay allowed');
   // (e) the retired stop, any case; the rgb tint is fine
   assert.equal(retired('x', 'from-[#7A62F0] #7a62f0 #745bef rgb(122 98 240 / 0.2)').length, 2);
 });

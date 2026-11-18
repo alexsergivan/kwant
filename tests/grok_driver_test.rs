@@ -333,6 +333,7 @@ fn mcp_ctx(dir: &Path) -> McpTurnContext {
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
         kwnt_only: false,
+        media: None,
     }
 }
 
