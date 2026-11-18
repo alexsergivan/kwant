@@ -6,9 +6,11 @@ pub mod cli_config;
 pub mod cli_hooks;
 pub mod client;
 pub mod composio;
+pub mod declined;
 pub mod echo_server;
 pub mod fetch_risk;
 pub mod home_floor;
+pub mod media;
 pub mod oauth;
 pub mod payment_floor;
 pub mod prod_floor;
@@ -456,10 +458,21 @@ pub enum ApprovalOutcome {
     /// A Skill Foundry replay (a dry run): the call didn't run and was recorded as what the bot
     /// would have done.
     Rehearsed,
+    /// 27b: the person already declined a call of this kind in this chat ([`declined`]), so it was
+    /// refused with no card. Recorded as `denied`.
+    DeclinedBefore,
 }
 
-/// What the bot is told when the person refused a call.
-pub const DENIED_TEXT: &str = "The user denied this tool call.";
+/// What the bot is told when the person refused a call: that, and [`NOT_ANOTHER_WAY_TEXT`].
+pub const DENIED_TEXT: &str = "The user denied this tool call. Don't try it again or another way unless the person asks.";
+/// 27b: the end of [`DENIED_TEXT`], for the bot only; a step's detail leaves it out.
+pub const NOT_ANOTHER_WAY_TEXT: &str = "Don't try it again or another way unless the person asks.";
+/// 27b: what the bot is told when kwant refused a call because the person already said no to one
+/// like it in this chat ([`ApprovalOutcome::DeclinedBefore`]).
+pub const DECLINED_BEFORE_TEXT: &str = "The person already said no to a call like this in this chat, so kwant didn't run it or ask again. \
+Don't try it again or another way. In your reply, say what you couldn't do; if the person still wants it, they can say so in this chat and you can try again.";
+/// 27b: the step detail of a call refused as [`ApprovalOutcome::DeclinedBefore`].
+pub const DECLINED_BEFORE_STEP_DETAIL: &str = "You said no to a call like this earlier in this chat; kwant didn't ask again";
 /// What the bot is told when nobody answered the card in time.
 pub const UNANSWERED_TEXT: &str = "No one has answered the approval card for this call yet, so it did not run. \
 The card stays open: if the person allows it later, you will be started again to make this same call and continue. \
@@ -514,6 +527,7 @@ impl ApprovalOutcome {
         match self {
             ApprovalOutcome::Unanswered => UNANSWERED_TEXT,
             ApprovalOutcome::Rehearsed => REHEARSED_TEXT,
+            ApprovalOutcome::DeclinedBefore => DECLINED_BEFORE_TEXT,
             _ => DENIED_TEXT,
         }
     }
@@ -522,7 +536,7 @@ impl ApprovalOutcome {
     pub fn record_status(self) -> &'static str {
         match self {
             ApprovalOutcome::Allowed => "allowed",
-            ApprovalOutcome::Denied => "denied",
+            ApprovalOutcome::Denied | ApprovalOutcome::DeclinedBefore => "denied",
             ApprovalOutcome::Unanswered => "unanswered",
             ApprovalOutcome::Rehearsed => "rehearsed",
         }
@@ -586,6 +600,10 @@ pub struct McpTurnContext {
     /// CLIs run with none of their built-in tools, so their own allow rules have nothing to let
     /// through without a card. A CLI that can't be held to that runs the turn with no tools.
     pub kwnt_only: bool,
+    /// 26h: where pictures, audio and video an MCP tool returns are saved and shown in the
+    /// turn's chat ([`media::MediaSink`]). `None` (no chat to post into): the model is told a
+    /// file came back but couldn't be saved.
+    pub media: Option<Arc<dyn media::MediaSink>>,
 }
 
 /// Where an agent CLI reaches this turn's MCP gateway. The token is sent as a bearer token.
@@ -644,6 +662,7 @@ impl std::fmt::Debug for McpTurnContext {
             .field("permission_url", &self.permission_url.as_ref().map(|_| "<set>"))
             .field("gateway", &self.gateway)
             .field("max_tool_iterations", &self.max_tool_iterations)
+            .field("media", &self.media.as_ref().map(|_| "<set>"))
             .finish()
     }
 }
@@ -717,6 +736,19 @@ mod folder_file_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 27b: a first no tells the bot not to try another way; a call refused because of an earlier
+    /// no says so, and is recorded as a denial (no extra reminder, nothing claimed done).
+    #[test]
+    fn a_no_tells_the_bot_not_to_try_another_way() {
+        assert!(DENIED_TEXT.starts_with("The user denied this tool call. "));
+        assert!(DENIED_TEXT.ends_with(NOT_ANOTHER_WAY_TEXT));
+        assert_eq!(ApprovalOutcome::Denied.refusal_text(), DENIED_TEXT);
+        assert_eq!(ApprovalOutcome::DeclinedBefore.refusal_text(), DECLINED_BEFORE_TEXT);
+        assert_eq!(ApprovalOutcome::DeclinedBefore.record_status(), "denied");
+        assert!(!ApprovalOutcome::DeclinedBefore.allowed());
+        assert!(missed_status("denied") && !reminds("denied"));
+    }
 
     fn input(json: Value) -> McpServerInput {
         serde_json::from_value(json).unwrap()
