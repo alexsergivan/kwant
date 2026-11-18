@@ -3210,18 +3210,19 @@ async fn run_kwant_turn_inner(
             purpose: opts.purpose.clone(),
             every_call: opts.every_call,
         };
-        // A no-tools turn starts no MCP server, kwant's own included
+        // A no-tools turn starts no MCP server, kwant's own included. Boxed (26h): inline, its
+        // future (now with the chat's media sink) grew this turn's past the test thread's stack
         let mcp_turn = if opts.no_tools {
             None
         } else {
-            super::mcp_runtime::prepare_turn_with_opts(
+            Box::pin(super::mcp_runtime::prepare_turn_with_opts(
                 state,
                 target_kwant,
                 Some(tag.turn_id.clone()),
                 workspace_dir.clone(),
                 self_scope,
                 card_opts,
-            )
+            ))
             .await
         };
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
