@@ -19,7 +19,7 @@ import {
 import { playSfx } from '../audio/chiptune';
 import { BOT_BUSY_TEXT, HELD_BY_PERSON_TEXT, useBrowserStream } from '../useBrowserStream';
 import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, SignInLine, useComputerMode } from './ComputerModeSwitch';
-import { useSteadyFrame } from '../steadyFrame';
+import { paneFrame, useSteadyFrame } from '../steadyFrame';
 import { browserFooterLabel, browserOwnerWord, isBlankPage, showsLocalWindow } from '../computerMode';
 import { paneStatus } from '../browserPanel';
 import { ModernAvatar } from './ModernAvatar';
@@ -35,7 +35,7 @@ import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 import { PointLayer, PointSink } from './PointLayer';
 import { POINT_COPY, footerText } from '../point';
-import { choosePage, noteTitle, pageTeam, pageTitleOf, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
+import { choosePage, noteTitle, ownNewestPage, pageOpened, pageTeam, pageTitleOf, restingPage, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
 import { secondsText } from '../clock';
@@ -230,7 +230,25 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // A list asked for before the pick can't know the picked page yet
   const knownPages = pageKeys && (!picked || (pages.list?.at ?? 0) >= picked.at) ? pageKeys : null;
   const openStep = humanStep?.status === 'open' ? humanStep : captchaStep?.status === 'open' ? captchaStep : null;
-  const chosenPage = choosePage({ picked: picked?.page ?? null, stepPage: stepPage(openStep), pages: knownPages });
+  // 28l: with nothing chosen, the page the pane already shows, kept while it is open. It lets go when a
+  // page opens (a bot's open or navigate step), then rests on the server's default, the page just used.
+  // Once the list is known this is never null, so the stream always names its page.
+  const [heldPage, setHeldPage] = useState<string | null>(null);
+  const lastList = useRef(pages.list);
+  const opened = pages.list !== lastList.current && pageOpened(lastList.current, pages.list);
+  const botName = useCallback((id: string) => botNames?.[id], [botNames]);
+  // 28o: the first list since the pane opened: rest first on the newest page of the bot whose panel it
+  // is. Held from then on, so it is decided once and never re-evaluated.
+  const firstPage = !lastList.current && !heldPage ? ownNewestPage(pages.list, browsingBot, botName) : null;
+  const chosenPage =
+    choosePage({ picked: picked?.page ?? null, stepPage: stepPage(openStep), pages: knownPages }) ??
+    restingPage(opened ? null : heldPage, pages.list, firstPage);
+  useEffect(() => {
+    lastList.current = pages.list;
+  }, [pages.list]);
+  useEffect(() => setHeldPage(isOpen ? chosenPage : null), [isOpen, chosenPage]);
+  // Until the first list answers, the stream waits (a stream to the default, then to the named page, blinks)
+  const pagesKnown = pages.checked || !teamId || teamId === 'default';
   // The picked page closed (idle, or the cap made room): forget it, so it never comes back by itself
   useEffect(() => {
     if (picked && knownPages && !knownPages.includes(picked.page)) setPicked(null);
@@ -241,7 +259,6 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const onScreen = (s: HumanStep | null | undefined) => (s && stepPage(s) === pageOnScreen ? s : null);
   humanStep = onScreen(humanStep);
   captchaStep = onScreen(captchaStep);
-  const botName = useCallback((id: string) => botNames?.[id], [botNames]);
   // Who the page on screen belongs to: its bot on a job page, else the team ("Architect needs you to sign in")
   const pageBot = (pageInfo?.job && pageInfo.kwant_id && botNames?.[pageInfo.kwant_id]) || teamName;
   // 0.9.8 header and footer: "Ben's browser", or "The team's browser" when no bot owns the page on screen
@@ -251,7 +268,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const touch = useCallback(() => onTouch?.(), [onTouch]);
 
   // Interactive Remote Control State
-  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending, chosenPage);
+  const streaming = isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending;
+  const stream = useBrowserStream(teamId, streaming && pagesKnown, chosenPage);
+  // 28e: the page the stream belongs to. Until the stream reconnects, it still shows the last page.
+  const [streamFor, setStreamFor] = useState(chosenPage);
+  useEffect(() => setStreamFor(chosenPage), [chosenPage]);
   const isControlMode = stream.controlling;
   const isInteracting = stream.busy;
   const narrow = useNarrow();
@@ -270,7 +291,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const shownTitle = stream.location ? stream.location.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
   // A blank light frame from Chrome (a page committing) waits behind the last good picture: no grey flash
   const steady = useSteadyFrame(stream.frame, stream.acknowledgeFrame);
-  const currentScreenshot = isBlankPage(pageUrl) ? null : steady.frame?.image || screenshotBase64;
+  const controlError = stream.error || (!stream.connected ? browserError : null);
+  // A live stream is ready; otherwise trust isRunning only while no error says the service is down.
+  const browserReady = stream.connected || (isRunning && !controlError);
+  // 28e: after a switch to another page's tab, the dark pane until that page's own frame, never another picture
+  const panePicture = paneFrame({ blank: isBlankPage(pageUrl), frame: steady.frame, holding: steady.holding, streaming: streaming && browserReady, switching: streamFor !== chosenPage || !pagesKnown, streamPage: stream.page, chosenPage, screenshot: screenshotBase64 });
+  const currentScreenshot = 'image' in panePicture ? panePicture.image : null;
   const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
   const blankFrameId = isBlankPage(pageUrl) ? stream.frame?.id : undefined;
@@ -278,9 +304,6 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   useEffect(() => {
     if (blankFrameId !== undefined) acknowledgeFrame(blankFrameId);
   }, [blankFrameId, acknowledgeFrame]);
-  const controlError = stream.error || (!stream.connected ? browserError : null);
-  // A live stream is ready; otherwise trust isRunning only while no error says the service is down.
-  const browserReady = stream.connected || (isRunning && !controlError);
   useEffect(() => {
     if (stream.location?.url) setInputUrl(stream.location.url);
   }, [stream.location]);
@@ -703,6 +726,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           </div>
         ) : activeTab === 'browser' ? (
           <div className="flex-1 min-h-0 flex flex-col p-3 gap-2 overflow-y-auto" onScroll={touch} data-pane-body="">
+            {/* 28o: while the pane waits for the list, the strip's row is kept, empty, so the dark box doesn't move down when the tabs arrive */}
+            {!pagesKnown && <div aria-hidden="true" data-page-strip-reserved="" className={`shrink-0 ${narrow ? 'h-11' : 'h-7'}`} />}
             {pages.list && (
               <BrowserPageStrip
                 pages={pages.list.pages}
@@ -965,7 +990,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     </button>
                   )}
                 </>
-              ) : steady.holding && !isBlankPage(pageUrl) ? (
+              ) : 'hold' in panePicture ? (
                 /* The first picture of this view is blank or still being checked: the dark pane, not "Browser idle" */
                 <div data-frame-holding="" aria-hidden="true" className="absolute inset-0" />
               ) : (

@@ -55,6 +55,51 @@ export function choosePage(input: { picked: string | null; stepPage: string | nu
   return null;
 }
 
+/**
+ * 28l: the page the pane rests on when nothing is chosen (no pick, no open step), once the pages
+ * list is known. It stays on `held`, the page it was already showing, while that page is still
+ * listed, so the server's default moving after a run (from the bot's page back to the team page, or
+ * the other way when a page is merely used) never swaps the tab under the person. Else the server's
+ * default. With no list (an older server with no pages route, or before the first answer) it is
+ * null: the old fallback. The pane lets go of `held` when a page opens (see pageOpened).
+ */
+export function restingPage(held: string | null, list: Pick<BrowserPageList, 'live' | 'pages'> | null, first: string | null = null): string | null {
+  if (!list) return null;
+  const listed = (key: string | null): key is string => !!key && list.pages.some((p) => p.page === key);
+  if (listed(held)) return held;
+  // 28o: the first resting page of an open pane, decided once (see ownNewestPage)
+  if (listed(first)) return first;
+  return list.live;
+}
+
+/**
+ * 28o: the newest listed page owned by the bot whose panel it is (`bot` is its name, as the header
+ * shows it, matched the way the strip names tabs with pageOwner), else null. The pane rests on it
+ * first when it opens with nothing chosen, so "Ben's browser" opens on Ben's tab, not an idle Shared.
+ */
+export function ownNewestPage(
+  list: Pick<BrowserPageList, 'pages'> | null,
+  bot: string | null | undefined,
+  botName: (id: string) => string | undefined,
+): string | null {
+  if (!list || !bot) return null;
+  // The list is newest first
+  return list.pages.find((p) => p.job && !!p.kwant_id && pageOwner(p, botName) === bot)?.page ?? null;
+}
+
+/**
+ * 28l: whether a page opened between two lists: a page that is new, or one at a new address (a bot's
+ * open or navigate step). Then the pane follows the server's default again, the page just used.
+ * A page that was only used, closed or retitled doesn't count.
+ */
+export function pageOpened(before: Pick<BrowserPageList, 'pages'> | null, after: Pick<BrowserPageList, 'pages'> | null): boolean {
+  if (!before || !after) return false;
+  const was = new Map(before.pages.map((p) => [p.page, p.url]));
+  return after.pages.some((p) => !was.has(p.page) || (p.url !== was.get(p.page) && !isBlankUrl(p.url)));
+}
+
+const isBlankUrl = (url: string | null) => !url || url === 'about:blank';
+
 /** The page the pane is showing: the chosen one, else the server's default, else the team page. */
 export function shownPage(chosen: string | null, list: BrowserPageList | null, team: string | undefined): string | null {
   return chosen ?? list?.live ?? team ?? null;
@@ -119,10 +164,15 @@ export function onBrowserPagesChanged(l: Listener): () => void {
   };
 }
 
-/** The team's pages, or null when the server has none to list (an older server, or no browser yet). */
+/**
+ * The team's pages, or null when the server has none to list (an older server: a 404, or an answer
+ * that isn't a list). 28o: any other failed answer (a 5xx, an auth blip) throws, as a network error
+ * does, so one bad moment is never read as "this server has no pages route".
+ */
 export async function fetchBrowserPages(team: string, signal?: AbortSignal): Promise<BrowserPageList | null> {
   const res = await fetch(`/api/sandbox/${encodeURIComponent(team)}/pages`, { signal });
-  if (!res.ok) return null;
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`pages: ${res.status}`);
   return parsePageList(await res.json().catch(() => null));
 }
 
