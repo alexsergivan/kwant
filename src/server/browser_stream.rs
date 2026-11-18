@@ -1421,8 +1421,7 @@ async fn stream(
     let result = async {
         watch_page(cdp, shared).await?;
         // the view may open on a sign-in that was already refused
-        let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
-        if let Some(notice) = signin.update(&url, ctrl.is_held_for_person()) { send(socket, notice).await?; }
+        if let Some(notice) = own_signin_notice(cdp, signin, ctrl.is_held_for_person()).await { send(socket, notice).await?; }
         // a link to another app may have fired before the view opened, with nobody to close
         // Chrome's prompt: check the page still gets input, off the loop. Not while a button is
         // held, where a move would be part of someone's drag.
@@ -1638,8 +1637,7 @@ async fn stream(
                             let (vw, vh) = shared.view();
                             send(socket, json!({"type":"control","active":true,"viewport":{"width":vw,"height":vh}})).await?;
                             // taking control of a sign-in page: the person is about to sign in
-                            let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
-                            if let Some(notice) = signin.update(&url, true) { send(socket, notice).await?; }
+                            if let Some(notice) = own_signin_notice(cdp, signin, true).await { send(socket, notice).await?; }
                         }
                         "release_control" => {
                             // Show it once: the edit still pending in the page is a step first
@@ -2004,6 +2002,15 @@ async fn flush_recorder(cdp: &Cdp) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The sign-in notice for the page this stream shows, judged by that page's own address. Never
+/// the controller's `current_url`: the bot's own page writes it too, so on the Shared tab a notice
+/// would follow the bot's page (and the reverse). Nothing when the page doesn't answer within
+/// `PROBE_WAIT` (a notice already shown stays until the page answers again).
+async fn own_signin_notice(cdp: &Cdp, signin: &mut crate::sandbox::signin_gate::LiveNotice, person_in_control: bool) -> Option<Value> {
+    let url = current_url(cdp).await?;
+    signin.update(&url, person_in_control)
+}
+
 /// The address of the page open in the tab now.
 async fn current_url(cdp: &Cdp) -> Option<String> {
     let history = cdp.call("Page.getNavigationHistory", json!({}), PROBE_WAIT).await.ok()?;
@@ -2253,11 +2260,10 @@ mod tests {
         assert_eq!(navigated_to("Page.domContentEventFired", &json!({"timestamp":1.0})), None);
     }
 
-    /// Take over from a second window while the first has control is `held_by_person`, never
-    /// the busy bot's error; a bot mid-step is `bot_busy`; once the first window hands back (its
-    /// lease dropped) the second can take over.
     /// A fake page on its own DevTools socket: it answers `Runtime.evaluate` with whatever
-    /// `answer` holds at that moment (its address and title).
+    /// `answer` holds at that moment (its address and title), and `Page.getNavigationHistory` with
+    /// that address as its current entry. While `answer` is `"silent"` it answers nothing, like a
+    /// page whose dialog is open.
     async fn fake_page(answer: Arc<std::sync::Mutex<Value>>) -> Cdp {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2267,7 +2273,15 @@ mod tests {
             while let Some(Ok(CdpMessage::Text(text))) = ws.next().await {
                 let call: Value = serde_json::from_str(&text).unwrap();
                 let value = answer.lock().unwrap().clone();
-                let reply = json!({"id": call["id"], "result": {"result": {"type": "object", "value": value}}});
+                if value == "silent" { continue; }
+                let result = match call["method"].as_str() {
+                    Some("Page.getNavigationHistory") => {
+                        let entries: Vec<Value> = value["url"].as_str().map(|url| json!({"id": 1, "url": url, "title": value["title"]})).into_iter().collect();
+                        json!({"currentIndex": 0, "entries": entries})
+                    }
+                    _ => json!({"result": {"type": "object", "value": value}}),
+                };
+                let reply = json!({"id": call["id"], "result": result});
                 if ws.send(CdpMessage::Text(reply.to_string())).await.is_err() { break; }
             }
         });
@@ -2326,6 +2340,48 @@ mod tests {
         assert_eq!(read_location(&bot_page, &ctrl).await, Some(location("chrome-error://chromewebdata/", "bot.example")));
     }
 
+    /// 28v: the Shared tab's stream and the bot's own page share one controller, and the bot's
+    /// navigation writes the controller's address. Opening the view and taking control judge the
+    /// sign-in notice by the address of the page this stream shows: a notice only when its own page
+    /// is a sign-in page, whatever the bot's page is on, and nothing while its page doesn't answer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sign_in_notice_follows_its_own_page_not_the_bots() {
+        use crate::sandbox::signin_gate::LiveNotice;
+        const REFUSED: &str = "https://accounts.google.com/v3/signin/rejected?app_domain=https://elevenlabs.io&flowName=GeneralOAuthLite";
+        const SIGN_IN: &str = "https://accounts.google.com/v3/signin/identifier?flowName=GlifWebSignIn";
+        let ctrl = BrowserController::new(0);
+        let page = Arc::new(std::sync::Mutex::new(json!({"url": "https://shared.example/doc", "title": "Shared doc"})));
+        let shared_tab = fake_page(page.clone()).await;
+        let shown = |notice: Option<Value>| notice.map(|n| { assert_eq!(n["type"], "signin"); n["text"].is_string() });
+
+        // the bot's page is on a refused sign-in, the Shared tab on a normal page: no notice
+        *ctrl.current_url.lock().await = Some(REFUSED.into());
+        let mut signin = LiveNotice::new(Some(false));
+        assert_eq!(shown(own_signin_notice(&shared_tab, &mut signin, false).await), None, "the view opens");
+        assert_eq!(shown(own_signin_notice(&shared_tab, &mut signin, true).await), None, "the person takes control");
+
+        // the reverse: the Shared tab is on a sign-in page, the bot's page on a normal one
+        *ctrl.current_url.lock().await = Some("https://bot.example/start".into());
+        *page.lock().unwrap() = json!({"url": SIGN_IN, "title": "Sign in"});
+        let mut signin = LiveNotice::new(Some(false));
+        assert_eq!(shown(own_signin_notice(&shared_tab, &mut signin, false).await), None, "a bot on it may still get through");
+        assert_eq!(shown(own_signin_notice(&shared_tab, &mut signin, true).await), Some(true), "taking control of its own sign-in page");
+        *page.lock().unwrap() = json!({"url": REFUSED, "title": "Couldn't sign you in"});
+        let mut signin = LiveNotice::new(Some(false));
+        assert_eq!(shown(own_signin_notice(&shared_tab, &mut signin, false).await), Some(true), "the view opens on its own refused sign-in");
+
+        // its page doesn't answer (a dialog is open): nothing, not a verdict on the bot's page
+        *page.lock().unwrap() = json!("silent");
+        assert_eq!(shown(own_signin_notice(&shared_tab, &mut signin, true).await), None);
+        // it answers again, off the sign-in: the notice goes
+        *ctrl.current_url.lock().await = Some(REFUSED.into());
+        *page.lock().unwrap() = json!({"url": "https://elevenlabs.io/app", "title": "App"});
+        assert_eq!(shown(own_signin_notice(&shared_tab, &mut signin, true).await), Some(false));
+    }
+
+    /// Take over from a second window while the first has control is `held_by_person`, never
+    /// the busy bot's error; a bot mid-step is `bot_busy`; once the first window hands back (its
+    /// lease dropped) the second can take over.
     #[tokio::test]
     async fn takeover_refused_says_whether_the_person_or_a_bot_has_the_browser() {
         let ctrl = BrowserController::new(0);
