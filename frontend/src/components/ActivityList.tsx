@@ -117,18 +117,20 @@ const STEP_MARK: Partial<Record<ActivityStep['status'], string>> = {
 };
 
 /**
- * The row's chip: its words, style and whether a screen reader hears it. 28s: a command row whose card folded into
- * it carries the card's answer ("You said OK" in the same neutral grey as "You said no"), unless the command then
- * failed: "Failed" stays the chip and the answer is read out after it. A human step the person said no to has no
- * chip (its title says "You said no: …"), nor does a card that said no on its own row (its title says so too).
+ * The row's chip, and words only a screen reader hears. 28s: a command row whose card folded into it carries the
+ * card's answer: "You said no" (grey) or "Not approved in time" (amber) as its chip. "You said OK" has no chip
+ * (Mira: too loud on a reply of many approved calls); it is read after the title instead. A command that then
+ * failed keeps "Failed" and reads its answer after it. A human step the person said no to has no chip (its title
+ * says "You said no: …"), nor does a card that said no on its own row (its title says so too).
  */
-function stepMark(step: ActivityStep, answer: CardAnswer | undefined): { text: string; cls: string; kind: string; heard: boolean; also?: string } | null {
+function stepMark(step: ActivityStep, answer: CardAnswer | undefined): { chip: { text: string; cls: string; kind: string } | null; also?: string } {
   const shown = shownStatus(step);
-  if (answer && shown !== 'failed') return { text: ANSWER_LABEL[answer], cls: STEP_MARK[answer === 'ok' ? 'declined' : answer]!, kind: answer, heard: answer === 'ok' };
-  if (step.status === 'declined' && (step.kind === 'approval' || step.kind === 'human_step')) return null;
+  if (answer === 'ok' && shown !== 'failed') return { chip: null, also: ANSWER_LABEL.ok };
+  if (answer && shown !== 'failed') return { chip: { text: ANSWER_LABEL[answer], cls: STEP_MARK[answer]!, kind: answer } };
+  const also = answer ? ANSWER_LABEL[answer] : undefined;
+  if (step.status === 'declined' && (step.kind === 'approval' || step.kind === 'human_step')) return { chip: null, also };
   const cls = STEP_MARK[shown];
-  if (!cls) return null;
-  return { text: statusLabel(step), cls, kind: shown, heard: false, also: answer ? ANSWER_LABEL[answer] : undefined };
+  return { chip: cls ? { text: statusLabel(step), cls, kind: shown } : null, also };
 }
 
 const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean; answer?: CardAnswer }> = ({
@@ -160,16 +162,17 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   // 26d: a step that failed or wasn't approved in time says so in words, not only by its icon, even when a later
   // step worked. The icon's label already names it for screen readers, so the mark is hidden from them.
   // The approval row keeps its icon only: the mark belongs on the command the person said no to.
-  const mark = stepMark(step, answer);
+  const { chip: mark, also } = stepMark(step, answer);
   const head = (
     <>
       <StatusIcon step={step} />
       <span className={`min-w-0 flex-1 break-words ${step.status === 'stopped' ? 'text-zinc-400' : waiting ? 'text-amber-100' : 'text-zinc-200'}`}>
         {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title, step.outcome ?? step.status)} />}
       </span>
+      {also && <span className="sr-only">{also}</span>}
       {mark && (
         <span
-          aria-hidden={mark.heard ? undefined : 'true'}
+          aria-hidden="true"
           data-step-mark={mark.kind}
           className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark.cls}`}
           data-answer={answer}
@@ -177,7 +180,6 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
           {mark.text}
         </span>
       )}
-      {mark?.also && <span className="sr-only">{mark.also}</span>}
       {time && <span className="flex-shrink-0 font-mono text-[10px] text-zinc-400 tabular-nums">{time}</span>}
     </>
   );

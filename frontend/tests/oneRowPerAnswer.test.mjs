@@ -59,15 +59,14 @@ test('Deny: one row, the command, with the grey "You said no" chip (fails on 541
   assert.doesNotMatch(html.replace(row(html, 't2'), ''), /You said no/, 'said on one row, not twice');
 });
 
-test('Allow: one row, the command, with "You said OK" in the same grey, heard by a screen reader (fails on 5411bbd7)', () => {
+test('Allow: one row, the command, no visible chip; "You said OK" is read after the title (fails on 5411bbd7)', () => {
   const html = open(RIG());
   assert.ok(!rowIds(html).includes('tk1'));
-  const c = chip(row(html, 't1'));
-  assert.equal(c.text, 'You said OK');
-  assert.equal(c.mark, 'ok');
-  assert.match(c.cls, GREY);
-  assert.equal(c.hidden, false, 'the icon says "Done", so the chip itself is read out');
-  assert.match(row(html, 't1'), /aria-label="Done"/);
+  const r = row(html, 't1');
+  assert.equal(chip(r), null, 'no visible chip (Mira 28s fix 1)');
+  assert.doesNotMatch(r, /data-step-mark="ok"/);
+  assert.match(r, /<span class="sr-only">You said OK<\/span>/);
+  assert.match(r, /aria-label="Done"/);
 });
 
 test('unanswered with a command row: one amber row "Not approved in time" (fails on 5411bbd7)', () => {
@@ -105,7 +104,8 @@ test('two calls of the same tool, one allowed and one denied: each command row g
   ]);
   const html = open(steps);
   assert.deepEqual(rowIds(html), ['a1', 'a2']);
-  assert.equal(chip(row(html, 'a1')).text, 'You said OK');
+  assert.equal(chip(row(html, 'a1')), null);
+  assert.match(row(html, 'a1'), /sr-only">You said OK</);
   assert.equal(chip(row(html, 'a2')).text, 'You said no');
 });
 
@@ -117,12 +117,12 @@ test('an allowed call that then failed keeps "Failed" as its chip, and the answe
   assert.match(r, /<span class="sr-only">You said OK<\/span>/);
 });
 
-test('an open card stays its own row; an approved call still running carries "You said OK" (fails on 5411bbd7)', () => {
+test('an open card stays its own row; an approved call still running reads "You said OK" (fails on 5411bbd7)', () => {
   const waiting = open(parse([tool('a1', 'running', 'Running `npm ci`', 0), ap('c1', 'waiting', 0.01)]));
   assert.deepEqual(rowIds(waiting), ['a1', 'c1']);
   const running = open(parse([ap('c1', 'ok', 0), tool('a1', 'running', 'Running `npm ci`', 0.1)]));
   assert.deepEqual(rowIds(running), ['a1']);
-  assert.equal(chip(row(running, 'a1')).text, 'You said OK');
+  assert.match(row(running, 'a1'), /sr-only">You said OK</);
 });
 
 test('a declined human step has no chip: its title already says "You said no" (fails on 5411bbd7)', () => {
