@@ -483,6 +483,9 @@ pub const NO_FALSE_CLAIMS_TEXT: &str =
     "A step failed or wasn't approved. Don't say it worked or that you checked something you didn't.";
 /// The step detail of a call nobody answered: the wait is [`APPROVAL_TIMEOUT_SECS`].
 pub const UNANSWERED_STEP_DETAIL: &str = "Waited 5 minutes for your answer; nothing ran";
+/// The step detail of a call the person said no to on its card (28b): the tool step ends
+/// `declined`, in the person's words. The bot is still told [`DENIED_TEXT`].
+pub const DENIED_STEP_DETAIL: &str = "You said no; nothing ran";
 /// The step detail of a call a Skill Foundry replay recorded instead of running.
 pub const REHEARSED_STEP_DETAIL: &str = "Dry run: kwant recorded this call instead of running it";
 
