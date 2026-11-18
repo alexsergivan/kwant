@@ -289,7 +289,7 @@ const SayWhy: React.FC<{ botName: string | null; disabled: boolean; onDeny: (rea
         aria-controls={id}
         onClick={() => setWhy((w) => (w === null ? '' : null))}
         data-approval-say-why=""
-        className="self-start sm:self-auto sm:mr-auto -ml-2 sm:ml-0 inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-sm text-[#a39dcc] hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed"
+        className={`self-start sm:self-auto sm:mr-auto -ml-2 sm:ml-0 inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-sm ${why === null ? 'text-[#a39dcc]' : 'text-zinc-100'} hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed`}
       >
         <MessageSquare size={14} aria-hidden="true" />
         <span>Say why</span>
