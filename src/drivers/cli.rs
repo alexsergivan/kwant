@@ -931,8 +931,12 @@ impl CliDriver {
                 let _ = event_tx.send(RuntimeEvent::ToolCallPending { id, name, args }).await;
             }
             super::grok::StreamEvent::ToolEnd { id, ok, error } => {
+                // Cut like Claude's: grok's reason can be a tool's whole output (29h)
                 let result = match error {
-                    Some(why) if !ok => serde_json::json!({ "status": "error", "error": why }),
+                    Some(why) if !ok => serde_json::json!({
+                        "status": "error",
+                        "error": crate::mcp::truncate_text(&why, CLAUDE_ERROR_MAX),
+                    }),
                     _ => serde_json::json!({ "status": "ok" }),
                 };
                 let _ = event_tx.send(RuntimeEvent::ToolCallCompleted { id, result }).await;
@@ -1127,7 +1131,7 @@ struct ClaudeStream {
     rate_limits: Option<crate::profiles::usage::UsageReading>,
 }
 
-/// Longest reason kept from a failed tool result.
+/// Longest reason kept from a failed tool result, Claude's or grok's.
 const CLAUDE_ERROR_MAX: usize = 600;
 
 /// A `tool_result`'s text: a string, or the text blocks of an array.
@@ -2402,6 +2406,67 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
         old.line("hello", Instant::now());
         old.line("world", Instant::now());
         assert_eq!(old.into_stdout(), "hello\nworld\n");
+    }
+
+    /// grok's live tool results, through grok's parser and the driver's handler, as the turn
+    /// broadcasts them: each update ends its own tool, started just before it as `c<n>`.
+    async fn grok_live_results(updates: &[&str]) -> Vec<serde_json::Value> {
+        let (tx, mut rx) = mpsc::channel(64);
+        let mut run = GrokRun {
+            stdout: String::new(),
+            stderr: String::new(),
+            errors: Vec::new(),
+            stop_reason: None,
+            exit_code: None,
+            tool_calls: false,
+            offered_tools: None,
+        };
+        let mut parser = crate::drivers::grok::StreamParser::default();
+        let mut lines = String::new();
+        for (n, update) in updates.iter().enumerate() {
+            let id = format!("c{n}");
+            lines.push_str(&serde_json::json!({"type":"tool_call","toolCallId":id,"toolName":"t","status":"pending"}).to_string());
+            lines.push('\n');
+            lines.push_str(&update.replace(r#""toolCallId":"c""#, &format!(r#""toolCallId":"{id}""#)));
+            lines.push('\n');
+        }
+        for event in parser.push(&lines).into_iter().chain(parser.finish()) {
+            CliDriver::apply_grok_event(event, &mut run, &tx).await;
+        }
+        drop(tx);
+        let mut results = Vec::new();
+        while let Some(event) = rx.recv().await {
+            if let RuntimeEvent::ToolCallCompleted { result, .. } = event {
+                results.push(result);
+            }
+        }
+        results
+    }
+
+    #[tokio::test]
+    async fn a_failed_grok_steps_live_reason_is_cut_like_claudes() {
+        // Since 29h a failed grok step's reason can be its tool's whole output
+        let long = format!("Error: {}", "ü".repeat(1_000));
+        let failed = |output: &str| {
+            serde_json::json!({"type":"tool_call_update","toolCallId":"c","status":"failed","rawOutput":{"output":output}})
+                .to_string()
+        };
+        let results = grok_live_results(&[
+            &failed(&long),
+            &failed("exit status 101"),
+            r#"{"type":"tool_call_update","toolCallId":"c","status":"completed","rawOutput":{"output":"fine"}}"#,
+        ])
+        .await;
+        assert_eq!(results.len(), 3, "{results:?}");
+        // Cut where Claude's is, with the same marker
+        let cut = results[0]["error"].as_str().unwrap();
+        assert_eq!(cut, crate::mcp::truncate_text(&long, CLAUDE_ERROR_MAX));
+        assert_eq!(cut.chars().count(), 600 + "… [truncated]".chars().count());
+        assert!(cut.starts_with("Error: üü") && cut.ends_with("ü… [truncated]"), "{cut}");
+        assert_eq!(results[0]["status"], "error");
+        // A short reason goes out as it is; a tool that worked has no error
+        assert_eq!(results[1], serde_json::json!({"status": "error", "error": "exit status 101"}));
+        assert_eq!(results[2], serde_json::json!({"status": "ok"}));
     }
 
     #[tokio::test]
