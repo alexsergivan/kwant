@@ -979,7 +979,7 @@ const RemoveDialog: React.FC<{ w: Worktree; bot: string | null; home: string | n
           type="button"
           onClick={go}
           disabled={saving || (needsForce && !force)}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 h-9 text-[13px] font-medium text-white bg-rose-700 hover:bg-rose-600 disabled:bg-rose-900/60 disabled:text-rose-200/50 disabled:cursor-not-allowed ${ring}`}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 h-9 text-[13px] font-medium text-white bg-rose-700 hover:bg-rose-800 disabled:bg-rose-900/60 disabled:text-rose-200/50 disabled:cursor-not-allowed ${ring}`}
           data-wt-remove
         >
           {saving && <Loader2 size={14} className="motion-safe:animate-spin" aria-hidden="true" />}

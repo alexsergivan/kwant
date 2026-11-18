@@ -21,7 +21,7 @@ const m = await loadBundled(`
   export * from './src/homeAssistant';
   export { homeAction, homePhrase, readableStepTitle } from './src/toolLabel';
   export { ModernApprovalCard, approvalAction } from './src/components/ModernApprovalCard';
-  export { HomeAssistantSheet } from './src/components/HomeAssistantSheet';
+  export { HomeAssistantSheet, urlWithBreaks } from './src/components/HomeAssistantSheet';
   export { needView } from './src/teams/teamTemplates';
   export { TEMPLATES_WIRE } from './src/teams/templateFixtures';
   export { newKey, isNewThing } from './src/whatsNew';
@@ -105,6 +105,15 @@ test('the Home template: House on the home sprite, Lights out off by default', (
   assert.equal(home.bots[0].avatar_sprite, 'home');
   assert.equal(home.bots[0].name, 'House');
   assert.equal(home.routine.enabled, false);
+});
+
+test('27e: the Home template says what a 7B model handles, and Check the house reads the whole home first', () => {
+  const home = m.TEMPLATES_WIRE.find((t) => t.id === 'home');
+  const model = home.needs.find((n) => n.id === 'local_model');
+  assert.equal(model.why, 'Keeps what happens at home on your own computer. A 7B model handles named devices ("Turn off the living room lamp"); for questions like "Is anything left on?" a larger or cloud model is more reliable.');
+  const check = home.skills.find((s) => s.name === 'Check the house');
+  assert.match(check.body, /1\. Read the live state once with GetLiveContext and no arguments \(Look at your home\)\. If it fails, say the check failed and why, and stop\./);
+  assert.deepEqual(home.first_prompts, ['Is anything left on?', 'How warm is it inside?', 'Turn off all the lights']);
 });
 
 test('New tags: home-team and home-assistant are new in 0.9.21; older ids keep their version', () => {
@@ -418,4 +427,12 @@ test('D2: the welcome grid’s Home card has the home-team New tag; picking it c
   } finally {
     g.fetch = g.window.fetch = realFetch;
   }
+});
+
+// ha-sheet-polish (a): the "kwant will connect to" URL wraps only after a "/", never mid-word ("/api/m|cp").
+test('the connect URL breaks only after each "/", with the scheme\'s "//" kept whole', () => {
+  const html = m.renderToStaticMarkup(h('span', null, ...m.urlWithBreaks('http://homeassistant.local:8123/api/mcp')));
+  assert.equal(html, '<span>http://<wbr/>homeassistant.local:8123/<wbr/>api/<wbr/>mcp</span>');
+  assert.ok(!html.includes('/<wbr/>/'), 'never between the two slashes');
+  assert.equal(m.renderToStaticMarkup(h('span', null, ...m.urlWithBreaks('https://ha.example.com/api/mcp/'))), '<span>https://<wbr/>ha.example.com/<wbr/>api/<wbr/>mcp/</span>');
 });

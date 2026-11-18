@@ -405,7 +405,7 @@ mod tests {
     fn hooks_merge_per_event_into_the_one_settings() {
         let mine = json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "mine"}]});
         let mut args = vec!["--settings".to_string(), json!({ "env": { "A": "1" }, "hooks": { "PreToolUse": [mine], "Stop": [] } }).to_string()];
-        let guard = crate::mcp::cli_hooks::settings(std::path::Path::new("/d/claude-hook-1.curl"));
+        let guard = crate::mcp::cli_hooks::settings(std::path::Path::new("/d/claude-hook-1.curl"), true, false);
         merge_settings_arg(&mut args, guard.clone());
         merge_settings_arg(&mut args, settings(&places(), true, None));
         assert_eq!(args.iter().filter(|a| *a == "--settings").count(), 1, "{args:?}");
