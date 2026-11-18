@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.25] - 2026-11-18
+
+kwant 0.9.25: fold titles centred in their rows on a phone, answered approval steps that say what you chose, a no that is saved as your no, also in routines, the link you send shown as the reply's first step, no blink when the bot browser panel opens after a run, a sign-in notice that follows its own tab's page, a run check that also catches local fetches with no card and failed grok steps that say why.
+
+### Changed
+- **kwnt run-check** also lists a web fetch of this computer or your local network that ran with no approval card, since kwant asks before those (#816)
+
+### Fixed
+- On a phone, every fold (a reply's Details steps, a check's Details, a goal's Last output and the other fold-out rows) has its title in the middle of its 44 px tap row, instead of stuck to the top with an empty strip under it. The disclosure triangle stays, and desktop, tablets and phones with a mouse look exactly as before. (#791)
+- Once you answer an approval card, its step in a reply's Details reads **You said OK: …** or **You said no: …**, and a card nobody answered in time reads **Asked for your OK: …**, instead of still saying "Waiting for your OK: …". The "What the bot did" list for work done while you were away reads the same way. Cards still waiting look as before, and replies saved before the update read the new way too. (#799)
+- When you press Deny on an approval card, that step is now saved as declined with **You said no; nothing ran**, instead of a failed step reading "The user denied this tool call." A routine run whose step you said no to reads **You said no to Bash; nothing ran** (with the tool's own name) and counts as not done, never as ok. If something really breaks later in the same run, that failure's own reason shows instead. Refusals you never saw, such as kwant's check before a push, never say "You said no". (#792)
+- When your message has a link, kwant's own opening of it before the bot starts is now the first step in the reply's Details: **Opening <host>**, with the page's title, or the reason it didn't open (such as a name that doesn't resolve). Before, a link that didn't open left nothing in Details. Old replies are unchanged. (#797)
+- Opening the bot browser panel right after a run stays on one tab from the first frame: the pane stays dark until it knows which pages are open (at most 1.5 s), then shows that tab's page, with no flash of the bot's last page under "Shared" and no jump from one tab to another. It still follows a bot that opens a new page while the panel is open. (#804)
+- The Shared browser tab's sign-in notice follows its own page, never the bot's (#817)
+- On grok, a failed tool step shows grok's reason instead of just "failed" (#830)
+
 ## [Mac 0.9.24] - 2026-11-18
 
 kwant 0.9.24: a Deny that reads as your no, not as a failed step, replies that keep the order you sent your messages in, no grey flash when the bot browser switches pages, a read-only check of what your bots ran without asking and address bars that show their own tab's page.
