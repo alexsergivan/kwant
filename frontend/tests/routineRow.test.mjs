@@ -12,8 +12,10 @@ const ui = await loadBundled(`
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { ChatView } from './src/components/ChatView';
   import { RoutineRow } from './src/components/RoutineRow';
+  import { RunRow } from './src/components/RoutinesPanel';
   export const chat = (props) => renderToStaticMarkup(React.createElement(ChatView, props));
   export const row = (props) => renderToStaticMarkup(React.createElement(RoutineRow, props));
+  export const run = (props) => renderToStaticMarkup(React.createElement(RunRow, props));
 `);
 
 const INSTR = 'Check the team is still working as planned.\nList anything stuck for more than an hour.';
@@ -85,4 +87,55 @@ test('ChatView: a routine post renders as a routine row, the others as before', 
   assert.match(html, /Routine: Morning check, can you run it now\?/);
   const you = html.match(/<span class="text-zinc-200 shrink-0">You<\/span>/g) ?? [];
   assert.equal(you.length, 2, '"You" on the two typed messages only, never on the routine');
+});
+
+// ---------------------------------------------------------------- 28f: your no reads as a no in Routines › History
+
+const SAID_NO = 'You said no to Bash; nothing ran';
+
+test('28f: an incomplete run the person said no to reads "You said no", not "A step failed"', () => {
+  assert.deepEqual(r.runRowState({ status: 'incomplete', error: SAID_NO }), { label: 'You said no', tone: 'said_no', cardId: null });
+  assert.deepEqual(r.runRowState({ status: 'incomplete', error: 'You said no to web_fetch; nothing ran' }).tone, 'said_no', 'any tool name');
+  assert.equal(r.saidNoRun(SAID_NO), true);
+  assert.equal(r.saidNoRun(undefined), false);
+});
+
+test('28f: only 28b\'s exact sentence counts; everything else stays as on main', () => {
+  const failed = { label: 'A step failed', tone: 'error', cardId: null };
+  for (const error of [
+    'Bash was denied',
+    'Bash failed',
+    null,
+    'curl: You said no to Bash; nothing ran',
+    'you said no to Bash; nothing ran',
+    'You said no to Bash',
+    'You said no to Bash; nothing ran.',
+    'You said no to ; nothing ran',
+  ]) assert.deepEqual(r.runRowState({ status: 'incomplete', error }), failed, String(error));
+  assert.deepEqual(r.runRowState({ status: 'incomplete' }), failed, 'no error key');
+  assert.deepEqual(r.runRowState({ status: 'error', error: SAID_NO }), { label: 'Failed', tone: 'error', cardId: null }, 'a run that errored stays Failed');
+  assert.deepEqual(
+    r.runRowState({ status: 'running', error: SAID_NO }, { routine_id: 'rt1', waiting: true, approval_id: 'ap1' }),
+    { label: 'Waiting for you', tone: 'waiting', cardId: 'ap1' },
+  );
+});
+
+test('28f: RunRow draws a said-no run grey and keeps a real failure rose', () => {
+  const routine = { id: 'rt1', kwant_id: 'k1', channel_id: null, thread_id: null, name: 'Tidy the build folder' };
+  const runOf = (id, status, error) => ({ id, routine_id: 'rt1', trigger: 'schedule', started_at: '2026-11-17T08:00:00Z', ended_at: null, status, error, message_id: null });
+
+  const no = ui.run({ routine, run: runOf('r-no', 'incomplete', SAID_NO) });
+  assert.match(no, /data-run-state="said_no"/);
+  assert.match(no, /data-run-badge="said_no"[^>]*>You said no</);
+  assert.match(no, /class="[^"]*text-zinc-400[^"]*">You said no to Bash; nothing ran</, 'the reason is a grey note');
+  assert.doesNotMatch(no, /rose/, 'no rose anywhere on a said-no row');
+  assert.doesNotMatch(no, /A step failed/);
+
+  const fail = ui.run({ routine, run: runOf('r-fail', 'incomplete', 'Bash failed') });
+  assert.match(fail, /data-run-state="error"/);
+  assert.match(fail, /data-run-badge="error"[^>]*>A step failed</);
+  assert.match(fail, /class="[^"]*text-rose-300\/90[^"]*">Bash failed</, 'a real failure keeps its rose note');
+
+  const old = ui.run({ routine, run: runOf('r-old', 'incomplete', 'Bash was denied') });
+  assert.match(old, /data-run-state="error"/, "main's denied reason is not proof of a Deny");
 });

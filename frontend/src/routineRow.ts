@@ -34,7 +34,7 @@ export interface RunWait {
   approval_id: string | null;
 }
 
-export type RunTone = 'running' | 'ok' | 'error' | 'skipped' | 'waiting' | 'needs_you';
+export type RunTone = 'running' | 'ok' | 'error' | 'skipped' | 'waiting' | 'needs_you' | 'said_no';
 
 export interface RunRowState {
   label: string;
@@ -52,13 +52,24 @@ const RUN_LABEL: Record<string, { label: string; tone: RunTone }> = {
   incomplete: { label: 'A step failed', tone: 'error' },
 };
 
+// 28f: after 28b (#792) a run whose step the person said no to ends `incomplete` with exactly
+// "You said no to <tool>; nothing ran" (scheduler.rs `said_no`). That is their choice, not a failure.
+// Only that sentence counts: main's "<tool> was denied" is also written for the pre-push gate, kwnt's
+// secret files, a ticket that couldn't be stored and a wait that ran out, so it keeps "A step failed".
+const SAID_NO_RUN = /^You said no to .+; nothing ran$/;
+
+/** True only for 28b's said-no reason on a run (anchored, case-sensitive). */
+export const saidNoRun = (error: string | null | undefined): boolean => typeof error === 'string' && SAID_NO_RUN.test(error);
+
 /**
  * A run's badge in History. A running run that waits on a card reads "Waiting for you" and links to it; a
  * `needs_you` run keeps that link when this session saw the card, since the card stays open after the wait.
- * An unknown status reads as itself, in the skipped tone. `incomplete`'s reason shows under it (routineRunNote).
+ * An unknown status reads as itself, in the skipped tone. `incomplete`'s reason shows under it (routineRunNote);
+ * an `incomplete` run the person said no to (28b's sentence) reads "You said no" in grey (28f).
  */
-export function runRowState(run: { status: string }, wait?: RunWait | null): RunRowState {
+export function runRowState(run: { status: string; error?: string | null }, wait?: RunWait | null): RunRowState {
   if (run.status === 'running' && wait?.waiting) return { label: 'Waiting for you', tone: 'waiting', cardId: wait.approval_id };
+  if (run.status === 'incomplete' && saidNoRun(run.error)) return { label: 'You said no', tone: 'said_no', cardId: null };
   const known = RUN_LABEL[run.status];
   const cardId = run.status === 'needs_you' ? wait?.approval_id ?? null : null;
   return known ? { ...known, cardId } : { label: run.status, tone: 'skipped', cardId: null };

@@ -101,7 +101,7 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
             >
               <SpaceTile space={s} size={40} dev={devStore.isOn(s.id)} devBehind="var(--kw-surface-rail)" />
               {unread > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] px-1 py-px rounded-full bg-rose-500 text-white text-[10px] font-semibold text-center border-2 border-zinc-950">
+                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] px-1 py-px rounded-full bg-rose-600 text-white text-[10px] font-semibold text-center border-2 border-zinc-950">
                   {badge(unread)}
                 </span>
               )}
@@ -193,7 +193,7 @@ export const SpaceSwitcher: React.FC<SwitcherProps> = ({ spaces, currentId, onSw
               <span className="block text-[11px] text-zinc-500 truncate" title={spaceSummaryTitle(s.counts)}>{spaceSummary(s.counts)}</span>
             </span>
             {!active && (s.counts?.unread ?? 0) > 0 && (
-              <span className="min-w-[18px] px-1.5 py-px rounded-full bg-rose-500 text-white text-[10px] font-semibold text-center">{badge(s.counts.unread)}</span>
+              <span className="min-w-[18px] px-1.5 py-px rounded-full bg-rose-600 text-white text-[10px] font-semibold text-center">{badge(s.counts.unread)}</span>
             )}
             {active && <Check size={14} className="text-sky-400" aria-hidden="true" />}
           </button>

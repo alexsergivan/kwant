@@ -241,3 +241,27 @@ test('a storytelling team with a sound engineer gets no developer prompt, and an
   });
   assert.deepEqual(civil, ['@Bridge what should we tackle first?', 'What can each of you help me with?']);
 });
+
+// ha-sheet-polish (c): House, the Home template's lead, gets home chips, not "Plan my week".
+const house = {
+  name: 'House', title: 'Home Helper',
+  persona_prompt: 'You are House, the lead of the @home team. You look after one home through Home Assistant. You answer questions about the home.',
+};
+
+test('House in a 1:1 gets home asks, and the persona order does not matter', () => {
+  assert.deepEqual(suggestedPrompts({ kind: 'bot', bot: house }), ['Is anything left on?', 'Turn off all the lights', 'What can you help me with?']);
+  // The title alone is enough; a persona that only says "Home Assistant" is too
+  assert.deepEqual(suggestedPrompts({ kind: 'bot', bot: { name: 'H', title: 'Home Helper' } })[0], 'Is anything left on?');
+  assert.deepEqual(suggestedPrompts({ kind: 'bot', bot: { name: 'H', title: '', persona_prompt: 'You run the smart home through Home Assistant.' } })[0], 'Is anything left on?');
+  assert.deepEqual(suggestedPrompts({ kind: 'bot', bot: { name: 'H', title: 'Home Assistant' } })[0], 'Is anything left on?');
+});
+
+test('an Assistant or a Planner bot still gets "Plan my week"', () => {
+  for (const title of ['Assistant', 'Personal Assistant', 'Planner', 'Executive Assistant']) {
+    assert.equal(suggestedPrompts({ kind: 'bot', bot: { name: 'A', title } })[0], 'Plan my week', title);
+  }
+});
+
+test("@home (a team chat) shows House's asks", () => {
+  assert.deepEqual(suggestedPrompts({ kind: 'team', members: [house], lead: 'House' }), ['@House is anything left on?', 'What can you help me with?']);
+});
