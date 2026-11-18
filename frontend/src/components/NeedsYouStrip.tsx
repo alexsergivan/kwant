@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, ChevronLeft, ChevronRight, Globe, Hand, Inbox, Loader2, Play, RotateCcw, type LucideIcon } from 'lucide-react';
 import type { AwayItem } from '../away';
+import { approvalLine } from '../approvals';
 import { localClock } from '../clock';
 import {
   ACTION_LABEL,
@@ -367,7 +368,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
           </p>
           {/* The whole line, never cut: it wraps, and the box scrolls past 240 px. */}
           <p data-strip-line className="mt-0.5 text-body font-medium text-zinc-50 break-words">
-            {askLine(item)}
+            {approvalLine(item) ?? askLine(item)}
           </p>
           <p data-strip-hint className={`mt-0.5 text-meta ${gone ? 'text-zinc-300' : 'text-zinc-400'}`}>
             {hint}
