@@ -73,6 +73,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.22.** One green and one purple across the app and Ollama bots that work again on their own when Ollama starts after kwant.
 - **New in 0.9.23.** **Pictures from your tools** (like the new **FLUX** preset) are saved in the chat, and anything that spends credits asks first.
 - **New in 0.9.24.** A Deny that reads as your no, not as a failed step, replies that keep the order you sent your messages in, no grey flash when the bot browser switches pages, a read-only check of what your bots ran without asking and address bars that show their own tab's page.
+- **New in 0.9.25.** Fold titles centred in their rows on a phone, answered approval steps that say what you chose, a no that is saved as your no, also in routines, the link you send shown as the reply's first step, no blink when the bot browser panel opens after a run, a sign-in notice that follows its own tab's page, a run check that also catches local fetches with no card and failed grok steps that say why.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 

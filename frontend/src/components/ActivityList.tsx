@@ -139,7 +139,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
     <>
       <StatusIcon step={step} />
       <span className={`min-w-0 flex-1 break-words ${step.status === 'stopped' ? 'text-zinc-400' : waiting ? 'text-amber-100' : 'text-zinc-200'}`}>
-        {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title)} />}
+        {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title, step.status)} />}
       </span>
       {mark && (
         <span aria-hidden="true" data-step-mark={step.status} className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark}`}>
