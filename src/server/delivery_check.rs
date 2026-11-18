@@ -31,7 +31,7 @@
 //! the same plan the prompt's "[What to deliver]" hint renders, read through [`Expect::from_plan`].
 //! The continuation carries that plan; it never makes a new one from kwant's own prompt.
 
-use super::home_claims::claimed_change;
+use super::home_claims::{claimed_change, claimed_home_change};
 use super::picture_claims::claims_picture;
 use crate::router::delivery::{DeliveryPlan, Show};
 use serde_json::Value;
@@ -77,6 +77,10 @@ pub struct Seen {
     /// 27e: what it did with Home Assistant (see [`home_steps_in`]); `None` when it had no Home
     /// Assistant server.
     pub home: Option<HomeSeen>,
+    /// 28i: a tool step that isn't one of the turn's Home Assistant servers' and can change
+    /// something (not a read, see [`other_change_in`]) worked. Then a reply's claim counts as a
+    /// home change only when it names something in the home (see [`home_miss`]).
+    pub other_changed: bool,
 }
 
 /// 27e: what a turn (or a delivery) did with a Home Assistant server's tools.
@@ -125,6 +129,35 @@ fn home_tool<'a>(tool: &'a str, servers: &[String]) -> Option<&'a str> {
 /// Whether a Home Assistant tool only reads the home.
 fn home_read(tool: &str) -> bool {
     crate::mcp::home_floor::is_home_read(tool) || ["GetLiveContext", "GetDateTime"].iter().any(|r| tool.ends_with(r))
+}
+
+/// Tools that only look, past [`super::restart_resume::read_only`]'s reads: kwant's own
+/// `web_fetch`, `search` and `browser_read`, opening a page (kwant's own link open is
+/// `browser_open`) and moving around in it.
+const LOOKS: &[&str] = &[
+    "web_fetch", "fetch", "search", "read", "page", "cite", "open", "navigate", "back", "forward", "reload", "scroll", "tab_switch",
+    "tab_new", "wait_ms", "hover",
+];
+
+/// 28i: whether a tool step that isn't one of `servers`' (the turn's Home Assistant servers) and
+/// can change something worked: anything but a read (a web search, a fetch, a file read, a page
+/// look). An unknown tool counts as a change, like `echo` or `Bash`; this only narrows which
+/// claims are about the home, so a misjudged read leaves the object check in [`home_miss`].
+pub fn other_change_in(activity: Option<&Value>, servers: &[String]) -> bool {
+    let steps = activity.and_then(|a| a["steps"].as_array()).map(Vec::as_slice).unwrap_or_default();
+    steps.iter().any(|step| {
+        let Some(tool) = step["tool"].as_str() else { return false };
+        let looks = || {
+            let bare = tool.rsplit("__").next().unwrap_or(tool).to_ascii_lowercase();
+            let bare = bare.trim_start_matches("agent_").trim_start_matches("browser_");
+            LOOKS.contains(&bare)
+        };
+        step["kind"].as_str() == Some("tool")
+            && matches!(step["status"].as_str(), Some("ok" | "done"))
+            && home_tool(tool, servers).is_none()
+            && !super::restart_resume::read_only(tool)
+            && !looks()
+    })
 }
 
 /// 27e: what the turn did with the Home Assistant servers named `servers`, from its saved
@@ -216,6 +249,7 @@ impl Seen {
         so_far.image_shared |= self.image_shared;
         so_far.pushed |= self.pushed;
         so_far.declined |= self.declined;
+        so_far.other_changed |= self.other_changed;
         if let Some(home) = &self.home {
             so_far.home.get_or_insert_with(HomeSeen::default).join(home);
         }
@@ -231,6 +265,7 @@ impl Seen {
             failed_step: so_far.failed_step.clone(),
             declined: so_far.declined,
             home: so_far.home.clone(),
+            other_changed: so_far.other_changed,
         }
     }
 }
@@ -446,10 +481,14 @@ pub fn check(reply: &str, expect: Option<&Expect>, continued: bool, seen: &Seen)
 
 /// 27e: what `seen`'s Home Assistant steps don't back in `reply`: a claimed change when no
 /// change step worked (and none waits on, went unanswered on or was declined on a card), and
-/// reads that all failed when nothing else worked.
+/// reads that all failed when nothing else worked. 28i: when another tool changed something
+/// ([`Seen::other_changed`]), only a claim that names something in the home counts
+/// ([`claimed_home_change`]): "I closed the issue." after closing it is true.
 pub fn home_miss(reply: &str, seen: &Seen) -> HomeMiss {
     let Some(home) = &seen.home else { return HomeMiss::default() };
-    let claim = (!home.changed && !home.on_card && !seen.declined).then(|| claimed_change(reply)).flatten();
+    // 28i: after another tool changed something, only a claim that names the home is about it
+    let claimed = |reply: &str| if seen.other_changed { claimed_home_change(reply) } else { claimed_change(reply) };
+    let claim = (!home.changed && !home.on_card && !seen.declined).then(|| claimed(reply)).flatten();
     let read_failed = (home.reads > 0 && !home.read_ok && !home.changed).then(|| home.read_error.clone());
     HomeMiss { claim, read_failed }
 }
@@ -906,12 +945,15 @@ fn strip_leads(mut s: &str) -> &str {
 
 /// The turn's tool steps, from its saved activity (`{"steps": [...]}`): whether it ran any, its
 /// last one when that one failed (a refused tool call is a failed step too), and whether the
-/// person declined an approval card in it.
+/// person declined an approval card in it, or said no to a tool step (28b: a `declined` tool step,
+/// with or without a card).
 pub fn tool_steps_in(activity: Option<&Value>) -> (bool, Option<FailedStep>, bool) {
     let Some(steps) = activity.and_then(|a| a["steps"].as_array()) else {
         return (false, None, false);
     };
-    let declined = steps.iter().any(|s| s["kind"] == "approval" && s["status"] == "declined");
+    let declined = steps
+        .iter()
+        .any(|s| matches!(s["kind"].as_str(), Some("approval" | "tool")) && s["status"] == "declined");
     let last = steps.iter().rfind(|s| s["kind"] == "tool" && !matches!(s["status"].as_str(), Some("running" | "waiting")));
     let failed = last.filter(|s| s["status"] == "failed").map(|s| FailedStep {
         tool: s["tool"].as_str().unwrap_or("a tool").to_string(),
@@ -1104,7 +1146,7 @@ mod tests {
     fn explain() -> Expect {
         Expect::default()
     }
-    const NOTHING: Seen = Seen { image_shared: false, has_shot: false, pushed: false, ran_tools: false, failed_step: None, declined: false, home: None };
+    const NOTHING: Seen = Seen { image_shared: false, has_shot: false, pushed: false, ran_tools: false, failed_step: None, declined: false, home: None, other_changed: false };
     const SHARED: Seen = Seen { image_shared: true, has_shot: true, ..NOTHING };
     const SHOT: Seen = Seen { has_shot: true, ..NOTHING };
 
@@ -1938,6 +1980,18 @@ mod tests {
         assert_eq!(FailedBefore::of_turn(reads.as_ref(), page), none);
     }
 
+    /// 28b: a tool step the person said no to counts as declined, with or without a card (#781's
+    /// no-card refusal has none), and isn't a failed step to follow through.
+    #[test]
+    fn a_declined_tool_step_counts_as_declined() {
+        let activity = json!({"steps": [
+            {"kind": "tool", "tool": "Bash", "title": "Running `rm -rf build`", "status": "declined", "detail": "You said no; nothing ran"},
+        ]});
+        let (_, failed, declined) = tool_steps_in(Some(&activity));
+        assert!(declined);
+        assert_eq!(failed, None);
+    }
+
     /// 27e: a turn on the Home Assistant server "house" with these activity steps.
     fn house(steps: Value) -> Seen {
         let activity = json!({ "steps": steps });
@@ -2040,6 +2094,20 @@ mod tests {
         assert!(check(UNLOCKING, None, false, &declined).missing.is_empty());
     }
 
+    /// 28b x 27e: a Home Assistant change the person said no to (a `declined` tool step, with or
+    /// without a card) is never a miss: the turn counts as declined the way routes.rs builds it.
+    #[test]
+    fn a_home_change_the_person_said_no_to_is_never_a_miss() {
+        let steps = json!([{ "kind": "tool", "tool": "mcp__house__intent__HassTurnOff", "status": "declined", "title": "HassTurnOff", "detail": "You said no; nothing ran" }]);
+        let (_, failed, declined) = tool_steps_in(Some(&json!({ "steps": steps.clone() })));
+        assert!(declined && failed.is_none());
+        let seen = Seen { declined, ..house(steps) };
+        let v = check(UNLOCKING, None, false, &seen);
+        assert!(v.missing.is_empty() && v.continue_with.is_none() && v.home_lines.is_empty(), "{v:?}");
+        let then = check(UNLOCKING, None, true, &seen);
+        assert!(then.home_lines.is_empty(), "{then:?}");
+    }
+
     #[test]
     fn reads_that_all_failed_continue_once_then_get_kwants_line() {
         let failed = house(json!([read("failed", SWITCH_MISS)]));
@@ -2084,6 +2152,90 @@ mod tests {
         assert!(prompt.contains("Your reply says") && prompt.contains("Your Home Assistant read failed"));
         let then = check(UNLOCKING, None, true, &house(json!([read("failed", SWITCH_MISS)])));
         assert_eq!(then.home_lines.len(), 2);
+    }
+
+    /// 28i: a turn on a bot with the Home Assistant server "house" and other tools.
+    fn mixed(steps: Value) -> Seen {
+        let activity = json!({ "steps": steps.clone() });
+        let servers = ["house".to_string()];
+        Seen { other_changed: other_change_in(Some(&activity), &servers), ..house(steps) }
+    }
+    fn step(tool: &str, status: &str) -> Value {
+        json!({ "kind": "tool", "tool": tool, "status": status, "title": tool })
+    }
+    const ECHO_OK: &str = "mcp__tools__echo";
+    const KITCHEN: &str = "I turned off the kitchen light.";
+
+    /// 28i (Rigel's QA of #782, Finding 1): a true claim after another tool that worked is never
+    /// called a home change: no continuation, and no kwant line after one.
+    #[test]
+    fn a_true_claim_about_another_tool_is_not_a_home_change() {
+        for reply in ["I closed the issue.", "I opened the pull request and closed the issue.", "Done: set the label to bug."] {
+            for steps in [json!([step(ECHO_OK, "ok")]), json!([step("WebSearch", "ok"), step("Bash", "ok")]), json!([read("ok", "Kitchen light: on"), step(ECHO_OK, "done")])] {
+                let seen = mixed(steps.clone());
+                assert!(seen.other_changed, "{steps}");
+                let v = check(reply, None, false, &seen);
+                assert!(v.missing.is_empty() && v.continue_with.is_none() && v.home_lines.is_empty(), "{reply} after {steps}: {v:?}");
+                assert!(check(reply, None, true, &seen).home_lines.is_empty(), "{reply} after {steps}");
+            }
+        }
+        // ...in an earlier turn of the same delivery too
+        let mut delivery = NOTHING;
+        let _ = mixed(json!([step(ECHO_OK, "ok")])).with_earlier(&mut delivery);
+        let then = mixed(json!([])).with_earlier(&mut delivery);
+        assert!(then.other_changed && check("I closed the issue.", None, true, &then).home_lines.is_empty());
+    }
+
+    /// 28i: a claim that names the home is still caught next to other tools, after a read only
+    /// (a web search, a fetch, a page) and after another tool that changed something.
+    #[test]
+    fn a_home_claim_next_to_other_tools_is_still_caught() {
+        for steps in [
+            json!([]),
+            json!([step("WebSearch", "ok")]),
+            json!([step("mcp__kwnt__web_search", "ok"), step("web_fetch", "ok"), step("browser_open", "ok")]),
+            json!([step("Read", "ok"), step("mcp__kwnt__browser_read", "ok"), step("agent_browser_snapshot", "ok")]),
+            json!([read("ok", "Kitchen light: on")]),
+            json!([step(ECHO_OK, "failed")]),
+            json!([step(ECHO_OK, "ok")]),
+        ] {
+            let v = check(KITCHEN, None, false, &mixed(steps.clone()));
+            assert_eq!(v.missing, [Missing::HomeChange], "{steps}");
+            assert!(v.continue_with.as_deref().is_some_and(|p| p.contains("Your reply says \"I turned off the kitchen light.\"")), "{steps}");
+            assert_eq!(check(KITCHEN, None, true, &mixed(steps.clone())).home_lines, [HomeLine::Change { tried: false }], "{steps}");
+        }
+        // The home sentence is the one quoted, after a true one about the other tool
+        let v = check("I closed the issue. I turned off the kitchen light.", None, false, &mixed(json!([step(ECHO_OK, "ok")])));
+        assert!(v.continue_with.as_deref().is_some_and(|p| p.contains("Your reply says \"I turned off the kitchen light.\"")), "{v:?}");
+        // With no tool that changed something, every claim is still checked as before
+        for steps in [json!([]), json!([step("WebSearch", "ok")])] {
+            assert_eq!(check("I closed the issue.", None, false, &mixed(steps.clone())).missing, [Missing::HomeChange], "{steps}");
+        }
+        // A Home Assistant change that worked still backs the claim
+        assert!(check(KITCHEN, None, false, &mixed(json!([step(ECHO_OK, "ok"), turn_off("ok")]))).missing.is_empty());
+    }
+
+    #[test]
+    fn other_changes_are_told_from_reads_and_home_steps() {
+        let servers = ["house".to_string()];
+        let changed = |steps: Value| other_change_in(Some(&json!({ "steps": steps })), &servers);
+        for tool in [ECHO_OK, "Bash", "Write", "mcp__github__close_issue", "browser_click", "mcp__kwnt__browser_act"] {
+            assert!(changed(json!([step(tool, "ok")])), "{tool}");
+            assert!(changed(json!([step(tool, "done")])), "{tool}");
+            assert!(!changed(json!([step(tool, "failed")])), "{tool}");
+            assert!(!changed(json!([step(tool, "unanswered")])), "{tool}");
+            assert!(!changed(json!([{ "kind": "approval", "tool": tool, "status": "ok" }])), "{tool}");
+        }
+        for tool in [
+            "WebSearch", "WebFetch", "Read", "Grep", "Glob", "web_search", "mcp__kwnt__web_fetch", "search", "browser_open",
+            "browser_navigate", "mcp__kwnt__browser_read", "browser_page", "agent_browser_snapshot", "browser_screenshot",
+            "mcp__house__intent__HassTurnOff", "mcp__kwnt__house__homeassistant__GetLiveContext",
+        ] {
+            assert!(!changed(json!([step(tool, "ok")])), "{tool}");
+        }
+        assert!(!changed(json!([])) && !other_change_in(None, &servers));
+        // A Home Assistant-only turn never has one, so its checks are #782's
+        assert!(!mixed(json!([read("ok", "x"), turn_off("ok"), turn_off("failed")])).other_changed);
     }
 
     /// 27e round 2 (Mira's design check): every sentence the model and the person get is true

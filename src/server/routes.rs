@@ -3094,7 +3094,8 @@ async fn run_kwant_turn_inner(
         // A replay opens no page: the bot's browser isn't its scratch folder
         let target_url_opt = if opts.rehearse.is_some() || opts.no_tools { None } else { opts.nav_target() };
         // 13a: the request's link couldn't be opened before the turn (it didn't load, or a site rule
-        // refused it). A failed first step that isn't in the turn's activity
+        // refused it). 28g: the open is saved as the turn's first step, but follow-through reads the
+        // turn's activity without it, so this stays the only signal for it
         let mut page_failed = false;
 
         if let Some(target_url) = target_url_opt {
@@ -3104,10 +3105,13 @@ async fn run_kwant_turn_inner(
             )));
             if let Some(ctrl) = get_or_create_browser_controller(state, &turn_page).await {
                 ctrl.site_guard.set_driver(&target_kwant.id);
+                // 28g: the open is a step on the reply ("Opening <host>"), live and saved
+                event_broadcast.activity.link_open_start(&target_url);
                 let navigated = match guard_bot_action(state, &ctrl, &turn_page).await {
                     Ok(()) => ctrl.navigate(&target_url).await,
                     Err(e) => Err(e),
                 };
+                event_broadcast.activity.link_open_end(&super::activity::LinkOpen::of(&navigated));
                 match navigated {
                 Ok(nav) => {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
@@ -4018,17 +4022,20 @@ async fn run_kwant_turn_inner(
                 // ...against the same plan the prompt's "[What to deliver]" hint came from
                 let expect = plan.as_ref().and_then(super::delivery_check::Expect::from_plan);
                 let checked = opts.delivery_checked();
+                // What the bot's own tools did: kwnt's link open before the turn counts only as `page_failed` (28g)
+                let own_steps = super::activity::without_link_open(activity.as_ref());
                 let verdict = if checked {
                     // Follow-through (0.9.4): the turn's last tool step, if it failed, and a declined card
-                    let (ran_tools, failed_step, declined) = super::delivery_check::tool_steps_in(activity.as_ref());
+                    let (ran_tools, failed_step, declined) = super::delivery_check::tool_steps_in(own_steps.as_ref());
                     let own = super::delivery_check::Seen {
                         image_shared: pictures.shared_image,
                         has_shot: pictures.last_shot.is_some(),
-                        pushed: super::delivery_check::pushed_in(activity.as_ref()),
+                        pushed: super::delivery_check::pushed_in(own_steps.as_ref()),
                         ran_tools,
                         failed_step,
                         declined,
                         home: super::delivery_check::home_steps_in(activity.as_ref(), &home_servers),
+                        other_changed: super::delivery_check::other_change_in(activity.as_ref(), &home_servers),
                     };
                     // ...counting what the delivery's earlier turns did (F1)
                     let seen = match opts.delivery_seen.as_ref().map(|d| d.lock()) {
@@ -4090,6 +4097,8 @@ async fn run_kwant_turn_inner(
                 if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref(), checked) {
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
                 }
+                // 29c: the folder kwnt's gate judged this turn's file tools against (see `note_gate_folder`)
+                note_gate_folder(&mut meta, activity.as_ref(), mcp_turn.is_some(), workspace_dir.as_deref());
                 // 0.9.4: a reply that ends with `Blocked: <what>. <what unblocks it>` says so in its meta
                 // 13a: with no such line, a turn whose last tool step failed (or was declined, or whose
                 // link didn't open and it ran no tool) and whose reply ends waiting on the person in
@@ -4101,7 +4110,7 @@ async fn run_kwant_turn_inner(
                 let blocked = super::keep_going::blocked_line(&asst_msg.text)
                     .map(|text| serde_json::json!({ "text": text }))
                     .or_else(|| {
-                        let text = super::delivery_check::failed_step_blocked(&asst_msg.text, activity.as_ref(), before).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
+                        let text = super::delivery_check::failed_step_blocked(&asst_msg.text, own_steps.as_ref(), before).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
                         Some(serde_json::json!({ "text": text, "from": "failed_step" }))
                     })
                     // 22j: the one continuation still ended on a promise after the step failed again
@@ -4112,7 +4121,7 @@ async fn run_kwant_turn_inner(
                         Some(serde_json::json!({ "text": super::delivery_check::blocked_text(&target_kwant.name, step), "from": "follow_through" }))
                     });
                 // ...and if this reply is held, its decided reply (a new turn) counts what this one left
-                let failed_before = super::delivery_check::FailedBefore::of_turn(activity.as_ref(), before);
+                let failed_before = super::delivery_check::FailedBefore::of_turn(own_steps.as_ref(), before);
                 if let Some(blocked) = blocked {
                     meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = blocked;
                 }
@@ -4326,6 +4335,21 @@ async fn idea_from_chat(
     match super::idea_jar::drop_in(state, &space, text).await {
         Ok(idea) => (StatusCode::CREATED, Json(serde_json::json!({"handled": "idea", "idea": super::idea_jar::idea_json(&idea)}))).into_response(),
         Err(r) => r,
+    }
+}
+
+/// 29c: records on a reply's meta the folder kwnt's gate judged the turn's file tools against
+/// ([`crate::mcp::builtin_tools::GATE_FOLDER_KEY`]), so `kwnt run-check` can tell a file step outside it
+/// from one inside. Only for a turn that had the gate (`gated`) and saved steps. Kept out of
+/// `run_kwant_turn_inner` (`inline(never)`) so its temporaries don't grow that function's frame.
+#[inline(never)]
+fn note_gate_folder(meta: &mut Option<serde_json::Value>, activity: Option<&serde_json::Value>, gated: bool, workspace_dir: Option<&std::path::Path>) {
+    let ran_steps = activity.and_then(|a| a["steps"].as_array()).is_some_and(|s| !s.is_empty());
+    if !gated || !ran_steps {
+        return;
+    }
+    if let Some(folder) = crate::mcp::builtin_tools::canonical_folder(workspace_dir) {
+        meta.get_or_insert_with(|| json!({}))[crate::mcp::builtin_tools::GATE_FOLDER_KEY] = json!(folder.display().to_string());
     }
 }
 
@@ -7462,6 +7486,41 @@ mod tests {
         assert_eq!(handoff_title("`@QA` please revise your part.", "QA").as_deref(), Some("Please revise your part."));
         assert_eq!(handoff_title("`@QA run the smoke tests`", "QA").as_deref(), Some("Run the smoke tests"));
         assert_eq!(handoff_title("@QA run `cargo test` on staging.", "QA").as_deref(), Some("Run `cargo test` on staging."));
+    }
+
+    #[test]
+    fn a_gated_turn_with_steps_records_the_canonical_folder_and_no_other_turn_does() {
+        use super::note_gate_folder;
+        use crate::mcp::builtin_tools::GATE_FOLDER_KEY;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("bot");
+        std::fs::create_dir(&folder).unwrap();
+        let canon = folder.canonicalize().unwrap().display().to_string();
+        let steps = json!({ "steps": [{ "title": "Wrote plan.md" }] });
+        let none = json!({ "steps": [] });
+        let missing = dir.path().join("missing");
+
+        let mut meta = Some(json!({ "ran_on": { "engine": "claude" } }));
+        note_gate_folder(&mut meta, Some(&steps), true, Some(&folder));
+        let meta = meta.unwrap();
+        assert_eq!(meta[GATE_FOLDER_KEY], json!(canon));
+        assert_eq!(meta["ran_on"]["engine"], "claude", "other keys stay");
+
+        let mut fresh = None;
+        note_gate_folder(&mut fresh, Some(&steps), true, Some(&folder.join(".")));
+        assert_eq!(fresh.unwrap()[GATE_FOLDER_KEY], json!(canon), "a meta-less reply gets one, canonical");
+
+        for (activity, gated, at) in [
+            (Some(&steps), false, Some(folder.as_path())),
+            (Some(&none), true, Some(folder.as_path())),
+            (None, true, Some(folder.as_path())),
+            (Some(&steps), true, None),
+            (Some(&steps), true, Some(missing.as_path())),
+        ] {
+            let mut meta = None;
+            note_gate_folder(&mut meta, activity, gated, at);
+            assert_eq!(meta, None, "{activity:?} gated={gated} at={at:?}");
+        }
     }
 
     use super::{
