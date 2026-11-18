@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- A Deploy on Railway button in the README: kwnt from the released image with a volume on `/data`, and the bots' private browser.
+
 ## [Mac 0.9.24] - 2026-11-18
 
 kwant 0.9.24: a Deny that reads as your no, not as a failed step, replies that keep the order you sent your messages in, no grey flash when the bot browser switches pages, a read-only check of what your bots ran without asking and address bars that show their own tab's page.
