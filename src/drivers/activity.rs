@@ -22,6 +22,9 @@ pub const MAX_THINKING_CHARS: usize = 16_000;
 pub const MAX_TITLE: usize = 160;
 /// Longest step detail (characters).
 pub const MAX_DETAIL: usize = 500;
+/// Longest reason a failed tool's live `ToolCallCompleted` event carries, cut after masking
+/// (29k). The drivers (Claude's, grok's, Codex's) send the whole reason.
+pub const LIVE_ERROR_MAX: usize = 600;
 /// Most thinking text held back from the live stream at once (characters): the last two words of
 /// what streamed so far, so a secret split across two chunks is masked once it is whole.
 pub const MAX_HELD_THINKING: usize = 256;
@@ -279,6 +282,7 @@ impl ActivityLog {
 
     /// Masks secrets in a driver event before it is broadcast: thinking text, a tool call's
     /// arguments and a finished tool's result (every string in them). Reply text passes as is.
+    /// A failed tool's `error` is then cut to [`LIVE_ERROR_MAX`]: drivers send it whole.
     pub fn redact_event(&self, event: &RuntimeEvent) -> RuntimeEvent {
         match event {
             RuntimeEvent::ThinkingDelta(text) => RuntimeEvent::ThinkingDelta(self.redact(text)),
@@ -286,7 +290,12 @@ impl ActivityLog {
                 RuntimeEvent::ToolCallPending { id: id.clone(), name: name.clone(), args: self.redact_value(args) }
             }
             RuntimeEvent::ToolCallCompleted { id, result } => {
-                RuntimeEvent::ToolCallCompleted { id: id.clone(), result: self.redact_value(result) }
+                let mut result = self.redact_value(result);
+                // 29k: cut only after masking, so a secret across the cut is masked whole
+                if let Some(Value::String(why)) = result.get_mut("error") {
+                    *why = crate::mcp::truncate_text(why, LIVE_ERROR_MAX);
+                }
+                RuntimeEvent::ToolCallCompleted { id: id.clone(), result }
             }
             RuntimeEvent::Scoped { tag, event } => {
                 RuntimeEvent::Scoped { tag: tag.clone(), event: Box::new(self.redact_event(event)) }
@@ -1514,6 +1523,29 @@ mod tests {
         // Old rows and other steps carry no `page_title` key at all
         let saved = log.to_json();
         assert!(saved["steps"].as_array().unwrap().iter().all(|s| s.get("page_title").is_none()), "{saved}");
+    }
+
+    /// 29k: the live event's `error` is masked whole first, then cut to 600 with the marker, in a
+    /// scoped event too; other fields aren't cut here, and a short error or "ok" stays as it is.
+    #[test]
+    fn a_live_error_is_masked_then_cut() {
+        let secret = "Qv7Lamp0Vole2Quiet8Fern4Moss6Rx";
+        let log = ActivityLog::with_secrets(vec![secret.into()]);
+        let why = format!("{}{secret} tail", "ü".repeat(590));
+        let content = "é".repeat(700);
+        let event = RuntimeEvent::Scoped {
+            tag: TurnTag::default(),
+            event: Box::new(opened("a", json!({"status": "error", "error": why, "content": content}))),
+        };
+        let RuntimeEvent::Scoped { event, .. } = log.redact_event(&event) else { panic!() };
+        let RuntimeEvent::ToolCallCompleted { result, .. } = *event else { panic!() };
+        assert_eq!(result["error"], format!("{}******** t… [truncated]", "ü".repeat(590)));
+        assert_eq!(result["content"], content);
+        assert_eq!(LIVE_ERROR_MAX, 600);
+        for kept in [json!({"status": "error", "error": "exit status 101"}), json!({"status": "ok"})] {
+            let RuntimeEvent::ToolCallCompleted { result, .. } = log.redact_event(&opened("b", kept.clone())) else { panic!() };
+            assert_eq!(result, kept);
+        }
     }
 
     #[test]
