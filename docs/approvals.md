@@ -17,7 +17,10 @@ an install; switch it in Settings when you're ready. While the built-in password
 passwords, a new space starts on `ask` instead (see below). An unknown bot always asks.
 
 Whatever the mode, a call that looks like a payment shows a card, even when `smart` finds it
-safe or "Always this session" was given: see [payments.md](payments.md).
+safe or "Always this session" was given: see [payments.md](payments.md). That includes paid
+generations: a FLUX (Black Forest Labs) or Picsart tool that spends the person's credits asks
+every time, and its card says whose credits it uses, without a price. Their reads (a balance, a
+job's status) don't ask.
 
 Whatever the mode, on a Home Assistant MCP server (it answers `initialize` with `serverInfo.name`
 `home-assistant`), a call that acts on a lock, a door, a garage door, a gate or an alarm shows a
@@ -148,7 +151,20 @@ person takes it back (`DELETE /api/kwants/:id/always-allowed`, see [mcp-api.md](
 command only. Neither covers a payment or a Home Assistant lock, door or alarm, and "Always this
 session" on such a card allows that one call.
 
+## A no stays a no
+
+When the person presses Deny, the bot is told not to try it again or another way, and for the
+rest of that conversation (a thread, else the channel or direct chat) kwnt refuses a call of the
+same family from that bot at once, with no card. A family is a shell program and its first
+subcommand (`gh pr`, `git push`), or a URL program and its host (`curl` to `api.github.com`); a
+file and whether it's read or written; a page's host; an MCP server's tool. Other built-in tools
+keep asking. The bot hears `DECLINED_BEFORE_TEXT` and the step shows as declined. It lasts until
+the person writes in that conversation again, and only in memory: a restart, another conversation
+or another bot asks as before. An unanswered card, a card its turn dropped, and kwnt's own refusals
+don't count, and a late Allow on an earlier card still runs that call (`src/mcp/declined.rs`).
+
 ## Tests
 
-`cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test --test payment_floor_test --test home_locks_always_ask_test`
-and the classifier tables in `src/mcp/shell_risk.rs` (`cargo test --lib shell_risk`).
+`cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test --test payment_floor_test --test home_locks_always_ask_test --test mcp_media_test`
+and the classifier tables in `src/mcp/shell_risk.rs` (`cargo test --lib shell_risk`); a no that
+stays a no: `cargo test --lib declined`.

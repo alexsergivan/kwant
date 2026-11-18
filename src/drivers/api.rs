@@ -2162,6 +2162,7 @@ mod tests {
             approvals: crate::mcp::Approvals::Ask,
             records: Default::default(),
             kwnt_only: false,
+            media: None,
         });
         match driver.stream_turn(input, tx).await {
             Err(DriverError::Execution(why)) => assert!(why.contains("MCP servers"), "{why}"),
@@ -2328,6 +2329,7 @@ mod tests {
                 approvals: crate::mcp::Approvals::Off,
                 records: Default::default(),
                 kwnt_only: false,
+                media: None,
             });
             input.delivery = Some(crate::router::delivery::keyword_plan(complaint, &[]));
             driver.stream_turn(input, tx).await.unwrap();
