@@ -115,7 +115,7 @@ export const Btn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { kin
 }) => {
   const base =
     kind === 'primary'
-      ? `${phone ? 'h-11' : 'h-9'} px-3.5 rounded-lg bg-accent-gradient text-[13px] font-semibold text-white disabled:opacity-45 disabled:cursor-not-allowed`
+      ? `${phone ? 'h-11' : 'h-9'} px-3.5 rounded-lg bg-accent-gradient kw-hover-deepen text-[13px] font-semibold text-white disabled:opacity-45 disabled:cursor-not-allowed`
       : kind === 'secondary'
         ? `${phone ? 'h-11' : 'h-9'} px-3 rounded-lg border border-white/[.14] bg-white/[.04] text-xs text-zinc-200 hover:bg-white/[.08]`
         : `${phone ? 'min-h-11' : 'min-h-8'} px-1 text-xs text-sky-300 hover:text-sky-200`;
