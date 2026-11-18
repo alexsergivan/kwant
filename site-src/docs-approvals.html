@@ -15,8 +15,9 @@ card_art: avatar:qa
 <ul>
   <li><strong>Allow once</strong> runs this one call.</li>
   <li><strong>Always allow</strong> allows that tool for that bot until kwant restarts.</li>
-  <li><strong>Deny</strong> refuses it, and the bot is told.</li>
+  <li><strong>Deny</strong> refuses it, and the bot is told not to try it again or another way.</li>
 </ul>
+<p>After you deny a call, the bot can't ask again for the same kind of thing in that chat: a command with the same program and first word (any <code>git push</code>), the same website, or the same file. kwant refuses it without a card until you write in that chat again.</p>
 <figure>
   <div class="frame">{{shot:desktop-approval|Ann's chat. Right under the request Tests are passing. Please open the pull request for the waitlist branch, an Approval needed card says Ann wants to open a pull request on GitHub, with the title Trip waitlist with timed seat holds and the repo trailhead/storefront, and Deny, Always allow and Allow once buttons.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Ann asks before opening a pull request.</figcaption>

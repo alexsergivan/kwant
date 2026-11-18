@@ -901,7 +901,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
               <button
                 type="button"
                 onClick={() => disconnect(server)}
-                className="px-2.5 py-1 rounded-md font-medium text-white bg-rose-600 hover:bg-rose-500 transition-colors"
+                className="px-2.5 py-1 rounded-md font-medium text-white bg-rose-600 hover:bg-rose-700 transition-colors"
               >
                 Disconnect
               </button>
@@ -919,7 +919,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
               <button
                 type="button"
                 onClick={() => handleDelete(server)}
-                className="px-2.5 py-1 rounded-md font-medium text-white bg-rose-600 hover:bg-rose-500 transition-colors"
+                className="px-2.5 py-1 rounded-md font-medium text-white bg-rose-600 hover:bg-rose-700 transition-colors"
               >
                 Delete
               </button>
