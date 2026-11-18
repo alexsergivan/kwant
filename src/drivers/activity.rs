@@ -234,14 +234,14 @@ impl ActivityLog {
     }
 
     /// The person's Deny behind tool step `i`, which [`step_end`] ended `status` with reason `why`
-    /// (28b): when the step failed with the CLI's denial ([`crate::mcp::DENIED_TEXT`]) and this
+    /// (28b): when the step failed with the CLI's denial ([`denial_shown`]) and this
     /// turn has a `declined` approval step for the same tool not yet paired with a tool step, that
     /// approval step's index. The card settles before the denial reaches the engine, but the tool
     /// step usually started first, so step order isn't read. A denial with no declined card (kwnt
     /// refused a call that names its own secret files, or a ticket couldn't be stored) wasn't the
     /// person's no: `None`, and the step stays `failed`.
     fn declined_card_for(&self, i: usize, status: &str, why: Option<&str>) -> Option<usize> {
-        if status != "failed" || !why.is_some_and(|w| w.starts_with(crate::mcp::DENIED_TEXT)) {
+        if status != "failed" || !why.is_some_and(|w| w.starts_with(denial_shown())) {
             return None;
         }
         let tool = self.steps[i].tool.as_deref()?;
@@ -581,6 +581,15 @@ pub fn with_page_title(mut result: Value, tool: &str, text: &str) -> Value {
         }
     }
     result
+}
+
+/// The part of [`crate::mcp::DENIED_TEXT`] a failed step shows, the CLI's own denial: [`step_end`]
+/// leaves out [`crate::mcp::NOT_ANOTHER_WAY_TEXT`] (27b), so a Deny is matched on what's left (28b).
+fn denial_shown() -> &'static str {
+    crate::mcp::DENIED_TEXT
+        .strip_suffix(crate::mcp::NOT_ANOTHER_WAY_TEXT)
+        .unwrap_or(crate::mcp::DENIED_TEXT)
+        .trim_end()
 }
 
 /// A finished tool call's result: `None` when it went fine, `Some(why)` when its step is
@@ -1632,8 +1641,9 @@ mod tests {
         let ended = log.observe(&denied("a"));
         assert_eq!(
             (ended[0].status, ended[0].detail.as_deref()),
-            ("failed", Some(crate::mcp::DENIED_TEXT))
+            ("failed", Some("The user denied this tool call."))
         );
+        assert_eq!(denial_shown(), "The user denied this tool call.");
         log.wait("approval", "t1", "Waiting for your approval: Fetching", Some("WebFetch"));
         log.settle("t1", "declined");
         log.wait("approval", "t2", "Waiting for your approval: Running `ls`", Some("Bash"));
@@ -1673,7 +1683,7 @@ mod tests {
             tools,
             vec![
                 ("declined", Some(crate::mcp::DENIED_STEP_DETAIL)),
-                ("failed", Some(crate::mcp::DENIED_TEXT)),
+                ("failed", Some(denial_shown())),
             ]
         );
         // A second Deny pairs with the second call
