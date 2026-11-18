@@ -89,8 +89,13 @@ pub struct ActivityLog {
     /// itself), sent with that scope's next chunk or when the thinking step ends.
     held: Vec<(Vec<TurnTag>, String)>,
     /// Indexes of `declined` approval steps already paired with the tool step they refused (28b),
-    /// so one Deny ends one tool step `declined`.
+    /// so one Deny ends one tool step `declined`, and of `stopped` ones paired with the denied
+    /// step whose wait they ended (28k).
     paired: HashSet<usize>,
+    /// Calls kwnt refused on its own this turn, before the engine heard (28k), oldest first: the
+    /// tool's name and the words its step shows instead of what the bot was told. Each one is
+    /// used by one failed step of that tool.
+    refused: Vec<(String, &'static str)>,
 }
 
 fn now() -> String {
@@ -207,8 +212,8 @@ impl ActivityLog {
                 if let Some(i) = self.tools.remove(id) {
                     let (status, why) = step_end(result);
                     let card = self.declined_card_for(i, status, why.as_deref());
-                    if let Some(why) = why {
-                        self.steps[i].detail = Some(cut(&self.redact(&why), MAX_DETAIL));
+                    if let Some(why) = why.as_deref() {
+                        self.steps[i].detail = Some(cut(&self.redact(why), MAX_DETAIL));
                     }
                     if status == "ok" && self.steps[i].tool.as_deref().is_some_and(opens_page) {
                         self.steps[i].page_title = result["title"]
@@ -223,7 +228,12 @@ impl ActivityLog {
                             self.steps[i].detail = Some(crate::mcp::DENIED_STEP_DETAIL.to_string());
                             "declined"
                         }
-                        None => status,
+                        None => {
+                            if let Some(words) = self.blocked_detail(i, status, why.as_deref()) {
+                                self.steps[i].detail = Some(words.to_string());
+                            }
+                            status
+                        }
                     };
                     changed.push(self.end(i, status));
                 }
@@ -251,6 +261,46 @@ impl ActivityLog {
                 && s.status == "declined"
                 && s.tool.as_deref() == Some(tool)
                 && !self.paired.contains(j)
+        })
+    }
+
+    /// kwnt refused a call to `tool` on its own, before the engine heard (28k): the next failed
+    /// step of that tool shows `words`, not the text the bot was told.
+    pub fn refused(&mut self, tool: &str, words: &'static str) {
+        self.refused.push((tool.to_string(), words));
+    }
+
+    /// What tool step `i`, which [`step_end`] ended `status` with reason `why` and no declined card
+    /// of its own, shows instead of the bot's text (28k). Nobody pressed Deny, so it never says the
+    /// person did:
+    /// - the words of a refusal kwnt noted for its tool ([`refused`](Self::refused)), such as the
+    ///   pre-push gate's;
+    /// - when it failed with the CLI's denial ([`denial_shown`]) and the turn has a `stopped` approval
+    ///   step of the same tool not yet paired (its card stopped waiting with no answer),
+    ///   [`crate::mcp::NOBODY_ANSWERED_STEP_DETAIL`], and that card is paired with it;
+    /// - else, with that denial, [`crate::mcp::BLOCKED_STEP_DETAIL`] (kwnt's
+    ///   secret files, a ticket it couldn't store).
+    fn blocked_detail(&mut self, i: usize, status: &str, why: Option<&str>) -> Option<&'static str> {
+        if status != "failed" {
+            return None;
+        }
+        let tool = self.steps[i].tool.clone();
+        if let Some(k) = self.refused.iter().position(|(t, _)| Some(t) == tool.as_ref()) {
+            return Some(self.refused.remove(k).1);
+        }
+        if !why.is_some_and(|w| w.starts_with(denial_shown())) {
+            return None;
+        }
+        let stopped = (0..self.steps.len()).find(|j| {
+            let s = &self.steps[*j];
+            s.kind == "approval" && s.status == "stopped" && s.tool == tool && !self.paired.contains(j)
+        });
+        Some(match stopped {
+            Some(j) => {
+                self.paired.insert(j);
+                crate::mcp::NOBODY_ANSWERED_STEP_DETAIL
+            }
+            None => crate::mcp::BLOCKED_STEP_DETAIL,
         })
     }
 
@@ -1632,8 +1682,9 @@ mod tests {
     }
 
     /// 28b: a denial with no declined card (kwnt refused a call naming its own secret files, or a
-    /// ticket couldn't be stored) wasn't the person's no: it stays `failed` with the CLI's text.
-    /// A card for another tool, or one the person allowed, doesn't count either.
+    /// ticket couldn't be stored) wasn't the person's no: it stays `failed`, and (28k) its step
+    /// says kwant blocked it, not the CLI's "The user denied this tool call.". A card for another
+    /// tool, or one the person allowed, doesn't count either.
     #[test]
     fn a_denial_without_a_declined_card_stays_failed() {
         let mut log = ActivityLog::default();
@@ -1641,7 +1692,7 @@ mod tests {
         let ended = log.observe(&denied("a"));
         assert_eq!(
             (ended[0].status, ended[0].detail.as_deref()),
-            ("failed", Some("The user denied this tool call."))
+            ("failed", Some(crate::mcp::BLOCKED_STEP_DETAIL))
         );
         assert_eq!(denial_shown(), "The user denied this tool call.");
         log.wait("approval", "t1", "Waiting for your approval: Fetching", Some("WebFetch"));
@@ -1650,7 +1701,10 @@ mod tests {
         log.settle("t2", "ok");
         log.observe(&pending("b", "Bash", json!({"command": "ls"})));
         let ended = log.observe(&denied("b"));
-        assert_eq!(ended[0].status, "failed");
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("failed", Some(crate::mcp::BLOCKED_STEP_DETAIL))
+        );
         // Another failure is never read as a no, even with a declined card for that tool
         log.wait("approval", "t3", "Waiting for your approval: Running `ls`", Some("Bash"));
         log.settle("t3", "declined");
@@ -1683,7 +1737,7 @@ mod tests {
             tools,
             vec![
                 ("declined", Some(crate::mcp::DENIED_STEP_DETAIL)),
-                ("failed", Some(denial_shown())),
+                ("failed", Some(crate::mcp::BLOCKED_STEP_DETAIL)),
             ]
         );
         // A second Deny pairs with the second call
@@ -1691,5 +1745,91 @@ mod tests {
         log.settle("t2", "declined");
         log.observe(&pending("c", "Bash", json!({"command": "rm c"})));
         assert_eq!(log.observe(&denied("c"))[0].status, "declined");
+    }
+
+    /// 28k: a refusal the person never saw doesn't blame them. kwnt's secret files read "kwant
+    /// blocked this; nothing ran"; a push the pre-push gate held reads "Blocked before push;
+    /// nothing ran", whatever the gate told the bot. Only the saved step changes: the result the
+    /// engine got (and so what the bot was told) is the same event, untouched.
+    #[test]
+    fn a_refusal_the_person_never_saw_says_who_stopped_it() {
+        assert_eq!(crate::mcp::BLOCKED_STEP_DETAIL, "kwant blocked this; nothing ran");
+        assert_eq!(crate::mcp::PREPUSH_BLOCKED_STEP_DETAIL, "Blocked before push; nothing ran");
+        assert_eq!(crate::mcp::NOBODY_ANSWERED_STEP_DETAIL, "Nobody answered in time; nothing ran");
+
+        // kwnt's secret files: the CLI reports kwnt's DENIED_TEXT, and no card was shown
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "Read", json!({"file_path": "/data/vault.json"})));
+        let secret = denied("a");
+        let ended = log.observe(&secret);
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("failed", Some("kwant blocked this; nothing ran"))
+        );
+        // What the engine got back is exactly what kwnt sent
+        let RuntimeEvent::ToolCallCompleted { result, .. } = &secret else { unreachable!() };
+        assert_eq!(result["error"], crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT));
+
+        // The pre-push gate: the bot gets the gate's own text; the step says "Blocked before push"
+        let gate = "kwant is checking this push of main before it goes (pre-push card pp1): secrets, new packages, \
+                    test tampering, the risk rules and a fresh-eyes review by another bot. Nothing was pushed. Run the \
+                    same push again in a minute or two.";
+        let mut log = ActivityLog::default();
+        log.observe(&pending("p", "Bash", json!({"command": "git push origin main"})));
+        log.refused("Bash", crate::mcp::PREPUSH_BLOCKED_STEP_DETAIL);
+        let held = RuntimeEvent::ToolCallCompleted { id: "p".into(), result: json!({"status": "error", "error": gate}) };
+        let ended = log.observe(&held);
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("failed", Some("Blocked before push; nothing ran"))
+        );
+        let RuntimeEvent::ToolCallCompleted { result, .. } = &held else { unreachable!() };
+        assert_eq!(result["error"], gate);
+        // The note is used once: the next failure of that tool keeps its own reason
+        log.observe(&pending("q", "Bash", json!({"command": "make"})));
+        let ended = log.observe(&RuntimeEvent::ToolCallCompleted { id: "q".into(), result: json!({"status": "error", "error": "exit 2"}) });
+        assert_eq!(ended[0].detail.as_deref(), Some("exit 2"));
+
+        // A note for another tool, or a call that went fine, leaves the note for its own step
+        let mut log = ActivityLog::default();
+        log.refused("mcp__github__create_or_update_file", crate::mcp::PREPUSH_BLOCKED_STEP_DETAIL);
+        log.observe(&pending("x", "Bash", json!({"command": "ls"})));
+        let ended = log.observe(&RuntimeEvent::ToolCallCompleted { id: "x".into(), result: json!({"status": "ok"}) });
+        // An ok step keeps its command summary as detail, as on main; the note doesn't touch it
+        assert_eq!((ended[0].status, ended[0].detail.as_deref()), ("ok", Some("ls")));
+        log.observe(&pending("y", "mcp__github__create_or_update_file", json!({"branch": "lin-x"})));
+        let ended = log.observe(&RuntimeEvent::ToolCallCompleted { id: "y".into(), result: json!({"status": "denied", "error": gate}) });
+        assert_eq!(ended[0].detail.as_deref(), Some(crate::mcp::PREPUSH_BLOCKED_STEP_DETAIL));
+    }
+
+    /// 28k: a denial whose card stopped waiting with no answer (it couldn't stay open, or it was
+    /// withdrawn) reads "Nobody answered in time", once per card; a Deny still reads as a no.
+    #[test]
+    fn a_denial_after_a_card_nobody_answered_says_so() {
+        let mut log = ActivityLog::default();
+        log.observe(&pending("a", "Bash", json!({"command": "rm a"})));
+        log.wait("approval", "t1", "Waiting for your approval: Running `rm a`", Some("Bash"));
+        log.settle("t1", "stopped");
+        let ended = log.observe(&denied("a"));
+        assert_eq!(
+            (ended[0].status, ended[0].detail.as_deref()),
+            ("failed", Some("Nobody answered in time; nothing ran"))
+        );
+        // That card is used up: another denial with no card of its own is kwant's block
+        log.observe(&pending("b", "Bash", json!({"command": "rm b"})));
+        assert_eq!(log.observe(&denied("b"))[0].detail.as_deref(), Some(crate::mcp::BLOCKED_STEP_DETAIL));
+        // A stopped card of another tool doesn't count
+        log.wait("approval", "t2", "Waiting for your approval: Fetching", Some("WebFetch"));
+        log.settle("t2", "stopped");
+        log.observe(&pending("c", "Bash", json!({"command": "rm c"})));
+        assert_eq!(log.observe(&denied("c"))[0].detail.as_deref(), Some(crate::mcp::BLOCKED_STEP_DETAIL));
+        // A Deny is still the person's no, even with a stopped card of the same tool waiting
+        log.wait("approval", "t3", "Waiting for your approval: Running `rm d`", Some("Bash"));
+        log.settle("t3", "stopped");
+        log.wait("approval", "t4", "Waiting for your approval: Running `rm d`", Some("Bash"));
+        log.settle("t4", "declined");
+        log.observe(&pending("d", "Bash", json!({"command": "rm d"})));
+        let ended = log.observe(&denied("d"));
+        assert_eq!((ended[0].status, ended[0].detail.as_deref()), ("declined", Some(crate::mcp::DENIED_STEP_DETAIL)));
     }
 }

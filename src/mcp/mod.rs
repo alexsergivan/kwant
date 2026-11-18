@@ -486,6 +486,16 @@ pub const UNANSWERED_STEP_DETAIL: &str = "Waited 5 minutes for your answer; noth
 /// The step detail of a call the person said no to on its card (28b): the tool step ends
 /// `declined`, in the person's words. The bot is still told [`DENIED_TEXT`].
 pub const DENIED_STEP_DETAIL: &str = "You said no; nothing ran";
+/// The step detail of a call kwant refused on its own, with no card the person said no on (28k):
+/// kwnt's secret files, a ticket it couldn't store, a card withdrawn before anyone answered. The
+/// bot is still told [`DENIED_TEXT`]; only the saved step says who stopped it.
+pub const BLOCKED_STEP_DETAIL: &str = "kwant blocked this; nothing ran";
+/// The step detail of a call whose card stopped waiting with no answer and couldn't stay open
+/// for a late one (28k): it didn't run, and it wasn't the person's no.
+pub const NOBODY_ANSWERED_STEP_DETAIL: &str = "Nobody answered in time; nothing ran";
+/// The step detail of a push or GitHub write the pre-push gate held (28k). The bot still gets
+/// the gate's own text, which says what to do next.
+pub const PREPUSH_BLOCKED_STEP_DETAIL: &str = "Blocked before push; nothing ran";
 /// The step detail of a call a Skill Foundry replay recorded instead of running.
 pub const REHEARSED_STEP_DETAIL: &str = "Dry run: kwant recorded this call instead of running it";
 

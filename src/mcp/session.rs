@@ -301,8 +301,14 @@ impl McpToolSession {
                     payment: super::payment_floor::credits_reason(server, server_url, &t.tool.name),
                 };
                 // B2: a write to a GitHub branch waits for its pre-push card before any card or rule
+                // 28k: a push the gate holds shows "Blocked before push" on its step; the bot
+                // gets the gate's own text
+                let held = || crate::server::activity::refused(&caller.turn_id, name, super::PREPUSH_BLOCKED_STEP_DETAIL);
                 match self.ctx.approver.prepush_gate(&req).await {
-                    Err(why) => ("denied", why),
+                    Err(why) => {
+                        held();
+                        ("denied", why)
+                    }
                     Ok(pass) => {
                         // A push the person's Retry or Override covers skips the ordinary card (0.9.7)
                         let outcome = match &pass.grant {
@@ -312,6 +318,7 @@ impl McpToolSession {
                         if !outcome.allowed() {
                             (outcome.record_status(), outcome.refusal_text().to_string())
                         } else if let Some(why) = self.ctx.approver.prepush_use(&pass.overrides).await {
+                            held();
                             ("denied", why)
                         } else {
                             match client.call_tool(&t.tool.name, arguments.clone()).await {
