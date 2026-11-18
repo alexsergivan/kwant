@@ -275,6 +275,28 @@ mod tests {
         }
     }
 
+    /// 27e house-says-what-ran: House reads the whole home first, answers only from what Home
+    /// Assistant returned, and makes the call when the person confirms (the lock card asks).
+    #[test]
+    fn house_reads_the_whole_home_and_makes_the_call() {
+        let home = get("home").unwrap();
+        let house = home.bot("House").unwrap();
+        let skill = &home.skills.iter().find(|s| s.name == "Check the house").unwrap().body;
+        for text in [&home.instructions, &house.persona, skill] {
+            assert!(text.contains("GetLiveContext and no arguments"), "{text}");
+            assert!(text.contains("say the check failed and why"), "{text}");
+        }
+        for text in [&home.instructions, &house.persona] {
+            assert!(text.contains("outside weather"), "{text}");
+            assert!(text.contains("card"), "{text}");
+            // A confirmation is a call, never a wait on a card the bot didn't ask for
+            assert!(!text.contains("on your own. Those always ask") && !text.contains("on your own: those always ask"), "{text}");
+        }
+        let model = home.needs.iter().find(|n| n.id == "local_model").unwrap();
+        assert!(model.why.contains("A 7B model handles named devices") && model.why.contains("a larger or cloud model is more reliable"));
+        assert_eq!(home.first_prompts, ["Is anything left on?", "How warm is it inside?", "Turn off all the lights"]);
+    }
+
     #[test]
     fn catalogue_hides_persona_soul_and_instructions() {
         let v = serde_json::to_value(get("inbox").unwrap().catalogue()).unwrap();

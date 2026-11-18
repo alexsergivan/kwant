@@ -5,6 +5,7 @@
 // It never falls back to the chat title: in a space that title is the space ("@booktun.ing").
 import { isSharedFileMessage, parseAttachments } from './attachments';
 import { parseMetaObject } from './questions';
+import { MCP_PRESETS } from './mcp';
 
 /** What a row shows when its bot can't be found (deleted, or the list hasn't loaded yet). */
 export const UNKNOWN_BOT_LABEL = 'A bot';
@@ -45,15 +46,25 @@ export function botDisplayName(senderId: string | undefined | null, bots: Readon
 export interface ShareInfo {
   /** The bot's id from meta, when the server sent it. */
   kwantId: string | null;
-  /** True when kwnt shared the turn's last screenshot itself, because the reply claimed a picture. */
+  /** True when kwnt shared the file itself: the turn's last screenshot because the reply claimed a picture, or a file an MCP tool returned. */
   auto: boolean;
+  /** 26h: the MCP server whose tool made the file (`meta.made_with`), as the person named it. */
+  madeWith: string | null;
 }
 
 /** What a shared-file row's meta says about who shared it and how. */
 export function shareInfo(meta: string | null | undefined): ShareInfo {
   const o = parseMetaObject(meta) ?? {};
   const id = typeof o.kwant_id === 'string' && o.kwant_id ? o.kwant_id : null;
-  return { kwantId: id, auto: o.auto === true };
+  const madeWith = typeof o.made_with === 'string' && o.made_with.trim() ? o.made_with.trim() : null;
+  return { kwantId: id, auto: o.auto === true, madeWith };
+}
+
+/** The caption under a file kwnt shared itself: "Made with FLUX · saved automatically" for a file an MCP tool made, else "Shared automatically". */
+export function madeWithCaption(madeWith: string | null): string {
+  if (!madeWith) return 'Shared automatically';
+  const label = MCP_PRESETS.find((p) => p.id === madeWith)?.label ?? madeWith;
+  return `Made with ${label} · saved automatically`;
 }
 
 /** Who a message is from, for matching: a share's meta.kwant_id when present, else its sender_id. */

@@ -105,6 +105,7 @@ fn ctx(url: &str, approver: Arc<dyn ToolApprover>, max: usize) -> McpTurnContext
         approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
         kwnt_only: false,
+        media: None,
     }
 }
 

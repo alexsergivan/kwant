@@ -327,7 +327,7 @@ export const ConnectionRow: React.FC<{
           <button type="button" onClick={onKeep} className={quiet} data-agent-keep>
             Keep
           </button>
-          <button type="button" onClick={onRevoke} disabled={revoking} aria-busy={revoking} className={`${btn} text-white bg-rose-600 hover:bg-rose-500`} data-agent-revoke>
+          <button type="button" onClick={onRevoke} disabled={revoking} aria-busy={revoking} className={`${btn} text-white bg-rose-600 hover:bg-rose-700`} data-agent-revoke>
             {revoking && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             Revoke
           </button>

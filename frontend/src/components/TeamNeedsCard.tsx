@@ -391,7 +391,7 @@ export const UndoTeamConfirm: React.FC<{
           <button ref={keep} type="button" onClick={onKeep} disabled={busy} className={`${b} px-3.5 rounded-lg border border-zinc-700 text-sm text-zinc-100 hover:bg-white/5 ${FOCUS}`}>
             Keep the team
           </button>
-          <button type="button" onClick={onUndo} disabled={busy} className={`${b} inline-flex items-center justify-center gap-2 px-3.5 rounded-lg bg-[#be123c] hover:bg-rose-600 text-white text-sm font-medium disabled:opacity-60 ${FOCUS}`}>
+          <button type="button" onClick={onUndo} disabled={busy} className={`${b} inline-flex items-center justify-center gap-2 px-3.5 rounded-lg bg-[#be123c] hover:bg-rose-800 text-white text-sm font-medium disabled:opacity-60 ${FOCUS}`}>
             {busy && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             Undo team
           </button>

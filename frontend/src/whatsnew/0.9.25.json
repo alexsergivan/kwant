@@ -1,0 +1,28 @@
+{
+  "version": "0.9.25",
+  "date": "2026-11-18",
+  "highlights": [
+    {
+      "id": "answered-card-says-so",
+      "title": "Answered cards say what you chose",
+      "text": "Once you answer an approval card, its step in Details reads \"You said OK\" or \"You said no\", and one nobody answered in time reads \"Asked for your OK\", not \"Waiting for your OK\".",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "link-open-is-a-step",
+      "title": "See kwant open the link you sent",
+      "text": "When your message has a link, the reply's Details start with \"Opening <host>\" and the page's title, or the reason it didn't open. Before, a link that didn't open left nothing there.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "On a phone, a fold's title sits in the middle of its row instead of stuck to the top with a gap under it.",
+    "A step you said no to is saved as declined (\"You said no; nothing ran\"), and a routine you only said no to reads as not done.",
+    "Opening the bot browser panel right after a run stays on one tab, with no flash of the last page and no jump between tabs.",
+    "The Shared browser tab's sign-in notice follows that tab's own page, so the bot's page no longer shows or hides it.",
+    "kwnt run-check also lists a bot's fetch of this computer or your local network that ran without an approval card.",
+    "On grok, a failed or cancelled tool step shows grok's own reason instead of just \"failed\"."
+  ]
+}

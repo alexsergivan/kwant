@@ -41,7 +41,7 @@ const BTN =
   'inline-flex items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors min-h-11 sm:min-h-[32px] max-sm:w-full outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 disabled:cursor-not-allowed disabled:opacity-50';
 const PLAIN = `${BTN} border border-hairline-strong bg-zinc-800 text-zinc-200 hover:bg-zinc-700`;
 const PRIMARY = `${BTN} text-white`;
-const AMBER = `${BTN} bg-amber-600 text-white shadow-sm hover:bg-amber-500`;
+const AMBER = `${BTN} bg-amber-500 text-zinc-950 shadow-sm hover:bg-amber-400`;
 const AMBER_OUTLINE = `${BTN} border border-amber-400/60 bg-transparent text-amber-200 hover:bg-amber-400/10`;
 const LINK = 'inline-flex items-center gap-0.5 rounded px-1 text-meta font-medium text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-sky-400 min-h-11 sm:min-h-0';
 
