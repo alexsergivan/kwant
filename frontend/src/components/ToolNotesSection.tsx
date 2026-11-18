@@ -442,7 +442,7 @@ export const NoteRow: React.FC<NoteRowProps> = ({ n, now, phone, readOnly, mode,
                 <button type="button" className={`${quietBtn} ${phone ? 'flex-1 min-h-[44px]' : ''}`} onClick={() => onMode('view')} autoFocus>
                   Cancel
                 </button>
-                <button type="button" className={`${btn} min-h-[30px] px-3 bg-rose-700 text-white hover:bg-rose-600 ${phone ? 'flex-1 min-h-[44px]' : ''}`} onClick={() => onDelete(n)} data-confirm-delete>
+                <button type="button" className={`${btn} min-h-[30px] px-3 bg-rose-700 text-white hover:bg-rose-800 ${phone ? 'flex-1 min-h-[44px]' : ''}`} onClick={() => onDelete(n)} data-confirm-delete>
                   Delete
                 </button>
               </div>
