@@ -2055,6 +2055,20 @@ mod tests {
         assert!(check(UNLOCKING, None, false, &declined).missing.is_empty());
     }
 
+    /// 28b x 27e: a Home Assistant change the person said no to (a `declined` tool step, with or
+    /// without a card) is never a miss: the turn counts as declined the way routes.rs builds it.
+    #[test]
+    fn a_home_change_the_person_said_no_to_is_never_a_miss() {
+        let steps = json!([{ "kind": "tool", "tool": "mcp__house__intent__HassTurnOff", "status": "declined", "title": "HassTurnOff", "detail": "You said no; nothing ran" }]);
+        let (_, failed, declined) = tool_steps_in(Some(&json!({ "steps": steps.clone() })));
+        assert!(declined && failed.is_none());
+        let seen = Seen { declined, ..house(steps) };
+        let v = check(UNLOCKING, None, false, &seen);
+        assert!(v.missing.is_empty() && v.continue_with.is_none() && v.home_lines.is_empty(), "{v:?}");
+        let then = check(UNLOCKING, None, true, &seen);
+        assert!(then.home_lines.is_empty(), "{then:?}");
+    }
+
     #[test]
     fn reads_that_all_failed_continue_once_then_get_kwants_line() {
         let failed = house(json!([read("failed", SWITCH_MISS)]));
