@@ -10,6 +10,7 @@ import {
   shownStepCount,
   foldAnswers,
   formatDuration,
+  isFileStep,
   isOpenStep,
   pathBreakParts,
   plainTitle,
@@ -230,7 +231,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
               step.status === 'declined' ? 'font-sans text-xs' : 'font-mono text-[11px]'
             } ${step.status === 'failed' ? 'text-rose-200 bg-rose-950/30 border-rose-500/20' : 'text-zinc-300 bg-zinc-950/80 border-zinc-800'}`}
           >
-            <StepDetail text={step.detail} />
+            <StepDetail text={step.detail} path={isFileStep(step)} />
           </pre>
         </details>
       ) : (
@@ -240,9 +241,12 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   );
 };
 
-/** 29i: a path detail may break after each "/" (<wbr>), so the file name stays whole; any other detail is plain text. */
-const StepDetail: React.FC<{ text: string }> = ({ text }) => {
-  const parts = pathBreakParts(text);
+/**
+ * 29i: a path detail may break after each "/" (<wbr>), so the file name stays whole; any other detail is plain text.
+ * 29l: only a file step's detail (`path`) is read as a path; a command that starts with one renders as before 29i.
+ */
+const StepDetail: React.FC<{ text: string; path: boolean }> = ({ text, path }) => {
+  const parts = path ? pathBreakParts(text) : null;
   if (!parts) return <>{text}</>;
   return <>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && <wbr />}{p}</React.Fragment>)}</>;
 };
