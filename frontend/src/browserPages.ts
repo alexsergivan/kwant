@@ -329,3 +329,19 @@ export function trailTime(iso: string, locale?: string): string {
     .replace(/\s?[AaPp]\.?\s?[Mm]\.?$/, '')
     .trim();
 }
+
+/**
+ * 28r: the address the pane shows for the page on screen, one rule for the address field and the picture.
+ * The chosen page's own stream first; a `location` from any other stream (the page just left) never counts.
+ * Then the chosen page's listed `url` (blank for a page with none). With no page chosen (an older server,
+ * no pages route), the app's last known address, as before.
+ */
+export function addressToShow(o: {
+  location: { url: string; page: string | null } | null;
+  chosen: string | null;
+  listedUrl: string | null | undefined;
+  activeUrl: string;
+}): string {
+  if (o.location && o.location.page === o.chosen) return o.location.url;
+  return o.chosen ? o.listedUrl ?? '' : o.activeUrl;
+}
