@@ -225,7 +225,7 @@ test('28a: live, the card then the failed tool step ends declined (and the other
 test('28a: the summary says "you said no to 1", never "failed", for a plain Deny', () => {
   const steps = saved([tool('t1', 'failed', 'Bash', CLI_DENIED), card('c1', 'declined', 'Bash')]);
   const sum = a.activitySummary({ steps, dropped: 0 });
-  assert.equal(sum, '2 steps · you said no to 1');
+  assert.equal(sum, '1 step · you said no to 1', '28t: the card and its command count once');
   const two = saved([tool('t1', 'failed', 'Bash', CLI_DENIED), card('c1', 'declined', 'Bash'), tool('t2', 'failed', 'Read', CLI_DENIED), card('c2', 'declined', 'Read')]);
   assert.match(a.activitySummary({ steps: two, dropped: 0 }), /you said no to 2$/);
   // The steps row: neutral icon (no rose)

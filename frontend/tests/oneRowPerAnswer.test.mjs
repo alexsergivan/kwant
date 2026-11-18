@@ -134,7 +134,7 @@ test('a declined human step has no chip: its title already says "You said no" (f
   assert.equal(chip(row(html, 'h2')).text, 'Not done in time', '28n stays');
 });
 
-test('saved steps and the summary line are unchanged by the fold', () => {
+test('saved steps are unchanged by the fold; the summary is the one Details shows (28t counts the rows)', () => {
   const steps = RIG();
   assert.equal(steps.steps.length, 6);
   assert.deepEqual(steps.steps.map((s) => s.status), ['ok', 'ok', 'declined', 'declined', 'unanswered', 'unanswered']);

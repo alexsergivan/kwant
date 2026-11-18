@@ -7,6 +7,7 @@ import {
   LiveActivity,
   SavedActivity,
   activitySummary,
+  shownStepCount,
   foldAnswers,
   formatDuration,
   isOpenStep,
@@ -273,7 +274,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
   const [open, setOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   if (steps.length === 0) return null;
-  const work = steps.filter((s) => s.kind !== 'note').length;
+  const work = shownStepCount(steps);
   const current = [...steps].reverse().find(isOpenStep);
   // Only waits are announced; a stream of tool names would be noise.
   const announce = (

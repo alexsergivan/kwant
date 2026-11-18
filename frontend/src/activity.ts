@@ -147,7 +147,7 @@ export interface FoldedSteps {
  * pairs with the nearest tool step of the same tool, in either order, the way `readDenials` pairs (each card at
  * most one step, each step at most one card); the approval row is hidden and the command row carries the answer.
  * A card with no such command row (kwnt held the call, nothing ran, or it is still open) stays its own row.
- * Draw time only: saved steps, `activitySummary` and follow-through read the steps as they are.
+ * Draw time only: saved steps and follow-through read the steps as they are; the step count uses `rows` (28t).
  */
 export function foldAnswers(steps: readonly ActivityStep[]): FoldedSteps {
   const answers = new Map<string, CardAnswer>();
@@ -261,8 +261,11 @@ export function formatDuration(msTotal: number): string {
   return `${m}m ${String(Math.round(s % 60)).padStart(2, '0')}s`;
 }
 
-/** Steps that count in the summary: notes explain a limit and aren't work. */
-const counted = (steps: ActivityStep[]) => steps.filter((s) => s.kind !== 'note');
+/**
+ * How many steps the summary and the live "Working · N steps" say: the rows Details draws, so a settled approval
+ * folded into its command (28s) counts once with it (28t). Notes explain a limit and aren't work.
+ */
+export const shownStepCount = (steps: readonly ActivityStep[]) => foldAnswers(steps).rows.filter((s) => s.kind !== 'note').length;
 
 /** "0:42", "12:05", "1:02:09": the working strip's clock. Negative or non-finite input reads 0:00. */
 export function formatClock(ms: number): string {
@@ -276,7 +279,7 @@ export function formatClock(ms: number): string {
 /** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when any failed,
  *  "· 1 didn't run" when an approval went unanswered (26d) and "· you said no to 1" when the person denied a call (28a). */
 export function activitySummary(a: SavedActivity): string {
-  const n = counted(a.steps).length + a.dropped;
+  const n = shownStepCount(a.steps) + a.dropped;
   const steps = `${n} ${n === 1 ? 'step' : 'steps'}`;
   const span = activitySpan(a.steps);
   const parts = span !== null && span >= 1000 ? [`Worked ${formatClock(span)}`, steps] : [steps];
