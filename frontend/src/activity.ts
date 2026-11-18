@@ -337,3 +337,15 @@ export const plainTitle = (t: string) => t.replace(/`([^`]*)`/g, '$1');
 
 /** Whether the saved activity has thinking text, so the old reasoning block would repeat it. */
 export const hasThinkingText = (a: SavedActivity | null) => !!a?.steps.some((s) => s.kind === 'thinking' && s.text);
+
+/**
+ * 29i: a single-line detail that is a file path, split after each "/" or "\" (["/", "home/", "me/", "plan.md"]), so
+ * StepRow can put a <wbr> between the parts and a long path breaks at a folder, not inside the file name. Null for
+ * every other detail (commands, URLs, errors, more than one line), which renders exactly as before. Joining the parts
+ * gives back the detail, so the text a person copies is unchanged.
+ */
+export function pathBreakParts(detail: string): string[] | null {
+  if (!/^(\/|~\/|\.\.?\/|[A-Za-z]:[\\/])/.test(detail) || /[\r\n]/.test(detail)) return null;
+  const parts = detail.match(/[^/\\]*(?:[/\\]+|$)/g)?.filter(Boolean) ?? [];
+  return parts.length > 1 ? parts : null;
+}

@@ -11,6 +11,7 @@ import {
   foldAnswers,
   formatDuration,
   isOpenStep,
+  pathBreakParts,
   plainTitle,
   shownStatus,
   statusLabel,
@@ -216,9 +217,10 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
     >
       {step.detail ? (
         // 29e: on a touch phone the 44 px summary takes in the li's py-1.5 (-my-1.5 py-1.5), so a row with › is 44 px
-        // like the rows without, not 56, and its tap area stays 44 px.
+        // like the rows without, not 56, and its tap area stays 44 px. 29i: there its ring sits inside (-outline-offset-2,
+        // like the li's), so the list's overflow-hidden doesn't clip it and it doesn't cross an open row's output.
         <details className="group" open={opened || undefined}>
-          <summary className="flex items-start [@media(max-width:767px)_and_(pointer:coarse)]:items-center [@media(max-width:767px)_and_(pointer:coarse)]:-my-1.5 [@media(max-width:767px)_and_(pointer:coarse)]:py-1.5 gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
+          <summary className="flex items-start [@media(max-width:767px)_and_(pointer:coarse)]:items-center [@media(max-width:767px)_and_(pointer:coarse)]:-my-1.5 [@media(max-width:767px)_and_(pointer:coarse)]:py-1.5 gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 [@media(max-width:767px)_and_(pointer:coarse)]:focus-visible:-outline-offset-2">
             {head}
             <ChevronRight size={13} className="mt-px flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
           </summary>
@@ -228,7 +230,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
               step.status === 'declined' ? 'font-sans text-xs' : 'font-mono text-[11px]'
             } ${step.status === 'failed' ? 'text-rose-200 bg-rose-950/30 border-rose-500/20' : 'text-zinc-300 bg-zinc-950/80 border-zinc-800'}`}
           >
-            {step.detail}
+            <StepDetail text={step.detail} />
           </pre>
         </details>
       ) : (
@@ -236,6 +238,13 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
       )}
     </li>
   );
+};
+
+/** 29i: a path detail may break after each "/" (<wbr>), so the file name stays whole; any other detail is plain text. */
+const StepDetail: React.FC<{ text: string }> = ({ text }) => {
+  const parts = pathBreakParts(text);
+  if (!parts) return <>{text}</>;
+  return <>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && <wbr />}{p}</React.Fragment>)}</>;
 };
 
 const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null }> = ({ steps, live, dropped = 0, id, openStep = null }) => {
