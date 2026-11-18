@@ -49,15 +49,19 @@ test('activitySummary counts steps through shownStepCount, not its own copy of t
   assert.doesNotMatch(body, /kind !== 'note'/, 'the note rule lives only in shownStepCount');
 });
 
-test('on a phone the summary wraps to two lines, one line from sm up; icons sit on the first line (fails on 770b27ee)', () => {
+test('on a phone the summary wraps to two lines between its parts, left-aligned, one line from sm up; icons sit on the first line (fails on 770b27ee)', () => {
   const a = parse([tool('t1', 'failed', 'Running `rm -rf dist`', 0, 'Bash', DENIED), ap('tk1', 'declined', 0.01), tool('t2', 'ok', 'Read a.ts', 26, 'Read')]);
   const html = m.saved({ activity: a, idBase: 'r1' });
-  const span = /<span class="([^"]*)" data-steps-summary="">([^<]*)<\/span>/.exec(html);
+  const span = /<span class="([^"]*)" data-steps-summary="">(.*?)<\/span><svg/.exec(html);
   assert.ok(span, 'the summary span is there');
   const cls = span[1].split(' ');
-  for (const c of ['min-w-0', 'break-words', 'max-sm:line-clamp-2', 'sm:truncate']) assert.ok(cls.includes(c), c);
+  for (const c of ['min-w-0', 'text-left', 'break-words', 'max-sm:line-clamp-2', 'sm:truncate']) assert.ok(cls.includes(c), c);
   assert.ok(!cls.includes('truncate'), 'no one-line cut below sm');
-  assert.equal(span[2], m.activitySummary(a), 'the whole summary is in the DOM');
+  assert.equal(span[2].replace(/<[^>]+>/g, ''), m.activitySummary(a), 'the whole summary is in the DOM, same text');
+  // a line breaks only between parts: each " · " part is one no-wrap piece
+  const parts = [...span[2].matchAll(/<span class="whitespace-nowrap">([^<]*)<\/span>/g)].map((x) => x[1]);
+  assert.deepEqual(parts, m.activitySummary(a).split(' · '));
+  assert.ok(parts.includes('you said no to 1'));
   const button = /<button type="button" aria-expanded="false" class="([^"]*)"/.exec(html)[1].split(' ');
   assert.ok(button.includes('max-sm:items-start'), 'chevron and icon top-aligned on a phone');
   assert.ok(button.includes('items-center'), 'centred from sm up');

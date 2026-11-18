@@ -416,7 +416,12 @@ export const SavedActivityList: React.FC<{
         className={STEPS_ROW_BUTTON}
       >
         <ListTree size={13} className={`flex-shrink-0 max-sm:mt-[1.5px] ${unanswered ? 'text-amber-300' : failed ? 'text-rose-300' : 'text-sky-400/80'}`} aria-hidden="true" />
-        <span className="min-w-0 break-words max-sm:line-clamp-2 sm:truncate" data-steps-summary="">{activitySummary(activity)}</span>
+        {/* 28z: on a phone two lines at most, left-aligned, and a line only breaks between " · " parts ("you said no to 1" stays whole). */}
+        <span className="min-w-0 text-left break-words max-sm:line-clamp-2 sm:truncate" data-steps-summary="">
+          {activitySummary(activity).split(' · ').map((part, i) => (
+            <React.Fragment key={i}>{i > 0 && ' · '}<span className="whitespace-nowrap">{part}</span></React.Fragment>
+          ))}
+        </span>
         <ChevronRight size={13} className={`flex-shrink-0 max-sm:mt-[1.5px] text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
       </button>
       {open && (

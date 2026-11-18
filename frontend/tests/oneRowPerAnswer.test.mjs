@@ -139,6 +139,6 @@ test('saved steps are unchanged by the fold; the summary is the one Details show
   assert.equal(steps.steps.length, 6);
   assert.deepEqual(steps.steps.map((s) => s.status), ['ok', 'ok', 'declined', 'declined', 'unanswered', 'unanswered']);
   const html = open(steps);
-  assert.match(html, new RegExp(m.activitySummary(steps).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(html.replace(/<[^>]+>/g, ''), new RegExp(m.activitySummary(steps).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.equal(m.activitySummary(steps), m.activitySummary(RIG()));
 });

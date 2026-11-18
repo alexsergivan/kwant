@@ -48,7 +48,7 @@ test('the 28s reply reads "8 steps · 1 didn’t run · you said no to 1", over 
   assert.equal(m.activitySummary(a), 'Worked 26:00 · 8 steps · 1 didn’t run · you said no to 1');
   const html = m.saved({ activity: a, idBase: 'r1', defaultOpen: true });
   assert.equal(rows(html), 8, 'Details draws 8 rows');
-  assert.match(html, /8 steps · 1 didn’t run · you said no to 1/);
+  assert.match(html.replace(/<[^>]+>/g, ''), /8 steps · 1 didn’t run · you said no to 1/);
 });
 
 test('a run with no approvals counts as before', () => {
