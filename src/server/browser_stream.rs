@@ -429,6 +429,11 @@ struct Shared {
     /// The size of the newest Point picture and when it was taken: while Chrome takes a clipped
     /// screenshot it can send one live-view frame at the clip's size, which is not the page's.
     shot: std::sync::Mutex<Option<(f64, f64, Instant)>>,
+    /// 29a: this view shows the bot's page (opened without `?page=`, following the page in front,
+    /// popups included), so its reads also keep the bot's address on the controller. A view on a
+    /// page the person picked never writes it: the bot's own status and a resumed run would
+    /// otherwise report the person's tab as the bot's page.
+    bots_page: bool,
 }
 
 /// How long after a Point picture a frame at exactly its size is taken for that picture's.
@@ -529,24 +534,29 @@ fn refresh_location(cdp: &Cdp, ctrl: &BrowserController, shared: &Arc<Shared>, c
     tokio::spawn(async move {
         while shared.location.next().is_some() {
             // blocks while a dialog is open, so never on the stream loop
-            let Some(location) = read_location(&cdp, &ctrl).await else { continue };
+            let Some(location) = read_location(&cdp, shared.bots_page.then_some(&ctrl)).await else { continue };
             let _ = client.send(location);
         }
     });
 }
 
 /// The `location` message for the page `cdp` is on: the address and title this read got from
-/// that page, also kept on the controller. The controller's fields are shared with the bot's own
-/// page (its navigation writes them too), so the message is never built from them: a stream on
-/// the Shared tab would show the bot's page's address. `None` when the page doesn't answer within
-/// `PROBE_WAIT` (a dialog is open) or answers without an address; a missing title is sent empty.
-async fn read_location(cdp: &Cdp, ctrl: &BrowserController) -> Option<Value> {
+/// that page. `bot` is the controller when this stream shows the bot's page ([`Shared::bots_page`]):
+/// the read is then also kept there as the bot's address. A stream on a page the person picked
+/// passes `None` and leaves the bot's address alone. The controller's fields are shared with the
+/// bot's own page (its navigation writes them too), so the message is never built from them: a
+/// stream on the Shared tab would show the bot's page's address. `None` when the page doesn't
+/// answer within `PROBE_WAIT` (a dialog is open) or answers without an address; a missing title
+/// is sent empty.
+async fn read_location(cdp: &Cdp, bot: Option<&BrowserController>) -> Option<Value> {
     let result = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await.ok()?;
     let read = &result["result"]["value"];
     let url = read["url"].as_str()?.to_string();
-    *ctrl.current_url.lock().await = Some(url.clone());
     let title = read["title"].as_str().map(str::to_string);
-    if let Some(title) = &title { *ctrl.current_title.lock().await = Some(title.clone()); }
+    if let Some(ctrl) = bot {
+        *ctrl.current_url.lock().await = Some(url.clone());
+        if let Some(title) = &title { *ctrl.current_title.lock().await = Some(title.clone()); }
+    }
     Some(json!({"type":"location","url":url,"title":title.unwrap_or_default()}))
 }
 
@@ -1257,12 +1267,15 @@ pub async fn upgrade(
     if !matches!(origin.scheme(), "http" | "https") || origin.origin() != expected.origin() { return Err(StatusCode::FORBIDDEN); }
     // The page shown: the one asked for (a page of this team only), else the page an open step
     // holds, else the page used last (0.9.3: each job has its own page)
-    let id = match query.page.filter(|p| super::browser_pages::page_team(p) == id) {
+    let chosen = query.page.filter(|p| super::browser_pages::page_team(p) == id);
+    // 29a: only a view the person didn't point at a page shows the bot's page
+    let bots_page = chosen.is_none();
+    let id = match chosen {
         Some(page) => page,
         None => super::browser_pages::live_page(&state, &id).await,
     };
     Ok(ws.max_message_size(32 * 1024).on_upgrade(move |socket| async move {
-        let result = serve(socket, state.clone(), id.clone()).await;
+        let result = serve(socket, state.clone(), id.clone(), bots_page).await;
         if let Err(error) = result { tracing::debug!("Browser stream ended: {}", error); }
         // the page's idle time counts from when the person stopped watching it
         if state.browser_service.page_used_at(&id).is_some() { state.browser_service.touch_page(&id); }
@@ -1329,7 +1342,7 @@ async fn back_from_closed_page(ctrl: &BrowserController, cdp: &Cdp, page: &mut P
     timeout(Duration::from_secs(4), back).await.ok()
 }
 
-async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(), BrowserError> {
+async fn serve(mut socket: WebSocket, state: AppState, id: String, bots_page: bool) -> Result<(), BrowserError> {
     let ctrl = match super::routes::open_page(&state, &id, Duration::ZERO).await {
         Ok(ctrl) => ctrl,
         Err(refusal) => {
@@ -1365,6 +1378,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
         location: Latest::new(),
         recording: AtomicBool::new(false),
         shot: std::sync::Mutex::new(None),
+        bots_page,
     });
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<Value>();
     let (jobs, jobs_rx) = mpsc::unbounded_channel::<Job>();
@@ -1460,7 +1474,7 @@ async fn stream(
                 // the address bar moves before the new page's first picture is shown: a still
                 // page (the opener once its popup closed) draws that picture once, and a client
                 // must know whose it is. Its frames wait in `events` until the loop reads them.
-                match read_location(cdp, ctrl).await {
+                match read_location(cdp, shared.bots_page.then_some(ctrl)).await {
                     Some(location) => {
                         // a "Continue with Google" popup in front
                         let url = location["url"].as_str().unwrap_or_default().to_string();
@@ -2292,7 +2306,8 @@ mod tests {
     /// 28p: the Shared tab's stream and the bot's own page share one controller, and the bot's
     /// navigation writes the controller's address and title. Each stream's `location` is the
     /// address and title its own page answered, even when the bot's page moves between this
-    /// stream's write and its message, and a read without an address sends nothing.
+    /// stream's write and its message, and a read without an address sends nothing. Both reads
+    /// here take the writing path (a stream following the page in front, 29a), where that race is.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn each_stream_shows_its_own_pages_address_while_the_other_page_navigates() {
         let ctrl = BrowserController::new(0);
@@ -2302,21 +2317,21 @@ mod tests {
         let bot_page = fake_page(bots.clone()).await;
         let location = |url: &str, title: &str| json!({"type": "location", "url": url, "title": title});
 
-        assert_eq!(read_location(&shared_tab, &ctrl).await, Some(location("https://shared.example/doc", "Shared doc")));
-        assert_eq!(read_location(&bot_page, &ctrl).await, Some(location("https://bot.example/start", "Bot start")));
+        assert_eq!(read_location(&shared_tab, Some(&ctrl)).await, Some(location("https://shared.example/doc", "Shared doc")));
+        assert_eq!(read_location(&bot_page, Some(&ctrl)).await, Some(location("https://bot.example/start", "Bot start")));
 
         // the bot's page navigates (browser.rs writes the controller), then the Shared tab reads again
         *bots.lock().unwrap() = json!({"url": "chrome-error://chromewebdata/", "title": "bot.example"});
         *ctrl.current_url.lock().await = Some("chrome-error://chromewebdata/".into());
         *ctrl.current_title.lock().await = Some("bot.example".into());
-        assert_eq!(read_location(&shared_tab, &ctrl).await, Some(location("https://shared.example/doc", "Shared doc")));
-        assert_eq!(read_location(&bot_page, &ctrl).await, Some(location("chrome-error://chromewebdata/", "bot.example")));
+        assert_eq!(read_location(&shared_tab, Some(&ctrl)).await, Some(location("https://shared.example/doc", "Shared doc")));
+        assert_eq!(read_location(&bot_page, Some(&ctrl)).await, Some(location("chrome-error://chromewebdata/", "bot.example")));
 
         // the bot's navigation lands while the Shared tab's read is between its write and its message
         let title_held = ctrl.current_title.lock().await;
         let read = tokio::spawn({
             let (cdp, ctrl) = (shared_tab.clone(), ctrl.clone());
-            async move { read_location(&cdp, &ctrl).await }
+            async move { read_location(&cdp, Some(&ctrl)).await }
         });
         let deadline = Instant::now() + Duration::from_secs(5);
         while ctrl.current_url.lock().await.as_deref() != Some("https://shared.example/doc") {
@@ -2330,14 +2345,77 @@ mod tests {
         // a page that answers without a title shows an empty one, never the bot's page's title
         *ctrl.current_title.lock().await = Some("Bot next".into());
         *shared.lock().unwrap() = json!({"url": "https://shared.example/doc"});
-        assert_eq!(read_location(&shared_tab, &ctrl).await, Some(location("https://shared.example/doc", "")));
+        assert_eq!(read_location(&shared_tab, Some(&ctrl)).await, Some(location("https://shared.example/doc", "")));
 
         // a page that answers without an address sends nothing, not the bot's page's address
         *shared.lock().unwrap() = json!({"title": "Shared doc"});
-        assert_eq!(read_location(&shared_tab, &ctrl).await, None);
+        assert_eq!(read_location(&shared_tab, Some(&ctrl)).await, None);
         *shared.lock().unwrap() = Value::Null;
-        assert_eq!(read_location(&shared_tab, &ctrl).await, None);
-        assert_eq!(read_location(&bot_page, &ctrl).await, Some(location("chrome-error://chromewebdata/", "bot.example")));
+        assert_eq!(read_location(&shared_tab, Some(&ctrl)).await, None);
+        assert_eq!(read_location(&bot_page, Some(&ctrl)).await, Some(location("chrome-error://chromewebdata/", "bot.example")));
+    }
+
+    /// A live view's shared state as `serve` makes it, for tests.
+    fn test_shared(bots_page: bool) -> Arc<Shared> {
+        Arc::new(Shared {
+            socket: NEXT_SOCKET.fetch_add(1, Ordering::Relaxed),
+            view: std::sync::Mutex::new((DEFAULT_VIEW.0 as f64, DEFAULT_VIEW.1 as f64)),
+            resized: AtomicBool::new(false),
+            cursor: std::sync::Mutex::new("auto".into()),
+            cursor_moves: Latest::new(),
+            cursor_at: std::sync::Mutex::new(None),
+            location: Latest::new(),
+            recording: AtomicBool::new(false),
+            shot: std::sync::Mutex::new(None),
+            bots_page,
+        })
+    }
+
+    /// 29a: the bot's address on the controller is what the bot's own status and a resumed run
+    /// read. A view on a page the person picked (`?page=`, the Shared tab) reads its own address
+    /// for its own `location` message and leaves the bot's address alone; a view following the
+    /// page in front (opened without `?page=`, popups included) still keeps it current.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_picked_page_leaves_the_bots_address_alone_and_a_following_view_keeps_it() {
+        let ctrl = BrowserController::new(0);
+        // browser.rs wrote the bot's page's address when the bot navigated
+        *ctrl.current_url.lock().await = Some("https://bot.example/start".into());
+        *ctrl.current_title.lock().await = Some("Bot start".into());
+        let picked = Arc::new(std::sync::Mutex::new(json!({"url": "https://shared.example/doc", "title": "Shared doc"})));
+        let front = Arc::new(std::sync::Mutex::new(json!({"url": "https://accounts.google.com/signin", "title": "Sign in"})));
+        let picked_tab = fake_page(picked.clone()).await;
+        let front_page = fake_page(front.clone()).await;
+        let location = |url: &str, title: &str| json!({"type": "location", "url": url, "title": title});
+        let bots_address = || async { (ctrl.current_url.lock().await.clone(), ctrl.current_title.lock().await.clone()) };
+        let bots = |url: &str, title: &str| (Some(url.to_string()), Some(title.to_string()));
+
+        // the picked page's view still shows its own address, and the bot's stays the bot's
+        assert_eq!(read_location(&picked_tab, None).await, Some(location("https://shared.example/doc", "Shared doc")));
+        assert_eq!(bots_address().await, bots("https://bot.example/start", "Bot start"));
+        *picked.lock().unwrap() = json!({"url": "https://shared.example/other"});
+        assert_eq!(read_location(&picked_tab, None).await, Some(location("https://shared.example/other", "")));
+        assert_eq!(bots_address().await, bots("https://bot.example/start", "Bot start"));
+
+        // the view as `stream` runs it: a picked page's refresh reaches the person, not the controller
+        let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
+        refresh_location(&picked_tab, &ctrl, &test_shared(false), &tx);
+        let sent = timeout(Duration::from_secs(5), rx.recv()).await.expect("the picked page's location reached the person");
+        assert_eq!(sent, Some(location("https://shared.example/other", "")));
+        assert_eq!(bots_address().await, bots("https://bot.example/start", "Bot start"));
+
+        // a view following the page in front (here the bot's "Continue with Google" popup) keeps
+        // the bot's address current, through both the direct read and a refresh
+        assert_eq!(read_location(&front_page, Some(&ctrl)).await, Some(location("https://accounts.google.com/signin", "Sign in")));
+        assert_eq!(bots_address().await, bots("https://accounts.google.com/signin", "Sign in"));
+        *front.lock().unwrap() = json!({"url": "https://bot.example/done", "title": "Signed in"});
+        refresh_location(&front_page, &ctrl, &test_shared(true), &tx);
+        let sent = timeout(Duration::from_secs(5), rx.recv()).await.expect("the following view's location reached the person");
+        assert_eq!(sent, Some(location("https://bot.example/done", "Signed in")));
+        assert_eq!(bots_address().await, bots("https://bot.example/done", "Signed in"));
+
+        // the picked page reading again afterwards still doesn't move it
+        assert_eq!(read_location(&picked_tab, None).await, Some(location("https://shared.example/other", "")));
+        assert_eq!(bots_address().await, bots("https://bot.example/done", "Signed in"));
     }
 
     /// 28v: the Shared tab's stream and the bot's own page share one controller, and the bot's

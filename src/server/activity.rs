@@ -230,6 +230,15 @@ pub fn approval_waiting(turn_id: &str, ticket: &str, tool_name: &str) {
     }
 }
 
+/// kwnt refused a call to `tool_name` in turn `turn_id` on its own, before the engine heard (28k):
+/// that tool's next failed step shows `words` (as [`crate::mcp::PREPUSH_BLOCKED_STEP_DETAIL`]),
+/// not the text the bot was told. Nobody pressed Deny, so it never reads as the person's no.
+pub fn refused(turn_id: &str, tool_name: &str, words: &'static str) {
+    if let Some(turn) = TurnActivity::find(turn_id) {
+        turn.with_log(|log| log.refused(tool_name, words));
+    }
+}
+
 /// An approval card for `turn_id` was answered ("ok" allowed, "declined") or stopped waiting.
 pub fn approval_settled(turn_id: &str, ticket: &str, status: &'static str) {
     if let Some(turn) = TurnActivity::find(turn_id) {
@@ -550,6 +559,25 @@ mod tests {
         drop(turn);
         assert!(TurnActivity::find("turn-activity-test").is_none());
         assert_eq!(with_activity(None, Some(json!({"steps": []}))).unwrap()["activity"]["steps"], json!([]));
+    }
+
+    /// 28k: kwnt's pre-push gate notes its refusal on the turn by id, so the tool step it held is
+    /// saved as "Blocked before push; nothing ran". A turn that isn't running is left alone.
+    #[test]
+    fn a_held_push_is_saved_as_blocked_before_push() {
+        let (tx, _rx) = broadcast::channel(16);
+        let tag = TurnTag { turn_id: "turn-prepush-held".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Bash".into(), args: json!({"command": "git push origin lin-x"}) });
+        refused("turn-prepush-held", "Bash", crate::mcp::PREPUSH_BLOCKED_STEP_DETAIL);
+        refused("no-such-turn", "Bash", crate::mcp::PREPUSH_BLOCKED_STEP_DETAIL);
+        turn.observe(&RuntimeEvent::ToolCallCompleted {
+            id: "1".into(),
+            result: json!({"status": "error", "error": "kwant checks one branch at a time before a push: push the branch by name."}),
+        });
+        let saved = turn.finish().unwrap();
+        assert_eq!(saved["steps"][0]["status"], "failed");
+        assert_eq!(saved["steps"][0]["detail"], "Blocked before push; nothing ran");
     }
 
     /// 0.9.8 browser panel: the page title of a bot browser open goes out live, is listed on
