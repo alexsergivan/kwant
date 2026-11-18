@@ -107,7 +107,7 @@ async fn built_in_tools_follow_the_folder_policy() {
 
     // Writing outside the folder (or escaping it with ..) shows a card; Deny refuses it
     let outside = tmp.path().join("elsewhere.txt").display().to_string();
-    for path in [outside.clone(), "../elsewhere.txt".to_string()] {
+    for path in [outside.clone(), "../other.txt".to_string()] {
         let ask = tokio::spawn({
             let (app, token) = (app.clone(), token.clone());
             async move { claude_asks(&app, &token, "Write", json!({"file_path": path, "content": "x"})).await }
@@ -121,6 +121,12 @@ async fn built_in_tools_follow_the_folder_policy() {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(ask.await.unwrap()["behavior"], "deny");
     }
+    // 27b: writing a file the person said no to is refused at once, with no card
+    let again = tokio::time::timeout(Duration::from_secs(5), claude_asks(&app, &token, "Write", json!({"file_path": outside, "content": "y"})))
+        .await
+        .expect("no card the second time");
+    assert_eq!(again, json!({"behavior": "deny", "message": kwnt::mcp::DECLINED_BEFORE_TEXT}));
+    assert!(state.broker.pending_ids().await.is_empty());
 
     // A shell command shows a card with the command and folder; Allow once runs it once
     let bash = |cmd: &str| json!({"command": cmd, "description": "List files"});

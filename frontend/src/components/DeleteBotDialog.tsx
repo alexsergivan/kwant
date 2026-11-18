@@ -153,7 +153,7 @@ export const DeleteBotDialog: React.FC<DeleteBotDialogProps> = ({ kwant, busy, o
             onClick={doDelete}
             disabled={!!blocked || deleting}
             title={blocked ?? undefined}
-            className={`${btn} text-white bg-rose-600 hover:bg-rose-500 focus-visible:outline-rose-400`}
+            className={`${btn} text-white bg-rose-600 hover:bg-rose-700 focus-visible:outline-rose-400`}
           >
             {deleting ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Trash2 size={13} aria-hidden="true" />}
             {deleting ? 'Deleting…' : `Delete ${kwant.name}`}

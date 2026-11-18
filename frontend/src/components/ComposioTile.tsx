@@ -55,7 +55,7 @@ const btn =
 const quietBtn = `${btn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
 const primaryBtn = `${btn} border border-sky-600 bg-sky-600 text-white hover:bg-sky-700`;
 const roseBtn = `${btn} border border-zinc-700 bg-transparent text-rose-300 hover:bg-rose-500/10 hover:border-rose-500/40`;
-const roseFill = `${btn} border border-rose-500 bg-rose-600 text-white hover:bg-rose-500`;
+const roseFill = `${btn} border border-rose-500 bg-rose-600 text-white hover:bg-rose-700`;
 const field =
   'w-full min-h-[40px] px-3 py-1.5 bg-zinc-950 border border-zinc-700 rounded-[10px] text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-sky-400 focus:ring-[3px] focus:ring-sky-400/25';
 
