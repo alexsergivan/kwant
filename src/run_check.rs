@@ -12,7 +12,9 @@
 //! How a step is judged:
 //! - kwnt's own tools (`mcp__kwnt_tools__*`) run without a card by design;
 //! - claude's look-ups (web search, to-do list, tool search) and file tools run without a card by
-//!   design (file tools only inside the bot's folder; the step keeps no path to check that);
+//!   design (file tools only inside the bot's folder; the step keeps no path to check that). A
+//!   WebFetch of this computer or the local network is the exception: kwnt asks for it, so it
+//!   needs a row (judged from the saved address, with no name lookups);
 //! - another engine's own tools (codex, grok) have no card hook: their sandbox holds them;
 //! - everything else (Bash, MCP tools, any tool on an API engine) needs an approvals row in the
 //!   step's time window, for the same bot, tool and chat. A read-only command claude didn't ask
@@ -199,7 +201,7 @@ enum Gate {
     OtherEngine,
 }
 
-fn gate(engine: Option<&str>, tool: &str, key: &str) -> Gate {
+fn gate(engine: Option<&str>, tool: &str, key: &str, step: &Step) -> Gate {
     if key.starts_with("kwnt_tools_") {
         return Gate::KwantTool;
     }
@@ -209,6 +211,8 @@ fn gate(engine: Option<&str>, tool: &str, key: &str) -> Gate {
     }
     match engine {
         None | Some("claude") => match builtin_tools::group(tool) {
+            // kwnt asks before a WebFetch of this computer or the local network (`fetches_kwnt`)
+            Some(ToolGroup::Lookup) if tool == "WebFetch" && fetch_address(step).is_some_and(|url| fetch_asks(&url)) => Gate::Card,
             Some(ToolGroup::Lookup) => Gate::Lookup,
             Some(ToolGroup::Read | ToolGroup::Write) => Gate::FolderFile,
             Some(ToolGroup::Shell) | None => Gate::Card,
@@ -217,6 +221,35 @@ fn gate(engine: Option<&str>, tool: &str, key: &str) -> Gate {
         Some("grok") if tool.contains('-') => Gate::Card,
         Some(_) => Gate::OtherEngine,
     }
+}
+
+/// The address a WebFetch step opened: its `detail` (the whole URL, redacted and cut), else the
+/// host in its title ("Opening 10.0.0.5"), which has lost the port and path. `None` when the step
+/// keeps neither ("Opening a page").
+fn fetch_address(step: &Step) -> Option<String> {
+    if let Some(url) = step.detail.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        return Some(url.to_string());
+    }
+    let host = step.title.strip_prefix("Opening ")?.trim();
+    (!host.is_empty() && host != "a page" && !host.contains(char::is_whitespace)).then(|| format!("http://{host}/"))
+}
+
+/// Whether kwnt's WebFetch rule ([`fetch_risk_with`]) asks about `url`, judged offline: no name is
+/// ever looked up. A name ending in `.local`, `.internal` or `.home.arpa` is taken as the local
+/// network, and every other name as public, so a public name that only resolves to a local address
+/// is missed here (on purpose: run-check makes no network calls).
+///
+/// [`fetch_risk_with`]: crate::mcp::fetch_risk::fetch_risk_with
+fn fetch_asks(url: &str) -> bool {
+    crate::mcp::fetch_risk::fetch_risk_with(url, &offline_resolve).is_some()
+}
+
+/// A stand-in for the name lookup that never touches the network.
+fn offline_resolve(name: &str, _port: u16) -> Option<Vec<std::net::IpAddr>> {
+    let local = [".local", ".internal", ".home.arpa"].iter().any(|end| name.ends_with(end) || name == &end[1..]);
+    // 192.168.0.1 is private; 1.1.1.1 is public. Only the kind of address matters.
+    let ip = if local { std::net::Ipv4Addr::new(192, 168, 0, 1) } else { std::net::Ipv4Addr::new(1, 1, 1, 1) };
+    Some(vec![ip.into()])
 }
 
 /// A step that needs a card, and what covers it.
@@ -275,7 +308,7 @@ pub fn check_since(
             }
             steps += 1;
             let key = tool_key(tool);
-            match gate(reply.engine.as_deref(), tool, &key) {
+            match gate(reply.engine.as_deref(), tool, &key, step) {
                 Gate::FolderFile => by_design.folder_files += 1,
                 Gate::KwantTool => by_design.kwant_tools += 1,
                 Gate::Lookup => by_design.lookups += 1,
@@ -956,7 +989,7 @@ mod tests {
 
     #[test]
     fn gate_by_engine_and_tool() {
-        let g = |e: Option<&str>, tool: &str| gate(e, tool, &tool_key(tool));
+        let g = |e: Option<&str>, tool: &str| gate(e, tool, &tool_key(tool), &Step::default());
         assert_eq!(g(Some("claude"), "Bash"), Gate::Card);
         assert_eq!(g(Some("claude"), "Write"), Gate::FolderFile);
         assert_eq!(g(None, "Read"), Gate::FolderFile);
@@ -1071,6 +1104,87 @@ mod tests {
         assert!(report.findings.is_empty());
         assert_eq!((report.by_design.folder_files, report.by_design.lookups, report.by_design.kwant_tools), (1, 1, 1));
         assert_eq!(check(&[running], &[], &[]).steps, 2);
+    }
+
+    fn fetch(at: &str, url: Option<&str>, title: &str) -> Step {
+        tool_step("WebFetch", at, title, url)
+    }
+
+    #[test]
+    fn a_rowless_fetch_of_this_computer_or_the_local_network_is_a_finding() {
+        // 8799 is always one of kwnt's ports; localhost on another port only asks for /api/
+        let steps = vec![
+            fetch("2026-11-06T18:30:00.000Z", Some("http://127.0.0.1:8799/api/settings"), "Opening 127.0.0.1"),
+            fetch("2026-11-06T18:30:01.000Z", Some("http://localhost/api/spaces"), "Opening localhost"),
+            fetch("2026-11-06T18:30:02.000Z", Some("http://192.168.1.20/admin"), "Opening 192.168.1.20"),
+            fetch("2026-11-06T18:30:03.000Z", Some("http://my-nas.local/"), "Opening my-nas.local"),
+            fetch("2026-11-06T18:30:04.000Z", Some("http://169.254.169.254/latest/meta-data/"), "Opening 169.254.169.254"),
+            // An older step with no detail: the title's host is enough for a private IP
+            fetch("2026-11-06T18:30:05.000Z", None, "Opening 10.0.0.5"),
+        ];
+        let report = check(&[reply("2026-11-06T18:30:00.000Z", "claude", steps.clone())], &[], &[]);
+        let titles: Vec<&str> = report.findings.iter().map(|f| f.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["Opening 127.0.0.1", "Opening localhost", "Opening 192.168.1.20", "Opening my-nas.local", "Opening 169.254.169.254", "Opening 10.0.0.5"]
+        );
+        assert!(report.findings.iter().all(|f| f.rule == Rule::RanWithNoCard && f.tool == "WebFetch"));
+        assert_eq!(report.by_design.lookups, 0);
+        // A reply with no engine recorded is judged as claude
+        let mut engineless = reply("2026-11-06T18:30:00.000Z", "claude", steps);
+        engineless.engine = None;
+        assert_eq!(check(&[engineless], &[], &[]).findings.len(), 6);
+    }
+
+    #[test]
+    fn a_public_fetch_or_the_local_dev_server_stays_a_lookup() {
+        let steps = vec![
+            fetch("2026-11-06T18:30:00.000Z", Some("https://github.com/alexsergivan/kwant/pull/798"), "Opening github.com"),
+            fetch("2026-11-06T18:30:01.000Z", Some("http://localhost:3000/"), "Opening localhost"),
+            fetch("2026-11-06T18:30:02.000Z", Some("http://127.0.0.1:5173/index.html"), "Opening 127.0.0.1"),
+            // Names are never looked up: a public name stays public
+            fetch("2026-11-06T18:30:03.000Z", Some("http://localtest.me:8799/api/x"), "Opening localtest.me"),
+            fetch("2026-11-06T18:30:04.000Z", None, "Opening github.com"),
+            fetch("2026-11-06T18:30:05.000Z", None, "Opening a page"),
+        ];
+        let report = check(&[reply("2026-11-06T18:30:00.000Z", "claude", steps)], &[], &[]);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.by_design.lookups, 6);
+        // Another engine's own fetch has no card hook, local or not
+        let codex = reply("2026-11-06T18:31:00.000Z", "codex", vec![fetch("2026-11-06T18:31:00.000Z", Some("http://127.0.0.1:8799/api/x"), "Opening 127.0.0.1")]);
+        let report = check(&[codex], &[], &[]);
+        assert!(report.findings.is_empty());
+        assert_eq!(report.by_design.other_engines, 1);
+    }
+
+    #[test]
+    fn a_local_fetch_with_its_row_is_covered() {
+        let r = reply(
+            "2026-11-06T18:30:00.100Z",
+            "claude",
+            vec![
+                fetch("2026-11-06T18:30:00.100Z", Some("http://127.0.0.1:8799/api/settings"), "Opening 127.0.0.1"),
+                fetch("2026-11-06T18:30:09.000Z", Some("http://10.0.0.5/"), "Opening 10.0.0.5"),
+            ],
+        );
+        let rows = vec![
+            row("a1", "WebFetch", "allowed_once", "2026-11-06 18:30:00", Some("direct:b1")),
+            row("a2", "WebFetch", "auto_allowed", "2026-11-06 18:30:09", Some("direct:b1")),
+        ];
+        let report = check(&[r], &[], &rows);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.with_card, 2);
+    }
+
+    #[test]
+    fn the_fetch_address_comes_from_the_detail_then_the_title() {
+        let at = "2026-11-06T18:30:00.000Z";
+        assert_eq!(fetch_address(&fetch(at, Some(" http://10.0.0.5:81/x "), "Opening 10.0.0.5")).as_deref(), Some("http://10.0.0.5:81/x"));
+        assert_eq!(fetch_address(&fetch(at, None, "Opening 10.0.0.5")).as_deref(), Some("http://10.0.0.5/"));
+        assert_eq!(fetch_address(&fetch(at, Some(""), "Opening a page")), None);
+        assert_eq!(fetch_address(&fetch(at, None, "Opening not a url")), None);
+        assert!(fetch_asks("http://router.home.arpa/") && fetch_asks("http://metadata.google.internal/") && fetch_asks("ftp://example.com/"));
+        assert!(!fetch_asks("https://example.local.example.com/"));
     }
 
     #[cfg(unix)]
