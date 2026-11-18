@@ -61,6 +61,9 @@ pub struct RoutineView {
     pub next_run_at: Option<DateTime<Utc>>,
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_status: Option<String>,
+    /// The last run's error, e.g. "You said no to Bash; nothing ran" (28b round 2), so the routine
+    /// card can tell a no from a failure. `null`: no run yet, or it had none.
+    pub last_error: Option<String>,
     pub created_at: DateTime<Utc>,
     /// The schedule in words, e.g. "monthly on the 1st at 09:00 Europe/Berlin".
     pub schedule_text: String,
@@ -102,6 +105,7 @@ impl From<RoutineRow> for RoutineView {
             next_run_at: r.next_run_at,
             last_run_at: r.last_run_at,
             last_status: r.last_status,
+            last_error: r.last_error,
             created_at: r.created_at,
         }
     }
@@ -667,26 +671,39 @@ pub struct StepSeen {
     /// "ok", "failed", "unanswered", or anything else (ignored).
     pub status: &'static str,
     pub reason: Option<String>,
+    /// A "failed" step the person said no to on its card (28b): its reason is the `said_no` sentence, and
+    /// a real failure's reason wins over it.
+    pub said_no: bool,
 }
 
 /// The run's status from what its turn's steps did, in order (26b; P1: never "ok" when nothing
 /// ran):
 /// - any call `unanswered` (its card is still open) → `needs_you`, [`NEEDS_YOU_ERROR`];
 /// - a call that failed (error, denied, cancelled) with no later "ok" call of the same tool →
-///   `incomplete`, with the first such call's reason on one line;
+///   `incomplete`, with the first such call's reason on one line. A real failure's reason wins
+///   over a "You said no" one (28b round 2), so a no never hides what broke after it;
 /// - otherwise `ok`.
 pub fn run_outcome(steps: &[StepSeen]) -> (&'static str, Option<String>) {
     if steps.iter().any(|s| s.status == "unanswered") {
         return ("needs_you", Some(NEEDS_YOU_ERROR.to_string()));
     }
-    let unfixed = steps.iter().enumerate().find(|(i, s)| {
-        s.status == "failed"
-            && !steps[i + 1..]
-                .iter()
-                .any(|later| later.status == "ok" && later.tool == s.tool)
-    });
-    match unfixed {
-        Some((_, s)) => {
+    let unfixed: Vec<&StepSeen> = steps
+        .iter()
+        .enumerate()
+        .filter(|(i, s)| {
+            s.status == "failed"
+                && !steps[i + 1..]
+                    .iter()
+                    .any(|later| later.status == "ok" && later.tool == s.tool)
+        })
+        .map(|(_, s)| s)
+        .collect();
+    let first = unfixed
+        .iter()
+        .find(|s| !s.said_no)
+        .or_else(|| unfixed.first());
+    match first {
+        Some(s) => {
             let why = s
                 .reason
                 .as_deref()
@@ -709,6 +726,19 @@ pub fn steps_seen(
     meta: Option<&serde_json::Value>,
 ) -> Vec<StepSeen> {
     let text = |v: &serde_json::Value| v.as_str().map(str::to_string);
+    let activity: &[serde_json::Value] = meta
+        .and_then(|m| m["activity"]["steps"].as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    // A `denied` call is the person's no only when its card was declined (28b round 2): each
+    // declined card of the same tool counts for one call. The pre-push gate, kwnt's secret files,
+    // a ticket that couldn't be stored and a wait that ran out record `denied` with no card the
+    // person said no on.
+    let mut cards_left: Vec<&str> = activity
+        .iter()
+        .filter(|s| s["kind"] == "approval" && s["status"] == "declined")
+        .filter_map(|s| s["tool"].as_str())
+        .collect();
     let mut seen = Vec::new();
     for c in tool_calls.and_then(|v| v.as_array()).into_iter().flatten() {
         let status = match c["status"].as_str().unwrap_or("") {
@@ -720,7 +750,17 @@ pub fn steps_seen(
         let tool = text(&c["name"]).unwrap_or_default();
         let reason = text(&c["error"]).or_else(|| text(&c["result"]));
         // A refusal's reason is what kwnt told the bot, not news; say what it was instead
+        let card = if c["status"] == "denied" {
+            cards_left.iter().position(|t| *t == tool)
+        } else {
+            None
+        };
+        let said = card.is_some();
+        if let Some(k) = card {
+            cards_left.remove(k);
+        }
         let reason = match c["status"].as_str() {
+            Some("denied") if said => Some(said_no(&tool)),
             Some("denied") => Some(format!("{tool} was denied")),
             _ => reason.map(|r| {
                 r.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
@@ -732,26 +772,35 @@ pub fn steps_seen(
             tool,
             status,
             reason,
+            said_no: said,
         });
     }
-    for step in meta
-        .and_then(|m| m["activity"]["steps"].as_array())
-        .into_iter()
-        .flatten()
-    {
+    for step in activity {
         let status = match (step["kind"].as_str(), step["status"].as_str()) {
             (_, Some("unanswered")) => "unanswered",
             (Some("tool"), Some("ok")) => "ok",
             (Some("tool"), Some("failed")) => "failed",
+            // The person said no on its card (28b): it didn't run, so the run isn't ok
+            (Some("tool"), Some("declined")) => "failed",
             _ => continue,
         };
+        let tool = text(&step["tool"]).unwrap_or_default();
+        // `activity.rs` ends a tool step `declined` only when it paired it with its declined card
+        let said = step["status"] == "declined";
+        let reason = if said { Some(said_no(&tool)) } else { text(&step["detail"]) };
         seen.push(StepSeen {
-            tool: text(&step["tool"]).unwrap_or_default(),
+            tool,
             status,
-            reason: text(&step["detail"]),
+            reason,
+            said_no: said,
         });
     }
     seen
+}
+
+/// A routine run's reason when the person said no to `tool` (28b).
+fn said_no(tool: &str) -> String {
+    format!("You said no to {tool}; nothing ran")
 }
 
 /// The meta key of a routine run's id on each reply of its turn (see `run_routine_turn`).
@@ -1170,6 +1219,15 @@ mod run_outcome_tests {
             tool: tool.into(),
             status,
             reason: reason.map(str::to_string),
+            said_no: false,
+        }
+    }
+
+    /// A step the person said no to on its card (28b).
+    fn no(tool: &str) -> StepSeen {
+        StepSeen {
+            said_no: true,
+            ..step(tool, "failed", Some(said_no(tool).as_str()))
         }
     }
 
@@ -1241,6 +1299,7 @@ mod run_outcome_tests {
             vec![
                 step("ha__turn_on", "unanswered", None),
                 step("web__get", "failed", Some("502")),
+                // no declined card of its own: main's words, not the person's no (28b round 2)
                 step("mail__send", "failed", Some("mail__send was denied")),
                 step("Bash", "unanswered", None),
                 step("Bash", "failed", Some("exit 1")),
@@ -1295,5 +1354,94 @@ mod run_outcome_tests {
                 ..
             }
         ));
+    }
+
+    /// 28b: a routine whose only step the person said no to on its card isn't ok: it stays
+    /// `incomplete`, and its reason says so in the person's words. A Deny on a kwnt tool reads
+    /// the same.
+    #[test]
+    fn a_no_ends_the_run_incomplete_in_the_persons_words() {
+        let meta = json!({"activity": {"steps": [
+            {"kind": "tool", "status": "declined", "tool": "Bash", "detail": crate::mcp::DENIED_STEP_DETAIL},
+            {"kind": "approval", "status": "declined", "tool": "Bash"},
+        ]}});
+        let seen = steps_seen(None, Some(&meta));
+        assert_eq!(seen, vec![no("Bash")]);
+        assert_eq!(seen[0].reason.as_deref(), Some("You said no to Bash; nothing ran"));
+        assert_eq!(
+            run_outcome(&seen),
+            ("incomplete", Some("You said no to Bash; nothing ran".into()))
+        );
+        let calls = json!([{"name": "mail__send", "status": "denied", "result": crate::mcp::DENIED_TEXT}]);
+        let card = json!({"activity": {"steps": [{"kind": "approval", "status": "declined", "tool": "mail__send"}]}});
+        assert_eq!(
+            run_outcome(&steps_seen(Some(&calls), Some(&card))),
+            ("incomplete", Some("You said no to mail__send; nothing ran".into()))
+        );
+    }
+
+    /// 28b round 2: kwnt records `denied` for refusals the person never saw (the pre-push gate,
+    /// kwnt's secret files, a ticket it couldn't store, a wait that ran out). Only a declined card
+    /// of the same tool makes it the person's no, and each card counts for one call.
+    #[test]
+    fn a_denied_call_is_the_persons_no_only_with_its_declined_card() {
+        let denied = |name: &str| json!({"name": name, "status": "denied", "result": crate::mcp::DENIED_TEXT});
+        let cards = |steps: serde_json::Value| json!({"activity": {"steps": steps}});
+        // no card at all
+        let calls = json!([denied("github__push")]);
+        assert_eq!(
+            steps_seen(Some(&calls), None),
+            vec![step("github__push", "failed", Some("github__push was denied"))]
+        );
+        // a declined card of the same tool
+        let same = cards(json!([{"kind": "approval", "status": "declined", "tool": "github__push"}]));
+        assert_eq!(steps_seen(Some(&calls), Some(&same)), vec![no("github__push")]);
+        // a declined card of another tool, or a card of the same tool that wasn't declined
+        let other = cards(json!([
+            {"kind": "approval", "status": "declined", "tool": "Bash"},
+            {"kind": "approval", "status": "stopped", "tool": "github__push"},
+            {"kind": "approval", "status": "ok", "tool": "github__push"},
+        ]));
+        let seen = steps_seen(Some(&calls), Some(&other));
+        assert_eq!(seen[0], step("github__push", "failed", Some("github__push was denied")));
+        // one card, two denied calls of its tool: one no, one plain denial
+        let twice = json!([denied("github__push"), denied("github__push")]);
+        assert_eq!(
+            steps_seen(Some(&twice), Some(&same)),
+            vec![no("github__push"), step("github__push", "failed", Some("github__push was denied"))]
+        );
+        // a CLI builtin pairs by its raw name too
+        let bash = json!([denied("Bash")]);
+        let bash_card = cards(json!([{"kind": "approval", "status": "declined", "tool": "Bash"}]));
+        assert_eq!(steps_seen(Some(&bash), Some(&bash_card))[0], no("Bash"));
+    }
+
+    /// 28b round 2: a real failure's reason wins over the person's no, whichever came first; the
+    /// no is the reason only when nothing else failed. The run is `incomplete` either way.
+    #[test]
+    fn a_real_failure_wins_over_a_no_in_the_runs_reason() {
+        let http = step("WebFetch", "failed", Some("HTTP 500"));
+        assert_eq!(
+            run_outcome(&[no("Bash"), http.clone()]),
+            ("incomplete", Some("HTTP 500".into()))
+        );
+        assert_eq!(
+            run_outcome(&[http.clone(), no("Bash")]),
+            ("incomplete", Some("HTTP 500".into()))
+        );
+        assert_eq!(
+            run_outcome(&[no("Bash")]),
+            ("incomplete", Some("You said no to Bash; nothing ran".into()))
+        );
+        // a failure a later call fixed doesn't count; the no is what's left
+        assert_eq!(
+            run_outcome(&[no("Bash"), http, step("WebFetch", "ok", None)]),
+            ("incomplete", Some("You said no to Bash; nothing ran".into()))
+        );
+        // two noes: the first one's tool
+        assert_eq!(
+            run_outcome(&[no("Bash"), no("Write")]),
+            ("incomplete", Some("You said no to Bash; nothing ran".into()))
+        );
     }
 }

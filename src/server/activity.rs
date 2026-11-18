@@ -14,6 +14,9 @@ pub struct TurnActivity {
     log: Mutex<ActivityLog>,
     sender: broadcast::Sender<RuntimeEvent>,
     tag: TurnTag,
+    /// The id (`s1`, …) of the step for kwnt's own open of the request's link, if it made one
+    /// (28g): it carries [`LINK_OPEN_REF`] wherever it goes out.
+    link_step: Mutex<Option<String>>,
 }
 
 fn turns() -> &'static Mutex<HashMap<String, Weak<TurnActivity>>> {
@@ -24,7 +27,7 @@ fn turns() -> &'static Mutex<HashMap<String, Weak<TurnActivity>>> {
 impl TurnActivity {
     /// Starts the turn's log and registers it under its turn id until it is dropped.
     pub fn start(sender: broadcast::Sender<RuntimeEvent>, tag: TurnTag) -> Arc<Self> {
-        let this = Arc::new(Self { log: Mutex::new(ActivityLog::default()), sender, tag });
+        let this = Arc::new(Self { log: Mutex::new(ActivityLog::default()), sender, tag, link_step: Mutex::new(None) });
         let mut all = turns().lock().unwrap_or_else(|e| e.into_inner());
         all.retain(|_, w| w.strong_count() > 0);
         all.insert(this.tag.turn_id.clone(), Arc::downgrade(&this));
@@ -41,7 +44,11 @@ impl TurnActivity {
     }
 
     fn send(&self, steps: impl IntoIterator<Item = Step>) {
-        for step in steps {
+        let link = self.link_step.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        for mut step in steps {
+            if link.as_deref() == Some(step.id.as_str()) {
+                step.ref_id = Some(LINK_OPEN_REF.to_string());
+            }
             let _ = self.sender.send(RuntimeEvent::Scoped {
                 tag: self.tag.clone(),
                 event: Box::new(RuntimeEvent::Activity { step: step.to_json() }),
@@ -102,6 +109,39 @@ impl TurnActivity {
         self.send(step);
     }
 
+    /// 28g: kwnt starts opening the link in the person's message in the bot browser, before the
+    /// turn. The step reads as a `browser_open` ("Opening <host>", the address as its detail) and
+    /// carries [`LINK_OPEN_REF`], so code can tell it from the bot's own opens. End it with
+    /// [`Self::link_open_end`].
+    pub fn link_open_start(&self, url: &str) {
+        let (pending, _) = link_open_events(url, &LinkOpen::Opened(String::new()));
+        let steps = self.with_log(|log| {
+            let steps = log.observe(&pending);
+            if let Some(step) = steps.iter().rfind(|s| s.kind == "tool") {
+                *self.link_step.lock().unwrap_or_else(|e| e.into_inner()) = Some(step.id.clone());
+            }
+            steps
+        });
+        self.send(steps);
+    }
+
+    /// Ends the step [`Self::link_open_start`] began: `ok` with the page's title, or `failed` with
+    /// the reason (redacted and cut like any failed step's).
+    pub fn link_open_end(&self, outcome: &LinkOpen) {
+        let (_, completed) = link_open_events("", outcome);
+        let steps = self.with_log(|log| log.observe(&completed));
+        self.send(steps);
+    }
+
+    /// Marks the link-open step in saved or listed steps (`{"steps": [...]}`).
+    fn mark_link_step(&self, v: &mut Value) {
+        let Some(id) = self.link_step.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+        let step = v["steps"].as_array_mut().and_then(|steps| steps.iter_mut().find(|s| s["id"] == id.as_str()));
+        if let Some(obj) = step.and_then(Value::as_object_mut) {
+            obj.insert("ref_id".into(), Value::String(LINK_OPEN_REF.into()));
+        }
+    }
+
     /// Sends any thinking text still held back, ends the turn's open steps and returns what to save on the reply as `meta.activity`
     /// (`None` when nothing happened).
     pub fn finish(&self) -> Option<Value> {
@@ -112,8 +152,74 @@ impl TurnActivity {
         });
         self.send_events(held);
         self.send(steps);
-        saved
+        saved.map(|mut v| {
+            self.mark_link_step(&mut v);
+            v
+        })
     }
+}
+
+/// The `ref_id` of the step for kwnt's own open of the link in the person's message before the
+/// turn (13a, 28g). Its tool is plain `browser_open`, so the chat's page trail and the inbox's
+/// "what changed" read it as a page open. It is never behind an approval card: kwnt opens the
+/// person's own link itself.
+pub const LINK_OPEN_REF: &str = "kwnt-link-open";
+
+/// The tool call id kwnt's own link open uses in the turn's log; drivers never send it.
+const LINK_OPEN_CALL: &str = "kwnt-link-open";
+
+/// How kwnt's open of the request's link before the turn went (28g).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LinkOpen {
+    /// The page loaded; its title (a bot wall or captcha page loaded too).
+    Opened(String),
+    /// It didn't: the page couldn't be reached, a site rule refused it, or the browser couldn't
+    /// move (held by the person, timed out…). The reason as kwnt has it.
+    Failed(String),
+}
+
+impl LinkOpen {
+    /// What the bot browser's navigate answered. A site rule's refusal is its message; a page that
+    /// couldn't be reached is its network reason (`net::ERR_NAME_NOT_RESOLVED`).
+    pub fn of(navigated: &Result<crate::sandbox::NavigationResult, crate::sandbox::BrowserError>) -> Self {
+        use crate::sandbox::BrowserError;
+        match navigated {
+            Ok(nav) => Self::Opened(nav.title.clone()),
+            Err(BrowserError::Navigation(reason)) => Self::Failed(reason.clone()),
+            Err(BrowserError::SiteRule(refusal)) => Self::Failed(refusal.message.clone()),
+            Err(other) => Self::Failed(other.to_string()),
+        }
+    }
+}
+
+/// The tool call pair kwnt's own link open feeds the turn's log: a `browser_open` of `url`, and
+/// its end (`{"status": "ok", "title"}` or `{"status": "error", "error"}`), as a driver reports
+/// the bot's own `browser_open`.
+fn link_open_events(url: &str, outcome: &LinkOpen) -> (RuntimeEvent, RuntimeEvent) {
+    let pending = RuntimeEvent::ToolCallPending {
+        id: LINK_OPEN_CALL.into(),
+        name: "browser_open".into(),
+        args: serde_json::json!({ "url": url }),
+    };
+    let result = match outcome {
+        LinkOpen::Opened(title) => serde_json::json!({ "status": "ok", "title": title }),
+        LinkOpen::Failed(reason) => serde_json::json!({ "status": "error", "error": reason }),
+    };
+    (pending, RuntimeEvent::ToolCallCompleted { id: LINK_OPEN_CALL.into(), result })
+}
+
+/// A turn's saved activity without kwnt's own link-open step ([`LINK_OPEN_REF`]): what the bot's
+/// own tools did. Follow-through (13a, 0.9.4) reads this, so a link that didn't open counts only
+/// through `page_failed`, exactly as before the step was saved. `None` when no other step is left.
+pub fn without_link_open(activity: Option<&Value>) -> Option<Value> {
+    let mut activity = activity?.clone();
+    if let Some(steps) = activity["steps"].as_array_mut() {
+        steps.retain(|s| s["ref_id"] != LINK_OPEN_REF);
+        if steps.is_empty() && activity.get("dropped").is_none() {
+            return None;
+        }
+    }
+    Some(activity)
 }
 
 /// An approval card for `turn_id` is waiting on the person.
@@ -137,7 +243,11 @@ pub fn approval_settled(turn_id: &str, ticket: &str, status: &'static str) {
 /// text is left out: a running thinking step's text isn't redacted until it ends.
 pub fn turn_view(turn: &super::turns::ActiveTurn) -> Value {
     let mut v = serde_json::to_value(turn).unwrap_or(Value::Null);
-    let steps = TurnActivity::find(&turn.turn_id).and_then(|t| t.with_log(|log| (!log.is_empty()).then(|| log.to_view_json())));
+    let steps = TurnActivity::find(&turn.turn_id).and_then(|t| {
+        let mut steps = t.with_log(|log| (!log.is_empty()).then(|| log.to_view_json()))?;
+        t.mark_link_step(&mut steps);
+        Some(steps)
+    });
     if let (Some(steps), Some(obj)) = (steps, v.as_object_mut()) {
         obj.insert("activity".into(), steps);
     }
@@ -694,4 +804,204 @@ mod tests {
         assert_eq!(live.concat(), text);
     }
 
+
+    // ---- 28g: kwnt's own open of the request's link is a step on the reply ----
+
+    fn link_turn(id: &str) -> (Arc<TurnActivity>, broadcast::Receiver<RuntimeEvent>) {
+        let (tx, rx) = broadcast::channel(64);
+        let tag = TurnTag { turn_id: id.into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        (TurnActivity::start(tx, tag), rx)
+    }
+
+    /// The link open as the pre-turn block records it, from what navigate answered.
+    fn open_link(turn: &TurnActivity, url: &str, navigated: Result<crate::sandbox::NavigationResult, crate::sandbox::BrowserError>) {
+        turn.link_open_start(url);
+        turn.link_open_end(&LinkOpen::of(&navigated));
+    }
+
+    fn unresolved() -> Result<crate::sandbox::NavigationResult, crate::sandbox::BrowserError> {
+        Err(crate::sandbox::BrowserError::Navigation("net::ERR_NAME_NOT_RESOLVED".into()))
+    }
+
+    /// The steps that went out live, as the chat sees them.
+    fn live_steps(rx: &mut broadcast::Receiver<RuntimeEvent>) -> Vec<Value> {
+        let mut out = Vec::new();
+        while let Ok(RuntimeEvent::Scoped { event, .. }) = rx.try_recv() {
+            if let RuntimeEvent::Activity { step } = *event {
+                out.push(step);
+            }
+        }
+        out
+    }
+
+    fn bot_tool(turn: &TurnActivity, id: &str, name: &str, args: Value, result: Value) {
+        turn.observe(&RuntimeEvent::ToolCallPending { id: id.into(), name: name.into(), args });
+        turn.observe(&RuntimeEvent::ToolCallCompleted { id: id.into(), result });
+    }
+
+    /// Pebble's trial reply (compass-trial row F): the link didn't resolve, and the reply's
+    /// activity now says so, live and saved, marked as kwnt's own open.
+    #[test]
+    fn a_link_that_does_not_resolve_is_one_failed_browser_open_step() {
+        let (turn, mut rx) = link_turn("turn-link-unresolved");
+        open_link(&turn, "https://tickets.example.invalid/buy", unresolved());
+        let saved = turn.finish().expect("the reply has activity");
+        let steps = saved["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 1, "{saved}");
+        let s = &steps[0];
+        assert_eq!(s["kind"], "tool");
+        assert_eq!(s["tool"], "browser_open");
+        assert_eq!(s["title"], "Opening tickets.example.invalid");
+        assert_eq!(s["status"], "failed");
+        assert!(s["detail"].as_str().unwrap().contains("ERR_NAME_NOT_RESOLVED"), "{s}");
+        assert_eq!(s["ref_id"], LINK_OPEN_REF, "marked as kwnt's own open: {s}");
+        assert!(s.get("page_title").is_none(), "{s}");
+        // Live: it ran, then failed, both marked
+        let live = live_steps(&mut rx);
+        let statuses: Vec<_> = live.iter().map(|s| s["status"].as_str().unwrap()).collect();
+        assert_eq!(statuses, ["running", "failed"], "{live:?}");
+        assert!(live.iter().all(|s| s["ref_id"] == LINK_OPEN_REF && s["tool"] == "browser_open"), "{live:?}");
+        assert_eq!(live[0]["detail"], "https://tickets.example.invalid/buy");
+    }
+
+    #[test]
+    fn a_link_that_opens_is_ok_with_the_page_title() {
+        let (turn, _rx) = link_turn("turn-link-opened");
+        let nav = crate::sandbox::NavigationResult { url: "https://roast.example/shop".into(), title: "RoastCo · Shop".into(), status_code: 200 };
+        open_link(&turn, "https://roast.example/shop", Ok(nav));
+        let saved = turn.finish().unwrap();
+        let s = &saved["steps"][0];
+        assert_eq!((s["status"].as_str(), s["title"].as_str()), (Some("ok"), Some("Opening roast.example")));
+        assert_eq!(s["page_title"], "RoastCo · Shop");
+        assert_eq!(s["detail"], "https://roast.example/shop");
+        assert_eq!(s["ref_id"], LINK_OPEN_REF);
+    }
+
+    #[test]
+    fn a_site_rule_refusal_or_a_held_browser_is_a_failed_step_with_its_reason() {
+        let refusal = crate::sandbox::site_guard::Refusal {
+            rule: "blocked",
+            host: "casino.example".into(),
+            url: "https://casino.example/".into(),
+            entry: Some("casino.example".into()),
+            message: "casino.example is on this bot's blocked sites.".into(),
+        };
+        let (turn, _rx) = link_turn("turn-link-refused");
+        open_link(&turn, "https://casino.example/", Err(crate::sandbox::BrowserError::SiteRule(refusal)));
+        let saved = turn.finish().unwrap();
+        let s = &saved["steps"][0];
+        assert_eq!((s["status"].as_str(), s["title"].as_str()), (Some("failed"), Some("Opening casino.example")));
+        assert_eq!(s["detail"], "casino.example is on this bot's blocked sites.");
+        // Errors main dropped silently are a failed step too
+        let (turn, _rx) = link_turn("turn-link-held");
+        open_link(&turn, "https://roast.example/", Err(crate::sandbox::BrowserError::HumanControl));
+        let s = turn.finish().unwrap()["steps"][0].clone();
+        assert_eq!(s["status"], "failed");
+        assert_eq!(s["detail"], crate::sandbox::BrowserError::HumanControl.to_string());
+    }
+
+    #[test]
+    fn a_secret_in_the_link_is_masked_in_the_title_and_detail() {
+        let url = "https://pebble:hunter2hunter2@tickets.example.invalid/pay?token=abcd1234efgh5678ijkl&api_key=sk-live0123456789abcdefXYZ";
+        let (turn, mut rx) = link_turn("turn-link-secret");
+        open_link(&turn, url, Err(crate::sandbox::BrowserError::Navigation(format!("net::ERR_NAME_NOT_RESOLVED at {url}"))));
+        let saved = turn.finish().unwrap();
+        let mut shown: Vec<Value> = live_steps(&mut rx);
+        shown.push(saved["steps"][0].clone());
+        let started = turn.with_log(|log| log.steps()[0].clone());
+        assert_eq!(started.tool.as_deref(), Some("browser_open"));
+        for s in &shown {
+            let text = format!("{} {}", s["title"], s["detail"]);
+            for secret in ["hunter2hunter2", "abcd1234efgh5678ijkl", "sk-live0123456789abcdefXYZ"] {
+                assert!(!text.contains(secret), "{secret} shown in {text}");
+            }
+            assert!(text.contains("tickets.example.invalid"), "{text}");
+        }
+        assert!(saved["steps"][0]["detail"].as_str().unwrap().contains("ERR_NAME_NOT_RESOLVED"), "{saved}");
+    }
+
+    /// Item 2 (13a and follow-through as on main): a link that didn't open and no tool after it
+    /// gives the same verdict, continuation, `meta.blocked` and held-turn carry-over as before the
+    /// step was saved, when `page_failed` alone said it.
+    #[test]
+    fn a_failed_link_and_no_later_tool_follows_through_as_before() {
+        use crate::server::delivery_check::{check, failed_step_blocked, pushed_in, tool_steps_in, FailedBefore, Seen};
+        let (turn, _rx) = link_turn("turn-link-follow");
+        open_link(&turn, "https://tickets.example.invalid/buy", unresolved());
+        let saved = turn.finish();
+        assert_eq!(saved.as_ref().unwrap()["steps"].as_array().unwrap().len(), 1, "the step is saved on the reply");
+        // Read raw, the step would be the turn's own failed last tool step
+        assert!(tool_steps_in(saved.as_ref()).1.is_some());
+        let own = without_link_open(saved.as_ref());
+        // Main saved no activity for this turn at all
+        let main: Option<Value> = None;
+        assert_eq!(own, main);
+        assert_eq!(tool_steps_in(own.as_ref()), tool_steps_in(main.as_ref()));
+        assert_eq!(tool_steps_in(own.as_ref()), (false, None, false));
+        assert_eq!(pushed_in(own.as_ref()), pushed_in(main.as_ref()));
+        let seen = |a: Option<&Value>| {
+            let (ran_tools, failed_step, declined) = tool_steps_in(a);
+            Seen { ran_tools, failed_step, declined, pushed: pushed_in(a), ..Seen::default() }
+        };
+        let reply = "The address tickets.example.invalid didn't resolve. Send me the correct link and I'll open it.";
+        for continued in [false, true] {
+            let (ours, before) = (check(reply, None, continued, &seen(own.as_ref())), check(reply, None, continued, &seen(main.as_ref())));
+            assert_eq!(ours, before, "continued {continued}");
+            assert_eq!(ours.continue_with, None, "a link told \"do not retry\" never gets a continuation");
+        }
+        let page_failed = FailedBefore { failed: true, declined: false };
+        let blocked = failed_step_blocked(reply, own.as_ref(), page_failed);
+        assert_eq!(blocked, failed_step_blocked(reply, main.as_ref(), page_failed));
+        assert!(blocked.is_some(), "page_failed still blocks the reply that waits on the person");
+        assert_eq!(FailedBefore::of_turn(own.as_ref(), page_failed), FailedBefore::of_turn(main.as_ref(), page_failed));
+        // A link that opened leaves nothing behind either
+        let (turn, _rx) = link_turn("turn-link-follow-ok");
+        let nav = crate::sandbox::NavigationResult { url: "https://roast.example/".into(), title: "RoastCo".into(), status_code: 200 };
+        open_link(&turn, "https://roast.example/", Ok(nav));
+        let own = without_link_open(turn.finish().as_ref());
+        assert_eq!(seen(own.as_ref()), seen(None));
+        assert_eq!(FailedBefore::of_turn(own.as_ref(), FailedBefore::default()), FailedBefore::default());
+    }
+
+    /// ...and the bot's own steps after it still count, failed or not.
+    #[test]
+    fn a_failed_link_then_a_failed_bot_tool_still_counts_the_bots_step() {
+        use crate::server::delivery_check::{failed_step_blocked, tool_steps_in, FailedBefore};
+        let (turn, _rx) = link_turn("turn-link-then-bash");
+        open_link(&turn, "https://tickets.example.invalid/buy", unresolved());
+        bot_tool(&turn, "t1", "Bash", json!({"command": "curl https://tickets.example/buy"}), json!({"status": "error", "error": "curl: (6) Could not resolve host"}));
+        let saved = turn.finish();
+        assert_eq!(saved.as_ref().unwrap()["steps"].as_array().unwrap().len(), 2);
+        let own = without_link_open(saved.as_ref());
+        let (ran, failed, declined) = tool_steps_in(own.as_ref());
+        let failed = failed.expect("the bot's own failed step counts");
+        assert_eq!((ran, failed.tool.as_str(), declined), (true, "Bash", false));
+        assert!(failed.detail.contains("Could not resolve host"), "{failed:?}");
+        let after = FailedBefore::of_turn(own.as_ref(), FailedBefore { failed: true, declined: false });
+        assert!(after.failed);
+        assert!(failed_step_blocked("Send me the correct link and I'll try again.", own.as_ref(), FailedBefore::default()).is_some());
+        // A bot tool that worked after the failed link: the turn moved on, as on main
+        let (turn, _rx) = link_turn("turn-link-then-ok");
+        open_link(&turn, "https://tickets.example.invalid/buy", unresolved());
+        bot_tool(&turn, "t1", "WebSearch", json!({"query": "tickets example"}), json!({"status": "ok"}));
+        let own = without_link_open(turn.finish().as_ref());
+        assert_eq!(tool_steps_in(own.as_ref()), (true, None, false));
+        assert_eq!(own.unwrap()["steps"].as_array().unwrap().len(), 1, "only the bot's own step");
+    }
+
+    /// A running turn listed by `GET /api/turns` shows the step marked too.
+    #[test]
+    fn the_listed_turn_marks_the_link_step() {
+        let (turn, _rx) = link_turn("turn-link-listed");
+        turn.link_open_start("https://roast.example/");
+        let mut v = turn.with_log(|log| log.to_view_json());
+        turn.mark_link_step(&mut v);
+        assert_eq!(v["steps"][0]["ref_id"], LINK_OPEN_REF);
+        assert_eq!(v["steps"][0]["status"], "running");
+        // The bot's own browser_open is never marked
+        bot_tool(&turn, "b1", "mcp__kwnt__browser_open", json!({"url": "https://roast.example/a"}), json!({"status": "ok", "title": "A"}));
+        let saved = turn.finish().unwrap();
+        assert_eq!(saved["steps"][1]["tool"], "mcp__kwnt__browser_open");
+        assert!(saved["steps"][1].get("ref_id").is_none(), "{saved}");
+    }
 }

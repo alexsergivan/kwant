@@ -80,6 +80,41 @@ test('a payment card says why it is a payment and offers only Allow once and Den
   assert.match(html, /role="note"/);
 });
 
+// 26h: a paid generation, shaped like BrokerApprover::classified for a FLUX call.
+const fluxTicket = (extra = {}) => ({
+  id: 'f1',
+  tool_name: 'mcp__flux__generate_image',
+  details: {
+    source: 'mcp',
+    server: 'flux',
+    tool: 'generate_image',
+    kwant_name: 'Pixel',
+    arguments: { prompt: 'a red fox in snow' },
+    payment_reason: 'generate_image uses your Black Forest Labs credits',
+    credits: 'Black Forest Labs',
+    ...extra,
+  },
+});
+
+test('a paid generation names whose credits it uses, never a price, and offers only Allow once and Deny', () => {
+  const html = render(fluxTicket());
+  assert.match(html, /This uses your Black Forest Labs credits\.<\/span>/);
+  assert.match(html, /Anything that spends credits asks you first, even with approvals off\. Allowing covers just this one\./);
+  // The tool stays in the header and details; the credits note itself never names it
+  const note = html.match(/<div role="note"[\s\S]*?<\/div><\/div>/)?.[0] ?? '';
+  assert.match(note, /Black Forest Labs credits/);
+  assert.doesNotMatch(note, /generate_image/);
+  assert.doesNotMatch(html, /looks like a payment|\$\d|price/);
+  assert.match(html, /Allow once/);
+  assert.doesNotMatch(html, /Always allow|Always this session/);
+  const picsart = render(fluxTicket({ server: 'picsart', tool: 'picsart_generate', credits: 'Picsart', payment_reason: 'picsart_generate uses your Picsart credits' }));
+  assert.match(picsart, /This uses your Picsart credits\.<\/span>/);
+  // A credits label without a payment reason is no payment card
+  assert.doesNotMatch(render(fluxTicket({ payment_reason: undefined })), /credits\.<\/span>/);
+  // A blank label falls back to the payment wording
+  assert.match(render(fluxTicket({ credits: '  ' })), /This looks like a payment:/);
+});
+
 test('a payment shown as a Claude tool card also drops Always this session', () => {
   const html = render({
     id: 'p2',

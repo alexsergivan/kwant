@@ -238,3 +238,55 @@ test('run waits outlive the Routines panel (Rigel D2): App records them, the pan
   assert.equal(calls, 1, 'unsubscribed');
   assert.equal(o.runRowState({ status: 'needs_you' }, o.runWaitsNow().run9).cardId, 'ap9', 'the card id outlives the wait');
 });
+
+// ---------------------------------------------------------------- 28a: your no reads as a no, not a failure
+
+const CLI_DENIED = 'The user denied this tool call.';
+const SAID_NO = 'You said no; nothing ran';
+const card = (id, status, tool) => ({ id, kind: 'approval', status, title: `Waiting for your approval: ${tool}`, tool, started_at: T0 });
+const DENY = [step('t1', 'failed', 'Bash', { detail: CLI_DENIED }), card('c1', 'declined', 'Bash')];
+const DENY_28B = [step('t1', 'declined', 'Bash', { detail: SAID_NO }), card('c1', 'declined', 'Bash')];
+const DENY_THEN_FAIL = [...DENY, step('t2', 'failed', 'web_fetch', { detail: 'exit 1' })];
+const KWNT_REFUSED = [step('t1', 'failed', 'Bash', { detail: CLI_DENIED })];
+const read = (steps) => o.parseActivityMeta({ activity: { steps, dropped: 0 } }).steps;
+
+test('28a: a plain Deny is not a failure: no outcome, no check line, plain Details', () => {
+  for (const shape of [DENY, DENY_28B, [...DENY].reverse()]) {
+    const steps = read(shape);
+    assert.equal(steps.find((s) => s.id === 't1').status, 'declined');
+    assert.equal(steps.find((s) => s.id === 't1').detail, SAID_NO);
+    assert.equal(o.replyOutcome(steps), null);
+    assert.equal(o.checkLine(o.replyOutcome(steps)), null);
+    assert.equal(o.detailsLabel(o.replyOutcome(steps)), 'Details');
+    const sum = o.activitySummary({ steps, dropped: 0 });
+    assert.match(sum, /you said no to 1/);
+    assert.doesNotMatch(sum, /failed/);
+  }
+  // kwnt refused the call itself (no card): still a failure
+  assert.equal(o.replyOutcome(read(KWNT_REFUSED)).kind, 'failed');
+  // A real failure after the Deny still says so
+  assert.deepEqual(o.replyOutcome(read(DENY_THEN_FAIL)), { kind: 'failed', stepId: 't2' });
+});
+
+test('28a: ChatView after a Deny: no rose toggle, no check line; a real failure after it still shows', () => {
+  const html = ui.chat(chatProps([
+    reply('m1', 'Okay, I didn’t run it.', DENY),
+    reply('m2', 'Okay, I didn’t run it.', DENY_28B),
+    reply('m3', 'I couldn’t fetch the page.', DENY_THEN_FAIL),
+    reply('m4', 'That command isn’t allowed.', KWNT_REFUSED),
+  ]));
+  const part = (id) => html.split('data-message-id="').find((c) => c.startsWith(`${id}"`)) ?? '';
+  for (const id of ['m1', 'm2']) {
+    assert.doesNotMatch(part(id), /a step failed/i, id);
+    assert.doesNotMatch(part(id), /data-reply-check/, id);
+  }
+  assert.match(part('m3'), /Details · a step failed/);
+  assert.match(part('m3'), /data-reply-check="failed"/);
+  assert.match(part('m4'), /Details · a step failed/);
+  // Open, the tool row is a grey "You said no" in the person's words, not a rose "Failed"
+  const open = ui.steps({ activity: { steps: read(DENY), dropped: 0 }, idBase: 'm1', defaultOpen: true });
+  assert.match(open, /aria-label="You said no"/);
+  assert.match(open, /data-step-mark="declined"[^>]*>You said no</);
+  assert.match(open, /You said no; nothing ran/);
+  assert.doesNotMatch(open, /The user denied|aria-label="Failed"|text-rose/);
+});
