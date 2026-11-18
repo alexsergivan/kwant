@@ -36,6 +36,30 @@ pub fn known(tool: &str) -> bool {
     LOOKUP_TOOLS.contains(&tool) || READ_TOOLS.contains(&tool) || WRITE_TOOLS.contains(&tool) || matches!(tool, "Bash" | "KillShell")
 }
 
+/// Which of kwnt's groups a built-in tool is in, for `kwnt run-check`. `None` for a tool this
+/// version of kwnt doesn't know (which asks, like Bash).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolGroup {
+    Lookup,
+    Read,
+    Write,
+    Shell,
+}
+
+pub fn group(tool: &str) -> Option<ToolGroup> {
+    if LOOKUP_TOOLS.contains(&tool) {
+        Some(ToolGroup::Lookup)
+    } else if READ_TOOLS.contains(&tool) {
+        Some(ToolGroup::Read)
+    } else if WRITE_TOOLS.contains(&tool) {
+        Some(ToolGroup::Write)
+    } else if matches!(tool, "Bash" | "KillShell") {
+        Some(ToolGroup::Shell)
+    } else {
+        None
+    }
+}
+
 /// Built-ins that start another agent: a Skill Foundry replay refuses them, as their own calls
 /// aren't checked against the replay's scratch folder.
 pub const SUBAGENT_TOOLS: &[&str] = &["Task", "Agent"];
