@@ -593,12 +593,20 @@ pub fn step_end(result: &Value) -> (&'static str, Option<String>) {
             Some(crate::mcp::REHEARSED_STEP_DETAIL.to_string()),
         );
     }
+    // 27b: refused with no card, because the person already said no to one like it
+    if refused && said(first_sentence(crate::mcp::DECLINED_BEFORE_TEXT)) {
+        return (
+            "declined",
+            Some(crate::mcp::DECLINED_BEFORE_STEP_DETAIL.to_string()),
+        );
+    }
     match failed_reason(result) {
         None => ("ok", None),
         Some(why) => (
             "failed",
             why.map(|w| {
                 w.replace(crate::mcp::NO_FALSE_CLAIMS_TEXT, "")
+                    .replace(crate::mcp::NOT_ANOTHER_WAY_TEXT, "")
                     .trim()
                     .to_string()
             })
@@ -1181,9 +1189,10 @@ mod tests {
         let (status, why) = step_end(
             &json!({"status": "error", "error": crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT)}),
         );
+        // 27b: the "don't try another way" sentence is for the bot too
         assert_eq!(
             (status, why.as_deref()),
-            ("failed", Some(crate::mcp::DENIED_TEXT))
+            ("failed", Some("The user denied this tool call."))
         );
         assert_eq!(
             step_end(&json!({"status": "ok", "content": "fine"})),
@@ -1193,6 +1202,20 @@ mod tests {
             step_end(&json!({"status": "error", "content": crate::mcp::NO_FALSE_CLAIMS_TEXT})),
             ("failed", None)
         );
+    }
+
+    /// 27b: a call refused because the person already said no ends `declined`, with the step
+    /// detail for the person, however the engine reports it.
+    #[test]
+    fn a_call_refused_for_an_earlier_no_shows_as_declined() {
+        let want = ("declined", Some(crate::mcp::DECLINED_BEFORE_STEP_DETAIL.to_string()));
+        // claude CLI: the permission route's deny message comes back as the error
+        assert_eq!(step_end(&json!({"status": "error", "error": crate::mcp::DECLINED_BEFORE_TEXT})), want);
+        // API engine: kwnt's own record, status `denied`
+        assert_eq!(step_end(&json!({"status": "denied", "content": crate::mcp::DECLINED_BEFORE_TEXT})), want);
+        assert_eq!(step_end(&json!({"status": "error", "content": crate::mcp::with_no_false_claims(crate::mcp::DECLINED_BEFORE_TEXT)})), want);
+        // An ok result quoting it is still ok
+        assert_eq!(step_end(&json!({"status": "ok", "content": crate::mcp::DECLINED_BEFORE_TEXT})).0, "ok");
     }
 
     #[test]
