@@ -35,7 +35,7 @@ import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 import { PointLayer, PointSink } from './PointLayer';
 import { POINT_COPY, footerText } from '../point';
-import { choosePage, noteTitle, pageTeam, pageTitleOf, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
+import { choosePage, noteTitle, pageOpened, pageTeam, pageTitleOf, restingPage, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
 import { secondsText } from '../clock';
@@ -230,7 +230,21 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // A list asked for before the pick can't know the picked page yet
   const knownPages = pageKeys && (!picked || (pages.list?.at ?? 0) >= picked.at) ? pageKeys : null;
   const openStep = humanStep?.status === 'open' ? humanStep : captchaStep?.status === 'open' ? captchaStep : null;
-  const chosenPage = choosePage({ picked: picked?.page ?? null, stepPage: stepPage(openStep), pages: knownPages });
+  // 28l: with nothing chosen, the page the pane already shows, kept while it is open. It lets go when a
+  // page opens (a bot's open or navigate step), then rests on the server's default, the page just used.
+  // Once the list is known this is never null, so the stream always names its page.
+  const [heldPage, setHeldPage] = useState<string | null>(null);
+  const lastList = useRef(pages.list);
+  const opened = pages.list !== lastList.current && pageOpened(lastList.current, pages.list);
+  const chosenPage =
+    choosePage({ picked: picked?.page ?? null, stepPage: stepPage(openStep), pages: knownPages }) ??
+    restingPage(opened ? null : heldPage, pages.list);
+  useEffect(() => {
+    lastList.current = pages.list;
+  }, [pages.list]);
+  useEffect(() => setHeldPage(isOpen ? chosenPage : null), [isOpen, chosenPage]);
+  // Until the first list answers, the stream waits (a stream to the default, then to the named page, blinks)
+  const pagesKnown = pages.checked || !teamId || teamId === 'default';
   // The picked page closed (idle, or the cap made room): forget it, so it never comes back by itself
   useEffect(() => {
     if (picked && knownPages && !knownPages.includes(picked.page)) setPicked(null);
@@ -252,7 +266,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
   // Interactive Remote Control State
   const streaming = isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending;
-  const stream = useBrowserStream(teamId, streaming, chosenPage);
+  const stream = useBrowserStream(teamId, streaming && pagesKnown, chosenPage);
   // 28e: the page the stream belongs to. Until the stream reconnects, it still shows the last page.
   const [streamFor, setStreamFor] = useState(chosenPage);
   useEffect(() => setStreamFor(chosenPage), [chosenPage]);
@@ -278,7 +292,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // A live stream is ready; otherwise trust isRunning only while no error says the service is down.
   const browserReady = stream.connected || (isRunning && !controlError);
   // 28e: after a switch to another page's tab, the dark pane until that page's own frame, never another picture
-  const panePicture = paneFrame({ blank: isBlankPage(pageUrl), frame: steady.frame, holding: steady.holding, streaming: streaming && browserReady, switching: streamFor !== chosenPage, streamPage: stream.page, chosenPage, screenshot: screenshotBase64 });
+  const panePicture = paneFrame({ blank: isBlankPage(pageUrl), frame: steady.frame, holding: steady.holding, streaming: streaming && browserReady, switching: streamFor !== chosenPage || !pagesKnown, streamPage: stream.page, chosenPage, screenshot: screenshotBase64 });
   const currentScreenshot = 'image' in panePicture ? panePicture.image : null;
   const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
