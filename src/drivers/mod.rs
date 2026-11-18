@@ -1354,6 +1354,7 @@ pub(crate) mod tests {
             approvals,
             records: Default::default(),
             kwnt_only: false,
+            media: None,
         });
         i
     }

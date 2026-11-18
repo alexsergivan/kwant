@@ -1,0 +1,21 @@
+{
+  "version": "0.9.22",
+  "date": "2026-11-17",
+  "highlights": [
+    {
+      "id": "app-look-sweep",
+      "image": null,
+      "open": null,
+      "title": "Every screen in kwant's own colours",
+      "text": "The older greens and purples are gone, so every screen uses kwant's teal and lavender, and buttons stay easy to read when you point at them."
+    },
+    {
+      "id": "ollama-ready-after-restart",
+      "title": "Ollama bots come back on their own",
+      "text": "If Ollama starts after kwant does, your Ollama bots now work within about 15 seconds or at your next message. If it's still off, the chat says where kwant looked.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}
