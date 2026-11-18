@@ -22,6 +22,9 @@ pub const MAX_THINKING_CHARS: usize = 16_000;
 pub const MAX_TITLE: usize = 160;
 /// Longest step detail (characters).
 pub const MAX_DETAIL: usize = 500;
+/// Longest reason a failed tool's live `ToolCallCompleted` event carries, cut after masking
+/// (29k). The drivers (Claude's, grok's, Codex's) send the whole reason.
+pub const LIVE_ERROR_MAX: usize = 600;
 /// Most thinking text held back from the live stream at once (characters): the last two words of
 /// what streamed so far, so a secret split across two chunks is masked once it is whole.
 pub const MAX_HELD_THINKING: usize = 256;
@@ -417,6 +420,7 @@ impl ActivityLog {
 
     /// Masks secrets in a driver event before it is broadcast: thinking text, a tool call's
     /// arguments and a finished tool's result (every string in them). Reply text passes as is.
+    /// A failed tool's `error` is then cut to [`LIVE_ERROR_MAX`]: drivers send it whole.
     pub fn redact_event(&self, event: &RuntimeEvent) -> RuntimeEvent {
         match event {
             RuntimeEvent::ThinkingDelta(text) => RuntimeEvent::ThinkingDelta(self.redact(text)),
@@ -424,7 +428,12 @@ impl ActivityLog {
                 RuntimeEvent::ToolCallPending { id: id.clone(), name: name.clone(), args: self.redact_value(args) }
             }
             RuntimeEvent::ToolCallCompleted { id, result } => {
-                RuntimeEvent::ToolCallCompleted { id: id.clone(), result: self.redact_value(result) }
+                let mut result = self.redact_value(result);
+                // 29k: cut only after masking, so a secret across the cut is masked whole
+                if let Some(Value::String(why)) = result.get_mut("error") {
+                    *why = crate::mcp::truncate_text(why, LIVE_ERROR_MAX);
+                }
+                RuntimeEvent::ToolCallCompleted { id: id.clone(), result }
             }
             RuntimeEvent::Scoped { tag, event } => {
                 RuntimeEvent::Scoped { tag: tag.clone(), event: Box::new(self.redact_event(event)) }
@@ -1083,7 +1092,7 @@ fn tool_part(name: &str) -> &str {
 }
 
 /// A short title for a tool call, and the detail to show when the step is opened (the whole
-/// command, address or query). Neither is redacted here.
+/// command, address, query or file path). Neither is redacted here.
 pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
     if is_shell_tool(name) {
         return match command_line(args) {
@@ -1098,7 +1107,7 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
         None => (None, name),
     };
     let lower = tool.to_ascii_lowercase();
-    let path = || arg(args, &["file_path", "path", "filePath", "notebook_path", "target_file"]).map(short_path);
+    let path = arg(args, &["file_path", "path", "filePath", "notebook_path", "target_file"]);
     let url = arg(args, &["url", "href", "uri"]);
     if let Some(kind) = WordsTool::of(&lower) {
         let title = match kind {
@@ -1109,7 +1118,10 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
         return (title.unwrap_or_else(|| kind.bare().to_string()), None);
     }
     if let Some(kind) = FileTool::of(&lower) {
-        return (path().map_or(kind.bare().into(), |p| format!("{} {p}", kind.verb())), None);
+        // 29c: the whole path is the detail (the title keeps the last two parts), so the step
+        // opens to it and `kwnt run-check` can tell a file inside the bot's folder from one outside
+        let title = path.map(short_path).map_or(kind.bare().into(), |p| format!("{} {p}", kind.verb()));
+        return (title, path.map(str::to_string));
     }
     match lower.as_str() {
         "webfetch" | "fetch" | "web_fetch" | "browser_open" | "browser_navigate" | "navigate" | "open_url" => match url {
@@ -1471,6 +1483,42 @@ mod tests {
         }
     }
 
+    /// 29c: a read, edit or write step keeps its whole path as the detail (Unix and Windows, any
+    /// of the path arguments), so the step opens to it and run-check can judge it; the title keeps
+    /// the last two parts as before, and a call with no path keeps no detail.
+    #[test]
+    fn file_steps_keep_their_whole_path_as_detail() {
+        let unix = "/home/maus/clients/acme-layoffs/plan.txt";
+        let win = "C:\\Users\\ann\\clients\\acme\\contract.md";
+        let cases = [
+            ("Read", json!({"file_path": unix}), unix, "Reading …/acme-layoffs/plan.txt"),
+            ("Write", json!({"file_path": unix, "content": "x"}), unix, "Writing …/acme-layoffs/plan.txt"),
+            ("Edit", json!({"file_path": win, "old_string": "a", "new_string": "b"}), win, "Editing …\\acme\\contract.md"),
+            ("MultiEdit", json!({"file_path": unix, "edits": []}), unix, "Editing …/acme-layoffs/plan.txt"),
+            ("NotebookEdit", json!({"notebook_path": "/srv/nb/acme/model.ipynb"}), "/srv/nb/acme/model.ipynb", "Editing …/acme/model.ipynb"),
+            ("apply_patch", json!({"path": win}), win, "Editing …\\acme\\contract.md"),
+            ("mcp__files__read_file", json!({"path": unix}), unix, "Reading …/acme-layoffs/plan.txt"),
+            ("Write", json!({"file_path": "notes.md"}), "notes.md", "Writing notes.md"),
+        ];
+        for (name, args, path, title) in cases {
+            assert_eq!(summarize(name, &args), (title.to_string(), Some(path.to_string())), "{name}");
+        }
+        assert_eq!(summarize("Write", &json!({"content": "x"})), ("Writing a file".to_string(), None));
+        assert_eq!(summarize("Read", &Value::Null), ("Reading a file".to_string(), None));
+        // Search tools keep no detail, as before
+        assert_eq!(summarize("Grep", &json!({"pattern": "x", "path": unix})).1, None);
+        assert_eq!(summarize("Glob", &json!({"pattern": "*.md", "path": unix})).1, None);
+        // Saved like every detail: redacted and cut to MAX_DETAIL
+        let mut log = ActivityLog::default();
+        let long = format!("/srv/{}/a.md", "d".repeat(600));
+        let s = log.observe(&pending("1", "Write", json!({"file_path": long})));
+        let detail = s[0].detail.clone().unwrap();
+        assert_eq!(detail.chars().count(), MAX_DETAIL);
+        assert!(detail.ends_with('…'));
+        let s = log.observe(&pending("2", "Read", json!({"file_path": unix})));
+        assert_eq!(s[0].detail.as_deref(), Some(unix));
+    }
+
     #[test]
     fn summaries_are_short_and_human() {
         let cases = [
@@ -1660,6 +1708,29 @@ mod tests {
         // Old rows and other steps carry no `page_title` key at all
         let saved = log.to_json();
         assert!(saved["steps"].as_array().unwrap().iter().all(|s| s.get("page_title").is_none()), "{saved}");
+    }
+
+    /// 29k: the live event's `error` is masked whole first, then cut to 600 with the marker, in a
+    /// scoped event too; other fields aren't cut here, and a short error or "ok" stays as it is.
+    #[test]
+    fn a_live_error_is_masked_then_cut() {
+        let secret = "Qv7Lamp0Vole2Quiet8Fern4Moss6Rx";
+        let log = ActivityLog::with_secrets(vec![secret.into()]);
+        let why = format!("{}{secret} tail", "ü".repeat(590));
+        let content = "é".repeat(700);
+        let event = RuntimeEvent::Scoped {
+            tag: TurnTag::default(),
+            event: Box::new(opened("a", json!({"status": "error", "error": why, "content": content}))),
+        };
+        let RuntimeEvent::Scoped { event, .. } = log.redact_event(&event) else { panic!() };
+        let RuntimeEvent::ToolCallCompleted { result, .. } = *event else { panic!() };
+        assert_eq!(result["error"], format!("{}******** t… [truncated]", "ü".repeat(590)));
+        assert_eq!(result["content"], content);
+        assert_eq!(LIVE_ERROR_MAX, 600);
+        for kept in [json!({"status": "error", "error": "exit status 101"}), json!({"status": "ok"})] {
+            let RuntimeEvent::ToolCallCompleted { result, .. } = log.redact_event(&opened("b", kept.clone())) else { panic!() };
+            assert_eq!(result, kept);
+        }
     }
 
     #[test]

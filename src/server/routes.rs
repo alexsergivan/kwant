@@ -4097,6 +4097,8 @@ async fn run_kwant_turn_inner(
                 if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref(), checked) {
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
                 }
+                // 29c: the folder kwnt's gate judged this turn's file tools against (see `note_gate_folder`)
+                note_gate_folder(&mut meta, activity.as_ref(), mcp_turn.is_some(), workspace_dir.as_deref());
                 // 0.9.4: a reply that ends with `Blocked: <what>. <what unblocks it>` says so in its meta
                 // 13a: with no such line, a turn whose last tool step failed (or was declined, or whose
                 // link didn't open and it ran no tool) and whose reply ends waiting on the person in
@@ -4333,6 +4335,21 @@ async fn idea_from_chat(
     match super::idea_jar::drop_in(state, &space, text).await {
         Ok(idea) => (StatusCode::CREATED, Json(serde_json::json!({"handled": "idea", "idea": super::idea_jar::idea_json(&idea)}))).into_response(),
         Err(r) => r,
+    }
+}
+
+/// 29c: records on a reply's meta the folder kwnt's gate judged the turn's file tools against
+/// ([`crate::mcp::builtin_tools::GATE_FOLDER_KEY`]), so `kwnt run-check` can tell a file step outside it
+/// from one inside. Only for a turn that had the gate (`gated`) and saved steps. Kept out of
+/// `run_kwant_turn_inner` (`inline(never)`) so its temporaries don't grow that function's frame.
+#[inline(never)]
+fn note_gate_folder(meta: &mut Option<serde_json::Value>, activity: Option<&serde_json::Value>, gated: bool, workspace_dir: Option<&std::path::Path>) {
+    let ran_steps = activity.and_then(|a| a["steps"].as_array()).is_some_and(|s| !s.is_empty());
+    if !gated || !ran_steps {
+        return;
+    }
+    if let Some(folder) = crate::mcp::builtin_tools::canonical_folder(workspace_dir) {
+        meta.get_or_insert_with(|| json!({}))[crate::mcp::builtin_tools::GATE_FOLDER_KEY] = json!(folder.display().to_string());
     }
 }
 
@@ -7469,6 +7486,41 @@ mod tests {
         assert_eq!(handoff_title("`@QA` please revise your part.", "QA").as_deref(), Some("Please revise your part."));
         assert_eq!(handoff_title("`@QA run the smoke tests`", "QA").as_deref(), Some("Run the smoke tests"));
         assert_eq!(handoff_title("@QA run `cargo test` on staging.", "QA").as_deref(), Some("Run `cargo test` on staging."));
+    }
+
+    #[test]
+    fn a_gated_turn_with_steps_records_the_canonical_folder_and_no_other_turn_does() {
+        use super::note_gate_folder;
+        use crate::mcp::builtin_tools::GATE_FOLDER_KEY;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("bot");
+        std::fs::create_dir(&folder).unwrap();
+        let canon = folder.canonicalize().unwrap().display().to_string();
+        let steps = json!({ "steps": [{ "title": "Wrote plan.md" }] });
+        let none = json!({ "steps": [] });
+        let missing = dir.path().join("missing");
+
+        let mut meta = Some(json!({ "ran_on": { "engine": "claude" } }));
+        note_gate_folder(&mut meta, Some(&steps), true, Some(&folder));
+        let meta = meta.unwrap();
+        assert_eq!(meta[GATE_FOLDER_KEY], json!(canon));
+        assert_eq!(meta["ran_on"]["engine"], "claude", "other keys stay");
+
+        let mut fresh = None;
+        note_gate_folder(&mut fresh, Some(&steps), true, Some(&folder.join(".")));
+        assert_eq!(fresh.unwrap()[GATE_FOLDER_KEY], json!(canon), "a meta-less reply gets one, canonical");
+
+        for (activity, gated, at) in [
+            (Some(&steps), false, Some(folder.as_path())),
+            (Some(&none), true, Some(folder.as_path())),
+            (None, true, Some(folder.as_path())),
+            (Some(&steps), true, None),
+            (Some(&steps), true, Some(missing.as_path())),
+        ] {
+            let mut meta = None;
+            note_gate_folder(&mut meta, activity, gated, at);
+            assert_eq!(meta, None, "{activity:?} gated={gated} at={at:?}");
+        }
     }
 
     use super::{

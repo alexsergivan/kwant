@@ -121,6 +121,59 @@ export function readDenials(steps: ActivityStep[]): ActivityStep[] {
 
 export const isOpenStep = (s: ActivityStep) => s.status === 'running' || s.status === 'waiting';
 
+/** The answer a settled approval card gave, as its command row says it (28s). */
+export type CardAnswer = 'ok' | 'declined' | 'unanswered';
+/** 28s: the command row's chip for the answer its folded card gave. */
+export const ANSWER_LABEL: Record<CardAnswer, string> = { ok: 'You said OK', declined: 'You said no', unanswered: 'Not approved in time' };
+
+/** Which tool steps a settled card of each answer can stand for: the command it let run, or the one it held. */
+const answeredBy: Record<CardAnswer, (s: ActivityStep) => boolean> = {
+  declined: (s) => s.status === 'declined',
+  unanswered: (s) => s.status === 'unanswered',
+  ok: (s) => s.status !== 'declined' && s.status !== 'unanswered' && s.status !== 'waiting',
+};
+
+export interface FoldedSteps {
+  /** The rows Details draws: `steps` without the approval steps that folded into their command row. */
+  rows: ActivityStep[];
+  /** Command step id → the answer its card gave. */
+  answers: Map<string, CardAnswer>;
+  /** Folded approval step id → the command step id that now carries it (so a link to the card lands on its row). */
+  foldedInto: Map<string, string>;
+}
+
+/**
+ * 28s one-row-per-answer: Details says each answer once. A settled approval step (OK, no, not answered in time)
+ * pairs with the nearest tool step of the same tool, in either order, the way `readDenials` pairs (each card at
+ * most one step, each step at most one card); the approval row is hidden and the command row carries the answer.
+ * A card with no such command row (kwnt held the call, nothing ran, or it is still open) stays its own row.
+ * Draw time only: saved steps and follow-through read the steps as they are; the step count uses `rows` (28t).
+ */
+export function foldAnswers(steps: readonly ActivityStep[]): FoldedSteps {
+  const answers = new Map<string, CardAnswer>();
+  const foldedInto = new Map<string, string>();
+  const used = new Set<number>();
+  steps.forEach((card, ci) => {
+    if (card.kind !== 'approval' || !card.tool || !(card.status in answeredBy)) return;
+    const fits = answeredBy[card.status as CardAnswer];
+    // Nearest by place; on a tie (one before, one after), the one that started closest in time to the card.
+    const gap = (i: number) => [Math.abs(i - ci), Math.abs(Date.parse(steps[i].started_at) - Date.parse(card.started_at)) || 0] as const;
+    let best = -1;
+    steps.forEach((s, i) => {
+      if (s.kind !== 'tool' || s.tool !== card.tool || used.has(i) || !fits(s)) return;
+      if (best < 0) return void (best = i);
+      const [a, b] = [gap(i), gap(best)];
+      if (a[0] < b[0] || (a[0] === b[0] && a[1] < b[1])) best = i;
+    });
+    if (best < 0) return;
+    used.add(best);
+    answers.set(steps[best].id, card.status as CardAnswer);
+    foldedInto.set(card.id, steps[best].id);
+  });
+  if (!foldedInto.size) return { rows: steps as ActivityStep[], answers, foldedInto };
+  return { rows: steps.filter((s) => !foldedInto.has(s.id)), answers, foldedInto };
+}
+
 /**
  * Whether the live steps card folds to one row (18f): once the reply has words, the row moves below the bubble,
  * into the landed action row's place, so landing moves nothing above the words. A step waiting for the person
@@ -208,8 +261,11 @@ export function formatDuration(msTotal: number): string {
   return `${m}m ${String(Math.round(s % 60)).padStart(2, '0')}s`;
 }
 
-/** Steps that count in the summary: notes explain a limit and aren't work. */
-const counted = (steps: ActivityStep[]) => steps.filter((s) => s.kind !== 'note');
+/**
+ * How many steps the summary and the live "Working · N steps" say: the rows Details draws, so a settled approval
+ * folded into its command (28s) counts once with it (28t). Notes explain a limit and aren't work.
+ */
+export const shownStepCount = (steps: readonly ActivityStep[]) => foldAnswers(steps).rows.filter((s) => s.kind !== 'note').length;
 
 /** "0:42", "12:05", "1:02:09": the working strip's clock. Negative or non-finite input reads 0:00. */
 export function formatClock(ms: number): string {
@@ -221,23 +277,39 @@ export function formatClock(ms: number): string {
 }
 
 /** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when any failed,
- *  "· 1 didn't run" when an approval went unanswered (26d) and "· you said no to 1" when the person denied a call (28a). */
+ *  "· 1 didn't run" when an approval went unanswered (26d) and "· you said no to 1" when the person denied a call (28a).
+ *  Counts read the rows Details draws: a folded card and its command count once (28t). */
 export function activitySummary(a: SavedActivity): string {
-  const n = counted(a.steps).length + a.dropped;
+  // Counts read the rows Details draws: a folded card and its command count once (28t).
+  const rows = foldAnswers(a.steps).rows;
+  const n = rows.filter((s) => s.kind !== 'note').length + a.dropped;
   const steps = `${n} ${n === 1 ? 'step' : 'steps'}`;
   const span = activitySpan(a.steps);
   const parts = span !== null && span >= 1000 ? [`Worked ${formatClock(span)}`, steps] : [steps];
   const failed = a.steps.filter((s) => s.status === 'failed').length;
   if (failed) parts.push(`${failed} failed`);
-  const unanswered = a.steps.filter((s) => s.status === 'unanswered').length;
+  // Raw status, not shownStatus: a human step nobody finished in time (28n) doesn't count here.
+  const unanswered = rows.filter((s) => s.status === 'unanswered').length;
   if (unanswered) parts.push(`${unanswered} didn’t run`);
   const declined = a.steps.filter((s) => s.kind === 'tool' && s.status === 'declined').length;
   if (declined) parts.push(`you said no to ${declined}`);
   return parts.join(' · ');
 }
 
+/** 28n: a human step nobody finished in time (server `timed_out`, kept in `outcome` by 28j). */
+const timedOutHumanStep = (s: ActivityStep) => s.kind === 'human_step' && s.outcome === 'timed_out';
+
+/**
+ * The status a step is drawn with (icon, chip). 28n: a human step nobody finished in time looks like an approval
+ * nobody answered (⏱, amber) instead of ✓ Done. `status` itself stays `ok`, so counts and follow-through are as before.
+ */
+export function shownStatus(s: ActivityStep): StepStatus {
+  return timedOutHumanStep(s) ? 'unanswered' : s.status;
+}
+
 /** What a step's status reads as, for screen readers and the row's label. */
 export function statusLabel(s: ActivityStep): string {
+  if (timedOutHumanStep(s)) return 'Not done in time';
   switch (s.status) {
     case 'running':
       return s.kind === 'thinking' ? 'Thinking' : 'Running';
@@ -250,7 +322,7 @@ export function statusLabel(s: ActivityStep): string {
     case 'failed':
       return 'Failed';
     case 'declined':
-      return s.kind === 'approval' ? 'Denied' : 'You said no';
+      return 'You said no';
     case 'stopped':
       return 'Stopped';
     case 'unanswered':

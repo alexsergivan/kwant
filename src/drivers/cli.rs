@@ -931,12 +931,9 @@ impl CliDriver {
                 let _ = event_tx.send(RuntimeEvent::ToolCallPending { id, name, args }).await;
             }
             super::grok::StreamEvent::ToolEnd { id, ok, error } => {
-                // Cut like Claude's: grok's reason can be a tool's whole output (29h)
+                // The whole reason: kwnt masks it, then cuts it (29k, `ActivityLog::redact_event`)
                 let result = match error {
-                    Some(why) if !ok => serde_json::json!({
-                        "status": "error",
-                        "error": crate::mcp::truncate_text(&why, CLAUDE_ERROR_MAX),
-                    }),
+                    Some(why) if !ok => serde_json::json!({ "status": "error", "error": why }),
                     _ => serde_json::json!({ "status": "ok" }),
                 };
                 let _ = event_tx.send(RuntimeEvent::ToolCallCompleted { id, result }).await;
@@ -1131,9 +1128,6 @@ struct ClaudeStream {
     rate_limits: Option<crate::profiles::usage::UsageReading>,
 }
 
-/// Longest reason kept from a failed tool result, Claude's or grok's.
-const CLAUDE_ERROR_MAX: usize = 600;
-
 /// A `tool_result`'s text: a string, or the text blocks of an array.
 fn tool_result_text(content: &serde_json::Value) -> String {
     match content {
@@ -1249,8 +1243,9 @@ impl ClaudeStream {
                         continue;
                     };
                     let result = if b["is_error"] == true {
-                        // Why it failed, cut short: the activity step's detail and the failure line read it
-                        serde_json::json!({ "status": "error", "error": crate::mcp::truncate_text(&tool_result_text(&b["content"]), CLAUDE_ERROR_MAX) })
+                        // Why it failed, whole: kwnt masks it before it cuts it (29k), so a secret
+                        // across the cut is masked whole
+                        serde_json::json!({ "status": "error", "error": tool_result_text(&b["content"]) })
                     } else {
                         serde_json::json!({ "status": "ok" })
                     };
@@ -2201,6 +2196,7 @@ fn lost_connection(text: &str) -> bool {
 mod tests {
     use super::*;
     use crate::db::models::{Kwant, Message};
+    use crate::drivers::activity::ActivityLog;
 
     // Plan decision 5: native .exe first, Claude's own install, then npm .cmd shims.
     #[test]
@@ -2411,6 +2407,18 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
     /// grok's live tool results, through grok's parser and the driver's handler, as the turn
     /// broadcasts them: each update ends its own tool, started just before it as `c<n>`.
     async fn grok_live_results(updates: &[&str]) -> Vec<serde_json::Value> {
+        grok_events(updates)
+            .await
+            .into_iter()
+            .filter_map(|event| match event {
+                RuntimeEvent::ToolCallCompleted { result, .. } => Some(result),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every event the grok driver sends for these updates (see [`grok_live_results`]).
+    async fn grok_events(updates: &[&str]) -> Vec<RuntimeEvent> {
         let (tx, mut rx) = mpsc::channel(64);
         let mut run = GrokRun {
             stdout: String::new(),
@@ -2434,13 +2442,11 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             CliDriver::apply_grok_event(event, &mut run, &tx).await;
         }
         drop(tx);
-        let mut results = Vec::new();
+        let mut events = Vec::new();
         while let Some(event) = rx.recv().await {
-            if let RuntimeEvent::ToolCallCompleted { result, .. } = event {
-                results.push(result);
-            }
+            events.push(event);
         }
-        results
+        events
     }
 
     #[tokio::test]
@@ -2458,15 +2464,90 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
         ])
         .await;
         assert_eq!(results.len(), 3, "{results:?}");
-        // Cut where Claude's is, with the same marker
-        let cut = results[0]["error"].as_str().unwrap();
-        assert_eq!(cut, crate::mcp::truncate_text(&long, CLAUDE_ERROR_MAX));
+        // 29k: the driver sends the whole reason, and kwnt cuts it where Claude's is, with the
+        // same marker, once it has masked it
+        assert_eq!(results[0]["error"], long);
+        let live = ActivityLog::default().redact_event(&RuntimeEvent::ToolCallCompleted { id: "c0".into(), result: results[0].clone() });
+        let RuntimeEvent::ToolCallCompleted { result: live, .. } = live else { panic!("{live:?}") };
+        let cut = live["error"].as_str().unwrap();
+        assert_eq!(cut, crate::mcp::truncate_text(&long, 600));
         assert_eq!(cut.chars().count(), 600 + "… [truncated]".chars().count());
         assert!(cut.starts_with("Error: üü") && cut.ends_with("ü… [truncated]"), "{cut}");
-        assert_eq!(results[0]["status"], "error");
+        assert_eq!(live["status"], "error");
         // A short reason goes out as it is; a tool that worked has no error
         assert_eq!(results[1], serde_json::json!({"status": "error", "error": "exit status 101"}));
         assert_eq!(results[2], serde_json::json!({"status": "ok"}));
+    }
+
+    /// 29k: a failed step's reason as kwnt relays it (masked, then cut) and as its step saves it,
+    /// for each driver event (`ToolCallPending`, then `ToolCallCompleted`).
+    fn relayed(log: &mut ActivityLog, events: &[RuntimeEvent]) -> (String, String) {
+        let mut live = Vec::new();
+        for event in events {
+            for out in log.relay(event).2 {
+                if let RuntimeEvent::ToolCallCompleted { result, .. } = out {
+                    live.push(result["error"].as_str().unwrap_or_default().to_string());
+                }
+            }
+        }
+        assert_eq!(live.len(), 1, "{events:?}");
+        let saved = log.steps().last().and_then(|s| s.detail.clone()).unwrap_or_default();
+        (live.remove(0), saved)
+    }
+
+    /// 29k: Claude and grok send a failed step's whole reason and kwnt masks it before it cuts
+    /// it, so a known secret across the cut is masked whole, live and in the saved step.
+    #[tokio::test]
+    async fn a_secret_across_the_cut_is_masked_whole_live_and_saved() {
+        // Registered with the log and not shaped like a token: only the exact value masks them
+        let short = "Qv7Lamp0Vole2Quiet8Fern4Moss6Rx".to_string();
+        let long: String = (0..150).map(|i| (b'a' + (i * 7 % 26) as u8) as char).collect();
+        let fill = |n: usize| "ü".repeat(n);
+        let marker = "… [truncated]";
+        // (reason, live event's error, saved step's detail)
+        let cases = [
+            // Across char 600 of the live event
+            (
+                format!("{}{short} tail", fill(590)),
+                format!("{}******** t{marker}", fill(590)),
+                format!("{}…", fill(499)),
+            ),
+            // From char 480 (before the step's 500) to 630 (past the event's 600)
+            (
+                format!("Error: {}{long} tail", fill(473)),
+                format!("Error: {}******** tail", fill(473)),
+                format!("Error: {}******** tail", fill(473)),
+            ),
+            // 600 plain chars stay whole; 601 are cut to 600 with the marker
+            (format!("Error: {}", fill(593)), format!("Error: {}", fill(593)), format!("Error: {}…", fill(492))),
+            (format!("Error: {}", fill(594)), format!("Error: {}{marker}", fill(593)), format!("Error: {}…", fill(492))),
+        ];
+        for (n, (reason, want_live, want_saved)) in cases.iter().enumerate() {
+            // Claude: a tool_result with is_error
+            let mut s = ClaudeStream::default();
+            let t0 = Instant::now();
+            let id = format!("tu_{n}");
+            let mut events = s.line(
+                &serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":id,"name":"Bash","input":{"command":"ls"}}]}}).to_string(),
+                t0,
+            );
+            events.extend(s.line(
+                &serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":id,"is_error":true,"content":[{"type":"text","text":reason}]}]}}).to_string(),
+                t0,
+            ));
+            // grok: a failed tool_call_update, its reason in rawOutput.output
+            let grok = grok_events(&[&serde_json::json!({"type":"tool_call_update","toolCallId":"c","status":"failed","rawOutput":{"output":reason}}).to_string()]).await;
+            for (driver, events) in [("claude", events), ("grok", grok)] {
+                let mut log = ActivityLog::with_secrets(vec![short.clone(), long.clone()]);
+                let (live, saved) = relayed(&mut log, &events);
+                for secret in [&short, &long] {
+                    let start = &secret[..4];
+                    assert!(!live.contains(start) && !saved.contains(start), "{driver} case {n}: {secret} shows: {live} / {saved}");
+                }
+                assert_eq!(&live, want_live, "{driver} case {n}: live event");
+                assert_eq!(&saved, want_saved, "{driver} case {n}: saved step");
+            }
+        }
     }
 
     #[tokio::test]

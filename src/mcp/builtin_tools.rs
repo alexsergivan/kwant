@@ -471,6 +471,11 @@ fn target_path(input: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// 29c: the key in a saved reply's meta holding the folder the turn's file tools were judged
+/// against ([`canonical_folder`] of the turn's working folder), for `kwnt run-check`. Replies saved
+/// before 0.9.25, and turns with no tools or no steps, have none.
+pub const GATE_FOLDER_KEY: &str = "gate_folder";
+
 /// The canonical working folder a bot's file tools are measured against.
 pub fn canonical_folder(folder: Option<&Path>) -> Option<PathBuf> {
     folder.and_then(|f| f.canonicalize().ok())
