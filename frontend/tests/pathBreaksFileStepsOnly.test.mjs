@@ -62,8 +62,11 @@ test('a Read, Write, Edit, MultiEdit or NotebookEdit step with a path still brea
   assert.equal(mixed[1], escaped(COMMANDS[0]));
 });
 
-test('isFileStep knows the five file tools and nothing else', () => {
-  for (const t of ['Read', 'write', 'EDIT', 'MultiEdit', 'notebookedit']) assert.equal(m.isFileStep({ tool: t }), true, t);
-  for (const t of [undefined, '', 'Bash', 'Grep', 'Glob', 'WebFetch', 'Reader', 'mcp__x__read', 'read_file'])
+// 29m: isFileStep now uses the server's FileTool list, so read_file and mcp__x__read are file steps
+// (fileStepsEveryEngine.test.mjs); shell, search and web tools stay out.
+test('isFileStep knows the file tools and not shell, search or web tools', () => {
+  for (const t of ['Read', 'write', 'EDIT', 'MultiEdit', 'notebookedit', 'read_file', 'mcp__x__read'])
+    assert.equal(m.isFileStep({ tool: t }), true, t);
+  for (const t of [undefined, '', 'Bash', 'Grep', 'Glob', 'WebFetch', 'Reader', 'mcp__kwnt__run', 'exec_command', 'shell'])
     assert.equal(m.isFileStep({ tool: t }), false, String(t));
 });

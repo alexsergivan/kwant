@@ -220,8 +220,10 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
         // 29e: on a touch phone the 44 px summary takes in the li's py-1.5 (-my-1.5 py-1.5), so a row with › is 44 px
         // like the rows without, not 56, and its tap area stays 44 px. 29i: there its ring sits inside (-outline-offset-2,
         // like the li's), so the list's overflow-hidden doesn't clip it and it doesn't cross an open row's output.
+        // 29m: -mx-0.5 px-0.5 widens the summary by 2 px each side without moving its content, so that inset ring
+        // clears the ✓ again (Mira's 29i design check).
         <details className="group" open={opened || undefined}>
-          <summary className="flex items-start [@media(max-width:767px)_and_(pointer:coarse)]:items-center [@media(max-width:767px)_and_(pointer:coarse)]:-my-1.5 [@media(max-width:767px)_and_(pointer:coarse)]:py-1.5 gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 [@media(max-width:767px)_and_(pointer:coarse)]:focus-visible:-outline-offset-2">
+          <summary className="flex items-start [@media(max-width:767px)_and_(pointer:coarse)]:items-center [@media(max-width:767px)_and_(pointer:coarse)]:-my-1.5 [@media(max-width:767px)_and_(pointer:coarse)]:py-1.5 [@media(max-width:767px)_and_(pointer:coarse)]:-mx-0.5 [@media(max-width:767px)_and_(pointer:coarse)]:px-0.5 gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 [@media(max-width:767px)_and_(pointer:coarse)]:focus-visible:-outline-offset-2">
             {head}
             <ChevronRight size={13} className="mt-px flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
           </summary>

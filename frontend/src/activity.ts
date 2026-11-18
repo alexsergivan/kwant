@@ -339,12 +339,27 @@ export const plainTitle = (t: string) => t.replace(/`([^`]*)`/g, '$1');
 export const hasThinkingText = (a: SavedActivity | null) => !!a?.steps.some((s) => s.kind === 'thinking' && s.text);
 
 /**
- * 29l: whether a step is one of the built-in file tools (Read, Write, Edit, MultiEdit, NotebookEdit, any case), whose
- * detail is a file path. Only these get 29i's path breaks: a shell step's detail is the whole command, which may start
- * with a path ("/usr/bin/git status", "./gradlew test") and must wrap as it always did.
+ * 29l/29m: whether a step is a file tool, whose detail is a file path. Only these get 29i's path breaks: a shell step's
+ * detail is the whole command, which may start with a path ("/usr/bin/git status", "./gradlew test") and must wrap as
+ * it always did. The list is the server's one list, `FileTool::of` (src/drivers/activity.rs), so Codex, grok and MCP
+ * file steps count too; keep the two in step. Like the server's `tool_part`, an `mcp__<server>__` prefix is dropped
+ * (strip "mcp__", then split once at the first "__") and the name is lowercased, so `mcp__kwnt__read_file` is a file step.
  */
-const FILE_TOOLS = new Set(['read', 'write', 'edit', 'multiedit', 'notebookedit']);
-export const isFileStep = (step: Pick<ActivityStep, 'tool'>) => !!step.tool && FILE_TOOLS.has(step.tool.toLowerCase());
+const FILE_TOOLS = new Set([
+  // FileTool::Read
+  'read', 'read_file', 'view', 'cat',
+  // FileTool::Edit
+  'edit', 'multiedit', 'edit_file', 'str_replace', 'str_replace_based_edit_tool', 'apply_patch', 'file_change', 'notebookedit',
+  // FileTool::Write
+  'write', 'write_file', 'create_file',
+]);
+const toolPart = (name: string) => {
+  const rest = name.startsWith('mcp__') ? name.slice(5) : null;
+  const at = rest?.indexOf('__') ?? -1;
+  return rest !== null && at >= 0 ? rest.slice(at + 2) : name;
+};
+export const isFileStep = (step: Pick<ActivityStep, 'tool'>) =>
+  !!step.tool && FILE_TOOLS.has(toolPart(step.tool).toLowerCase());
 
 /**
  * 29i: a single-line detail that is a file path, split after each "/" or "\" (["/", "home/", "me/", "plan.md"]), so
