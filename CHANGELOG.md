@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.27] - 2026-11-19
+
+kwant 0.9.27: a Deny that can say why.
+
+### Added
+- **Deny can now say why.** Tap **Say why** on an approval card, type what the bot should do instead (up to 500 characters), and press Enter or the **Deny and tell** button: the call is denied and the bot that asked hears your reason right away, so it can try another way, and anything new it tries asks you again. The step still reads "You said no; nothing ran". An empty field is a plain Deny, and a plain Deny works exactly as before. Works on cards in chat, Away and the Inbox; Telegram keeps the plain Deny (#839, #840)
+
 ## [Mac 0.9.26] - 2026-11-19
 
 kwant 0.9.26: routine runs you said no to shown in calm grey, finished steps you did for the bot that say so, home bots no longer told off for a true claim about another tool, false home claims caught before Home Assistant is tested, "You said no" only after a real Deny, steps nobody finished in time that say so, a bot browser panel that opens on the bot's own page, an address field that follows the tab you pick, one row per command you answered, step counts that match the rows in Details, an empty tab's address field that stays empty, a blocked push that says so on its own step, an address field that keeps what you type, a picked tab that leaves the bot's page alone, step summaries that wrap instead of being cut off on a phone, an address field that a page's title change leaves alone, a held push on Codex that says so on its own step, a picked tab's list entry that follows your own clicks, phone Details steps that open no taller than the rest, typed addresses that stay with their own tab, a held push on grok that says so on its own step, file steps that keep their full path, long grok tool errors shortened live, as on Claude, secrets in long tool errors hidden in full, phone step rows whose focus ring sits inside and whose paths wrap at a folder and no sign-in notes from a login word late in a long tool error.
