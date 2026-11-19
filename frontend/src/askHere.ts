@@ -351,3 +351,18 @@ export const onlyLiveApproval = (asks: Parameters<typeof askAction>[0][]): boole
 export const stripStepsAside = (s: { strip: boolean; onlyApproval: boolean; cardInView: boolean; followingCard: boolean }): boolean =>
   s.strip && s.onlyApproval && (s.cardInView || s.followingCard);
 
+
+/**
+ * 30a (Mira's 29w design check, small thing b): the strip offers "Go to the approval" for a live approval of this
+ * chat. `asks` are already this chat's (asksHere), so another chat's ask never counts.
+ */
+export const stripHasLiveApproval = (asks: Parameters<typeof askAction>[0][]): boolean =>
+  asks.some((a) => a.kind === 'approval' && askAction(a) === 'decide');
+
+/**
+ * 30a: whether ChatView shows its "↓ Approval waiting" pill. It shows while a waiting card's buttons are off screen,
+ * except when something else already points at that card: on a phone the working line's "Answer ↑" (0.8.1 F6), and
+ * now the Needs-you strip's "Go to the approval", just as "Answer ↑" steps aside for the strip. One pointer per card.
+ */
+export const approvalPillShows = (s: { offscreen: boolean; waiting: number; phoneAnswerUp: boolean; stripHasApproval: boolean }): boolean =>
+  s.offscreen && s.waiting > 0 && !s.phoneAnswerUp && !s.stripHasApproval;

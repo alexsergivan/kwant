@@ -256,7 +256,9 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({
       data-floor-case={view.case}
       role="group"
       aria-labelledby={headingId}
-      className="dv-floor my-3 max-w-2xl rounded-xl text-zinc-100 shadow-lg backdrop-blur-sm"
+      // 30a: "Go to the approval" from the keyboard lands here (no tab stop of its own).
+      tabIndex={-1}
+      className="dv-floor kw-focus my-3 max-w-2xl rounded-xl text-zinc-100 shadow-lg backdrop-blur-sm"
     >
       {/* The hazard tape is .dv-floor::before (4 px, only on the floor card). */}
       <div className="p-3 sm:px-4 sm:pb-4 sm:pt-3.5">
