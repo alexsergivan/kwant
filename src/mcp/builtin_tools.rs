@@ -36,6 +36,30 @@ pub fn known(tool: &str) -> bool {
     LOOKUP_TOOLS.contains(&tool) || READ_TOOLS.contains(&tool) || WRITE_TOOLS.contains(&tool) || matches!(tool, "Bash" | "KillShell")
 }
 
+/// Which of kwnt's groups a built-in tool is in, for `kwnt run-check`. `None` for a tool this
+/// version of kwnt doesn't know (which asks, like Bash).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolGroup {
+    Lookup,
+    Read,
+    Write,
+    Shell,
+}
+
+pub fn group(tool: &str) -> Option<ToolGroup> {
+    if LOOKUP_TOOLS.contains(&tool) {
+        Some(ToolGroup::Lookup)
+    } else if READ_TOOLS.contains(&tool) {
+        Some(ToolGroup::Read)
+    } else if WRITE_TOOLS.contains(&tool) {
+        Some(ToolGroup::Write)
+    } else if matches!(tool, "Bash" | "KillShell") {
+        Some(ToolGroup::Shell)
+    } else {
+        None
+    }
+}
+
 /// Built-ins that start another agent: a Skill Foundry replay refuses them, as their own calls
 /// aren't checked against the replay's scratch folder.
 pub const SUBAGENT_TOOLS: &[&str] = &["Task", "Agent"];
@@ -446,6 +470,11 @@ fn target_path(input: &Value) -> Option<String> {
         .filter(|p| !p.is_empty())
         .map(str::to_string)
 }
+
+/// 29c: the key in a saved reply's meta holding the folder the turn's file tools were judged
+/// against ([`canonical_folder`] of the turn's working folder), for `kwnt run-check`. Replies saved
+/// before 0.9.25, and turns with no tools or no steps, have none.
+pub const GATE_FOLDER_KEY: &str = "gate_folder";
 
 /// The canonical working folder a bot's file tools are measured against.
 pub fn canonical_folder(folder: Option<&Path>) -> Option<PathBuf> {
