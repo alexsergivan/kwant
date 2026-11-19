@@ -35,7 +35,7 @@
 
 use super::continuity::SelfScope;
 use super::AppState;
-use crate::sandbox::service::Rest;
+use crate::sandbox::service::{Rest, SeenLocation};
 use axum::{extract::{Path, State}, Json};
 use serde_json::{json, Value};
 use std::{
@@ -460,6 +460,17 @@ pub async fn live_page(state: &AppState, team: &str) -> String {
         .unwrap_or_else(|| team.to_string())
 }
 
+/// 29d: the address and title the tab list shows for a page: the newer of what the controller
+/// holds (written by browser.rs, or by a view on the bot's page) and what a view on the page the
+/// person picked last read there. The picked read is newer while the controller still holds
+/// exactly what it held at that read ([`SeenLocation::over`]), or holds nothing yet.
+pub(crate) fn shown_location(written: (Option<String>, Option<String>), seen: Option<SeenLocation>) -> (Option<String>, Option<String>) {
+    match seen {
+        Some(seen) if written.0.is_none() || seen.over == written => (Some(seen.url), Some(seen.title)),
+        _ => written,
+    }
+}
+
 /// `GET /api/sandbox/:team_id/pages`: the team's pages for a tab strip, newest first. Each has
 /// its `page` key (pass it to the live view as `?page=`), the bot and chat of a job page, its
 /// address and title, whether a step holds it (`held`), and seconds since its last use. `live`
@@ -473,10 +484,11 @@ pub async fn list_pages(State(state): State<AppState>, Path(team_id): Path<Strin
     let mut out = Vec::new();
     for (key, at) in pages {
         let ctrl = state.browser_controllers.lock().await.get(&key).cloned();
-        let (url, title) = match &ctrl {
+        let written = match &ctrl {
             Some(c) => (c.current_url.lock().await.clone(), c.current_title.lock().await.clone()),
             None => (None, None),
         };
+        let (url, title) = shown_location(written, state.browser_service.pages_seen().get(&key));
         let mut parts = key.splitn(3, PAGE_SEP).skip(1);
         out.push(json!({
             "page": key,

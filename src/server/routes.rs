@@ -1023,10 +1023,13 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
-        // H3: a message held for a stuck or waiting bot starts its turn once the bot can take it
+        // H3: a message held for a stuck or waiting bot starts its turn once the bot can take it,
+        // after the older ones the person held in this chat (27d: answered in the order sent)
+        let mut held_place = super::bot_status::HeldPlace::default();
         if let Some(id) = &held {
-            if !super::bot_status::wait_released(&scope.state, id, &scope.cancel_token).await {
-                return;
+            match Box::pin(super::bot_status::wait_turn(&scope.state, id, &scope.cancel_token)).await {
+                Some(place) => held_place = place,
+                None => return,
             }
         }
         // P10: what the person expects and how best to deliver it, planned once before the bot
@@ -1045,7 +1048,7 @@ fn execute_single_turn(
             super::delivery_plan::remember(&scope.job_id, &message_id, plan);
         }
         // A full link in the person's own message may open the bot browser first
-        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), ..TurnOpts::default() };
+        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), held_place, ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
             // Several bots asked the person something: one list of it all (when the chain is over)
@@ -2141,7 +2144,13 @@ pub(super) struct TurnOpts {
     /// reply's plan, though its prompt is kwant's; the delivery check's continuation keeps the
     /// first turn's, and is checked against it). `None`: the plan comes from the person's own
     /// message, or there is none (see [`crate::router::delivery::plan_for_turn`]).
-    pub(super) delivery: Option<crate::router::delivery::DeliveryPlan>,
+    /// Boxed, like `audit` and `held_place`: `TurnOpts` rides in every layer of a turn's future.
+    pub(super) delivery: Option<Box<crate::router::delivery::DeliveryPlan>>,
+    /// 27d: a released held message's place in its chat's line, given up once this turn has its
+    /// own place in the bot's line (see [`super::bot_status::wait_turn`]). Only the first attempt
+    /// carries it. Empty for every turn that wasn't held. One pointer wide (see
+    /// [`super::bot_status::HeldPlace`]).
+    pub(super) held_place: super::bot_status::HeldPlace,
 }
 
 /// See [`TurnOpts::chat_handover`].
@@ -2316,7 +2325,8 @@ fn turn_plan(opts: &TurnOpts, current: Option<&Message>, recent: &[&str], git_re
         fresh_eyes: opts.fresh_eyes,
         carried: opts
             .delivery
-            .clone()
+            .as_deref()
+            .cloned()
             .or_else(|| person.and_then(|m| super::delivery_plan::plan_for_answer(job_id, Some(m.id.as_str())))),
         person_message: person_words(opts.nav_prompt.is_some(), current),
         recent,
@@ -2385,7 +2395,7 @@ impl Carried {
         let delivery_seen = self.delivery_seen.clone();
         TurnOpts {
             label: Some(label.into()),
-            delivery: plan,
+            delivery: plan.map(Box::new),
             delivery_continued: true,
             chat_handover: handover,
             delivery_seen,
@@ -2425,7 +2435,7 @@ pub(super) async fn turn_once(
     scope: &TurnScope,
     target_kwant: &Kwant,
     prompt: String,
-    opts: TurnOpts,
+    mut opts: TurnOpts,
 ) -> Result<String, String> {
     let tag = crate::drivers::events::TurnTag {
         turn_id: uuid::Uuid::new_v4().to_string(),
@@ -2473,9 +2483,16 @@ pub(super) async fn turn_once(
     // A delivery continuation starts on the slot its first turn handed over (see
     // [`TurnOpts::chat_handover`]); every other turn takes one
     let handed = opts.chat_handover.as_ref().and_then(|h| h.lock().ok()?.take());
+    // 27d: a released held message keeps its chat's line until this turn is in the bot's line
+    let place = std::mem::take(&mut opts.held_place);
     let slot = match handed {
-        Some(slot) => slot,
-        None => match turns.acquire(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender).await {
+        Some(slot) => {
+            drop(place);
+            slot
+        }
+        // Boxed, like the place itself: turn_once's future is part of every turn's (see
+        // [`super::bot_status::HeldPlace`])
+        None => match Box::pin(turns.acquire_then(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender, move || drop(place))).await {
             Some(slot) => slot,
             None => return Err("stopped by the user".into()),
         },
@@ -2974,7 +2991,7 @@ async fn run_kwant_turn_inner(
                 no_tools: opts.no_tools,
                 read_only,
                 fresh_eyes: opts.fresh_eyes,
-                carried: opts.delivery.clone().or_else(|| job_plan.clone()),
+                carried: opts.delivery.as_deref().cloned().or_else(|| job_plan.clone()),
                 person_message: answered.map(|m| m.text.as_str()),
                 recent: &[],
                 git_repo: workspace_dir.as_deref().is_some_and(crate::router::delivery::in_git_repo),
@@ -3077,7 +3094,8 @@ async fn run_kwant_turn_inner(
         // A replay opens no page: the bot's browser isn't its scratch folder
         let target_url_opt = if opts.rehearse.is_some() || opts.no_tools { None } else { opts.nav_target() };
         // 13a: the request's link couldn't be opened before the turn (it didn't load, or a site rule
-        // refused it). A failed first step that isn't in the turn's activity
+        // refused it). 28g: the open is saved as the turn's first step, but follow-through reads the
+        // turn's activity without it, so this stays the only signal for it
         let mut page_failed = false;
 
         if let Some(target_url) = target_url_opt {
@@ -3087,10 +3105,13 @@ async fn run_kwant_turn_inner(
             )));
             if let Some(ctrl) = get_or_create_browser_controller(state, &turn_page).await {
                 ctrl.site_guard.set_driver(&target_kwant.id);
+                // 28g: the open is a step on the reply ("Opening <host>"), live and saved
+                event_broadcast.activity.link_open_start(&target_url);
                 let navigated = match guard_bot_action(state, &ctrl, &turn_page).await {
                     Ok(()) => ctrl.navigate(&target_url).await,
                     Err(e) => Err(e),
                 };
+                event_broadcast.activity.link_open_end(&super::activity::LinkOpen::of(&navigated));
                 match navigated {
                 Ok(nav) => {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
@@ -4001,17 +4022,20 @@ async fn run_kwant_turn_inner(
                 // ...against the same plan the prompt's "[What to deliver]" hint came from
                 let expect = plan.as_ref().and_then(super::delivery_check::Expect::from_plan);
                 let checked = opts.delivery_checked();
+                // What the bot's own tools did: kwnt's link open before the turn counts only as `page_failed` (28g)
+                let own_steps = super::activity::without_link_open(activity.as_ref());
                 let verdict = if checked {
                     // Follow-through (0.9.4): the turn's last tool step, if it failed, and a declined card
-                    let (ran_tools, failed_step, declined) = super::delivery_check::tool_steps_in(activity.as_ref());
+                    let (ran_tools, failed_step, declined) = super::delivery_check::tool_steps_in(own_steps.as_ref());
                     let own = super::delivery_check::Seen {
                         image_shared: pictures.shared_image,
                         has_shot: pictures.last_shot.is_some(),
-                        pushed: super::delivery_check::pushed_in(activity.as_ref()),
+                        pushed: super::delivery_check::pushed_in(own_steps.as_ref()),
                         ran_tools,
                         failed_step,
                         declined,
                         home: super::delivery_check::home_steps_in(activity.as_ref(), &home_servers),
+                        other_changed: super::delivery_check::other_change_in(activity.as_ref(), &home_servers),
                     };
                     // ...counting what the delivery's earlier turns did (F1)
                     let seen = match opts.delivery_seen.as_ref().map(|d| d.lock()) {
@@ -4073,6 +4097,8 @@ async fn run_kwant_turn_inner(
                 if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref(), checked) {
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
                 }
+                // 29c: the folder kwnt's gate judged this turn's file tools against (see `note_gate_folder`)
+                note_gate_folder(&mut meta, activity.as_ref(), mcp_turn.is_some(), workspace_dir.as_deref());
                 // 0.9.4: a reply that ends with `Blocked: <what>. <what unblocks it>` says so in its meta
                 // 13a: with no such line, a turn whose last tool step failed (or was declined, or whose
                 // link didn't open and it ran no tool) and whose reply ends waiting on the person in
@@ -4084,7 +4110,7 @@ async fn run_kwant_turn_inner(
                 let blocked = super::keep_going::blocked_line(&asst_msg.text)
                     .map(|text| serde_json::json!({ "text": text }))
                     .or_else(|| {
-                        let text = super::delivery_check::failed_step_blocked(&asst_msg.text, activity.as_ref(), before).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
+                        let text = super::delivery_check::failed_step_blocked(&asst_msg.text, own_steps.as_ref(), before).filter(|_| verdict.continue_with.is_none() || opts.delivery_next.is_none())?;
                         Some(serde_json::json!({ "text": text, "from": "failed_step" }))
                     })
                     // 22j: the one continuation still ended on a promise after the step failed again
@@ -4095,7 +4121,7 @@ async fn run_kwant_turn_inner(
                         Some(serde_json::json!({ "text": super::delivery_check::blocked_text(&target_kwant.name, step), "from": "follow_through" }))
                     });
                 // ...and if this reply is held, its decided reply (a new turn) counts what this one left
-                let failed_before = super::delivery_check::FailedBefore::of_turn(activity.as_ref(), before);
+                let failed_before = super::delivery_check::FailedBefore::of_turn(own_steps.as_ref(), before);
                 if let Some(blocked) = blocked {
                     meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = blocked;
                 }
@@ -4309,6 +4335,21 @@ async fn idea_from_chat(
     match super::idea_jar::drop_in(state, &space, text).await {
         Ok(idea) => (StatusCode::CREATED, Json(serde_json::json!({"handled": "idea", "idea": super::idea_jar::idea_json(&idea)}))).into_response(),
         Err(r) => r,
+    }
+}
+
+/// 29c: records on a reply's meta the folder kwnt's gate judged the turn's file tools against
+/// ([`crate::mcp::builtin_tools::GATE_FOLDER_KEY`]), so `kwnt run-check` can tell a file step outside it
+/// from one inside. Only for a turn that had the gate (`gated`) and saved steps. Kept out of
+/// `run_kwant_turn_inner` (`inline(never)`) so its temporaries don't grow that function's frame.
+#[inline(never)]
+fn note_gate_folder(meta: &mut Option<serde_json::Value>, activity: Option<&serde_json::Value>, gated: bool, workspace_dir: Option<&std::path::Path>) {
+    let ran_steps = activity.and_then(|a| a["steps"].as_array()).is_some_and(|s| !s.is_empty());
+    if !gated || !ran_steps {
+        return;
+    }
+    if let Some(folder) = crate::mcp::builtin_tools::canonical_folder(workspace_dir) {
+        meta.get_or_insert_with(|| json!({}))[crate::mcp::builtin_tools::GATE_FOLDER_KEY] = json!(folder.display().to_string());
     }
 }
 
@@ -5089,7 +5130,7 @@ async fn send_to_thread(
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
-    let opts = TurnOpts {
+    let mut opts = TurnOpts {
         nav_prompt: Some(payload.prompt.clone()),
         source: Some(super::bot_status::TurnSource::sender(from_person)),
         ..TurnOpts::default()
@@ -5102,9 +5143,11 @@ async fn send_to_thread(
     let held_id = held.as_ref().map(|_| saved.id.clone());
     tokio::spawn(async move {
         let _job = job;
+        // After the older messages the person held in this thread (27d)
         if let Some(id) = &held_id {
-            if !super::bot_status::wait_released(&scope.state, id, &scope.cancel_token).await {
-                return;
+            match Box::pin(super::bot_status::wait_turn(&scope.state, id, &scope.cancel_token)).await {
+                Some(place) => opts.held_place = place,
+                None => return,
             }
         }
         run_kwant_turn(&scope, &target, prompt, opts).await;
@@ -7445,6 +7488,41 @@ mod tests {
         assert_eq!(handoff_title("@QA run `cargo test` on staging.", "QA").as_deref(), Some("Run `cargo test` on staging."));
     }
 
+    #[test]
+    fn a_gated_turn_with_steps_records_the_canonical_folder_and_no_other_turn_does() {
+        use super::note_gate_folder;
+        use crate::mcp::builtin_tools::GATE_FOLDER_KEY;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("bot");
+        std::fs::create_dir(&folder).unwrap();
+        let canon = folder.canonicalize().unwrap().display().to_string();
+        let steps = json!({ "steps": [{ "title": "Wrote plan.md" }] });
+        let none = json!({ "steps": [] });
+        let missing = dir.path().join("missing");
+
+        let mut meta = Some(json!({ "ran_on": { "engine": "claude" } }));
+        note_gate_folder(&mut meta, Some(&steps), true, Some(&folder));
+        let meta = meta.unwrap();
+        assert_eq!(meta[GATE_FOLDER_KEY], json!(canon));
+        assert_eq!(meta["ran_on"]["engine"], "claude", "other keys stay");
+
+        let mut fresh = None;
+        note_gate_folder(&mut fresh, Some(&steps), true, Some(&folder.join(".")));
+        assert_eq!(fresh.unwrap()[GATE_FOLDER_KEY], json!(canon), "a meta-less reply gets one, canonical");
+
+        for (activity, gated, at) in [
+            (Some(&steps), false, Some(folder.as_path())),
+            (Some(&none), true, Some(folder.as_path())),
+            (None, true, Some(folder.as_path())),
+            (Some(&steps), true, None),
+            (Some(&steps), true, Some(missing.as_path())),
+        ] {
+            let mut meta = None;
+            note_gate_folder(&mut meta, activity, gated, at);
+            assert_eq!(meta, None, "{activity:?} gated={gated} at={at:?}");
+        }
+    }
+
     use super::{
         is_persons, is_reply_by, person_words, scrub_urls, turn_failed_text, turn_plan, with_failure_meta, Carried, TurnOpts,
     };
@@ -7579,7 +7657,7 @@ mod tests {
         assert!(first.continuation_slot().is_some());
         let ideas = turn_plan(&first, Some(&saved("user", "user", "What cool feature can we add?", None)), &[], true, "").unwrap();
         let next = Carried::of(&first).continuation(Some(ideas.clone()), crate::server::delivery_check::continuation_label(&[crate::server::delivery_check::Missing::Link]), None);
-        assert_eq!(next.delivery.as_ref(), Some(&ideas));
+        assert_eq!(next.delivery.as_deref(), Some(&ideas));
         assert!(next.delivery_continued && next.continuation_slot().is_none(), "continued once at most");
         // kwant's continuation prompt can't make a plan of its own
         let prompt = saved("user", "user", "Commit and push your work, then reply with the PR link", None);
@@ -7613,9 +7691,9 @@ mod tests {
             TurnOpts { no_tools: true, ..person_turn() },
             TurnOpts { fresh_eyes: true, ..person_turn() },
             TurnOpts { purpose: brief.clone(), ..person_turn() },
-            TurnOpts { no_tools: true, delivery: carried.clone(), ..Default::default() },
-            TurnOpts { fresh_eyes: true, delivery: carried.clone(), ..Default::default() },
-            TurnOpts { purpose: brief.clone(), delivery: carried.clone(), ..Default::default() },
+            TurnOpts { no_tools: true, delivery: carried.clone().map(Box::new), ..Default::default() },
+            TurnOpts { fresh_eyes: true, delivery: carried.clone().map(Box::new), ..Default::default() },
+            TurnOpts { purpose: brief.clone(), delivery: carried.clone().map(Box::new), ..Default::default() },
         ] {
             assert_eq!(plan_of(&opts, &m, true), None, "no_tools={} fresh_eyes={} purpose={:?}", opts.no_tools, opts.fresh_eyes, opts.purpose);
         }
