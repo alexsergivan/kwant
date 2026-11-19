@@ -733,8 +733,31 @@ test('30a: keyboard "Go to the approval" (strip, pill, Answer ↑) focuses the c
   // The 29w hand-off to the composer still only runs when focus was lost (body) or is still in the hidden strip.
   assert.match(chat, /if \(!a \|\| a === document\.body \|\| stripSlotRef\.current\?\.contains\(a\)\) textareaRef\.current\?\.focus\(\{ preventScroll: true \}\);/);
   // The flash wrapper is always there, so flashing the card on landing doesn't remount it (and drop its focus).
-  assert.match(chat, /<div key=\{approval\.id\} className=\{flashId === approval\.id \? 'rounded-xl kw-flash' : 'contents'\}>\n\s*<ModernApprovalCard approval=\{approval\} onResolve=\{onResolveApproval\} \/>\n\s*<\/div>/);
+  assert.match(chat, /<div key=\{approval\.id\} className=\{flashId === approval\.id \? '[^']*\bkw-flash\b[^']*' : 'contents'\}>\n\s*<ModernApprovalCard approval=\{approval\} onResolve=\{onResolveApproval\} \/>\n\s*<\/div>/);
   assert.doesNotMatch(chat, /<ModernApprovalCard key=\{approval\.id\}/);
   // The dev production-floor card is a landing place too.
   assert.match(floor, /data-approval-card=\{id\}[\s\S]{0,400}tabIndex=\{-1\}/);
+});
+
+// 30h (brief: autonomy/approval-flash-fits-card/brief.md; Mira's 30a design check "Small things c", Rigel's 30a QA
+// observation 1): at 1440 the amber flash box ran to the chat column's edge while the card stops at its max width.
+test('30h: the approval flash box is as wide as the card, and adds nothing to its height', () => {
+  const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const card = readFileSync(new URL('../src/components/ModernApprovalCard.tsx', import.meta.url), 'utf8');
+  const flash = chat.match(/<div key=\{approval\.id\} className=\{flashId === approval\.id \? '([^']*)' : '([^']*)'\}>\s*<ModernApprovalCard /);
+  assert.ok(flash, 'the approval card sits in the flash wrapper');
+  const [, on, idle] = flash;
+  const onCls = on.split(/\s+/);
+  assert.ok(onCls.includes('kw-flash') && onCls.includes('rounded-xl'), on);
+  // The idle wrapper stays display: contents (30a: no remount, no layout of its own).
+  assert.equal(idle, 'contents');
+  // The card root's own max width, read from the card, is on the flashing wrapper too.
+  const root = card.match(/data-approval-card=\{approval\.id\}[\s\S]{0,300}?className=\{`([^`$]*)/);
+  assert.ok(root, 'card root class');
+  const maxW = root[1].split(/\s+/).filter((c) => /^max-w-/.test(c));
+  assert.equal(maxW.length, 1, root[1]);
+  assert.ok(onCls.includes(maxW[0]), `flash wrapper "${on}" lacks the card's ${maxW[0]}`);
+  // Top and bottom: the card's my-3 collapses through the wrapper only while the wrapper has no margin, padding,
+  // border or its own formatting context, so none of those may join the flashing class.
+  for (const c of onCls) assert.doesNotMatch(c, /^(-?m[trblxy]?|p[trblxy]?|border|ring|flex|grid|inline|overflow|flow-root|w)-|^(flex|grid|inline-block|flow-root|border)$/, c);
 });
