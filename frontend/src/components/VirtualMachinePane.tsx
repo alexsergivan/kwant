@@ -35,7 +35,7 @@ import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 import { PointLayer, PointSink } from './PointLayer';
 import { POINT_COPY, footerText } from '../point';
-import { choosePage, noteTitle, pageOpened, pageTeam, pageTitleOf, restingPage, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
+import { addressToShow, choosePage, noteTitle, ownNewestPage, pageOpened, pageTeam, pageTitleOf, restingPage, shownPage, stepPage, trailTime, type ReplyPage } from '../browserPages';
 import { useBrowserPages } from '../useBrowserPages';
 import { BrowserPageStrip } from './BrowserPageStrip';
 import { secondsText } from '../clock';
@@ -190,7 +190,20 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
-  const [inputUrl, setInputUrl] = useState(activeUrl);
+  // 28r: what was last written into the address field, and for which tab (see `fieldKey` below)
+  const [written, setWritten] = useState<{ key: string; url: string } | null>(null);
+  // 29f: what the person typed, per tab (same keys), apart from what a stream wrote, so another tab's stream
+  // never reaches it (Rigel's Q4). Only a new url (or page) from that tab's own stream replaces it (28x/28y).
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  const dropTyped = useCallback((key: string) => setTyped((t) => {
+    if (!(key in t)) return t;
+    const rest = { ...t };
+    delete rest[key];
+    return rest;
+  }), []);
+  // 29f: the url each tab's own stream last reported since the pane opened. A tab you come back to reports
+  // its address again on a new socket; the same url is not a change, so what you typed there stays.
+  const heard = useRef(new Map<string, string>());
   // No event fires when the browser catches a login, so a new screenshot or page loads the list again.
   const passwords = useSavedPasswords(teamId, `${activeUrl}|${screenshotBase64?.length ?? 0}|${screenshotBase64?.slice(-32) ?? ''}`);
   const savedCount = passwords.logins.length;
@@ -236,9 +249,13 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [heldPage, setHeldPage] = useState<string | null>(null);
   const lastList = useRef(pages.list);
   const opened = pages.list !== lastList.current && pageOpened(lastList.current, pages.list);
+  const botName = useCallback((id: string) => botNames?.[id], [botNames]);
+  // 28o: the first list since the pane opened: rest first on the newest page of the bot whose panel it
+  // is. Held from then on, so it is decided once and never re-evaluated.
+  const firstPage = !lastList.current && !heldPage ? ownNewestPage(pages.list, browsingBot, botName) : null;
   const chosenPage =
     choosePage({ picked: picked?.page ?? null, stepPage: stepPage(openStep), pages: knownPages }) ??
-    restingPage(opened ? null : heldPage, pages.list);
+    restingPage(opened ? null : heldPage, pages.list, firstPage);
   useEffect(() => {
     lastList.current = pages.list;
   }, [pages.list]);
@@ -255,7 +272,6 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const onScreen = (s: HumanStep | null | undefined) => (s && stepPage(s) === pageOnScreen ? s : null);
   humanStep = onScreen(humanStep);
   captchaStep = onScreen(captchaStep);
-  const botName = useCallback((id: string) => botNames?.[id], [botNames]);
   // Who the page on screen belongs to: its bot on a job page, else the team ("Architect needs you to sign in")
   const pageBot = (pageInfo?.job && pageInfo.kwant_id && botNames?.[pageInfo.kwant_id]) || teamName;
   // 0.9.8 header and footer: "Ben's browser", or "The team's browser" when no bot owns the page on screen
@@ -282,10 +298,13 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // Shown for a moment after the CAPTCHA closes by itself, before control goes back to the bot
   const [solvedNote, setSolvedNote] = useState(false);
 
-  // Once the stream reports where the tab is, trust it; before that, the last URL the app heard of.
-  const pageUrl = stream.location ? stream.location.url : chosenPage ? pageInfo?.url ?? '' : activeUrl;
-  // The same for the title: a new page's empty title must not fall back to the previous page's.
-  const shownTitle = stream.location ? stream.location.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
+  // Once the chosen page's own stream reports where the tab is, trust it; before that, that page's listed
+  // address; with no page chosen, the last URL the app heard of (28r: one rule, shared with the field).
+  const pageUrl = addressToShow({ location: stream.location, chosen: chosenPage, listedUrl: pageInfo?.url, activeUrl });
+  // The same for the title: a new page's empty title must not fall back to the previous page's, and (28u)
+  // only the chosen page's own stream names it, so the tab just left never lends its title for a render.
+  const ownLocation = stream.location && stream.location.page === chosenPage ? stream.location : null;
+  const shownTitle = ownLocation ? ownLocation.title : chosenPage ? pageInfo?.title ?? '' : pageTitle;
   // A blank light frame from Chrome (a page committing) waits behind the last good picture: no grey flash
   const steady = useSteadyFrame(stream.frame, stream.acknowledgeFrame);
   const controlError = stream.error || (!stream.connected ? browserError : null);
@@ -301,16 +320,72 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   useEffect(() => {
     if (blankFrameId !== undefined) acknowledgeFrame(blankFrameId);
   }, [blankFrameId, acknowledgeFrame]);
+  // 28r: the address field follows the tab. A value typed or reported belongs to the tab it was written for;
+  // for any other tab the field shows that tab's listed address (none or a blank tab: empty), in the same
+  // render as the pick, so the old tab's address never shows under the new one. While the list is still on
+  // its way nothing is chosen yet: empty, not another bot's last address. No page chosen: as before.
+  const fieldKey = chosenPage ? `page:${chosenPage}` : pagesKnown ? 'default' : 'waiting';
+  // 28x (Rigel's 28r P1): leaving a tab drops what its stream wrote, so coming back shows the newer listed
+  // address, not the old one; text the person typed stays. Set during render, so the tap render is right.
+  const [fieldSeen, setFieldSeen] = useState(fieldKey);
+  if (fieldSeen !== fieldKey) {
+    setFieldSeen(fieldKey);
+    if (written && written.key === fieldSeen) setWritten(null);
+  }
+  const inputUrl = typed[fieldKey] ?? (written?.key === fieldKey
+    ? written.url
+    : chosenPage ? (isBlankPage(pageInfo?.url) ? '' : pageInfo?.url ?? '') : pagesKnown ? activeUrl : '');
+  const setInputUrl = (url: string) => setTyped((t) => ({ ...t, [fieldKey]: url }));
+  // Then the stream takes over, but only the chosen page's own: a late message from the page just left
+  // never writes its address. A blank tab's own about:blank keeps the field empty (28u), as its chip says
+  // "nothing open"; pageUrl keeps the raw value for the blank check and the picture. 28y: only a new url or page
+  // writes it; a title that changes on its own ("(3) Inbox") never reaches the field or what the person typed.
   useEffect(() => {
-    if (stream.location?.url) setInputUrl(stream.location.url);
-  }, [stream.location]);
+    const url = stream.location?.url;
+    if (!url || stream.location?.page !== chosenPage) return;
+    setWritten({ key: fieldKey, url: isBlankPage(url) ? '' : url });
+    if (heard.current.get(fieldKey) !== url) dropTyped(fieldKey);
+    heard.current.set(fieldKey, url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stream.location?.url, stream.location?.page]);
+  // 29f: a closed pane starts over (a reopened stream writes the address, as 28x/28y decided); a closed page's
+  // typed text goes with it, and another team's pane remembers nothing of this one.
+  useEffect(() => {
+    if (!isOpen) heard.current.clear();
+  }, [isOpen]);
+  useEffect(() => {
+    if (!pageKeys) return;
+    const open = new Set(pageKeys.map((p) => `page:${p}`));
+    for (const key of [...heard.current.keys()]) if (key.startsWith('page:') && !open.has(key)) heard.current.delete(key);
+    setTyped((t) => {
+      const gone = Object.keys(t).filter((key) => key.startsWith('page:') && !open.has(key));
+      if (!gone.length) return t;
+      const rest = { ...t };
+      for (const key of gone) delete rest[key];
+      return rest;
+    });
+  }, [pageKeys]);
+  const typedTeam = useRef(teamId);
+  useEffect(() => {
+    if (typedTeam.current === teamId) return;
+    typedTeam.current = teamId;
+    heard.current.clear();
+    setTyped({});
+    setWritten(null);
+  }, [teamId]);
   // The pane's own stream knows each page's title too, so the trail can name pages the bot opened
   useEffect(() => {
     noteTitle(stream.location?.url, stream.location?.title);
   }, [stream.location?.url, stream.location?.title]);
 
+  // The app's last known address is any bot's, not the selected tab's: it writes the field only when no
+  // page is chosen (an older server with no pages route)
   useEffect(() => {
-    setInputUrl(activeUrl);
+    if (!chosenPage && pagesKnown) {
+      setWritten({ key: fieldKey, url: activeUrl });
+      dropTyped(fieldKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeUrl]);
 
   // "Solve it" on the card or a CAPTCHA notification: take control once the stream is up
@@ -723,6 +798,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           </div>
         ) : activeTab === 'browser' ? (
           <div className="flex-1 min-h-0 flex flex-col p-3 gap-2 overflow-y-auto" onScroll={touch} data-pane-body="">
+            {/* 28o: while the pane waits for the list, the strip's row is kept, empty, so the dark box doesn't move down when the tabs arrive */}
+            {!pagesKnown && <div aria-hidden="true" data-page-strip-reserved="" className={`shrink-0 ${narrow ? 'h-11' : 'h-7'}`} />}
             {pages.list && (
               <BrowserPageStrip
                 pages={pages.list.pages}
@@ -757,6 +834,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     }
                     if (isControlMode) stream.send({ action: 'navigate', url: target }, true);
                     else onNavigate(target, chosenPage);
+                    // 29f (Rigel's Q2): the field goes back to the page and shows the full address it was sent to,
+                    // even when the page was already there and no new url comes
+                    setWritten({ key: fieldKey, url: target });
+                    dropTyped(fieldKey);
                   }
                 }}
                 placeholder="https://..."

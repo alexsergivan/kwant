@@ -223,6 +223,8 @@ export interface ProdFloor {
 /** How the card answers: `without_backup` only from the person's own confirm on a "guess" deploy (22f). */
 export interface FloorResolveOpts {
   withoutBackup?: boolean;
+  /** 29p: Deny only, from the card's "Say why" field: what the person told the bot (sent trimmed, at most 500 chars). */
+  reason?: string;
 }
 
 /** `POST /api/spaces/:id/dev/backup`. */

@@ -8,8 +8,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-### Added
-- A Deploy on Railway button in the README: kwnt from the released image with a volume on `/data`, and the bots' private browser.
+## [Mac 0.9.26] - 2026-11-19
+
+kwant 0.9.26: routine runs you said no to shown in calm grey, finished steps you did for the bot that say so, home bots no longer told off for a true claim about another tool, false home claims caught before Home Assistant is tested, "You said no" only after a real Deny, steps nobody finished in time that say so, a bot browser panel that opens on the bot's own page, an address field that follows the tab you pick, one row per command you answered, step counts that match the rows in Details, an empty tab's address field that stays empty, a blocked push that says so on its own step, an address field that keeps what you type, a picked tab that leaves the bot's page alone, step summaries that wrap instead of being cut off on a phone, an address field that a page's title change leaves alone, a held push on Codex that says so on its own step, a picked tab's list entry that follows your own clicks, phone Details steps that open no taller than the rest, typed addresses that stay with their own tab, a held push on grok that says so on its own step, file steps that keep their full path, long grok tool errors shortened live, as on Claude, secrets in long tool errors hidden in full, phone step rows whose focus ring sits inside and whose paths wrap at a folder and no sign-in notes from a login word late in a long tool error.
+
+### Fixed
+- In a routine's History and on its card, a run you said no to now shows a grey **You said no** badge with **You said no to Bash; nothing ran** (with the tool's own name) under it, instead of a rose "A step failed". A run where something really broke stays rose, as before. (#794)
+- Once a step the bot asked you to do is over, its row in a reply's Details and in the "What <bot> did" list reads **You did it: …**, **Cleared by itself: …**, **You said no: …** or **Asked you: …** (nobody did it in time, or it was stopped), instead of still saying "Waiting for you: …". The bot's own reason is kept exactly as it wrote it. Steps still waiting look as before. (#801)
+- A bot that uses Home Assistant and other tools, and really changed something with another tool in the same reply, is no longer sent back to redo a home step when it truthfully says something like "I closed the issue." A sentence that names something in the home ("I turned off the kitchen light.") with no Home Assistant step behind it is still caught, and bots that only use Home Assistant behave exactly as before. (#800)
+- On the Claude CLI engine, a Home Assistant server kwant hasn't tested yet now counts as a home server from the first message when its address (or a stdio argument) ends in Home Assistant's own /api/mcp or /mcp_server/sse path, so a bot that says "I turned off the light" without calling it is caught just as it is after a test. What a server says it is still wins over its address. (#805)
+- A step now says **You said no** only when you pressed Deny. An approval card that went away with nobody answering is saved as stopped, not as your no. A routine step nobody answered in time reads **Nobody answered in time; <tool> didn't run** and still counts as a failure. A refusal you never saw reads **kwant blocked this; nothing ran**, or **Blocked before push; nothing ran** for kwant's check before a push. What the bot is told is unchanged. (#802)
+- A step you didn't get to in time no longer shows as Done (#807)
+- The bot browser panel opens on the bot's own newest page, without a jump while it loads (#808)
+- Switching tabs in the bot browser shows the new tab's address at once, never the old one (#812)
+- In Details, your answer to an approval shows on the command's own row instead of a second row (#811)
+- A reply's step count no longer counts a command and your answer to it as two steps (#813)
+- An empty bot browser tab no longer shows about:blank in its address field, and its title follows the tab you pick (#814)
+- When kwant blocks a push, **Blocked before push; nothing ran** shows on that push's own step, never on another call of the same tool that failed on its own (#809)
+- Typing in the bot browser's address field is no longer wiped every 2 seconds, and a tab you go back to shows its newest address (#819)
+- A tab you pick in the bot's browser no longer overwrites the bot's own page address (#820)
+- On a phone, a reply's step summary above Details wraps to two lines instead of being cut off (#821)
+- A page that only changes its title, such as an unread count or a loading message, no longer wipes what you are typing in the bot browser's address field (#823)
+- On Codex, a push kwnt's safety check held reads "Blocked before push; nothing ran" on its own step (#822)
+- In a tab you picked in the bot's browser, the tab list follows your clicks and Back/Forward again (#824)
+- On a phone, a step you can open in a reply's Details is as tall as the others (44 px, not 56) (#827)
+- Text typed in the bot browser's address field stays with its own tab, and Enter shows the full https:// address (#826)
+- On grok, a push kwnt's safety check held reads "Blocked before push; nothing ran" on its own step (#828)
+- File steps in a reply's Details keep their full path, and kwnt run-check flags a file read or written outside the bot's folder without a card (#825)
+- On grok, a very long tool error is shortened to 600 characters in the live view, as on Claude (#833)
+- On a phone, a step's keyboard focus ring in a reply's Details sits inside its row, and a long file path in a file step wraps at a folder first, whichever engine ran it (Claude, Codex, grok or an MCP file tool); commands wrap as before (#832, #835, #837)
+
+### Security
+- A secret in a very long tool error is now masked in full before the error is shortened, so no part of it shows in the live view or the saved step; Codex's live tool error is now capped at 600 characters too (#836)
+- A secret in a very long tool result from an API model is now masked in full before the live view shortens it to 4000 characters, and a very long tool error that mentions a login problem only after its first 600 characters no longer says you need to sign in again (#838)
+
+## [Mac 0.9.25] - 2026-11-18
+
+kwant 0.9.25: fold titles centred in their rows on a phone, answered approval steps that say what you chose, a no that is saved as your no, also in routines, the link you send shown as the reply's first step, no blink when the bot browser panel opens after a run, a sign-in notice that follows its own tab's page, a run check that also catches local fetches with no card and failed grok steps that say why.
+
+### Changed
+- **kwnt run-check** also lists a web fetch of this computer or your local network that ran with no approval card, since kwant asks before those (#816)
+
+### Fixed
+- On a phone, every fold (a reply's Details steps, a check's Details, a goal's Last output and the other fold-out rows) has its title in the middle of its 44 px tap row, instead of stuck to the top with an empty strip under it. The disclosure triangle stays, and desktop, tablets and phones with a mouse look exactly as before. (#791)
+- Once you answer an approval card, its step in a reply's Details reads **You said OK: …** or **You said no: …**, and a card nobody answered in time reads **Asked for your OK: …**, instead of still saying "Waiting for your OK: …". The "What the bot did" list for work done while you were away reads the same way. Cards still waiting look as before, and replies saved before the update read the new way too. (#799)
+- When you press Deny on an approval card, that step is now saved as declined with **You said no; nothing ran**, instead of a failed step reading "The user denied this tool call." A routine run whose step you said no to reads **You said no to Bash; nothing ran** (with the tool's own name) and counts as not done, never as ok. If something really breaks later in the same run, that failure's own reason shows instead. Refusals you never saw, such as kwant's check before a push, never say "You said no". (#792)
+- When your message has a link, kwant's own opening of it before the bot starts is now the first step in the reply's Details: **Opening <host>**, with the page's title, or the reason it didn't open (such as a name that doesn't resolve). Before, a link that didn't open left nothing in Details. Old replies are unchanged. (#797)
+- Opening the bot browser panel right after a run stays on one tab from the first frame: the pane stays dark until it knows which pages are open (at most 1.5 s), then shows that tab's page, with no flash of the bot's last page under "Shared" and no jump from one tab to another. It still follows a bot that opens a new page while the panel is open. (#804)
+- The Shared browser tab's sign-in notice follows its own page, never the bot's (#817)
+- On grok, a failed tool step shows grok's reason instead of just "failed" (#830)
 
 ## [Mac 0.9.24] - 2026-11-18
 

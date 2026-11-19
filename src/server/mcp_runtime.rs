@@ -557,14 +557,7 @@ impl BrokerApprover {
         let decision = tokio::time::timeout(self.timeout, rx).await;
         guard.id = None;
         super::scheduler::approval_wait(&self.events, &req.kwant_id, &chat_key, None);
-        let answered = match &decision {
-            Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => {
-                Some("ok")
-            }
-            Ok(_) => Some("declined"),
-            Err(_) => None,
-        };
-        if let Some(settled) = answered {
+        if let Some(settled) = card_settles(&decision) {
             super::activity::approval_settled(&req.turn_id, &ticket, settled);
         }
         let outcome = match decision {
@@ -579,11 +572,22 @@ impl BrokerApprover {
                 self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
                 ApprovalOutcome::Allowed
             }
-            // 27b: only the person's own no is remembered, not a dropped card
+            // 27b: only the person's own no is remembered, not a dropped card. A card that was
+            // withdrawn or whose channel dropped (28k) runs nothing either, but it wasn't the
+            // person's no, so its step settled `stopped` above
+            // 29o: a Deny with the person's reason goes back to the call, and its family isn't
+            // remembered: they said what to do instead, and the adjusted call gets its own card
             Ok(Ok(ApprovalDecision::Deny)) => {
-                self.broker.declined.record(&req.kwant_id, &self.conversation, &families, &ticket);
+                // A reason nobody is listening for (no caller scoped by `hear_deny_reason`) means
+                // the bot hears the plain DENIED_TEXT, so the no is remembered as a plain one
+                let heard = self.broker.take_deny_reason(&ticket).is_some_and(mcp::tell_deny_reason);
+                if !heard {
+                    self.broker.declined.record(&req.kwant_id, &self.conversation, &families, &ticket);
+                }
                 ApprovalOutcome::Denied
             }
+            // The card was withdrawn or its channel dropped (28k): nothing runs, but it wasn't
+            // the person's no, so its step settled `stopped` above
             Ok(Err(_)) => ApprovalOutcome::Denied,
             // Nobody answered: the card stays up as `waiting`, and a late Allow resumes the work
             // (see `resume_late_approval`)
@@ -620,6 +624,19 @@ impl BrokerApprover {
     }
 }
 
+/// How an approval card's step settles once its wait ends with `decision`: "ok" on an Allow,
+/// "declined" only on the person's Deny, and "stopped" when the card was withdrawn or its
+/// channel dropped with no answer (28k: nobody pressed Deny, so it isn't the person's no). `None`
+/// when the wait ran out: the timeout path settles it (`unanswered` or `stopped`).
+fn card_settles<E, T>(decision: &Result<Result<ApprovalDecision, E>, T>) -> Option<&'static str> {
+    match decision {
+        Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => Some("ok"),
+        Ok(Ok(ApprovalDecision::Deny)) => Some("declined"),
+        Ok(Err(_)) => Some("stopped"),
+        Err(_) => None,
+    }
+}
+
 /// 26h: why a call to a renamed credit app (FLUX, Picsart) asks: the bot's stored server with
 /// this name is at the app's address ([`mcp::payment_floor::credits_reason`]). Calls kwnt runs
 /// itself already carry the address in `req.payment`; this covers the ones an agent CLI asks
@@ -641,15 +658,19 @@ pub async fn credit_floor(db: &Database, req: &ToolApprovalRequest) -> Option<St
 
 /// 27e: the names (in kwant) of the turn's `servers` that are Home Assistant's: by what each
 /// said on kwnt's last connection to it in this run, else by what its last test stored. A server
-/// kwnt never heard from isn't counted (the delivery check only adds a continuation for them).
+/// kwnt never heard from counts when its address is Home Assistant's MCP path (28m: on the Claude
+/// CLI the CLI connects, not kwnt, so a new server is often one kwnt never heard from), see
+/// [`mcp::home_floor::counts_as_home_assistant`]. The delivery check only adds a continuation.
 pub async fn home_server_names(db: &Database, servers: &[McpServer]) -> Vec<String> {
     let mut names = Vec::new();
     for server in servers.iter().filter(|s| s.name != mcp::SELF_SERVER_NAME && s.name != mcp::RESERVED_SERVER_NAME) {
-        let reported = match mcp::home_floor::seen(&server.id) {
-            Some(seen) => seen.reported,
-            None => db.mcp_reported_name(&server.id).await.ok().flatten().flatten(),
+        let heard = match mcp::home_floor::seen(&server.id) {
+            Some(seen) => Some(seen.reported),
+            // A read that failed is a server kwnt can't place: its address decides (the safe side)
+            None => db.mcp_reported_name(&server.id).await.ok().flatten(),
         };
-        if reported.is_some_and(|n| mcp::home_floor::is_home_assistant(&n)) {
+        let heard = heard.as_ref().map(Option::as_deref);
+        if mcp::home_floor::counts_as_home_assistant(heard, &server.transport, server.url.as_deref(), &server.args) {
             names.push(server.name.clone());
         }
     }
@@ -1436,15 +1457,16 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool, grant: O
         payment: None,
     };
     // A push the person's Retry or Override covers skips the ordinary card (0.9.7)
-    let approval = async {
+    // 29o: and a Deny may come with the person's reason
+    let approval = mcp::hear_deny_reason(async {
         match grant {
             Some(g) => session.ctx.approver.decide_granted(req, g).await,
             None => session.ctx.approver.decide(req).await,
         }
-    };
+    });
     // Dropping the approval withdraws its card when the turn ends first
-    let outcome = tokio::select! {
-        outcome = approval => outcome,
+    let (outcome, reason) = tokio::select! {
+        heard = approval => heard,
         _ = session.ended.cancelled() => {
             session.ctx.record(cancelled_record(&tool_use_id, tool_name, server, tool, &input));
             return json!({"behavior": "deny", "message": "The turn ended before the user answered."});
@@ -1466,9 +1488,9 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool, grant: O
     if outcome.allowed() {
         json!({"behavior": "allow", "updatedInput": input})
     } else if remind {
-        json!({"behavior": "deny", "message": mcp::with_no_false_claims(outcome.refusal_text())})
+        json!({"behavior": "deny", "message": mcp::with_no_false_claims(&outcome.refusal(reason.as_deref()))})
     } else {
-        json!({"behavior": "deny", "message": outcome.refusal_text()})
+        json!({"behavior": "deny", "message": outcome.refusal(reason.as_deref())})
     }
 }
 
@@ -1525,13 +1547,22 @@ pub async fn permission_endpoint(
                     None => Ok(Default::default()),
                 },
             };
+            // 28k: the gate's refusal is its own text to the bot, and "Blocked before push" on the step.
+            // 28q: keyed to this call's own tool-use id (the id claude puts on the step), so a
+            // neighbouring call of the same tool that failed on its own keeps its own reason
+            let call = args["tool_use_id"].as_str();
+            let held = || super::activity::refused(&session.turn_id, tool_name, call, &args["input"], mcp::PREPUSH_BLOCKED_STEP_DETAIL);
             let decision = match prepush {
-                Err(why) => json!({"behavior": "deny", "message": why}),
+                Err(why) => {
+                    held();
+                    json!({"behavior": "deny", "message": why})
+                }
                 Ok(pass) => {
                     let mut decision = decide(&session, args, smart, pass.grant.as_ref()).await;
                     if decision["behavior"] == "allow" {
                         // The override goes with the push that runs, never one the person declined
                         if let Some(why) = super::dev::prepush::use_up(&state, &pass).await {
+                            held();
                             decision = json!({"behavior": "deny", "message": why});
                         } else if let (Some(pinned), Some(input)) = (pass.pinned, decision.get_mut("updatedInput").and_then(Value::as_object_mut)) {
                             // What goes is the commit kwant checked, even if a parallel call commits
@@ -1611,6 +1642,12 @@ pub async fn gateway_grok_endpoint(
     gateway_rpc(&state, &headers, msg, GatewayNaming::Grok).await
 }
 
+/// The engine's own id for a gateway `tools/call` (28q): Claude Code sends its tool-use id, which
+/// its activity step carries, as `_meta["claudecode/toolUseId"]`. `None` when the engine sends none.
+fn engine_call_id(msg: &Value) -> Option<&str> {
+    msg["params"]["_meta"]["claudecode/toolUseId"].as_str().map(str::trim).filter(|id| !id.is_empty())
+}
+
 async fn gateway_rpc(
     state: &AppState,
     headers: &HeaderMap,
@@ -1647,6 +1684,7 @@ async fn gateway_rpc(
             };
             let arguments = msg["params"].get("arguments").cloned().unwrap_or_else(|| json!({}));
             let call_id = format!("gw_{}", uuid::Uuid::new_v4().simple());
+            let step_id = engine_call_id(&msg);
             let Some(tools) = session.tool_session().await else {
                 return StatusCode::UNAUTHORIZED.into_response();
             };
@@ -1654,10 +1692,12 @@ async fn gateway_rpc(
             let tool_name = tools
                 .canonical_name(naming, name)
                 .unwrap_or_else(|| name.to_string());
+            // 29g: grok sends no id; its step carries the grok name, which only this map can read
+            let called_as = (naming == GatewayNaming::Grok).then_some(name);
             // Dropping the call withdraws its card (or stops the forwarded call) when the turn ends
             let (caller, raw_arguments) = (session.caller(), arguments.to_string());
             let outcome = tokio::select! {
-                outcome = tools.call(&caller, &call_id, &tool_name, &raw_arguments) => outcome,
+                outcome = tools.call_step(&caller, &call_id, step_id, called_as, &tool_name, &raw_arguments) => outcome,
                 _ = session.ended.cancelled() => {
                     let (server, tool) = mcp::split_tool_name(&tool_name).unwrap_or(("", name));
                     session.ctx.record(cancelled_record(&call_id, &tool_name, server, tool, &arguments));
@@ -1708,6 +1748,72 @@ mod expired_tests {
         assert_eq!((p.direct_kwant_id, p.thread_id.as_deref()), (None, Some("t1")));
         let p = expired_place(&json!({"channel_id": "c1"}), "k1");
         assert_eq!((p.direct_kwant_id, p.channel_id.as_deref()), (None, Some("c1")));
+    }
+}
+
+#[cfg(test)]
+mod card_settles_tests {
+    use super::*;
+
+    /// 28k: only the person's Deny settles a card `declined`. A card that was withdrawn, or whose
+    /// channel dropped, settles `stopped`: nobody pressed Deny. The bot's outcome is `Denied`
+    /// either way (nothing runs), and it hears the same text.
+    #[tokio::test]
+    async fn a_withdrawn_card_settles_stopped_and_only_a_deny_settles_declined() {
+        let broker = PermissionBroker::new();
+        let ask = |id: &str| ApprovalRequest {
+            id: id.into(),
+            kwant_id: "k1".into(),
+            tool_name: "Bash".into(),
+            details: Value::Null,
+        };
+        let wait = |rx: tokio::sync::oneshot::Receiver<ApprovalDecision>| tokio::time::timeout(Duration::from_secs(5), rx);
+
+        // Withdrawn: the broker drops the ticket with no decision
+        let rx = broker.request_approval(ask("apr_withdrawn")).await;
+        assert!(broker.cancel("apr_withdrawn").await);
+        let withdrawn = wait(rx).await;
+        assert!(matches!(withdrawn, Ok(Err(_))), "the waiter sees the channel close");
+        assert_eq!(card_settles(&withdrawn), Some("stopped"));
+
+        // The person pressed Deny
+        let rx = broker.request_approval(ask("apr_deny")).await;
+        assert!(broker.resolve("apr_deny", ApprovalDecision::Deny).await);
+        assert_eq!(card_settles(&wait(rx).await), Some("declined"));
+
+        // Allow, once or for the session
+        for d in [ApprovalDecision::AllowOnce, ApprovalDecision::AlwaysAllowSession] {
+            let rx = broker.request_approval(ask("apr_ok")).await;
+            assert!(broker.resolve("apr_ok", d).await);
+            assert_eq!(card_settles(&wait(rx).await), Some("ok"));
+        }
+
+        // The wait ran out: the timeout path settles it, not this
+        let rx = broker.request_approval(ask("apr_slow")).await;
+        let ran_out = tokio::time::timeout(Duration::from_millis(1), rx).await;
+        assert!(ran_out.is_err());
+        assert_eq!(card_settles(&ran_out), None);
+
+        // What the bot hears doesn't change: a withdrawn card and a Deny are both `Denied`
+        assert_eq!(ApprovalOutcome::Denied.refusal_text(), mcp::DENIED_TEXT);
+        assert_eq!(ApprovalOutcome::Denied.record_status(), "denied");
+    }
+}
+
+#[cfg(test)]
+mod engine_call_id_tests {
+    use super::*;
+
+    /// 28q: the gateway keys a held push's step note to Claude Code's tool-use id, which it sends
+    /// on `tools/call` as `_meta["claudecode/toolUseId"]`; an engine that sends none gives `None`.
+    #[test]
+    fn the_gateway_reads_the_engines_own_call_id() {
+        let call = |meta: Value| json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "github__push", "arguments": {}, "_meta": meta}});
+        assert_eq!(engine_call_id(&call(json!({"claudecode/toolUseId": "toolu_01AbC"}))), Some("toolu_01AbC"));
+        assert_eq!(engine_call_id(&call(json!({"progressToken": 1}))), None);
+        assert_eq!(engine_call_id(&call(json!({"claudecode/toolUseId": " "}))), None);
+        assert_eq!(engine_call_id(&call(json!({"claudecode/toolUseId": 7}))), None);
+        assert_eq!(engine_call_id(&json!({"method": "tools/call", "params": {"name": "github__push"}})), None);
     }
 }
 
@@ -1822,14 +1928,69 @@ mod declined_tests {
         Drop,
         /// Nobody answers before the approver stops waiting.
         Nothing,
+        /// 29o: answered through the app's route, `{decision, reason}` as the card sends it.
+        Route(&'static str, Option<&'static str>),
+    }
+
+    /// 29o: the person answers card `id` through the app's route with `{decision, reason}`:
+    /// the route's reply.
+    async fn answer_route(state: &AppState, id: &str, decision: &str, reason: Option<&str>) -> Value {
+        let mut body = json!({"decision": decision});
+        if let Some(r) = reason {
+            body["reason"] = json!(r);
+        }
+        let payload = serde_json::from_value(body).expect("the card's body parses");
+        let resp = super::super::routes::resolve_approval(State(state.clone()), Path(id.to_string()), Json(payload))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap()
+    }
+
+    /// 29o: what the bot hears when the person said no with `reason` (the brief's words).
+    fn said_why(reason: &str) -> String {
+        format!(
+            "The user denied this tool call. They said why: \"{reason}\". Don't make this same call again. \
+If what they said points to another way, you may try that; it will ask them again. Otherwise say in your reply what you couldn't do."
+        )
+    }
+
+    const fn why(reason: &'static str) -> Answer {
+        Answer::Route("deny", Some(reason))
     }
 
     /// `a.decide(req)`, answering the card it shows with `answer`: the outcome and the card's
-    /// ticket, `None` when no card went out.
+    /// ticket, `None` when no card went out. Like both real callers (the MCP session and the
+    /// permission prompt) it listens for a Deny's reason ([`mcp::hear_deny_reason`]).
     async fn ask(e: &Env, a: &BrokerApprover, req: ToolApprovalRequest, answer: Answer) -> (ApprovalOutcome, Option<String>) {
+        let (outcome, card, _) = asked(e, a, req, answer, true).await;
+        (outcome, card)
+    }
+
+    /// [`ask`] from a caller that doesn't listen for a Deny's reason: the bot would hear the
+    /// plain `DENIED_TEXT`.
+    async fn ask_unheard(e: &Env, a: &BrokerApprover, req: ToolApprovalRequest, answer: Answer) -> (ApprovalOutcome, Option<String>) {
+        let (outcome, card, _) = asked(e, a, req, answer, false).await;
+        (outcome, card)
+    }
+
+    /// [`ask`], also giving the reason the call heard (`None` when `listening` is false).
+    async fn asked(
+        e: &Env,
+        a: &BrokerApprover,
+        req: ToolApprovalRequest,
+        answer: Answer,
+        listening: bool,
+    ) -> (ApprovalOutcome, Option<String>, Option<String>) {
         let mut events = e.state.event_sender.subscribe();
         let broker = e.state.broker.clone();
-        let decide = a.decide(req);
+        let decide = async move {
+            if listening {
+                mcp::hear_deny_reason(a.decide(req)).await
+            } else {
+                (a.decide(req).await, None)
+            }
+        };
         tokio::pin!(decide);
         let mut card = None;
         let outcome = loop {
@@ -1842,6 +2003,9 @@ mod declined_tests {
                             Answer::Decide(d) => assert!(broker.resolve(&id, d).await),
                             Answer::Drop => assert!(broker.cancel(&id).await),
                             Answer::Nothing => {}
+                            Answer::Route(d, r) => {
+                                answer_route(&e.state, &id, d, r).await;
+                            }
                         }
                         card = Some(id);
                     }
@@ -1853,7 +2017,8 @@ mod declined_tests {
                 panic!("a card went out after the call was settled: {id}");
             }
         }
-        (outcome, card)
+        let (outcome, heard) = outcome;
+        (outcome, card, heard)
     }
 
     /// The bot's approvals rows: (status, details).
@@ -2015,8 +2180,12 @@ mod declined_tests {
                 resp = &mut prompt => break resp.unwrap(),
                 ev = events.recv() => {
                     if let Ok(RuntimeEvent::ApprovalRequired { id, .. }) = ev {
-                        if let Answer::Decide(d) = answer.clone() {
-                            assert!(e.state.broker.resolve(&id, d).await);
+                        match answer.clone() {
+                            Answer::Decide(d) => assert!(e.state.broker.resolve(&id, d).await),
+                            Answer::Route(d, r) => {
+                                answer_route(&e.state, &id, d, r).await;
+                            }
+                            Answer::Drop | Answer::Nothing => {}
                         }
                         card = Some(id);
                     }
@@ -2040,6 +2209,153 @@ mod declined_tests {
         let (reply, card) = claude_asks(&e, "Bash", json!({"command": "git push --force origin main"}), ALLOW).await;
         assert_eq!(card, None, "no card the second time");
         assert_eq!(reply, json!({"behavior": "deny", "message": mcp::DECLINED_BEFORE_TEXT}));
+    }
+
+    /// 29o (a, b, c) on claude's permission prompt: the card's `{decision: "deny", reason}` reaches
+    /// the bot as one trimmed line of at most 500 chars, and the same family asks again; the old
+    /// body, an empty reason and a plain Deny still tell it `DENIED_TEXT` word for word, and only
+    /// the plain Deny is remembered (27b).
+    #[tokio::test]
+    async fn claude_hears_why_the_person_said_no() {
+        let e = setup().await;
+        let denied = |message: String| json!({"behavior": "deny", "message": message});
+        let push = |args: &str| json!({"command": format!("git push {args}")});
+        let (reply, card) = claude_asks(&e, "Bash", push("--force origin main"), why("  push without\n--force \r\n")).await;
+        assert!(card.is_some());
+        assert_eq!(reply, denied(said_why("push without --force")));
+
+        // Capped at 500 chars, on a char boundary
+        let long: &'static str = "é".repeat(501).leak();
+        let (reply, card) = claude_asks(&e, "Bash", push("origin main"), why(long)).await;
+        assert!(card.is_some(), "a no with a reason isn't remembered: the same family asks again");
+        assert_eq!(reply, denied(said_why(&"é".repeat(500))));
+
+        // Nothing left of the reason, or the old body: a plain Deny, remembered as before (27b)
+        let (reply, card) = claude_asks(&e, "Bash", push("origin dev"), why("  \n\t ")).await;
+        assert!(card.is_some());
+        assert_eq!(reply, denied(mcp::DENIED_TEXT.to_string()));
+        let (reply, card) = claude_asks(&e, "Bash", json!({"command": "gh pr merge 7"}), Answer::Route("deny", None)).await;
+        assert!(card.is_some());
+        assert_eq!(reply, denied(mcp::DENIED_TEXT.to_string()));
+        for command in ["git push origin main", "gh pr merge 8"] {
+            let (reply, card) = claude_asks(&e, "Bash", json!({"command": command}), ALLOW).await;
+            assert_eq!(card, None, "{command}");
+            assert_eq!(reply, denied(mcp::DECLINED_BEFORE_TEXT.to_string()), "{command}");
+        }
+
+        // A reason on an Allow is ignored: the call runs
+        let (reply, card) = claude_asks(&e, "Bash", json!({"command": "npm publish"}), Answer::Route("allow_once", Some("fine"))).await;
+        assert!(card.is_some());
+        assert_eq!(reply["behavior"], "allow");
+        assert_eq!(e.state.broker.deny_reasons_held(), 0, "nothing left behind");
+    }
+
+    /// 29o (c) on the approver itself: after a no with a reason, a call of the same family gets
+    /// its own card, so nothing runs without the person's yes.
+    #[tokio::test]
+    async fn a_no_with_a_reason_lets_the_adjusted_call_ask() {
+        let e = setup().await;
+        let a = approver(&e, &e.general, Duration::from_secs(10));
+        let (out, card, heard) = asked(&e, &a, bash(&e.bot, "git push --force origin main"), why("push without --force"), true).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Denied, true));
+        assert_eq!(heard.as_deref(), Some("push without --force"), "the waiting call hears the reason");
+        let (out, card) = ask(&e, &a, bash(&e.bot, "git push origin main"), ALLOW).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Allowed, true), "the adjusted call asks, and the person allows it");
+        let (out, card) = ask(&e, &a, bash(&e.bot, "git push origin main"), DENY).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Denied, true));
+        let (out, card) = ask(&e, &a, bash(&e.bot, "git push origin dev"), ALLOW).await;
+        assert_eq!((out, card), (ApprovalOutcome::DeclinedBefore, None), "a plain no still stays a no");
+        assert_eq!(e.state.broker.deny_reasons_held(), 0);
+    }
+
+    /// 29o round 2: a reason no call listens for reaches nobody (the bot hears the plain
+    /// `DENIED_TEXT`), so the no is remembered as a plain one: the same family isn't asked again.
+    #[tokio::test]
+    async fn a_reason_nobody_hears_stays_a_plain_no() {
+        let e = setup().await;
+        let a = approver(&e, &e.general, Duration::from_secs(10));
+        let (out, card) = ask_unheard(&e, &a, bash(&e.bot, "git push --force origin main"), why("push without --force")).await;
+        assert_eq!((out, card.is_some()), (ApprovalOutcome::Denied, true));
+        let (out, card) = ask(&e, &a, bash(&e.bot, "git push origin main"), ALLOW).await;
+        assert_eq!((out, card), (ApprovalOutcome::DeclinedBefore, None), "an unheard reason is a plain no");
+        assert_eq!(e.state.broker.deny_reasons_held(), 0, "nothing left behind");
+    }
+
+    /// 29o (d): a late Deny with a reason (its turn stopped waiting) answers as a plain late Deny
+    /// does, and keeps nothing for a call that will never come.
+    #[tokio::test]
+    async fn a_late_deny_with_a_reason_answers_as_today() {
+        let e = setup().await;
+        let a = approver(&e, &e.general, Duration::from_millis(200));
+        let mut bodies = vec![];
+        for (n, reason) in [(1, None), (2, Some("use staging"))] {
+            let (out, card) = ask(&e, &a, bash(&e.bot, &format!("gh pr merge {n}")), Answer::Nothing).await;
+            assert_eq!(out, ApprovalOutcome::Unanswered);
+            let card = card.unwrap();
+            let mut body = answer_route(&e.state, &card, "deny", reason).await;
+            assert_eq!(body["ticket_id"], json!(card));
+            body.as_object_mut().unwrap().remove("ticket_id");
+            bodies.push(body);
+        }
+        assert_eq!(bodies[0], bodies[1]);
+        assert_eq!(bodies[1], json!({"resolved": true, "status": "denied", "resumed": false}));
+        assert_eq!(e.state.broker.deny_reasons_held(), 0, "nothing kept for a call that won't come");
+    }
+
+    /// 29o (b) on kwnt's own tool calls (an API engine, codex, grok and claude through the
+    /// gateway): the bot's tool result says why the person said no; a plain Deny still says
+    /// `DENIED_TEXT` (`an_api_bot_s_tool_result_says_it_was_already_declined`).
+    #[tokio::test]
+    async fn an_api_bot_s_tool_result_says_why_the_person_said_no() {
+        let e = setup().await;
+        let (_, token) = prepare_turn_with_opts(&e.state, &e.bot, Some("t-host-why".into()), None, None, Default::default()).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = super::super::create_router(e.state.clone());
+        let serve = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let server = http_server("perm", &format!("http://{addr}/api/mcp/permission/{token}"));
+        let ctx = McpTurnContext {
+            servers: vec![server],
+            approver: Arc::new(approver(&e, &e.general, Duration::from_secs(10))),
+            config_dir: std::env::temp_dir(),
+            permission_url: None,
+            gateway: None,
+            max_tool_iterations: 5,
+            approvals: mcp::Approvals::Ask,
+            records: Default::default(),
+            kwnt_only: false,
+            media: None,
+        };
+        let (session, problems) = McpToolSession::open(&ctx, None).await;
+        assert!(problems.is_empty(), "{problems:?}");
+        let caller = Caller { kwant_id: e.bot.id.clone(), kwant_name: e.bot.name.clone(), turn_id: "t-api-why".into() };
+
+        let mut events = e.state.event_sender.subscribe();
+        let mut cards = 0;
+        for (n, reason) in [(1, "use the read-only tool\ninstead"), (2, "ask Ada first")] {
+            let call_id = format!("c{n}");
+            let call = session.call(&caller, &call_id, "mcp__perm__approve", r#"{"tool_name": "Bash", "input": {}}"#);
+            tokio::pin!(call);
+            let out = loop {
+                tokio::select! {
+                    out = &mut call => break out,
+                    ev = events.recv() => {
+                        if let Ok(RuntimeEvent::ApprovalRequired { id, .. }) = ev {
+                            cards += 1;
+                            answer_route(&e.state, &id, "deny", Some(reason)).await;
+                        }
+                    }
+                }
+            };
+            let heard = said_why(&reason.replace('\n', " "));
+            assert_eq!((out.status, out.text.as_str()), ("denied", heard.as_str()));
+            assert_eq!(out.record["status"], "denied");
+        }
+        assert_eq!(cards, 2, "the second call asked: a no with a reason isn't remembered");
+        assert_eq!(e.state.broker.deny_reasons_held(), 0);
+        session.shutdown().await;
+        finish_turn(&e.state, &token).await;
+        serve.abort();
     }
 
     #[tokio::test]

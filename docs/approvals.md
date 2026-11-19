@@ -162,6 +162,8 @@ keep asking. The bot hears `DECLINED_BEFORE_TEXT` and the step shows as declined
 the person writes in that conversation again, and only in memory: a restart, another conversation
 or another bot asks as before. An unanswered card, a card its turn dropped, and kwnt's own refusals
 don't count, and a late Allow on an earlier card still runs that call (`src/mcp/declined.rs`).
+A Deny with a reason (the person says why on the card) isn't remembered: the bot hears the reason,
+may try the other way it points to, and that call gets its own card (29o).
 
 ## Tests
 
