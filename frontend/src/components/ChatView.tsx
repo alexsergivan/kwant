@@ -948,7 +948,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const writing = useStreamWriting(stream) || (!streamProp && !!streamingTextProp);
   const thinking = useStreamThinking(stream) || (!streamProp && !!streamingThinkingProp);
   const lastScrollTopRef = useRef(0);
-  // The empty chat's home opens at its top: on a phone a team home is taller than the screen, and its faces come first (13d).
+  // The empty chat's home and Get started open at their top: on a phone both are taller than the screen, and their heads come first (13d, 29u).
   const homeShowingRef = useRef(false);
   const pinToBottom = (el: HTMLDivElement) => {
     el.scrollTop = homeShowingRef.current ? 0 : el.scrollHeight;
@@ -2086,11 +2086,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   // The empty chat shows a home (a bot's own chat, #general, or a team's chat) instead of a bare pane and a row of chips
+  // Nothing in the chat yet and nothing on its way: no message, reply, queued turn, routing or waiting card.
+  const chatIsEmpty = messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
   const showHome =
     !!home &&
     (home.kind === 'bot' || home.kind === 'general' || (home.kind === 'team' && !!home.team)) &&
-    !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
-  homeShowingRef.current = showHome;
+    !welcome && chatIsEmpty;
+  // The home and Get started (the welcome) both open at their top (13d, 29u); once anything is in, the chat pins to the bottom.
+  homeShowingRef.current = showHome || (!!welcome && chatIsEmpty);
   // first-screen E: nothing can run and Get started (the welcome) isn't on screen. The home shows it in place of its asks.
   const accountCard = accountCardShows({ canRun, getStartedShowing: !!welcome });
   // Who answers what's typed: the chat decides, an @mention overrides
