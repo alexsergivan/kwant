@@ -2730,8 +2730,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {pendingApprovals.map((approval) => (
           // 0.8.1 F6: a notification's tap lands on this card and flashes it. 30a: the wrapper is always there
           // (display: contents when not flashing), so the flash never remounts the card: focus that "Go to the
-          // approval" put on it stays, and so does a half-typed Deny reason.
-          <div key={approval.id} className={flashId === approval.id ? 'rounded-xl kw-flash' : 'contents'}>
+          // approval" put on it stays, and so does a half-typed Deny reason. 30h: while flashing, the wrapper is as wide
+          // as the card (the card's own max-w-2xl), so the amber box hugs the card instead of running to the column's
+          // edge. Top and bottom already match: the card's my-3 collapses through the wrapper.
+          <div key={approval.id} className={flashId === approval.id ? 'max-w-2xl rounded-xl kw-flash' : 'contents'}>
             <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
           </div>
         ))}
