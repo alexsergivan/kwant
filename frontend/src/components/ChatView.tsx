@@ -109,6 +109,7 @@ import { ideaBlockedLine, ideaLength } from '../ideaShell';
 import { JarIcon } from './JarIcon';
 import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
+import { stripStepsAside } from '../askHere';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
 import { SmartActionsSlot } from './results/SmartActions';
@@ -961,6 +962,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [approvalOffscreen, setApprovalOffscreen] = useState(false);
   // 29w: some card's Allow / Deny row is fully on screen (the same measurement), so the strip need not repeat it.
   const [approvalCardInView, setApprovalCardInView] = useState(false);
+  // ...or the chat follows the bottom with a card in it (the follow pin would undo the strip coming back there).
+  const [followingCard, setFollowingCard] = useState(false);
   const approvalKey = pendingApprovals.map((a) => a.id).join(',');
   const checkApprovalVisible = () => {
     const el = scrollRef.current;
@@ -971,6 +974,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const action = approvalScrollAction({ waiting: rows.length, following: stickRef.current, buttonsVisible });
     setApprovalOffscreen(action === 'notify');
     setApprovalCardInView(buttonsVisible);
+    setFollowingCard(stickRef.current && rows.length > 0);
   };
   const onScroll = () => {
     const el = scrollRef.current;
@@ -1018,7 +1022,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setApprovalOffscreen(false);
   };
   // 29w: the Needs-you strip steps aside while its one ask is the live approval whose buttons are on screen.
-  const stripAside = !!needsYouStrip && stripOnlyApproval && approvalCardInView;
+  const stripAside = stripStepsAside({ strip: !!needsYouStrip, onlyApproval: stripOnlyApproval, cardInView: approvalCardInView, followingCard });
   const stripSlotRef = useRef<HTMLDivElement | null>(null);
   const stripHadFocusRef = useRef(false);
   // Its "Go to the approval" brings the card into view and the strip goes: focus that was in it goes to the

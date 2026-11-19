@@ -342,3 +342,12 @@ export function resendTarget(messages: ChatMessage[], noticeId: string | null | 
 export const onlyLiveApproval = (asks: Parameters<typeof askAction>[0][]): boolean =>
   asks.length === 1 && asks[0].kind === 'approval' && askAction(asks[0]) === 'decide';
 
+/**
+ * 29w: whether the Needs-you strip steps aside. Its one ask is the live approval and either the card's Allow / Deny
+ * row is fully on screen, or the chat still follows the bottom with the card in it. The second half keeps the strip
+ * aside through the first 80 px of a slow scroll up: bringing it back there would shrink the chat, the follow pin
+ * would snap to the bottom and hide it again, and the reader could not leave the bottom (Rigel, QA round 1).
+ */
+export const stripStepsAside = (s: { strip: boolean; onlyApproval: boolean; cardInView: boolean; followingCard: boolean }): boolean =>
+  s.strip && s.onlyApproval && (s.cardInView || s.followingCard);
+

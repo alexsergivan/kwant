@@ -638,7 +638,9 @@ test('29w: App passes stripOnlyApproval; ChatView keeps approvalCardInView from 
   const check = chat.slice(chat.indexOf('const checkApprovalVisible'), chat.indexOf('const onScroll'));
   assert.match(check, /const buttonsVisible = rows\.some\(\(r\) => fullyVisible\(/);
   assert.match(check, /setApprovalCardInView\(buttonsVisible\)/);
-  assert.match(chat, /const stripAside = !!needsYouStrip && stripOnlyApproval && approvalCardInView;/);
+  assert.match(chat, /const stripAside = stripStepsAside\(\{ strip: !!needsYouStrip, onlyApproval: stripOnlyApproval, cardInView: approvalCardInView, followingCard \}\);/);
+  // Round 3 (Rigel): followingCard comes from the same measurement, after onScroll has updated stickRef.
+  assert.match(check, /setFollowingCard\(stickRef\.current && rows\.length > 0\)/);
   // Kept mounted (no re-enter animation, its state stays) and hidden at once: no new motion.
   assert.match(chat, /className=\{stripAside \? 'hidden' : 'contents'\}.*\n\s*\{needsYouStrip\}\n\s*<\/div>/);
   assert.doesNotMatch(chat, /\n\s*\{needsYouStrip\}\n\n\s*<form/);
@@ -646,4 +648,22 @@ test('29w: App passes stripOnlyApproval; ChatView keeps approvalCardInView from 
   // raise the soft keyboard over Allow / Deny.
   assert.match(chat, /onFocus=\{\(e\) => \(stripHadFocusRef\.current = \(e\.target as HTMLElement\)\.matches\(':focus-visible'\)\)\}/);
   assert.doesNotMatch(chat, /stripHadFocusRef\.current = true/);
+});
+
+// Round 3 (Rigel's QA at 6168ce1b): bringing the strip back within the follow zone shrank the chat, the follow pin
+// snapped to the bottom, the card was in view again and the strip hid: a slow scroll up could not leave the bottom.
+test('29w: while the chat follows the bottom with the card in it, the strip stays aside; past the follow zone it is back', () => {
+  const base = { strip: true, onlyApproval: true };
+  assert.equal(typeof m.stripStepsAside, 'function');
+  // At the bottom: card in view.
+  assert.equal(m.stripStepsAside({ ...base, cardInView: true, followingCard: true }), true);
+  // 32 px up: the buttons are clipped but the chat still follows: stays aside (was: back, then snapped down).
+  assert.equal(m.stripStepsAside({ ...base, cardInView: false, followingCard: true }), true);
+  // Past 80 px up: no longer following, buttons off screen: back.
+  assert.equal(m.stripStepsAside({ ...base, cardInView: false, followingCard: false }), false);
+  // Read up with the card still fully in view: aside, as before.
+  assert.equal(m.stripStepsAside({ ...base, cardInView: true, followingCard: false }), true);
+  // Never aside without a strip, or when the ask is not one live approval.
+  assert.equal(m.stripStepsAside({ ...base, strip: false, cardInView: true, followingCard: true }), false);
+  assert.equal(m.stripStepsAside({ ...base, onlyApproval: false, cardInView: true, followingCard: true }), false);
 });
