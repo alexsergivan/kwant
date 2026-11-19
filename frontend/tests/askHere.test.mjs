@@ -732,6 +732,9 @@ test('30a: keyboard "Go to the approval" (strip, pill, Answer ↑) focuses the c
   assert.doesNotMatch(show + hl, /data-approval-actions|button.*\.focus\(/);
   // The 29w hand-off to the composer still only runs when focus was lost (body) or is still in the hidden strip.
   assert.match(chat, /if \(!a \|\| a === document\.body \|\| stripSlotRef\.current\?\.contains\(a\)\) textareaRef\.current\?\.focus\(\{ preventScroll: true \}\);/);
+  // The flash wrapper is always there, so flashing the card on landing doesn't remount it (and drop its focus).
+  assert.match(chat, /<div key=\{approval\.id\} className=\{flashId === approval\.id \? 'rounded-xl kw-flash' : 'contents'\}>\n\s*<ModernApprovalCard approval=\{approval\} onResolve=\{onResolveApproval\} \/>\n\s*<\/div>/);
+  assert.doesNotMatch(chat, /<ModernApprovalCard key=\{approval\.id\}/);
   // The dev production-floor card is a landing place too.
   assert.match(floor, /data-approval-card=\{id\}[\s\S]{0,400}tabIndex=\{-1\}/);
 });

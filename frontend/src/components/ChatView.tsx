@@ -2727,16 +2727,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {prepush}
 
         {/* Pending Security Approval Ticket */}
-        {pendingApprovals.map((approval) =>
-          // 0.8.1 F6: a notification's tap lands on this card and flashes it
-          flashId === approval.id ? (
-            <div key={approval.id} className="rounded-xl kw-flash">
-              <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
-            </div>
-          ) : (
-            <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
-          ),
-        )}
+        {pendingApprovals.map((approval) => (
+          // 0.8.1 F6: a notification's tap lands on this card and flashes it. 30a: the wrapper is always there
+          // (display: contents when not flashing), so the flash never remounts the card: focus that "Go to the
+          // approval" put on it stays, and so does a half-typed Deny reason.
+          <div key={approval.id} className={flashId === approval.id ? 'rounded-xl kw-flash' : 'contents'}>
+            <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
+          </div>
+        ))}
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
