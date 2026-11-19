@@ -25,6 +25,7 @@ const m = await loadBundled(`
   export { Sidebar } from './src/components/Sidebar';
   export { needsYouRows, attentionRows } from './src/chatsTab';
   export { ringElement } from './src/ring';
+  export { ModernApprovalCard } from './src/components/ModernApprovalCard';
 `);
 const h = m.React.createElement;
 const noop = () => {};
@@ -666,4 +667,97 @@ test('29w: while the chat follows the bottom with the card in it, the strip stay
   // Never aside without a strip, or when the ask is not one live approval.
   assert.equal(m.stripStepsAside({ ...base, strip: false, cardInView: true, followingCard: true }), false);
   assert.equal(m.stripStepsAside({ ...base, onlyApproval: false, cardInView: true, followingCard: true }), false);
+});
+
+// 30a (brief: autonomy/approval-one-pointer/brief.md; Mira's 29w design check, small things a and b).
+// b: one pointer per card. The "↓ Approval waiting" pill steps aside while the Needs-you strip offers
+// "↑ Go to the approval" for this chat's live approval, as the working line's "Answer ↑" already does.
+test('30a: the "Approval waiting" pill steps aside while the strip offers Go to the approval', () => {
+  assert.equal(typeof m.approvalPillShows, 'function');
+  const base = { offscreen: true, waiting: 1, phoneAnswerUp: false, stripHasApproval: false };
+  // No strip about it: the pill shows while the card's buttons are off screen (old 22i / 0.8.1 F6 behaviour).
+  assert.equal(m.approvalPillShows(base), true);
+  assert.equal(m.approvalPillShows({ ...base, waiting: 2 }), true);
+  // b-1440: the strip says "Go to the approval": the pill steps aside (it pointed the other way at the same card).
+  assert.equal(m.approvalPillShows({ ...base, stripHasApproval: true }), false);
+  // Phone: "Answer ↑" stands in for it, as before.
+  assert.equal(m.approvalPillShows({ ...base, phoneAnswerUp: true }), false);
+  // Buttons in view, or nothing waiting: no pill.
+  assert.equal(m.approvalPillShows({ ...base, offscreen: false }), false);
+  assert.equal(m.approvalPillShows({ ...base, waiting: 0 }), false);
+  // Which strips count: a live approval of this chat, alone or with other asks. A question alone, a run-out
+  // approval (its Ask again is a different action) or no asks leave the pill where it was.
+  const q = { id: 'q1', kind: 'question', kwant_id: 'k1', title: 'Which folder?', timestamp: '2026-11-19T09:01:00Z' };
+  const ranOut = { id: 's1', kind: 'stopped', kwant_id: 'k1', title: 'Approval ran out', retry: { type: 'approval', approval_id: 'ap0' }, timestamp: '2026-11-19T09:00:00Z' };
+  assert.equal(m.stripHasLiveApproval([live]), true);
+  assert.equal(m.stripHasLiveApproval([q, live]), true);
+  assert.equal(m.stripHasLiveApproval([q]), false);
+  assert.equal(m.stripHasLiveApproval([ranOut]), false);
+  assert.equal(m.stripHasLiveApproval([{ ...live, action: 'ask_again' }]), false);
+  assert.equal(m.stripHasLiveApproval([]), false);
+});
+
+// a: the approval card is the landing place: script-focusable only, named by its own heading and ask (no new copy).
+test('30a: the approval card can take focus without a tab stop, and is named by its heading and ask', () => {
+  const approval = { id: 'ap1', tool_name: 'execute_shell', details: { source: 'local_shell', tool: 'execute_shell', arguments: { command: 'curl -sI https://example.com', cwd: '/tmp' }, kwant_name: 'Mia' } };
+  const html = m.renderToStaticMarkup(h(m.ModernApprovalCard, { approval, onResolve: noop }));
+  const d = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  const card = d.querySelector('[data-approval-card="ap1"]');
+  assert.equal(card.getAttribute('tabindex'), '-1');
+  assert.equal(card.getAttribute('role'), 'group');
+  const name = card.getAttribute('aria-labelledby').split(' ').map((id) => d.getElementById(id)?.textContent.trim());
+  assert.equal(name.length, 2);
+  assert.equal(name[0], 'Approval needed');
+  assert.equal(name[1], d.querySelector('[data-approval-summary]').textContent.trim());
+  assert.match(name[1], /wants to/);
+  // Allow / Deny stay ordinary tab stops after the card (no tabindex games on them).
+  for (const b of card.querySelectorAll('[data-approval-actions] button')) assert.equal(b.getAttribute('tabindex'), null);
+});
+
+test('30a: keyboard "Go to the approval" (strip, pill, Answer ↑) focuses the card, never Allow / Deny; a tap moves nothing', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const floor = readFileSync(new URL('../src/components/dev/ProdFloorCard.tsx', import.meta.url), 'utf8');
+  assert.match(app, /stripHasApproval=\{stripHasLiveApproval\(asks\)\}/);
+  // The pill's show rule is the helper (one pointer per card).
+  assert.match(chat, /\{approvalPillShows\(\{ offscreen: approvalOffscreen, waiting: pendingApprovals\.length, phoneAnswerUp: phone && stripWaitsOn === 'approval', stripHasApproval \}\) && \(/);
+  // Pill and "Answer ↑" go through showApproval: focus the card only when a button had keyboard focus.
+  const show = chat.slice(chat.indexOf('const showApproval = () =>'), chat.indexOf('const stripAside ='));
+  assert.match(show, /const keyboard = from instanceof HTMLButtonElement && from\.matches\(':focus-visible'\);/);
+  assert.match(show, /if \(keyboard\) card\.focus\(\{ preventScroll: true \}\);/);
+  // The strip's Go to goes through the highlight effect: only its own decide button with keyboard focus moves it.
+  const hl = chat.slice(chat.indexOf('// 0.8.1 F6: an approval\'s card'), chat.indexOf('if (!messages.some((m) => m.id === highlightMessageId)) return;'));
+  assert.match(hl, /stripSlotRef\.current\?\.contains\(from\) && from\.matches\('\[data-strip-action="decide"\]:focus-visible'\)\) card\.focus\(\{ preventScroll: true \}\)/);
+  // Never Allow / Deny: nothing in these paths queries the card's buttons to focus them.
+  assert.doesNotMatch(show + hl, /data-approval-actions|button.*\.focus\(/);
+  // The 29w hand-off to the composer still only runs when focus was lost (body) or is still in the hidden strip.
+  assert.match(chat, /if \(!a \|\| a === document\.body \|\| stripSlotRef\.current\?\.contains\(a\)\) textareaRef\.current\?\.focus\(\{ preventScroll: true \}\);/);
+  // The flash wrapper is always there, so flashing the card on landing doesn't remount it (and drop its focus).
+  assert.match(chat, /<div key=\{approval\.id\} className=\{flashId === approval\.id \? '[^']*\bkw-flash\b[^']*' : 'contents'\}>\n\s*<ModernApprovalCard approval=\{approval\} onResolve=\{onResolveApproval\} \/>\n\s*<\/div>/);
+  assert.doesNotMatch(chat, /<ModernApprovalCard key=\{approval\.id\}/);
+  // The dev production-floor card is a landing place too.
+  assert.match(floor, /data-approval-card=\{id\}[\s\S]{0,400}tabIndex=\{-1\}/);
+});
+
+// 30h (brief: autonomy/approval-flash-fits-card/brief.md; Mira's 30a design check "Small things c", Rigel's 30a QA
+// observation 1): at 1440 the amber flash box ran to the chat column's edge while the card stops at its max width.
+test('30h: the approval flash box is as wide as the card, and adds nothing to its height', () => {
+  const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const card = readFileSync(new URL('../src/components/ModernApprovalCard.tsx', import.meta.url), 'utf8');
+  const flash = chat.match(/<div key=\{approval\.id\} className=\{flashId === approval\.id \? '([^']*)' : '([^']*)'\}>\s*<ModernApprovalCard /);
+  assert.ok(flash, 'the approval card sits in the flash wrapper');
+  const [, on, idle] = flash;
+  const onCls = on.split(/\s+/);
+  assert.ok(onCls.includes('kw-flash') && onCls.includes('rounded-xl'), on);
+  // The idle wrapper stays display: contents (30a: no remount, no layout of its own).
+  assert.equal(idle, 'contents');
+  // The card root's own max width, read from the card, is on the flashing wrapper too.
+  const root = card.match(/data-approval-card=\{approval\.id\}[\s\S]{0,300}?className=\{`([^`$]*)/);
+  assert.ok(root, 'card root class');
+  const maxW = root[1].split(/\s+/).filter((c) => /^max-w-/.test(c));
+  assert.equal(maxW.length, 1, root[1]);
+  assert.ok(onCls.includes(maxW[0]), `flash wrapper "${on}" lacks the card's ${maxW[0]}`);
+  // Top and bottom: the card's my-3 collapses through the wrapper only while the wrapper has no margin, padding,
+  // border or its own formatting context, so none of those may join the flashing class.
+  for (const c of onCls) assert.doesNotMatch(c, /^(-?m[trblxy]?|p[trblxy]?|border|ring|flex|grid|inline|overflow|flow-root|w)-|^(flex|grid|inline-block|flow-root|border)$/, c);
 });

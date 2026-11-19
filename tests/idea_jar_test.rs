@@ -798,3 +798,57 @@ async fn deleting_an_idea_a_bot_is_peeking_at_drops_the_take_cleanly() {
     assert!(e.state.db.idea_takes(&gone.id).await.unwrap().is_empty());
     assert_eq!(ok(&e.app, "GET", "/api/ideas", None).await["ideas"].as_array().unwrap().len(), 0);
 }
+
+/// The take row ends before the idea leaves `peeking`: the scan picks spaces by idea status, but
+/// its pause and cap checks read the take row, so a row still `running` at that moment would let
+/// one more take start right after a usage limit or an over-cap take. A trigger in the test's own
+/// database records the newest take row at the moment the idea leaves `peeking`.
+#[tokio::test]
+async fn the_take_row_is_finished_before_the_idea_leaves_peeking() {
+    let e = setup().await;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", e.state.config.data_dir.join("kwnt.db").display()))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE test_left_peeking (idea_id TEXT, take_status TEXT, cause TEXT, over_cap INTEGER, finished INTEGER)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER test_left_peeking AFTER UPDATE OF status ON ideas WHEN OLD.status = 'peeking' AND NEW.status <> 'peeking' BEGIN \
+         INSERT INTO test_left_peeking SELECT NEW.id, t.status, t.cause, t.over_cap, t.finished_at IS NOT NULL FROM idea_takes t \
+         WHERE t.idea_id = NEW.id ORDER BY t.started_at DESC, t.rowid DESC LIMIT 1; END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let seen = |id: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>, bool, bool)>(
+                "SELECT take_status, cause, over_cap, finished FROM test_left_peeking WHERE idea_id = ?",
+            )
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // A good take
+    let good = e.drop_in("A dark mode").await;
+    let (_, after) = e.take(&good, &e.ann, vec![(Ok(GOOD.into()), 50)]).await;
+    assert_eq!(after.status, "ready");
+    assert_eq!(seen(good.id).await, [("ready".to_string(), None, false, true)], "a good take");
+    // A usage limit: the pause has to be on the row before the scan can pick the space again
+    let limit = e.drop_in("Weekly digest").await;
+    let (_, after) = e.take(&limit, &e.ann, vec![(Err("Every model is out until 11:44 UTC".into()), 0)]).await;
+    assert_eq!(after.status, "failed");
+    assert_eq!(seen(limit.id).await, [("failed".to_string(), Some("usage_limit".to_string()), false, true)], "a usage limit");
+    // Over the token cap: no more scans in this space today, from the moment the idea is done
+    let big = e.drop_in("Sepia").await;
+    let (_, after) = e.take(&big, &e.bob, vec![(Ok(GOOD.into()), idea_jar::MAX_TURN_TOKENS + 1)]).await;
+    assert_eq!(after.status, "ready");
+    assert_eq!(seen(big.id).await, [("ready".to_string(), None, true, true)], "an over-cap take");
+    pool.close().await;
+}
