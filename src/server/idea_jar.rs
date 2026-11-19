@@ -407,6 +407,8 @@ where
             (false, state.db.finish_idea_take(&idea.id, Err(&untrusted(&why, 300))).await.unwrap_or(false))
         }
     };
+    // RED PROOF ONLY (30b, never merges): widen the gap between leaving `peeking` and writing the take row
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     let status = if take.is_some() { "ready" } else { "failed" };
     let error = last_error.as_deref().filter(|_| take.is_none());
     let _ = state.db.finish_idea_take_row(&take_id, status, tries, tokens, error, over_cap, cause.filter(|_| take.is_none())).await;
