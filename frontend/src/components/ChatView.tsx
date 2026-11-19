@@ -2840,7 +2840,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {workingStrip}
         {/* 22i: below the working line, right above the box (design.md §2 order). */}
         {/* 29w: it steps aside (instantly, kept mounted) while it only repeats the approval card on screen. */}
-        <div ref={stripSlotRef} className={stripAside ? 'hidden' : 'contents'} data-needs-you-slot={stripAside ? 'aside' : 'shown'} onFocus={() => (stripHadFocusRef.current = true)} onBlur={() => (stripHadFocusRef.current = false)}>
+        <div ref={stripSlotRef} className={stripAside ? 'hidden' : 'contents'} data-needs-you-slot={stripAside ? 'aside' : 'shown'} onFocus={(e) => (stripHadFocusRef.current = (e.target as HTMLElement).matches(':focus-visible'))} onBlur={() => (stripHadFocusRef.current = false)}>
           {needsYouStrip}
         </div>
 
