@@ -90,6 +90,26 @@ test('Details: Ran on carries the effort in words; without one it reads as befor
   api.unmount();
 });
 
+// 30l (autonomy/ran-on-effort-together/brief.md): at 390 px Ran on could wrap between "medium" and "effort".
+// The suffix is one no-wrap unit; the space before its dot stays breakable. Fails on #872's head fe333a50.
+test('Details: "· medium effort" is one no-wrap unit inside Ran on', async () => {
+  need();
+  const withEffort = mount({ name: 'Mia', ranOn: 'Claude · Opus 5.5', account: null, effort: m.effortWords(CLI) });
+  await openDetails(withEffort.host);
+  const dd = [...withEffort.host.querySelectorAll('[data-reply-details] dt')].find((dt) => dt.textContent === 'Ran on').nextElementSibling;
+  assert.equal(dd.textContent, 'Claude Opus 5.5 · medium effort');
+  const unit = [...dd.querySelectorAll('*')].find((el) => el.textContent === '· medium effort');
+  assert.ok(unit, '"· medium effort" sits inside one element');
+  assert.ok(unit.classList.contains('whitespace-nowrap'), 'and that element does not wrap');
+  assert.ok(!dd.classList.contains('whitespace-nowrap'), 'the row itself can still wrap before the dot');
+  withEffort.unmount();
+  const api = mount({ name: 'Mia', ranOn: 'Claude · Opus 5.5', account: 'Work account', effort: null });
+  await openDetails(api.host);
+  const apiDd = [...api.host.querySelectorAll('[data-reply-details] dt')].find((dt) => dt.textContent === 'Ran on').nextElementSibling;
+  assert.equal(apiDd.querySelector('.whitespace-nowrap'), null, 'no effort: Ran on is plain text as before');
+  api.unmount();
+});
+
 test('ChatView hides the disclosure only for the run line and passes the effort to ReplyMeta', () => {
   const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   assert.match(src, /\{msg\.reasoning_content && !isCliRunLine\(msg\.reasoning_content\) && !hasThinkingText\(savedActivity\) && \(/);
