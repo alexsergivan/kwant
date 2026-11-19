@@ -198,3 +198,44 @@ mod windows_path_tests {
         assert!(GIT_MISSING.contains("winget install --id Git.Git -e"));
     }
 }
+
+// RED PROOF ONLY (do not merge): stubs with main's behaviour, so the new tests compile
+pub const OOM_KILLED: &str = "kwant: the computer ran out of memory, so the system stopped this command and everything it started. kwant kept running. Try a smaller job (for example fewer parallel build jobs).";
+pub const KILLED_FROM_OUTSIDE: &str = "kwant: this command was killed (signal 9) by something outside it.";
+pub fn killed_note(_signal: Option<i32>, _oom_before: Option<u64>, _oom_after: Option<u64>) -> Option<&'static str> {
+    None
+}
+#[cfg(test)]
+fn vmstat_oom_kills(_vmstat: &str) -> Option<u64> {
+    None
+}
+
+#[cfg(test)]
+mod killed_tests {
+    use super::*;
+
+    #[test]
+    fn a_kill_while_the_oom_count_rose_says_out_of_memory_and_any_other_kill_says_outside() {
+        assert_eq!(killed_note(Some(9), Some(3), Some(4)), Some(OOM_KILLED));
+        assert_eq!(killed_note(Some(9), Some(3), Some(3)), Some(KILLED_FROM_OUTSIDE));
+        // No count to compare (not Linux, /proc unreadable): never a guess at memory
+        assert_eq!(killed_note(Some(9), None, Some(4)), Some(KILLED_FROM_OUTSIDE));
+        assert_eq!(killed_note(Some(9), Some(3), None), Some(KILLED_FROM_OUTSIDE));
+        assert_eq!(killed_note(Some(9), None, None), Some(KILLED_FROM_OUTSIDE));
+        // A normal exit, or another signal (SIGTERM, SIGSEGV), gets no line
+        assert_eq!(killed_note(None, Some(3), Some(4)), None);
+        assert_eq!(killed_note(Some(15), Some(3), Some(4)), None);
+        assert_eq!(killed_note(Some(11), None, None), None);
+        assert!(OOM_KILLED.contains("ran out of memory") && OOM_KILLED.contains("kwant kept running"));
+        assert!(KILLED_FROM_OUTSIDE.contains("signal 9"));
+    }
+
+    #[test]
+    fn the_oom_kill_count_is_read_from_vmstat() {
+        assert_eq!(vmstat_oom_kills("pgfault 12\noom_kill 7\nnr_free_pages 1\n"), Some(7));
+        // oom_kill_x is another counter; a missing line or a non-number is no count
+        assert_eq!(vmstat_oom_kills("oom_kill_x 7\n"), None);
+        assert_eq!(vmstat_oom_kills("oom_kill x\n"), None);
+        assert_eq!(vmstat_oom_kills(""), None);
+    }
+}

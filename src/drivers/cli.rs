@@ -3329,3 +3329,19 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod oom_tests {
+    use super::*;
+
+    // Covers the CLI spawns (claude, codex, grok…): they go through own_process_group too
+    #[tokio::test]
+    async fn a_cli_started_in_its_own_group_is_first_when_memory_runs_out() {
+        let mut cmd = Command::new("cat");
+        cmd.arg("/proc/self/oom_score_adj").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        own_process_group(&mut cmd);
+        let out = cmd.output().await.unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1000");
+    }
+}
