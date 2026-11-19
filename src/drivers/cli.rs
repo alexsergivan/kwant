@@ -71,13 +71,64 @@ fn kill_group(pid: Option<u32>) {
 /// Starts the CLI as the leader of its own process group, for [`ProcessGroup`].
 /// On Windows the CLI gets no console window of its own (`CREATE_NO_WINDOW`); its tree is held
 /// by the Job Object [`ProcessGroup::of`] puts it in.
+/// On Linux it is also first in line when memory runs out ([`OOM_FIRST`]): a runaway build a
+/// bot started is stopped before kwnt is.
 pub(crate) fn own_process_group(cmd: &mut Command) {
     #[cfg(unix)]
     cmd.process_group(0);
+    #[cfg(target_os = "linux")]
+    // SAFETY: open(2), write(2) and close(2) are async-signal-safe; the path and value are
+    // static, so nothing is allocated or touched in this process's memory
+    unsafe {
+        cmd.pre_exec(|| {
+            // Raising one's own score needs no privilege; a missing /proc is fine too
+            let fd = libc::open(c"/proc/self/oom_score_adj".as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
+            if fd >= 0 {
+                libc::write(fd, OOM_FIRST.as_ptr().cast(), OOM_FIRST.len());
+                libc::close(fd);
+            }
+            Ok(())
+        });
+    }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     #[cfg(not(any(unix, windows)))]
     let _ = cmd;
+}
+
+/// Written to `/proc/self/oom_score_adj` of everything kwant starts on the host: the highest
+/// score, inherited by all it starts, so the kernel stops the bot's work before kwnt.
+#[cfg(target_os = "linux")]
+const OOM_FIRST: &[u8] = b"1000";
+
+/// What a turn says when its `cli` (claude, codex, grok…) ended on `signal`: the shell tool's
+/// choice ([`crate::tools::shell::killed_note`]: only a SIGKILL, out of memory when the system's
+/// OOM-kill count rose while it ran), worded for a CLI. `None` for any other end.
+fn cli_killed_line(cli: &str, signal: Option<i32>, oom_before: Option<u64>, oom_after: Option<u64>) -> Option<String> {
+    let note = crate::tools::shell::killed_note(signal, oom_before, oom_after)?;
+    Some(if note == crate::tools::shell::OOM_KILLED {
+        format!(
+            "The computer ran out of memory, so the system stopped the {cli} CLI partway through this turn. \
+             kwant kept running. Try again, or a smaller job."
+        )
+    } else {
+        format!("The {cli} CLI was killed (signal 9) by something outside it, partway through this turn.")
+    })
+}
+
+/// The line for a CLI that exited with `status`, `oom_before` being the OOM-kill count read just
+/// before it was started. kwnt's own kills (a stopped no-tools run) are handled before this is
+/// read; a cancelled turn never gets here.
+fn cli_killed(cli: &str, oom_before: Option<u64>, status: Option<std::process::ExitStatus>) -> Option<String> {
+    #[cfg(unix)]
+    let signal = status.and_then(|s| std::os::unix::process::ExitStatusExt::signal(&s));
+    #[cfg(not(unix))]
+    let signal: Option<i32> = {
+        let _ = status;
+        None
+    };
+    let oom_after = signal.and_then(|_| crate::tools::shell::oom_kills());
+    cli_killed_line(cli, signal, oom_before, oom_after)
 }
 
 /// `CREATE_NO_WINDOW`: a console program started by the (windowless) app opens no console window.
@@ -764,6 +815,8 @@ struct GrokRun {
     tool_calls: bool,
     /// The tools grok's `available_commands` line said it offers; `None` until it says.
     offered_tools: Option<Vec<String>>,
+    /// Why grok was killed from outside (out of memory or another SIGKILL), in plain words.
+    killed: Option<String>,
 }
 
 impl GrokRun {
@@ -844,6 +897,8 @@ impl CliDriver {
         cmd.kill_on_drop(true);
         own_process_group(&mut cmd);
 
+        // Read before the spawn: a kill the system made while grok ran raises it
+        let oom_before = crate::tools::shell::oom_kills();
         let mut child = cmd.spawn()?;
         let mut group = ProcessGroup::of(&child);
         // A no-tools run is stopped the moment grok offers or starts a tool
@@ -859,6 +914,7 @@ impl CliDriver {
                 exit_code: None,
                 tool_calls: false,
                 offered_tools: None,
+                killed: None,
             };
             let mut parser = super::grok::StreamParser::default();
             let mut buffer = [0u8; 4096];
@@ -901,7 +957,10 @@ impl CliDriver {
             }
         };
         let (mut run, stderr) = tokio::join!(read_stdout, read_stderr);
-        run.exit_code = child.wait().await.ok().and_then(|s| s.code());
+        let status = child.wait().await.ok();
+        run.exit_code = status.and_then(|s| s.code());
+        // A no-tools run kwnt stopped itself is told apart by its tools, before this is read
+        run.killed = cli_killed("grok", oom_before, status);
         group.disarm();
         drop(home);
         run.stderr = stderr;
@@ -1069,15 +1128,18 @@ async fn empty_grok_reply(
             .and_then(|c| c.gateway.as_ref())
             .map(|g| g.token.clone()),
     );
-    let notice = super::grok::empty_reply_notice(
-        &super::grok::EmptyRun {
-            stderr: &run.stderr,
-            errors: &run.errors,
-            stop_reason: run.stop_reason.as_deref(),
-            exit_code: run.exit_code,
-        },
-        &secrets,
-    );
+    let notice = match &run.killed {
+        Some(line) => line.clone(),
+        None => super::grok::empty_reply_notice(
+            &super::grok::EmptyRun {
+                stderr: &run.stderr,
+                errors: &run.errors,
+                stop_reason: run.stop_reason.as_deref(),
+                exit_code: run.exit_code,
+            },
+            &secrets,
+        ),
+    };
     tracing::warn!(exit_code = ?run.exit_code, stop_reason = ?run.stop_reason, "grok gave no reply");
     let msg = format!("⚠️ [{}] {notice}", input.kwant.name);
     let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
@@ -1732,7 +1794,15 @@ impl Driver for CliDriver {
                     }
                     Ok(run) => {
                         let tokens = run.stdout.len() / 4;
-                        (run.stdout, tokens)
+                        match &run.killed {
+                            // Its partial reply was already streamed: the reason follows it
+                            Some(line) => {
+                                let notice = format!("\n\n⚠️ [{}] {line}", input.kwant.name);
+                                let _ = event_tx.send(RuntimeEvent::TextDelta(notice.clone())).await;
+                                (format!("{}{notice}", run.stdout), tokens)
+                            }
+                            None => (run.stdout, tokens),
+                        }
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, binary = %bin_path, "grok run failed");
@@ -1907,6 +1977,8 @@ impl Driver for CliDriver {
         cmd.kill_on_drop(true);
         own_process_group(&mut cmd);
 
+        // Read before the spawn: a kill the system made while the CLI ran raises it
+        let oom_before = crate::tools::shell::oom_kills();
         match cmd.spawn() {
             Ok(mut child) => {
                 let mut group = ProcessGroup::of(&child);
@@ -1949,6 +2021,8 @@ impl Driver for CliDriver {
                         return Err(no_tools_broken(&self.tool_kind, &what));
                     }
                 }
+                // Killed from outside (a no-tools run kwnt stopped itself has returned above)
+                let killed = cli_killed(&self.tool_kind, oom_before, exit);
                 // The account's windows, from a container run too (its stdout is the same stream)
                 let rate_limits = claude_stream.rate_limits.take();
                 let stdout = claude_stream.into_stdout();
@@ -1978,6 +2052,11 @@ impl Driver for CliDriver {
                             return Ok(TurnOutput::refused(failure));
                         }
                     }
+                    // Killed before it wrote its reply: say why, not an empty reply
+                    if let Some(line) = killed.filter(|_| content.trim().is_empty()) {
+                        tracing::warn!(binary = %bin_path, %line, "CLI was killed");
+                        return Err(DriverError::Execution(line));
+                    }
                     content
                 } else {
                     match ClaudeResult::parse(&stdout) {
@@ -1997,6 +2076,12 @@ impl Driver for CliDriver {
                                 record_cli_usage(&input, result.main_model(), u).await;
                             }
                             result.result
+                        }
+                        // Killed before its result line: say why (what it streamed stays streamed)
+                        None if killed.is_some() => {
+                            let line = killed.unwrap_or_default();
+                            tracing::warn!(binary = %bin_path, %line, "CLI was killed");
+                            return Err(DriverError::Execution(line));
                         }
                         // A failed run with no output is an error, not an empty reply
                         None if stdout.trim().is_empty() && !exit.is_some_and(|s| s.success()) => {
@@ -2428,6 +2513,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             exit_code: None,
             tool_calls: false,
             offered_tools: None,
+            killed: None,
         };
         let mut parser = crate::drivers::grok::StreamParser::default();
         let mut lines = String::new();
@@ -3312,6 +3398,50 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             assert!(why.contains("didn't say which tools it offered"), "{why}");
         }
 
+        // 29y: a CLI killed mid-turn says why. On a test machine nothing raises the OOM-kill
+        // count, so a `kill -9` reads as the outside line; the memory line is pinned in
+        // `killed_cli_tests`.
+        const OUTSIDE: &str = "CLI was killed (signal 9) by something outside it";
+
+        #[tokio::test]
+        async fn a_claude_cli_killed_mid_turn_says_it_was_killed() {
+            let fake = Fake::new("claude", &format!("echo '{CLAUDE_INIT_EMPTY}'\nkill -9 $$"));
+            let why = execution_error(fake.run(turn(false)).await);
+            assert!(why.contains(&format!("The claude {OUTSIDE}")), "{why}");
+            assert!(!why.contains("no output"), "{why}");
+        }
+
+        #[tokio::test]
+        async fn a_codex_cli_killed_before_its_reply_says_it_was_killed() {
+            let fake = Fake::new("codex", "if [ \"$1\" = mcp ]; then echo '[]'; exit 0; fi\nkill -9 $$");
+            let why = execution_error(fake.run(turn(false)).await);
+            assert!(why.contains(&format!("The codex {OUTSIDE}")), "{why}");
+        }
+
+        #[tokio::test]
+        async fn a_grok_cli_killed_mid_reply_keeps_its_words_and_says_why() {
+            let fake = Fake::new("grok", &format!("{GROK_TEXT}\nkill -9 $$"));
+            let out = fake.run(turn(false)).await.expect("a killed grok turn still answers");
+            assert!(out.text.starts_with("The card."), "{}", out.text);
+            assert!(out.text.contains(&format!("⚠️ [Vega] The grok {OUTSIDE}")), "{}", out.text);
+            // With nothing said yet, the reason is the whole reply
+            let fake = Fake::new("grok", "kill -9 $$");
+            let out = fake.run(turn(false)).await.unwrap();
+            assert!(out.text.contains(&format!("The grok {OUTSIDE}")), "{}", out.text);
+            assert!(!out.text.contains("stopped before it replied"), "{}", out.text);
+        }
+
+        #[tokio::test]
+        async fn a_cli_that_exits_with_an_error_keeps_todays_words() {
+            let fake = Fake::new("claude", "exit 3");
+            let why = execution_error(fake.run(turn(false)).await);
+            assert_eq!(why, "claude CLI exited with status 3 and no output");
+            let fake = Fake::new("grok", "exit 3");
+            let out = fake.run(turn(false)).await.unwrap();
+            assert!(out.text.contains("grok exited with code 3 without a reply"), "{}", out.text);
+            assert!(!out.text.contains("killed"), "{}", out.text);
+        }
+
         #[tokio::test]
         async fn no_tools_turn_on_another_cli_is_refused_before_it_starts() {
             let fake = Fake::new("gemini", "touch {dir}/ran\necho hi");
@@ -3327,5 +3457,42 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             assert!(why.contains("MCP servers"), "{why}");
             assert!(!fake.path("ran").exists());
         }
+    }
+}
+
+#[cfg(test)]
+mod killed_cli_tests {
+    use super::cli_killed_line;
+
+    #[test]
+    fn a_killed_cli_says_out_of_memory_when_the_count_rose_and_outside_otherwise() {
+        let oom = cli_killed_line("claude", Some(9), Some(3), Some(4)).unwrap();
+        assert!(oom.starts_with("The computer ran out of memory, so the system stopped the claude CLI partway through this turn."), "{oom}");
+        assert!(oom.contains("kwant kept running"), "{oom}");
+        let outside = "The codex CLI was killed (signal 9) by something outside it, partway through this turn.";
+        assert_eq!(cli_killed_line("codex", Some(9), Some(3), Some(3)).as_deref(), Some(outside));
+        // No count (not Linux, /proc unreadable) on either side: the outside line
+        assert_eq!(cli_killed_line("codex", Some(9), None, None).as_deref(), Some(outside));
+        assert_eq!(cli_killed_line("codex", Some(9), None, Some(5)).as_deref(), Some(outside));
+        // Any other end gets no line: the existing words stay
+        for signal in [None, Some(15), Some(6)] {
+            assert_eq!(cli_killed_line("claude", signal, Some(3), Some(4)), None, "{signal:?}");
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod oom_tests {
+    use super::*;
+
+    // Covers the CLI spawns (claude, codex, grok…): they go through own_process_group too
+    #[tokio::test]
+    async fn a_cli_started_in_its_own_group_is_first_when_memory_runs_out() {
+        let mut cmd = Command::new("cat");
+        cmd.arg("/proc/self/oom_score_adj").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        own_process_group(&mut cmd);
+        let out = cmd.output().await.unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1000");
     }
 }

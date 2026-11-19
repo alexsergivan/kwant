@@ -57,3 +57,40 @@ async fn a_finished_command_still_returns_its_output() {
     assert_eq!(v["exit_code"], 3);
     assert_eq!(v["success"], false);
 }
+
+// Everything a bot runs on the host is first in line when memory runs out, so a runaway build
+// is stopped before kwnt is; whatever the command starts inherits it.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_bot_command_and_what_it_starts_go_first_when_memory_runs_out() {
+    let tmp = tempdir().unwrap();
+    let args = json!({ "command": "cat /proc/self/oom_score_adj; bash -c 'cat /proc/self/oom_score_adj'" });
+    let v = execute_shell(tmp.path(), &args).await.unwrap();
+    assert_eq!(v["exit_code"], 0, "{v}");
+    assert_eq!(v["stdout"], "1000\n1000\n", "{v}");
+}
+
+// A command killed from outside says so, and keeps exit_code -1 for existing readers. kwnt's
+// own timeout is not a kill seen here (it is an error, tested above).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_command_killed_from_outside_is_told_why() {
+    let tmp = tempdir().unwrap();
+    let args = json!({ "command": "echo before >&2; kill -9 $$" });
+    let v = execute_shell(tmp.path(), &args).await.unwrap();
+    assert_eq!(v["signal"], 9, "{v}");
+    assert_eq!(v["exit_code"], -1, "{v}");
+    assert_eq!(v["success"], false, "{v}");
+    let stderr = v["stderr"].as_str().unwrap();
+    assert!(stderr.starts_with("before\n"), "{stderr}");
+    assert!(stderr.contains(kwnt::tools::shell::KILLED_FROM_OUTSIDE), "{stderr}");
+    assert!(!stderr.contains("ran out of memory"), "{stderr}");
+}
+
+#[tokio::test]
+async fn a_normal_exit_has_no_signal() {
+    let tmp = tempdir().unwrap();
+    let v = execute_shell(tmp.path(), &json!({ "command": "exit 0" })).await.unwrap();
+    assert!(v.get("signal").is_none(), "{v}");
+    assert_eq!(v["stderr"], "", "{v}");
+}

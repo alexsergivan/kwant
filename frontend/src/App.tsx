@@ -14,7 +14,7 @@ import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
 import { focusPhoneApp } from './components/PhoneAppTip';
-import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, ringDevSettings } from './firstScreen';
+import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, recordMovedForNewPerson, ringDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -4811,6 +4811,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     wroteHere,
     getStartedShowing: getStartedEligible,
   });
+  // 29v: a brand-new person never gets the "moved" pointer: record it as seen once they're known to be new
+  // (false, never null), the way What's new records its version, so it can't pin after their first message.
+  useEffect(() => {
+    if (recordMovedForNewPerson({ established: whatsNewEstablished, seen: movedHidden })) hideMoved();
+  }, [whatsNewEstablished, movedHidden]);
   const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (

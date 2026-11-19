@@ -230,6 +230,7 @@ test('a card from a turn kwant started offers no "always"; an ordinary card stil
   assert.doesNotMatch(started, /Always this session|Always allow/);
   assert.match(started, /Allow once/);
   assert.match(started, />Deny</);
-  assert.match(started, /grid-cols-1/);
+  // 29r: Deny is the only button in its row (it fills the row on its own).
+  assert.match(started, /data-approval-deny-row[^>]*>\s*<button[^>]*>(?:(?!<button)[\s\S])*?>Deny<\/span><\/button><\/div>/);
   assert.doesNotMatch(render(startedTicket({ started_by: 'Watch' })), /Always this session|Always allow/);
 });
