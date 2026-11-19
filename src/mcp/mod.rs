@@ -490,6 +490,13 @@ If what they said points to another way, you may try that; it will ask them agai
     )
 }
 
+/// 29s: the detail of the card's approval step after a Deny whose reason the call heard, so the
+/// person (and a teammate reading the run) can see later what they told the bot. The tool step
+/// keeps [`DENIED_STEP_DETAIL`]. The activity log redacts it and cuts it to its detail length.
+pub fn said_why_detail(reason: &str) -> String {
+    format!("You said why: \u{201c}{reason}\u{201d}")
+}
+
 tokio::task_local! {
     /// 29o: where [`tell_deny_reason`] leaves the person's reason for [`hear_deny_reason`].
     static DENY_REASON: Arc<Mutex<Option<String>>>;
@@ -847,6 +854,7 @@ If what they said points to another way, you may try that; it will ask them agai
     /// 29o round 2: a Deny with a reason, as the claude CLI reports it back (an error carrying the
     /// permission prompt's message), still ends the tool step `declined` in the person's words,
     /// paired with its card; the reason and the rest of the bot's text stay out of the step.
+    /// 29s: the reason shows once, on the card's approval step, as the person's own words.
     #[test]
     fn a_deny_with_a_reason_still_ends_the_step_declined() {
         use crate::drivers::activity::ActivityLog;
@@ -857,7 +865,7 @@ If what they said points to another way, you may try that; it will ask them agai
         for text in [with_no_false_claims(&said), said.clone()] {
             let mut log = ActivityLog::default();
             log.wait("approval", "t1", "Waiting for your approval: Running `git push --force`", Some("Bash"));
-            log.settle("t1", "declined");
+            log.settle_with("t1", "declined", Some(&said_why_detail("push without --force")));
             log.observe(&RuntimeEvent::ToolCallPending {
                 id: "a".into(),
                 name: "Bash".into(),
@@ -871,8 +879,16 @@ If what they said points to another way, you may try that; it will ask them agai
                 (ended[0].kind, ended[0].status, ended[0].detail.as_deref()),
                 ("tool", "declined", Some(DENIED_STEP_DETAIL))
             );
+            let details: Vec<_> = log.steps().iter().map(|s| (s.kind, s.status, s.detail.as_deref())).collect();
+            assert_eq!(
+                details,
+                vec![
+                    ("approval", "declined", Some("You said why: \u{201c}push without --force\u{201d}")),
+                    ("tool", "declined", Some(DENIED_STEP_DETAIL)),
+                ]
+            );
             let shown = serde_json::to_string(log.steps()).unwrap();
-            assert!(!shown.contains("without --force") && !shown.contains("They said why"), "{shown}");
+            assert!(!shown.contains("They said why") && !shown.contains("Don't make this same call"), "{shown}");
         }
     }
 

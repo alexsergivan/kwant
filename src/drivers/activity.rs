@@ -427,12 +427,21 @@ impl ActivityLog {
     /// Ends the waiting step for `ref_id` with `status` ("ok", "done", "declined", "stopped", or
     /// "unanswered" for an approval card the turn stopped waiting for, still open for a late answer).
     pub fn settle(&mut self, ref_id: &str, status: &'static str) -> Option<Step> {
+        self.settle_with(ref_id, status, None)
+    }
+
+    /// [`settle`](Self::settle), with a detail of the person's own words for the step, redacted
+    /// and cut to [`MAX_DETAIL`] like any detail (29s: the reason they gave with a Deny). An
+    /// `unanswered` step keeps its own detail.
+    pub fn settle_with(&mut self, ref_id: &str, status: &'static str, detail: Option<&str>) -> Option<Step> {
         let i = self
             .steps
             .iter()
             .rposition(|s| s.ref_id.as_deref() == Some(ref_id) && s.is_open())?;
         if status == "unanswered" {
             self.steps[i].detail = Some(crate::mcp::UNANSWERED_STEP_DETAIL.to_string());
+        } else if let Some(d) = detail {
+            self.steps[i].detail = Some(cut(&self.redact(d), MAX_DETAIL));
         }
         Some(self.end(i, status))
     }
@@ -1865,6 +1874,36 @@ mod tests {
             id: id.into(),
             result: json!({"status": "error", "error": crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT)}),
         }
+    }
+
+    /// 29s: a card settled with the person's words keeps them as its detail, redacted and cut like
+    /// any detail; the paired tool step still reads "You said no; nothing ran". A plain settle adds
+    /// none, and an `unanswered` card keeps its own detail.
+    #[test]
+    fn a_card_settled_with_the_persons_words_keeps_them_redacted() {
+        let mut log = ActivityLog::default();
+        log.wait("approval", "t1", "Waiting for your approval: Running `git push --force`", Some("Bash"));
+        let said = crate::mcp::said_why_detail("push it with ghp_abcdefghijklmnopqrstuvwxyz0123 instead");
+        let card = log.settle_with("t1", "declined", Some(&said)).unwrap();
+        assert_eq!(card.detail.as_deref(), Some("You said why: \u{201c}push it with [redacted] instead\u{201d}"));
+        log.observe(&pending("a", "Bash", json!({"command": "git push --force"})));
+        let ended = log.observe(&denied("a"));
+        assert_eq!((ended[0].status, ended[0].detail.as_deref()), ("declined", Some(crate::mcp::DENIED_STEP_DETAIL)));
+        // Cut to MAX_DETAIL like any detail
+        log.wait("approval", "t2", "Waiting for your approval: Running a command", Some("Bash"));
+        let long = crate::mcp::said_why_detail(&"é".repeat(crate::mcp::DENY_REASON_MAX));
+        let card = log.settle_with("t2", "declined", Some(&long)).unwrap();
+        assert!(card.detail.as_ref().unwrap().chars().count() <= MAX_DETAIL);
+        assert!(card.detail.unwrap().starts_with("You said why: \u{201c}é"));
+        // A plain Deny and an Allow: no detail
+        log.wait("approval", "t3", "Waiting for your approval: Running a command", Some("Bash"));
+        assert_eq!(log.settle("t3", "declined").unwrap().detail, None);
+        log.wait("approval", "t4", "Waiting for your approval: Running a command", Some("Bash"));
+        assert_eq!(log.settle_with("t4", "ok", None).unwrap().detail, None);
+        // An unanswered card keeps its own words
+        log.wait("approval", "t5", "Waiting for your approval: Running a command", Some("Bash"));
+        let late = log.settle_with("t5", "unanswered", Some("ignored")).unwrap();
+        assert_eq!(late.detail.as_deref(), Some(crate::mcp::UNANSWERED_STEP_DETAIL));
     }
 
     /// 28b: a Deny on the card ends the tool step `declined`, in the person's words, whether the
