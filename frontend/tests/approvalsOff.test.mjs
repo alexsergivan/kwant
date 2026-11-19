@@ -116,11 +116,12 @@ test('errors are sentences: 403 (a bot token), 409 (archived), no endpoint, no n
 
 // ---------------------------------------------------------------- the space control
 
-test('space control: Ask is the default and checked, Don\'t ask explains itself, no confirm yet', () => {
+test('space control: Ask is checked when the space asks, Don\'t ask explains itself, no confirm yet', () => {
   const html = m.spaceSetting({});
   const t = text(html);
   assert.match(html, /role="radiogroup" aria-label="Approvals in Work"/);
-  assert.match(t, /Ask before running commands \(default\)/);
+  assert.match(t, /Ask before running commands/);
+  assert.match(t, /Ask only when risky \(default\)/, '29v: the default is what a new space starts on (NEW_SPACE = SMART)');
   assert.match(t, /Don't ask Bots act without asking, including sending, deleting, publishing and signing in\. Payments still ask you\./);
   assert.doesNotMatch(html, /data-approvals-off-hint/, 'no standing hint while asking');
   assert.match(html, /checked="" value="ask"/);

@@ -394,6 +394,12 @@ where
             break;
         }
     }
+    // The take row ends first: the scan's pause and cap checks read it, and the scan may pick
+    // the space again as soon as the idea leaves `peeking`. A row deleted with its idea updates
+    // nothing.
+    let status = if take.is_some() { "ready" } else { "failed" };
+    let error = last_error.as_deref().filter(|_| take.is_none());
+    let _ = state.db.finish_idea_take_row(&take_id, status, tries, tokens, error, over_cap, cause.filter(|_| take.is_none())).await;
     // Only while the idea is still peeking: one deleted meanwhile gets nothing (its take rows
     // went with it), no event and no notice
     let (saved, here) = match &take {
@@ -407,9 +413,6 @@ where
             (false, state.db.finish_idea_take(&idea.id, Err(&untrusted(&why, 300))).await.unwrap_or(false))
         }
     };
-    let status = if take.is_some() { "ready" } else { "failed" };
-    let error = last_error.as_deref().filter(|_| take.is_none());
-    let _ = state.db.finish_idea_take_row(&take_id, status, tries, tokens, error, over_cap, cause.filter(|_| take.is_none())).await;
     if !here {
         tracing::info!(idea_id = %idea.id, "an idea-jar take finished after its idea was deleted or changed; dropped");
         return false;

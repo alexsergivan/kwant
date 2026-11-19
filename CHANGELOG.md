@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.29] - 2026-11-19
+
+kwant 0.9.29: an approval that asks once, on its own card.
+
+### Fixed
+- When a bot waits for one approval and its card's Allow once and Deny buttons are on screen, the "needs you" bar above the message box now steps aside instead of asking the same thing again. It comes back once you scroll the card away, and it stays when more than one thing is waiting (#861)
+
+## [Mac 0.9.28] - 2026-11-19
+
+kwant 0.9.28: a runaway command that can't take kwant down, your reason for Deny in Details and a Deploy on Railway button.
+
+### Added
+- **Your reason for Deny shows in Details.** When you deny with a reason, Details show your words with the step you stopped: on a command, as a second line under "You said no; nothing ran"; on any other card, on its own row ("You said why: ..."). Secrets in them are masked. A plain Deny reads as before (#849, #857)
+- A Deploy on Railway button in the README: kwnt from the released image with a volume on /data, and the bots' private browser (#842, thanks to greqone)
+
+### Fixed
+- On Linux, when memory runs out, the system now stops the command or AI CLI a bot is running (and everything it started) before kwant itself. kwant says so in plain words: the computer ran out of memory, or something outside kwant stopped it. kwant keeps running (#852, #855)
+- On a 320 px phone, Deny, Always allow and Always this session on an approval card keep each label on one line; when two don't fit side by side, the second gets its own line (chat, Away and the Inbox) (#851)
+- Get started (the welcome in a new chat) now opens at its top instead of scrolled to the bottom; once the chat has a message it follows the newest one as before (#854)
+- Someone new to kwant no longer sees the "Dev mode and Approvals moved to this space's settings" notice about a change they never saw; people who used kwant before still see it once. A space's Approvals setting now marks Ask only when risky as the default, the mode a new space starts on (#859)
+
 ## [Mac 0.9.27] - 2026-11-19
 
 kwant 0.9.27: a Deny that can say why.

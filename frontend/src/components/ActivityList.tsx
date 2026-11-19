@@ -136,13 +136,14 @@ function stepMark(step: ActivityStep, answer: CardAnswer | undefined): { chip: {
   return { chip: cls ? { text: statusLabel(step), cls, kind: shown } : null, also };
 }
 
-const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean; answer?: CardAnswer }> = ({
+const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean; answer?: CardAnswer; reason?: string }> = ({
   step,
   live,
   now,
   listId,
   opened = false,
   answer,
+  reason,
 }) => {
   const time = stepTime(step, now);
   const running = step.kind === 'thinking' && step.status === 'running';
@@ -162,6 +163,9 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
     );
 
   const waiting = step.status === 'waiting';
+  // 29x: the reason the person gave with their no, from the card folded into this row, is a second line under
+  // "You said no; nothing ran" in the same box. The saved detail stays as it is (readDenials matches it exactly).
+  const detail = reason ? (step.detail ? `${step.detail}\n${reason}` : reason) : step.detail;
   // 26d: a step that failed or wasn't approved in time says so in words, not only by its icon, even when a later
   // step worked. The icon's label already names it for screen readers, so the mark is hidden from them.
   // The approval row keeps its icon only: the mark belongs on the command the person said no to.
@@ -216,7 +220,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
       data-step-status={step.status}
       className={`px-3 py-1.5 text-xs focus:outline-none focus-visible:bg-zinc-800/60 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400 ${waiting ? 'bg-amber-500/[0.06]' : ''}`}
     >
-      {step.detail ? (
+      {detail ? (
         // 29e: on a touch phone the 44 px summary takes in the li's py-1.5 (-my-1.5 py-1.5), so a row with › is 44 px
         // like the rows without, not 56, and its tap area stays 44 px. 29i: there its ring sits inside (-outline-offset-2,
         // like the li's), so the list's overflow-hidden doesn't clip it and it doesn't cross an open row's output.
@@ -233,7 +237,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
               step.status === 'declined' ? 'font-sans text-xs' : 'font-mono text-[11px]'
             } ${step.status === 'failed' ? 'text-rose-200 bg-rose-950/30 border-rose-500/20' : 'text-zinc-300 bg-zinc-950/80 border-zinc-800'}`}
           >
-            <StepDetail text={step.detail} path={isFileStep(step)} />
+            <StepDetail text={detail} path={isFileStep(step) && !reason} />
           </pre>
         </details>
       ) : (
@@ -256,12 +260,12 @@ const StepDetail: React.FC<{ text: string; path: boolean }> = ({ text, path }) =
 const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null }> = ({ steps, live, dropped = 0, id, openStep = null }) => {
   const now = useNow(steps.some(isOpenStep));
   // 28s: one row per answer. A settled card folds into its command row; draw time only.
-  const { rows, answers, foldedInto } = useMemo(() => foldAnswers(steps), [steps]);
+  const { rows, answers, foldedInto, reasons } = useMemo(() => foldAnswers(steps), [steps]);
   const opened = openStep ? foldedInto.get(openStep) ?? openStep : null;
   return (
     <ol id={id} aria-label="Steps" className="divide-y divide-zinc-700/40">
       {rows.map((s) => (
-        <StepRow key={s.id} step={s} live={live} now={now} listId={id} opened={s.id === opened} answer={answers.get(s.id)} />
+        <StepRow key={s.id} step={s} live={live} now={now} listId={id} opened={s.id === opened} answer={answers.get(s.id)} reason={reasons.get(s.id)} />
       ))}
       {dropped > 0 && (
         <li className="px-3 py-1.5 text-xs text-zinc-400">

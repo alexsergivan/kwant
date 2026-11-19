@@ -39,6 +39,43 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0929" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.29</p>
+      <h2>An approval asks once, on its own card</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0929">Smaller changes in 0.9.29</h3>
+        <p>The "needs you" bar above the message box now steps aside while the approval it points to is on screen, and comes back when you scroll the card away.</p>
+      </div>
+      <div class="frame">{{shot:v0929-strip-aside|kwant chat with Ann in Trailhead Outfitters. You asked "Can you pad the order numbers on the receipts to six digits?". Ann is "Waiting for your OK", and her "Approval needed" card asks to run npm install left-pad in ~/demo/shop, with Say why, Deny, Always this session and Allow once. Below it, "Ann is waiting for your OK · 0:05" sits right above the message box, with no needs-you bar. The sidebar shows NEEDS YOU · 1 for Ann.}}</div>
+    </div>
+  </div>
+</section>
+
+<section id="new-0928" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.28</p>
+      <h2>A runaway command can't take kwant down, and your reason for Deny shows in Details</h2>
+      <p>A runaway command can't take kwant down: on Linux, the system now stops the command or AI CLI that used up the memory, not kwant, and kwant says why. Your reason for Deny shows in Details, with the step it stopped.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="deny-reason-details">Your reason shows in Details</h3>
+        <p>When you deny with <strong>Say why</strong>, Details keep your words with the step you stopped: under <em>You said no; nothing ran</em> on a command, or on the card's own row. Secrets in them are masked. A plain Deny reads as before.</p>
+      </div>
+      <div class="frame">{{shot:v0928-deny-reason-details|kwant chat with Ann (Frontend) in Trailhead Outfitters. You asked "Can you pad the order numbers on the receipts to six digits?". Under Ann's reply, Details are open: "Worked 0:02 · 1 step · you said no to 1", then the step "Running npm install left-pad" with a You said no chip. Its open detail reads "You said no; nothing ran" and "You said why: “Use padStart, no new package”", and the tool list shows Bash as Denied. Ann replies that she'll use String(n).padStart(6, '0') instead.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="runaway-command" class="span3"><h3>A runaway command can't take kwant down</h3><p>On Linux, everything a bot starts, its commands and the claude, codex or grok CLI, is now first in line when the computer runs out of memory, so the system stops the runaway one, not kwant. kwant says so in plain words: the computer ran out of memory, or something outside kwant stopped it. kwant keeps running, and so do your chats.</p></li>
+      <li id="fixes-0928" class="span3"><h3>Smaller changes in 0.9.28</h3><p>On a narrow phone, an approval card's Deny and Always buttons keep each label on one line; when two don't fit side by side, one moves to its own line. Get started, the welcome in a new chat, now opens at its top instead of scrolled to the bottom. Someone new to kwant no longer sees the notice that Dev mode and Approvals moved, a change they never saw, and a space's Approvals setting now marks Ask only when risky as the default.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-0927" class="fgroup">
   <div class="wrap">
     <div class="section-head">

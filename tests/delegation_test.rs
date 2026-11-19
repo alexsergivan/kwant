@@ -2130,3 +2130,53 @@ async fn a_restart_mid_turn_still_reports_the_held_hand_offs() {
     tokio::time::sleep(Duration::from_millis(1000)).await;
     assert_eq!(resumes("HOLDRESTART").len(), 1);
 }
+
+/// 30i: from the end of the teammate's turn until the lead's resume holds them, a job holds the
+/// hand-off and its chat, so nothing reads them idle meanwhile (a review sweep, "is this chat
+/// busy", a Stop on the chat). Before, the run's job ended before the result was posted and
+/// nothing held the hand-off until the lead's job started. The teammate's thread isn't held for
+/// that, so it doesn't read busy while the lead's resume runs.
+#[tokio::test]
+async fn a_hand_off_reads_busy_until_its_lead_takes_over() {
+    let env = setup().await;
+    let channel = team_channel(&env, "bridge").await;
+    let release = env.release_file("bridge-done");
+    let id = delegate_from(&env, &channel, &env.specialist, &format!("Check it LONGTASK:{} REPLYTAG:bridge30i", release.display()), "Bridge").await;
+    let thread = env.state.db.get_delegation(&id).await.unwrap().unwrap().thread_id;
+    wait_for("the hand-off to run", || async { delegation_status(&env, &id).await == "running" }).await;
+    assert!(env.state.turns.has_job(&id) && env.state.turns.has_job(&thread), "the run's job holds the hand-off and its thread");
+    assert!(!env.state.turns.has_job(&channel), "nothing holds the chat while the teammate works in its own thread");
+
+    // Watched from a plain thread, so no await between two looks can hide a gap
+    let turns = env.state.turns.clone();
+    let (watched, chat, thread_key) = (id.clone(), channel.clone(), thread.clone());
+    let watcher = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut gaps = 0u32;
+        while std::time::Instant::now() < deadline {
+            let held = turns.has_job(&watched);
+            if !held {
+                gaps += 1;
+            }
+            // Handed over: the hand-off and its chat are held, its thread isn't any more
+            if held && turns.has_job(&chat) && !turns.has_job(&thread_key) {
+                return Ok(gaps);
+            }
+            std::thread::yield_now();
+        }
+        Err(gaps)
+    });
+    std::fs::write(&release, "").unwrap();
+    let watched = tokio::task::spawn_blocking(move || watcher.join().unwrap()).await.unwrap();
+    assert_eq!(watched, Ok(0), "Ok(n): n looks found nothing holding the hand-off before the hand-over; Err: never handed over");
+
+    wait_or_dump(&env, &channel, "the lead's resume with the result", || async { !prompts_with("answer bridge30i").is_empty() }).await;
+    assert_eq!(delegation_status(&env, &id).await, "completed");
+    let msgs = channel_messages(&env, &channel).await;
+    assert_eq!(msgs.iter().filter(|m| meta_kind(m).as_deref() == Some("delegation_result")).count(), 1, "the result is posted once");
+    // Every job ends with it: nothing is left holding the hand-off, its chat or its thread
+    wait_for("the hand-off, its chat and its thread to read idle", || async {
+        !env.state.turns.has_job(&id) && !env.state.turns.has_job(&channel) && !env.state.turns.has_job(&thread)
+    })
+    .await;
+}

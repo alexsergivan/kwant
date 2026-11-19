@@ -144,9 +144,16 @@ impl Env {
         panic!("timed out waiting for {what}: {:#?}", self.messages().await.iter().map(|m| (&m.sender_id, &m.text)).collect::<Vec<_>>());
     }
 
-    /// Lets anything still on its way arrive.
+    /// Waits until nothing more is coming in this chat, then gives a wrong extra turn a short
+    /// grace to show up. The signal is the dispatch's job: `send_chat` and a Continue register
+    /// one keyed by the channel before they answer, and drop it only once the turn and all its
+    /// hand-offs (or the pause notice) are saved (routes.rs `execute_single_turn`, budget.rs
+    /// `resume`). A fixed 1.5 s sleep let a hand-off that started later than that pass the
+    /// "nobody else spoke" checks, and wasted the time when nothing was coming.
     async fn settle(&self) {
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        self.wait_for("the chat's dispatches to end", || async { !self.state.turns.has_job(&self.channel) }).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!self.state.turns.has_job(&self.channel), "nothing starts in the chat after it settled");
     }
 }
 
@@ -211,6 +218,7 @@ async fn a_chain_over_its_budget_pauses_hand_offs_until_the_person_says_continue
     env.wait_for("Bob's turn", || async { env.replies_from("Bob").await == 1 }).await;
     env.settle().await;
     assert_eq!(env.replies_from("Ann").await, 1, "\"continue\" isn't a new request for Ann");
+    // Written by the Continue itself, before it answers "continued"
     assert_eq!(meta(&env.notices().await[0])["resumed"], true);
     // Already carried on: the button is refused
     let (s, _) = call(&env.app, "POST", &format!("/api/chains/{}/continue", notices[0].id), None).await;
