@@ -270,6 +270,9 @@ const ApprovalDetails: React.FC<{ phone?: boolean; children: React.ReactNode }> 
 const SECONDARY =
   'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg border border-[#3f3868] bg-[#231d4b] text-sm font-medium text-[#ecebfa] hover:bg-[#2c2552] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed';
 
+/** 29r: Deny and Always in their row: equal halves on a phone (basis 0, never narrower than the label); from sm their own width, filling the line only if the row wraps (the narrow Inbox list). */
+const ROW_FIT = 'flex-1 basis-0 sm:flex-auto';
+
 /**
  * 29p "Say why": a quiet button in the action row that opens a one-line field under it, with "Deny and tell
  * <bot>". Its own component so the card itself keeps no state. Fragment children of the action row: the form
@@ -590,10 +593,13 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
           <Check size={16} aria-hidden="true" />
           <span>{waiting ? 'Allow and continue' : 'Allow once'}</span>
         </button>
-        <div className={`grid gap-2 sm:flex ${offerAlways ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          <button type="button" disabled={disabled} onClick={() => handleDecision('deny')} className={SECONDARY}>
+        {/* 29r: labels never break. On a phone the two share the row in equal halves while both labels fit and
+            the second drops to its own full-width line when they don't (320 px, Away and the Inbox, "Always this
+            session"); no measuring, the wrap does it. From sm up both keep their own width, as before, and a wrapped one fills its line. */}
+        <div data-approval-deny-row="" className="flex flex-wrap gap-2">
+          <button type="button" disabled={disabled} onClick={() => handleDecision('deny')} className={`${SECONDARY} ${ROW_FIT}`}>
             <X size={14} aria-hidden="true" />
-            <span>Deny</span>
+            <span className="whitespace-nowrap">Deny</span>
           </button>
           {offerAlways && (
             <button
@@ -601,10 +607,10 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
               disabled={disabled}
               onClick={() => handleDecision('always_allow')}
               title={perSession ? 'Allow this tool for this bot in this conversation' : mcp ? 'Allow this tool for this bot in this conversation, also after kwant restarts' : undefined}
-              className={SECONDARY}
+              className={`${SECONDARY} ${ROW_FIT}`}
             >
               <CheckCheck size={14} aria-hidden="true" />
-              <span>{perSession ? 'Always this session' : 'Always allow'}</span>
+              <span className="whitespace-nowrap">{perSession ? 'Always this session' : 'Always allow'}</span>
             </button>
           )}
         </div>

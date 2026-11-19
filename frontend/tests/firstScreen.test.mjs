@@ -149,6 +149,46 @@ test('A: Open goes to Space settings › General and rings the Dev mode card onc
   assert.match(app, /<GetStarted[\s\S]*?onDismissed=\{hideMoved\}/, 'finishing Get started (someone new) hides the pointer for good');
 });
 
+// 29v (Mira's UX pass 0.9.26, fix #3): a brand-new person gets the pointer recorded as seen, the way What's new
+// records its version for them, so it never pins to their sidebar after their first message.
+test('29v: a brand-new person (established false) records the pointer; true still shows it; null waits', () => {
+  assert.equal(typeof m.recordMovedForNewPerson, 'function', 'firstScreen exports recordMovedForNewPerson');
+  assert.equal(m.recordMovedForNewPerson({ established: false, seen: false }), true, 'brand new, decided: record it');
+  assert.equal(m.recordMovedForNewPerson({ established: null, seen: false }), false, 'still loading: do nothing');
+  assert.equal(m.recordMovedForNewPerson({ established: true, seen: false }), false, 'used kwant before: leave it to show');
+  assert.equal(m.recordMovedForNewPerson({ established: false, seen: true }), false, 'already recorded: nothing to do');
+});
+
+test('29v: brand new on load, then the first message: the pointer never shows', () => {
+  localStorage.clear();
+  // The same steps SpaceApp runs: load (null), decided brand new (false), first message written (true).
+  let seen = m.movedSeen();
+  for (const established of [null, false, true]) {
+    if (m.recordMovedForNewPerson({ established, seen })) {
+      m.markMovedSeen();
+      seen = true;
+    }
+    assert.equal(m.movedPointerShows({ established, seen }), false, `no pointer at established=${established}`);
+  }
+  assert.equal(localStorage.getItem('kwnt:moved-space-controls'), '1', 'the key is recorded');
+  // Reload after that first message: established is true straight away, the key keeps it hidden.
+  assert.equal(m.movedPointerShows({ established: true, seen: m.movedSeen() }), false);
+  localStorage.clear();
+  // Someone with history and no key: true on load, nothing recorded, the pointer shows.
+  seen = m.movedSeen();
+  assert.equal(m.recordMovedForNewPerson({ established: true, seen }), false);
+  assert.equal(m.movedPointerShows({ established: true, seen }), true, 'someone who used kwant before still sees it');
+  assert.equal(localStorage.getItem('kwnt:moved-space-controls'), null);
+});
+
+test('29v: SpaceApp records it in an effect placed after whatsNewEstablished is declared', () => {
+  const app = src('App.tsx');
+  const decl = app.indexOf('const whatsNewEstablished = decideWhatsNewEstablished(');
+  const eff = app.search(/useEffect\(\(\) => \{\s*if \(recordMovedForNewPerson\(\{ established: whatsNewEstablished, seen: movedHidden \}\)\) hideMoved\(\);\s*\}/);
+  assert.ok(decl > 0, 'whatsNewEstablished is declared');
+  assert.ok(eff > decl, 'the effect sits after the declaration, so it never reads it before it exists');
+});
+
 // ------------------------------------------------------------------ C: #general's three asks
 
 test('C: #general with the Helpers team shows "What do you want done?" and its three role asks, no filler', () => {

@@ -32,6 +32,8 @@ pub async fn execute_shell_env(workspace: &Path, args: &Value, env: &[(String, S
     cmd.kill_on_drop(true);
     own_process_group(&mut cmd);
 
+    // Read before the spawn: a kill the system made while the command ran raises it
+    let oom_before = oom_kills();
     let mut child = cmd
         .spawn()
         .map_err(|e| ToolError::Execution(format!("Failed to execute shell: {}", e)))?;
@@ -74,16 +76,70 @@ pub async fn execute_shell_env(workspace: &Path, args: &Value, env: &[(String, S
     let status = status.map_err(|e| ToolError::Execution(format!("Failed to execute shell: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&stdout).to_string();
-    let stderr = String::from_utf8_lossy(&stderr).to_string();
+    let mut stderr = String::from_utf8_lossy(&stderr).to_string();
     let exit_code = status.code().unwrap_or(-1);
+    #[cfg(unix)]
+    let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    // kwant's own timeout returned above, so a kill seen here came from outside the command
+    let oom_after = if signal == Some(KILLED) { oom_kills() } else { None };
+    if let Some(note) = killed_note(signal, oom_before, oom_after) {
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(note);
+        stderr.push('\n');
+    }
 
-    Ok(json!({
+    let mut out = json!({
         "command": command_str,
         "stdout": stdout,
         "stderr": stderr,
         "exit_code": exit_code,
         "success": status.success()
-    }))
+    });
+    if let Some(n) = signal {
+        out["signal"] = json!(n);
+    }
+    Ok(out)
+}
+
+/// SIGKILL: what the out-of-memory killer sends, and what nothing can catch.
+const KILLED: i32 = 9;
+
+/// Told to the bot when the system stopped its command for lack of memory.
+pub const OOM_KILLED: &str = "kwant: the computer ran out of memory, so the system stopped this command and everything it started. kwant kept running. Try a smaller job (for example fewer parallel build jobs).";
+
+/// Told to the bot when something else killed its command.
+pub const KILLED_FROM_OUTSIDE: &str = "kwant: this command was killed (signal 9) by something outside it.";
+
+/// The line added to stderr for a command that ended on `signal`: only a SIGKILL gets one, and
+/// it says out of memory when the system's OOM-kill count went up while the command ran. The
+/// count is system-wide, so another process's kill at the same moment would read the same;
+/// that is rare enough here. With no count (not Linux, /proc unreadable) it is the outside line.
+pub fn killed_note(signal: Option<i32>, oom_before: Option<u64>, oom_after: Option<u64>) -> Option<&'static str> {
+    if signal != Some(KILLED) {
+        return None;
+    }
+    match (oom_before, oom_after) {
+        (Some(before), Some(after)) if after > before => Some(OOM_KILLED),
+        _ => Some(KILLED_FROM_OUTSIDE),
+    }
+}
+
+/// How many processes the kernel's out-of-memory killer has stopped since boot (`oom_kill` in
+/// /proc/vmstat); None outside Linux or when it can't be read.
+pub(crate) fn oom_kills() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    return vmstat_oom_kills(&std::fs::read_to_string("/proc/vmstat").ok()?);
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn vmstat_oom_kills(vmstat: &str) -> Option<u64> {
+    vmstat.lines().find_map(|l| l.strip_prefix("oom_kill ")).and_then(|n| n.trim().parse().ok())
 }
 
 /// The bash that runs bot commands. On Windows this is Git for Windows' `bash.exe`, never
@@ -196,5 +252,35 @@ mod windows_path_tests {
     #[test]
     fn missing_git_says_how_to_install_it() {
         assert!(GIT_MISSING.contains("winget install --id Git.Git -e"));
+    }
+}
+
+#[cfg(test)]
+mod killed_tests {
+    use super::*;
+
+    #[test]
+    fn a_kill_while_the_oom_count_rose_says_out_of_memory_and_any_other_kill_says_outside() {
+        assert_eq!(killed_note(Some(9), Some(3), Some(4)), Some(OOM_KILLED));
+        assert_eq!(killed_note(Some(9), Some(3), Some(3)), Some(KILLED_FROM_OUTSIDE));
+        // No count to compare (not Linux, /proc unreadable): never a guess at memory
+        assert_eq!(killed_note(Some(9), None, Some(4)), Some(KILLED_FROM_OUTSIDE));
+        assert_eq!(killed_note(Some(9), Some(3), None), Some(KILLED_FROM_OUTSIDE));
+        assert_eq!(killed_note(Some(9), None, None), Some(KILLED_FROM_OUTSIDE));
+        // A normal exit, or another signal (SIGTERM, SIGSEGV), gets no line
+        assert_eq!(killed_note(None, Some(3), Some(4)), None);
+        assert_eq!(killed_note(Some(15), Some(3), Some(4)), None);
+        assert_eq!(killed_note(Some(11), None, None), None);
+        assert!(OOM_KILLED.contains("ran out of memory") && OOM_KILLED.contains("kwant kept running"));
+        assert!(KILLED_FROM_OUTSIDE.contains("signal 9"));
+    }
+
+    #[test]
+    fn the_oom_kill_count_is_read_from_vmstat() {
+        assert_eq!(vmstat_oom_kills("pgfault 12\noom_kill 7\nnr_free_pages 1\n"), Some(7));
+        // oom_kill_x is another counter; a missing line or a non-number is no count
+        assert_eq!(vmstat_oom_kills("oom_kill_x 7\n"), None);
+        assert_eq!(vmstat_oom_kills("oom_kill x\n"), None);
+        assert_eq!(vmstat_oom_kills(""), None);
     }
 }
