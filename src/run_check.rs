@@ -12,9 +12,12 @@
 //! How a step is judged:
 //! - kwnt's own tools (`mcp__kwnt_tools__*`) run without a card by design;
 //! - claude's look-ups (web search, to-do list, tool search) and file tools run without a card by
-//!   design (file tools only inside the bot's folder; the step keeps no path to check that). A
-//!   WebFetch of this computer or the local network is the exception: kwnt asks for it, so it
-//!   needs a row (judged from the saved address, with no name lookups);
+//!   design. A WebFetch of this computer or the local network is the exception: kwnt asks for it,
+//!   so it needs a row (judged from the saved address, with no name lookups). File tools run
+//!   without one only inside the bot's folder: a read, edit or write step whose saved path is
+//!   outside the folder its reply records ([`GATE_FOLDER_KEY`]) needs a row. A step with no path,
+//!   a cut path, a failed step (its detail is the failure) or a reply with no folder (all history
+//!   before 0.9.25) counts as inside, as before. Glob and Grep are judged as before;
 //! - another engine's own tools (codex, grok) have no card hook: their sandbox holds them;
 //! - everything else (Bash, MCP tools, any tool on an API engine) needs an approvals row in the
 //!   step's time window, for the same bot, tool and chat. A read-only command claude didn't ask
@@ -22,6 +25,7 @@
 //!   person chose "Always allow" for earlier in the same chat don't count as findings.
 //!
 //! [`families`]: crate::mcp::declined::families
+//! [`GATE_FOLDER_KEY`]: crate::mcp::builtin_tools::GATE_FOLDER_KEY
 
 use crate::drivers::activity::redact;
 use crate::mcp::builtin_tools::{self, ToolGroup};
@@ -65,6 +69,8 @@ pub struct Reply {
     pub chat_label: String,
     /// `meta.ran_on.engine`: "claude", "codex", "grok", "anthropic_api", …
     pub engine: Option<String>,
+    /// `meta.gate_folder`: the folder kwnt's gate judged the turn's file tools against (29c).
+    pub folder: Option<String>,
     pub steps: Vec<Step>,
 }
 
@@ -201,7 +207,7 @@ enum Gate {
     OtherEngine,
 }
 
-fn gate(engine: Option<&str>, tool: &str, key: &str, step: &Step) -> Gate {
+fn gate(engine: Option<&str>, folder: Option<&str>, tool: &str, key: &str, step: &Step) -> Gate {
     if key.starts_with("kwnt_tools_") {
         return Gate::KwantTool;
     }
@@ -214,6 +220,8 @@ fn gate(engine: Option<&str>, tool: &str, key: &str, step: &Step) -> Gate {
             // kwnt asks before a WebFetch of this computer or the local network (`fetches_kwnt`)
             Some(ToolGroup::Lookup) if tool == "WebFetch" && fetch_address(step).is_some_and(|url| fetch_asks(&url)) => Gate::Card,
             Some(ToolGroup::Lookup) => Gate::Lookup,
+            // kwnt asks before a file tool outside the bot's folder (`builtin_tools::decide`)
+            Some(ToolGroup::Read | ToolGroup::Write) if file_outside(tool, step, folder) => Gate::Card,
             Some(ToolGroup::Read | ToolGroup::Write) => Gate::FolderFile,
             Some(ToolGroup::Shell) | None => Gate::Card,
         },
@@ -221,6 +229,20 @@ fn gate(engine: Option<&str>, tool: &str, key: &str, step: &Step) -> Gate {
         Some("grok") if tool.contains('-') => Gate::Card,
         Some(_) => Gate::OtherEngine,
     }
+}
+
+/// Whether a claude file step's saved path is outside `folder`, judged with the gate's own
+/// [`builtin_tools::is_inside`] (29c). Only a whole absolute path counts: no folder, no detail, a
+/// cut detail ("…"), a relative path or a failed step (whose detail is usually the failure) is
+/// `false`, so history saved before 0.9.25 reads as before. Glob, Grep and LS keep no path.
+fn file_outside(tool: &str, step: &Step, folder: Option<&str>) -> bool {
+    let (Some(folder), Some(path)) = (folder.filter(|f| !f.is_empty()), step.detail.as_deref()) else {
+        return false;
+    };
+    if matches!(tool, "Glob" | "Grep" | "LS") || step.status == "failed" || path.ends_with('…') || !Path::new(path).is_absolute() {
+        return false;
+    }
+    !builtin_tools::is_inside(Path::new(folder), path)
 }
 
 /// The address a WebFetch step opened: its `detail` (the URL as the call gave it, redacted and cut),
@@ -311,7 +333,7 @@ pub fn check_since(
             }
             steps += 1;
             let key = tool_key(tool);
-            match gate(reply.engine.as_deref(), tool, &key, step) {
+            match gate(reply.engine.as_deref(), reply.folder.as_deref(), tool, &key, step) {
                 Gate::FolderFile => by_design.folder_files += 1,
                 Gate::KwantTool => by_design.kwant_tools += 1,
                 Gate::Lookup => by_design.lookups += 1,
@@ -780,6 +802,7 @@ async fn read_all(pool: &sqlx::SqlitePool, cutoff: Option<DateTime<Utc>>) -> Res
                 chat_label: chat.as_deref().map(label).unwrap_or_else(|| "a chat".into()),
                 chat,
                 engine: meta.pointer("/ran_on/engine").and_then(Value::as_str).map(str::to_string),
+                folder: meta.get(builtin_tools::GATE_FOLDER_KEY).and_then(Value::as_str).map(str::to_string),
                 steps: steps_of(&meta),
             })
         })
@@ -959,6 +982,7 @@ mod tests {
             chat: Some("direct:b1".into()),
             chat_label: "chat with Forge".into(),
             engine: Some(engine.into()),
+            folder: None,
             steps,
         }
     }
@@ -992,7 +1016,7 @@ mod tests {
 
     #[test]
     fn gate_by_engine_and_tool() {
-        let g = |e: Option<&str>, tool: &str| gate(e, tool, &tool_key(tool), &Step::default());
+        let g = |e: Option<&str>, tool: &str| gate(e, None, tool, &tool_key(tool), &Step::default());
         assert_eq!(g(Some("claude"), "Bash"), Gate::Card);
         assert_eq!(g(Some("claude"), "Write"), Gate::FolderFile);
         assert_eq!(g(None, "Read"), Gate::FolderFile);
@@ -1184,6 +1208,86 @@ mod tests {
         // The lenient limit: a failed loopback fetch whose URL was replaced reads as the dev server
         let s = failed("2026-11-06T18:30:00.000Z", Some("fetch failed"), "Opening 127.0.0.1");
         assert_eq!(fetch_address(&s).as_deref(), Some("http://127.0.0.1/"));
+    }
+
+    /// A bot folder in a temp dir, canonical as the gate keeps it, and a path outside it.
+    fn bot_folder() -> (tempfile::TempDir, std::path::PathBuf, String) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("bot")).unwrap();
+        let folder = builtin_tools::canonical_folder(Some(&dir.path().join("bot"))).unwrap();
+        let outside = dir.path().join("elsewhere").join("plan.txt").display().to_string();
+        (dir, folder, outside)
+    }
+
+    fn file_reply(at: &str, folder: Option<&std::path::Path>, steps: Vec<Step>) -> Reply {
+        Reply { folder: folder.map(|f| f.display().to_string()), ..reply(at, "claude", steps) }
+    }
+
+    /// 29c: a claude write or read whose saved path is outside the folder its reply records ran
+    /// with no card: kwnt asks for it (`builtin_tools::decide`), so it is a finding unless a row
+    /// covers it. Inside the folder (an existing or a new file) it stays "in the bot's own folder".
+    #[test]
+    fn a_rowless_file_step_outside_the_bots_folder_is_a_finding() {
+        let (_dir, folder, outside) = bot_folder();
+        let inside = folder.join("plan.txt").display().to_string();
+        let new_inside = folder.join("notes").join("new").join("draft.md").display().to_string();
+        let sep = std::path::MAIN_SEPARATOR;
+        let climbs_out = format!("{}{sep}..{sep}escape.txt", folder.display());
+        let steps = vec![
+            tool_step("Write", "2026-11-18T05:00:00.000Z", "Writing …/bot/plan.txt", Some(&inside)),
+            tool_step("Edit", "2026-11-18T05:00:01.000Z", "Editing …/new/draft.md", Some(&new_inside)),
+            tool_step("Write", "2026-11-18T05:00:02.000Z", "Writing …/elsewhere/plan.txt", Some(&outside)),
+            tool_step("Read", "2026-11-18T05:00:03.000Z", "Reading …/elsewhere/plan.txt", Some(&outside)),
+            tool_step("Write", "2026-11-18T05:00:04.000Z", "Writing …/../escape.txt", Some(&climbs_out)),
+        ];
+        let report = check(&[file_reply("2026-11-18T05:00:00.000Z", Some(&folder), steps)], &[], &[]);
+        let found: Vec<(&str, &str)> = report.findings.iter().map(|f| (f.tool.as_str(), f.title.as_str())).collect();
+        assert_eq!(
+            found,
+            [("Write", "Writing …/elsewhere/plan.txt"), ("Read", "Reading …/elsewhere/plan.txt"), ("Write", "Writing …/../escape.txt")]
+        );
+        assert!(report.findings.iter().all(|f| f.rule == Rule::RanWithNoCard));
+        assert_eq!(report.by_design.folder_files, 2);
+
+        // The card kwnt showed for it covers it
+        let steps = vec![tool_step("Write", "2026-11-18T05:00:02.000Z", "Writing …/elsewhere/plan.txt", Some(&outside))];
+        let rows = vec![row("w1", "Write", "allowed_once", "2026-11-18 05:00:02", Some("direct:b1"))];
+        let report = check(&[file_reply("2026-11-18T05:00:00.000Z", Some(&folder), steps)], &[], &rows);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.with_card, 1);
+    }
+
+    /// 29c: only a whole absolute path judged against a recorded folder counts. No path, a cut
+    /// path, a relative path, a failed step (its detail is the failure), a search tool, a reply
+    /// with no folder (all history before 0.9.25) and another engine read as before.
+    #[test]
+    fn a_file_step_with_no_path_a_cut_path_or_no_folder_counts_as_today() {
+        let (_dir, folder, outside) = bot_folder();
+        let at = "2026-11-18T05:00:00.000Z";
+        let cut = format!("{}…", &outside[..outside.len() - 4]);
+        let failed = Step { status: "failed".into(), ..tool_step("Write", at, "Writing …/elsewhere/plan.txt", Some(&outside)) };
+        let steps = vec![
+            tool_step("Write", at, "Writing a file", None),
+            tool_step("Write", at, "Writing …/elsewhere/plan.txt", Some(&cut)),
+            tool_step("Edit", at, "Editing ../plan.txt", Some("../plan.txt")),
+            failed,
+            tool_step("Glob", at, "Searching files", Some(&outside)),
+            tool_step("Grep", at, "Searching files", Some(&outside)),
+        ];
+        let report = check(&[file_reply(at, Some(&folder), steps)], &[], &[]);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.by_design.folder_files, 6);
+
+        let write_outside = || vec![tool_step("Write", at, "Writing …/elsewhere/plan.txt", Some(&outside))];
+        let report = check(&[file_reply(at, None, write_outside())], &[], &[]);
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.by_design.folder_files, 1);
+        let empty = Reply { folder: Some(String::new()), ..reply(at, "claude", write_outside()) };
+        assert!(check(&[empty], &[], &[]).findings.is_empty());
+        let codex = Reply { folder: Some(folder.display().to_string()), ..reply(at, "codex", write_outside()) };
+        let report = check(&[codex], &[], &[]);
+        assert!(report.findings.is_empty());
+        assert_eq!(report.by_design.other_engines, 1);
     }
 
     #[test]

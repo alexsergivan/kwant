@@ -97,12 +97,29 @@ const SETTLED_APPROVAL: Record<string, string> = {
 };
 
 /**
+ * 28j: how a human step (sign in, solve a CAPTCHA, enter a code in the bot's browser) reads once it's settled.
+ * The server titles it "Waiting for you: <reason>" (human_steps.rs:587); the reason is the bot's own sentence
+ * ("Ben needs you to sign in to tiktok.com…"), so it's kept exactly as written. Open steps read as today.
+ */
+const SETTLED_HUMAN_STEP: Record<string, string> = {
+  done: 'You did it',
+  resolved_auto: 'Cleared by itself',
+  declined: 'You said no',
+  timed_out: 'Asked you',
+  stopped: 'Asked you',
+};
+
+/**
  * A step title from the server, with a raw tool name made readable. The server writes an unknown
  * tool as "Using create_pull_request (github)", and an approval as "Waiting for your approval: <that>";
  * every other title (already in words) comes back unchanged. Pass the step's status so an answered
- * approval says what the person chose ("You said OK: running a command"), not that it still waits.
+ * approval says what the person chose ("You said OK: running a command"), not that it still waits, and a
+ * settled human step says what happened ("You did it: <reason>").
  */
 export function readableStepTitle(title: string, status?: string): string {
+  const human = /^Waiting for you: (.+)$/s.exec(title);
+  const humanSettled = human && status ? SETTLED_HUMAN_STEP[status] : undefined;
+  if (human && humanSettled) return `${humanSettled}: ${human[1]}`;
   const using = /^Using `?([A-Za-z0-9_.:-]+)`?(?: \(([^)]+)\))?$/;
   const approval = /^Waiting for your approval: (.+)$/.exec(title);
   if (approval) {

@@ -465,6 +465,62 @@ pub enum ApprovalOutcome {
 
 /// What the bot is told when the person refused a call: that, and [`NOT_ANOTHER_WAY_TEXT`].
 pub const DENIED_TEXT: &str = "The user denied this tool call. Don't try it again or another way unless the person asks.";
+/// 29o: the longest reason, in chars, the person can give with a Deny ([`deny_reason`]).
+pub const DENY_REASON_MAX: usize = 500;
+
+/// 29o: the person's reason on a Deny as the bot hears it: control characters (newlines, tabs)
+/// and runs of spaces become one space, trimmed, cut at [`DENY_REASON_MAX`] chars. `None` when
+/// nothing is left: a plain Deny.
+pub fn deny_reason(raw: &str) -> Option<String> {
+    let flat: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let line = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = line.chars().take(DENY_REASON_MAX).collect();
+    let cut = cut.trim_end();
+    (!cut.is_empty()).then(|| cut.to_string())
+}
+
+/// 29o: what the bot is told when the person refused a call and said why. Unlike
+/// [`DENIED_TEXT`] it may try another way the person pointed to; that call asks again. Its first
+/// sentence is [`DENIED_TEXT`]'s, word for word: the activity log pairs a CLI's denial with the
+/// person's card by that sentence (28b/28q), so the step still ends "You said no; nothing ran".
+pub fn denied_with_reason_text(reason: &str) -> String {
+    format!(
+        "The user denied this tool call. They said why: \"{reason}\". Don't make this same call again. \
+If what they said points to another way, you may try that; it will ask them again. Otherwise say in your reply what you couldn't do."
+    )
+}
+
+tokio::task_local! {
+    /// 29o: where [`tell_deny_reason`] leaves the person's reason for [`hear_deny_reason`].
+    static DENY_REASON: Arc<Mutex<Option<String>>>;
+}
+
+/// 29o: runs `decide` (an approver's [`ToolApprover::decide`] or
+/// [`decide_granted`](ToolApprover::decide_granted)) and hears the reason the person gave if they
+/// denied its card with one. [`ApprovalOutcome`] stays `Copy` and every approver that wraps
+/// another passes it through unchanged: the reason travels beside it, in this task only.
+pub async fn hear_deny_reason<F>(decide: F) -> (ApprovalOutcome, Option<String>)
+where
+    F: std::future::Future<Output = ApprovalOutcome>,
+{
+    let slot = Arc::new(Mutex::new(None));
+    let outcome = DENY_REASON.scope(slot.clone(), decide).await;
+    let reason = slot.lock().ok().and_then(|mut s| s.take());
+    (outcome, reason.filter(|_| outcome == ApprovalOutcome::Denied))
+}
+
+/// 29o: hands the person's reason for a Deny to the caller waiting in [`hear_deny_reason`];
+/// false when nobody in this task listens (the bot then hears [`DENIED_TEXT`]).
+pub fn tell_deny_reason(reason: String) -> bool {
+    DENY_REASON
+        .try_with(|slot| {
+            if let Ok(mut s) = slot.lock() {
+                *s = Some(reason);
+            }
+        })
+        .is_ok()
+}
+
 /// 27b: the end of [`DENIED_TEXT`], for the bot only; a step's detail leaves it out.
 pub const NOT_ANOTHER_WAY_TEXT: &str = "Don't try it again or another way unless the person asks.";
 /// 27b: what the bot is told when kwant refused a call because the person already said no to one
@@ -486,6 +542,16 @@ pub const UNANSWERED_STEP_DETAIL: &str = "Waited 5 minutes for your answer; noth
 /// The step detail of a call the person said no to on its card (28b): the tool step ends
 /// `declined`, in the person's words. The bot is still told [`DENIED_TEXT`].
 pub const DENIED_STEP_DETAIL: &str = "You said no; nothing ran";
+/// The step detail of a call kwant refused on its own, with no card the person said no on (28k):
+/// kwnt's secret files, a ticket it couldn't store, a card withdrawn before anyone answered. The
+/// bot is still told [`DENIED_TEXT`]; only the saved step says who stopped it.
+pub const BLOCKED_STEP_DETAIL: &str = "kwant blocked this; nothing ran";
+/// The step detail of a call whose card stopped waiting with no answer and couldn't stay open
+/// for a late one (28k): it didn't run, and it wasn't the person's no.
+pub const NOBODY_ANSWERED_STEP_DETAIL: &str = "Nobody answered in time; nothing ran";
+/// The step detail of a push or GitHub write the pre-push gate held (28k). The bot still gets
+/// the gate's own text, which says what to do next.
+pub const PREPUSH_BLOCKED_STEP_DETAIL: &str = "Blocked before push; nothing ran";
 /// The step detail of a call a Skill Foundry replay recorded instead of running.
 pub const REHEARSED_STEP_DETAIL: &str = "Dry run: kwant recorded this call instead of running it";
 
@@ -529,6 +595,15 @@ impl ApprovalOutcome {
             ApprovalOutcome::Rehearsed => REHEARSED_TEXT,
             ApprovalOutcome::DeclinedBefore => DECLINED_BEFORE_TEXT,
             _ => DENIED_TEXT,
+        }
+    }
+
+    /// [`refusal_text`](Self::refusal_text), or on the person's Deny with a reason (29o)
+    /// [`denied_with_reason_text`].
+    pub fn refusal(self, reason: Option<&str>) -> String {
+        match (self, reason) {
+            (ApprovalOutcome::Denied, Some(why)) => denied_with_reason_text(why),
+            _ => self.refusal_text().to_string(),
         }
     }
 
@@ -736,6 +811,90 @@ mod folder_file_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 29o: a Deny's reason is one line, trimmed and at most 500 chars; nothing left is a plain Deny.
+    #[test]
+    fn a_deny_reason_is_one_trimmed_line_of_at_most_500_chars() {
+        assert_eq!(deny_reason("  use the staging database  ").as_deref(), Some("use the staging database"));
+        assert_eq!(deny_reason("push\nwithout\r\n--force\there\u{7}now").as_deref(), Some("push without --force here now"));
+        assert_eq!(deny_reason("a  \n\n  b").as_deref(), Some("a b"));
+        for empty in ["", "   ", "\n\t\r", "\u{0}"] {
+            assert_eq!(deny_reason(empty), None, "{empty:?}");
+        }
+        let long = "é".repeat(501);
+        assert_eq!(deny_reason(&long).map(|r| r.chars().count()), Some(DENY_REASON_MAX));
+        assert_eq!(deny_reason(&"x".repeat(500)).map(|r| r.len()), Some(500));
+        // Cut at 500, then trimmed: no trailing space
+        let edge = format!("{} y", "x".repeat(499));
+        assert_eq!(deny_reason(&edge), Some("x".repeat(499)));
+    }
+
+    /// 29o: a plain Deny is still told [`DENIED_TEXT`] word for word; a Deny with a reason hears it,
+    /// and may try another way the person pointed to. Other refusals ignore a reason.
+    #[test]
+    fn a_deny_with_a_reason_tells_the_bot_why() {
+        assert_eq!(ApprovalOutcome::Denied.refusal(None), DENIED_TEXT);
+        assert_eq!(
+            ApprovalOutcome::Denied.refusal(Some("use the staging database")),
+            "The user denied this tool call. They said why: \"use the staging database\". Don't make this same call again. \
+If what they said points to another way, you may try that; it will ask them again. Otherwise say in your reply what you couldn't do."
+        );
+        for other in [ApprovalOutcome::DeclinedBefore, ApprovalOutcome::Unanswered, ApprovalOutcome::Rehearsed] {
+            assert_eq!(other.refusal(Some("why")), other.refusal_text(), "{other:?}");
+        }
+    }
+
+    /// 29o round 2: a Deny with a reason, as the claude CLI reports it back (an error carrying the
+    /// permission prompt's message), still ends the tool step `declined` in the person's words,
+    /// paired with its card; the reason and the rest of the bot's text stay out of the step.
+    #[test]
+    fn a_deny_with_a_reason_still_ends_the_step_declined() {
+        use crate::drivers::activity::ActivityLog;
+        use crate::drivers::events::RuntimeEvent;
+        let first = |t: &str| t.split_inclusive('.').next().unwrap_or(t).to_string();
+        let said = ApprovalOutcome::Denied.refusal(Some("push without --force"));
+        assert_eq!(first(&said), first(DENIED_TEXT), "same first sentence as DENIED_TEXT");
+        for text in [with_no_false_claims(&said), said.clone()] {
+            let mut log = ActivityLog::default();
+            log.wait("approval", "t1", "Waiting for your approval: Running `git push --force`", Some("Bash"));
+            log.settle("t1", "declined");
+            log.observe(&RuntimeEvent::ToolCallPending {
+                id: "a".into(),
+                name: "Bash".into(),
+                args: serde_json::json!({"command": "git push --force"}),
+            });
+            let ended = log.observe(&RuntimeEvent::ToolCallCompleted {
+                id: "a".into(),
+                result: serde_json::json!({"status": "error", "error": text}),
+            });
+            assert_eq!(
+                (ended[0].kind, ended[0].status, ended[0].detail.as_deref()),
+                ("tool", "declined", Some(DENIED_STEP_DETAIL))
+            );
+            let shown = serde_json::to_string(log.steps()).unwrap();
+            assert!(!shown.contains("without --force") && !shown.contains("They said why"), "{shown}");
+        }
+    }
+
+    /// 29o: the reason reaches only the call that is listening, and only on a denial.
+    #[tokio::test]
+    async fn a_deny_reason_is_heard_only_by_its_own_call() {
+        let denied = || async {
+            assert!(tell_deny_reason("use staging".into()));
+            ApprovalOutcome::Denied
+        };
+        assert_eq!(hear_deny_reason(denied()).await, (ApprovalOutcome::Denied, Some("use staging".into())));
+        // Nobody listening: dropped
+        assert!(!tell_deny_reason("lost".into()));
+        // A reason left beside an outcome that isn't a denial is never heard
+        let allowed = async {
+            tell_deny_reason("why".into());
+            ApprovalOutcome::Allowed
+        };
+        assert_eq!(hear_deny_reason(allowed).await, (ApprovalOutcome::Allowed, None));
+        // A plain Deny has none
+        assert_eq!(hear_deny_reason(async { ApprovalOutcome::Denied }).await, (ApprovalOutcome::Denied, None));
+    }
 
     /// 27b: a first no tells the bot not to try another way; a call refused because of an earlier
     /// no says so, and is recorded as a denial (no extra reminder, nothing claimed done).

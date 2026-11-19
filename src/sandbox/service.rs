@@ -76,6 +76,48 @@ async fn previous_entry(endpoint: &str, target: &str) -> Option<String> {
     history["entries"].as_array()?.get(index.checked_sub(1)?)?["url"].as_str().map(str::to_string)
 }
 
+/// 29d: what a live view on a page the person picked last read there (its own `location`
+/// message), kept per page key for the tab list. Such a view never writes the controller's
+/// address (29a), so without this the page's tab-list entry would stay on its old address while
+/// the person clicks links or goes Back/Forward in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeenLocation {
+    pub url: String,
+    pub title: String,
+    /// The controller's `(current_url, current_title)` when this was read. While the controller
+    /// still holds exactly these, nothing wrote it since, so this read is the newer one; once it
+    /// holds anything else, browser.rs wrote it after this read and the controller is newer.
+    pub over: (Option<String>, Option<String>),
+}
+
+/// Each page's [`SeenLocation`], by page key. Cloned handles share one map.
+#[derive(Clone, Default)]
+pub struct PagesSeen(std::sync::Arc<std::sync::Mutex<HashMap<String, SeenLocation>>>);
+
+impl PagesSeen {
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, SeenLocation>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn record(&self, key: &str, seen: SeenLocation) {
+        self.map().insert(key.to_string(), seen);
+    }
+
+    pub fn get(&self, key: &str) -> Option<SeenLocation> {
+        self.map().get(key).cloned()
+    }
+
+    pub fn forget(&self, key: &str) {
+        self.map().remove(key);
+    }
+
+    /// Forgets the team page `team` and all its job pages.
+    pub fn forget_team(&self, team: &str) {
+        let prefix = format!("{team}{PAGE_SEP}");
+        self.map().retain(|k, _| k != team && !k.starts_with(&prefix));
+    }
+}
+
 pub struct BrowserService {
     root: PathBuf,
     endpoint: Option<String>,
@@ -101,6 +143,8 @@ pub struct BrowserService {
     last_outage: std::sync::Mutex<Option<Outage>>,
     /// Pages the idle sweep put to rest, until they are used again (see [`Self::touch_page`]).
     rested: std::sync::Mutex<HashMap<String, Rest>>,
+    /// 29d: what a view on a picked page last read there, for the tab list ([`PagesSeen`]).
+    pages_seen: PagesSeen,
 }
 
 struct ServiceState {
@@ -126,6 +170,7 @@ impl BrowserService {
             page_use: Default::default(),
             last_outage: Default::default(),
             rested: Default::default(),
+            pages_seen: Default::default(),
         }
     }
 
@@ -713,7 +758,13 @@ impl BrowserService {
     pub fn forget_page(&self, key: &str) {
         if is_job_page(key) {
             self.page_use.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+            self.pages_seen.forget(key);
         }
+    }
+
+    /// 29d: each picked page's last seen address, shared with the live views that record it.
+    pub fn pages_seen(&self) -> PagesSeen {
+        self.pages_seen.clone()
     }
 
     /// When a page was last used in this run, if it was.
@@ -751,6 +802,7 @@ impl BrowserService {
         if !is_job_page(key) { return Ok(()); }
         self.page_use.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
         self.rested.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        self.pages_seen.forget(key);
         let mut lock = self.state.lock().await;
         if let Some(state) = lock.as_mut() {
             // Drop this page's own cached controller too (#753): otherwise its downloads/site
@@ -790,6 +842,7 @@ impl BrowserService {
         let prefix = format!("{id}{PAGE_SEP}");
         self.page_use.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| !k.starts_with(&prefix));
         self.rested.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| k != id && !k.starts_with(&prefix));
+        self.pages_seen.forget_team(id);
         let mut lock = self.state.lock().await;
         if lock.is_none() && self.sessions_file().exists() {
             *lock = Some(self.connect().await?);
