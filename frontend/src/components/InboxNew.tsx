@@ -212,7 +212,7 @@ interface RowProps {
   busy: string | null;
   onPick: (i: InboxItem) => void;
   onAnswer: (i: InboxItem, choice: number) => void;
-  onResolve: (i: InboxItem, d: ApprovalDecision, withoutBackup?: boolean) => void;
+  onResolve: (i: InboxItem, d: ApprovalDecision, withoutBackup?: boolean, reason?: string) => void;
   /** 0.9.5: Retry on a stopped item whose approval expired unanswered. */
   onRetry?: (i: InboxItem, approvalId: string) => void;
   /** A routine's review task in Done: its run's first line, as the run's own row would show it. */
@@ -353,8 +353,8 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
       )}
 
       {item.kind === 'approval' && (
-        <div className="px-3 pb-1 pl-[54px] [&>div]:my-0 [&>div]:mb-2">
-          <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} onResolve={(_, d, opts) => onResolve(item, d as ApprovalDecision, opts?.withoutBackup)} />
+        <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
+          <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} stackWhy onResolve={(_, d, opts) => onResolve(item, d as ApprovalDecision, opts?.withoutBackup, opts?.reason)} />
         </div>
       )}
 
@@ -822,10 +822,10 @@ export const InboxNew: React.FC<InboxNewProps> = ({
 
   const onAnswer = (item: InboxItem, choice: number) => act(item, () => awayApi.answer(item.id, choice));
   const onRetry = (item: InboxItem, approvalId: string) => act(item, () => awayApi.retryApproval(approvalId));
-  const onResolve = (item: InboxItem, decision: ApprovalDecision, withoutBackup?: boolean) =>
+  const onResolve = (item: InboxItem, decision: ApprovalDecision, withoutBackup?: boolean, reason?: string) =>
     act(
       item,
-      () => resolveFromList(item.id, onApprovalResolved, () => awayApi.resolve(item.id, decision, withoutBackup)),
+      () => resolveFromList(item.id, onApprovalResolved, () => awayApi.resolve(item.id, decision, withoutBackup, reason)),
       decision === 'deny',
     );
 
