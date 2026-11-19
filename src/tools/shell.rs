@@ -130,7 +130,7 @@ pub fn killed_note(signal: Option<i32>, oom_before: Option<u64>, oom_after: Opti
 
 /// How many processes the kernel's out-of-memory killer has stopped since boot (`oom_kill` in
 /// /proc/vmstat); None outside Linux or when it can't be read.
-fn oom_kills() -> Option<u64> {
+pub(crate) fn oom_kills() -> Option<u64> {
     #[cfg(target_os = "linux")]
     return vmstat_oom_kills(&std::fs::read_to_string("/proc/vmstat").ok()?);
     #[cfg(not(target_os = "linux"))]
