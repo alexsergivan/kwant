@@ -3333,6 +3333,50 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             assert!(why.contains("didn't say which tools it offered"), "{why}");
         }
 
+        // 29y: a CLI killed mid-turn says why. On a test machine nothing raises the OOM-kill
+        // count, so a `kill -9` reads as the outside line; the memory line is pinned in
+        // `killed_cli_tests`.
+        const OUTSIDE: &str = "CLI was killed (signal 9) by something outside it";
+
+        #[tokio::test]
+        async fn a_claude_cli_killed_mid_turn_says_it_was_killed() {
+            let fake = Fake::new("claude", &format!("echo '{CLAUDE_INIT_EMPTY}'\nkill -9 $$"));
+            let why = execution_error(fake.run(turn(false)).await);
+            assert!(why.contains(&format!("The claude {OUTSIDE}")), "{why}");
+            assert!(!why.contains("no output"), "{why}");
+        }
+
+        #[tokio::test]
+        async fn a_codex_cli_killed_before_its_reply_says_it_was_killed() {
+            let fake = Fake::new("codex", "if [ \"$1\" = mcp ]; then echo '[]'; exit 0; fi\nkill -9 $$");
+            let why = execution_error(fake.run(turn(false)).await);
+            assert!(why.contains(&format!("The codex {OUTSIDE}")), "{why}");
+        }
+
+        #[tokio::test]
+        async fn a_grok_cli_killed_mid_reply_keeps_its_words_and_says_why() {
+            let fake = Fake::new("grok", &format!("{GROK_TEXT}\nkill -9 $$"));
+            let out = fake.run(turn(false)).await.expect("a killed grok turn still answers");
+            assert!(out.text.starts_with("The card."), "{}", out.text);
+            assert!(out.text.contains(&format!("⚠️ [Vega] The grok {OUTSIDE}")), "{}", out.text);
+            // With nothing said yet, the reason is the whole reply
+            let fake = Fake::new("grok", "kill -9 $$");
+            let out = fake.run(turn(false)).await.unwrap();
+            assert!(out.text.contains(&format!("The grok {OUTSIDE}")), "{}", out.text);
+            assert!(!out.text.contains("stopped before it replied"), "{}", out.text);
+        }
+
+        #[tokio::test]
+        async fn a_cli_that_exits_with_an_error_keeps_todays_words() {
+            let fake = Fake::new("claude", "exit 3");
+            let why = execution_error(fake.run(turn(false)).await);
+            assert_eq!(why, "claude CLI exited with status 3 and no output");
+            let fake = Fake::new("grok", "exit 3");
+            let out = fake.run(turn(false)).await.unwrap();
+            assert!(out.text.contains("grok exited with code 3 without a reply"), "{}", out.text);
+            assert!(!out.text.contains("killed"), "{}", out.text);
+        }
+
         #[tokio::test]
         async fn no_tools_turn_on_another_cli_is_refused_before_it_starts() {
             let fake = Fake::new("gemini", "touch {dir}/ran\necho hi");
@@ -3347,6 +3391,33 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             let why = execution_error(fake.run(input).await);
             assert!(why.contains("MCP servers"), "{why}");
             assert!(!fake.path("ran").exists());
+        }
+    }
+}
+
+/// Red proof stub: #852's behaviour, where no CLI exit gets a killed line.
+#[cfg(test)]
+fn cli_killed_line(_cli: &str, _signal: Option<i32>, _oom_before: Option<u64>, _oom_after: Option<u64>) -> Option<String> {
+    None
+}
+
+#[cfg(test)]
+mod killed_cli_tests {
+    use super::cli_killed_line;
+
+    #[test]
+    fn a_killed_cli_says_out_of_memory_when_the_count_rose_and_outside_otherwise() {
+        let oom = cli_killed_line("claude", Some(9), Some(3), Some(4)).unwrap();
+        assert!(oom.starts_with("The computer ran out of memory, so the system stopped the claude CLI partway through this turn."), "{oom}");
+        assert!(oom.contains("kwant kept running"), "{oom}");
+        let outside = "The codex CLI was killed (signal 9) by something outside it, partway through this turn.";
+        assert_eq!(cli_killed_line("codex", Some(9), Some(3), Some(3)).as_deref(), Some(outside));
+        // No count (not Linux, /proc unreadable) on either side: the outside line
+        assert_eq!(cli_killed_line("codex", Some(9), None, None).as_deref(), Some(outside));
+        assert_eq!(cli_killed_line("codex", Some(9), None, Some(5)).as_deref(), Some(outside));
+        // Any other end gets no line: the existing words stay
+        for signal in [None, Some(15), Some(6)] {
+            assert_eq!(cli_killed_line("claude", signal, Some(3), Some(4)), None, "{signal:?}");
         }
     }
 }
