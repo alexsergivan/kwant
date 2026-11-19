@@ -427,12 +427,23 @@ impl ActivityLog {
     /// Ends the waiting step for `ref_id` with `status` ("ok", "done", "declined", "stopped", or
     /// "unanswered" for an approval card the turn stopped waiting for, still open for a late answer).
     pub fn settle(&mut self, ref_id: &str, status: &'static str) -> Option<Step> {
+        self.settle_with(ref_id, status, None)
+    }
+
+    /// [`settle`](Self::settle), with the reason the person gave with a Deny as the step's detail
+    /// (29s, [`crate::mcp::said_why_detail`]). The reason is redacted first, then cut so the whole
+    /// detail fits [`MAX_DETAIL`] and a cut reason still ends `…”`. An `unanswered` step keeps its
+    /// own detail.
+    pub fn settle_with(&mut self, ref_id: &str, status: &'static str, said_why: Option<&str>) -> Option<Step> {
         let i = self
             .steps
             .iter()
             .rposition(|s| s.ref_id.as_deref() == Some(ref_id) && s.is_open())?;
         if status == "unanswered" {
             self.steps[i].detail = Some(crate::mcp::UNANSWERED_STEP_DETAIL.to_string());
+        } else if let Some(why) = said_why {
+            let room = MAX_DETAIL.saturating_sub(crate::mcp::said_why_detail("").chars().count());
+            self.steps[i].detail = Some(crate::mcp::said_why_detail(&cut(&self.redact(why), room)));
         }
         Some(self.end(i, status))
     }
@@ -1865,6 +1876,39 @@ mod tests {
             id: id.into(),
             result: json!({"status": "error", "error": crate::mcp::with_no_false_claims(crate::mcp::DENIED_TEXT)}),
         }
+    }
+
+    /// 29s: a card settled with the person's words keeps them as its detail, redacted and cut like
+    /// any detail; the paired tool step still reads "You said no; nothing ran". A plain settle adds
+    /// none, and an `unanswered` card keeps its own detail.
+    #[test]
+    fn a_card_settled_with_the_persons_words_keeps_them_redacted() {
+        let mut log = ActivityLog::default();
+        log.wait("approval", "t1", "Waiting for your approval: Running `git push --force`", Some("Bash"));
+        let card = log.settle_with("t1", "declined", Some("push it with ghp_abcdefghijklmnopqrstuvwxyz0123 instead")).unwrap();
+        assert_eq!(card.detail.as_deref(), Some("You said why: \u{201c}push it with [redacted] instead\u{201d}"));
+        log.observe(&pending("a", "Bash", json!({"command": "git push --force"})));
+        let ended = log.observe(&denied("a"));
+        assert_eq!((ended[0].status, ended[0].detail.as_deref()), ("declined", Some(crate::mcp::DENIED_STEP_DETAIL)));
+        // A 500-char reason: cut so the whole detail fits MAX_DETAIL, and the quote still closes
+        log.wait("approval", "t2", "Waiting for your approval: Running a command", Some("Bash"));
+        let long = "é".repeat(crate::mcp::DENY_REASON_MAX);
+        let detail = log.settle_with("t2", "declined", Some(&long)).unwrap().detail.unwrap();
+        assert_eq!(detail.chars().count(), MAX_DETAIL, "{detail}");
+        assert!(detail.starts_with("You said why: \u{201c}é") && detail.ends_with("é…\u{201d}"), "{detail}");
+        // A short one isn't cut
+        log.wait("approval", "t6", "Waiting for your approval: Running a command", Some("Bash"));
+        let short = log.settle_with("t6", "declined", Some("use staging")).unwrap().detail;
+        assert_eq!(short.as_deref(), Some("You said why: \u{201c}use staging\u{201d}"));
+        // A plain Deny and an Allow: no detail
+        log.wait("approval", "t3", "Waiting for your approval: Running a command", Some("Bash"));
+        assert_eq!(log.settle("t3", "declined").unwrap().detail, None);
+        log.wait("approval", "t4", "Waiting for your approval: Running a command", Some("Bash"));
+        assert_eq!(log.settle_with("t4", "ok", None).unwrap().detail, None);
+        // An unanswered card keeps its own words
+        log.wait("approval", "t5", "Waiting for your approval: Running a command", Some("Bash"));
+        let late = log.settle_with("t5", "unanswered", Some("ignored")).unwrap();
+        assert_eq!(late.detail.as_deref(), Some(crate::mcp::UNANSWERED_STEP_DETAIL));
     }
 
     /// 28b: a Deny on the card ends the tool step `declined`, in the person's words, whether the

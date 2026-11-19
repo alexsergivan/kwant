@@ -69,6 +69,14 @@ export function markMovedSeen(): void {
  */
 export const movedPointerShows = (opts: { established: boolean | null; seen: boolean }): boolean => opts.established === true && !opts.seen;
 
+/**
+ * 29v: a brand-new person (`established === false`, decided) has never seen the old place, so the pointer is
+ * recorded as seen, the way What's new records its version for them ('record'). Otherwise `established`
+ * turns true at their first message and the pointer would pin to their sidebar. `null` (can't tell yet) waits;
+ * someone who used kwant before (true on load) is left to see it.
+ */
+export const recordMovedForNewPerson = (opts: { established: boolean | null; seen: boolean }): boolean => opts.established === false && !opts.seen;
+
 // ------------------------------------------------------------------ E: the account card
 
 /**
