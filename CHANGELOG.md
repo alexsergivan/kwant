@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.29] - 2026-11-19
+
+kwant 0.9.29: an approval that asks once, on its own card.
+
+### Fixed
+- When a bot waits for one approval and its card's Allow once and Deny buttons are on screen, the "needs you" bar above the message box now steps aside instead of asking the same thing again. It comes back once you scroll the card away, and it stays when more than one thing is waiting (#861)
+
 ## [Mac 0.9.28] - 2026-11-19
 
 kwant 0.9.28: a runaway command that can't take kwant down, your reason for Deny in Details and a Deploy on Railway button.
