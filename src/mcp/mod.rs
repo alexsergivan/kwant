@@ -492,7 +492,8 @@ If what they said points to another way, you may try that; it will ask them agai
 
 /// 29s: the detail of the card's approval step after a Deny whose reason the call heard, so the
 /// person (and a teammate reading the run) can see later what they told the bot. The tool step
-/// keeps [`DENIED_STEP_DETAIL`]. The activity log redacts it and cuts it to its detail length.
+/// keeps [`DENIED_STEP_DETAIL`]. The activity log redacts the reason, then cuts it so this fits
+/// its detail length with the closing quote kept.
 pub fn said_why_detail(reason: &str) -> String {
     format!("You said why: \u{201c}{reason}\u{201d}")
 }
@@ -865,7 +866,7 @@ If what they said points to another way, you may try that; it will ask them agai
         for text in [with_no_false_claims(&said), said.clone()] {
             let mut log = ActivityLog::default();
             log.wait("approval", "t1", "Waiting for your approval: Running `git push --force`", Some("Bash"));
-            log.settle_with("t1", "declined", Some(&said_why_detail("push without --force")));
+            log.settle_with("t1", "declined", Some("push without --force"));
             log.observe(&RuntimeEvent::ToolCallPending {
                 id: "a".into(),
                 name: "Bash".into(),

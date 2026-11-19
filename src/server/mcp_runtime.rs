@@ -567,8 +567,7 @@ impl BrokerApprover {
             _ => None,
         };
         if let Some(settled) = card_settles(&decision) {
-            let said_why = heard_reason.as_deref().map(mcp::said_why_detail);
-            super::activity::approval_settled_with(&req.turn_id, &ticket, settled, said_why.as_deref());
+            super::activity::approval_settled_with(&req.turn_id, &ticket, settled, heard_reason.as_deref());
         }
         let outcome = match decision {
             Ok(Ok(ApprovalDecision::AllowOnce)) => ApprovalOutcome::Allowed,
