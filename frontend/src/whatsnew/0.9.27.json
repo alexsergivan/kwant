@@ -1,0 +1,21 @@
+{
+  "version": "0.9.27",
+  "date": "2026-11-19",
+  "highlights": [
+    {
+      "id": "deny-say-why",
+      "title": "Deny can now say why",
+      "text": "Tap Say why on an approval card, type what the bot should do instead, and it hears it right away. An empty field is a plain Deny.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "deny-why-still-asks",
+      "title": "Saying why never allows anything",
+      "text": "The bot uses your words to try another way. Anything new it tries still asks you first, and the denied step still reads \"You said no; nothing ran\".",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}

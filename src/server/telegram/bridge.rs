@@ -376,7 +376,7 @@ async fn allow_once(state: &AppState, runner: &Runner, link: &TelegramLink, ask:
         let _ = runner.client.answer_callback(cb_id, Some(copy::ALREADY_ANSWERED)).await;
         return;
     }
-    let (status, body) = crate::server::routes::resolve_approval_inner(state, &ask.ref_id, ApprovalDecision::AllowOnce, Some("telegram"), false).await;
+    let (status, body) = crate::server::routes::resolve_approval_inner(state, &ask.ref_id, ApprovalDecision::AllowOnce, Some("telegram"), false, None).await;
     if status.is_success() {
         let _ = runner.client.answer_callback(cb_id, None).await;
         edit_answered(state, runner, ask, &format!("{TEAL_CHECK} Allowed once from Telegram · {}", hhmm(state).await)).await;
