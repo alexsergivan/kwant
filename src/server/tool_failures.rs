@@ -281,6 +281,9 @@ pub fn about_the_connection(result: &Value) -> bool {
 
 /// A failed call → the connection failure it is, if any.
 pub fn classify(name: &str, args: &Value, why: &str, servers: &[Server]) -> Option<Failure> {
+    // 29n: every driver's reason is judged on the same first 600 chars the live step shows, so a
+    // "401" or "unauthorized" deep in a long tool error isn't called a connection problem
+    let why = &crate::mcp::truncate_text(why, crate::drivers::activity::LIVE_ERROR_MAX);
     let conn = connection_of(name, args, servers)?;
     let cause = cause_of(&conn, why)?;
     Some(Failure {

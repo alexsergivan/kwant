@@ -44,7 +44,9 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
-  const [location, setLocation] = useState<{ url: string; title: string } | null>(null);
+  // 28r: `page` is the page this location's own stream was opened for (null: the server's default), so the
+  // pane can tell a message about the chosen page from one about the page it just left
+  const [location, setLocation] = useState<{ url: string; title: string; page: string | null } | null>(null);
   // After each tap: whether it focused a text field on the page (the phone keyboard follows it)
   const [tapFocus, setTapFocus] = useState<{ seq: number; editable: boolean } | null>(null);
   const [viewport, setViewport] = useState<Size | null>(null);
@@ -123,7 +125,13 @@ export function useBrowserStream(id: string | undefined, visible: boolean, page?
             setFrame({ id: message.id, image: message.image, width, height });
             break;
           }
-          case 'location': setLocation({ url: message.url || '', title: message.title || '' }); break;
+          case 'location': {
+            // 28x: the server re-reads the address every 2 s; an unchanged one keeps the same object, so
+            // nothing downstream (the address field) is rewritten by a tick
+            const url = message.url || '', title = message.title || '', at = page ?? null;
+            setLocation((prev) => prev && prev.url === url && prev.title === title && prev.page === at ? prev : { url, title, page: at });
+            break;
+          }
           case 'signin':
             setSignIn(typeof message.text === 'string' && message.text
               ? { text: message.text, action: typeof message.action === 'string' ? message.action : null }

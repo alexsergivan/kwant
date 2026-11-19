@@ -244,8 +244,25 @@ impl McpToolSession {
     }
 
     /// Runs one model-requested call: approval first, then the MCP call. The record is also
-    /// appended to the turn's `tool_calls`.
+    /// appended to the turn's `tool_calls`. `call_id` is also the engine's id for the call, the one
+    /// its activity step carries (the API driver's).
     pub async fn call(&self, caller: &Caller, call_id: &str, name: &str, raw_arguments: &str) -> CallOutcome {
+        self.call_step(caller, call_id, Some(call_id), None, name, raw_arguments).await
+    }
+
+    /// [`call`](Self::call) for a call whose engine id, `step_id`, differs from kwnt's `call_id`
+    /// (the gateway's), or is unknown: a refusal kwnt notes on its activity step is keyed to it (28q).
+    /// `called_as` is the name the engine called `name` under when that differs (grok's, 29g), so
+    /// the refusal also finds a step that carries that name and no id.
+    pub async fn call_step(
+        &self,
+        caller: &Caller,
+        call_id: &str,
+        step_id: Option<&str>,
+        called_as: Option<&str>,
+        name: &str,
+        raw_arguments: &str,
+    ) -> CallOutcome {
         let start = Instant::now();
         let arguments: Value = if raw_arguments.trim().is_empty() {
             json!({})
@@ -301,17 +318,30 @@ impl McpToolSession {
                     payment: super::payment_floor::credits_reason(server, server_url, &t.tool.name),
                 };
                 // B2: a write to a GitHub branch waits for its pre-push card before any card or rule
+                // 28k: a push the gate holds shows "Blocked before push" on its step; the bot
+                // gets the gate's own text. 28q: on its own step, never on another call of the tool
+                let held = || {
+                    crate::server::activity::refused_as(&caller.turn_id, name, called_as, step_id, &arguments, super::PREPUSH_BLOCKED_STEP_DETAIL)
+                };
                 match self.ctx.approver.prepush_gate(&req).await {
-                    Err(why) => ("denied", why),
+                    Err(why) => {
+                        held();
+                        ("denied", why)
+                    }
                     Ok(pass) => {
                         // A push the person's Retry or Override covers skips the ordinary card (0.9.7)
-                        let outcome = match &pass.grant {
-                            Some(g) => self.ctx.approver.decide_granted(req, g).await,
-                            None => self.ctx.approver.decide(req).await,
-                        };
+                        // 29o: and a Deny may come with the person's reason
+                        let (outcome, reason) = super::hear_deny_reason(async {
+                            match &pass.grant {
+                                Some(g) => self.ctx.approver.decide_granted(req, g).await,
+                                None => self.ctx.approver.decide(req).await,
+                            }
+                        })
+                        .await;
                         if !outcome.allowed() {
-                            (outcome.record_status(), outcome.refusal_text().to_string())
+                            (outcome.record_status(), outcome.refusal(reason.as_deref()))
                         } else if let Some(why) = self.ctx.approver.prepush_use(&pass.overrides).await {
+                            held();
                             ("denied", why)
                         } else {
                             match client.call_tool(&t.tool.name, arguments.clone()).await {

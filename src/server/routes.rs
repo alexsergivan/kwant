@@ -4035,6 +4035,7 @@ async fn run_kwant_turn_inner(
                         failed_step,
                         declined,
                         home: super::delivery_check::home_steps_in(activity.as_ref(), &home_servers),
+                        other_changed: super::delivery_check::other_change_in(activity.as_ref(), &home_servers),
                     };
                     // ...counting what the delivery's earlier turns did (F1)
                     let seen = match opts.delivery_seen.as_ref().map(|d| d.lock()) {
@@ -4096,6 +4097,8 @@ async fn run_kwant_turn_inner(
                 if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref(), checked) {
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
                 }
+                // 29c: the folder kwnt's gate judged this turn's file tools against (see `note_gate_folder`)
+                note_gate_folder(&mut meta, activity.as_ref(), mcp_turn.is_some(), workspace_dir.as_deref());
                 // 0.9.4: a reply that ends with `Blocked: <what>. <what unblocks it>` says so in its meta
                 // 13a: with no such line, a turn whose last tool step failed (or was declined, or whose
                 // link didn't open and it ran no tool) and whose reply ends waiting on the person in
@@ -4332,6 +4335,21 @@ async fn idea_from_chat(
     match super::idea_jar::drop_in(state, &space, text).await {
         Ok(idea) => (StatusCode::CREATED, Json(serde_json::json!({"handled": "idea", "idea": super::idea_jar::idea_json(&idea)}))).into_response(),
         Err(r) => r,
+    }
+}
+
+/// 29c: records on a reply's meta the folder kwnt's gate judged the turn's file tools against
+/// ([`crate::mcp::builtin_tools::GATE_FOLDER_KEY`]), so `kwnt run-check` can tell a file step outside it
+/// from one inside. Only for a turn that had the gate (`gated`) and saved steps. Kept out of
+/// `run_kwant_turn_inner` (`inline(never)`) so its temporaries don't grow that function's frame.
+#[inline(never)]
+fn note_gate_folder(meta: &mut Option<serde_json::Value>, activity: Option<&serde_json::Value>, gated: bool, workspace_dir: Option<&std::path::Path>) {
+    let ran_steps = activity.and_then(|a| a["steps"].as_array()).is_some_and(|s| !s.is_empty());
+    if !gated || !ran_steps {
+        return;
+    }
+    if let Some(folder) = crate::mcp::builtin_tools::canonical_folder(workspace_dir) {
+        meta.get_or_insert_with(|| json!({}))[crate::mcp::builtin_tools::GATE_FOLDER_KEY] = json!(folder.display().to_string());
     }
 }
 
@@ -5183,6 +5201,21 @@ pub struct ResolveApprovalPayload {
     /// kwant's guess (22f). Refused on any other card that needs a backup.
     #[serde(default)]
     pub without_backup: bool,
+    /// 29o: why the person pressed Deny ("use the staging database"), for the waiting bot. Only
+    /// read on a Deny, made one line of at most 500 chars ([`crate::mcp::deny_reason`]); empty is
+    /// a plain Deny.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl ResolveApprovalPayload {
+    /// 29o: the Deny's reason as the bot will hear it; `None` for an Allow or a plain Deny.
+    pub fn deny_reason(&self, decision: &ApprovalDecision) -> Option<String> {
+        match decision {
+            ApprovalDecision::Deny => self.reason.as_deref().and_then(crate::mcp::deny_reason),
+            _ => None,
+        }
+    }
 }
 
 pub async fn resolve_approval(
@@ -5195,7 +5228,8 @@ pub async fn resolve_approval(
         "always_allow" => ApprovalDecision::AlwaysAllowSession,
         _ => ApprovalDecision::Deny,
     };
-    let (status, body) = resolve_approval_inner(&state, &ticket_id, decision, None, payload.without_backup).await;
+    let reason = payload.deny_reason(&decision);
+    let (status, body) = resolve_approval_inner(&state, &ticket_id, decision, None, payload.without_backup, reason).await;
     Ok((status, Json(body)).into_response())
 }
 
@@ -5222,12 +5256,16 @@ pub async fn retry_expired_approval(State(state): State<AppState>, Path(ticket_i
 ///
 /// `without_backup` is the person's "Allow without a backup" (22f): only the app's route, which is
 /// person-only, ever passes `true`; see [`super::dev::floor::allow_check`] for which cards take it.
+///
+/// `reason` is the person's reason on a Deny (29o, the app's route only): the waiting call
+/// hears it; a late answer drops it.
 pub(crate) async fn resolve_approval_inner(
     state: &AppState,
     ticket_id: &str,
     decision: ApprovalDecision,
     via: Option<&str>,
     without_backup: bool,
+    reason: Option<String>,
 ) -> (StatusCode, serde_json::Value) {
     let status_str = match decision {
         ApprovalDecision::AllowOnce => "allowed_once",
@@ -5263,7 +5301,7 @@ pub(crate) async fn resolve_approval_inner(
 
     // Only a ticket still waiting can be answered; a withdrawn one (turn ended, expired)
     // keeps its status and its tool never runs
-    let resolved = state.broker.resolve(ticket_id, decision.clone()).await;
+    let resolved = state.broker.resolve_with_reason(ticket_id, decision.clone(), reason).await;
     if !resolved {
         // A card whose turn stopped waiting (or that kwant kept over a restart): a late answer,
         // and Allow resumes the work
@@ -7462,12 +7500,65 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
+    /// 29o: the card's resolve body may carry a Deny's reason; the old body still parses, and a
+    /// reason only counts on a Deny.
+    #[test]
+    fn a_resolve_body_may_carry_a_deny_reason() {
+        use super::ResolveApprovalPayload;
+        use crate::broker::ApprovalDecision;
+        use serde_json::json;
+        let body = |v: serde_json::Value| serde_json::from_value::<ResolveApprovalPayload>(v).unwrap();
+        assert_eq!(body(json!({"decision": "deny"})).deny_reason(&ApprovalDecision::Deny), None);
+        let with = body(json!({"decision": "deny", "reason": " use the\nstaging database "}));
+        assert_eq!(with.deny_reason(&ApprovalDecision::Deny).as_deref(), Some("use the staging database"));
+        for allow in [ApprovalDecision::AllowOnce, ApprovalDecision::AlwaysAllowSession] {
+            assert_eq!(with.deny_reason(&allow), None);
+        }
+        assert_eq!(body(json!({"decision": "deny", "reason": "   "})).deny_reason(&ApprovalDecision::Deny), None);
+        assert_eq!(body(json!({"decision": "deny", "reason": null})).deny_reason(&ApprovalDecision::Deny), None);
+    }
+
     #[test]
     fn a_mention_in_inline_code_leaves_no_stray_backtick_in_the_title() {
         use super::handoff_title;
         assert_eq!(handoff_title("`@QA` please revise your part.", "QA").as_deref(), Some("Please revise your part."));
         assert_eq!(handoff_title("`@QA run the smoke tests`", "QA").as_deref(), Some("Run the smoke tests"));
         assert_eq!(handoff_title("@QA run `cargo test` on staging.", "QA").as_deref(), Some("Run `cargo test` on staging."));
+    }
+
+    #[test]
+    fn a_gated_turn_with_steps_records_the_canonical_folder_and_no_other_turn_does() {
+        use super::note_gate_folder;
+        use crate::mcp::builtin_tools::GATE_FOLDER_KEY;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("bot");
+        std::fs::create_dir(&folder).unwrap();
+        let canon = folder.canonicalize().unwrap().display().to_string();
+        let steps = json!({ "steps": [{ "title": "Wrote plan.md" }] });
+        let none = json!({ "steps": [] });
+        let missing = dir.path().join("missing");
+
+        let mut meta = Some(json!({ "ran_on": { "engine": "claude" } }));
+        note_gate_folder(&mut meta, Some(&steps), true, Some(&folder));
+        let meta = meta.unwrap();
+        assert_eq!(meta[GATE_FOLDER_KEY], json!(canon));
+        assert_eq!(meta["ran_on"]["engine"], "claude", "other keys stay");
+
+        let mut fresh = None;
+        note_gate_folder(&mut fresh, Some(&steps), true, Some(&folder.join(".")));
+        assert_eq!(fresh.unwrap()[GATE_FOLDER_KEY], json!(canon), "a meta-less reply gets one, canonical");
+
+        for (activity, gated, at) in [
+            (Some(&steps), false, Some(folder.as_path())),
+            (Some(&none), true, Some(folder.as_path())),
+            (None, true, Some(folder.as_path())),
+            (Some(&steps), true, None),
+            (Some(&steps), true, Some(missing.as_path())),
+        ] {
+            let mut meta = None;
+            note_gate_folder(&mut meta, activity, gated, at);
+            assert_eq!(meta, None, "{activity:?} gated={gated} at={at:?}");
+        }
     }
 
     use super::{

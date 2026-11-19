@@ -79,6 +79,8 @@ export interface Routine {
   next_run_at: string | null;
   last_run_at: string | null;
   last_status: RunStatus | null;
+  /** 28f: the last run's reason, sent from 28b round 2 (absent on older servers, where the card badge reads as before). */
+  last_error?: string | null;
   created_at: string;
   /** The schedule in the server's words, e.g. "monthly on day 1 at 09:00 Europe/Berlin". */
   schedule_text?: string;

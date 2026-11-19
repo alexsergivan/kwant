@@ -269,3 +269,26 @@ fn reasons_are_cut() {
     let f = classify("mcp__github__x", &json!({}), &long, &servers()).unwrap();
     assert!(f.detail.unwrap().chars().count() <= MAX_DETAIL + 1);
 }
+
+/// 29n: a failed reason is judged on its first 600 chars, the part the live step shows, for every
+/// driver. "unauthorized" or a bare 503 deep in a long tool error is the tool's own text, not a
+/// connection problem; the same words inside the first 600 still are, and the line keeps them.
+#[test]
+fn only_the_first_600_chars_say_its_the_connection() {
+    let at = |n: usize, word: &str| format!("{}{word} rest of the tool's own error", "é".repeat(n));
+    let judged = |why: &str| classify("mcp__github__list_issues", &json!({}), why, &servers());
+    // After char 600 (whole, or straddling it): the tool's own error, no line
+    for why in [at(600, "unauthorized"), at(601, " 503 "), at(1500, "HTTP 401 Unauthorized"), at(598, "503")] {
+        assert!(judged(&why).is_none(), "{}", why.trim_start_matches('é'));
+    }
+    // Inside the first 600: still the connection's, as before
+    let signin = judged(&at(588, "unauthorized")).expect("unauthorized ending at char 600");
+    assert_eq!(signin.cause, Cause::SignIn);
+    let detail = signin.detail.unwrap();
+    assert_eq!(detail.chars().count(), MAX_DETAIL);
+    assert!(detail.starts_with("éé") && detail.ends_with("é…"), "{detail}");
+    let down = judged(&at(597, "503")).expect("503 ending at char 600");
+    assert_eq!(down.cause, Cause::Down);
+    assert_eq!(judged(&at(0, " 503 ")).unwrap().cause, Cause::Down);
+    assert_eq!(crate::drivers::activity::LIVE_ERROR_MAX, 600);
+}

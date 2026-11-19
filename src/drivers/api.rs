@@ -1391,23 +1391,8 @@ impl ApiDriver {
                     .send(RuntimeEvent::ToolCallPending { id: id.to_string(), name: name.to_string(), args: shown_args })
                     .await;
                 let outcome = session.call(caller, id, name, raw_args).await;
-                let mut completed = json!({
-                    "status": outcome.status,
-                    "content": crate::mcp::truncate_text(&outcome.text, crate::mcp::RECORD_RESULT_MAX_CHARS),
-                });
-                // 15c: a call kwnt didn't send says so, so the failure line doesn't count it
-                if let Some(n) = outcome.record.get("repeat_stopped") {
-                    completed["repeat_stopped"] = n.clone();
-                }
                 let _ = event_tx
-                    .send(RuntimeEvent::ToolCallCompleted {
-                        id: id.to_string(),
-                        result: super::activity::with_page_title(
-                            completed,
-                            name,
-                            &outcome.text,
-                        ),
-                    })
+                    .send(RuntimeEvent::ToolCallCompleted { id: id.to_string(), result: live_result(&outcome, name) })
                     .await;
                 results.push(&mut messages, id, name, outcome.model_text(), outcome.status == "ok");
             }
@@ -1673,6 +1658,18 @@ impl Driver for ApiDriver {
     }
 }
 
+/// A finished call's `ToolCallCompleted`: its status and its whole text as `content`. kwnt masks
+/// it, then cuts it to [`crate::mcp::RECORD_RESULT_MAX_CHARS`] (`ActivityLog::redact_event`, 29n),
+/// so a secret across the cut is masked whole. A call kwnt didn't send says so (15c), so the
+/// failure line doesn't count it; an opened page carries its title.
+fn live_result(outcome: &crate::mcp::session::CallOutcome, name: &str) -> Value {
+    let mut completed = json!({ "status": outcome.status, "content": outcome.text });
+    if let Some(n) = outcome.record.get("repeat_stopped") {
+        completed["repeat_stopped"] = n.clone();
+    }
+    super::activity::with_page_title(completed, name, &outcome.text)
+}
+
 #[cfg(test)]
 mod attribution_tests {
     use super::*;
@@ -1764,6 +1761,51 @@ mod tests {
     use super::*;
     use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
     use std::sync::{Arc, Mutex};
+
+    /// 29n: a tool's whole text goes out as `content`, and kwnt masks it before it cuts it to 4000,
+    /// so a known secret across char 4000 is masked whole live (no part of it shows), ok or failed.
+    /// A text of 4000 chars is relayed as it is; 4001 is cut to 4000 plus the marker, as before.
+    #[test]
+    fn a_secret_across_4000_is_masked_whole_live() {
+        use crate::drivers::activity::ActivityLog;
+        use crate::mcp::session::CallOutcome;
+        let secret = "Qv7Lamp0Vole2Quiet8Fern4Moss6Rx";
+        let tool = "mcp__github__get_file_contents";
+        let outcome = |status: &'static str, text: &str, record: Value| CallOutcome {
+            text: text.to_string(),
+            status,
+            record,
+            remind: false,
+            hint: None,
+        };
+        // What the live stream gets for one call through the API driver, and its saved step
+        let relayed = |o: &CallOutcome| {
+            let mut log = ActivityLog::with_secrets(vec![secret.into()]);
+            log.relay(&RuntimeEvent::ToolCallPending { id: "c".into(), name: tool.into(), args: json!({}) });
+            let (_, steps, out) = log.relay(&RuntimeEvent::ToolCallCompleted { id: "c".into(), result: live_result(o, tool) });
+            let [RuntimeEvent::ToolCallCompleted { result, .. }] = &out[..] else { panic!("{out:?}") };
+            (result.clone(), steps[0].detail.clone())
+        };
+        let text = format!("{}{secret} tail", "é".repeat(3990));
+        for status in ["ok", "error"] {
+            let o = outcome(status, &text, json!({}));
+            assert_eq!(live_result(&o, tool), json!({"status": status, "content": text}), "the driver sends it whole");
+            let (live, saved) = relayed(&o);
+            assert_eq!(live, json!({"status": status, "content": format!("{}******** t… [truncated]", "é".repeat(3990))}));
+            for shown in [Some(live["content"].as_str().unwrap().to_string()), saved].into_iter().flatten() {
+                assert!(!shown.contains(&secret[..4]), "{}", shown.trim_start_matches('é'));
+            }
+        }
+        // The same bounds as before: 4000 stays, 4001 is cut
+        let whole = "é".repeat(crate::mcp::RECORD_RESULT_MAX_CHARS);
+        assert_eq!(relayed(&outcome("ok", &whole, json!({}))).0["content"], whole);
+        let over = format!("{whole}x");
+        assert_eq!(relayed(&outcome("ok", &over, json!({}))).0["content"], format!("{whole}… [truncated]"));
+        assert_eq!(crate::mcp::RECORD_RESULT_MAX_CHARS, 4000);
+        // 15c: a stopped repeat still says so
+        let (stopped, _) = relayed(&outcome("error", "stopped", json!({"repeat_stopped": 3})));
+        assert_eq!(stopped, json!({"status": "error", "content": "stopped", "repeat_stopped": 3}));
+    }
 
     type Seen = Arc<Mutex<Vec<(HeaderMap, Value)>>>;
 
