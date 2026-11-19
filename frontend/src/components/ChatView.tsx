@@ -110,7 +110,7 @@ import { ideaBlockedLine, ideaLength } from '../ideaShell';
 import { JarIcon } from './JarIcon';
 import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
-import { stripStepsAside } from '../askHere';
+import { approvalPillShows, stripStepsAside } from '../askHere';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
 import { SmartActionsSlot } from './results/SmartActions';
@@ -357,6 +357,8 @@ export interface ChatViewProps {
   needsYouOpen?: boolean;
   /** 29w: the strip's only ask is this chat's live approval, so it steps aside while that card's buttons are on screen. */
   stripOnlyApproval?: boolean;
+  /** 30a: the strip offers "Go to the approval" for a live approval here, so the "Approval waiting" pill steps aside. */
+  stripHasApproval?: boolean;
   onHighlightDone?: () => void;
   /** Set while `messages` is an older window (a search hit beyond the latest page). */
   viewingHistory?: boolean;
@@ -642,6 +644,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   needsYouStrip,
   needsYouOpen,
   stripOnlyApproval = false,
+  stripHasApproval = false,
   onContinueFrom,
   threadKind,
   continuedFrom,
@@ -1018,9 +1021,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const cards = scrollRef.current?.querySelectorAll<HTMLElement>('[data-approval-card]');
     const card = cards?.[cards.length - 1];
     if (!card) return;
+    // 30a: started from the keyboard (the pill or "Answer ↑" had keyboard focus), focus lands on the card itself,
+    // never on Allow / Deny, so a second Enter can't approve. A tap or click never moves focus.
+    const from = document.activeElement;
+    const keyboard = from instanceof HTMLButtonElement && from.matches(':focus-visible');
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     card.scrollIntoView({ block: 'end', behavior: reduce ? 'auto' : 'smooth' });
     setApprovalOffscreen(false);
+    if (keyboard) card.focus({ preventScroll: true });
   };
   // 29w: the Needs-you strip steps aside while its one ask is the live approval whose buttons are on screen.
   const stripAside = stripStepsAside({ strip: !!needsYouStrip, onlyApproval: stripOnlyApproval, cardInView: approvalCardInView, followingCard });
@@ -1123,6 +1131,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
       if (!card) return;
       const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+      // 30a: the strip's "Go to the approval" pressed from the keyboard lands focus on the card (as the question
+      // card's first choice does), never on Allow / Deny. A tap, an Inbox row or a notification leaves focus alone.
+      const from = document.activeElement;
+      if (from instanceof HTMLElement && stripSlotRef.current?.contains(from) && from.matches('[data-strip-action="decide"]:focus-visible')) card.focus({ preventScroll: true });
       if (highlightRing) ringElement(card);
       setFlashKind(highlightRing ? 'ask' : 'search');
       setFlashId(highlightMessageId);
@@ -2721,16 +2733,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {prepush}
 
         {/* Pending Security Approval Ticket */}
-        {pendingApprovals.map((approval) =>
-          // 0.8.1 F6: a notification's tap lands on this card and flashes it
-          flashId === approval.id ? (
-            <div key={approval.id} className="rounded-xl kw-flash">
-              <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
-            </div>
-          ) : (
-            <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
-          ),
-        )}
+        {pendingApprovals.map((approval) => (
+          // 0.8.1 F6: a notification's tap lands on this card and flashes it. 30a: the wrapper is always there
+          // (display: contents when not flashing), so the flash never remounts the card: focus that "Go to the
+          // approval" put on it stays, and so does a half-typed Deny reason.
+          <div key={approval.id} className={flashId === approval.id ? 'rounded-xl kw-flash' : 'contents'}>
+            <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
+          </div>
+        ))}
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
@@ -2813,7 +2823,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* On a phone the strip's "Answer ↑" stands in for this pill while the bot waits on the card. */}
-        {approvalOffscreen && pendingApprovals.length > 0 && !(phone && stripWaitsOn === 'approval') && (
+        {/* 30a: one pointer per card: it also steps aside while the Needs-you strip offers "Go to the approval". */}
+        {approvalPillShows({ offscreen: approvalOffscreen, waiting: pendingApprovals.length, phoneAnswerUp: phone && stripWaitsOn === 'approval', stripHasApproval }) && (
           <div role="status" className="max-w-4xl mx-auto mb-2 flex justify-center">
             <button
               type="button"
