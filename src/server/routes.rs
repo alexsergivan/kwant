@@ -5201,6 +5201,21 @@ pub struct ResolveApprovalPayload {
     /// kwant's guess (22f). Refused on any other card that needs a backup.
     #[serde(default)]
     pub without_backup: bool,
+    /// 29o: why the person pressed Deny ("use the staging database"), for the waiting bot. Only
+    /// read on a Deny, made one line of at most 500 chars ([`crate::mcp::deny_reason`]); empty is
+    /// a plain Deny.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl ResolveApprovalPayload {
+    /// 29o: the Deny's reason as the bot will hear it; `None` for an Allow or a plain Deny.
+    pub fn deny_reason(&self, decision: &ApprovalDecision) -> Option<String> {
+        match decision {
+            ApprovalDecision::Deny => self.reason.as_deref().and_then(crate::mcp::deny_reason),
+            _ => None,
+        }
+    }
 }
 
 pub async fn resolve_approval(
@@ -5213,7 +5228,8 @@ pub async fn resolve_approval(
         "always_allow" => ApprovalDecision::AlwaysAllowSession,
         _ => ApprovalDecision::Deny,
     };
-    let (status, body) = resolve_approval_inner(&state, &ticket_id, decision, None, payload.without_backup).await;
+    let reason = payload.deny_reason(&decision);
+    let (status, body) = resolve_approval_inner(&state, &ticket_id, decision, None, payload.without_backup, reason).await;
     Ok((status, Json(body)).into_response())
 }
 
@@ -5240,12 +5256,16 @@ pub async fn retry_expired_approval(State(state): State<AppState>, Path(ticket_i
 ///
 /// `without_backup` is the person's "Allow without a backup" (22f): only the app's route, which is
 /// person-only, ever passes `true`; see [`super::dev::floor::allow_check`] for which cards take it.
+///
+/// `reason` is the person's reason on a Deny (29o, the app's route only): the waiting call
+/// hears it; a late answer drops it.
 pub(crate) async fn resolve_approval_inner(
     state: &AppState,
     ticket_id: &str,
     decision: ApprovalDecision,
     via: Option<&str>,
     without_backup: bool,
+    reason: Option<String>,
 ) -> (StatusCode, serde_json::Value) {
     let status_str = match decision {
         ApprovalDecision::AllowOnce => "allowed_once",
@@ -5281,7 +5301,7 @@ pub(crate) async fn resolve_approval_inner(
 
     // Only a ticket still waiting can be answered; a withdrawn one (turn ended, expired)
     // keeps its status and its tool never runs
-    let resolved = state.broker.resolve(ticket_id, decision.clone()).await;
+    let resolved = state.broker.resolve_with_reason(ticket_id, decision.clone(), reason).await;
     if !resolved {
         // A card whose turn stopped waiting (or that kwant kept over a restart): a late answer,
         // and Allow resumes the work
@@ -7480,6 +7500,24 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
+    /// 29o: the card's resolve body may carry a Deny's reason; the old body still parses, and a
+    /// reason only counts on a Deny.
+    #[test]
+    fn a_resolve_body_may_carry_a_deny_reason() {
+        use super::ResolveApprovalPayload;
+        use crate::broker::ApprovalDecision;
+        use serde_json::json;
+        let body = |v: serde_json::Value| serde_json::from_value::<ResolveApprovalPayload>(v).unwrap();
+        assert_eq!(body(json!({"decision": "deny"})).deny_reason(&ApprovalDecision::Deny), None);
+        let with = body(json!({"decision": "deny", "reason": " use the\nstaging database "}));
+        assert_eq!(with.deny_reason(&ApprovalDecision::Deny).as_deref(), Some("use the staging database"));
+        for allow in [ApprovalDecision::AllowOnce, ApprovalDecision::AlwaysAllowSession] {
+            assert_eq!(with.deny_reason(&allow), None);
+        }
+        assert_eq!(body(json!({"decision": "deny", "reason": "   "})).deny_reason(&ApprovalDecision::Deny), None);
+        assert_eq!(body(json!({"decision": "deny", "reason": null})).deny_reason(&ApprovalDecision::Deny), None);
+    }
+
     #[test]
     fn a_mention_in_inline_code_leaves_no_stray_backtick_in_the_title() {
         use super::handoff_title;

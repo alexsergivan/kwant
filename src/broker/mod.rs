@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
@@ -37,7 +37,14 @@ pub struct PermissionBroker {
     /// 27b: what the person declined, per bot and conversation, until they write there again.
     /// In memory only.
     pub declined: crate::mcp::declined::Declines,
+    /// 29o: the person's reason on a Deny, by ticket, from [`resolve_with_reason`](Self::resolve_with_reason)
+    /// until the waiting call takes it. At most [`DENY_REASONS_KEPT`]: a call whose turn ended
+    /// in the same instant never takes its own, and the oldest goes first.
+    deny_reasons: Arc<std::sync::Mutex<VecDeque<(String, String)>>>,
 }
+
+/// 29o: how many untaken Deny reasons the broker keeps at most.
+pub const DENY_REASONS_KEPT: usize = 32;
 
 /// How long a late Allow waits for the resumed turn to make its call again.
 pub const GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
@@ -70,6 +77,7 @@ impl PermissionBroker {
             always_allowed: Arc::new(Mutex::new(HashSet::new())),
             grants: Default::default(),
             declined: Default::default(),
+            deny_reasons: Default::default(),
             store: Default::default(),
             loaded: Default::default(),
         }
@@ -173,12 +181,48 @@ impl PermissionBroker {
 
     /// Resolves an approval ticket by sending the user's decision to the waiting oneshot channel.
     pub async fn resolve(&self, ticket_id: &str, decision: ApprovalDecision) -> bool {
+        self.resolve_with_reason(ticket_id, decision, None).await
+    }
+
+    /// [`resolve`](Self::resolve), with the reason the person gave for a Deny (29o): kept for
+    /// the waiting call ([`take_deny_reason`](Self::take_deny_reason)) before it hears the
+    /// decision. Ignored for an Allow, and dropped when no call waits (a late answer).
+    pub async fn resolve_with_reason(&self, ticket_id: &str, decision: ApprovalDecision, reason: Option<String>) -> bool {
         let mut map = self.pending.lock().await;
-        if let Some(sender) = map.remove(ticket_id) {
-            sender.send(decision).is_ok()
-        } else {
-            false
+        let Some(sender) = map.remove(ticket_id) else {
+            return false;
+        };
+        let reason = reason.filter(|_| decision == ApprovalDecision::Deny);
+        if let Some(why) = reason.clone() {
+            self.keep_deny_reason(ticket_id, why);
         }
+        let sent = sender.send(decision).is_ok();
+        if !sent && reason.is_some() {
+            self.take_deny_reason(ticket_id);
+        }
+        sent
+    }
+
+    fn keep_deny_reason(&self, ticket_id: &str, reason: String) {
+        if let Ok(mut kept) = self.deny_reasons.lock() {
+            kept.retain(|(t, _)| t != ticket_id);
+            while kept.len() >= DENY_REASONS_KEPT {
+                kept.pop_front();
+            }
+            kept.push_back((ticket_id.to_string(), reason));
+        }
+    }
+
+    /// 29o: the reason the person gave when they denied `ticket_id`, once; `None` for a plain Deny.
+    pub fn take_deny_reason(&self, ticket_id: &str) -> Option<String> {
+        let mut kept = self.deny_reasons.lock().ok()?;
+        let i = kept.iter().position(|(t, _)| t == ticket_id)?;
+        kept.remove(i).map(|(_, why)| why)
+    }
+
+    /// 29o: how many Deny reasons wait for a call to take them.
+    pub fn deny_reasons_held(&self) -> usize {
+        self.deny_reasons.lock().map(|k| k.len()).unwrap_or(0)
     }
 
     /// Drops a pending ticket without a decision; its waiter sees the channel close.
@@ -275,6 +319,44 @@ impl PermissionBroker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ask(id: &str) -> ApprovalRequest {
+        ApprovalRequest { id: id.into(), kwant_id: "k1".into(), tool_name: "Bash".into(), details: Value::Null }
+    }
+
+    /// 29o: a Deny's reason waits for its own call, once; an Allow, a late answer and a call that
+    /// stopped waiting leave nothing behind, and untaken ones never pile up.
+    #[tokio::test]
+    async fn a_deny_reason_waits_for_its_own_call_only() {
+        let b = PermissionBroker::new();
+        let rx = b.request_approval(ask("a1")).await;
+        assert!(b.resolve_with_reason("a1", ApprovalDecision::Deny, Some("use staging".into())).await);
+        assert_eq!(rx.await.unwrap(), ApprovalDecision::Deny);
+        assert_eq!(b.take_deny_reason("a1").as_deref(), Some("use staging"));
+        assert_eq!(b.take_deny_reason("a1"), None, "taken once");
+
+        let rx = b.request_approval(ask("a2")).await;
+        assert!(b.resolve_with_reason("a2", ApprovalDecision::AllowOnce, Some("why".into())).await);
+        assert_eq!(rx.await.unwrap(), ApprovalDecision::AllowOnce);
+        assert_eq!(b.deny_reasons_held(), 0, "an Allow keeps no reason");
+
+        assert!(!b.resolve_with_reason("gone", ApprovalDecision::Deny, Some("late".into())).await);
+        assert_eq!(b.deny_reasons_held(), 0, "no call waits: dropped");
+
+        let rx = b.request_approval(ask("a3")).await;
+        drop(rx);
+        assert!(!b.resolve_with_reason("a3", ApprovalDecision::Deny, Some("nobody hears".into())).await);
+        assert_eq!(b.deny_reasons_held(), 0, "the call stopped waiting: dropped");
+
+        for i in 0..DENY_REASONS_KEPT + 5 {
+            let id = format!("n{i}");
+            let _rx = b.request_approval(ask(&id)).await;
+            assert!(b.resolve_with_reason(&id, ApprovalDecision::Deny, Some("x".into())).await);
+        }
+        assert_eq!(b.deny_reasons_held(), DENY_REASONS_KEPT);
+        assert_eq!(b.take_deny_reason("n0"), None, "the oldest went first");
+        assert!(b.take_deny_reason(&format!("n{}", DENY_REASONS_KEPT + 4)).is_some());
+    }
 
     #[tokio::test]
     async fn without_a_store_an_answer_lasts_for_this_broker_only() {

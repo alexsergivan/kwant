@@ -330,12 +330,16 @@ impl McpToolSession {
                     }
                     Ok(pass) => {
                         // A push the person's Retry or Override covers skips the ordinary card (0.9.7)
-                        let outcome = match &pass.grant {
-                            Some(g) => self.ctx.approver.decide_granted(req, g).await,
-                            None => self.ctx.approver.decide(req).await,
-                        };
+                        // 29o: and a Deny may come with the person's reason
+                        let (outcome, reason) = super::hear_deny_reason(async {
+                            match &pass.grant {
+                                Some(g) => self.ctx.approver.decide_granted(req, g).await,
+                                None => self.ctx.approver.decide(req).await,
+                            }
+                        })
+                        .await;
                         if !outcome.allowed() {
-                            (outcome.record_status(), outcome.refusal_text().to_string())
+                            (outcome.record_status(), outcome.refusal(reason.as_deref()))
                         } else if let Some(why) = self.ctx.approver.prepush_use(&pass.overrides).await {
                             held();
                             ("denied", why)
