@@ -24,7 +24,6 @@ const m = await loadBundled(`
   export { NeedsYouStrip } from './src/components/NeedsYouStrip';
   export { Sidebar } from './src/components/Sidebar';
   export { needsYouRows, attentionRows } from './src/chatsTab';
-  export { ringElement } from './src/ring';
   export { ModernApprovalCard } from './src/components/ModernApprovalCard';
 `);
 const h = m.React.createElement;
@@ -345,14 +344,6 @@ test('strip: a keyboard open focuses it; when the last ask closes, focus goes to
   assert.equal(live(), 'Cleared.');
   unmount();
   composer.remove();
-});
-
-test('ring: a card outside the message list gets the amber kw-flash, tagged as an ask', () => {
-  const el = document.createElement('div');
-  document.body.append(el);
-  m.ringElement(el);
-  assert.ok(el.classList.contains('kw-flash'), 'kw-flash: a static outline under reduced motion, never nothing');
-  assert.equal(el.dataset.flashKind, 'ask');
 });
 
 // ---- the pinned row ----

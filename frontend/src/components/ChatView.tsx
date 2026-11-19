@@ -1121,6 +1121,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
   // 22i: a Needs-attention landing ('ask') is the same amber flash as search, tagged so tests tell them apart.
   const [flashKind, setFlashKind] = useState<'search' | 'quote' | 'ask'>('search');
+  // 30n: a second "Go to the approval" (or search hit) on what is already flashing restarts the ring and its 2.4 s,
+  // like the quote jump: clear the flash, then set it again. Setting the same id again would change nothing. The
+  // second step waits for the cleared flash to commit, then two frames, so the browser draws a frame without
+  // kw-flash and the CSS animation starts over (rAFs queued at once can both run before React commits the null).
+  const [flashNext, setFlashNext] = useState<string | null>(null);
+  const restartFlash = (id: string, kind: 'search' | 'ask') => {
+    setFlashId(null);
+    setFlashKind(kind);
+    setFlashNext(id);
+  };
+  useEffect(() => {
+    if (!flashNext) return;
+    let f = requestAnimationFrame(() => {
+      f = requestAnimationFrame(() => {
+        setFlashId(flashNext);
+        setFlashNext(null);
+      });
+    });
+    return () => cancelAnimationFrame(f);
+  }, [flashNext]);
   useEffect(() => {
     if (!highlightMessageId) return;
     // 0.8.1 F6: an approval's card (a notification names it), not a message
@@ -1133,8 +1153,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       // card's first choice does), never on Allow / Deny. A tap, an Inbox row or a notification leaves focus alone.
       const from = document.activeElement;
       if (from instanceof HTMLElement && stripSlotRef.current?.contains(from) && from.matches('[data-strip-action="decide"]:focus-visible')) card.focus({ preventScroll: true });
-      setFlashKind(highlightRing ? 'ask' : 'search');
-      setFlashId(highlightMessageId);
+      restartFlash(highlightMessageId, highlightRing ? 'ask' : 'search');
       onHighlightDone?.();
       return;
     }
@@ -1150,8 +1169,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!el) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-    setFlashKind(highlightRing ? 'ask' : 'search');
-    setFlashId(highlightMessageId);
+    restartFlash(highlightMessageId, highlightRing ? 'ask' : 'search');
     onHighlightDone?.();
   }, [highlightMessageId, highlightRing, messages, openThoughts, onHighlightDone, pendingApprovals]);
   useEffect(() => {
