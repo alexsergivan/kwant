@@ -332,3 +332,13 @@ export function resendTarget(messages: ChatMessage[], noticeId: string | null | 
   }
   return null;
 }
+
+/**
+ * 29w (Mira's UX pass 0.9.26, fix #2): the strip's asks are exactly one live approval of this chat, so all it
+ * says is the approval card's own ask ("Allow or Deny it on the card in the chat"). ChatView then lets the
+ * strip step aside while that card's Allow / Deny row is fully on screen; it comes back when the buttons
+ * scroll off, another ask joins, or the approval runs out (a stopped item, whose Ask again is the strip's).
+ */
+export const onlyLiveApproval = (asks: Parameters<typeof askAction>[0][]): boolean =>
+  asks.length === 1 && asks[0].kind === 'approval' && askAction(asks[0]) === 'decide';
+
