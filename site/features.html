@@ -58,7 +58,7 @@
   <div class="wrap">
     <div class="jump-scroll">
       <p class="jump-label" aria-hidden="true">Jump</p>
-      <ul class="jump"><li><a class="ver" href="#new-0927">0.9.27</a></li><li><a class="ver" href="#new-0926">0.9.26</a></li><li><a class="ver" href="#new-0925">0.9.25</a></li><li><a class="ver" href="#new-0924">0.9.24</a></li><li><a class="ver" href="#new-0923">0.9.23</a></li><li><a class="ver" href="#new-0922">0.9.22</a></li></ul><span class="sep" aria-hidden="true"></span>
+      <ul class="jump"><li><a class="ver" href="#new-0928">0.9.28</a></li><li><a class="ver" href="#new-0927">0.9.27</a></li><li><a class="ver" href="#new-0926">0.9.26</a></li><li><a class="ver" href="#new-0925">0.9.25</a></li><li><a class="ver" href="#new-0924">0.9.24</a></li><li><a class="ver" href="#new-0923">0.9.23</a></li></ul><span class="sep" aria-hidden="true"></span>
       <ul class="jump">
         <li><a href="#discovery">Suggested routines</a></li>
         <li><a href="#new-teams">Hand-offs &amp; review</a></li>
@@ -79,6 +79,27 @@
     </div>
   </div>
 </nav>
+
+<section id="new-0928" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.28</span><time datetime="2026-11-19">Nov 19, 2026</time></p>
+      <h2>A runaway command can't take kwant down, and your reason for Deny shows in Details</h2>
+      <p>A runaway command can't take kwant down: on Linux, the system now stops the command or AI CLI that used up the memory, not kwant, and kwant says why. Your reason for Deny shows in Details, with the step it stopped.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="deny-reason-details">Your reason shows in Details</h3>
+        <p>When you deny with <strong>Say why</strong>, Details keep your words with the step you stopped: under <em>You said no; nothing ran</em> on a command, or on the card's own row. Secrets in them are masked. A plain Deny reads as before.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v0928-deny-reason-details-2880.webp?v=f1be8ecec7" data-caption="kwant chat with Ann (Frontend) in Trailhead Outfitters. You asked &quot;Can you pad the order numbers on the receipts to six digits?&quot;. Under Ann&#x27;s reply, Details are open: &quot;Worked 0:02 · 1 step · you said no to 1&quot;, then the step &quot;Running npm install left-pad&quot; with a You said no chip. Its open detail reads &quot;You said no; nothing ran&quot; and &quot;You said why: “Use padStart, no new package”&quot;, and the tool list shows Bash as Denied. Ann replies that she&#x27;ll use String(n).padStart(6, &#x27;0&#x27;) instead."><img class="app" src="assets/media/v0928-deny-reason-details-1440.webp?v=fd6de59e08" srcset="assets/media/v0928-deny-reason-details-1440.webp?v=fd6de59e08 1440w, assets/media/v0928-deny-reason-details-2880.webp?v=f1be8ecec7 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="kwant chat with Ann (Frontend) in Trailhead Outfitters. You asked &quot;Can you pad the order numbers on the receipts to six digits?&quot;. Under Ann&#x27;s reply, Details are open: &quot;Worked 0:02 · 1 step · you said no to 1&quot;, then the step &quot;Running npm install left-pad&quot; with a You said no chip. Its open detail reads &quot;You said no; nothing ran&quot; and &quot;You said why: “Use padStart, no new package”&quot;, and the tool list shows Bash as Denied. Ann replies that she&#x27;ll use String(n).padStart(6, &#x27;0&#x27;) instead."></a></div>
+    </div>
+    <ul class="flist">
+      <li id="runaway-command" class="span3"><h3>A runaway command can't take kwant down</h3><p>On Linux, everything a bot starts, its commands and the claude, codex or grok CLI, is now first in line when the computer runs out of memory, so the system stops the runaway one, not kwant. kwant says so in plain words: the computer ran out of memory, or something outside kwant stopped it. kwant keeps running, and so do your chats.</p></li>
+      <li id="fixes-0928" class="span3"><h3>Smaller changes in 0.9.28</h3><p>On a narrow phone, an approval card's Deny and Always buttons keep each label on one line; when two don't fit side by side, one moves to its own line. Get started, the welcome in a new chat, now opens at its top instead of scrolled to the bottom. Someone new to kwant no longer sees the notice that Dev mode and Approvals moved, a change they never saw, and a space's Approvals setting now marks Ask only when risky as the default.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-0927" class="fgroup">
   <div class="wrap">
@@ -1469,7 +1490,7 @@
         <div class="card-body"><h3>Payments always ask</h3><p>Anything that looks like paying shows a card, at every tier and even with approvals off. It says why, and has no Always button.</p></div>
       </article>
       <article class="card" id="approvals-off">
-        <span class="shot"><a class="zoom" href="assets/media/v3-approvals-off-2880.webp?v=14239bd60c" data-caption="The warning shown before turning off approvals: bots can send messages, delete files, publish and sign in without asking, payments still ask, with Cancel and Turn off approvals."><img class="app" src="assets/media/v3-approvals-off-1440.webp?v=0401b05407" srcset="assets/media/v3-approvals-off-1440.webp?v=0401b05407 1440w, assets/media/v3-approvals-off-2880.webp?v=14239bd60c 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The warning shown before turning off approvals: bots can send messages, delete files, publish and sign in without asking, payments still ask, with Cancel and Turn off approvals."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v3-approvals-off-2880.webp?v=9923d48ef2" data-caption="The warning shown before turning off approvals: bots can send messages, delete files, publish and sign in without asking, payments still ask, with Cancel and Turn off approvals."><img class="app" src="assets/media/v3-approvals-off-1440.webp?v=1d8597618a" srcset="assets/media/v3-approvals-off-1440.webp?v=1d8597618a 1440w, assets/media/v3-approvals-off-2880.webp?v=9923d48ef2 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The warning shown before turning off approvals: bots can send messages, delete files, publish and sign in without asking, payments still ask, with Cancel and Turn off approvals."></a></span>
         <div class="card-body"><h3>Risks said before approvals go off</h3><p>Choosing "Don't ask" first says plainly what bots can then do on their own. Nothing changes until you press Turn off approvals.</p></div>
       </article>
     </div>
@@ -1549,7 +1570,7 @@
     </div>
     <div class="grid two">
       <article class="card">
-        <span class="shot"><a class="zoom" href="assets/media/v2-space-settings-2880.webp?v=c41eb66c44" data-caption="Settings for one space (This space), General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don&#x27;t ask, and Archive space."><img class="app" src="assets/media/v2-space-settings-1440.webp?v=8ec735b519" srcset="assets/media/v2-space-settings-1440.webp?v=8ec735b519 1440w, assets/media/v2-space-settings-2880.webp?v=c41eb66c44 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings for one space (This space), General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don&#x27;t ask, and Archive space."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v2-space-settings-2880.webp?v=36262c33fc" data-caption="Settings for one space (This space), General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don&#x27;t ask, and Archive space."><img class="app" src="assets/media/v2-space-settings-1440.webp?v=aae3845365" srcset="assets/media/v2-space-settings-1440.webp?v=aae3845365 1440w, assets/media/v2-space-settings-2880.webp?v=36262c33fc 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings for one space (This space), General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don&#x27;t ask, and Archive space."></a></span>
         <div class="card-body"><h3>Rules per space</h3><p>Each space has its own approval rule and hiring rule.</p></div>
       </article>
       <article class="card">
