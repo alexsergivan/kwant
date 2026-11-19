@@ -475,9 +475,14 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
 
 
   return (
+    // 30a: the landing place for "Go to the approval" from the keyboard: focusable only from script (no tab stop),
+    // named by its own heading and ask, so a screen reader reads the ask and the next Tab reaches Deny / Allow.
     <div
       data-approval-card={approval.id}
-      className={`my-3 border rounded-xl p-3 sm:p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm ${
+      role="group"
+      aria-labelledby={`apc-${approval.id}-h apc-${approval.id}-s`}
+      tabIndex={-1}
+      className={`kw-focus my-3 border rounded-xl p-3 sm:p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm ${
         waiting ? 'border-sky-500/30 bg-sky-950/20' : 'border-amber-500/30 bg-amber-950/20'
       }`}
     >
@@ -488,7 +493,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         >
           {waiting ? <Clock size={16} /> : <ShieldAlert size={16} />}
         </span>
-        <h3 className="min-w-0 flex-1 text-[15px] leading-5 font-semibold text-zinc-50">{waiting ? 'Still open: you can still allow' : 'Approval needed'}</h3>
+        <h3 id={`apc-${approval.id}-h`} className="min-w-0 flex-1 text-[15px] leading-5 font-semibold text-zinc-50">{waiting ? 'Still open: you can still allow' : 'Approval needed'}</h3>
         {time && (
           <time dateTime={approval.asked_at} className="shrink-0 text-xs leading-4 text-[#a39dcc] tabular-nums">
             {time}
@@ -497,7 +502,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
       </div>
       {waiting && <p className="mt-1.5 text-xs leading-[18px] text-zinc-400">{waitingNote(botName)}</p>}
 
-      <p className="mt-2.5 text-base leading-6 text-zinc-200 break-words" data-approval-summary="">
+      <p id={`apc-${approval.id}-s`} className="mt-2.5 text-base leading-6 text-zinc-200 break-words" data-approval-summary="">
         {bot} wants to {what}
       </p>
       {startedBy && (
