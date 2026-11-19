@@ -119,6 +119,45 @@ pub fn claimed_change(reply: &str) -> Option<String> {
     sentences(reply).into_iter().find(|s| sentence_claims(s))
 }
 
+/// 28i: what a sentence must name to be about the home when the turn also changed something
+/// with another tool: a device, a part of one, a room or what Home Assistant plays. "I closed
+/// the issue." names none of these; "I closed the garage door." does. Singular, lowercase; a
+/// plural ("lights", "switches") counts too.
+const HOME_THINGS: &[&str] = &[
+    // lights and power
+    "light", "lamp", "bulb", "led", "chandelier", "sconce", "switch", "plug", "outlet", "socket", "power",
+    // doors and covers
+    "door", "lock", "deadbolt", "garage", "gate", "blind", "shade", "curtain", "shutter", "awning", "cover",
+    // climate and water
+    "thermostat", "heating", "heater", "boiler", "radiator", "ac", "aircon", "conditioner", "air", "climate", "fan",
+    "temperature", "humidifier", "dehumidifier", "purifier", "valve", "sprinkler", "irrigation", "water",
+    // safety
+    "alarm", "siren", "camera", "doorbell", "sensor",
+    // appliances
+    "oven", "kettle", "dishwasher", "washer", "dryer", "fridge", "freezer", "appliance",
+    // rooms and the home
+    "porch", "kitchen", "bedroom", "bathroom", "hallway", "hall", "living", "lounge", "garden", "yard", "patio",
+    "basement", "attic", "nursery", "room", "home", "house", "scene",
+];
+
+/// Whether a lowercase word (or one part of a hyphenated one) is one of [`HOME_THINGS`] or
+/// [`PLAYERS`], or a plural of one.
+fn home_thing(word: &str) -> bool {
+    word.split('-').any(|w| {
+        let known = |x: &str| HOME_THINGS.contains(&x) || PLAYERS.contains(&x);
+        known(w) || w.strip_suffix('s').is_some_and(known) || w.strip_suffix("es").is_some_and(known)
+    })
+}
+
+/// 28i: like [`claimed_change`], but only a sentence that also names something in the home
+/// ([`HOME_THINGS`]). For a turn where another tool changed something and no Home Assistant
+/// step did: there "I closed the issue." is true and about that tool, while "I turned off the
+/// kitchen light." is still a claim about the home. A sentence that names nothing ("I've
+/// unlocked it.") is left to the other tool there.
+pub fn claimed_home_change(reply: &str) -> Option<String> {
+    sentences(reply).into_iter().find(|s| sentence_claims(s) && words(s).iter().any(|w| home_thing(&w.text)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +223,36 @@ mod tests {
         ] {
             assert_eq!(claimed_change(reply), None, "{reply}");
         }
+    }
+
+    /// 28i (Rigel's QA of #782, Finding 1): when another tool changed something, only a claim
+    /// that names something in the home is about the home.
+    #[test]
+    fn a_home_claim_names_something_in_the_home() {
+        for (reply, first) in [
+            ("I closed the issue.", None),
+            ("I opened the pull request and closed the issue.", None),
+            ("Done: set the label to bug.", None),
+            ("I've unlocked it.", None),
+            ("The issue is now closed.", None),
+            ("I stopped looking.", None),
+            ("I closed the issue. I turned off the kitchen light.", Some("I turned off the kitchen light.")),
+            ("I turned off the kitchen light.", Some("I turned off the kitchen light.")),
+            ("I have closed the garage door.", Some("I have closed the garage door.")),
+            ("Unlocking the front door now.", Some("Unlocking the front door now.")),
+            ("Turned off Living room lamp.", Some("Turned off Living room lamp.")),
+            ("Switched off the lights.", Some("Switched off the lights.")),
+            ("Setting the thermostat to 21 degrees.", Some("Setting the thermostat to 21 degrees.")),
+            ("Disarming the alarm now.", Some("Disarming the alarm now.")),
+            ("I stopped the vacuum.", Some("I stopped the vacuum.")),
+            ("Done — the porch light is now off.", Some("Done — the porch light is now off.")),
+            ("I turned on the living-room fan.", Some("I turned on the living-room fan.")),
+            ("I turned off both switches.", Some("I turned off both switches.")),
+        ] {
+            assert_eq!(claimed_home_change(reply).as_deref(), first, "{reply}");
+        }
+        // Never more than claimed_change finds
+        assert_eq!(claimed_home_change("The front door is locked."), None);
+        assert_eq!(claimed_home_change("I can't unlock the front door."), None);
     }
 }

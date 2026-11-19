@@ -1,13 +1,20 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Brain, Check, ChevronRight, CircleDashed, CircleSlash, Hand, Info, ListTree, Loader2, ShieldQuestion, TimerOff, X } from 'lucide-react';
 import {
+  ANSWER_LABEL,
   ActivityStep,
+  CardAnswer,
   LiveActivity,
   SavedActivity,
   activitySummary,
+  shownStepCount,
+  foldAnswers,
   formatDuration,
+  isFileStep,
   isOpenStep,
+  pathBreakParts,
   plainTitle,
+  shownStatus,
   statusLabel,
   thinkingText,
 } from '../activity';
@@ -31,7 +38,7 @@ const Title: React.FC<{ text: string }> = ({ text }) => (
 const StatusIcon: React.FC<{ step: ActivityStep }> = ({ step }) => {
   const label = statusLabel(step);
   const icon = (() => {
-    switch (step.status) {
+    switch (shownStatus(step)) {
       case 'running':
         return step.kind === 'thinking' ? (
           <Brain size={13} className="text-info animate-pulse motion-reduce:animate-none" />
@@ -112,7 +119,31 @@ const STEP_MARK: Partial<Record<ActivityStep['status'], string>> = {
   declined: 'text-zinc-300 border-zinc-500/40',
 };
 
-const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean }> = ({ step, live, now, listId, opened = false }) => {
+/**
+ * The row's chip, and words only a screen reader hears. 28s: a command row whose card folded into it carries the
+ * card's answer: "You said no" (grey) or "Not approved in time" (amber) as its chip. "You said OK" has no chip
+ * (Mira: too loud on a reply of many approved calls); it is read after the title instead. A command that then
+ * failed keeps "Failed" and reads its answer after it. A human step the person said no to has no chip (its title
+ * says "You said no: …"), nor does a card that said no on its own row (its title says so too).
+ */
+function stepMark(step: ActivityStep, answer: CardAnswer | undefined): { chip: { text: string; cls: string; kind: string } | null; also?: string } {
+  const shown = shownStatus(step);
+  if (answer === 'ok' && shown !== 'failed') return { chip: null, also: ANSWER_LABEL.ok };
+  if (answer && shown !== 'failed') return { chip: { text: ANSWER_LABEL[answer], cls: STEP_MARK[answer]!, kind: answer } };
+  const also = answer ? ANSWER_LABEL[answer] : undefined;
+  if (step.status === 'declined' && (step.kind === 'approval' || step.kind === 'human_step')) return { chip: null, also };
+  const cls = STEP_MARK[shown];
+  return { chip: cls ? { text: statusLabel(step), cls, kind: shown } : null, also };
+}
+
+const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; listId: string; opened?: boolean; answer?: CardAnswer }> = ({
+  step,
+  live,
+  now,
+  listId,
+  opened = false,
+  answer,
+}) => {
   const time = stepTime(step, now);
   const running = step.kind === 'thinking' && step.status === 'running';
   const text = step.kind === 'thinking' ? thinkingText(step, live) : '';
@@ -134,16 +165,22 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   // 26d: a step that failed or wasn't approved in time says so in words, not only by its icon, even when a later
   // step worked. The icon's label already names it for screen readers, so the mark is hidden from them.
   // The approval row keeps its icon only: the mark belongs on the command the person said no to.
-  const mark = step.status === 'declined' && step.kind === 'approval' ? undefined : STEP_MARK[step.status];
+  const { chip: mark, also } = stepMark(step, answer);
   const head = (
     <>
       <StatusIcon step={step} />
       <span className={`min-w-0 flex-1 break-words ${step.status === 'stopped' ? 'text-zinc-400' : waiting ? 'text-amber-100' : 'text-zinc-200'}`}>
-        {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title, step.status)} />}
+        {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title, step.outcome ?? step.status)} />}
       </span>
+      {also && <span className="sr-only">{also}</span>}
       {mark && (
-        <span aria-hidden="true" data-step-mark={step.status} className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark}`}>
-          {statusLabel(step)}
+        <span
+          aria-hidden="true"
+          data-step-mark={mark.kind}
+          className={`flex-shrink-0 rounded border px-1 text-[10px] leading-4 font-medium ${mark.cls}`}
+          data-answer={answer}
+        >
+          {mark.text}
         </span>
       )}
       {time && <span className="flex-shrink-0 font-mono text-[10px] text-zinc-400 tabular-nums">{time}</span>}
@@ -180,8 +217,13 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
       className={`px-3 py-1.5 text-xs focus:outline-none focus-visible:bg-zinc-800/60 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-400 ${waiting ? 'bg-amber-500/[0.06]' : ''}`}
     >
       {step.detail ? (
+        // 29e: on a touch phone the 44 px summary takes in the li's py-1.5 (-my-1.5 py-1.5), so a row with › is 44 px
+        // like the rows without, not 56, and its tap area stays 44 px. 29i: there its ring sits inside (-outline-offset-2,
+        // like the li's), so the list's overflow-hidden doesn't clip it and it doesn't cross an open row's output.
+        // 29m: -mx-0.5 px-0.5 widens the summary by 2 px each side without moving its content, so that inset ring
+        // clears the ✓ again (Mira's 29i design check).
         <details className="group" open={opened || undefined}>
-          <summary className="flex items-start [@media(max-width:767px)_and_(pointer:coarse)]:items-center gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
+          <summary className="flex items-start [@media(max-width:767px)_and_(pointer:coarse)]:items-center [@media(max-width:767px)_and_(pointer:coarse)]:-my-1.5 [@media(max-width:767px)_and_(pointer:coarse)]:py-1.5 [@media(max-width:767px)_and_(pointer:coarse)]:-mx-0.5 [@media(max-width:767px)_and_(pointer:coarse)]:px-0.5 gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 [@media(max-width:767px)_and_(pointer:coarse)]:focus-visible:-outline-offset-2">
             {head}
             <ChevronRight size={13} className="mt-px flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
           </summary>
@@ -191,7 +233,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
               step.status === 'declined' ? 'font-sans text-xs' : 'font-mono text-[11px]'
             } ${step.status === 'failed' ? 'text-rose-200 bg-rose-950/30 border-rose-500/20' : 'text-zinc-300 bg-zinc-950/80 border-zinc-800'}`}
           >
-            {step.detail}
+            <StepDetail text={step.detail} path={isFileStep(step)} />
           </pre>
         </details>
       ) : (
@@ -201,12 +243,25 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   );
 };
 
+/**
+ * 29i: a path detail may break after each "/" (<wbr>), so the file name stays whole; any other detail is plain text.
+ * 29l: only a file step's detail (`path`) is read as a path; a command that starts with one renders as before 29i.
+ */
+const StepDetail: React.FC<{ text: string; path: boolean }> = ({ text, path }) => {
+  const parts = path ? pathBreakParts(text) : null;
+  if (!parts) return <>{text}</>;
+  return <>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && <wbr />}{p}</React.Fragment>)}</>;
+};
+
 const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null }> = ({ steps, live, dropped = 0, id, openStep = null }) => {
   const now = useNow(steps.some(isOpenStep));
+  // 28s: one row per answer. A settled card folds into its command row; draw time only.
+  const { rows, answers, foldedInto } = useMemo(() => foldAnswers(steps), [steps]);
+  const opened = openStep ? foldedInto.get(openStep) ?? openStep : null;
   return (
     <ol id={id} aria-label="Steps" className="divide-y divide-zinc-700/40">
-      {steps.map((s) => (
-        <StepRow key={s.id} step={s} live={live} now={now} listId={id} opened={s.id === openStep} />
+      {rows.map((s) => (
+        <StepRow key={s.id} step={s} live={live} now={now} listId={id} opened={s.id === opened} answer={answers.get(s.id)} />
       ))}
       {dropped > 0 && (
         <li className="px-3 py-1.5 text-xs text-zinc-400">
@@ -218,8 +273,11 @@ const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: nu
 };
 
 /** The saved reply's steps row (and the live one once it folds, 18f): one class string, so both are the same height. */
+// 28z: on a phone the saved summary may wrap to two lines, so both rows keep their icons on the first line (items-start + 1.5px).
+// Below sm the three children (icon, text, chevron) are a one-row grid centred in the 44 px touch box (content-center),
+// so a one-line row still sits 14/14 and a two-line row fills the box (Mira, 28z round 2).
 export const STEPS_ROW_BUTTON =
-  'max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
+  'max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 max-sm:grid max-sm:grid-cols-[auto_minmax(0,1fr)_auto] max-sm:content-center max-sm:items-start';
 /** The list the steps row opens to. */
 export const STEPS_ROW_LIST = 'mt-1.5 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]';
 
@@ -236,7 +294,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
   const [open, setOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   if (steps.length === 0) return null;
-  const work = steps.filter((s) => s.kind !== 'note').length;
+  const work = shownStepCount(steps);
   const current = [...steps].reverse().find(isOpenStep);
   // Only waits are announced; a stream of tool names would be noise.
   const announce = (
@@ -302,7 +360,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; co
       <section aria-label="What the bot is doing" data-steps-folded="" className="mt-2 max-w-full">
         <div className="flex max-w-full min-w-0 items-center gap-2">
           <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={open ? listId : undefined} className={STEPS_ROW_BUTTON}>
-            <ListTree size={13} className="text-sky-400/80" aria-hidden="true" />
+            <ListTree size={13} className="flex-shrink-0 text-sky-400/80" aria-hidden="true" />
             {/* No time while running, as in the card */}
             <span className="truncate min-w-0">Working · {work} {work === 1 ? 'step' : 'steps'}</span>
             <ChevronRight size={13} className={`flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
@@ -360,10 +418,11 @@ export const SavedActivityList: React.FC<{
   }, [openRequest, focusStep]);
   useEffect(() => {
     if (!openRequest || !focusStep) return;
-    const el = document.getElementById(`${listId}-${focusStep}`);
+    // 28s: a card that folded into its command row is focused there.
+    const el = document.getElementById(`${listId}-${foldAnswers(activity.steps).foldedInto.get(focusStep) ?? focusStep}`);
     el?.focus({ preventScroll: true });
     el?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-  }, [openRequest, focusStep, listId, open]);
+  }, [openRequest, focusStep, listId, open, activity.steps]);
   const failed = activity.steps.some((s) => s.status === 'failed');
   const unanswered = activity.steps.some((s) => s.status === 'unanswered');
   return (
@@ -375,9 +434,14 @@ export const SavedActivityList: React.FC<{
         aria-controls={open ? listId : undefined}
         className={STEPS_ROW_BUTTON}
       >
-        <ListTree size={13} className={unanswered ? 'text-amber-300' : failed ? 'text-rose-300' : 'text-sky-400/80'} aria-hidden="true" />
-        <span className="truncate min-w-0">{activitySummary(activity)}</span>
-        <ChevronRight size={13} className={`flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
+        <ListTree size={13} className={`flex-shrink-0 max-sm:mt-[1.5px] ${unanswered ? 'text-amber-300' : failed ? 'text-rose-300' : 'text-sky-400/80'}`} aria-hidden="true" />
+        {/* 28z: on a phone two lines at most, left-aligned, and a line only breaks between " · " parts ("you said no to 1" stays whole). */}
+        <span className="min-w-0 text-left break-words max-sm:line-clamp-2 sm:truncate" data-steps-summary="">
+          {activitySummary(activity).split(' · ').map((part, i) => (
+            <React.Fragment key={i}>{i > 0 && ' · '}<span className="whitespace-nowrap">{part}</span></React.Fragment>
+          ))}
+        </span>
+        <ChevronRight size={13} className={`flex-shrink-0 max-sm:mt-[1.5px] text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
       </button>
       {open && (
         <div className={STEPS_ROW_LIST}>
