@@ -101,7 +101,6 @@ import { awayApi } from '../away';
 import { parseBudgetNotice } from '../botBudget';
 import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
 import { isSystemNotice, parseExpiredApproval, parseInterruption, retryTargets } from '../interruptions';
-import { ringElement } from '../ring';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
@@ -1134,7 +1133,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
       // card's first choice does), never on Allow / Deny. A tap, an Inbox row or a notification leaves focus alone.
       const from = document.activeElement;
       if (from instanceof HTMLElement && stripSlotRef.current?.contains(from) && from.matches('[data-strip-action="decide"]:focus-visible')) card.focus({ preventScroll: true });
-      if (highlightRing) ringElement(card);
       setFlashKind(highlightRing ? 'ask' : 'search');
       setFlashId(highlightMessageId);
       onHighlightDone?.();
@@ -2732,8 +2730,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
           // (display: contents when not flashing), so the flash never remounts the card: focus that "Go to the
           // approval" put on it stays, and so does a half-typed Deny reason. 30h: while flashing, the wrapper is as wide
           // as the card (the card's own max-w-2xl), so the amber box hugs the card instead of running to the column's
-          // edge. Top and bottom already match: the card's my-3 collapses through the wrapper.
-          <div key={approval.id} className={flashId === approval.id ? 'max-w-2xl rounded-xl kw-flash' : 'contents'}>
+          // edge. Top and bottom already match: the card's my-3 collapses through the wrapper. 30j: the wrapper has
+          // the same box idle and flashing (only kw-flash toggles), and !mt-0 cancels the list's space-y gap, so the
+          // card stays where it sat idle instead of hopping 8 / 12 px as the flash starts and ends. It is the one
+          // amber ring (the card root no longer gets its own), tagged with the flash kind as message rows are.
+          <div
+            key={approval.id}
+            className={`max-w-2xl rounded-xl !mt-0${flashId === approval.id ? ' kw-flash' : ''}`}
+            data-flash-kind={flashId === approval.id ? flashKind : undefined}
+          >
             <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
           </div>
         ))}
