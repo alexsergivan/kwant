@@ -603,3 +603,67 @@ test('pinned row tooltip: a Home Assistant lock ask says the card sentence too',
   const d = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
   assert.equal(d.querySelector('#pin-tip-house span:last-child').textContent, 'House wants to unlock Front door');
 });
+
+// 29w (brief: autonomy/needs-you-strip-steps-aside/brief.md): while the chat's only ask is a live approval and its
+// card's Allow / Deny row is fully on screen, the Needs-you strip steps aside (it would only repeat the card).
+const live = { id: 'ap1', kind: 'approval', kwant_id: 'k1', kwant_name: 'Mia', title: 'Mia wants to run a command', timestamp: '2026-11-19T09:00:00Z' };
+const asideWhen = ({ asks, cardInView }) => cardInView && m.onlyLiveApproval(asks);
+
+test('29w: one live approval with its card in view: the strip steps aside; card scrolled off: it is back', () => {
+  assert.equal(typeof m.onlyLiveApproval, 'function');
+  assert.equal(m.onlyLiveApproval([live]), true);
+  assert.equal(m.onlyLiveApproval([{ ...live, action: 'decide' }]), true);
+  assert.equal(asideWhen({ asks: [live], cardInView: true }), true);
+  assert.equal(asideWhen({ asks: [live], cardInView: false }), false);
+});
+
+test('29w: an approval plus a second ask, a run-out approval, or no asks: the strip is not hidden', () => {
+  const q = { id: 'q1', kind: 'question', kwant_id: 'k1', title: 'Which folder?', timestamp: '2026-11-19T09:01:00Z' };
+  const ranOut = { id: 's1', kind: 'stopped', kwant_id: 'k1', title: 'Approval ran out', retry: { type: 'approval', approval_id: 'ap0' }, timestamp: '2026-11-19T09:00:00Z' };
+  assert.equal(m.onlyLiveApproval([live, q]), false);
+  assert.equal(m.onlyLiveApproval([live, { ...live, id: 'ap2' }]), false);
+  assert.equal(m.onlyLiveApproval([ranOut]), false);
+  assert.equal(m.onlyLiveApproval([{ ...live, action: 'ask_again' }]), false);
+  assert.equal(m.onlyLiveApproval([q]), false);
+  assert.equal(m.onlyLiveApproval([]), false);
+  assert.equal(asideWhen({ asks: [live, q], cardInView: true }), false);
+  assert.equal(asideWhen({ asks: [ranOut], cardInView: true }), false);
+});
+
+test('29w: App passes stripOnlyApproval; ChatView keeps approvalCardInView from the same measurement and gates the strip', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  assert.match(app, /stripOnlyApproval=\{onlyLiveApproval\(asks\)\}/);
+  // Set in checkApprovalVisible from the same buttonsVisible the "Approval waiting" pill uses: no new listeners.
+  const check = chat.slice(chat.indexOf('const checkApprovalVisible'), chat.indexOf('const onScroll'));
+  assert.match(check, /const buttonsVisible = rows\.some\(\(r\) => fullyVisible\(/);
+  assert.match(check, /setApprovalCardInView\(buttonsVisible\)/);
+  assert.match(chat, /const stripAside = stripStepsAside\(\{ strip: !!needsYouStrip, onlyApproval: stripOnlyApproval, cardInView: approvalCardInView, followingCard \}\);/);
+  // Round 3 (Rigel): followingCard comes from the same measurement, after onScroll has updated stickRef.
+  assert.match(check, /setFollowingCard\(stickRef\.current && rows\.length > 0\)/);
+  // Kept mounted (no re-enter animation, its state stays) and hidden at once: no new motion.
+  assert.match(chat, /className=\{stripAside \? 'hidden' : 'contents'\}.*\n\s*\{needsYouStrip\}\n\s*<\/div>/);
+  assert.doesNotMatch(chat, /\n\s*\{needsYouStrip\}\n\n\s*<form/);
+  // Round 2 (Mira): only keyboard focus hands off to the composer; a tap (Android focuses the button) must not
+  // raise the soft keyboard over Allow / Deny.
+  assert.match(chat, /onFocus=\{\(e\) => \(stripHadFocusRef\.current = \(e\.target as HTMLElement\)\.matches\(':focus-visible'\)\)\}/);
+  assert.doesNotMatch(chat, /stripHadFocusRef\.current = true/);
+});
+
+// Round 3 (Rigel's QA at 6168ce1b): bringing the strip back within the follow zone shrank the chat, the follow pin
+// snapped to the bottom, the card was in view again and the strip hid: a slow scroll up could not leave the bottom.
+test('29w: while the chat follows the bottom with the card in it, the strip stays aside; past the follow zone it is back', () => {
+  const base = { strip: true, onlyApproval: true };
+  assert.equal(typeof m.stripStepsAside, 'function');
+  // At the bottom: card in view.
+  assert.equal(m.stripStepsAside({ ...base, cardInView: true, followingCard: true }), true);
+  // 32 px up: the buttons are clipped but the chat still follows: stays aside (was: back, then snapped down).
+  assert.equal(m.stripStepsAside({ ...base, cardInView: false, followingCard: true }), true);
+  // Past 80 px up: no longer following, buttons off screen: back.
+  assert.equal(m.stripStepsAside({ ...base, cardInView: false, followingCard: false }), false);
+  // Read up with the card still fully in view: aside, as before.
+  assert.equal(m.stripStepsAside({ ...base, cardInView: true, followingCard: false }), true);
+  // Never aside without a strip, or when the ask is not one live approval.
+  assert.equal(m.stripStepsAside({ ...base, strip: false, cardInView: true, followingCard: true }), false);
+  assert.equal(m.stripStepsAside({ ...base, onlyApproval: false, cardInView: true, followingCard: true }), false);
+});

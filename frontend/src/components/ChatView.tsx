@@ -109,6 +109,7 @@ import { ideaBlockedLine, ideaLength } from '../ideaShell';
 import { JarIcon } from './JarIcon';
 import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
+import { stripStepsAside } from '../askHere';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
 import { SmartActionsSlot } from './results/SmartActions';
@@ -353,6 +354,8 @@ export interface ChatViewProps {
   needsYouStrip?: React.ReactNode;
   /** 22i: the strip shows an ask here, so the working line drops its own "Answer ↑". */
   needsYouOpen?: boolean;
+  /** 29w: the strip's only ask is this chat's live approval, so it steps aside while that card's buttons are on screen. */
+  stripOnlyApproval?: boolean;
   onHighlightDone?: () => void;
   /** Set while `messages` is an older window (a search hit beyond the latest page). */
   viewingHistory?: boolean;
@@ -637,6 +640,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   highlightRing,
   needsYouStrip,
   needsYouOpen,
+  stripOnlyApproval = false,
   onContinueFrom,
   threadKind,
   continuedFrom,
@@ -956,18 +960,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   // A waiting card whose buttons are off screen while the person reads further up.
   const [approvalOffscreen, setApprovalOffscreen] = useState(false);
+  // 29w: some card's Allow / Deny row is fully on screen (the same measurement), so the strip need not repeat it.
+  const [approvalCardInView, setApprovalCardInView] = useState(false);
+  // ...or the chat follows the bottom with a card in it (the follow pin would undo the strip coming back there).
+  const [followingCard, setFollowingCard] = useState(false);
   const approvalKey = pendingApprovals.map((a) => a.id).join(',');
   const checkApprovalVisible = () => {
     const el = scrollRef.current;
     if (!el) return;
     const view = el.getBoundingClientRect();
     const rows = Array.from(el.querySelectorAll<HTMLElement>('[data-approval-actions]'));
-    const action = approvalScrollAction({
-      waiting: rows.length,
-      following: stickRef.current,
-      buttonsVisible: rows.some((r) => fullyVisible(r.getBoundingClientRect(), view)),
-    });
+    const buttonsVisible = rows.some((r) => fullyVisible(r.getBoundingClientRect(), view));
+    const action = approvalScrollAction({ waiting: rows.length, following: stickRef.current, buttonsVisible });
     setApprovalOffscreen(action === 'notify');
+    setApprovalCardInView(buttonsVisible);
+    setFollowingCard(stickRef.current && rows.length > 0);
   };
   const onScroll = () => {
     const el = scrollRef.current;
@@ -1014,6 +1021,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
     card.scrollIntoView({ block: 'end', behavior: reduce ? 'auto' : 'smooth' });
     setApprovalOffscreen(false);
   };
+  // 29w: the Needs-you strip steps aside while its one ask is the live approval whose buttons are on screen.
+  const stripAside = stripStepsAside({ strip: !!needsYouStrip, onlyApproval: stripOnlyApproval, cardInView: approvalCardInView, followingCard });
+  const stripSlotRef = useRef<HTMLDivElement | null>(null);
+  const stripHadFocusRef = useRef(false);
+  // Its "Go to the approval" brings the card into view and the strip goes: focus that was in it goes to the
+  // composer (as when the strip leaves), never to the page body.
+  useLayoutEffect(() => {
+    if (!stripAside || !stripHadFocusRef.current) return;
+    stripHadFocusRef.current = false;
+    const a = document.activeElement;
+    if (!a || a === document.body || stripSlotRef.current?.contains(a)) textareaRef.current?.focus({ preventScroll: true });
+  }, [stripAside]);
   // The running turn's summary line (WorkingStrip): inside the composer section, right above the box.
   const { byBot: budgetsByBot } = useBudgets();
   const chatBudget = budgetBotId ? budgetsByBot[budgetBotId] : undefined;
@@ -2827,7 +2846,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {budgetBanner}
         {workingStrip}
         {/* 22i: below the working line, right above the box (design.md §2 order). */}
-        {needsYouStrip}
+        {/* 29w: it steps aside (instantly, kept mounted) while it only repeats the approval card on screen. */}
+        <div ref={stripSlotRef} className={stripAside ? 'hidden' : 'contents'} data-needs-you-slot={stripAside ? 'aside' : 'shown'} onFocus={(e) => (stripHadFocusRef.current = (e.target as HTMLElement).matches(':focus-visible'))} onBlur={() => (stripHadFocusRef.current = false)}>
+          {needsYouStrip}
+        </div>
 
         <form
           onSubmit={handleSubmit}

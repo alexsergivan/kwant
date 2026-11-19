@@ -159,17 +159,34 @@ impl Env {
         self.state.db.list_messages(chat, 100).await.unwrap().into_iter().filter(|m| meta(m)["kind"] == "work_ahead").collect()
     }
 
-    /// Waits until no run is going.
-    async fn settle(&self) {
+    /// Waits until the work-ahead run in `chat` has finished, then until no turn is going, and
+    /// returns the run's final status ("posted", "nothing" or "failed"). The run's row is the
+    /// signal: `scan` writes it as "running" before `/api/work-ahead/run` answers, and `run`
+    /// finishes it only after the post is saved. `/api/turns` alone isn't enough: it is empty
+    /// before the run's turn starts and again after it ends, while the post is still being
+    /// saved, so a slow machine saw 0 posts (CI on #860, Nov 19).
+    async fn settle_run(&self, chat: &str) -> String {
+        let mut last = None;
+        for _ in 0..400 {
+            last = self.state.db.last_work_ahead_run(chat).await.unwrap().map(|r| r.status);
+            if last.as_deref().is_some_and(|s| s != "running") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let status = match last {
+            Some(s) if s != "running" => s,
+            other => panic!("the work-ahead run in {chat} didn't finish in 20 s (last status: {other:?})"),
+        };
+        // Nothing still running bleeds into the next step
         for _ in 0..200 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
             let turns = ok(&self.app, "GET", "/api/turns", None).await;
             if turns["turns"].as_array().is_none_or(|t| t.is_empty()) {
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                return;
+                return status;
             }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        panic!("runs never ended");
+        panic!("turns were still going 20 s after the run in {chat} finished");
     }
 }
 
@@ -181,7 +198,7 @@ async fn a_quiet_chat_gets_one_run_and_one_message_with_a_prediction() {
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(started[0]["kwant_id"], env.ann.as_str(), "the channel's lead works ahead");
     assert_eq!(started[0]["context_id"], env.channel.as_str());
-    env.settle().await;
+    assert_eq!(env.settle_run(&env.channel).await, "posted");
     let posted = env.work_ahead_in(&env.channel).await;
     assert_eq!(posted.len(), 1);
     let m = &posted[0];
@@ -202,7 +219,7 @@ async fn a_work_ahead_post_keeps_its_choices_as_chips_not_text() {
     let env = setup().await;
     env.quiet_channel("Plan the school run. QUIETDECIDE").await;
     assert_eq!(env.run_now().await.len(), 1);
-    env.settle().await;
+    assert_eq!(env.settle_run(&env.channel).await, "posted");
     let posted = env.work_ahead_in(&env.channel).await;
     assert_eq!(posted.len(), 1);
     assert_eq!(posted[0].text, "I updated the daily overview with a leave-by line.");
@@ -218,7 +235,7 @@ async fn nothing_worth_doing_posts_nothing_and_isnt_retried_today() {
     let env = setup().await;
     env.quiet_channel("Plan the launch week. QUIETNOTHING").await;
     assert_eq!(env.run_now().await.len(), 1);
-    env.settle().await;
+    assert_eq!(env.settle_run(&env.channel).await, "nothing");
     assert!(env.work_ahead_in(&env.channel).await.is_empty());
     let all = env.state.db.list_messages(&env.channel, 100).await.unwrap();
     assert_eq!(all.len(), 2, "only the seeded messages");
@@ -237,8 +254,10 @@ async fn the_daily_cap_the_switch_and_a_chat_that_isnt_quiet_start_nothing() {
     env.seed(&env.bob, true, &[("user", "user", "Check the links.", 8), ("kwant", "Bob", "Started.", 7)]).await;
     let (s, v) = call(&env.app, "POST", "/api/settings", Some(json!({"work_ahead_daily_cap": 1}))).await;
     assert!(s.is_success(), "{v}");
-    assert_eq!(env.run_now().await.len(), 1);
-    env.settle().await;
+    let started = env.run_now().await;
+    assert_eq!(started.len(), 1, "{started:?}");
+    let chat = started[0]["context_id"].as_str().unwrap();
+    assert_eq!(env.settle_run(chat).await, "posted");
     assert!(env.run_now().await.is_empty(), "cap reached");
 
     // Off: nothing, and the route says so
