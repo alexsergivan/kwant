@@ -40,7 +40,7 @@ test('a Bash approval shows who, the command and the folder, with the three choi
   assert.match(t, /Run the strategy tests/);
   assert.match(html, /<pre[^>]*>go test \.\/internal\/strategy\/<\/pre>/);
   assert.match(t, /In folder: \/Users\/alex\/trader/);
-  assert.deepEqual(buttons(html), ['Hide details', 'Allow once', 'Deny', 'Always this session']);
+  assert.deepEqual(buttons(html), ['Hide details', 'Allow once', 'Deny', 'Always this session', 'Say why']);
   assert.doesNotMatch(html, /&quot;source&quot;|claude_builtin|kwant_name/);
 });
 
