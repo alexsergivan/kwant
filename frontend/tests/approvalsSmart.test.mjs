@@ -38,7 +38,7 @@ test('the space control offers "Ask only when risky" between Ask and Don\'t ask,
   const values = [...html.matchAll(/value="(ask|smart|off)"/g)].map((x) => x[1]);
   assert.deepEqual(values, ['ask', 'smart', 'off']);
   const t = text(html);
-  assert.match(t, /Ask only when risky Everyday work in the bot's own folder runs on its own\. A card asks you before it goes online, installs something new, publishes, touches anything outside its folder, or does anything that isn't clearly safe\./);
+  assert.match(t, /Ask only when risky (?:\(default\) )?Everyday work in the bot's own folder runs on its own\. A card asks you before it goes online, installs something new, publishes, touches anything outside its folder, or does anything that isn't clearly safe\./);
   assert.match(t, /It isn't a locked box: a program the bot runs inside its folder can still do anything you can\./, 'the honest limit of "smart" stays said');
   // 29v: a new space starts on smart (src/db/approval_modes.rs NEW_SPACE = SMART), so the mark sits there.
   assert.match(t, /Ask only when risky \(default\)/, '"(default)" sits on Ask only when risky, what a new space starts on');
