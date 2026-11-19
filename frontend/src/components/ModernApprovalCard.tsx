@@ -36,6 +36,8 @@ interface ModernApprovalCardProps {
   /** Floor card only (22f): saves the backup command / re-reads the backup state; tests and the rig fake them. */
   onSetCommand?: (spaceId: string, command: string) => Promise<void>;
   onLoadBackup?: (spaceId: string) => Promise<FloorBackup | null>;
+  /** 29q: the Say why field stacks (field, then a full-width button) at every width, for a narrow column like the Inbox list. */
+  stackWhy?: boolean;
 }
 
 /** Server/tool/arguments of an MCP approval, or null for other tools. */
@@ -273,7 +275,7 @@ const SECONDARY =
  * <bot>". Its own component so the card itself keeps no state. Fragment children of the action row: the form
  * takes a whole line of its own (basis-full) on a wide screen and comes last on a phone.
  */
-const SayWhy: React.FC<{ botName: string | null; disabled: boolean; onDeny: (reason: string) => void }> = ({ botName, disabled, onDeny }) => {
+const SayWhy: React.FC<{ botName: string | null; disabled: boolean; stack?: boolean; onDeny: (reason: string) => void }> = ({ botName, disabled, stack = false, onDeny }) => {
   // null while closed, else the reason typed so far.
   const [why, setWhy] = useState<string | null>(null);
   const id = useId();
@@ -289,7 +291,7 @@ const SayWhy: React.FC<{ botName: string | null; disabled: boolean; onDeny: (rea
         aria-controls={id}
         onClick={() => setWhy((w) => (w === null ? '' : null))}
         data-approval-say-why=""
-        className="self-start sm:self-auto sm:mr-auto -ml-2 sm:ml-0 inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-sm text-[#a39dcc] hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed"
+        className={`self-start sm:self-auto sm:mr-auto -ml-2 sm:ml-0 inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-sm ${why === null ? 'text-[#a39dcc]' : 'text-zinc-100'} hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed`}
       >
         <MessageSquare size={14} aria-hidden="true" />
         <span>Say why</span>
@@ -298,7 +300,7 @@ const SayWhy: React.FC<{ botName: string | null; disabled: boolean; onDeny: (rea
         <form
           id={id}
           data-approval-why=""
-          className="sm:basis-full flex flex-col gap-2 sm:flex-row sm:items-center"
+          className={`sm:basis-full flex flex-col gap-2 ${stack ? '' : 'sm:flex-row sm:items-center'}`}
           onSubmit={(e) => {
             e.preventDefault();
             onDeny(why);
@@ -322,9 +324,9 @@ const SayWhy: React.FC<{ botName: string | null; disabled: boolean; onDeny: (rea
             placeholder="What should it do instead?"
             enterKeyHint="send"
             autoComplete="off"
-            className="min-w-0 w-full sm:flex-1 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg border border-[#3f3868] bg-zinc-950/70 text-base sm:text-sm text-[#ecebfa] placeholder:text-[#a39dcc] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50"
+            className={`min-w-0 w-full ${stack ? '' : 'sm:flex-1'} min-h-[44px] sm:min-h-[36px] px-3 rounded-lg border border-[#3f3868] bg-zinc-950/70 text-base sm:text-sm text-[#ecebfa] placeholder:text-[#a39dcc] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50`}
           />
-          <button type="submit" disabled={disabled} data-approval-deny-why="" className={`${SECONDARY} w-full sm:w-auto sm:max-w-[50%] min-w-0`}>
+          <button type="submit" disabled={disabled} data-approval-deny-why="" className={`${SECONDARY} w-full ${stack ? '' : 'sm:w-auto sm:max-w-[50%]'} min-w-0`}>
             <X size={14} aria-hidden="true" className="shrink-0" />
             <span className="min-w-0 break-words [overflow-wrap:anywhere] text-left">Deny and tell {tellWho}</span>
           </button>
@@ -344,6 +346,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   onBackup,
   onSetCommand,
   onLoadBackup,
+  stackWhy = false,
 }) => {
   // Dev mode's production floor has its own card: blast radius, backup row, and never "always allow".
   const floor = parseProdFloor(approval.details);
@@ -606,7 +609,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
           )}
         </div>
         {/* 29p: quiet, next to Deny (left of it on a wide screen, under the buttons on a phone). Deny itself stays one tap. */}
-        {offerWhy && <SayWhy botName={botName} disabled={disabled} onDeny={denyWithReason} />}
+        {offerWhy && <SayWhy botName={botName} disabled={disabled} stack={stackWhy} onDeny={denyWithReason} />}
       </div>
     </div>
   );
