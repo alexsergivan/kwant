@@ -2281,6 +2281,54 @@ If what they said points to another way, you may try that; it will ask them agai
         assert_eq!(e.state.broker.deny_reasons_held(), 0, "nothing left behind");
     }
 
+    /// 29s: the reason a person gives with Deny shows in Details: once the waiting call hears it,
+    /// the card's approval step ends `declined` with `You said why: “…”`, redacted (a token in the
+    /// reason never shows). A reason nobody heard, a plain Deny and an Allow add nothing.
+    #[tokio::test]
+    async fn a_heard_deny_reason_is_the_cards_detail_in_details() {
+        use crate::drivers::events::TurnTag;
+        use crate::server::activity::TurnActivity;
+        let e = setup().await;
+        let a = approver(&e, &e.general, Duration::from_secs(10));
+        let tag = TurnTag { turn_id: "t-29s".into(), kwant_id: e.bot.id.clone(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(broadcast::channel(64).0, tag);
+        let on_turn = |command: &str| ToolApprovalRequest { turn_id: "t-29s".into(), ..bash(&e.bot, command) };
+        let token = "ghp_abcdefghijklmnopqrstuvwxyz0123";
+        let reason: &'static str = Box::leak(format!("push without --force, my token {token} is fine").into_boxed_str());
+        let (out, _, heard) = asked(&e, &a, on_turn("git push --force origin main"), why(reason), true).await;
+        assert_eq!((out, heard.as_deref()), (ApprovalOutcome::Denied, Some(reason)), "the call hears it whole");
+        let (out, _) = ask_unheard(&e, &a, on_turn("rm -rf build"), why("keep the build folder")).await;
+        assert_eq!(out, ApprovalOutcome::Denied);
+        let (out, _) = ask(&e, &a, on_turn("gh pr merge 7"), DENY).await;
+        assert_eq!(out, ApprovalOutcome::Denied);
+        let (out, _) = ask(&e, &a, on_turn("npm run build"), ALLOW).await;
+        assert_eq!(out, ApprovalOutcome::Allowed);
+        let saved = turn.finish().unwrap();
+        let cards: Vec<(String, Option<String>)> = saved["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["kind"] == "approval")
+            .map(|s| (s["status"].as_str().unwrap().to_string(), s["detail"].as_str().map(str::to_string)))
+            .collect();
+        assert_eq!(
+            cards,
+            vec![
+                (
+                    "declined".to_string(),
+                    Some("You said why: \u{201c}push without --force, my token [redacted] is fine\u{201d}".to_string())
+                ),
+                ("declined".to_string(), None),
+                ("declined".to_string(), None),
+                ("ok".to_string(), None),
+            ],
+            "{saved}"
+        );
+        assert!(!saved.to_string().contains(token), "{saved}");
+        assert!(!saved.to_string().contains("keep the build folder"), "an unheard reason shows nothing new");
+        assert_eq!(e.state.broker.deny_reasons_held(), 0, "nothing left behind");
+    }
+
     /// 29o (d): a late Deny with a reason (its turn stopped waiting) answers as a plain late Deny
     /// does, and keeps nothing for a call that will never come.
     #[tokio::test]
