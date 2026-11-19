@@ -1,0 +1,21 @@
+{
+  "version": "0.9.29",
+  "date": "2026-11-19",
+  "highlights": [
+    {
+      "id": "approval-asks-once",
+      "title": "An approval asks once, on its card",
+      "text": "When a bot waits for your OK and its card is on screen, the \"needs you\" bar above the message box steps aside. Allow once and Deny are the one place to answer.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "needs-you-comes-back",
+      "title": "Scroll away and the bar comes back",
+      "text": "Scroll the approval card out of view and the \"needs you\" bar returns with Go to the approval. With more than one thing waiting, it stays.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}
