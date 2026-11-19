@@ -208,17 +208,40 @@ where
     panic!("timed out waiting for {what}");
 }
 
-/// Waits until nothing runs in this test's chats any more.
-async fn settle(env: &Env) {
-    let mut quiet = 0;
-    for _ in 0..400 {
-        quiet = if env.state.turns.active_turns().is_empty() { quiet + 1 } else { 0 };
-        if quiet >= 20 {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+/// What still runs for `channel`: a turn, or a job holding the chat or one of its hand-offs.
+/// - The person's message holds a job keyed by the chat until its turn, the hand-offs that run in that
+///   turn's task (a teammate's @mentions, in order, "once @An1 has the numbers" ones too) and the
+///   one list of asks are done (routes.rs `send_chat`, `execute_single_turn`). A lead resumed with
+///   results holds the chat too (delegation.rs `continue_lead`).
+/// - A lead's hand-off runs in a job keyed by its own id, not the chat's (delegation.rs `spawn_run`),
+///   and one parked behind another starts or fails in its prerequisite's `finish`. That job ends
+///   with the specialist's turn, before `finish` saves the result and resumes the lead (`run`
+///   drops it first), so a lead's test waits for the lead's resume ([`lead_resumed`]) before it settles.
+async fn running(env: &Env, channel: &str) -> Vec<String> {
+    let turns = &env.state.turns;
+    let mut what: Vec<String> = turns.active_turns().iter().map(|t| format!("{} turn of {} in {}", t.state, t.kwant_id, t.context_id)).collect();
+    if turns.has_job(channel) {
+        what.push(format!("a job holding the chat: {:?}", turns.job_keys_holding(channel)));
     }
-    panic!("the chain never went quiet");
+    for d in env.state.db.list_delegations(None, None, 200).await.unwrap() {
+        if d.origin_channel_id.as_deref() == Some(channel) && turns.has_job(&d.id) {
+            what.push(format!("the hand-off to {} ({}): {:?}", d.specialist_kwant_id, d.status, turns.job_keys_holding(&d.id)));
+        }
+    }
+    what
+}
+
+/// Waits until the chat's dispatches have ended, then checks nothing starts there again.
+async fn settle(env: &Env, channel: &str) {
+    wait_for("the chat's dispatches to end", || async { running(env, channel).await.is_empty() }).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let late = running(env, channel).await;
+    assert!(late.is_empty(), "started in the chat after its dispatches ended: {late:?}");
+}
+
+/// Whether lead `name` was resumed with its hand-offs' results (the prompts of delegation.rs `continue_lead`).
+fn lead_resumed(name: &str) -> bool {
+    prompts_of(name).iter().any(|p| p.contains("tasks you delegated have ended") || p.contains("finished the task you delegated"))
 }
 
 async fn delegation_to(env: &Env, lead: &str, to: &str) -> Option<kwnt::db::threads::Delegation> {
@@ -236,7 +259,7 @@ async fn a_handoff_that_waits_for_another_gets_its_result() {
     behave("Wr1", "Summary written.");
     say_in(&env, &channel, "@Hub1 plan the report").await;
     wait_for("Wr1's turn", || async { !prompts_of("Wr1").is_empty() }).await;
-    settle(&env).await;
+    settle(&env, &channel).await;
 
     assert!(first_prompt_at("An1") < first_prompt_at("Wr1"), "An1, mentioned second, runs first");
     let p = &prompts_of("Wr1")[0];
@@ -253,7 +276,7 @@ async fn a_handoff_waiting_for_a_failed_or_asking_teammate_does_not_start() {
     behave("Sc2", "Market scanned.");
     say_in(&env, &channel, "@Hub2 plan the report").await;
     wait_for("Sc2's turn", || async { !prompts_of("Sc2").is_empty() }).await;
-    settle(&env).await;
+    settle(&env, &channel).await;
     assert!(prompts_of("Wr2").is_empty(), "Wr2 waited for An2, which failed");
     let msgs = messages(&env, &channel).await;
     assert!(msgs.iter().any(|m| m.text.contains("Wr2") && m.text.contains("An2")), "the chain says Wr2 didn't start: {:?}", msgs.iter().map(|m| &m.text).collect::<Vec<_>>());
@@ -264,7 +287,7 @@ async fn a_handoff_waiting_for_a_failed_or_asking_teammate_does_not_start() {
     behave("An7", "I can pull them.\nWhich quarter should I use?");
     say_in(&env, &channel, "@Hub7 plan the report").await;
     wait_for("An7's turn", || async { !prompts_of("An7").is_empty() }).await;
-    settle(&env).await;
+    settle(&env, &channel).await;
     assert!(prompts_of("Wr7").is_empty(), "Wr7 waits for the person's answer to An7");
 }
 
@@ -298,7 +321,7 @@ async fn a_leads_dependent_delegation_waits_while_independent_ones_run_in_parall
     let p = &prompts_of("Wr3")[0];
     assert!(p.contains("ANRESULT3"), "Wr3 gets An3's result: {p}");
     wait_for("the lead's resume", || async { prompts_of("Ld3").iter().any(|p| p.contains("WRRESULT3")) }).await;
-    settle(&env).await;
+    settle(&env, &channel).await;
     let resumes: Vec<_> = prompts_of("Ld3").into_iter().filter(|p| p.contains("WRRESULT3")).collect();
     assert_eq!(resumes.len(), 1, "one resume with every result");
     assert!(resumes[0].contains("ANRESULT3"), "{}", resumes[0]);
@@ -313,7 +336,8 @@ async fn a_leads_delegation_waiting_for_a_failed_or_asking_one_does_not_start() 
     behave("An4", "FAIL");
     say_in(&env, &channel, "@Ld4 get me the report").await;
     wait_for("Wr4's task to end", || async { delegation_to(&env, &ids[0], &ids[1]).await.is_some_and(|d| !d.is_open()) }).await;
-    settle(&env).await;
+    wait_for("the lead's resume", || async { lead_resumed("Ld4") }).await;
+    settle(&env, &channel).await;
     let w = delegation_to(&env, &ids[0], &ids[1]).await.unwrap();
     assert_eq!(w.status, "failed");
     assert!(prompts_of("Wr4").is_empty(), "Wr4 never ran");
@@ -324,7 +348,8 @@ async fn a_leads_delegation_waiting_for_a_failed_or_asking_one_does_not_start() 
     behave("An5", "I can pull them.\nWhich quarter should I use?");
     say_in(&env, &channel, "@Ld5 get me the report").await;
     wait_for("Wr5's task to end", || async { delegation_to(&env, &ids[0], &ids[1]).await.is_some_and(|d| !d.is_open()) }).await;
-    settle(&env).await;
+    wait_for("the lead's resume", || async { lead_resumed("Ld5") }).await;
+    settle(&env, &channel).await;
     assert!(prompts_of("Wr5").is_empty(), "Wr5 never ran");
     let w = delegation_to(&env, &ids[0], &ids[1]).await.unwrap();
     assert!(w.error.as_deref().is_some_and(|e| e.contains("asked you something first")), "{w:?}");
@@ -343,7 +368,7 @@ async fn two_askers_get_one_list_from_the_lead_and_the_answer_goes_to_it() {
     behave("Ld6", "Thanks, passing it on.");
     say_in(&env, &channel, "@Hub6 plan the offsite").await;
     wait_for("the list", || async { messages(&env, &channel).await.iter().any(|m| meta(m).get("consolidated_asks").is_some()) }).await;
-    settle(&env).await;
+    settle(&env, &channel).await;
 
     let gathering: Vec<_> = prompts_of("Ld6").into_iter().filter(|p| p.contains("as one numbered list")).collect();
     assert_eq!(gathering.len(), 1, "one extra turn");
@@ -359,7 +384,7 @@ async fn two_askers_get_one_list_from_the_lead_and_the_answer_goes_to_it() {
     let before = (prompts_of("As6").len(), prompts_of("Bs6").len());
     say_in(&env, &channel, "May, and 5000 EUR ANSWER6").await;
     wait_for("the lead's turn with the answer", || async { prompts_of("Ld6").iter().any(|p| p.contains("ANSWER6")) }).await;
-    settle(&env).await;
+    settle(&env, &channel).await;
     assert_eq!((prompts_of("As6").len(), prompts_of("Bs6").len()), before, "the answer went to the lead, not an asker");
     let p = prompts_of("Ld6").into_iter().find(|p| p.contains("ANSWER6")).unwrap();
     assert!(p.contains("Pass the part that answers") && p.contains("As6, Bs6"), "the lead is told whom to pass it to: {p}");
@@ -375,7 +400,7 @@ async fn one_asker_or_none_gets_no_extra_turn() {
     behave("Bs8", "Venues found: three options.");
     say_in(&env, &channel, "@Hub8 plan the offsite").await;
     wait_for("Bs8's turn", || async { !prompts_of("Bs8").is_empty() }).await;
-    settle(&env).await;
+    settle(&env, &channel).await;
     assert!(prompts_of("Ld8").iter().all(|p| !p.contains("as one numbered list")), "one asker: no list");
     assert!(messages(&env, &channel).await.iter().all(|m| meta(m).get("consolidated_asks").is_none()));
 
@@ -384,6 +409,6 @@ async fn one_asker_or_none_gets_no_extra_turn() {
     behave("As9", "Dates are fine.");
     say_in(&env, &channel, "@Hub9 plan the offsite").await;
     wait_for("As9's turn", || async { !prompts_of("As9").is_empty() }).await;
-    settle(&env).await;
+    settle(&env, &channel).await;
     assert!(prompts_of("Ld9").is_empty(), "nobody asked: the lead isn't woken");
 }
