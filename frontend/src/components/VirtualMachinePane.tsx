@@ -556,6 +556,14 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     setPointing(false);
     pointButton.current?.focus();
   }, []);
+  // 30o: a message with picks went out, so Point turns off; focus stays in the composer (not stopPointing)
+  const sentPicks = point?.sentPicks ?? 0;
+  const lastSentPicks = useRef(sentPicks);
+  useEffect(() => {
+    if (sentPicks === lastSentPicks.current) return;
+    lastSentPicks.current = sentPicks;
+    setPointing(false);
+  }, [sentPicks]);
 
   // 0.9.8 D: a panel the bot opened stays open while the person controls it or has picks to send
   const pointPending = (point?.picks ?? 0) > 0;

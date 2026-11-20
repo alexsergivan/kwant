@@ -133,11 +133,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
           winget settings --enable LocalManifestFiles
           $winget = (Get-Command winget).Source
+          # A child is created at or after its parent: Windows reuses process ids, so an older process whose
+          # ParentProcessId matches had a dead parent with that id and isn't part of this tree
           function Get-Tree([int]$Root) {
             $all = @(Get-CimInstance Win32_Process)
+            $born = @{}; foreach ($p in $all) { $born[[int]$p.ProcessId] = $p.CreationDate }
             $ids = [System.Collections.Generic.List[int]]::new(); $ids.Add($Root)
             for ($i = 0; $i -lt $ids.Count; $i++) {
-              $all | Where-Object { $_.ParentProcessId -eq $ids[$i] -and $_.ProcessId -ne $ids[$i] } | ForEach-Object { $ids.Add([int]$_.ProcessId) }
+              $all | Where-Object { $_.ParentProcessId -eq $ids[$i] -and $_.ProcessId -ne $ids[$i] -and $_.CreationDate -ge $born[$ids[$i]] } |
+                ForEach-Object { $ids.Add([int]$_.ProcessId) }
             }
             $all | Where-Object { $ids.Contains([int]$_.ProcessId) }
           }

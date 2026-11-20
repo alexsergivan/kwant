@@ -121,19 +121,27 @@ jobs:
           $proc = Start-Process -FilePath $exe -ArgumentList @('serve', '--host', '127.0.0.1', '--port', "$port", '--no-laya') `
             -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -WindowStyle Hidden
 
+          # Windows reuses process ids and never re-parents orphans, so ParentProcessId alone can name a newer
+          # process that got a dead parent's id (the linker's lingering vctip.exe once looked like kwnt.exe's
+          # child). A child is created at or after its parent; an older process with that ParentProcessId is
+          # left out and listed in $script:olderThanParent.
           function Get-Tree([int]$root) {
-            $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
+            $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CreationDate)
+            $born = @{}; foreach ($p in $all) { $born[[int]$p.ProcessId] = $p.CreationDate }
             $tree = @($root); $grew = $true
             while ($grew) {
               $grew = $false
               foreach ($p in $all) {
-                if ($tree -contains [int]$p.ParentProcessId -and -not ($tree -contains [int]$p.ProcessId)) {
+                if ($tree -contains [int]$p.ParentProcessId -and -not ($tree -contains [int]$p.ProcessId) -and
+                    $p.CreationDate -ge $born[[int]$p.ParentProcessId]) {
                   $tree += [int]$p.ProcessId; $grew = $true
                 }
               }
             }
+            $script:olderThanParent = @($all | Where-Object { $tree -contains [int]$_.ParentProcessId -and -not ($tree -contains [int]$_.ProcessId) })
             $all | Where-Object { $tree -contains [int]$_.ProcessId }
           }
+          $created = @{ n = 'CreationDate'; e = { '{0:yyyy-MM-dd HH:mm:ss.ffffff}' -f $_.CreationDate } }
 
           $health = $null
           $deadline = (Get-Date).AddSeconds(90)
@@ -158,17 +166,24 @@ jobs:
           }
 
           $tree = @(Get-Tree $proc.Id)
-          "process tree while running:"; $tree | Format-Table ProcessId, ParentProcessId, Name
+          "process tree while running:"; $tree | Format-Table ProcessId, ParentProcessId, Name, $created
+          if ($script:olderThanParent.Count -gt 0) {
+            "not counted (created before the process that now has their parent's id):"
+            $script:olderThanParent | Format-Table ProcessId, ParentProcessId, Name, $created
+          }
           Stop-Process -Id $proc.Id -Force
           $proc.WaitForExit(15000) | Out-Null
           $left = @()
           $deadline = (Get-Date).AddSeconds(15)
           do {
             Start-Sleep -Milliseconds 500
-            $left = @($tree | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+            # the same process (id and creation time), not a newer one that got a stopped process's id
+            $left = @($tree | Where-Object {
+                $now = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$_.ProcessId)"
+                $now -and $now.CreationDate -eq $_.CreationDate })
           } while ($left.Count -gt 0 -and (Get-Date) -lt $deadline)
           if ($left.Count -gt 0) {
-            "still running after Stop:"; $left | Format-Table ProcessId, Name
+            "still running after Stop:"; $left | Format-Table ProcessId, Name, $created
             $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
             Write-Error "kwnt.exe's process tree wasn't gone after Stop"; exit 1
           }

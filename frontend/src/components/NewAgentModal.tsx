@@ -19,6 +19,7 @@ import { BotApprovalsSetting } from './ApprovalsSetting';
 import { FlightSchoolPanel } from './FlightSchoolPanel';
 import { useEscapeLayer } from '../escape';
 import { BrowserSites, FieldErrorKey, SITE_LIMITS, changedSites, fieldError, sitesOf, sitesSummary } from '../browserSites';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 export type EditTab = 'profile' | 'memory' | 'skills' | 'routines' | 'usage';
 const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
@@ -143,6 +144,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [sitesBase, setSitesBase] = useState<BrowserSites | null>(null);
   const [sites, setSites] = useState<BrowserSites | null>(null);
   const [sitesOpen, setSitesOpen] = useState(false);
+  const focusAfterRender = useFocusAfterRender();
   // A 400 that names one list ("browser_allowed_sites: …"), shown next to that list.
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldErrorKey, string>>>({});
   // Follows the prop until the person changes this bot's approvals here.
@@ -301,7 +303,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       setFieldErrors({ [named.field]: named.text });
       setError('Nothing was saved. Fix the entry marked above, then save again.');
       if (named.field.startsWith('browser_')) setSitesOpen(true);
-      setTimeout(() => document.getElementById(fieldInputId(named.field))?.focus(), 0);
+      focusAfterRender(() => document.getElementById(fieldInputId(named.field)));
       return;
     }
     onClose();

@@ -92,6 +92,7 @@ const GitHubConnectLayer: React.FC<{ req: GitHubConnectRequest; onClose: () => v
     onClose();
     // Back to the button it opened from, when it's still on screen.
     const a = req.anchor;
+    // Kept on a timer: the anchor is already on screen and this layer unmounts in the same update, so it can't wait for its own render.
     if (a?.isConnected) window.setTimeout(() => a.focus({ preventScroll: true }), 0);
   };
   useEscapeLayer(ref, true, close, { modal: true, fallback: () => (req.anchor?.isConnected ? req.anchor : null) });

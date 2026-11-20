@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusAfterRender } from '../focusAfterRender';
 import { AlertTriangle, ExternalLink, Loader2, LogIn, LogOut, RotateCcw } from 'lucide-react';
 import { ClaudeLoginError, ClaudeLoginSession, claudeLoginApi, isClaudeSignInUrl, isLoginActive, loginFailure } from '../claudeLogin';
 import type { EngineInfo } from '../engines';
@@ -43,6 +44,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
   /** Mac app: the link goes to the default browser once it arrives (no blank tab to fill). */
   const toBrowser = useRef(false);
   const startRef = useRef<HTMLButtonElement>(null);
+  const focusAfterRender = useFocusAfterRender();
   const codeRef = useRef<HTMLInputElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
   const alive = useRef(true);
@@ -151,7 +153,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
     setCode('');
     setBlocked(false);
     // Focus goes back to where it started.
-    requestAnimationFrame(() => startRef.current?.focus());
+    focusAfterRender(() => startRef.current);
   };
 
   // While it's running, look again: it can time out, or finish from another tab.
@@ -317,6 +319,7 @@ export const ClaudeSignOut: React.FC<{ onSignedOut: (engines: EngineInfo[]) => v
     if (busy) return;
     setOpen(false);
     setError(null);
+    // Focus on a frame, not after render (kept): the trigger is always on screen; only Cancel, Escape or the backdrop close it
     requestAnimationFrame(() => triggerRef.current?.focus());
   };
 

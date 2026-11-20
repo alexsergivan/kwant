@@ -33,6 +33,7 @@ import { FindTool, FindToolApi } from './FindTool';
 import { OPEN_ADD_TOOL_EVENT, OpenAddTool } from '../mcp';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { ModernAvatar } from './ModernAvatar';
+import { useAfterRender } from '../focusAfterRender';
 
 /** The tile mark: plain initials on the overlay colour, never a brand logo. */
 const TILE_BG = '#231d4b';
@@ -575,13 +576,15 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
       .map((u) => u.name);
   const needs = data ? data.connections.filter((c) => accountNeedsYou(c)).length : 0;
   /** Opens "Sign-ins and settings", at one AI's card when given: its existing sign-in or set-up. */
+  const afterRender = useAfterRender();
   const openManage = (engineCard?: string) => {
     setManageOpen(true);
-    window.setTimeout(() => {
+    // After the render that opens the section, so its cards are there to scroll to and focus.
+    afterRender(() => {
       const card = engineCard ? manageRef.current?.querySelector<HTMLElement>(`[data-engine="${CSS.escape(engineCard)}"]`) : null;
       (card ?? manageRef.current)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       card?.querySelector<HTMLElement>('button:not([disabled]), a[href]')?.focus({ preventScroll: true });
-    }, 50);
+    });
   };
   const reloadAccounts = async () => {
     await Promise.all([accountsState.reload(), enginesState.reload(), reload()]);
