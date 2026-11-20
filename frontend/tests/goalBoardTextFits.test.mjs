@@ -58,9 +58,15 @@ test('a bot’s draft card spans the strip and its "proposed this" line wraps; a
   assert.match(line[1], /break-words/);
   assert.equal(line[2], 'Mia proposed this. Nothing runs until you approve it.');
   assert.match(draft, /title="Check kwant.si answers with HTTP 200"/, 'the title keeps its tooltip');
+  const titleCls = draft.match(/<button[^>]*class="([^"]*)"[^>]*data-goal-open/)?.[1] ?? '';
+  assert.match(titleCls, /max-sm:line-clamp-2/, 'on a phone (no hover, no tooltip) the draft title wraps to 2 lines');
+  assert.match(titleCls, /(^|\s)sm:truncate(\s|$)/, 'from sm up it stays one line');
+  assert.doesNotMatch(titleCls, /(^|\s)truncate(\s|$)/);
 
-  const met = liClass(b.rowHtml({ goal: goal(), names, now: NOW }));
+  const metHtml = b.rowHtml({ goal: goal(), names, now: NOW });
+  const met = liClass(metHtml);
   assert.doesNotMatch(met, /col-span/, 'a met goal stays in one cell');
+  assert.doesNotMatch(metHtml, /line-clamp-2/, 'a met title stays one line');
   const failing = liClass(b.rowHtml({ goal: goal({ status: 'not_met' }), names, now: NOW }));
   assert.doesNotMatch(failing, /col-span/, 'a failing goal stays in one cell');
 });

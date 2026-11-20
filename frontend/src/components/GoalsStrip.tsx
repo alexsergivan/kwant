@@ -368,7 +368,6 @@ export const DecisionCard: React.FC<{
   );
 };
 
-/** What a goal says after the person chose Not now: not a request, so no amber and no counting (D1, D3). */
 /**
  * The person's goal sentence as quoted in the drafting line: one closing `.`, `!`, `?` or `…` comes off, so the line
  * never reads `…HTTP 200.”.`; longer than 80 characters, it is cut to 79 and ends in `…`.
@@ -378,6 +377,7 @@ export const quotedGoalText = (text: string): string => {
   return t.length > 80 ? `${t.slice(0, 79)}…` : t;
 };
 
+/** What a goal says after the person chose Not now: not a request, so no amber and no counting (D1, D3). */
 export const declinedText = (at: string | null, now: number): string => {
   const when = atClock(at, now);
   return `${when ? `You chose Not now ${when}.` : 'Not now.'} The fix waits; it’s dropped if this recovers.`;
@@ -433,7 +433,7 @@ export const GoalRow: React.FC<{
             id={`${id}-t`}
             title={g.title}
             onClick={() => onOpen(g)}
-            className={`min-w-0 flex-1 truncate text-left text-xs font-medium text-zinc-100 rounded ${wide ? 'hover:underline' : "after:absolute after:inset-0 after:content-['']"} ${focusRing}`}
+            className={`min-w-0 flex-1 ${draft && !wide ? 'max-sm:whitespace-normal max-sm:line-clamp-2 max-sm:break-words sm:truncate' : 'truncate'} text-left text-xs font-medium text-zinc-100 rounded ${wide ? 'hover:underline' : "after:absolute after:inset-0 after:content-['']"} ${focusRing}`}
             data-goal-open
           >
             {g.title}
