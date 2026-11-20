@@ -122,6 +122,7 @@ import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageRe
 import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, useDictation } from './DictationMic';
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
 import type { FloorResolveOpts } from '../dev/types';
+import { useAfterRender } from '../focusAfterRender';
 
 export interface ChatMessage {
   id: string;
@@ -919,6 +920,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (isMentionOpen) markNewSeen('mention');
   }, [isMentionOpen]);
 
+  const afterRender = useAfterRender();
   const handleSelectMention = (item: MentionItem) => {
     if (mentionStartIndex < 0) return;
     const cursorPos = textareaRef.current?.selectionStart ?? inputVal.length;
@@ -932,14 +934,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setMentionStartIndex(-1);
 
     const nextCursor = mentionStartIndex + mentionText.length;
-    setTimeout(() => {
+    // After the render that shows the new text, so the caret and the height are set on it.
+    afterRender(() => {
       if (textareaRef.current) {
         textareaRef.current.focus();
         textareaRef.current.setSelectionRange(nextCursor, nextCursor);
         textareaRef.current.style.height = 'auto';
         textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
       }
-    }, 0);
+    });
   };
 
   // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.

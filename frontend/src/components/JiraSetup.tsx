@@ -38,6 +38,7 @@ import {
   step1Error,
   zeroMatchHelp,
 } from '../dev/jiraSetup';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 export const JIRA_SETUP_EVENT = 'kwnt:jira-setup';
 const WIDTH = 448;
@@ -99,6 +100,7 @@ const JiraSetupLayer: React.FC<{
   const close = () => {
     onClose();
     const a = req.anchor;
+    // Kept on a timer: the anchor is already on screen and this layer unmounts in the same update, so it can't wait for its own render.
     if (a?.isConnected) window.setTimeout(() => a.focus({ preventScroll: true }), 0);
   };
   useEscapeLayer(ref, true, close, {
@@ -384,6 +386,7 @@ export const JiraSetupForm: React.FC<{
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const addrRef = useRef<HTMLInputElement>(null);
   const tokRef = useRef<HTMLInputElement>(null);
+  const focusAfterRender = useFocusAfterRender();
 
   // The password store decides whether the "Before you save the token" card comes first (as GitHub's form).
   useEffect(() => {
@@ -416,6 +419,7 @@ export const JiraSetupForm: React.FC<{
     [],
   );
   useEffect(() => {
+    // Kept on a timer: the field is already rendered (this runs after mount); the timer lets the sheet's own open focus go first.
     if (stage === 1) window.setTimeout(() => addrRef.current?.focus({ preventScroll: true }), 0);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -722,7 +726,7 @@ export const JiraSetupForm: React.FC<{
               onReady={(_note, accept) => {
                 if (accept) setAcceptRisk(true);
                 setGate('open');
-                window.setTimeout(() => tokRef.current?.focus(), 0);
+                focusAfterRender(() => tokRef.current);
               }}
             />
           </div>
