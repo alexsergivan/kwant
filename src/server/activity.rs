@@ -105,7 +105,13 @@ impl TurnActivity {
     }
 
     pub fn settle(&self, ref_id: &str, status: &'static str) {
-        let step = self.with_log(|log| log.settle(ref_id, status));
+        self.settle_with(ref_id, status, None);
+    }
+
+    /// [`settle`](Self::settle) with the reason the person gave with a Deny as the step's detail
+    /// (29s), redacted and cut ([`ActivityLog::settle_with`]).
+    pub fn settle_with(&self, ref_id: &str, status: &'static str, said_why: Option<&str>) {
+        let step = self.with_log(|log| log.settle_with(ref_id, status, said_why));
         self.send(step);
     }
 
@@ -256,8 +262,14 @@ pub fn refused_as(
 
 /// An approval card for `turn_id` was answered ("ok" allowed, "declined") or stopped waiting.
 pub fn approval_settled(turn_id: &str, ticket: &str, status: &'static str) {
+    approval_settled_with(turn_id, ticket, status, None);
+}
+
+/// [`approval_settled`], with a detail on the card's step: 29s, the reason the person gave with
+/// a Deny that the waiting call heard, shown as [`crate::mcp::said_why_detail`], redacted and cut.
+pub fn approval_settled_with(turn_id: &str, ticket: &str, status: &'static str, said_why: Option<&str>) {
     if let Some(turn) = TurnActivity::find(turn_id) {
-        turn.settle(ticket, status);
+        turn.settle_with(ticket, status, said_why);
     }
 }
 

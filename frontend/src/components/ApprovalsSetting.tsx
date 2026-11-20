@@ -150,7 +150,7 @@ function refusedOff(err: unknown, passwords: PasswordStoreState): string | null 
 const radioCls = (on: boolean) =>
   `flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-colors ${on ? 'border-sky-500/60 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-700'}`;
 
-/** Space settings: Ask (default) / Don't ask. Ask saves at once; Don't ask needs the confirm. */
+/** Space settings: Ask / Ask only when risky (default, what a new space starts on) / Don't ask. Ask and smart save at once; Don't ask needs the confirm. */
 export const SpaceApprovalsSetting: React.FC<{
   spaceId: string;
   spaceName: string;
@@ -225,7 +225,7 @@ export const SpaceApprovalsSetting: React.FC<{
             <span className="min-w-0">
               <span className="block text-xs font-medium text-zinc-200">
                 {o.label}
-                {o.value === 'ask' && <span className="ml-1 text-zinc-500 font-normal">(default)</span>}
+                {o.value === 'smart' && <span className="ml-1 text-zinc-500 font-normal">(default)</span>}
               </span>
               <span className="block text-[11px] text-zinc-500">{o.hint}</span>
             </span>

@@ -100,7 +100,7 @@ test('approval card on a phone: header, one sentence, two key facts, details clo
   assert.match(b[1].attrs, /bg-teal-300 hover:bg-teal-200 .*text-zinc-950/);
   for (const x of b.slice(2)) assert.match(x.attrs, /min-h-\[44px\]/, x.label);
   // Allow once is the only child of its row; Deny and Always allow share the next one.
-  assert.match(html, /data-approval-actions[^>]*>\s*<button[^>]*data-approval-allow[\s\S]*?<\/button>\s*<div class="grid gap-2 sm:flex grid-cols-2">/);
+  assert.match(html, /data-approval-actions[^>]*>\s*<button[^>]*data-approval-allow[\s\S]*?<\/button>\s*<div data-approval-deny-row="" class="flex flex-wrap gap-2">\s*<button[^>]*>[\s\S]*?>Deny<\/span><\/button>\s*<button[^>]*>[\s\S]*?>Always allow<\/span><\/button><\/div>/);
 });
 
 test('approval card on desktop: details open, the JSON wraps between words, never break-all', () => {
@@ -120,7 +120,7 @@ test('a payment card offers no Always allow on a phone either: its second row is
   const payment = pr({ details: { ...pr().details, payment_reason: 'stripe create payment is a money action' } });
   const html = m.card({ approval: payment, onResolve: noop, phone: true });
   assert.deepEqual(buttons(html).map((x) => x.label), ['Show details', 'Allow once', 'Deny', 'Say why']);
-  assert.match(html, /<div class="grid gap-2 sm:flex grid-cols-1">/);
+  assert.match(html, /<div data-approval-deny-row="" class="flex flex-wrap gap-2">\s*<button[^>]*>(?:(?!<button)[\s\S])*?>Deny<\/span><\/button><\/div>/);
   assert.doesNotMatch(html, /Always/);
 });
 

@@ -1,0 +1,32 @@
+{
+  "version": "0.9.28",
+  "date": "2026-11-19",
+  "highlights": [
+    {
+      "id": "runaway-command",
+      "title": "A runaway command can't take kwant down",
+      "text": "On Linux, when a bot's command or AI CLI uses up the memory, the system now stops it, not kwant. kwant keeps running and says what happened.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "stopped-command-says-why",
+      "title": "A stopped command says why",
+      "text": "When the system stops a command or the claude, codex or grok CLI, kwant says so in plain words: memory ran out, or something outside stopped it.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "deny-reason-in-details",
+      "title": "Your reason for Deny shows in Details",
+      "text": "When you deny a step and say why, Details show your words under \"You said no; nothing ran\", so you can see later why it didn't run.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "On a narrow phone, Deny and Always allow keep each label on one line.",
+    "Get started now opens at its top, not scrolled to the bottom.",
+    "Someone new to kwant no longer sees a \"moved\" notice about a change they never saw, and Approvals marks Ask only when risky as the default."
+  ]
+}
