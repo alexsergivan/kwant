@@ -32,6 +32,19 @@
 //! sign-ins and place in the page stay, and its next use reconnects lazily
 //! ([`crate::sandbox::service::BrowserService::open_session`]). Never a page that's watched, held
 //! for a person, or mid-download or -chooser ([`connections_closable`]).
+//!
+//! The browser's process budget (31b). kwant's browser container can't fork past
+//! [`BROWSER_PIDS_LIMIT`] processes and threads, and every open page holds a share of them (its
+//! renderer, its context's network and storage, and one DevTools proxy process per connection).
+//! Measured on kwnt-browser:v5: about 116 idle, 30-54 for a team page (its new context) and 13-32
+//! for a job page, so three busy teams' 15 pages sat at about 444 and 17 at 496. Past the limit
+//! Chrome can't start a page's processes and the browser fails in ways that look unrelated (a
+//! download that never ends, `net::ERR_EMPTY_RESPONSE`, BROWSER_BUSY). So before a new job page
+//! opens, the pages of every team are kept under [`PAGE_PID_BUDGET`] ([`pids_with`]): the least
+//! recently used idle job page of any team is closed to make room, and when none can close the
+//! job is told plainly that the browser is full ([`browser_full_message`]). Freezing or blanking
+//! a page frees none of its processes (blanking briefly adds one), so only closing makes room. A
+//! team page is never refused or closed; it counts, so job pages give way to it.
 
 use super::continuity::SelfScope;
 use super::AppState;
@@ -48,6 +61,48 @@ use std::{
 };
 
 pub use crate::sandbox::service::{is_job_page, job_page_key, page_team, PAGE_SEP};
+
+pub use crate::sandbox::service::BROWSER_PIDS_LIMIT;
+/// The idle browser's own processes and threads, with no page open (measured 105-116).
+pub const BROWSER_IDLE_PIDS: u64 = 120;
+/// Kept free for what isn't a page: downloads copied out with `docker exec`, a live view's
+/// connection, a blanked page's short-lived renderer (+11 measured).
+pub const PIDS_HEADROOM: u64 = 64;
+/// A team page: the first page of a team's browser context (measured 30-54 with its connections).
+pub const TEAM_PAGE_PIDS: u64 = 40;
+/// A job page: one more page in its team's context (measured 13-32 with its connections, about 19
+/// on average).
+pub const JOB_PAGE_PIDS: u64 = 20;
+/// What every open page of the browser together may hold: room for three teams' pages and ten job
+/// pages, or two teams with all eight of theirs.
+pub const PAGE_PID_BUDGET: u64 = BROWSER_PIDS_LIMIT - BROWSER_IDLE_PIDS - PIDS_HEADROOM;
+
+/// What one open page holds of the budget.
+pub fn page_pids(key: &str) -> u64 {
+    if is_job_page(key) {
+        JOB_PAGE_PIDS
+    } else {
+        TEAM_PAGE_PIDS
+    }
+}
+
+/// What the browser's pages would hold with `key` open beside the `open` ones: a job page whose
+/// team has no page open yet opens its team's page (the context) too.
+pub fn pids_with(open: &[String], key: &str) -> u64 {
+    let others: u64 = open.iter().filter(|k| *k != key).map(|k| page_pids(k)).sum();
+    let team = page_team(key);
+    let team_too = is_job_page(key) && !open.iter().any(|k| k == team);
+    others + page_pids(key) + if team_too { TEAM_PAGE_PIDS } else { 0 }
+}
+
+/// What a job is told when the browser holds as many pages as it can run (its process budget)
+/// and every one is held or in use.
+pub fn browser_full_message() -> String {
+    "The browser is full: it has as many pages open as it can run, and every one is in use by a \
+     job or waiting for a person. Try again in a minute, or finish a job that has a page open; \
+     nothing is wrong with the browser."
+        .to_string()
+}
 
 /// Most job pages one team keeps open at once.
 pub const MAX_JOB_PAGES_PER_TEAM: usize = 4;
@@ -108,6 +163,11 @@ pub struct JobPages {
     wait_ms: AtomicU64,
     /// Tests only: the retry window in ms (0 = [`RETRY_WINDOW`]).
     retry_ms: AtomicU64,
+    /// Tests only: the page budget (0 = [`PAGE_PID_BUDGET`]).
+    budget: AtomicU64,
+    /// Held, after a team's lock, while room is made in the whole browser and a page opened, so
+    /// two teams opening at once never pass [`PAGE_PID_BUDGET`] together.
+    room: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl JobPages {
@@ -138,6 +198,23 @@ impl JobPages {
             0 => RETRY_WINDOW,
             ms => Duration::from_millis(ms),
         }
+    }
+
+    /// Tests: a smaller page budget than [`PAGE_PID_BUDGET`].
+    pub fn set_page_budget(&self, pids: u64) {
+        self.budget.store(pids.max(1), Ordering::Relaxed);
+    }
+
+    pub fn page_budget(&self) -> u64 {
+        match self.budget.load(Ordering::Relaxed) {
+            0 => PAGE_PID_BUDGET,
+            pids => pids,
+        }
+    }
+
+    /// The lock held while room is made in the whole browser (see [`JobPages::room`]).
+    pub fn room_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.room.clone()
     }
 }
 
@@ -393,6 +470,50 @@ pub async fn make_room(state: &AppState, team: &str, key: &str) -> bool {
     to_close == 0
 }
 
+/// 31b: before a new job page `key` opens: keeps every team's open pages under the browser's
+/// process budget ([`JobPages::page_budget`], [`pids_with`]) by closing the least recently used
+/// job pages of any team that can be closed ([`closable`]). Never a team page or `key`; another
+/// team's page only when its team's lock is free (a page that team is opening or closing is left
+/// to it). `false` when the budget can't be met. Local mode (the person's own Chrome) has no such
+/// limit. The caller holds its team's [`JobPages::team_lock`] and then [`JobPages::room_lock`]
+/// until the new page is open.
+pub async fn make_browser_room(state: &AppState, key: &str) -> bool {
+    if state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local {
+        return true;
+    }
+    let budget = state.job_pages.page_budget();
+    let pages = state.browser_service.live_pages().await;
+    let mut open: Vec<String> = pages.iter().map(|(k, _)| k.clone()).collect();
+    if pids_with(&open, key) <= budget {
+        return true;
+    }
+    let team = page_team(key);
+    for (page, _) in pages {
+        if page == key || !is_job_page(&page) {
+            continue;
+        }
+        let other_team = (page_team(&page) != team).then(|| state.job_pages.team_lock(page_team(&page)));
+        let _other_team_lock = match &other_team {
+            Some(lock) => match lock.try_lock() {
+                Ok(guard) => Some(guard),
+                Err(_) => continue,
+            },
+            None => None,
+        };
+        if !closable(state, &page).await {
+            continue;
+        }
+        close_page(state, &page).await;
+        open.retain(|k| *k != page);
+        tracing::info!(page = %page, for_page = %key, "browser: closed the least recently used idle job page to stay under the browser's process limit");
+        if pids_with(&open, key) <= budget {
+            return true;
+        }
+    }
+    tracing::warn!(page = %key, "the browser is at its page budget and every job page is held or in use");
+    false
+}
+
 /// Closes job pages unused for `idle` that no step holds and nobody is using. Returns how many.
 pub async fn sweep_idle(state: &AppState, idle: Duration) -> usize {
     let now = Instant::now();
@@ -585,6 +706,60 @@ mod tests {
         assert!(!connection_closable(true, true, false), "a download is in progress");
         assert!(!connection_closable(true, false, true), "a file chooser is open, unanswered");
         assert!(!connection_closable(true, true, true));
+    }
+
+    /// 31b: how many pages fit the budget for a number of teams, each team filling its pages in
+    /// turn (at most four job pages each).
+    fn pages_that_fit(teams: usize) -> usize {
+        let mut open: Vec<String> = Vec::new();
+        let mut jobs = vec![0; teams];
+        'fill: loop {
+            let mut added = false;
+            for (t, n) in jobs.iter_mut().enumerate() {
+                let team = format!("t{t}");
+                let key = if open.contains(&team) {
+                    if *n == MAX_JOB_PAGES_PER_TEAM {
+                        continue;
+                    }
+                    *n += 1;
+                    job_page_key(&team, "k", &format!("c{n}")).unwrap()
+                } else {
+                    team
+                };
+                if pids_with(&open, &key) > PAGE_PID_BUDGET {
+                    break 'fill;
+                }
+                open.push(key);
+                added = true;
+            }
+            if !added {
+                break;
+            }
+        }
+        open.len()
+    }
+
+    #[test]
+    fn the_browsers_pages_stay_under_its_process_limit_with_room_for_normal_use() {
+        assert_eq!(BROWSER_PIDS_LIMIT, 512);
+        let args = crate::sandbox::service::managed_run_args("n", std::path::Path::new("/tmp"), None);
+        assert!(args.contains(&format!("--pids-limit={BROWSER_PIDS_LIMIT}")), "the budget follows the container's real limit");
+        assert_eq!(PAGE_PID_BUDGET, 328);
+        // one or two teams never meet it; three busy teams keep 13 of their 15 pages
+        assert_eq!(pages_that_fit(1), 1 + MAX_JOB_PAGES_PER_TEAM);
+        assert_eq!(pages_that_fit(2), 2 * (1 + MAX_JOB_PAGES_PER_TEAM));
+        assert_eq!(pages_that_fit(3), 13);
+        assert!((4..=6).all(|teams| pages_that_fit(teams) >= 8), "never under the ~8 pages normal use needs");
+        // a job page of a team with no page yet opens its team's page too; the page itself counts once
+        assert_eq!(pids_with(&[], "t#k#c"), TEAM_PAGE_PIDS + JOB_PAGE_PIDS);
+        assert_eq!(pids_with(&["t".into()], "t#k#c"), TEAM_PAGE_PIDS + JOB_PAGE_PIDS);
+        assert_eq!(pids_with(&["t".into(), "t#k#c".into()], "t#k#c"), TEAM_PAGE_PIDS + JOB_PAGE_PIDS);
+        assert_eq!(pids_with(&["u".into()], "t"), 2 * TEAM_PAGE_PIDS);
+        assert!(browser_full_message().contains("nothing is wrong with the browser"));
+        let pages = JobPages::default();
+        assert_eq!(pages.page_budget(), PAGE_PID_BUDGET);
+        pages.set_page_budget(60);
+        assert_eq!(pages.page_budget(), 60);
     }
 
     #[test]

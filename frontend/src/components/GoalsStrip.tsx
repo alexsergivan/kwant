@@ -368,6 +368,15 @@ export const DecisionCard: React.FC<{
   );
 };
 
+/**
+ * The person's goal sentence as quoted in the drafting line: one closing `.`, `!`, `?` or `…` comes off, so the line
+ * never reads `…HTTP 200.”.`; longer than 80 characters, it is cut to 79 and ends in `…`.
+ */
+export const quotedGoalText = (text: string): string => {
+  const t = text.trim().replace(/[.!?…]$/, '');
+  return t.length > 80 ? `${t.slice(0, 79)}…` : t;
+};
+
 /** What a goal says after the person chose Not now: not a request, so no amber and no counting (D1, D3). */
 export const declinedText = (at: string | null, now: number): string => {
   const when = atClock(at, now);
@@ -412,7 +421,7 @@ export const GoalRow: React.FC<{
   return (
     <li
       aria-labelledby={`${id}-t`}
-      className={`relative min-w-0 rounded-lg border bg-zinc-900/40 px-2.5 py-1.5 ${wide ? 'sm:col-span-2 xl:col-span-3 space-y-1.5' : 'flex items-center gap-2 hover:bg-zinc-900/70'} ${CARD_EDGE[g.status] ?? 'border-zinc-800'} ${hideOnPhone ? 'max-sm:hidden' : ''}`}
+      className={`relative min-w-0 rounded-lg border bg-zinc-900/40 px-2.5 py-1.5 ${wide ? 'sm:col-span-2 xl:col-span-3 space-y-1.5' : `flex items-center gap-2 hover:bg-zinc-900/70${draft ? ' sm:col-span-2 xl:col-span-3' : ''}`} ${CARD_EDGE[g.status] ?? 'border-zinc-800'} ${hideOnPhone ? 'max-sm:hidden' : ''}`}
       data-goal={g.id}
       data-status={g.status}
     >
@@ -424,7 +433,7 @@ export const GoalRow: React.FC<{
             id={`${id}-t`}
             title={g.title}
             onClick={() => onOpen(g)}
-            className={`min-w-0 flex-1 truncate text-left text-xs font-medium text-zinc-100 rounded ${wide ? 'hover:underline' : "after:absolute after:inset-0 after:content-['']"} ${focusRing}`}
+            className={`min-w-0 flex-1 ${draft && !wide ? 'max-sm:whitespace-normal max-sm:line-clamp-2 max-sm:break-words sm:truncate' : 'truncate'} text-left text-xs font-medium text-zinc-100 rounded ${wide ? 'hover:underline' : "after:absolute after:inset-0 after:content-['']"} ${focusRing}`}
             data-goal-open
           >
             {g.title}
@@ -440,7 +449,7 @@ export const GoalRow: React.FC<{
           </div>
         )}
         {wide ? null : draft ? (
-          <p className="mt-0.5 truncate text-[11px] text-zinc-400" data-goal-line="draft">
+          <p className={`mt-0.5 text-[11px] text-zinc-400 ${wrap}`} data-goal-line="draft">
             {proposer ? `${proposer} proposed this.` : 'A bot proposed this.'} Nothing runs until you approve it.
           </p>
         ) : declined ? (
@@ -1901,7 +1910,7 @@ export const GoalsStrip: React.FC<{
   const draftingLine = drafting && (
     <p role="status" className={`flex min-w-0 items-center gap-1.5 text-[11px] text-sky-200 ${wrap}`} data-goals-drafting>
       <Loader2 size={11} className={`shrink-0 ${spin}`} aria-hidden="true" />
-      {drafting.bot} is drafting checks for “{drafting.text.length > 80 ? `${drafting.text.slice(0, 79)}…` : drafting.text}”. The draft shows here.
+      {drafting.bot} is drafting checks for “{quotedGoalText(drafting.text)}”. The draft shows here.
     </p>
   );
 

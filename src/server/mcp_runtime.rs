@@ -159,6 +159,32 @@ pub struct BrokerApprover {
     pub data_dir: PathBuf,
 }
 
+fn held_cards() -> &'static std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>> {
+    static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>> =
+        std::sync::OnceLock::new();
+    HELD.get_or_init(Default::default)
+}
+
+/// Test-only (31k): the next card for `kwant_id` stops right after it is listed (its row is
+/// `pending`, so /api/approvals, Needs you and the Inbox show it), before its bot finishes
+/// setting it up, until the test calls `notify_one` on the returned gate. Lets a test answer a
+/// card in that moment, the way a fast tap on a freshly listed card does on a busy machine.
+#[doc(hidden)]
+pub fn hold_next_card_after_listing(kwant_id: &str) -> Arc<tokio::sync::Notify> {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    held_cards().lock().unwrap_or_else(|e| e.into_inner()).insert(kwant_id.to_string(), gate.clone());
+    gate
+}
+
+/// Where a card held by [`hold_next_card_after_listing`] waits, once it is listed; every other
+/// card goes straight on.
+pub(crate) async fn card_listed(kwant_id: &str) {
+    let gate = held_cards().lock().unwrap_or_else(|e| e.into_inner()).remove(kwant_id);
+    if let Some(gate) = gate {
+        gate.notified().await;
+    }
+}
+
 /// Withdraws the ticket if the waiting turn is cancelled (its future dropped) mid-wait.
 struct TicketGuard {
     id: Option<String>,
@@ -510,21 +536,10 @@ impl BrokerApprover {
             tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, "ran a call the person allowed after its turn ended");
             return (ApprovalOutcome::Allowed, "approved", None);
         }
-        let ticket = match self
-            .db
-            .save_approval(&record)
-            .await
-        {
-            Ok(a) => a.id,
-            Err(e) => {
-                tracing::warn!(error = %e, "could not store MCP approval ticket; denying");
-                return (ApprovalOutcome::Denied, "denied", None);
-            }
-        };
-        // Its chat is known from the start: the board links to it, and a card that outlives a
-        // restart still resumes there (see `keep_cards_after_restart`)
-        let chat = self.chat.clone().unwrap_or_else(|| json!({"direct_kwant_id": req.kwant_id}));
-        let _ = self.db.set_approval_chat(&ticket, &chat).await;
+        // 31k: the waiter first, then the row. A card is listed (`pending` in /api/approvals,
+        // Needs you, the Inbox) only once an answer to it reaches this call; before, a Deny in
+        // between was told "This card expired" and the call kept waiting
+        let ticket = uuid::Uuid::new_v4().to_string();
         let rx = self
             .broker
             .request_approval(ApprovalRequest {
@@ -540,6 +555,16 @@ impl BrokerApprover {
             db: self.db.clone(),
             events: self.events.clone(),
         };
+        // Its chat is known from the start, stored with the card: the board links to it, and a
+        // card that outlives a restart still resumes there (see `keep_cards_after_restart`)
+        let chat = self.chat.clone().unwrap_or_else(|| json!({"direct_kwant_id": req.kwant_id}));
+        if let Err(e) = self.db.save_approval_with_id(&ticket, &record, Some(&chat)).await {
+            guard.id = None;
+            self.broker.cancel(&ticket).await;
+            tracing::warn!(error = %e, "could not store MCP approval ticket; denying");
+            return (ApprovalOutcome::Denied, "denied", None);
+        }
+        card_listed(&req.kwant_id).await;
         let _ = self.events.send(RuntimeEvent::ApprovalRequired {
             id: ticket.clone(),
             tool_name: req.tool_name.clone(),

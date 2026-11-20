@@ -4,7 +4,7 @@ import { recordRunWait } from './routineRow';
 import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
-import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
+import { Sidebar, Kwant, Channel, Team, memberIdsOf, realAskCount } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import type { MessageTarget } from './components/DoneDetail';
@@ -60,7 +60,8 @@ import { RouteChoiceCard } from './components/RouteChoiceCard';
 import { RouteChoiceMeta, applyRouteChoice, correctRoute, isAskingReply, rerouteTargetsFor, resolveRouteChoice } from './routeChoice';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { InboxNew } from './components/InboxNew';
-import { inboxBadge, isReview, type InboxItem } from './api/inbox';
+import { isReview, type InboxItem } from './api/inbox';
+import { inboxCount as foldedInboxCount } from './doneAway';
 import { batchItems, inboxNav, loadInbox, openItem, useInbox } from './inboxStore';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { MissionBoardPage } from './components/MissionBoardView';
@@ -631,7 +632,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [awayCount, setAwayCount] = useState(0);
   // 0.9.0 V1: the Inbox store (GET /api/inbox, or /api/away before the server has it).
   const inboxState = useInbox();
-  const inboxCount = inboxBadge(inboxState.data, { unseen: { total: awayCount } }, prepushWaiting);
+  // 30z: a routine run folded into its review item counts once (doneAway.inboxCount).
+  const inboxCount = useMemo(() => foldedInboxCount(inboxState.data, { unseen: { total: awayCount } }, prepushWaiting), [inboxState.data, awayCount, prepushWaiting]);
   const reviewItems: InboxItem[] = inboxState.data ? [...inboxState.data.items, ...batchItems(inboxState.data)].filter(isReview) : [];
   // "Needs you" nudges (attention.ts): what waits on the person, the pill, and the "Show nudges" setting.
   const [awayWaiting, setAwayWaiting] = useState(0);
@@ -4296,6 +4298,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         showPage('inbox', 'new');
       }}
       inboxActive={page === 'inbox'}
+      onChat={page === 'chat'}
       onOpenInbox={() => {
         showPage('inbox');
         playSfx('click');
@@ -4782,6 +4785,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     </main>
   ) : chat;
 
+  const inboxAsk = realAskCount(attention) > 0;
   const phoneTabs: Array<PhoneTabItem<PhoneTab>> = [
     { id: 'chats', label: 'Chats', icon: <MessageSquare size={20} aria-hidden="true" /> },
     { id: 'bots', label: 'Bots', icon: <Bot size={20} aria-hidden="true" /> },
@@ -4797,7 +4801,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       badgeTone: 'violet',
       badgeNoun: ideaJarCount === 1 ? 'take ready' : 'takes ready',
     },
-    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: inboxCount },
+    // 31c: amber "waiting" only when something really needs you (rank 1–2), as the sidebar's pill and heading;
+    // otherwise a neutral count read as "Inbox, 1 new", like the desktop pill
+    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: inboxCount, badgeTone: inboxAsk ? 'amber' : 'neutral', badgeNoun: inboxAsk ? undefined : 'new' },
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
