@@ -332,3 +332,37 @@ export function resendTarget(messages: ChatMessage[], noticeId: string | null | 
   }
   return null;
 }
+
+/**
+ * 29w (Mira's UX pass 0.9.26, fix #2): the strip's asks are exactly one live approval of this chat, so all it
+ * says is the approval card's own ask ("Allow or Deny it on the card in the chat"). ChatView then lets the
+ * strip step aside while that card's Allow / Deny row is fully on screen; it comes back when the buttons
+ * scroll off, another ask joins, or the approval runs out (a stopped item, whose Ask again is the strip's).
+ */
+export const onlyLiveApproval = (asks: Parameters<typeof askAction>[0][]): boolean =>
+  asks.length === 1 && asks[0].kind === 'approval' && askAction(asks[0]) === 'decide';
+
+/**
+ * 29w: whether the Needs-you strip steps aside. Its one ask is the live approval and either the card's Allow / Deny
+ * row is fully on screen, or the chat still follows the bottom with the card in it. The second half keeps the strip
+ * aside through the first 80 px of a slow scroll up: bringing it back there would shrink the chat, the follow pin
+ * would snap to the bottom and hide it again, and the reader could not leave the bottom (Rigel, QA round 1).
+ */
+export const stripStepsAside = (s: { strip: boolean; onlyApproval: boolean; cardInView: boolean; followingCard: boolean }): boolean =>
+  s.strip && s.onlyApproval && (s.cardInView || s.followingCard);
+
+
+/**
+ * 30a (Mira's 29w design check, small thing b): the strip offers "Go to the approval" for a live approval of this
+ * chat. `asks` are already this chat's (asksHere), so another chat's ask never counts.
+ */
+export const stripHasLiveApproval = (asks: Parameters<typeof askAction>[0][]): boolean =>
+  asks.some((a) => a.kind === 'approval' && askAction(a) === 'decide');
+
+/**
+ * 30a: whether ChatView shows its "↓ Approval waiting" pill. It shows while a waiting card's buttons are off screen,
+ * except when something else already points at that card: on a phone the working line's "Answer ↑" (0.8.1 F6), and
+ * now the Needs-you strip's "Go to the approval", just as "Answer ↑" steps aside for the strip. One pointer per card.
+ */
+export const approvalPillShows = (s: { offscreen: boolean; waiting: number; phoneAnswerUp: boolean; stripHasApproval: boolean }): boolean =>
+  s.offscreen && s.waiting > 0 && !s.phoneAnswerUp && !s.stripHasApproval;

@@ -1,0 +1,27 @@
+{
+  "version": "0.9.30",
+  "date": "2026-11-19",
+  "highlights": [
+    {
+      "id": "no-echo-reasoning",
+      "title": "No more run line posing as reasoning",
+      "text": "A reply made through a CLI used to show its \"Executed via … CLI\" line as the bot's reasoning. It's gone now. Real reasoning still shows, in older messages too.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "details-effort",
+      "title": "Details shows the effort",
+      "text": "Open Details on a CLI reply and Ran on now ends with the effort it ran at, for example \"· medium effort\".",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "After a usage limit or its cap, the idea jar no longer starts one more take a few minutes later.",
+    "Details' Ran on reads \"on this machine\" instead of \"on the This machine account\".",
+    "Go to the approval's amber flash now fits the approval card on a wide window.",
+    "A finished hand-off keeps the chat busy until its lead takes over, so the lead never reviews it twice.",
+    "Go to the approval, pressed from the keyboard, lands on the approval card, and only one pointer to it shows."
+  ]
+}
