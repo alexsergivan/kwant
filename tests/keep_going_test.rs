@@ -97,6 +97,7 @@ fn fake_on_path() {
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         exe::write_executable(bin.join("claude"), FAKE_CLAUDE);
+        std::env::set_var("KWNT_PROOF", "late_res,late_kg,stray_done");
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
     });
 }
