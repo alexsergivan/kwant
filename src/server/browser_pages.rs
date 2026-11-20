@@ -470,6 +470,50 @@ pub async fn make_room(state: &AppState, team: &str, key: &str) -> bool {
     to_close == 0
 }
 
+/// 31b: before a new job page `key` opens: keeps every team's open pages under the browser's
+/// process budget ([`JobPages::page_budget`], [`pids_with`]) by closing the least recently used
+/// job pages of any team that can be closed ([`closable`]). Never a team page or `key`; another
+/// team's page only when its team's lock is free (a page that team is opening or closing is left
+/// to it). `false` when the budget can't be met. Local mode (the person's own Chrome) has no such
+/// limit. The caller holds its team's [`JobPages::team_lock`] and then [`JobPages::room_lock`]
+/// until the new page is open.
+pub async fn make_browser_room(state: &AppState, key: &str) -> bool {
+    if state.browser_service.mode() == crate::sandbox::computer::ComputerMode::Local {
+        return true;
+    }
+    let budget = state.job_pages.page_budget();
+    let pages = state.browser_service.live_pages().await;
+    let mut open: Vec<String> = pages.iter().map(|(k, _)| k.clone()).collect();
+    if pids_with(&open, key) <= budget {
+        return true;
+    }
+    let team = page_team(key);
+    for (page, _) in pages {
+        if page == key || !is_job_page(&page) {
+            continue;
+        }
+        let other_team = (page_team(&page) != team).then(|| state.job_pages.team_lock(page_team(&page)));
+        let _other_team_lock = match &other_team {
+            Some(lock) => match lock.try_lock() {
+                Ok(guard) => Some(guard),
+                Err(_) => continue,
+            },
+            None => None,
+        };
+        if !closable(state, &page).await {
+            continue;
+        }
+        close_page(state, &page).await;
+        open.retain(|k| *k != page);
+        tracing::info!(page = %page, for_page = %key, "browser: closed the least recently used idle job page to stay under the browser's process limit");
+        if pids_with(&open, key) <= budget {
+            return true;
+        }
+    }
+    tracing::warn!(page = %key, "the browser is at its page budget and every job page is held or in use");
+    false
+}
+
 /// Closes job pages unused for `idle` that no step holds and nobody is using. Returns how many.
 pub async fn sweep_idle(state: &AppState, idle: Duration) -> usize {
     let now = Instant::now();

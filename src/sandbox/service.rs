@@ -621,6 +621,29 @@ impl BrowserService {
         pages
     }
 
+    /// [`Self::open_pages`] whose page is still there in the browser (31b): after the container
+    /// restarts, pages kept from before stay listed until reused or closed, and must not count
+    /// toward the browser's process budget. Every open page when the browser can't be asked.
+    pub async fn live_pages(&self) -> Vec<(String, std::time::Instant)> {
+        let alive: Option<std::collections::HashSet<String>> = {
+            let lock = self.state.lock().await;
+            let Some(state) = lock.as_ref() else { return Vec::new() };
+            match state.browser.send_cdp_command("Target.getTargets", json!({})).await {
+                Ok(targets) => {
+                    let live: std::collections::HashSet<&str> = targets["targetInfos"].as_array().into_iter().flatten()
+                        .filter_map(|t| t["targetId"].as_str()).collect();
+                    Some(state.sessions.iter().filter(|(_, s)| live.contains(s.target.as_str())).map(|(k, _)| k.clone()).collect())
+                }
+                Err(_) => None,
+            }
+        };
+        let pages = self.open_pages().await;
+        match alive {
+            Some(alive) => pages.into_iter().filter(|(k, _)| alive.contains(k)).collect(),
+            None => pages,
+        }
+    }
+
     /// Records that the idle sweep put a page to rest.
     pub fn mark_rested(&self, key: &str, rest: Rest) {
         self.rested.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), rest);

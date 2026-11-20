@@ -6253,18 +6253,36 @@ pub async fn open_page(
     loop {
         let lock = state.job_pages.team_lock(&team);
         let opening = lock.lock().await;
+        // 31b: then the whole browser's, so two teams opening at once never pass its process
+        // budget together (always after a team's lock; other teams' locks are only tried)
+        let room_lock = state.job_pages.room_lock();
+        let room = room_lock.lock().await;
         let open = state.browser_controllers.lock().await.contains_key(key);
-        if open || super::browser_pages::make_room(state, &team, key).await {
+        let refusal = if open {
+            None
+        } else if !super::browser_pages::make_room(state, &team, key).await {
+            Some(PageRefusal::PagesFull)
+        } else if !super::browser_pages::make_browser_room(state, key).await {
+            Some(PageRefusal::BrowserFull)
+        } else {
+            None
+        };
+        let Some(refusal) = refusal else {
             state.browser_service.touch_page(key);
             let ctrl = controller_for(state, key, &team).await;
+            drop(room);
             drop(opening);
             return ctrl.map_err(refusal_for);
-        }
+        };
+        drop(room);
         drop(opening);
         let now = std::time::Instant::now();
         if now >= deadline {
-            tracing::warn!(page = %key, "every job page of this team is held or in use; no room for another");
-            return Err(PageRefusal::PagesFull);
+            match refusal {
+                PageRefusal::BrowserFull => tracing::warn!(page = %key, "the browser is full: every page is held or in use; no room for another"),
+                _ => tracing::warn!(page = %key, "every job page of this team is held or in use; no room for another"),
+            }
+            return Err(refusal);
         }
         tokio::time::sleep((deadline - now).min(std::time::Duration::from_secs(1))).await;
     }
