@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, ChevronDown, Terminal } from 'lucide-react';
@@ -28,6 +28,14 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
   const lineCount = value.split('\n').length;
   const long = lineCount > FOLD_AFTER;
   const folded = long && !open;
+  // Folding a log you read to its end removes ~1,000 px above the toggle; bring the toggle back into view.
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const folding = useRef(false);
+  useLayoutEffect(() => {
+    if (!folding.current) return;
+    folding.current = false;
+    toggleRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [open]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(value);
@@ -73,8 +81,12 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
       {long && (
         <button
           type="button"
+          ref={toggleRef}
           aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => {
+            folding.current = open;
+            setOpen(!open);
+          }}
           className="flex w-full min-h-[44px] sm:min-h-[32px] items-center justify-center gap-1.5 border-t border-zinc-800 text-[11px] font-mono text-zinc-300 hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-400"
         >
           <ChevronDown size={12} aria-hidden="true" className={open ? 'rotate-180' : undefined} />

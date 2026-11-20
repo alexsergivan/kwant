@@ -34,6 +34,8 @@ const draw = (content) => {
   flushSync(() => root.render(h(MarkdownRenderer, { content })));
   return { el, root, done: () => { root.unmount(); el.remove(); } };
 };
+const scrolled = [];
+dom.window.HTMLElement.prototype.scrollIntoView = function (opts) { scrolled.push({ el: this, opts }); };
 const toggleOf = (el) => [...el.querySelectorAll('button')].filter((b) => b.hasAttribute('aria-expanded'));
 const click = (b) => flushSync(() => b.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })));
 
@@ -98,6 +100,24 @@ test('a 9-line diff and a 20-line block have no toggle and no fold; 21 lines fol
   const { el, done } = draw(fence(lines(21)));
   try {
     assert.equal(toggleOf(el)[0]?.textContent.trim(), 'Show all 21 lines');
+  } finally {
+    done();
+  }
+});
+
+test('"Show less" brings the toggle back into view (nearest); "Show all" does not scroll', () => {
+  const { el, done } = draw(fence(lines(69)));
+  try {
+    const [btn] = toggleOf(el);
+    scrolled.length = 0;
+    click(btn);
+    assert.equal(btn.getAttribute('aria-expanded'), 'true');
+    assert.equal(scrolled.length, 0, 'opening does not scroll');
+    click(btn);
+    assert.equal(btn.getAttribute('aria-expanded'), 'false');
+    assert.equal(scrolled.length, 1, 'folding scrolls once');
+    assert.equal(scrolled[0].el, btn);
+    assert.deepEqual(scrolled[0].opts, { block: 'nearest' });
   } finally {
     done();
   }
