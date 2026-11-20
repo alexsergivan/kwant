@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.31] - 2026-11-20
+
+kwant 0.9.31: an approval card that stays put when Go to the approval flashes it and Details' Ran on keeping its effort on one line.
+
+### Fixed
+- When Go to the approval flashes the approval card, the card no longer jumps down and back while the amber outline shows: it stays exactly where it was (#878)
+- On a narrow window, Details' Ran on row keeps the effort together: "· medium effort" moves to the next line as one piece instead of breaking between its words (#884)
+- Pressing Stop on a chat while a teammate's hand-off is reporting back now also stops the lead's follow-up turn; the result card still shows once (#882)
+- Pressing Go to the approval again while the approval card is still flashing now starts the flash over, so a second press always answers (#889)
+
 ## [Mac 0.9.30] - 2026-11-19
 
 kwant 0.9.30: CLI replies without a run line posing as reasoning, and their effort in Details.

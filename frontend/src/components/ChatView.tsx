@@ -1125,12 +1125,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
   // 22i: a Needs-attention landing ('ask') is the same amber flash as search, tagged so tests tell them apart.
   const [flashKind, setFlashKind] = useState<'search' | 'quote' | 'ask'>('search');
-  // 30n: a second "Go to the approval" (or search hit) on what is already flashing restarts the ring and its 2.4 s,
-  // like the quote jump: clear the flash, then set it again. Setting the same id again would change nothing. The
-  // second step waits for the cleared flash to commit, then two frames, so the browser draws a frame without
+  // 30n: a second "Go to the approval" (or search hit) on what is already flashing restarts the ring and its 2.4 s;
+  // 30q: so does a second quote jump (1.6 s). Clear the flash, then set it again. Setting the same id again would
+  // change nothing. The second step waits for the cleared flash to commit, then two frames, so the browser draws a frame without
   // kw-flash and the CSS animation starts over (rAFs queued at once can both run before React commits the null).
   const [flashNext, setFlashNext] = useState<string | null>(null);
-  const restartFlash = (id: string, kind: 'search' | 'ask') => {
+  const restartFlash = (id: string, kind: 'search' | 'quote' | 'ask') => {
     setFlashId(null);
     setFlashKind(kind);
     setFlashNext(id);
@@ -1284,9 +1284,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
     if (el.tabIndex < 0 || el.hasAttribute('tabindex')) el.focus({ preventScroll: true });
-    setFlashId(null);
-    setFlashKind('quote');
-    requestAnimationFrame(() => setFlashId(quoteJump.id));
+    // 30q: same race-free restart as search and approvals, so a second click on a quote always rings again.
+    restartFlash(quoteJump.id, 'quote');
   }, [quoteJump, messages, openThoughts]);
 
   // Thumbs on the bot's newest question are a yes or no; once one has answered it, they're feedback again.
@@ -1393,7 +1392,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   // G3 Point at it: a pick from the browser pane is a composer upload with a `point`
+  // 30o: counts the sent messages that carried a pick; the pane turns Point off when it goes up.
+  const [sentPicks, setSentPicks] = useState(0);
   const pointSink: PointSink = {
+    sentPicks,
     picks: pointPicks(uploads),
     filesLeft: uploadSlotsLeft(uploads),
     start: (label, n, { fromMouse }) => {
@@ -1488,7 +1490,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     playSfx('click');
     stickRef.current = true;
     const replying = replyTo;
-    const sent = onSendMessage(inputVal.trim(), readyAttachments(uploads), replying ? { replyTo: replying } : undefined);
+    const refs = readyAttachments(uploads);
+    const sent = onSendMessage(inputVal.trim(), refs, replying ? { replyTo: replying } : undefined);
+    if (refs.some((r) => r.point)) setSentPicks((n) => n + 1);
     setReplyTo(null);
     // A send that fails keeps the reply, unless the person has moved on to another one.
     if (replying && sent && typeof (sent as Promise<unknown>).then === 'function')

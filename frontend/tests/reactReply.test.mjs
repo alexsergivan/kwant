@@ -217,6 +217,8 @@ test('ChatView: the quote in the bubble opens the original; a deleted one says s
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(g.__scrolled, 'b1');
   const row = v.host.querySelector('[data-message-id="b1"]');
+  // 30q: the ring comes on after the cleared flash commits plus two frames (restartFlash), so wait for it.
+  for (let i = 0; i < 50 && !row.className.includes('kw-flash-quote'); i++) await new Promise((r) => setTimeout(r, 10));
   assert.ok(row.className.includes('kw-flash-quote'), 'violet ring, not the amber search flash');
   assert.equal(document.activeElement, row, 'focus lands on the original');
   const gone = v.host.querySelector('[data-reply-quote="gone"]');
