@@ -476,6 +476,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   // Opened from a page's Settings button (the Idea jar's): bring that switch into view and focus it.
   useEffect(() => {
     if (!isOpen || !focusRow || !settings) return;
+    // Focus on a frame, not after render (kept): an effect after the commit that renders the switch; the frame is cancelled on cleanup
     const raf = requestAnimationFrame(() => {
       // The Claude switch shows only in VM mode; otherwise land on the Computer card it lives in.
       const el =

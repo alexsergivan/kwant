@@ -10,16 +10,20 @@ import { useCallback, useLayoutEffect, useReducer, useRef } from 'react';
  * on screen: a component that unmounts in the same update never runs its effects.
  */
 export function useAfterRender(): (work: () => void) => void {
-  const queue = useRef<Array<() => void>>([]);
-  const [, render] = useReducer((n: number) => n + 1, 0);
+  // Each piece of work waits for the render it asked for (its ticket), not just the next commit: a store update
+  // (useSyncExternalStore) renders first in a sync commit of its own, before the state set next to it after an
+  // await, and work run there would miss the target that state shows (raf-focus-after-render, DevStatusLine Undo).
+  const queue = useRef<Array<{ at: number; work: () => void }>>([]);
+  const asked = useRef(0);
+  const [rendered, render] = useReducer((n: number) => n + 1, 0);
   useLayoutEffect(() => {
-    if (!queue.current.length) return;
-    const run = queue.current;
-    queue.current = [];
-    for (const work of run) work();
+    if (!queue.current.some((q) => q.at <= rendered)) return;
+    const run = queue.current.filter((q) => q.at <= rendered);
+    queue.current = queue.current.filter((q) => q.at > rendered);
+    for (const q of run) q.work();
   });
   return useCallback((work: () => void) => {
-    queue.current.push(work);
+    queue.current.push({ at: ++asked.current, work });
     render();
   }, []);
 }

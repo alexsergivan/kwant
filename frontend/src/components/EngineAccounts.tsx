@@ -299,6 +299,7 @@ export const AccountList: React.FC<{
             spec={spec}
             onCancel={() => {
               setAdding(false);
+              // Focus on a frame, not after render (kept): only Cancel or Escape call this, and React renders that update before the next frame
               requestAnimationFrame(() => addRef.current?.focus());
             }}
             onCreated={async () => {

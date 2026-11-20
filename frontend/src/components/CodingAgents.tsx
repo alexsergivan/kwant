@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useFocusAfterRender } from '../focusAfterRender';
 import { AlertTriangle, Check, ChevronDown, Copy, Loader2, Plus, RotateCcw, TerminalSquare } from 'lucide-react';
 import {
   AgentCall,
@@ -386,6 +387,7 @@ export const CodingAgents: React.FC<{ send?: typeof fetch; currentSpace?: string
   const [rowError, setRowError] = useState<string | null>(null);
   const [activity, setActivity] = useState<Record<string, Activity>>({});
   const addRef = useRef<HTMLButtonElement>(null);
+  const focusAfterRender = useFocusAfterRender();
 
   const load = useCallback(async () => {
     try {
@@ -422,6 +424,7 @@ export const CodingAgents: React.FC<{ send?: typeof fetch; currentSpace?: string
   const full = list.kind === 'ready' && list.connections.length >= list.max;
   const done = () => {
     setCreated(null);
+    // Focus on a frame, not after render (kept): only Done (a click) calls this, and React renders that update before the next frame
     requestAnimationFrame(() => addRef.current?.focus());
   };
 
@@ -446,6 +449,7 @@ export const CodingAgents: React.FC<{ send?: typeof fetch; currentSpace?: string
           initialSpace={currentSpace}
           onCancel={() => {
             setAdding(false);
+            // Focus on a frame, not after render (kept): only Cancel (a click) calls this, and React renders that update before the next frame
             setFormError(null);
             requestAnimationFrame(() => addRef.current?.focus());
           }}
@@ -539,7 +543,7 @@ export const CodingAgents: React.FC<{ send?: typeof fetch; currentSpace?: string
                 setConfirm(null);
                 if (created?.connection.id === c.id) setCreated(null);
                 setList((l) => (l.kind === 'ready' ? { ...l, connections: l.connections.filter((x) => x.id !== c.id) } : l));
-                requestAnimationFrame(() => addRef.current?.focus());
+                focusAfterRender(() => addRef.current);
               }}
               activity={activity[c.id] ?? null}
               onToggleActivity={() => {

@@ -155,6 +155,7 @@ export const RoutineForm: React.FC<{
   const tzRef = useRef<HTMLInputElement>(null);
   const openTz = () => {
     setTzOpen(true);
+    // Focus on a frame, not after render (kept): only Change (a click) calls this, and React renders that update before the next frame
     requestAnimationFrame(() => tzRef.current?.focus());
   };
   const setS = (patch: Partial<ScheduleForm>) => setF((prev) => ({ ...prev, schedule: { ...prev.schedule, ...patch } }));

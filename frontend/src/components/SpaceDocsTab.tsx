@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusAfterRender } from '../focusAfterRender';
 import { AlertTriangle, Copy, FileText, Loader2, RotateCw, Trash2, Upload, X } from 'lucide-react';
 import {
   DOC_ACCEPT,
@@ -68,6 +69,7 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
   const inputRef = useRef<HTMLInputElement>(null);
   const chooseRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const focusAfterRender = useFocusAfterRender();
   const nextId = useRef(1);
   const queue = useRef<Promise<void>>(Promise.resolve());
 
@@ -143,10 +145,10 @@ export const SpaceDocsTab: React.FC<{ spaceId: string; spaceName: string; isPhon
     const next = docs.filter((d) => d.name !== name);
     await load();
     // Focus moves to the next row's remove, or to Choose files when the list is empty.
-    requestAnimationFrame(() => {
+    focusAfterRender(() => {
       const target = next[Math.min(at, next.length - 1)];
       const el = target ? panelRef.current?.querySelector<HTMLElement>(`[data-doc-remove="${CSS.escape(target.name)}"]`) : chooseRef.current;
-      (el ?? chooseRef.current)?.focus();
+      return el ?? chooseRef.current;
     });
   };
 
