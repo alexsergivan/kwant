@@ -17,7 +17,7 @@ use chrono::{Duration as Mins, Utc};
 use kwnt::{
     broker::PermissionBroker,
     config::Config,
-    db::{ideas::Idea, models::Kwant, spaces::SpaceId, Database},
+    db::{ideas::{Idea, IdeaTake}, models::Kwant, spaces::SpaceId, Database},
     router::LayaRouter,
     server::{create_router, idea_jar, AppState},
     tools::ToolRunner,
@@ -234,15 +234,34 @@ impl Env {
         panic!("the take never finished");
     }
 
+    /// Waits until the newest take row of `idea_id` has finished and returns it. The row is the
+    /// signal for a take that runs in the background (Look now, the scan): `run_with` leaves
+    /// `peeking` (`finish_idea_take`) before it writes the row's status, tries and cause
+    /// (`finish_idea_take_row`), so neither [`Env::peeked`] nor an empty `/api/turns` (the turn
+    /// is over by then) means the row is written. Panics after 20 s with the last status seen.
+    async fn take_done(&self, idea_id: &str) -> IdeaTake {
+        let mut last = None;
+        for _ in 0..400 {
+            match self.state.db.idea_takes(idea_id).await.unwrap().into_iter().next() {
+                Some(row) if row.status != "running" => return row,
+                row => last = row.map(|r| r.status),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the take of {idea_id} didn't finish in 20 s (last status: {last:?})");
+    }
+
+    /// Waits until no turn is going, so nothing still running bleeds into the next step. Every
+    /// caller already saw its turn start (or end), so there is no grace sleep first.
     async fn settle(&self) {
-        for _ in 0..100 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        for _ in 0..200 {
             let turns = ok(&self.app, "GET", "/api/turns", None).await;
             if turns["turns"].as_array().is_none_or(|t| t.is_empty()) {
                 return;
             }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        panic!("turns never ended");
+        panic!("turns were still going after 20 s");
     }
 }
 
@@ -582,8 +601,8 @@ async fn a_real_take_runs_with_no_tools_and_look_now_retries_a_failed_idea() {
     assert_eq!(runs[before..], ["notools=yes mcp=no".to_string()], "the CLI was started with no tools");
     let list = ok(&e.app, "GET", "/api/ideas", None).await;
     assert_eq!((list["peeks_today"].as_i64(), list["cap_reached"].as_bool()), (Some(1), Some(false)), "Look now isn't a scan");
-    let rows = e.state.db.idea_takes(&idea.id).await.unwrap();
-    assert_eq!((rows[0].trigger.as_str(), rows[0].status.as_str(), rows[0].tries), ("look", "ready", 1));
+    let row = e.take_done(&idea.id).await;
+    assert_eq!((row.trigger.as_str(), row.status.as_str(), row.tries), ("look", "ready", 1));
 
     // A failed idea stays failed with its error, and Look now on it tries again
     let failed = e.drop_in("Sync to the phone").await;
@@ -613,13 +632,13 @@ async fn a_usage_limit_fails_the_take_at_once_parks_nothing_and_posts_nowhere() 
     let v = ok(&e.app, "POST", &format!("/api/ideas/{}/look", idea.id), None).await;
     assert_eq!(v["kwant_id"].as_str(), Some(e.ann.id.as_str()), "{v}");
     let after = e.peeked(&idea.id).await;
+    let row = e.take_done(&idea.id).await;
     e.settle().await;
     // Failed at once with a plain reason: one turn, no bad-JSON retry
     assert_eq!(after.status, "failed");
     let why = after.error.as_deref().unwrap();
     assert!(why.starts_with("Every model was out of usage, so no bot could look at it. Use Look now after "), "{why}");
     assert_eq!(tagged_runs("jar1"), ["notools=yes mcp=no".to_string()], "one turn, with no tools");
-    let row = &e.state.db.idea_takes(&idea.id).await.unwrap()[0];
     assert_eq!((row.status.as_str(), row.tries, row.cause.as_deref()), ("failed", 1, Some("usage_limit")));
     // Nothing parked, nothing posted in any chat
     assert!(e.state.db.list_parked().await.unwrap().is_empty(), "a take is never parked");
@@ -636,6 +655,8 @@ async fn a_usage_limit_fails_the_take_at_once_parks_nothing_and_posts_nowhere() 
     ok(&e.app, "POST", &format!("/api/ideas/{}/look", idea.id), None).await;
     let again = e.peeked(&idea.id).await;
     assert_eq!((again.status.as_str(), again.error.as_deref()), ("ready", None));
+    let row = e.take_done(&idea.id).await;
+    assert_eq!((row.trigger.as_str(), row.status.as_str(), row.cause.as_deref()), ("look", "ready", None));
     e.settle().await;
     assert!(e.state.db.list_parked().await.unwrap().is_empty());
     assert!(e.state.db.list_messages(&e.ann.id, 50).await.unwrap().is_empty());
@@ -776,4 +797,58 @@ async fn deleting_an_idea_a_bot_is_peeking_at_drops_the_take_cleanly() {
     assert!(e.state.db.start_idea_take(&gone, &e.ann.id, &today(), "scan").await.unwrap().is_none());
     assert!(e.state.db.idea_takes(&gone.id).await.unwrap().is_empty());
     assert_eq!(ok(&e.app, "GET", "/api/ideas", None).await["ideas"].as_array().unwrap().len(), 0);
+}
+
+/// The take row ends before the idea leaves `peeking`: the scan picks spaces by idea status, but
+/// its pause and cap checks read the take row, so a row still `running` at that moment would let
+/// one more take start right after a usage limit or an over-cap take. A trigger in the test's own
+/// database records the newest take row at the moment the idea leaves `peeking`.
+#[tokio::test]
+async fn the_take_row_is_finished_before_the_idea_leaves_peeking() {
+    let e = setup().await;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", e.state.config.data_dir.join("kwnt.db").display()))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE test_left_peeking (idea_id TEXT, take_status TEXT, cause TEXT, over_cap INTEGER, finished INTEGER)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER test_left_peeking AFTER UPDATE OF status ON ideas WHEN OLD.status = 'peeking' AND NEW.status <> 'peeking' BEGIN \
+         INSERT INTO test_left_peeking SELECT NEW.id, t.status, t.cause, t.over_cap, t.finished_at IS NOT NULL FROM idea_takes t \
+         WHERE t.idea_id = NEW.id ORDER BY t.started_at DESC, t.rowid DESC LIMIT 1; END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let seen = |id: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>, bool, bool)>(
+                "SELECT take_status, cause, over_cap, finished FROM test_left_peeking WHERE idea_id = ?",
+            )
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // A good take
+    let good = e.drop_in("A dark mode").await;
+    let (_, after) = e.take(&good, &e.ann, vec![(Ok(GOOD.into()), 50)]).await;
+    assert_eq!(after.status, "ready");
+    assert_eq!(seen(good.id).await, [("ready".to_string(), None, false, true)], "a good take");
+    // A usage limit: the pause has to be on the row before the scan can pick the space again
+    let limit = e.drop_in("Weekly digest").await;
+    let (_, after) = e.take(&limit, &e.ann, vec![(Err("Every model is out until 11:44 UTC".into()), 0)]).await;
+    assert_eq!(after.status, "failed");
+    assert_eq!(seen(limit.id).await, [("failed".to_string(), Some("usage_limit".to_string()), false, true)], "a usage limit");
+    // Over the token cap: no more scans in this space today, from the moment the idea is done
+    let big = e.drop_in("Sepia").await;
+    let (_, after) = e.take(&big, &e.bob, vec![(Ok(GOOD.into()), idea_jar::MAX_TURN_TOKENS + 1)]).await;
+    assert_eq!(after.status, "ready");
+    assert_eq!(seen(big.id).await, [("ready".to_string(), None, true, true)], "an over-cap take");
+    pool.close().await;
 }
