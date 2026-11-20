@@ -137,9 +137,9 @@ test('tapping "This week" opens the tiles and tapping again folds them', async (
   host.remove();
 });
 
-test('the tile reads "Board tasks waiting on you", not the Inbox-like "Needs you now"', () => {
+test('the tile reads "Waiting on you", not the Inbox-like "Needs you now"', () => {
   const html = ui.insights({ insights: insightsData, needsYou: 2 });
-  assert.match(html, /Board tasks waiting on you<\/dt>/);
+  assert.match(html, />Waiting on you<\/dt>/);
   assert.doesNotMatch(html, /Needs you now/);
 });
 
