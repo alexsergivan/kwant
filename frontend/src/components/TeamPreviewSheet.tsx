@@ -463,6 +463,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   useEffect(() => {
     if (!ready || focused.current) return;
     focused.current = true;
+    // Focus on a frame, not after render (kept): an effect after the commit that renders Rename or Create
     requestAnimationFrame(() => {
       const clash = !isD && Object.keys(notes).length > 0;
       (clash && firstRenameRef.current ? firstRenameRef.current : createRef.current)?.focus({ preventScroll: true });

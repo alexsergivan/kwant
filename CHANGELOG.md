@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.32] - 2026-11-20
+
+kwant 0.9.32: a Point bar the hover tag no longer covers, and Point turning off once you send your picks.
+
+### Fixed
+- While Point is on, the tag naming the part under the pointer no longer covers the Point bar: when there is no room above the outline it sits below it, or inside it at the bottom left, so "Click the part you mean" stays readable. Point also turns off once you send a message with picks, and the cursor stays in the message box; a click, Esc and removing picks work as before (#891)
+- Clicking a reply's quote again while the original message is still highlighted now starts the highlight over, so a second click always answers, as it already did for search hits and Go to the approval (#894)
+- Saving App settings › Computer (Run Claude inside the VM, or where bots work) now asks Docker once instead of up to three times, so a save on a slow Docker answers in about 3 s instead of up to 9 s, and Run Claude inside the VM no longer shows as unavailable right after you turn it on (#895)
+- Dev mode's production floor card now moves keyboard focus only after the screen shows its target, so after you save a backup command focus always lands on Back up first (and on the field or button you opened or closed), instead of now and then getting lost on a slow machine (#897)
+- Keyboard focus now waits until the screen shows its target in 14 more places, so after you open a key field, allow approvals from Telegram, pick a mention, dictate or close a popover, focus lands on the right field or button instead of now and then getting lost on a slow machine (#898)
+- After you take back an approval, pause a budget again, cancel a Claude sign-in, remove a coding-agent connection, a file or a hand row, focus now waits for the screen to update before it moves, so it lands on the next button (or Undo) instead of now and then getting lost when the app is busy (#900)
+
+## [Mac 0.9.31] - 2026-11-20
+
+kwant 0.9.31: an approval card that stays put when Go to the approval flashes it and Details' Ran on keeping its effort on one line.
+
+### Fixed
+- When Go to the approval flashes the approval card, the card no longer jumps down and back while the amber outline shows: it stays exactly where it was (#878)
+- On a narrow window, Details' Ran on row keeps the effort together: "· medium effort" moves to the next line as one piece instead of breaking between its words (#884)
+- Pressing Stop on a chat while a teammate's hand-off is reporting back now also stops the lead's follow-up turn; the result card still shows once (#882)
+- Pressing Go to the approval again while the approval card is still flashing now starts the flash over, so a second press always answers (#889)
+
 ## [Mac 0.9.30] - 2026-11-19
 
 kwant 0.9.30: CLI replies without a run line posing as reasoning, and their effort in Details.

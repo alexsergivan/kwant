@@ -2222,3 +2222,67 @@ async fn a_stop_on_the_chat_while_its_hand_off_reports_skips_the_lead() {
         prompts_with("answer chatstop30ib").into_iter().filter(|p| p.contains("finished the task you delegated")).collect();
     assert!(resumes.is_empty(), "the person stopped the chat, so its lead isn't resumed; got {} resume(s)", resumes.len());
 }
+
+/// 30m: a Stop on the hand-off card itself (`delegation::cancel`) while the finished hand-off
+/// reports (its result is posted, the lead's resume hasn't taken the chat yet) also skips the
+/// lead's resume: `cancel` stops the jobs that hold the hand-off before its compare-and-set, and
+/// the reporting job holds it. The compare-and-set then fails (the hand-off already completed),
+/// so `cancel` returns None and posts nothing: the result stays the one line, with no "Stopped …".
+/// Before 30i-b that Stop cancelled only the reporting job, nothing read it, and the lead resumed.
+#[tokio::test]
+async fn a_stop_on_the_hand_off_while_it_reports_skips_the_lead() {
+    let env = setup().await;
+    let channel = team_channel(&env, "cardstop").await;
+    let release = env.release_file("cardstop-done");
+    let id = delegate_from(&env, &channel, &env.specialist, &format!("Check it LONGTASK:{} REPLYTAG:cardstop30m", release.display()), "Card stop").await;
+    let thread = env.state.db.get_delegation(&id).await.unwrap().unwrap().thread_id;
+    wait_for("the hand-off to run", || async { delegation_status(&env, &id).await == "running" }).await;
+    assert!(!env.state.turns.has_job(&channel), "nothing holds the chat while the teammate works in its own thread");
+
+    // `cancel`'s Stop (by the hand-off's id) lands the moment the result is posted while only the
+    // reporting job holds the hand-off and its chat: watched from a plain thread, so no await sits
+    // between the look and the Stop. The result's post comes after `finish`'s compare-and-set, so
+    // the hand-off already reads completed then.
+    let mut events = env.state.event_sender.subscribe();
+    let turns = env.state.turns.clone();
+    let (watched, chat, thread_key) = (id.clone(), channel.clone(), thread.clone());
+    let stopper = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut posted = false;
+        while std::time::Instant::now() < deadline {
+            loop {
+                match events.try_recv() {
+                    Ok(e) => {
+                        if let RuntimeEvent::MessageAdded { message } = e.unscoped() {
+                            let kind = message["meta"].as_str().and_then(|m| serde_json::from_str::<Value>(m).ok()).map(|m| m["kind"].clone());
+                            posted |= message["channel_id"] == chat.as_str() && kind == Some(json!("delegation_result"));
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+            if posted && turns.has_job(&watched) && turns.has_job(&chat) && !turns.has_job(&thread_key) {
+                return Some(turns.cancel(Some(&watched)));
+            }
+            std::thread::yield_now();
+        }
+        None
+    });
+    std::fs::write(&release, "").unwrap();
+    let stopped = tokio::task::spawn_blocking(move || stopper.join().unwrap()).await.unwrap();
+    assert_eq!(stopped, Some(1), "the Stop lands while only the reporting job holds the hand-off (None: it never reported; 2: the lead had taken over)");
+
+    // Once nothing holds the hand-off or its chat, `finish` is over (it awaits the lead's resume).
+    // The rest of the card's Stop runs then, so it can't cut short a resume that wrongly started.
+    wait_for("the hand-off and its chat to read idle", || async { !env.state.turns.has_job(&id) && !env.state.turns.has_job(&channel) }).await;
+    assert!(delegation::cancel(&env.state, &id).await.is_none(), "the hand-off had completed, so the card's Stop reports nothing");
+    assert_eq!(delegation_status(&env, &id).await, "completed", "the Stop on the card doesn't change the hand-off's end");
+    let msgs = channel_messages(&env, &channel).await;
+    assert_eq!(msgs.iter().filter(|m| meta_kind(m).as_deref() == Some("delegation_result")).count(), 1, "the result is posted once");
+    assert!(!msgs.iter().any(|m| m.text.starts_with("Stopped ")), "no \"Stopped …\" line for a hand-off that completed");
+    let resumes: Vec<_> =
+        prompts_with("answer cardstop30m").into_iter().filter(|p| p.contains("finished the task you delegated")).collect();
+    assert!(resumes.is_empty(), "the person stopped the hand-off, so its lead isn't resumed; got {} resume(s)", resumes.len());
+    assert!(!env.state.turns.has_job(&id) && !env.state.turns.has_job(&channel), "the hand-off and its chat read idle");
+}

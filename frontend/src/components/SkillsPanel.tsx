@@ -560,6 +560,7 @@ export const SkillsPanel: React.FC<{
   const waitBtn = useRef<HTMLButtonElement>(null);
   // Mira §4.1: when the row goes away with focus on its button, focus moves to Show it once
   const setWaiting = useCallback((next: Recording | null) => {
+    // Focus on a frame, not after render (kept): Show it once is already on screen; only the row that had focus goes away
     if (!next && waitBtn.current && document.activeElement === waitBtn.current) requestAnimationFrame(() => showOnceBtn.current?.focus());
     setWaitingRaw(next);
   }, []);
