@@ -39,6 +39,38 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0930" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.30</p>
+      <h2>Details shows the effort, not a copy of the run line</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0930">Smaller changes in 0.9.30</h3>
+        <p>A reply made through a CLI no longer shows its "Executed via … CLI" line as if it were reasoning; Details shows the effort on the Ran on row instead. After the idea jar hits a usage limit or its cap, it no longer starts one more take a few minutes later. Details' Ran on now reads "on this machine" for a reply that ran on the built-in account, instead of "on the This machine account". When Go to the approval flashes the approval card, the amber outline now fits the card instead of running past it on a wide window. When a teammate finishes a hand-off, the chat now reads busy until its lead picks up the result, so the lead is never started on a second review of it. Go to the approval, pressed from the keyboard, now moves focus to the approval card itself, and the Approval waiting pill steps aside while the needs-you bar already points at it.</p>
+      </div>
+      <div class="frame">{{shot:v0930-details-effort|kwant chat with Ann in Trailhead Outfitters. You asked "Where does the waitlist badge on the trip card come from?". Ann's reply has Details open: Ran on "Claude Sonnet, on this machine · medium effort", Cost "1,500 tokens of new work" and "Worked 0:01 · 1 step", with no reasoning disclosure above it. She answers that it's WaitlistBadge in src/components/trips/WaitlistBadge.tsx, which TripCard shows when seats_left is 0.}}</div>
+    </div>
+  </div>
+</section>
+
+<section id="new-0929" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.29</p>
+      <h2>An approval asks once, on its own card</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0929">Smaller changes in 0.9.29</h3>
+        <p>The "needs you" bar above the message box now steps aside while the approval it points to is on screen, and comes back when you scroll the card away.</p>
+      </div>
+      <div class="frame">{{shot:v0929-strip-aside|kwant chat with Ann in Trailhead Outfitters. You asked "Can you pad the order numbers on the receipts to six digits?". Ann is "Waiting for your OK", and her "Approval needed" card asks to run npm install left-pad in ~/demo/shop, with Say why, Deny, Always this session and Allow once. Below it, "Ann is waiting for your OK · 0:05" sits right above the message box, with no needs-you bar. The sidebar shows NEEDS YOU · 1 for Ann.}}</div>
+    </div>
+  </div>
+</section>
+
 <section id="new-0928" class="fgroup">
   <div class="wrap">
     <div class="section-head">

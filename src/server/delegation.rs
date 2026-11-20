@@ -613,6 +613,10 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
         Err(_) if job.token.is_cancelled() => Err("stopped".to_string()),
         other => other,
     };
+    // The hand-off and its chat stay busy until `finish` has reported it and handed over to the
+    // lead's own job (a sweep or a Stop asking meanwhile sees it). The specialist's thread is
+    // free from here, so it doesn't read busy while the lead's resume runs.
+    let _reporting = state.turns.start_job([d.id.clone(), d.origin_context().unwrap_or(&lead.id).to_string()]);
     drop(job);
     // A usage limit stopped it before anything happened: it stays open and runs again when the
     // limit resets
@@ -982,6 +986,8 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
         let outcome = try_kwant_turn(&scope, &specialist, prompt, TurnOpts::default()).await;
         let outcome = continue_once_if_capped(&scope, &specialist, outcome, None).await;
         let stopped = job.token.is_cancelled();
+        // Busy until the result is posted and the lead's own job took over, as in `run`
+        let _reporting = state.turns.start_job([d.id.clone(), d.origin_context().unwrap_or(&d.lead_kwant_id).to_string()]);
         drop(job);
         let reply = match outcome {
             Ok(reply) => reply,
