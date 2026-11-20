@@ -602,3 +602,34 @@ pub struct Recipe {
     pub notes: Vec<String>,
     pub provenance: Provenance,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shape [`PROMPT_LINE`] asks for key numbers: the quoted example after "key numbers".
+    fn key_numbers_shape() -> &'static str {
+        let after = &PROMPT_LINE[PROMPT_LINE.find("key numbers").expect("PROMPT_LINE asks for key numbers")..];
+        let open = after.find('\'').expect("the key-numbers example is quoted") + 1;
+        let len = after[open..].find('\'').expect("the key-numbers example is closed");
+        &after[open..open + len]
+    }
+
+    /// Mira's UX pass at 0.9.32, fix #2: a bot that writes key numbers exactly the way the prompt
+    /// asks gets metric tiles, not one run-on paragraph.
+    #[test]
+    fn key_numbers_written_as_the_prompt_asks_draw_as_metrics() {
+        let shape = key_numbers_shape();
+        assert!(shape.contains("Label") && shape.contains("value"), "{shape:?}");
+        let lines: Vec<String> = [("Revenue", "EUR 18,420"), ("Orders", "627"), ("Refunds", "EUR 212")]
+            .iter()
+            .map(|(label, value)| shape.replace("Label", label).replace("value", value))
+            .collect();
+        let reply = format!("Here are October's numbers:\n\n{}\n", lines.join("\n"));
+        let set = compute(&reply).unwrap_or_else(|| panic!("no block for the prompt's own shape {shape:?}:\n{reply}"));
+        let Some(Block::Metrics(m)) = set.blocks.first() else { panic!("not metrics for {shape:?}: {set:?}") };
+        let labels: Vec<&str> = m.items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["Revenue", "Orders", "Refunds"]);
+        assert_eq!(m.items[0].value_text, "EUR 18,420");
+    }
+}
