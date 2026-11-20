@@ -152,6 +152,7 @@ jobs:
     needs: frontend
     env:
       KWNT_TEST_REQUIRE: "1"
+      RUST_MIN_STACK: "16777216"
     steps:
       - uses: actions/checkout@v4
       - name: Test skips go through skip_or_fail
