@@ -344,6 +344,32 @@ test('opening at Advanced shows it; a used account that can’t run counts as ne
   assert.match(html, /data-ai-needs[^>]*>1 needs you/);
 });
 
+// 31a (Mira's UX pass on 0.9.31, fix 3): the amber counts only accounts the panel shows bots relying on.
+const auto = [{ id: 'k1', name: 'Ann' }, { id: 'k2', name: 'Ben' }];
+test('accountsNeedingYou: a signed-out account under Not used never counts, unless a bot is pinned to it or nothing is used', () => {
+  const claude = acct('sys', { used_by: auto });
+  const codex = acct('p2', { name: 'Work', detail: 'codex', status: 'needs_sign_in', used_by: auto });
+  // Mira's state: Claude ready and used, Codex signed out with every auto bot in used_by, nobody pinned.
+  assert.equal(m.accountsNeedingYou([claude, codex], ['sys'], []), 0);
+  // A bot pinned to Codex can't fail over: that's a real ask.
+  assert.equal(m.accountsNeedingYou([claude, codex], ['sys'], ['p2']), 1);
+  // The account bots run on is still ranked but out of usage.
+  assert.equal(m.accountsNeedingYou([acct('sys', { status: 'limited', used_by: auto }), codex], ['sys'], []), 1);
+  // Nothing is used at all: every bad account is worth the amber.
+  assert.equal(m.accountsNeedingYou([acct('sys', { status: 'needs_sign_in', used_by: auto }), codex], [], []), 2);
+  // Unused (nobody in used_by) stays quiet, whatever the order says.
+  assert.equal(m.accountsNeedingYou([acct('p3', { status: 'error' })], [], ['p3']), 0);
+});
+
+test('Settings in Mira’s state shows no amber; with a bot pinned to the signed-out Codex it says 1 needs you', () => {
+  const conns = [acct('sys', { used_by: auto }), acct('p2', { name: 'Work', detail: 'codex', status: 'needs_sign_in', used_by: auto })];
+  const calm = m.renderToStaticMarkup(h(m.AppsAccounts, pageProps({ data: data({ connections: conns }) })));
+  assert.ok(!calm.includes('data-ai-needs'), 'Codex is Not used: no "needs you"');
+  const pinned = bots.map((b, i) => (i === 0 ? { ...b, preferred_model: 'codex' } : b));
+  const ask = m.renderToStaticMarkup(h(m.AppsAccounts, pageProps({ kwants: pinned, data: data({ connections: conns }) })));
+  assert.match(ask, /data-ai-needs[^>]*>1 needs you/);
+});
+
 test('Advanced’s Composio card offers Choose bots instead of Turn on in Tools, and leaves AI accounts out', () => {
   const html = m.renderToStaticMarkup(
     h(m.ConnectionsView, {
