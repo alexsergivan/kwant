@@ -19,6 +19,7 @@ import {
   stripIndex,
   type AskAction,
 } from '../askHere';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 export interface NeedsYouStripProps {
   /** The open asks in this chat, oldest first (`asksHere`). Nothing shows when empty. */
@@ -187,6 +188,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
     </span>
   );
 
+  const focusAfterRender = useFocusAfterRender();
   if (!item) return live;
   // A Retry with nowhere to go (a failed hand-off with no board task) isn't offered (Mira's fix 3).
   const base = askAction(item);
@@ -221,7 +223,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
         // Not an error: this ask is resolved on its own card, so the button goes there.
         cleared.current = false;
         setSwitched(use);
-        window.setTimeout(() => actionRef.current?.focus(), 0);
+        focusAfterRender(() => actionRef.current);
       }
     } catch (e) {
       cleared.current = false;
