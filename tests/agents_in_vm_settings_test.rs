@@ -73,3 +73,27 @@ async fn the_switch_saves_and_the_chips_say_where_each_engine_runs() {
     assert_eq!(v["isolate_claude"], false);
     assert_eq!(v["agents"]["claude"]["state"], "off");
 }
+
+/// A save asks Docker once, so its reply agrees with the check it just passed: a switch that
+/// turned on is never shown as unavailable in the same answer (computer-save-one-docker-check).
+#[tokio::test]
+async fn a_save_that_turns_the_switch_on_says_it_is_available() {
+    let data = tempfile::tempdir().unwrap();
+    let env = common::setup_with(|state| {
+        state.agent_vm = AgentVm::with_parts(
+            data.path(),
+            BrokerConfig::new(data.path().join("broker.log")),
+            Some("kwnt-agent-settings-test:never-built".into()),
+            AgentsInVmConfig::default(),
+            None,
+        );
+    })
+    .await;
+    let (s, v) = common::call(&env.app, "PUT", "/api/settings/computer", Some(json!({"isolate_claude": true}))).await;
+    if s == StatusCode::OK {
+        assert_eq!(v["isolate_claude_toggle"]["available"], true, "{v}");
+    } else {
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+        assert_eq!(v["isolate_claude"], json!(null), "a refusal is an error, not the view: {v}");
+    }
+}
