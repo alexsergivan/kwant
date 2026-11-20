@@ -892,7 +892,7 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     }
     match opened {
         Ok(ctrl) => ctrl.site_guard.set_driver(&scope.kwant_id),
-        Err(refusal @ (super::routes::PageRefusal::PagesFull | super::routes::PageRefusal::Busy)) => {
+        Err(refusal @ (super::routes::PageRefusal::PagesFull | super::routes::PageRefusal::BrowserFull | super::routes::PageRefusal::Busy)) => {
             return (page_refusal_text(state, refusal), true)
         }
         Err(super::routes::PageRefusal::Unavailable) => {}
@@ -936,6 +936,7 @@ fn wall_check_helps(text: &str, page: Option<&Value>) -> bool {
 fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> String {
     match refusal {
         super::routes::PageRefusal::PagesFull => super::browser_pages::pages_full_message(),
+        super::routes::PageRefusal::BrowserFull => super::browser_pages::browser_full_message(),
         super::routes::PageRefusal::Unavailable => state.browser_service.unavailable_reason(),
         super::routes::PageRefusal::Busy => crate::sandbox::service::BROWSER_BUSY.to_string(),
     }

@@ -1368,6 +1368,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String, bots_page: bo
             let error = match refusal {
                 PageRefusal::Busy => crate::sandbox::service::BROWSER_RECONNECTING.to_string(),
                 PageRefusal::PagesFull => super::browser_pages::pages_full_message(),
+                PageRefusal::BrowserFull => super::browser_pages::browser_full_message(),
                 PageRefusal::Unavailable => crate::sandbox::service::BROWSER_UNREACHABLE_VIEW.to_string(),
             };
             let _ = socket.send(Message::Text(json!({"type":"error","error":error}).to_string())).await;
