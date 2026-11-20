@@ -50,7 +50,7 @@ pub const PICK_REASON: &str = "named as the pick in this reply";
 /// comparison. Every header cell must be filled, or the table stays text.
 pub const PROMPT_LINE: &str = "When you compare options use a table with every header cell filled (one row per option; for \
     just two, a column each and a row per point), for steps use a numbered list, for a recipe an 'Ingredients' list then \
-    numbered steps, and for key numbers use '**Label:** value' lines; kwant shows them as cards and charts.";
+    numbered steps, and for key numbers a list of '- **Label:** value' items; kwant shows them as cards and charts.";
 
 /// The checked block set for a reply: the first candidate, in priority order ([`rank`]), whose
 /// type is enabled and that passes [`validate`]; `None` when there isn't one. A selector bug must never
