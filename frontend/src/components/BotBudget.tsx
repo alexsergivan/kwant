@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useFocusAfterRender } from '../focusAfterRender';
 import { Check, Gauge, Loader2, PauseCircle, Play, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import {
   BotBudget,
@@ -319,6 +320,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
   const [undoing, setUndoing] = useState(false);
   const first = useRef<HTMLInputElement>(null);
   const section = useRef<HTMLElement>(null);
+  const focusAfterRender = useFocusAfterRender();
 
   const load = React.useCallback(() => {
     setLoadError(null);
@@ -433,7 +435,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
                 send={send}
                 onContinued={() => {
                   // The paused row swaps for Pause again once this renders: focus moves there, not to <body> (#536 Mira F4)
-                  requestAnimationFrame(() => section.current?.querySelector<HTMLButtonElement>('[data-budget-pause-again]')?.focus());
+                  focusAfterRender(() => section.current?.querySelector<HTMLButtonElement>('[data-budget-pause-again]'));
                 }}
               />
               <span className="text-[11px] text-zinc-500">or raise a limit below.</span>

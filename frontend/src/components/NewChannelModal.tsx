@@ -38,6 +38,7 @@ export const NewChannelModal: React.FC<NewChannelModalProps> = ({ isOpen, onClos
     setTouched(false);
     setError(null);
     setSubmitting(false);
+    // Focus on a frame, not after render (kept): an effect after the commit that renders the name field
     requestAnimationFrame(() => nameRef.current?.focus());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);

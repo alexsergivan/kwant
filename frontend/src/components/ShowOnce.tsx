@@ -226,6 +226,7 @@ export const ShowOnceStart: React.FC<{
  * Record steps when the stage is up, else Show it once in Skills, else the Skills tab panel.
  */
 export function focusAfterDiscard() {
+  // Focus on a frame, not after render (kept): a plain function, not a component, so it cannot use the hook; it looks for what is on screen
   requestAnimationFrame(() => {
     const visible = (el: Element | null): el is HTMLElement => el instanceof HTMLElement && el.getClientRects().length > 0;
     const rec = Array.from(document.querySelectorAll('.so-record-steps')).find(visible);

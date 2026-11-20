@@ -1203,6 +1203,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     if (!focusComposerKey) return;
     // After the new chat's first paint, so its composer is the one that takes focus
+    // Focus on a frame, not after render (kept): an effect after the commit; the composer is already rendered and the frame is cancelled on cleanup
     const raf = requestAnimationFrame(() => focusComposer());
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1440,6 +1441,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const slashOpen = !ideaMode && inputVal.length > 0 && inputVal.length < 5 && '/idea'.startsWith(inputVal.toLowerCase()) && !uploads.length;
   const completeIdea = () => {
     setInputVal('/idea ');
+    // Focus on a frame, not after render (kept): only Tab, Enter or a click calls this, and React renders that update before the next frame
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
@@ -1564,7 +1566,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       const text = (e as CustomEvent<{ text?: unknown }>).detail?.text;
       if (typeof text !== 'string' || !text) return;
       setInputVal((prev) => withPrefill(prev, text));
-      requestAnimationFrame(() => {
+      // After the render that shows the new text: the caret and height need it (the event can come from any caller)
+      afterRender(() => {
         const el = textareaRef.current;
         if (!el) return;
         el.focus();
