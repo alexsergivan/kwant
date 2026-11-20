@@ -88,7 +88,7 @@ jobs:
           fi
           echo "event $EVENT, tag '${tag:-none}', upload $upload"
           { echo "tag=$tag"; echo "ref=$ref"; echo "upload=$upload"; } >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.which.outputs.ref }}
       # The installer's version comes from apps/mac/tauri.conf.json (file name, the .exe's version
@@ -124,17 +124,17 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: frontend-dist
           path: frontend/dist
@@ -149,14 +149,14 @@ jobs:
       name: ${{ steps.file.outputs.name }}
       sha256: ${{ steps.file.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.ref }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: frontend/dist
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -238,7 +238,7 @@ jobs:
             $u = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
             "uninstall exit code: $($u.ExitCode)"
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kwant-windows-installer-release
           path: |
@@ -266,7 +266,7 @@ jobs:
       # mac.yml publishes ~40-60 min after the tag (the .dmg build alone is 21-30 min)
       WAIT_MINUTES: 120
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: kwant-windows-installer-release
           path: out
