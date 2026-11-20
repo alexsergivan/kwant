@@ -24,7 +24,6 @@ const m = await loadBundled(`
   export { NeedsYouStrip } from './src/components/NeedsYouStrip';
   export { Sidebar } from './src/components/Sidebar';
   export { needsYouRows, attentionRows } from './src/chatsTab';
-  export { ringElement } from './src/ring';
   export { ModernApprovalCard } from './src/components/ModernApprovalCard';
 `);
 const h = m.React.createElement;
@@ -345,14 +344,6 @@ test('strip: a keyboard open focuses it; when the last ask closes, focus goes to
   assert.equal(live(), 'Cleared.');
   unmount();
   composer.remove();
-});
-
-test('ring: a card outside the message list gets the amber kw-flash, tagged as an ask', () => {
-  const el = document.createElement('div');
-  document.body.append(el);
-  m.ringElement(el);
-  assert.ok(el.classList.contains('kw-flash'), 'kw-flash: a static outline under reduced motion, never nothing');
-  assert.equal(el.dataset.flashKind, 'ask');
 });
 
 // ---- the pinned row ----
@@ -733,7 +724,8 @@ test('30a: keyboard "Go to the approval" (strip, pill, Answer ↑) focuses the c
   // The 29w hand-off to the composer still only runs when focus was lost (body) or is still in the hidden strip.
   assert.match(chat, /if \(!a \|\| a === document\.body \|\| stripSlotRef\.current\?\.contains\(a\)\) textareaRef\.current\?\.focus\(\{ preventScroll: true \}\);/);
   // The flash wrapper is always there, so flashing the card on landing doesn't remount it (and drop its focus).
-  assert.match(chat, /<div key=\{approval\.id\} className=\{flashId === approval\.id \? '[^']*\bkw-flash\b[^']*' : 'contents'\}>\n\s*<ModernApprovalCard approval=\{approval\} onResolve=\{onResolveApproval\} \/>\n\s*<\/div>/);
+  // 30j: the flash only toggles kw-flash on the same wrapper (see the 30h test for the exact classes).
+  assert.match(chat, /<div\s+key=\{approval\.id\}\s+className=\{`[^`]*\$\{flashId === approval\.id \? ' kw-flash' : ''\}`\}[^>]*>\n\s*<ModernApprovalCard approval=\{approval\} onResolve=\{onResolveApproval\} \/>\n\s*<\/div>/);
   assert.doesNotMatch(chat, /<ModernApprovalCard key=\{approval\.id\}/);
   // The dev production-floor card is a landing place too.
   assert.match(floor, /data-approval-card=\{id\}[\s\S]{0,400}tabIndex=\{-1\}/);
@@ -744,13 +736,15 @@ test('30a: keyboard "Go to the approval" (strip, pill, Answer ↑) focuses the c
 test('30h: the approval flash box is as wide as the card, and adds nothing to its height', () => {
   const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   const card = readFileSync(new URL('../src/components/ModernApprovalCard.tsx', import.meta.url), 'utf8');
-  const flash = chat.match(/<div key=\{approval\.id\} className=\{flashId === approval\.id \? '([^']*)' : '([^']*)'\}>\s*<ModernApprovalCard /);
+  const flash = chat.match(/<div\s+key=\{approval\.id\}\s+className=\{`([^`$]*)\$\{flashId === approval\.id \? '([^']*)' : ''\}`\}[^>]*>\s*<ModernApprovalCard /);
   assert.ok(flash, 'the approval card sits in the flash wrapper');
-  const [, on, idle] = flash;
-  const onCls = on.split(/\s+/);
+  const [, idle, toggled] = flash;
+  // 30j: one box idle and flashing; only kw-flash toggles (the brief's "no jump" rule; behaviour in approvalFlashNoJump).
+  assert.equal(toggled, ' kw-flash');
+  const on = `${idle}${toggled}`;
+  const onCls = on.split(/\s+/).filter(Boolean);
   assert.ok(onCls.includes('kw-flash') && onCls.includes('rounded-xl'), on);
-  // The idle wrapper stays display: contents (30a: no remount, no layout of its own).
-  assert.equal(idle, 'contents');
+  assert.ok(onCls.includes('!mt-0'), 'the wrapper cancels the list gap, so the card keeps its idle spot');
   // The card root's own max width, read from the card, is on the flashing wrapper too.
   const root = card.match(/data-approval-card=\{approval\.id\}[\s\S]{0,300}?className=\{`([^`$]*)/);
   assert.ok(root, 'card root class');
@@ -758,6 +752,6 @@ test('30h: the approval flash box is as wide as the card, and adds nothing to it
   assert.equal(maxW.length, 1, root[1]);
   assert.ok(onCls.includes(maxW[0]), `flash wrapper "${on}" lacks the card's ${maxW[0]}`);
   // Top and bottom: the card's my-3 collapses through the wrapper only while the wrapper has no margin, padding,
-  // border or its own formatting context, so none of those may join the flashing class.
-  for (const c of onCls) assert.doesNotMatch(c, /^(-?m[trblxy]?|p[trblxy]?|border|ring|flex|grid|inline|overflow|flow-root|w)-|^(flex|grid|inline-block|flow-root|border)$/, c);
+  // border or its own formatting context, so none of those may join the wrapper (its one margin class is !mt-0).
+  for (const c of onCls.filter((c) => c !== '!mt-0')) assert.doesNotMatch(c, /^!?(-?m[trblxy]?|p[trblxy]?|border|ring|flex|grid|inline|overflow|flow-root|w)-|^!?(flex|grid|inline-block|flow-root|border|contents)$/, c);
 });

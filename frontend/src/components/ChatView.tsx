@@ -45,6 +45,7 @@ import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
 import { ReplyCheckLine } from './ReplyCheckLine';
 import { replyOutcome } from '../replyOutcome';
+import { effortWords, isCliRunLine } from '../reasoningEcho';
 import { FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
@@ -101,7 +102,6 @@ import { awayApi } from '../away';
 import { parseBudgetNotice } from '../botBudget';
 import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
 import { isSystemNotice, parseExpiredApproval, parseInterruption, retryTargets } from '../interruptions';
-import { ringElement } from '../ring';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
@@ -1122,6 +1122,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
   // 22i: a Needs-attention landing ('ask') is the same amber flash as search, tagged so tests tell them apart.
   const [flashKind, setFlashKind] = useState<'search' | 'quote' | 'ask'>('search');
+  // 30n: a second "Go to the approval" (or search hit) on what is already flashing restarts the ring and its 2.4 s,
+  // like the quote jump: clear the flash, then set it again. Setting the same id again would change nothing. The
+  // second step waits for the cleared flash to commit, then two frames, so the browser draws a frame without
+  // kw-flash and the CSS animation starts over (rAFs queued at once can both run before React commits the null).
+  const [flashNext, setFlashNext] = useState<string | null>(null);
+  const restartFlash = (id: string, kind: 'search' | 'ask') => {
+    setFlashId(null);
+    setFlashKind(kind);
+    setFlashNext(id);
+  };
+  useEffect(() => {
+    if (!flashNext) return;
+    let f = requestAnimationFrame(() => {
+      f = requestAnimationFrame(() => {
+        setFlashId(flashNext);
+        setFlashNext(null);
+      });
+    });
+    return () => cancelAnimationFrame(f);
+  }, [flashNext]);
   useEffect(() => {
     if (!highlightMessageId) return;
     // 0.8.1 F6: an approval's card (a notification names it), not a message
@@ -1134,9 +1154,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       // card's first choice does), never on Allow / Deny. A tap, an Inbox row or a notification leaves focus alone.
       const from = document.activeElement;
       if (from instanceof HTMLElement && stripSlotRef.current?.contains(from) && from.matches('[data-strip-action="decide"]:focus-visible')) card.focus({ preventScroll: true });
-      if (highlightRing) ringElement(card);
-      setFlashKind(highlightRing ? 'ask' : 'search');
-      setFlashId(highlightMessageId);
+      restartFlash(highlightMessageId, highlightRing ? 'ask' : 'search');
       onHighlightDone?.();
       return;
     }
@@ -1152,8 +1170,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!el) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-    setFlashKind(highlightRing ? 'ask' : 'search');
-    setFlashId(highlightMessageId);
+    restartFlash(highlightMessageId, highlightRing ? 'ask' : 'search');
     onHighlightDone?.();
   }, [highlightMessageId, highlightRing, messages, openThoughts, onHighlightDone, pendingApprovals]);
   useEffect(() => {
@@ -1908,6 +1925,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
               ranOn={ranOn}
               account={account}
+              effort={effortWords(msg.reasoning_content)}
               tokens={tokens}
               cost={cost}
               done={done}
@@ -1951,7 +1969,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
 
               {/* Collapsible Reasoning Disclosure (the steps above already hold the thinking when they have it) */}
-              {msg.reasoning_content && !hasThinkingText(savedActivity) && (
+              {/* 30e: a CLI reply's only "reasoning" is its run line, which Ran on already says; its effort moves there */}
+              {msg.reasoning_content && !isCliRunLine(msg.reasoning_content) && !hasThinkingText(savedActivity) && (
                 <div className="mb-2 max-w-full">
                   <button
                     type="button"
@@ -2740,8 +2759,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
           // (display: contents when not flashing), so the flash never remounts the card: focus that "Go to the
           // approval" put on it stays, and so does a half-typed Deny reason. 30h: while flashing, the wrapper is as wide
           // as the card (the card's own max-w-2xl), so the amber box hugs the card instead of running to the column's
-          // edge. Top and bottom already match: the card's my-3 collapses through the wrapper.
-          <div key={approval.id} className={flashId === approval.id ? 'max-w-2xl rounded-xl kw-flash' : 'contents'}>
+          // edge. Top and bottom already match: the card's my-3 collapses through the wrapper. 30j: the wrapper has
+          // the same box idle and flashing (only kw-flash toggles), and !mt-0 cancels the list's space-y gap, so the
+          // card stays where it sat idle instead of hopping 8 / 12 px as the flash starts and ends. It is the one
+          // amber ring (the card root no longer gets its own), tagged with the flash kind as message rows are.
+          <div
+            key={approval.id}
+            className={`max-w-2xl rounded-xl !mt-0${flashId === approval.id ? ' kw-flash' : ''}`}
+            data-flash-kind={flashId === approval.id ? flashKind : undefined}
+          >
             <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
           </div>
         ))}
