@@ -896,6 +896,48 @@ test('22f (b): set a command inline, back up and allow, without leaving the card
   }
 });
 
+test('22f: focus lands on its target even when React yields before rendering it (the #895 flake)', async () => {
+  // React's scheduler gives up the thread after 5 ms of work. Advancing performance.now 10 ms per call makes it
+  // yield every time, as on a starved CI runner: a focus on a setTimeout(0) then runs before the render that
+  // mounts its target, and focus drops to <body> for good.
+  const perf = window.performance === globalThis.performance ? [globalThis.performance] : [globalThis.performance, window.performance];
+  const realNows = perf.map((p) => p.now);
+  let skew = 0;
+  const slow = (on) => perf.forEach((p, i) => (p.now = on ? () => (skew += 10) + realNows[i].call(p) : realNows[i]));
+  // Name the focused element instead of handing two jsdom nodes to assert (printing them runs out of memory).
+  const focused = () => {
+    const a = document.activeElement;
+    return a ? `${a.tagName.toLowerCase()}${a.dataset?.floorMain ? `[data-floor-main=${a.dataset.floorMain}]` : ''}` : 'nothing';
+  };
+  const waitFor = async (cond, ms = 2000) => {
+    const end = Date.now() + ms;
+    while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+  };
+  try {
+    let server = { state: 'no_command', age_s: null, bytes: null, path: null, error: null };
+    const host = await mount(m.ModernApprovalCard, {
+      approval: fx.FLOOR_GUESS_NO_COMMAND,
+      onResolve() {},
+      onSetCommand: async () => {
+        server = NONE;
+      },
+      onLoadBackup: async () => server,
+    });
+    slow(true);
+    await click(host.querySelector('[data-floor-main]'));
+    await waitFor(() => document.activeElement === host.querySelector('[data-floor-command] input'));
+    assert.ok(document.activeElement === host.querySelector('[data-floor-command] input'), `focus goes to the field, not ${focused()}`);
+    await typeInto(host.querySelector('[data-floor-command] input'), 'pg_dump app');
+    await click(host.querySelector('[data-floor-command-save]'));
+    await waitFor(() => document.activeElement === host.querySelector('[data-floor-main]'));
+    slow(false);
+    assert.equal(host.querySelector('[data-floor-main]')?.dataset.floorMain, 'backup');
+    assert.ok(document.activeElement === host.querySelector('[data-floor-main]'), `focus is on Back up first, not ${focused()}`);
+  } finally {
+    slow(false);
+  }
+});
+
 test('22f: a refused save keeps the field open with the server’s reason; an older server still moves on', async () => {
   const host = await mount(m.ModernApprovalCard, {
     approval: fx.FLOOR_NO_COMMAND,

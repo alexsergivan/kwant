@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { Database, Folder, Target, X, Check, Terminal } from 'lucide-react';
 import type { BackupResult, FloorBackup, FloorResolveOpts, ProdFloor } from '../../dev/types';
 import { parseBackupResult, parseBackupState } from '../../dev/types';
@@ -125,6 +125,18 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({
   // The server's backup state, re-read on focus and after a backup or a new command, so a backup taken (or a
   // command set) elsewhere counts without a reload. The server checks freshness again at answer time.
   const spaceId = floor.space_id;
+  // Focus moves after the render that shows its target, never on a timer: a setTimeout(0) can run before React
+  // commits when the scheduler yields (a slow machine), find the target not rendered yet and drop focus to <body>.
+  const focusNext = useRef<(() => HTMLElement | null) | null>(null);
+  const focusAfterRender = (target: () => HTMLElement | null) => {
+    focusNext.current = target;
+  };
+  useLayoutEffect(() => {
+    const target = focusNext.current;
+    if (!target) return;
+    focusNext.current = null;
+    target()?.focus();
+  });
   const busyRef = useRef(false);
   busyRef.current = view.busy || cmd.saving;
   const refresh = useCallback(async () => {
@@ -186,11 +198,11 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({
     if (off) return;
     setSkip({ open: false, sure: false });
     setCmd((c) => ({ ...c, open: true, error: null }));
-    window.setTimeout(() => cmdRef.current?.focus(), 0);
+    focusAfterRender(() => cmdRef.current);
   };
   const closeCommand = () => {
     setCmd((c) => ({ ...c, open: false, error: null }));
-    window.setTimeout(() => mainRef.current?.focus(), 0);
+    focusAfterRender(() => mainRef.current);
   };
   const saveCommand = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -206,7 +218,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({
       await onSetCommand(spaceId, value);
     } catch (err) {
       setCmd((c) => ({ ...c, saving: false, error: err instanceof Error ? err.message : 'Couldn’t save the command.' }));
-      window.setTimeout(() => cmdRef.current?.focus(), 0);
+      focusAfterRender(() => cmdRef.current);
       return;
     }
     const b = await refresh();
@@ -215,18 +227,18 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({
     setCmd({ open: false, value: '', saving: false, error: null });
     setJustSaved(true);
     // The main button is Back up first now, in the same place: focus goes there.
-    window.setTimeout(() => mainRef.current?.focus(), 0);
+    focusAfterRender(() => mainRef.current);
   };
 
   const openSkip = () => {
     if (off) return;
     setCmd((c) => ({ ...c, open: false, error: null }));
     setSkip({ open: true, sure: false });
-    window.setTimeout(() => skipRef.current?.focus(), 0);
+    focusAfterRender(() => skipRef.current);
   };
   const closeSkip = () => {
     setSkip({ open: false, sure: false });
-    window.setTimeout(() => (skipOpenerRef.current ?? mainRef.current)?.focus(), 0);
+    focusAfterRender(() => skipOpenerRef.current ?? mainRef.current);
   };
   const allowWithoutBackup = () => {
     if (off || !skip.sure || !view.skip) return;
