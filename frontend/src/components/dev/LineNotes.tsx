@@ -52,6 +52,7 @@ import { LineNotesError, newSendId, type LineNotesApi } from '../../dev/lineNote
 import { BarTrigger, type RecipientsLoad, type SendTo } from './RecipientPicker';
 import { badRecipientNotes, noDefaultNotes, target, toFor } from '../../dev/recipients';
 import type { RecipientBot } from '../../dev/types';
+import { useAfterRender, useFocusAfterRender } from '../../focusAfterRender';
 
 /** The app re-sends the `dev_card` SSE as this window event (DevDesk.tsx DEV_CARD_EVENT). */
 const DEV_CARD_EVENT = 'kwant:dev-card';
@@ -237,12 +238,14 @@ export const ChangesSection: React.FC<ChangesSectionProps> = ({ cardId, api, sta
     setWriting({ path: n.path, start: n.start, end: n.end, code: n.code, text: n.text, editing: n.id, asking: false, busy: false, error: null });
   };
 
+  const afterRender = useAfterRender();
+  // After the render that closes the note, so the line's button is back in the grid.
   const focusLine = (path: string, p: LinePoint | null) => {
-    window.setTimeout(() => {
+    afterRender(() => {
       const grid = document.querySelector<HTMLElement>(`[data-ln-grid="${CSS.escape(path)}"]`);
       const btn = p ? grid?.querySelector<HTMLElement>(`[data-ln-point="${p.side}:${p.line}"] button`) : null;
       (btn ?? grid?.querySelector<HTMLElement>('button[tabindex="0"]'))?.focus();
-    }, 0);
+    });
   };
 
   const stopWriting = () => {
@@ -610,6 +613,7 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
   const lines = useMemo(() => flatLines(f), [f]);
   const [active, setActive] = useState(0);
   const [shown, setShown] = useState(false);
+  const focusAfterRender = useFocusAfterRender();
   const wrap = useRef<HTMLDivElement>(null);
   const near = useNear(wrap, p.open);
   const drag = useRef<number | null>(null);
@@ -649,7 +653,7 @@ const FileBlock: React.FC<FileBlockProps> = (p) => {
   const focusAt = (i: number) => {
     const n = Math.max(0, Math.min(lines.length - 1, i));
     setActive(n);
-    window.setTimeout(() => wrap.current?.querySelector<HTMLElement>(`[data-ln-i="${n}"] button`)?.focus(), 0);
+    focusAfterRender(() => wrap.current?.querySelector<HTMLElement>(`[data-ln-i="${n}"] button`));
     return n;
   };
 
@@ -1133,6 +1137,7 @@ const AskThrowAway: React.FC<{ setWriting: ComposerProps['setWriting']; onCancel
         type="button"
         onClick={() => {
           setWriting((x) => (x ? { ...x, asking: false } : x));
+          // Kept on a timer: the note's text box is already on screen, and this confirm unmounts in the same update.
           window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('[data-ln-text]')?.focus(), 0);
         }}
         className={`kw-btn-primary ${big ? 'min-h-11' : ''}`}

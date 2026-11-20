@@ -302,11 +302,21 @@ export function toView(fit: Fit, page: { width: number; height: number }, box: P
   };
 }
 
-/** The tag goes above the outline, or below it when there's no room above (inside it as a last resort). */
-export function tagPlacement(outline: PointBox, viewHeight: number, tagHeight = 18): 'above' | 'below' | 'inside' {
-  if (outline.y >= tagHeight + 2) return 'above';
+/** The Point bar across the top of the view (PointLayer's `h-7`): the tag never goes on it. */
+export const POINT_BAR_H = 28;
+
+/** The tag goes above the outline when it clears the Point bar, else below it, else inside it (bottom left). */
+export function tagPlacement(outline: PointBox, viewHeight: number, barHeight = POINT_BAR_H, tagHeight = 18): 'above' | 'below' | 'inside' {
+  if (outline.y >= barHeight + tagHeight + 2) return 'above';
   if (outline.y + outline.height + tagHeight + 2 <= viewHeight) return 'below';
   return 'inside';
+}
+
+/** The tag's top for a placement: 2 px off the outline, or 22 px up from the outline's (visible) bottom when inside. */
+export function tagTop(outline: PointBox, place: 'above' | 'below' | 'inside', viewHeight: number, tagHeight = 18): number {
+  if (place === 'above') return outline.y - tagHeight - 2;
+  if (place === 'below') return outline.y + outline.height + 2;
+  return Math.min(outline.y + outline.height, viewHeight) - tagHeight - 4;
 }
 
 /** The arrow keys' directions. */

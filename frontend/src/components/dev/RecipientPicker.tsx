@@ -28,6 +28,7 @@ import {
   loadShown,
   saveShown,
 } from '../../dev/recipients';
+import { useFocusAfterRender } from '../../focusAfterRender';
 
 const RING = 'outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400';
 
@@ -499,12 +500,16 @@ export function useSendTo(
   const anchorRef = useRef<HTMLElement | null>(null);
   anchorRef.current = anchor;
   // Closing gives focus back to the trigger that opened the picker (design §2).
-  const close = React.useCallback((refocus: boolean = true) => {
-    const a = anchorRef.current;
-    setAnchor(null);
-    after.current = null;
-    if (a && refocus) window.setTimeout(() => a.isConnected && a.focus({ preventScroll: true }), 0);
-  }, []);
+  const focusAfterRender = useFocusAfterRender();
+  const close = React.useCallback(
+    (refocus: boolean = true) => {
+      const a = anchorRef.current;
+      setAnchor(null);
+      after.current = null;
+      if (a && refocus) focusAfterRender(() => (a.isConnected ? a : null), { preventScroll: true });
+    },
+    [focusAfterRender],
+  );
 
   if (!fetcher) return { st: null, picker: null, say: '' };
 

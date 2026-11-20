@@ -86,6 +86,17 @@ test('geometry: object-contain letterbox, view to page and back, clipped outline
   assert.deepEqual(m.toView(fit, { width: 1280, height: 800 }, { x: -20, y: 790, width: 100, height: 40 }), { x: 0, y: 445, width: 40, height: 5 });
   assert.equal(m.tagPlacement({ x: 0, y: 4, width: 10, height: 10 }, 400), 'below');
   assert.equal(m.tagPlacement({ x: 0, y: 4, width: 10, height: 395 }, 400), 'inside');
+  // 30o: the tag never covers the 28 px Point bar
+  const full = { x: 0, y: 0, width: 1265, height: 900 };
+  const low = { x: 0, y: 30, width: 200, height: 40 };
+  assert.equal(m.tagPlacement(low, 900), 'below', 'y 30 has no room above the bar any more');
+  assert.equal(m.tagPlacement(full, 900), 'inside', 'a full-view element keeps its tag inside');
+  assert.equal(m.tagTop(full, 'inside', 900), 878, 'bottom left inside the outline, not on the bar');
+  assert.equal(m.tagTop(low, 'below', 900), 72);
+  assert.equal(m.tagPlacement({ x: 0, y: 48, width: 10, height: 10 }, 900), 'above', 'above from y 48 (bar 28 + tag 18 + 2)');
+  assert.equal(m.tagTop({ x: 0, y: 48, width: 10, height: 10 }, 'above', 900), 28, 'an above tag starts right under the bar');
+  assert.equal(m.tagTop({ x: 0, y: 100, width: 10, height: 2000 }, 'inside', 900), 878, 'inside measures from the visible bottom');
+  assert.equal(m.POINT_BAR_H, 28);
 });
 
 test('composer: n/of by the picks\' order, other files not counted; the bubble parses it back', () => {

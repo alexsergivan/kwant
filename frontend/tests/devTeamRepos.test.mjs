@@ -380,6 +380,35 @@ test('DOM: Remove on a hand row sends DELETE …/dev_mode/repos/:key; team rows 
   root.unmount();
 });
 
+test('DOM: after Remove, focus lands on Undo even when a frame comes before React renders it', async () => {
+  // A frame that is due before React's scheduler task (raf-focus-after-render): an update made after an await or a
+  // .then renders in that task, so a focus on requestAnimationFrame ran first, found the old DOM and focus dropped
+  // to <body>. Running each frame callback in a microtask forces that order every time.
+  const realRaf = [g.requestAnimationFrame, window.requestAnimationFrame];
+  const frameFirst = (on) => {
+    const raf = on ? (cb) => (queueMicrotask(() => cb(performance.now())), 0) : null;
+    g.requestAnimationFrame = raf ?? realRaf[0];
+    window.requestAnimationFrame = raf ?? realRaf[1];
+  };
+  // Name the focused element instead of handing jsdom nodes to assert (printing them can run out of memory).
+  const focused = () => {
+    const a = document.activeElement;
+    return a ? `${a.tagName.toLowerCase()} "${a.textContent.trim().slice(0, 30)}"` : 'nothing';
+  };
+  const { root } = await line({ repos: [APP, SITE, DOCS] });
+  try {
+    frameFirst(true);
+    await click(document.querySelector(`[data-dv-row-action="${DOCS.key}"]`));
+    await frame();
+    frameFirst(false);
+    assert.ok(has('[data-dv-undo]'), 'Undo is there');
+    assert.ok(document.activeElement === document.querySelector('[data-dv-undo]'), `focus is on Undo, not ${focused()}`);
+  } finally {
+    frameFirst(false);
+    root.unmount();
+  }
+});
+
 test('DOM: a 409 team_repo on Remove shows the team note as the error', async () => {
   const { root } = await line({ repos: [APP, SITE, DOCS] });
   server.state = { ...server.state, repos: server.state.repos.map((r) => (r.key === DOCS.key ? { ...r, added_by: 'team', team: 'Docs' } : r)) };
