@@ -550,6 +550,14 @@ impl Database {
         Ok(r.rows_affected() == 1)
     }
 
+    /// Closes an open ask and returns it as it was closed: `None` for every caller but the one that
+    /// closed it. One statement, so it and [`Self::telegram_ask_sent`] agree on who edits a card
+    /// closed around the time it was sent: the closer when the id was already stored (its
+    /// `message_id` is set), the sender otherwise (it reads `closed`).
+    pub async fn telegram_close_open_ask(&self, id: &str) -> Result<Option<TelegramAsk>, DbError> {
+        Ok(sqlx::query_as::<_, TelegramAsk>("UPDATE telegram_asks SET state = 'closed' WHERE id = ? AND state = 'open' RETURNING *").bind(id).fetch_optional(&self.pool).await?)
+    }
+
     pub async fn telegram_reopen_ask(&self, id: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE telegram_asks SET state = 'open' WHERE id = ?").bind(id).execute(&self.pool).await?;
         Ok(())
