@@ -10,6 +10,7 @@ import { DevModeState, DevTeamRef, devApi, devStore, normaliseRepo } from '../de
 import { foundRepo, hasFoundCode, readableRepos } from '../devSuggest';
 import { JiraSettings } from './JiraSettings';
 import { useDevMode } from './DevModeSwitch';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 const card = 'rounded-xl border border-zinc-800 bg-zinc-950/60';
 /** Off with a repo found: the accent family of the primary buttons (no shadow, no glow, no holo). */
@@ -68,6 +69,7 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
     setBackup(state?.backup_command ?? '');
   }, [baseRepo, baseBranch, state?.backup_command]);
 
+  const focusAfterRender = useFocusAfterRender();
   // 0.9.8 (first-screen A): the header switch is gone, so this card is where Dev mode is turned on, the
   // first time too. It shows as soon as the space's state has loaded.
   if (!state) return null;
@@ -100,7 +102,7 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
   const turnOn = () => {
     if (repoErr) {
       setDetails(true);
-      setTimeout(() => repoInput.current?.focus(), 0);
+      focusAfterRender(() => repoInput.current);
       return;
     }
     if (!accent && !normal) {

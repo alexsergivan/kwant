@@ -331,6 +331,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   const closeSend = () => {
     setSendOpen(false);
     setSendErr(null);
+    // Focus on a frame, not after render (kept): only Cancel, Escape or the sheet close call this, and the button is already on screen
     requestAnimationFrame(() => sendBtnRef.current?.focus());
   };
   const sendBack = async () => {
@@ -701,6 +702,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
           denyAllOpen={denyAllOpen}
           onClose={() => {
             setRollOpen(null);
+            // Focus on a frame, not after render (kept): only Keep my work or Escape call this, and the button is already on screen
             requestAnimationFrame(() => rollBtnRef.current?.focus());
           }}
           onDone={(r, extra) => {

@@ -8,6 +8,7 @@
 // floor and the command guards are on in every status.
 
 import React, { useEffect, useId, useRef, useState } from 'react';
+import { useFocusAfterRender } from '../focusAfterRender';
 import { ChevronDown, Info } from 'lucide-react';
 import {
   DevModeError,
@@ -84,6 +85,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   const [note, setNote] = useState<string | null>(null);
   const [removed, setRemoved] = useState<(RemovedRepo & { busy: boolean; error: string | null }) | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
+  const focusAfterRender = useFocusAfterRender();
   // One 200 ms ping when a check lands, not on first paint.
   const firstCheck = useRef(checkedAt);
   const ping = checkedAt != null && checkedAt !== firstCheck.current;
@@ -114,6 +116,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   const loneTeam = single && line.action === 'link' ? ownTeam(state.repos[0]) ?? teams.find((t) => !state.repos.some((r) => r.team === t.name)) ?? null : null;
 
   const focusAfter = (id: string) => {
+    // Focus on a frame, not after render (kept): only Cancel or Escape call this, and React renders that update before the next frame
     requestAnimationFrame(() => {
       const el = [...(wrap.current?.querySelectorAll<HTMLElement>('[data-dv-row-action], [data-dv-status-action], [data-dv-norepo-action]') ?? [])].find(
         (b) => b.dataset.dvRowAction === id || (id === 'line' && b.dataset.dvStatusAction) || (id === 'norepo' && b.dataset.dvNorepoAction !== undefined),
@@ -134,7 +137,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
         // A team's repo link comes back as that team's link; a hand row as a hand row (answer 5).
         const team = repo.added_by === 'team' && repo.from === 'repo' ? row.teamId : null;
         setRemoved({ repo: repo.repo, team, teamName: team ? row.team : null, busy: false, error: null });
-        requestAnimationFrame(() => wrap.current?.querySelector<HTMLElement>('[data-dv-undo]')?.focus());
+        focusAfterRender(() => wrap.current?.querySelector<HTMLElement>('[data-dv-undo]'));
       },
       (e: unknown) => {
         setBusy(null);
