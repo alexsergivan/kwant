@@ -1125,12 +1125,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
   // 22i: a Needs-attention landing ('ask') is the same amber flash as search, tagged so tests tell them apart.
   const [flashKind, setFlashKind] = useState<'search' | 'quote' | 'ask'>('search');
-  // 30n: a second "Go to the approval" (or search hit) on what is already flashing restarts the ring and its 2.4 s,
-  // like the quote jump: clear the flash, then set it again. Setting the same id again would change nothing. The
-  // second step waits for the cleared flash to commit, then two frames, so the browser draws a frame without
+  // 30n: a second "Go to the approval" (or search hit) on what is already flashing restarts the ring and its 2.4 s;
+  // 30q: so does a second quote jump (1.6 s). Clear the flash, then set it again. Setting the same id again would
+  // change nothing. The second step waits for the cleared flash to commit, then two frames, so the browser draws a frame without
   // kw-flash and the CSS animation starts over (rAFs queued at once can both run before React commits the null).
   const [flashNext, setFlashNext] = useState<string | null>(null);
-  const restartFlash = (id: string, kind: 'search' | 'ask') => {
+  const restartFlash = (id: string, kind: 'search' | 'quote' | 'ask') => {
     setFlashId(null);
     setFlashKind(kind);
     setFlashNext(id);
@@ -1283,9 +1283,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
     if (el.tabIndex < 0 || el.hasAttribute('tabindex')) el.focus({ preventScroll: true });
-    setFlashId(null);
-    setFlashKind('quote');
-    requestAnimationFrame(() => setFlashId(quoteJump.id));
+    // 30q: same race-free restart as search and approvals, so a second click on a quote always rings again.
+    restartFlash(quoteJump.id, 'quote');
   }, [quoteJump, messages, openThoughts]);
 
   // Thumbs on the bot's newest question are a yes or no; once one has answered it, they're feedback again.
