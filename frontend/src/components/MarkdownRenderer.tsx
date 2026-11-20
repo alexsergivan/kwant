@@ -10,6 +10,7 @@ import { ReplyText } from './results/ReplyText';
 import { inlineCodeClass, linkClass } from './markdownInline';
 import { DOC_SCHEME } from '../spaceDocs';
 import { DocQuoteChip } from './DocQuoteChip';
+import { copyText } from '../copyText';
 
 /** react-markdown drops unknown schemes; a space document's address is kept for its quote chip. */
 const urlTransform = (url: string) => (url.startsWith(DOC_SCHEME) ? url : defaultUrlTransform(url));
@@ -22,10 +23,13 @@ interface CodeBlockProps {
 const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(value);
+  // 31s: "copied" is the 2 s result window; copyFailed says the clipboard refused (or there is none).
+  const [copyFailed, setCopyFailed] = useState(false);
+  const handleCopy = async () => {
+    const ok = await copyText(value);
+    setCopyFailed(!ok);
     setCopied(true);
-    playSfx('click');
+    if (ok) playSfx('click');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -39,13 +43,18 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
         <button
           type="button"
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors cursor-pointer"
+          className="flex items-center gap-1 px-2 py-0.5 sm:py-1.5 sm:-my-1 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors cursor-pointer"
           title="Copy code"
         >
-          {copied ? (
+          {copied && !copyFailed ? (
             <>
               <Check size={12} className="text-ok" />
               <span className="text-ok">Copied</span>
+            </>
+          ) : copied ? (
+            <>
+              <Copy size={12} className="text-bad" />
+              <span className="text-bad">Couldn’t copy</span>
             </>
           ) : (
             <>
@@ -54,6 +63,9 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
             </>
           )}
         </button>
+        <span className="sr-only" aria-live="polite">
+          {copied ? (copyFailed ? 'Couldn’t copy' : 'Copied') : ''}
+        </span>
       </div>
       <pre className="p-3.5 overflow-x-auto text-xs font-mono text-zinc-200 leading-relaxed">
         <code>{value}</code>
