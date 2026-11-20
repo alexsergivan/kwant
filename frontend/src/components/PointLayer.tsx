@@ -22,6 +22,7 @@ import {
   pickedCountText,
   spokenText,
   tagPlacement,
+  tagTop,
   tagText,
   toPage,
   toView,
@@ -39,6 +40,8 @@ export interface PointSink {
   done(key: string, pick: PointPick): void;
   /** The capture failed: the chip goes away. */
   fail(key: string): void;
+  /** Goes up each time a message carrying at least one pick is sent: Point turns off then (30o). */
+  sentPicks?: number;
 }
 
 export interface PointLayerProps {
@@ -365,7 +368,7 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
       onKeyDown={onKeyDown}
       className="absolute inset-0 z-10 cursor-crosshair rounded-xl ring-2 ring-inset ring-sky-500/70 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-sky-300"
     >
-      <div className="absolute top-0 inset-x-0 h-7 px-2.5 flex items-center justify-between gap-2 bg-[rgb(14_10_33/0.88)] text-[11.5px] text-zinc-100 pointer-events-none rounded-t-xl">
+      <div className="absolute top-0 inset-x-0 z-[1] h-7 px-2.5 flex items-center justify-between gap-2 bg-[rgb(14_10_33/0.88)] text-[11.5px] text-zinc-100 pointer-events-none rounded-t-xl">
         <span className="truncate font-semibold">{bar?.kind === 'waiting' ? bar.text : topText}</span>
         {!phone && <span className="shrink-0 text-zinc-400">{POINT_COPY.keys}</span>}
       </div>
@@ -387,7 +390,7 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
             }`}
             style={{
               left: Math.max(4, Math.min(outline.x, size.width - 4 - tagW)),
-              top: place === 'above' ? outline.y - 20 : place === 'below' ? outline.y + outline.height + 2 : outline.y + 2,
+              top: tagTop(outline, place, size.height),
             }}
           >
             {tagLabel}
