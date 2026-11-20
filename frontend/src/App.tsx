@@ -60,7 +60,8 @@ import { RouteChoiceCard } from './components/RouteChoiceCard';
 import { RouteChoiceMeta, applyRouteChoice, correctRoute, isAskingReply, rerouteTargetsFor, resolveRouteChoice } from './routeChoice';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { InboxNew } from './components/InboxNew';
-import { inboxBadge, isReview, type InboxItem } from './api/inbox';
+import { isReview, type InboxItem } from './api/inbox';
+import { inboxCount as foldedInboxCount } from './doneAway';
 import { batchItems, inboxNav, loadInbox, openItem, useInbox } from './inboxStore';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { MissionBoardPage } from './components/MissionBoardView';
@@ -631,7 +632,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [awayCount, setAwayCount] = useState(0);
   // 0.9.0 V1: the Inbox store (GET /api/inbox, or /api/away before the server has it).
   const inboxState = useInbox();
-  const inboxCount = inboxBadge(inboxState.data, { unseen: { total: awayCount } }, prepushWaiting);
+  // 30z: a routine run folded into its review item counts once (doneAway.inboxCount).
+  const inboxCount = useMemo(() => foldedInboxCount(inboxState.data, { unseen: { total: awayCount } }, prepushWaiting), [inboxState.data, awayCount, prepushWaiting]);
   const reviewItems: InboxItem[] = inboxState.data ? [...inboxState.data.items, ...batchItems(inboxState.data)].filter(isReview) : [];
   // "Needs you" nudges (attention.ts): what waits on the person, the pill, and the "Show nudges" setting.
   const [awayWaiting, setAwayWaiting] = useState(0);
