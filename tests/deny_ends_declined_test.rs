@@ -161,3 +161,122 @@ async fn the_routine_list_carries_the_last_runs_error() {
     db.start_routine_run(&id, "manual", "ok", None).await.unwrap();
     assert_eq!(listed().await, (json!("ok"), Value::Null));
 }
+
+/// 31k: a card is answerable as soon as it is listed. The bot is held right after its card shows
+/// up `pending` (before it has finished setting the card up); the person's Deny in that moment
+/// still reaches the bot, is never "This card expired", and the run ends on their no.
+#[tokio::test]
+async fn a_deny_on_a_card_just_listed_reaches_the_bot() {
+    let env = setup().await;
+    env.state
+        .db
+        .set_space_approvals(&SpaceId::default_space(), "ask")
+        .await
+        .unwrap();
+    env.state.approval_wait_ms.store(60_000, Ordering::Relaxed);
+    let gate = kwnt::server::mcp_runtime::hold_next_card_after_listing(&env.a);
+    let marker = call_tool_marker(
+        "bash",
+        json!({"command": "rm -rf DENY31K_BUILD", "description": "clean the build"}),
+    );
+    let (s, r) = call(
+        &env.app,
+        "POST",
+        "/api/routines",
+        Some(json!({"kwant_id": env.a, "name": "Clean", "instructions":
+            format!("Clean the build {marker} ASKFIRST ASKAS:Bash REPLYTAG:deny31k"),
+            "schedule": {"type": "daily", "time": "03:00", "tz": "UTC"}})),
+    )
+    .await;
+    assert_eq!(s.as_u16(), 201, "{r}");
+    let id = r["id"].as_str().unwrap().to_string();
+    let (s, run) = call(&env.app, "POST", &format!("/api/routines/{id}/run"), None).await;
+    assert_eq!(s.as_u16(), 202, "{run}");
+    let run_id = run["id"].as_str().unwrap().to_string();
+
+    let open = || async {
+        env.state
+            .db
+            .list_approvals(&SpaceId::default_space(), Some("pending"), Some(&env.a))
+            .await
+            .unwrap()
+    };
+    wait_for("the card", || async { !open().await.is_empty() }).await;
+    let ticket = open().await[0].id.clone();
+    let (s, v) = call(
+        &env.app,
+        "POST",
+        &format!("/api/approvals/{ticket}/resolve"),
+        Some(json!({"decision": "deny"})),
+    )
+    .await;
+    assert!(s.is_success(), "a Deny on a listed card reaches the bot: {v}");
+    gate.notify_one();
+
+    let find = |runs: Value| {
+        runs.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == run_id.as_str())
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    wait_for("the run to end", || async {
+        let (_, runs) = call(&env.app, "GET", &format!("/api/routines/{id}/runs"), None).await;
+        let run = find(runs);
+        !run.is_null() && run["status"] != "running"
+    })
+    .await;
+    let (_, runs) = call(&env.app, "GET", &format!("/api/routines/{id}/runs"), None).await;
+    let run = find(runs);
+    assert_eq!(
+        (&run["status"], &run["error"]),
+        (&json!("incomplete"), &json!("You said no to Bash; nothing ran")),
+        "{run}"
+    );
+    let card = env.state.db.get_approval(&ticket).await.unwrap().unwrap();
+    assert_eq!(card.status, "denied");
+}
+
+/// 31k: the same for a local shell command's card (`approve_local_shell`): a Deny the moment it
+/// is listed reaches the waiting command, which does not run.
+#[tokio::test]
+async fn a_deny_on_a_local_shell_card_just_listed_reaches_it() {
+    let env = setup().await;
+    env.state
+        .db
+        .set_space_approvals(&SpaceId::default_space(), "ask")
+        .await
+        .unwrap();
+    let gate = kwnt::server::mcp_runtime::hold_next_card_after_listing(&env.a);
+    let folder = tempfile::tempdir().unwrap();
+    let (state, a, f) = (env.state.clone(), env.a.clone(), folder.path().to_path_buf());
+    let waiting = tokio::spawn(async move {
+        kwnt::server::computer::approve_local_shell(&state, &a, "rm -rf DENY31K_LOCAL", &f).await
+    });
+    let open = || async {
+        env.state
+            .db
+            .list_approvals(&SpaceId::default_space(), Some("pending"), Some(&env.a))
+            .await
+            .unwrap()
+    };
+    wait_for("the card", || async { !open().await.is_empty() }).await;
+    let ticket = open().await[0].id.clone();
+    let (s, v) = call(
+        &env.app,
+        "POST",
+        &format!("/api/approvals/{ticket}/resolve"),
+        Some(json!({"decision": "deny"})),
+    )
+    .await;
+    assert!(s.is_success(), "a Deny on a listed card reaches the command: {v}");
+    gate.notify_one();
+    let ran = tokio::time::timeout(std::time::Duration::from_secs(30), waiting)
+        .await
+        .expect("the command heard the Deny")
+        .unwrap();
+    assert!(!ran, "nothing runs");
+    let card = env.state.db.get_approval(&ticket).await.unwrap().unwrap();
+    assert_eq!(card.status, "denied");
+}

@@ -410,6 +410,7 @@ async fn approve_local_shell_with(
             return false;
         }
     };
+    super::mcp_runtime::card_listed(target_id).await;
     let rx = state
         .broker
         .request_approval(ApprovalRequest {
