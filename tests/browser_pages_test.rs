@@ -503,9 +503,13 @@ async fn a_page_past_the_browsers_process_budget_closes_the_oldest_idle_job_page
     // another team's, and well under that team's own cap of four
     open_page(&state, &b, "b2").await.expect("a third job page opens");
     assert_eq!(open_pages(&state).await, vec![key(&b, "b1"), key(&b, "b2")], "team a's idle page made room");
-    let controllers = state.browser_controllers.lock().await;
-    assert!(controllers.contains_key(&a) && controllers.contains_key(&b), "team pages are never closed to make room");
-    drop(controllers);
+    // A job page's team page is the browser service's (its context), not a kwant controller:
+    // check it where the budget counts it, as a live page in the browser
+    let team_pages_kept = || async {
+        let live: Vec<String> = state.browser_service.live_pages().await.into_iter().map(|(k, _)| k).collect();
+        live.contains(&a) && live.contains(&b)
+    };
+    assert!(team_pages_kept().await, "team pages are never closed to make room");
 
     // Every job page held: nothing closes, and the job is told the browser is full
     hold(&state, &b, &key(&b, "b1"), "t1").await;
@@ -523,6 +527,7 @@ async fn a_page_past_the_browsers_process_budget_closes_the_oldest_idle_job_page
     assert!(is_error);
     assert_eq!(text, browser_pages::browser_full_message());
     assert_eq!(open_pages(&state).await, vec![key(&b, "b1"), key(&b, "b2")], "nothing was closed");
+    assert!(team_pages_kept().await, "nor a team page");
     assert!(state.browser_service.job_pages(&a).await.is_empty(), "the refused pages aren't counted");
 }
 
