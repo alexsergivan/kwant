@@ -1,6 +1,7 @@
 // Per-bot model calls and tokens from `GET /api/kwants/:id/model-usage` (API-key, custom API and
 // Claude CLI bots), per-day totals from `GET /api/usage/daily`, and the split on each reply.
 import { request } from './threads';
+import { KIND_LABELS } from './profiles';
 
 export type UsagePurpose = 'reply' | 'tool_round' | 'summary' | string;
 
@@ -156,10 +157,12 @@ export function replyCostWords(meta: string | null | undefined): { text: string;
   return { text: parts.join(' · '), note };
 }
 
-/** reply-chrome part 4: "Claude Sonnet 5.5, on your Work account" from ranOnLabel's "Claude · Sonnet 5.5" and the account. */
+/** reply-chrome part 4: "Claude Sonnet 5.5, on your Work account" from ranOnLabel's "Claude · Sonnet 5.5" and the account.
+ *  The built-in account ("This machine", a CLI's own login) isn't one the person named: "Claude Opus 5.5, on this machine". */
 export function ranOnWords(ranOn: string | null | undefined, account: string | null | undefined): string | null {
   const model = ranOn ? ranOn.split(' · ').join(' ') : null;
   const acct = account?.trim();
+  if (acct && acct.toLowerCase() === KIND_LABELS.system.toLowerCase()) return model ? `${model}, on this machine` : KIND_LABELS.system;
   if (!model) return acct ? (/account$/i.test(acct) ? `Your ${acct}` : `The ${acct} account`) : null;
   if (!acct) return model;
   return /account$/i.test(acct) ? `${model}, on your ${acct}` : `${model}, on the ${acct} account`;

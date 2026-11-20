@@ -39,6 +39,75 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0931" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.31</p>
+      <h2>The approval card stays put when it flashes, and Ran on keeps the effort in one piece</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0931">Smaller changes in 0.9.31</h3>
+        <p>When Go to the approval flashes the approval card, the card now stays where it is instead of jumping down and back. On a narrow window, Details' Ran on now keeps "· medium effort" on one line instead of splitting it. Pressing Stop on a chat while a hand-off reports back now also stops the lead's follow-up turn; the result still shows once. Pressing Go to the approval again while the card is still flashing now starts the flash over.</p>
+      </div>
+      <div class="frame">{{shot:v0931-effort-one-line|kwant on a phone-width screen: Ann's reply in Trailhead Outfitters with Details open. Ran on wraps as "Claude Sonnet, on the Trailhead Outfitters Team account", with "· medium effort" whole on the next line. Below are Cost "1,500 tokens of new work", "Worked 0:01 · 1 step" and her answer that the waitlist badge is WaitlistBadge in src/components/trips/WaitlistBadge.tsx, which TripCard shows when seats_left is 0.}}</div>
+    </div>
+  </div>
+</section>
+
+<section id="new-0930" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.30</p>
+      <h2>Details shows the effort, not a copy of the run line</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0930">Smaller changes in 0.9.30</h3>
+        <p>A reply made through a CLI no longer shows its "Executed via … CLI" line as if it were reasoning; Details shows the effort on the Ran on row instead. After the idea jar hits a usage limit or its cap, it no longer starts one more take a few minutes later. Details' Ran on now reads "on this machine" for a reply that ran on the built-in account, instead of "on the This machine account". When Go to the approval flashes the approval card, the amber outline now fits the card instead of running past it on a wide window. When a teammate finishes a hand-off, the chat now reads busy until its lead picks up the result, so the lead is never started on a second review of it. Go to the approval, pressed from the keyboard, now moves focus to the approval card itself, and the Approval waiting pill steps aside while the needs-you bar already points at it.</p>
+      </div>
+      <div class="frame">{{shot:v0930-details-effort|kwant chat with Ann in Trailhead Outfitters. You asked "Where does the waitlist badge on the trip card come from?". Ann's reply has Details open: Ran on "Claude Sonnet, on this machine · medium effort", Cost "1,500 tokens of new work" and "Worked 0:01 · 1 step", with no reasoning disclosure above it. She answers that it's WaitlistBadge in src/components/trips/WaitlistBadge.tsx, which TripCard shows when seats_left is 0.}}</div>
+    </div>
+  </div>
+</section>
+
+<section id="new-0929" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.29</p>
+      <h2>An approval asks once, on its own card</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0929">Smaller changes in 0.9.29</h3>
+        <p>The "needs you" bar above the message box now steps aside while the approval it points to is on screen, and comes back when you scroll the card away.</p>
+      </div>
+      <div class="frame">{{shot:v0929-strip-aside|kwant chat with Ann in Trailhead Outfitters. You asked "Can you pad the order numbers on the receipts to six digits?". Ann is "Waiting for your OK", and her "Approval needed" card asks to run npm install left-pad in ~/demo/shop, with Say why, Deny, Always this session and Allow once. Below it, "Ann is waiting for your OK · 0:05" sits right above the message box, with no needs-you bar. The sidebar shows NEEDS YOU · 1 for Ann.}}</div>
+    </div>
+  </div>
+</section>
+
+<section id="new-0928" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.28</p>
+      <h2>A runaway command can't take kwant down, and your reason for Deny shows in Details</h2>
+      <p>A runaway command can't take kwant down: on Linux, the system now stops the command or AI CLI that used up the memory, not kwant, and kwant says why. Your reason for Deny shows in Details, with the step it stopped.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="deny-reason-details">Your reason shows in Details</h3>
+        <p>When you deny with <strong>Say why</strong>, Details keep your words with the step you stopped: under <em>You said no; nothing ran</em> on a command, or on the card's own row. Secrets in them are masked. A plain Deny reads as before.</p>
+      </div>
+      <div class="frame">{{shot:v0928-deny-reason-details|kwant chat with Ann (Frontend) in Trailhead Outfitters. You asked "Can you pad the order numbers on the receipts to six digits?". Under Ann's reply, Details are open: "Worked 0:02 · 1 step · you said no to 1", then the step "Running npm install left-pad" with a You said no chip. Its open detail reads "You said no; nothing ran" and "You said why: “Use padStart, no new package”", and the tool list shows Bash as Denied. Ann replies that she'll use String(n).padStart(6, '0') instead.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="runaway-command" class="span3"><h3>A runaway command can't take kwant down</h3><p>On Linux, everything a bot starts, its commands and the claude, codex or grok CLI, is now first in line when the computer runs out of memory, so the system stops the runaway one, not kwant. kwant says so in plain words: the computer ran out of memory, or something outside kwant stopped it. kwant keeps running, and so do your chats.</p></li>
+      <li id="fixes-0928" class="span3"><h3>Smaller changes in 0.9.28</h3><p>On a narrow phone, an approval card's Deny and Always buttons keep each label on one line; when two don't fit side by side, one moves to its own line. Get started, the welcome in a new chat, now opens at its top instead of scrolled to the bottom. Someone new to kwant no longer sees the notice that Dev mode and Approvals moved, a change they never saw, and a space's Approvals setting now marks Ask only when risky as the default.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-0927" class="fgroup">
   <div class="wrap">
     <div class="section-head">

@@ -211,19 +211,36 @@ where
     panic!("timed out waiting for {what}");
 }
 
-/// No turn has run for a second: the chain has settled.
-async fn settled(env: &Env) {
-    let mut quiet = 0;
-    for _ in 0..300 {
-        let (_, t) = call(&env.app, "GET", "/api/turns", None).await;
-        let busy = t["turns"].as_array().is_some_and(|a| !a.is_empty());
-        quiet = if busy { 0 } else { quiet + 1 };
-        if quiet >= 5 {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+/// What still runs for the test's chat: a turn, a job holding the chat, or one of the chat's
+/// hand-offs that runs or whose job is held.
+/// - A lead resumed with results holds the chat until its keep-going turns and the card they may
+///   open are done: they run inside that job (delegation.rs `continue_lead`, then
+///   `keep_going::after_lead_turn`). An answered card holds it too (questions.rs `resume`,
+///   keep_going.rs `on_card_answer`), and so does the person's message (routes.rs `send_chat`).
+/// - A hand-off runs in a job keyed by its own id (delegation.rs `spawn_run`). That job ends with
+///   the specialist's turn, before `finish` saves the result and resumes the lead (`run` drops it
+///   first), so a test whose chain still has a hand-off to finish waits for the lead's results
+///   turn on it before it settles.
+async fn running(env: &Env) -> Vec<String> {
+    let turns = &env.state.turns;
+    let mut what: Vec<String> = turns.active_turns().iter().map(|t| format!("{} turn of {} in {}", t.state, t.kwant_id, t.context_id)).collect();
+    if turns.has_job(&env.channel) {
+        what.push(format!("a job holding the chat: {:?}", turns.job_keys_holding(&env.channel)));
     }
-    panic!("turns kept running");
+    for d in delegations(env).await {
+        if d.origin_channel_id.as_deref() == Some(env.channel.as_str()) && (d.status == "running" || turns.has_job(&d.id)) {
+            what.push(format!("the hand-off \u{201c}{}\u{201d} ({}): {:?}", d.task, d.status, turns.job_keys_holding(&d.id)));
+        }
+    }
+    what
+}
+
+/// Waits until the chat's work has ended, then checks nothing starts there again.
+async fn settled(env: &Env) {
+    wait_for("the chat's work to end", || async { running(env).await.is_empty() }).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let late = running(env).await;
+    assert!(late.is_empty(), "started in the chat after its work ended: {late:?}");
 }
 
 async fn messages(env: &Env) -> Vec<Message> {
@@ -296,6 +313,7 @@ async fn a_stalled_lead_gets_a_keep_going_turn_and_its_mention_goes_out() {
     person_asks(&env, "Build the level, both parts.").await;
     hand_off(&env, "Check part 1", true).await;
     wait_for("the second hand-off", || async { delegations(&env).await.len() == 2 }).await;
+    wait_for("the lead's results turn on the second hand-off", || async { env.prompts("res").len() == 2 }).await;
     settled(&env).await;
 
     let kg = env.prompts("kg");
@@ -347,6 +365,7 @@ async fn a_bots_chat_api_message_is_not_quoted_as_the_persons() {
     env.state.db.insert_message_with(&input, &extra).await.unwrap();
     hand_off(&env, "Check part 1", true).await;
     wait_for("the second hand-off", || async { delegations(&env).await.len() == 2 }).await;
+    wait_for("the lead's results turn on the second hand-off", || async { env.prompts("res").len() == 2 }).await;
     settled(&env).await;
 
     let kg = env.prompts("kg");

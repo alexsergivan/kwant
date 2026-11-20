@@ -13,6 +13,8 @@ export interface ReplyFacts {
   /** "Claude · Opus 5.5": the engine and model the reply ran on. */
   ranOn?: string | null;
   account?: string | null;
+  /** 30e: a CLI reply's effort in words ("medium effort"), shown after Ran on; never invented when absent. */
+  effort?: string | null;
   tokens?: { label: string; detail: string } | null;
   /** Details' Cost row in words (replyCostWords); `tokens.detail` is its tooltip. */
   cost?: { text: string; note: string | null } | null;
@@ -68,7 +70,7 @@ export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
 const hasContent = (n: React.ReactNode) => React.Children.toArray(n).length > 0;
 
 /** A bot reply's header: one line, "Name · [Done] · 3:42 PM · Details", and a Details toggle holding the rest in words. */
-export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, cost, failed = false, outcome, openRequest, note, route, done, handoff, now, sentToTelegram = false, children }) => {
+export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, effort, tokens, cost, failed = false, outcome, openRequest, note, route, done, handoff, now, sentToTelegram = false, children }) => {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (openRequest) setOpen(true);
@@ -89,7 +91,19 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
       </>,
     ]);
   const ran = ranOnWords(ranOn, account);
-  if (ran) facts.push(['Ran on', ran]);
+  // 30l: "· medium effort" stays one unit when Ran on wraps on a phone; the space before it is still a break point.
+  if (ran)
+    facts.push([
+      'Ran on',
+      effort ? (
+        <>
+          {ran} <span className="whitespace-nowrap" data-ran-on-effort="">· {effort}</span>
+        </>
+      ) : (
+        ran
+      ),
+    ]);
+  else if (effort) facts.push(['Effort', effort]);
   if (cost)
     facts.push([
       'Cost',

@@ -140,6 +140,11 @@ export interface FoldedSteps {
   answers: Map<string, CardAnswer>;
   /** Folded approval step id → the command step id that now carries it (so a link to the card lands on its row). */
   foldedInto: Map<string, string>;
+  /**
+   * 29x: command step id → what the person said with their no: the folded card's detail when the card is `declined`
+   * and has one (the server sets it only for a heard reason, `You said why: “…”`). Its row shows it as a second line.
+   */
+  reasons: Map<string, string>;
 }
 
 /**
@@ -152,6 +157,7 @@ export interface FoldedSteps {
 export function foldAnswers(steps: readonly ActivityStep[]): FoldedSteps {
   const answers = new Map<string, CardAnswer>();
   const foldedInto = new Map<string, string>();
+  const reasons = new Map<string, string>();
   const used = new Set<number>();
   steps.forEach((card, ci) => {
     if (card.kind !== 'approval' || !card.tool || !(card.status in answeredBy)) return;
@@ -169,9 +175,10 @@ export function foldAnswers(steps: readonly ActivityStep[]): FoldedSteps {
     used.add(best);
     answers.set(steps[best].id, card.status as CardAnswer);
     foldedInto.set(card.id, steps[best].id);
+    if (card.status === 'declined' && card.detail) reasons.set(steps[best].id, card.detail);
   });
-  if (!foldedInto.size) return { rows: steps as ActivityStep[], answers, foldedInto };
-  return { rows: steps.filter((s) => !foldedInto.has(s.id)), answers, foldedInto };
+  if (!foldedInto.size) return { rows: steps as ActivityStep[], answers, foldedInto, reasons };
+  return { rows: steps.filter((s) => !foldedInto.has(s.id)), answers, foldedInto, reasons };
 }
 
 /**

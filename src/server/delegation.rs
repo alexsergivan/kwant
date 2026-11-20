@@ -17,6 +17,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 /// A specialist may delegate once more; deeper chains are refused (no loops, bounded cost).
 pub const MAX_DEPTH: i64 = 2;
@@ -545,11 +546,11 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     let carried_on = carry_on.is_some() || sent_back.is_some();
     // H3: a hand-off held for a stuck or waiting specialist starts once it can take it
     if !super::bot_status::wait_released(&state, &d.id, &job.token).await {
-        return finish(&state, &d, &specialist, Err("stopped".into()), carried_on).await;
+        return finish(&state, &d, &specialist, Err("stopped".into()), carried_on, None).await;
     }
     let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
         Ok(s) => s,
-        Err(why) => return finish(&state, &d, &specialist, Err(why), carried_on).await,
+        Err(why) => return finish(&state, &d, &specialist, Err(why), carried_on, None).await,
     };
     // Queued until the specialist's turn gets its slot: a busy specialist runs one turn at a time
     let (started_state, started_id) = (state.clone(), d.id.clone());
@@ -613,6 +614,10 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
         Err(_) if job.token.is_cancelled() => Err("stopped".to_string()),
         other => other,
     };
+    // The hand-off and its chat stay busy until `finish` has reported it and handed over to the
+    // lead's own job (a sweep or a Stop asking meanwhile sees it). The specialist's thread is
+    // free from here, so it doesn't read busy while the lead's resume runs.
+    let reporting = state.turns.start_job([d.id.clone(), d.origin_context().unwrap_or(&lead.id).to_string()]);
     drop(job);
     // A usage limit stopped it before anything happened: it stays open and runs again when the
     // limit resets
@@ -635,7 +640,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
             return;
         }
     }
-    finish(&state, &d, &specialist, outcome, carried_on).await;
+    finish(&state, &d, &specialist, outcome, carried_on, Some(&reporting.token)).await;
 }
 
 /// How [`run`] runs a delegation's task.
@@ -755,8 +760,16 @@ pub(super) fn report_text(title: &str, outcome: &Result<String, String>) -> Stri
 }
 
 /// Ends `d` with `outcome`: the result in the origin chat, then the lead (with its batch, or on
-/// its own when the person sent the task back: `carried_on`).
-async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: Result<String, String>, carried_on: bool) {
+/// its own when the person sent the task back: `carried_on`). `stop` is the token of the job that
+/// holds the origin chat meanwhile (see `run`): a Stop on that chat skips the lead's resume.
+async fn finish(
+    state: &AppState,
+    d: &Delegation,
+    specialist: &Kwant,
+    outcome: Result<String, String>,
+    carried_on: bool,
+    stop: Option<&CancellationToken>,
+) {
     let (status, error) = ended_as(&outcome);
     // Someone may have cancelled it meanwhile; then the cancel already reported it
     if !state.db.finish_delegation(&d.id, status, error.as_deref(), None).await.unwrap_or(false) {
@@ -811,12 +824,12 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
         if let Ok(reply) = &outcome {
             relay_mentions(state, &done, specialist, reply).await;
         }
-        return report_to_lead(state, &done, None).await;
+        return report_to_lead(state, &done, None, stop).await;
     }
     // Its batch already went to the lead: this result goes on its own (a stop was the person's)
     if done.continue_lead && status != "cancelled" {
         let opening = format!("{} carried on with the task you delegated (“{}”) after it was sent back.", specialist.name, done.title);
-        continue_lead(state, &done, std::slice::from_ref(&done), Some(opening)).await;
+        continue_lead(state, &done, std::slice::from_ref(&done), Some(opening), stop).await;
     }
 }
 
@@ -872,8 +885,9 @@ async fn relay_chain(state: &AppState, d: &Delegation) -> Vec<String> {
 }
 
 /// Resumes the lead once `d` ended, if it was the last of its batch to end (see
-/// [`finished_batch`]). `opening` replaces the first line of the lead's prompt.
-async fn report_to_lead(state: &AppState, d: &Delegation, opening: Option<String>) {
+/// [`finished_batch`]). `opening` replaces the first line of the lead's prompt; `stop` as in
+/// [`continue_lead`].
+async fn report_to_lead(state: &AppState, d: &Delegation, opening: Option<String>, stop: Option<&CancellationToken>) {
     if !d.continue_lead {
         return;
     }
@@ -883,14 +897,14 @@ async fn report_to_lead(state: &AppState, d: &Delegation, opening: Option<String
         return;
     }
     if let Some(batch) = finished_batch(state, d).await {
-        continue_lead(state, d, &batch, opening).await;
+        continue_lead(state, d, &batch, opening, stop).await;
     }
 }
 
 /// [`report_to_lead`] in the background, for callers that must not wait for the lead's turn.
 fn spawn_report_to_lead(state: &AppState, d: Delegation) {
     let state = state.clone();
-    tokio::spawn(async move { report_to_lead(&state, &d, None).await });
+    tokio::spawn(async move { report_to_lead(&state, &d, None, None).await });
 }
 
 /// Reports the hand-offs a lead's turn held (see [`super::turns::TurnRegistry::hold`]) now that
@@ -982,6 +996,8 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
         let outcome = try_kwant_turn(&scope, &specialist, prompt, TurnOpts::default()).await;
         let outcome = continue_once_if_capped(&scope, &specialist, outcome, None).await;
         let stopped = job.token.is_cancelled();
+        // Busy until the result is posted and the lead's own job took over, as in `run`
+        let reporting = state.turns.start_job([d.id.clone(), d.origin_context().unwrap_or(&d.lead_kwant_id).to_string()]);
         drop(job);
         let reply = match outcome {
             Ok(reply) => reply,
@@ -1005,7 +1021,7 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
                 "{} got the person's answer to its question and continued the task you delegated (“{}”).",
                 specialist.name, d.title
             );
-            continue_lead(&state, &d, std::slice::from_ref(&d), Some(opening)).await;
+            continue_lead(&state, &d, std::slice::from_ref(&d), Some(opening), Some(&reporting.token)).await;
         }
     });
     true
@@ -1113,14 +1129,28 @@ async fn result_of(state: &AppState, d: &Delegation) -> String {
 /// Gives the lead one turn in the origin chat with every result of the batch, so it checks them
 /// and keeps the person's request moving: it hands the next step on, asks the person, or ends with
 /// `Done: …` (see [`super::keep_going`], which steps in when it does none of these). Tasks that
-/// didn't complete say what the lead should do about it.
-async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], opening: Option<String>) {
+/// didn't complete say what the lead should do about it. `stop` is the token of the job that held
+/// the origin chat until this one (see `run`): when a Stop on the chat cancelled it, the lead
+/// isn't resumed.
+async fn continue_lead(
+    state: &AppState,
+    d: &Delegation,
+    batch: &[Delegation],
+    opening: Option<String>,
+    stop: Option<&CancellationToken>,
+) {
     let Ok(Some(lead)) = state.db.get_kwant(&d.lead_kwant_id).await else {
         return;
     };
     let context = d.origin_context().unwrap_or(&lead.id).to_string();
     // Every hand-off of the batch is busy while its lead looks at it (see `sweep_unreviewed`)
     let job = state.turns.start_job(std::iter::once(context).chain(batch.iter().map(|b| b.id.clone())).chain([d.id.clone()]));
+    // 30i-b: a Stop on the chat from here on cancels this job; one before it cancelled only the
+    // job that held the chat while the result was reported, so the person stopped the lead's
+    // resume before it began. The results stay posted and the cards stay as they are.
+    if stop.is_some_and(CancellationToken::is_cancelled) {
+        return tracing::info!(delegation = %d.id, "the chat was stopped while its hand-off reported: the lead isn't resumed");
+    }
     let Ok(scope) = scope_for(state, &lead, d.origin_channel_id.clone(), d.origin_thread_id.clone(), &job, d.depth - 1).await else {
         return;
     };
