@@ -91,7 +91,18 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
       </>,
     ]);
   const ran = ranOnWords(ranOn, account);
-  if (ran) facts.push(['Ran on', effort ? `${ran} · ${effort}` : ran]);
+  // 30l: "· medium effort" stays one unit when Ran on wraps on a phone; the space before it is still a break point.
+  if (ran)
+    facts.push([
+      'Ran on',
+      effort ? (
+        <>
+          {ran} <span className="whitespace-nowrap" data-ran-on-effort="">· {effort}</span>
+        </>
+      ) : (
+        ran
+      ),
+    ]);
   else if (effort) facts.push(['Effort', effort]);
   if (cost)
     facts.push([
