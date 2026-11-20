@@ -3,6 +3,7 @@
 // watcher's chat message and the amber Inbox row. All copy is from the design; all numbers are the
 // report's own rows. Data that doesn't parse never reaches here (missionWatch.ts drops it).
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useFocusAfterRender } from '../focusAfterRender';
 import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Eye, Hand, HelpCircle, Info, Loader2, MessageSquare, RotateCcw, ShieldCheck, XCircle, type LucideIcon } from 'lucide-react';
 import {
   CHIP_TONES,
@@ -669,6 +670,7 @@ const Controls: React.FC<{
   const [chipError, setChipError] = useState<string | null>(null);
   const [undo, setUndo] = useState<{ kwant: string } | null>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
+  const focusAfterRender = useFocusAfterRender();
   const wrap = useRef<HTMLDivElement>(null);
   const panelId = useId();
   const reportId = useId();
@@ -732,7 +734,8 @@ const Controls: React.FC<{
   const close = () => {
     setPanel(null);
     setError(null);
-    requestAnimationFrame(() => chipRef.current?.focus());
+    // close also runs after an await (run's `after`): focus once the chip is back and enabled
+    focusAfterRender(() => chipRef.current);
   };
   const openPanel = (mode: 'setup' | 'change') => {
     setChipError(null);
@@ -856,6 +859,7 @@ const Controls: React.FC<{
         timeZone={timeZone}
         onHide={() => {
           setReportOpen(false);
+          // Focus on a frame, not after render (kept): only Hide (a click) calls this, and the chip is already on screen
           requestAnimationFrame(() => chipRef.current?.focus());
         }}
         onOpenChat={board.onOpenChat ? () => board.onOpenChat!(m) : undefined}

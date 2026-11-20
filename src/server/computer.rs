@@ -41,10 +41,17 @@ pub async fn apply_mode(state: &AppState) -> ComputerMode {
     mode
 }
 
+/// The view, asking Docker once (`docker version`, up to 3 s).
 async fn view(state: &AppState) -> Value {
+    let docker = state.sandbox_manager.is_docker_available().await;
+    view_with(state, docker).await
+}
+
+/// The view for a Docker answer the caller already has, so one request asks Docker once and its
+/// checks and its reply can't disagree (a save used to ask up to three times).
+async fn view_with(state: &AppState, docker: bool) -> Value {
     let mode = current_mode(state).await;
     let local = computer::local_reason();
-    let docker = state.sandbox_manager.is_docker_available().await;
     let vm = computer::vm_unavailable_reason(
         docker,
         state.browser_service.has_endpoint(),
@@ -130,9 +137,12 @@ pub async fn put_computer(
     if mode.is_none() && isolate_claude.is_none() {
         return Err(bad("Send mode (\"local\" or \"vm\") and/or isolate_claude (true or false)".into()));
     }
+    // Ask Docker once for the whole save: the checks below and the reply use the same answer
+    // (switching mode doesn't change whether Docker runs)
+    let docker = state.sandbox_manager.is_docker_available().await;
     if let Some(on) = isolate_claude {
         if on {
-            let current = view(&state).await;
+            let current = view_with(&state, docker).await;
             if current["isolate_claude_toggle"]["available"] != json!(true) {
                 // People's words in `error` (the Settings error line prints it); the code apart
                 let reason = current["isolate_claude_toggle"]["reason"].as_str().unwrap_or("unavailable").to_string();
@@ -146,9 +156,9 @@ pub async fn put_computer(
         }
     }
     let Some(mode) = mode else {
-        return Ok(Json(view(&state).await));
+        return Ok(Json(view_with(&state, docker).await));
     };
-    let current = view(&state).await;
+    let current = view_with(&state, docker).await;
     if current["available"][mode.as_str()] != json!(true) {
         let reason = current["reasons"][mode.as_str()]
             .as_str()
@@ -166,7 +176,7 @@ pub async fn put_computer(
             )
         })?;
     apply_mode(&state).await;
-    Ok(Json(view(&state).await))
+    Ok(Json(view_with(&state, docker).await))
 }
 
 #[derive(Deserialize)]
@@ -384,22 +394,8 @@ async fn approve_local_shell_with(
         }
         return true;
     }
-    let ticket = match state
-        .db
-        .save_approval(&NewApproval {
-            turn_id: String::new(),
-            kwant_id: target_id.to_string(),
-            tool_name: "execute_shell".into(),
-            parameters: details.clone(),
-        })
-        .await
-    {
-        Ok(a) => a.id,
-        Err(e) => {
-            tracing::warn!(error = %e, "could not store local shell approval; denying");
-            return false;
-        }
-    };
+    // 31k: the waiter first, then the row, so a listed card is always answerable
+    let ticket = uuid::Uuid::new_v4().to_string();
     let rx = state
         .broker
         .request_approval(ApprovalRequest {
@@ -409,6 +405,25 @@ async fn approve_local_shell_with(
             details: details.clone(),
         })
         .await;
+    let saved = state
+        .db
+        .save_approval_with_id(
+            &ticket,
+            &NewApproval {
+                turn_id: String::new(),
+                kwant_id: target_id.to_string(),
+                tool_name: "execute_shell".into(),
+                parameters: details.clone(),
+            },
+            None,
+        )
+        .await;
+    if let Err(e) = saved {
+        state.broker.cancel(&ticket).await;
+        tracing::warn!(error = %e, "could not store local shell approval; denying");
+        return false;
+    }
+    super::mcp_runtime::card_listed(target_id).await;
     let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
         id: ticket.clone(),
         tool_name: "execute_shell".into(),

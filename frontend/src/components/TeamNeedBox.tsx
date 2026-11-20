@@ -58,6 +58,7 @@ export const TeamNeedBox: React.FC<TeamNeedBoxProps> = ({ label, register, autoF
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [register, rt?.registerNeedBox]);
   useEffect(() => {
+    // Focus on a frame, not after render (kept): a mount effect: the box is already rendered
     if (autoFocus) requestAnimationFrame(() => ta.current?.focus({ preventScroll: true }));
   }, [autoFocus]);
   useEffect(() => {
@@ -110,6 +111,7 @@ export const TeamNeedBox: React.FC<TeamNeedBoxProps> = ({ label, register, autoF
         {
           onCancel: () => {
             onShow?.();
+            // Focus on a frame, not after render (kept): only the sheet’s Cancel calls this; the box is on screen, or remounts and its autoFocus effect focuses it
             requestAnimationFrame(focusBox);
           },
           onDone: () => {

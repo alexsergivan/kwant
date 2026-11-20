@@ -558,7 +558,7 @@ export function defaultColumn(tasks: Task[]): Column {
 }
 
 /**
- * The "Board tasks waiting on you" count: the cards the Needs you column holds across all work, so the tile and the
+ * The "Waiting on you" tile's count: the cards the Needs you column holds across all work, so the tile and the
  * column never disagree. The server's `needs_you_now` counts the same tasks.
  */
 export function needsYouCount(tasks: Task[]): number {

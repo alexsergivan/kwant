@@ -12,7 +12,7 @@ import {
   AppTile,
   AppsSection,
   GiveError,
-  accountNeedsYou,
+  accountsNeedingYou,
   appInitials,
   approvalLine,
   botsWithServer,
@@ -26,6 +26,7 @@ import { useEscapeLayer } from '../escape';
 import { ProfilesState, useProfiles } from '../useProfiles';
 import { EnginesApi, useEngines } from '../useEngines';
 import { parsePick, type EngineInfo } from '../engines';
+import { accountGroups, failoverOrder } from '../failover';
 import { AccountPriority } from './AccountPriority';
 import { Profile, cardOf } from '../profiles';
 import type { Kwant } from './Sidebar';
@@ -33,6 +34,7 @@ import { FindTool, FindToolApi } from './FindTool';
 import { OPEN_ADD_TOOL_EVENT, OpenAddTool } from '../mcp';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { ModernAvatar } from './ModernAvatar';
+import { useAfterRender } from '../focusAfterRender';
 
 /** The tile mark: plain initials on the overlay colour, never a brand logo. */
 const TILE_BG = '#231d4b';
@@ -573,15 +575,20 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
         return !pinnedOnly || !bot || parsePick(bot.preferred_model).family !== 'auto';
       })
       .map((u) => u.name);
-  const needs = data ? data.connections.filter((c) => accountNeedsYou(c)).length : 0;
+  // Only accounts a bot relies on: used and broken, pinned, or anything broken when nothing is used (31a).
+  const usedIds = profiles ? accountGroups(failoverOrder(profiles), (a) => engines?.find((e) => e.id === cardOf(a))).used.map((a) => a.id) : [];
+  const pinnedIds = (profiles ?? []).filter((a) => usedByOf(a.id, true).length > 0).map((a) => a.id);
+  const needs = data ? accountsNeedingYou(data.connections, usedIds, pinnedIds) : 0;
   /** Opens "Sign-ins and settings", at one AI's card when given: its existing sign-in or set-up. */
+  const afterRender = useAfterRender();
   const openManage = (engineCard?: string) => {
     setManageOpen(true);
-    window.setTimeout(() => {
+    // After the render that opens the section, so its cards are there to scroll to and focus.
+    afterRender(() => {
       const card = engineCard ? manageRef.current?.querySelector<HTMLElement>(`[data-engine="${CSS.escape(engineCard)}"]`) : null;
       (card ?? manageRef.current)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       card?.querySelector<HTMLElement>('button:not([disabled]), a[href]')?.focus({ preventScroll: true });
-    }, 50);
+    });
   };
   const reloadAccounts = async () => {
     await Promise.all([accountsState.reload(), enginesState.reload(), reload()]);

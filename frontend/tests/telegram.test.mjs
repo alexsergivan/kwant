@@ -343,6 +343,43 @@ test('Allow approvals: a confirm with "Keep it off" focused; Escape keeps it off
   assert.ok(!calls.some((c) => c[0] === 'patch'), 'nothing changed');
 });
 
+test('Allow approvals: after the save, focus goes back to the Allow switch even when React yields before rendering it', async () => {
+  // React's scheduler gives up the thread after 5 ms of work. Advancing performance.now 10 ms per call makes it
+  // yield every time, as on a starved CI runner: a focus on a setTimeout(0) then runs before the render that
+  // mounts its target, and focus drops to <body> for good (focus-after-render-everywhere, after #897).
+  const perf = window.performance === globalThis.performance ? [globalThis.performance] : [globalThis.performance, window.performance];
+  const realNows = perf.map((p) => p.now);
+  let skew = 0;
+  const slow = (on) => perf.forEach((p, i) => (p.now = on ? () => (skew += 10) + realNows[i].call(p) : realNows[i]));
+  // Name the focused element instead of handing jsdom nodes to assert (printing them can run out of memory).
+  const focused = () => {
+    const a = document.activeElement;
+    return a ? `${a.tagName.toLowerCase()}${a.getAttribute('role') ? `[role=${a.getAttribute('role')}]` : ''} "${a.textContent.trim().slice(0, 30)}"` : 'nothing';
+  };
+  const waitFor = async (cond, ms = 2000) => {
+    const end = Date.now() + ms;
+    while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+  };
+  try {
+    const { api } = mockApi();
+    await mount(h(m.TelegramConnection, { api, initial: paired() }));
+    await click($('[data-tg-allow] [role="switch"]'));
+    assert.equal(document.activeElement.textContent.trim(), 'Keep it off');
+    // The switch is disabled while the save runs; the focus comes after the await, outside the click, so React
+    // renders it in a scheduler task that can yield.
+    slow(true);
+    byText('Allow from Telegram').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    const target = () => $('[data-tg-allow] [role="switch"]');
+    await waitFor(() => $('[role="alertdialog"]') === null && document.activeElement === target());
+    slow(false);
+    assert.equal($('[data-tg-allow]').dataset.tgAllow, 'on', 'saved');
+    assert.equal($('[role="alertdialog"]'), null, 'the confirm closed');
+    assert.ok(document.activeElement === target(), `focus is on the Allow switch, not ${focused()}`);
+  } finally {
+    slow(false);
+  }
+});
+
 test('Allow approvals on: amber, "On since", and the never-from-Telegram line; off needs no confirm', async () => {
   const { api, calls } = mockApi({ patch: async (b) => paired({ allow_approvals: !!b.allow_approvals, allow_since: '2026-11-07T10:12:00Z' }) });
   await mount(h(m.TelegramConnection, { api, initial: paired() }));

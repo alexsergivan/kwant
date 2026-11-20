@@ -26,6 +26,7 @@ import {
   telegramApi,
   tokenErrorText,
 } from '../telegram';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 export type TelegramApi = typeof telegramApi;
 
@@ -250,11 +251,12 @@ export const SetupSheet: React.FC<SetupSheetProps> = ({ status, api, start, onSt
     }
   };
 
+  const focusAfterRender = useFocusAfterRender();
   const change = () => {
     setToken('');
     setLink(null);
     setStep({ kind: 'token', error: null, checking: false });
-    window.setTimeout(() => tokenRef.current?.focus());
+    focusAfterRender(() => tokenRef.current);
   };
 
   const copy = async () => {
@@ -707,10 +709,11 @@ export const ConnectedCard: React.FC<ConnectedCardProps> = ({ status, api, onSta
     setToast(null);
     if (await run('undo', () => api.undoUnpair())) setUnpaired(false);
   };
+  const focusAfterRender = useFocusAfterRender();
   const setAllow = async (on: boolean) => {
     const ok = await run('allow', () => api.patch({ allow_approvals: on }));
     setConfirm(null);
-    if (ok || !on) window.setTimeout(() => allowRef.current?.focus());
+    if (ok || !on) focusAfterRender(() => allowRef.current);
   };
   const disconnect = async () => {
     if (await run('disconnect', () => api.disconnect())) onGone();
@@ -839,7 +842,7 @@ export const ConnectedCard: React.FC<ConnectedCardProps> = ({ status, api, onSta
             The token is deleted from the vault{status.paired ? ` and ${status.paired.name} is unpaired` : ''}. Your bot stays in Telegram; delete it with <code>@BotFather</code> if you don't need it.
           </p>
           <div className="tg-row">
-            <button ref={keepRef} type="button" className={quietBtn} onClick={() => (setConfirm(null), window.setTimeout(() => footRef.current?.querySelector<HTMLButtonElement>('[data-tg-disconnect-open]')?.focus()))}>
+            <button ref={keepRef} type="button" className={quietBtn} onClick={() => (setConfirm(null), focusAfterRender(() => footRef.current?.querySelector<HTMLButtonElement>('[data-tg-disconnect-open]')))}>
               Keep it
             </button>
             <button type="button" className={dangerBtn} onClick={() => void disconnect()} disabled={busy === 'disconnect'}>
@@ -866,7 +869,7 @@ export const ConnectedCard: React.FC<ConnectedCardProps> = ({ status, api, onSta
         </div>
       )}
 
-      {confirm === 'allow' && <AllowConfirm busy={busy === 'allow'} onKeep={() => (setConfirm(null), window.setTimeout(() => allowRef.current?.focus()))} onAllow={() => void setAllow(true)} />}
+      {confirm === 'allow' && <AllowConfirm busy={busy === 'allow'} onKeep={() => (setConfirm(null), focusAfterRender(() => allowRef.current))} onAllow={() => void setAllow(true)} />}
       {toast && (
         <Over>
           <Toast text={toast.text} action={toast.undo && busy !== 'undo' ? { label: 'Undo', run: () => void undo() } : undefined} />

@@ -76,12 +76,17 @@ const TONE: Record<RunTone, string> = {
   said_no: 'bg-zinc-700/30 text-zinc-300 border-zinc-500/40',
 };
 
-const StatusBadge: React.FC<{ status: string; error?: string | null; wait?: RunWait | null }> = ({ status, error, wait }) => {
+/**
+ * 31f: `inHistory` is a History row's badge. While that run is going the card's header badge already says "Running",
+ * so the row keeps the box and spinner and says the word to screen readers only. Every other tone keeps its word.
+ */
+const StatusBadge: React.FC<{ status: string; error?: string | null; wait?: RunWait | null; inHistory?: boolean }> = ({ status, error, wait, inHistory = false }) => {
   const st = runRowState({ status, error }, wait);
+  const quiet = inHistory && st.tone === 'running';
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${TONE[st.tone]}`} data-run-badge={st.tone}>
       {st.tone === 'running' && <Loader2 size={9} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
-      {st.label}
+      {quiet ? <span className="sr-only">{st.label}</span> : st.label}
     </span>
   );
 };
@@ -150,6 +155,7 @@ export const RoutineForm: React.FC<{
   const tzRef = useRef<HTMLInputElement>(null);
   const openTz = () => {
     setTzOpen(true);
+    // Focus on a frame, not after render (kept): only Change (a click) calls this, and React renders that update before the next frame
     requestAnimationFrame(() => tzRef.current?.focus());
   };
   const setS = (patch: Partial<ScheduleForm>) => setF((prev) => ({ ...prev, schedule: { ...prev.schedule, ...patch } }));
@@ -472,7 +478,7 @@ export const RunRow: React.FC<{
   const link = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200';
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400" data-run-row={r.id} data-run-state={st.tone}>
-      <StatusBadge status={r.status} error={r.error} wait={wait} />
+      <StatusBadge status={r.status} error={r.error} wait={wait} inHistory />
       <span>{formatWhen(r.started_at)}</span>
       <span className="text-zinc-400">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
       {/* Mira re-check 6: on a phone the links always sit on their own line under the badge. */}
@@ -649,7 +655,7 @@ export const RoutineRow: React.FC<{
       {/* Phone: four 44 px buttons in one row, no indent, so Delete never wraps. Desktop is as before. */}
       <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:pl-9">
         <button type="button" onClick={runNow} disabled={busy} className={`${rowSmallBtn} ${rowBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
-          <Play size={11} aria-hidden="true" className="hidden sm:block" /> Run now
+          <Play size={11} aria-hidden="true" /> Run now
         </button>
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={`${rowQuietBtn} ${rowBtn}`}>
           <span className="hidden sm:inline-flex" aria-hidden="true">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span> <History size={11} aria-hidden="true" /> History

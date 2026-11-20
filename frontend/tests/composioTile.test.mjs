@@ -90,6 +90,38 @@ test('names and lists stay short', () => {
   assert.equal(m.removeQuestion([], []), 'Remove Composio? Your sign-ins stay on Composio, so you can add it back later.');
 });
 
+test('a request to open it focuses the new key field even when React yields before rendering it', async () => {
+  // React's scheduler gives up the thread after 5 ms of work. Advancing performance.now 10 ms per call makes it
+  // yield every time, as on a starved CI runner: a focus on a setTimeout(0) then runs before the render that
+  // mounts its target, and focus drops to <body> for good (focus-after-render-everywhere, after #897).
+  const perf = window.performance === globalThis.performance ? [globalThis.performance] : [globalThis.performance, window.performance];
+  const realNows = perf.map((p) => p.now);
+  let skew = 0;
+  const slow = (on) => perf.forEach((p, i) => (p.now = on ? () => (skew += 10) + realNows[i].call(p) : realNows[i]));
+  // Name the focused element instead of handing jsdom nodes to assert (printing them can run out of memory).
+  const focused = () => {
+    const a = document.activeElement;
+    return a ? `${a.tagName.toLowerCase()}${a.getAttribute('role') ? `[role=${a.getAttribute('role')}]` : ''} "${a.textContent.trim().slice(0, 30)}"` : 'nothing';
+  };
+  const waitFor = async (cond, ms = 2000) => {
+    const end = Date.now() + ms;
+    while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+  };
+  try {
+    const { api } = stubApi();
+    // The request opens the field from an effect, outside any click, so React renders it in a scheduler task.
+    slow(true);
+    const host = await mount({ entry: entry(), api, openRequest: 1 });
+    const field = () => host.querySelector('input[type="password"]');
+    await waitFor(() => !!field() && document.activeElement === field());
+    slow(false);
+    assert.ok(field(), 'the key field opens');
+    assert.ok(document.activeElement === field(), `focus is in the key field, not ${focused()}`);
+  } finally {
+    slow(false);
+  }
+});
+
 test('not added: one key field adds it, and the link form hides under advanced', async () => {
   const { api, calls } = stubApi();
   let changed = 0;
