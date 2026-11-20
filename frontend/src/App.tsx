@@ -4,7 +4,7 @@ import { recordRunWait } from './routineRow';
 import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
-import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
+import { Sidebar, Kwant, Channel, Team, memberIdsOf, realAskCount } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import type { MessageTarget } from './components/DoneDetail';
@@ -4298,6 +4298,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         showPage('inbox', 'new');
       }}
       inboxActive={page === 'inbox'}
+      onChat={page === 'chat'}
       onOpenInbox={() => {
         showPage('inbox');
         playSfx('click');
@@ -4799,7 +4800,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       badgeTone: 'violet',
       badgeNoun: ideaJarCount === 1 ? 'take ready' : 'takes ready',
     },
-    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: inboxCount },
+    // 31c: amber only when something really needs you (rank 1–2), as the sidebar's pill and heading
+    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: inboxCount, badgeTone: realAskCount(attention) > 0 ? 'amber' : 'neutral' },
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
