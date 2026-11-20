@@ -59,10 +59,11 @@ test('(a) Inbox pill: neutral with only rank 3–4 rows (one finished routine ru
   }
 });
 
-const tabs = (tone) => new DOMParser().parseFromString(`<body>${m.renderToStaticMarkup(React.createElement(m.PhoneTabBar, {
+const tabBar = (tone, noun) => new DOMParser().parseFromString(`<body>${m.renderToStaticMarkup(React.createElement(m.PhoneTabBar, {
   label: 'Kwant', active: 'chats', onSelect: noop,
-  tabs: [{ id: 'chats', label: 'Chats', icon: null }, { id: 'inbox', label: 'Inbox', icon: null, badge: 1, badgeTone: tone }],
-}))}</body>`, 'text/html').querySelector('[data-tab="inbox"] [data-tab-badge]');
+  tabs: [{ id: 'chats', label: 'Chats', icon: null }, { id: 'inbox', label: 'Inbox', icon: null, badge: 1, badgeTone: tone, badgeNoun: noun }],
+}))}</body>`, 'text/html');
+const tabs = (tone) => tabBar(tone).querySelector('[data-tab="inbox"] [data-tab-badge]');
 
 test('(a) phone: the Inbox tab badge has a neutral tone (not amber) and App picks it by the same rank 1–2 rule', () => {
   const calm = tabs('neutral');
@@ -71,7 +72,11 @@ test('(a) phone: the Inbox tab badge has a neutral tone (not amber) and App pick
   assert.equal(tabs('amber').getAttribute('data-tone'), 'amber');
   assert.match(tabs('amber').getAttribute('class'), /fcd34d/);
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.match(app, /id: 'inbox', label: 'Inbox'[^\n]*badgeTone: realAskCount\(attention\) > 0 \? 'amber' : 'neutral'/);
+  // Neutral reads "Inbox, 1 new" (Mira, design-check.md fix 1), like the desktop pill; amber keeps "waiting"
+  assert.equal(tabBar('neutral', 'new').querySelector('[data-tab="inbox"]').getAttribute('aria-label'), 'Inbox, 1 new');
+  assert.equal(tabBar('amber').querySelector('[data-tab="inbox"]').getAttribute('aria-label'), 'Inbox, 1 waiting');
+  assert.match(app, /const inboxAsk = realAskCount\(attention\) > 0;/);
+  assert.match(app, /id: 'inbox', label: 'Inbox'[^\n]*badgeTone: inboxAsk \? 'amber' : 'neutral', badgeNoun: inboxAsk \? undefined : 'new' \}/);
   assert.match(app, /onChat=\{page === 'chat'\}/);
 });
 

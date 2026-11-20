@@ -4785,6 +4785,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     </main>
   ) : chat;
 
+  const inboxAsk = realAskCount(attention) > 0;
   const phoneTabs: Array<PhoneTabItem<PhoneTab>> = [
     { id: 'chats', label: 'Chats', icon: <MessageSquare size={20} aria-hidden="true" /> },
     { id: 'bots', label: 'Bots', icon: <Bot size={20} aria-hidden="true" /> },
@@ -4800,8 +4801,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       badgeTone: 'violet',
       badgeNoun: ideaJarCount === 1 ? 'take ready' : 'takes ready',
     },
-    // 31c: amber only when something really needs you (rank 1–2), as the sidebar's pill and heading
-    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: inboxCount, badgeTone: realAskCount(attention) > 0 ? 'amber' : 'neutral' },
+    // 31c: amber "waiting" only when something really needs you (rank 1–2), as the sidebar's pill and heading;
+    // otherwise a neutral count read as "Inbox, 1 new", like the desktop pill
+    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: inboxCount, badgeTone: inboxAsk ? 'amber' : 'neutral', badgeNoun: inboxAsk ? undefined : 'new' },
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
