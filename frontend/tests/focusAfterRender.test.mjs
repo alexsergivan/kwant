@@ -42,12 +42,7 @@ const KEPT = [
   { file: 'components/DictationMic.tsx', has: "popRef.current?.querySelector<HTMLButtonElement>('button')", why: 'an effect after the commit that renders the popover' },
   { file: 'components/LooseEndsView.tsx', has: "box.current?.querySelector<HTMLElement>('input:not([disabled])", why: 'an effect after the commit that renders the form' },
   { file: 'components/dev/LineNotes.tsx', has: "'[data-ln-text]'", why: 'the text box is already on screen and the confirm that calls it unmounts' },
-  // ProdFloorCard moves to the shared hook after #897 (in 0.9.32) merges; this item leaves the file alone.
   { file: 'components/dev/ProdFloorCard.tsx', has: 'cardRef.current?.contains(a)', why: 'takeBackup: the main button is always rendered (#897 keeps it)' },
-  { file: 'components/dev/ProdFloorCard.tsx', has: 'cmdRef.current?.focus()', why: 'moves to the shared hook after #897', count: 2 },
-  { file: 'components/dev/ProdFloorCard.tsx', has: 'mainRef.current?.focus()', why: 'moves to the shared hook after #897', count: 2 },
-  { file: 'components/dev/ProdFloorCard.tsx', has: 'skipRef.current?.focus()', why: 'moves to the shared hook after #897' },
-  { file: 'components/dev/ProdFloorCard.tsx', has: '(skipOpenerRef.current ?? mainRef.current)?.focus()', why: 'moves to the shared hook after #897' },
 ];
 
 const sources = (dir) =>
