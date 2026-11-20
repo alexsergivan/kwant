@@ -116,7 +116,10 @@ async fn self_tool(app: &Router, token: &str, name: &str, args: Value) -> (Value
     let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap_or(Value::Null);
     let is_error = v["result"]["isError"].as_bool().unwrap_or(false);
     let text = v["result"]["content"][0]["text"].as_str().unwrap_or("");
-    (serde_json::from_str(text).unwrap_or(Value::Null), is_error)
+    // A tool's error is plain text, not JSON: keep it (or the whole reply when there's no text),
+    // so a failed assert says why rather than "null"
+    let page = serde_json::from_str(text).unwrap_or_else(|_| if text.is_empty() { v.clone() } else { Value::String(text.to_string()) });
+    (page, is_error)
 }
 
 /// Polls `browser_page` until `download.status` is terminal, or panics.
@@ -159,6 +162,10 @@ fn app_state(data_dir: &std::path::Path, db: Database, cdp_url: Option<String>) 
 #[tokio::test]
 #[ignore = "needs Docker and the kwnt-browser image (BROWSER_IMAGE); starts a real container"]
 async fn a_vm_bots_download_from_the_browser_container_lands_in_its_own_folder() {
+    // kwant's own log, shown only when the test fails, so a rare failure in CI says which browser
+    // step stalled (RUST_LOG overrides the level)
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "kwnt=debug".into());
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_test_writer().try_init();
     std::env::set_var(kwnt::sandbox::computer::MODE_ENV, "vm");
     std::env::remove_var("KWNT_BROWSER_CDP_URL");
     let tmp = tempfile::tempdir().unwrap();
