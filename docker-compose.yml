@@ -58,6 +58,8 @@ services:
       KWNT_ALLOWED_ORIGINS: ${KWNT_ALLOWED_ORIGINS:-}
     volumes:
       - kwnt-data:/data
+      # the WireGuard config lives in its own volume, so the helper never sees the rest of /data
+      - kwnt-wireguard:/data/wireguard
       # CLI sign-ins (~/.claude, ~/.codex, ~/.grok) survive rebuilds
       - kwnt-home:/home/kwnt
     depends_on:
@@ -66,6 +68,21 @@ services:
       browser:
         condition: service_started
 
+  # Optional: a WireGuard tunnel for the browser, with no root, host relay or iptables.
+  # Off unless COMPOSE_PROFILES=wireguard. See docs/wireguard-helper.md. Use a WireGuard
+  # connection made for kwant: a router hands one connection to one device at a time.
+  wireproxy:
+    profiles: [wireguard]
+    build:
+      context: .
+      dockerfile: docker/wireproxy.Dockerfile
+    image: ghcr.io/alexsergivan/kwnt-wireproxy:${KWNT_VERSION:-latest}
+    restart: unless-stopped
+    # no published ports: only the browser on this compose network reaches it
+    volumes:
+      - kwnt-wireguard:/data/wireguard:ro
+
 volumes:
   kwnt-data:
   kwnt-home:
+  kwnt-wireguard:

@@ -40,6 +40,14 @@ pub enum Commands {
     /// the command that fixes each missing part on this platform. Exits 1 if a required part is missing
     Doctor,
 
+    /// WireGuard tunnel for the bots' browser (the `wireguard` compose profile). `import` reads a
+    /// WireGuard config from a file or stdin, `status` shows what is saved, `remove` deletes it.
+    /// A private key is never printed
+    Wireguard {
+        #[command(subcommand)]
+        action: WireguardAction,
+    },
+
     /// Install what kwant needs on this Mac or Linux machine: Laya, a browser and an AI CLI
     /// (Claude Code unless you pick with --clis). Asks before each part; never runs sudo (it
     /// prints those commands for you). Safe to run again
@@ -198,6 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
+        Some(Commands::Wireguard { action }) => std::process::exit(run_wireguard(&config, action)),
         Some(Commands::Setup { yes, only, clis, docker, dry_run }) => {
             let parse = |v: Option<String>| -> Result<Option<Vec<kwnt::setup::ItemId>>, String> {
                 v.map(|v| kwnt::setup::parse_list(&v)).transpose()
@@ -272,6 +281,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum WireguardAction {
+    /// Save a WireGuard config (from a file, or from stdin when no file is given)
+    Import { file: Option<std::path::PathBuf> },
+    /// Show what is saved (no keys)
+    Status,
+    /// Delete the saved config
+    Remove,
+}
+
+fn run_wireguard(config: &kwnt::config::Config, action: WireguardAction) -> i32 {
+    use kwnt::sandbox::wireguard as wg;
+    match action {
+        WireguardAction::Import { file } => {
+            use std::io::Read;
+            let mut text = String::new();
+            let read = match &file {
+                Some(f) => std::fs::read_to_string(f).map(|t| text = t),
+                None => std::io::stdin().take(wg::MAX_CONFIG_BYTES as u64 + 1).read_to_string(&mut text).map(|_| ()),
+            };
+            if let Err(e) = read {
+                eprintln!("kwnt wireguard: could not read the config: {}", e.kind());
+                return 1;
+            }
+            match wg::save(&config.data_dir, &text) {
+                Ok(s) => {
+                    print_wireguard(&s);
+                    println!("\nSaved. To use it, put these two lines in the .env next to docker-compose.yml and run `docker compose up -d`:");
+                    println!("  COMPOSE_PROFILES=wireguard");
+                    println!("  KWNT_BROWSER_PROXY={}", wg::HELPER_PROXY_URL);
+                    println!("Then `docker compose exec kwnt kwnt doctor` checks the exit address.");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("kwnt wireguard: {e}");
+                    1
+                }
+            }
+        }
+        WireguardAction::Status => match wg::summary(&config.data_dir) {
+            None => {
+                println!("No WireGuard config saved. `kwnt wireguard import <file>` saves one.");
+                0
+            }
+            Some(Ok(s)) => {
+                print_wireguard(&s);
+                0
+            }
+            Some(Err(e)) => {
+                eprintln!("kwnt wireguard: the saved config is not usable: {e}");
+                1
+            }
+        },
+        WireguardAction::Remove => {
+            println!("{}", if wg::remove(&config.data_dir) { "Removed the saved WireGuard config." } else { "Nothing was saved." });
+            0
+        }
+    }
+}
+
+fn print_wireguard(s: &kwnt::sandbox::wireguard::WgSummary) {
+    println!("WireGuard config: {} peer, endpoint {}", s.peers, s.endpoint);
+    println!("  address: {}", s.address.join(", "));
+    println!("  full tunnel: {}", if s.full_tunnel { "yes" } else { "no" });
+    for w in &s.warnings {
+        println!("  warning: {w}");
+    }
 }
 
 fn print_status(config: &Config) {

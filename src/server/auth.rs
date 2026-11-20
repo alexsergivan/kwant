@@ -377,6 +377,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // Folders isolated bots used (#446 item 6): forgetting one lets host CLIs load its files
         // again, so only the person reads or changes the list
         ["", "api", "isolated-folders", ..] => true,
+        // The WireGuard tunnel for the browser: a private key goes in, and what the browser sees
+        // from the internet changes, so only the person reads or changes it
+        ["", "api", "settings", "wireguard", ..] => true,
         // P5 tool notes: bots file them with `note_tool`; only the person reads, edits, fixes or
         // deletes them, and their text is what every bot with the tool sees
         ["", "api", "tool-notes", ..] => true,
@@ -1016,6 +1019,9 @@ mod tests {
         let (get, post, put, del) = (Method::GET, Method::POST, Method::PUT, Method::DELETE);
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
         assert!(person_only(&get, "/api/tool-notes"));
+        assert!(person_only(&get, "/api/settings/wireguard"));
+        assert!(person_only(&put, "/api/settings/wireguard"));
+        assert!(person_only(&del, "/api/settings/wireguard/"));
         assert!(person_only(&get, "/api/glance"));
         assert!(person_only(&post, "/api/glance/ask"));
         assert!(person_only(&post, "/api/questions/q1/answer"));

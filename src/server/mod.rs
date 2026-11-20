@@ -1,4 +1,5 @@
 pub mod discussion;
+pub mod wireguard;
 pub mod routes;
 pub mod error_shape;
 pub mod delivery_plan;
@@ -365,6 +366,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
         .route("/api/kwants/:id/always-allowed", get(always_allowed::list).delete(always_allowed::revoke))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
+        .route("/api/settings/wireguard", get(wireguard::get_wireguard).put(wireguard::put_wireguard).delete(wireguard::delete_wireguard))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
         .route("/api/isolated-folders", get(isolated_folders_routes::list))
         .route("/api/isolated-folders/forget", post(isolated_folders_routes::forget))

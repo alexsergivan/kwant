@@ -53,7 +53,7 @@ RUN apt-get update \
       $(if [ -n "$KWNT_CLIS" ]; then echo curl procps ripgrep less; fi) \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 10001 --create-home --home-dir /home/kwnt --shell /bin/bash kwnt \
- && mkdir -p /data && chown kwnt:kwnt /data
+ && mkdir -p /data/wireguard && chown -R kwnt:kwnt /data
 COPY --from=clis /opt/clis /opt/clis
 COPY docker/kwnt-entrypoint.sh /usr/local/bin/kwnt-entrypoint
 RUN chmod 755 /usr/local/bin/kwnt-entrypoint

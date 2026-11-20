@@ -160,6 +160,10 @@ pub struct Facts {
     pub https_origin: Option<String>,
     /// `KWNT_BROWSER_PROXY`: unset, unusable (the reason, without the value) or set and probed.
     pub proxy: ProxyState,
+    /// The saved WireGuard config for the `wireguard` compose profile, if any (no keys), and
+    /// whether `KWNT_BROWSER_PROXY` points at its helper.
+    pub wireguard: Option<Result<crate::sandbox::wireguard::WgSummary, String>>,
+    pub proxy_is_helper: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -247,6 +251,7 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
     });
 
     out.extend(proxy_check(&f.proxy));
+    out.extend(wireguard_check(f.wireguard.as_ref(), f.proxy_is_helper));
 
     let mut ready = 0;
     let any_installed = f.clis.iter().any(|(_, bin, _, key)| bin.is_some() || *key);
@@ -304,6 +309,32 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
         )
     });
     out
+}
+
+/// The WireGuard check: nothing when no config is saved. Never shows a key.
+fn wireguard_check(saved: Option<&Result<crate::sandbox::wireguard::WgSummary, String>>, proxy_is_helper: bool) -> Option<Check> {
+    const NAME: &str = "WireGuard";
+    Some(match saved? {
+        Err(why) => Check::new(
+            NAME,
+            Status::Fail,
+            format!("the saved config is not usable: {why}"),
+            Some("Save it again: kwnt wireguard import <file>".into()),
+        ),
+        Ok(s) if !proxy_is_helper => Check::new(
+            NAME,
+            Status::Warn,
+            format!("a config for {} is saved, but the browser does not use it", s.endpoint),
+            Some(format!("Set KWNT_BROWSER_PROXY={} and COMPOSE_PROFILES=wireguard, then docker compose up -d", crate::sandbox::wireguard::HELPER_PROXY_URL)),
+        ),
+        Ok(s) if !s.full_tunnel => Check::new(
+            NAME,
+            Status::Warn,
+            format!("tunnel to {} is not a full tunnel (AllowedIPs lacks 0.0.0.0/0)", s.endpoint),
+            Some("Make the router connection a full tunnel, or sites keep seeing this server's address".into()),
+        ),
+        Ok(s) => Check::new(NAME, Status::Ok, format!("config for {} saved; the browser goes through it (see Browser proxy)", s.endpoint), None),
+    })
 }
 
 /// The browser proxy check: nothing when none is set; otherwise set, reachable, and leaving from
@@ -390,7 +421,11 @@ pub async fn gather(config: &Config) -> Facts {
         Ok(Some(p)) => ProxyState::Probed(crate::sandbox::browser_proxy::probe(&p).await),
         Err(why) => ProxyState::Invalid(why),
     };
+    let wireguard = crate::sandbox::wireguard::summary(&config.data_dir);
+    let proxy_is_helper = matches!(crate::sandbox::browser_proxy::BrowserProxy::from_env(), Ok(Some(p)) if p.url == crate::sandbox::wireguard::HELPER_PROXY_URL);
     Facts {
+        wireguard,
+        proxy_is_helper,
         data_dir: config.data_dir.display().to_string(),
         data_dir_writable: writable(&config.data_dir),
         laya_url,
@@ -468,6 +503,8 @@ mod tests {
             token: true,
             https_origin: Some("https://kwant.example".into()),
             proxy: ProxyState::Unset,
+            wireguard: None,
+            proxy_is_helper: false,
         }
     }
 
@@ -577,6 +614,18 @@ mod tests {
     }
 
     #[test]
+    fn the_wireguard_check_wants_the_browser_to_use_the_helper() {
+        use crate::sandbox::wireguard::WgSummary;
+        let s = |full| WgSummary { address: vec![], dns: vec![], endpoint: "h.example:51820".into(), peers: 1, full_tunnel: full, preshared_key: false, warnings: vec![] };
+        assert!(wireguard_check(None, false).is_none());
+        let st = |x: &Result<WgSummary, String>, h| wireguard_check(Some(x), h).unwrap().status;
+        assert_eq!(st(&Ok(s(true)), true), Status::Ok);
+        assert_eq!(st(&Ok(s(true)), false), Status::Warn);
+        assert_eq!(st(&Ok(s(false)), true), Status::Warn);
+        assert_eq!(st(&Err("x".into()), true), Status::Fail);
+    }
+
+    #[test]
     fn the_proxy_check_is_absent_without_a_proxy() {
         assert!(checks(&healthy(), Platform::Docker).iter().all(|c| c.name != "Browser proxy"));
     }
@@ -627,6 +676,8 @@ mod tests {
             token: false,
             https_origin: None,
             proxy: ProxyState::Unset,
+            wireguard: None,
+            proxy_is_helper: false,
         };
         for p in [Platform::Linux, Platform::Mac] {
             let cs = checks(&f, p);

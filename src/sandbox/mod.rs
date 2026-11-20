@@ -3,6 +3,7 @@ pub mod app_links;
 pub mod bitwarden;
 pub mod browser;
 pub mod browser_proxy;
+pub mod wireguard;
 pub mod browser_downloads;
 pub mod browser_history;
 pub mod chrome_download;

@@ -44,3 +44,5 @@ The **Browser proxy** line is OK when the proxy answers and a request through it
 
 - Only the browser uses the proxy. The AI accounts' network traffic and kwnt's own downloads go direct.
 - A reverse proxy hop, WebRTC and the sites' own fingerprinting still exist. A home address helps; it does not make the browser invisible.
+
+No proxy of your own? Kwant can run a WireGuard tunnel for you: see [wireguard-helper.md](wireguard-helper.md).
