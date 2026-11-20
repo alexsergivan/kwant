@@ -794,6 +794,7 @@ export const GoalForm: React.FC<{
     if (hasFormErrors(errors)) {
       // A problem behind "More options" opens it. Then move to the first problem.
       if (errors.budget) setMore(true);
+      // Focus on a frame, not after render (kept): a submit event: React renders the error state before the next frame
       requestAnimationFrame(() => formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
       return;
     }

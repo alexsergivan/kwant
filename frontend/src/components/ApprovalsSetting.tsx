@@ -2,6 +2,7 @@
 // bot runs without asking. The marker always has an icon and words, never colour alone.
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useFocusAfterRender } from '../focusAfterRender';
 import { AlertTriangle, CheckCheck, Loader2, RotateCcw, ShieldCheck, ShieldOff, Undo2 } from 'lucide-react';
 import { AlwaysAllowed, alwaysAllowedApi, grantTool, grantWhere } from '../alwaysAllowed';
 import { relativeTime } from '../away';
@@ -281,6 +282,7 @@ export const AlwaysAllowedList: React.FC<{
   const headingId = useId();
   const listRef = useRef<HTMLUListElement>(null);
   const headingRef = useRef<HTMLParagraphElement>(null);
+  const focusAfterRender = useFocusAfterRender();
 
   const load = useCallback(() => {
     let live = true;
@@ -321,10 +323,10 @@ export const AlwaysAllowedList: React.FC<{
           : `All ${n} taken back. ${kwantName} asks again before using any of them.`,
       );
       // Keep the keyboard in the list: the next row's Take back, else the heading
-      requestAnimationFrame(() => {
+      focusAfterRender(() => {
         const buttons = listRef.current?.querySelectorAll<HTMLButtonElement>('button[data-take-back]');
         const next = buttons && buttons.length ? buttons[Math.min(Math.max(index, 0), buttons.length - 1)] : null;
-        (next ?? headingRef.current)?.focus();
+        return next ?? headingRef.current;
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Couldn’t take that back. Try again.');

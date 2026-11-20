@@ -59,6 +59,7 @@ import {
   sourceWords,
 } from '../appSearch';
 import { usePhoneLayout } from '../usePhoneLayout';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 export { presetPublisher };
 
@@ -623,10 +624,11 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
     return id ? (connections.find((c) => c.id === id)?.used_by ?? []).map((u) => u.name) : [];
   };
 
+  const focusAfterRender = useFocusAfterRender();
   const openKey = (app: { slug: string; name: string } | null, replace = false) => {
     setKeyOpen({ slug: app?.slug ?? null, name: app?.name ?? null, replace });
     setKeyPhase({ s: 'idle' });
-    window.setTimeout(() => keyRef.current?.focus(), 0);
+    focusAfterRender(() => keyRef.current);
   };
 
   /** Starts an app's sign-in: the tab opens inside the click or key event, its address follows. */
@@ -673,7 +675,7 @@ export const FindTool: React.FC<FindToolProps> = (p) => {
       const text = e instanceof Error ? e.message : 'Something went wrong.';
       const refused = e instanceof ConnectionsError && (e.status === 409 || e.status === 400);
       setKeyPhase(refused ? { s: 'refused', text } : { s: 'down', text });
-      window.setTimeout(() => keyRef.current?.focus(), 0);
+      focusAfterRender(() => keyRef.current);
       return;
     }
     if (!alive.current) return;

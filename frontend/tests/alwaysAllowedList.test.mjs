@@ -131,6 +131,31 @@ test('Take back sends that one grant and shows what is left; focus stays in the 
   assert.equal(document.activeElement, host.querySelectorAll('[data-take-back]')[1], 'focus moves to the next row');
 });
 
+test('Take back on the last row: focus moves to the new last row even when a frame comes before React renders the list', async () => {
+  // A frame that is due before React's scheduler task (raf-focus-after-render): an update made after an await or a
+  // .then renders in that task, so a focus on requestAnimationFrame ran first, found the old DOM and focus dropped
+  // to <body>. Running each frame callback in a microtask forces that order every time.
+  const realRaf = [g.requestAnimationFrame, window.requestAnimationFrame];
+  const frameFirst = (on) => {
+    const raf = on ? (cb) => (queueMicrotask(() => cb(performance.now())), 0) : null;
+    g.requestAnimationFrame = raf ?? realRaf[0];
+    window.requestAnimationFrame = raf ?? realRaf[1];
+  };
+  const list = three();
+  server = (_url, init) => (init?.method === 'DELETE' ? json(200, { revoked: 1, always_allowed: [list[0], list[1]] }) : json(200, list));
+  const host = await mount();
+  try {
+    frameFirst(true);
+    await click(host.querySelectorAll('[data-take-back]')[2]);
+    frameFirst(false);
+    assert.equal(rows(host).length, 2);
+    const a = document.activeElement;
+    assert.ok(a === host.querySelectorAll('[data-take-back]')[1], `focus is on the new last Take back, not ${a?.tagName.toLowerCase()} "${a?.textContent.trim().slice(0, 30)}"`);
+  } finally {
+    frameFirst(false);
+  }
+});
+
 test('Take back all sends {} and leaves only the confirmation, no heading', async () => {
   server = (_url, init) => (init?.method === 'DELETE' ? json(200, { revoked: 3, always_allowed: [] }) : json(200, three()));
   const host = await mount();

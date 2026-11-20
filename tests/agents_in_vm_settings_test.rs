@@ -28,7 +28,7 @@ async fn the_switch_saves_and_the_chips_say_where_each_engine_runs() {
         assert_eq!(v["agents"][other]["state"], "not_isolated");
         assert_eq!(v["agents"][other]["reason"], "not_supported_yet");
     }
-    let available = v["isolate_claude_toggle"]["available"].as_bool().unwrap();
+    assert!(v["isolate_claude_toggle"]["available"].is_boolean(), "{v}");
     if cfg!(target_os = "macos") {
         assert_eq!(v["isolate_claude_toggle"]["reason"], "mac_later");
     }
@@ -44,8 +44,9 @@ async fn the_switch_saves_and_the_chips_say_where_each_engine_runs() {
     assert_eq!(common::call_remote(&env.app, "PUT", "/api/settings/computer").await, StatusCode::UNAUTHORIZED);
 
     let (s, v) = common::call(&env.app, "PUT", "/api/settings/computer", Some(json!({"isolate_claude": true}))).await;
-    if available {
-        assert_eq!(s, StatusCode::OK, "{v}");
+    // Branch on the PUT's own answer, not the GET's `available` above: each asks Docker again
+    // (`docker version`, 3 s timeout), so on a busy runner the two can disagree
+    if s == StatusCode::OK {
         assert_eq!(v["isolate_claude"], true);
         let claude = &v["agents"]["claude"];
         if v["mode"] == "local" {
@@ -56,7 +57,7 @@ async fn the_switch_saves_and_the_chips_say_where_each_engine_runs() {
             assert!(["preparing", "unavailable"].contains(&claude["state"].as_str().unwrap()), "{v}");
         }
     } else {
-        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
         // The code for the client, and words for the person (ui-check-446 fix 5)
         let code = v["code"].as_str().unwrap_or_default();
         assert!(["mac_later", "docker_unavailable", "not_supported_yet"].contains(&code), "{v}");

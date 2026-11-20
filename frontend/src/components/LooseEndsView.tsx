@@ -396,6 +396,7 @@ export const SaveFirst: React.FC<{
   // Use/Unlock Bitwarden opens its form in place: focus goes to its first field, not back to the page
   useEffect(() => {
     if (!step) return undefined;
+    // Kept on a timer: this effect runs after the commit that renders the form, so its field is already there.
     const h = window.setTimeout(() => box.current?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled])')?.focus(), 0);
     return () => window.clearTimeout(h);
   }, [step, !!store.status]);

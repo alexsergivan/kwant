@@ -34,6 +34,7 @@ import {
   type Inserted,
   type MicView,
 } from '../dictation';
+import { useAfterRender } from '../focusAfterRender';
 
 export type DictPhase = 'idle' | 'asking' | 'recording' | 'transcribing';
 
@@ -110,6 +111,7 @@ export function useDictation(o: DictationOptions): Dictation {
   const [popOpen, setPopOpen] = useState(false);
   const [announce, setAnnounceState] = useState({ text: '', n: 0 });
   const micRef = useRef<HTMLButtonElement>(null);
+  const afterRender = useAfterRender();
   const popRef = useRef<HTMLDivElement>(null);
   const levelRef = useRef(0);
   const recRef = useRef<Rec | null>(null);
@@ -130,7 +132,7 @@ export function useDictation(o: DictationOptions): Dictation {
     setPhaseState(p);
   };
   const say = (text: string) => setAnnounceState((a) => ({ text, n: a.n + 1 }));
-  const focusMic = () => setTimeout(() => micRef.current?.focus({ preventScroll: true }), 0);
+  const focusMic = () => afterRender(() => micRef.current?.focus({ preventScroll: true }));
   const clearAdded = () => {
     if (addedTimer.current) clearTimeout(addedTimer.current);
     addedTimer.current = null;
@@ -234,7 +236,8 @@ export function useDictation(o: DictationOptions): Dictation {
       clearAdded();
       addedTimer.current = setTimeout(() => setLine((l) => (l?.kind === 'added' ? null : l)), ADDED_MS);
       const handTouch = live.current.phone && live.current.touch;
-      setTimeout(() => {
+      // After the render that shows the new text, so the height and the caret are measured on it.
+      afterRender(() => {
         const ta = textareaRef.current;
         if (ta) {
           ta.style.height = 'auto';
@@ -245,7 +248,7 @@ export function useDictation(o: DictationOptions): Dictation {
           ta.focus();
           ta.setSelectionRange(ins.caret, ins.caret);
         }
-      }, 0);
+      });
       return;
     }
     if (r.status === 409 && r.code === 'no_transcriber') {
@@ -403,7 +406,7 @@ export function useDictation(o: DictationOptions): Dictation {
     setLine(null);
     say('Dictated words removed.');
     const at = line.ins.from;
-    setTimeout(() => {
+    afterRender(() => {
       const ta = textareaRef.current;
       if (ta) {
         ta.style.height = 'auto';
@@ -414,7 +417,7 @@ export function useDictation(o: DictationOptions): Dictation {
         ta.focus();
         ta.setSelectionRange(at, at);
       }
-    }, 0);
+    });
   };
 
   const noteTyping = useCallback(() => {
@@ -430,7 +433,7 @@ export function useDictation(o: DictationOptions): Dictation {
     if (spaceId) setMicHidden(spaceId, true);
     setPopOpen(false);
     say('Mic hidden. It comes back when dictation is set up.');
-    setTimeout(() => textareaRef.current?.focus({ preventScroll: true }), 0);
+    afterRender(() => textareaRef.current?.focus({ preventScroll: true }));
   };
 
   // Esc anywhere stops and transcribes, before the composer's own Esc, unless a dialog or picker is open.
@@ -484,6 +487,7 @@ export function useDictation(o: DictationOptions): Dictation {
   // The popover: focus its first button; Esc or a click outside closes it.
   useEffect(() => {
     if (!popOpen) return;
+    // Kept on a timer: this effect runs after the commit that renders the popover, so its button is already there.
     const t = setTimeout(() => popRef.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true }), 0);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;

@@ -59,6 +59,7 @@ import {
 } from '../gettingStarted';
 import { type StepTeam, type TeamStepView, teamDoneValue, teamStepView } from '../firstScreen';
 import { type InstallTrack, forgetInstall, installDetails, startInstall, useInstallTrack, useStartVersion } from '../gettingStartedInstall';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 const SLOW_S = 40;
@@ -778,6 +779,7 @@ export const TeamStep: React.FC<{
   const [importing, setImporting] = useState(false);
   const imported = useRef(false);
   const importTile = useRef<HTMLButtonElement>(null);
+  const focusAfterRender = useFocusAfterRender();
   // Desktop app only: one look at the usual places, for the "N found" line and the dialog.
   const localSources = useLocalSources();
   const [local] = localSources;
@@ -786,7 +788,7 @@ export const TeamStep: React.FC<{
     setImporting(false);
     // An import that went in (even if undone in the dialog) counts; Cancel or Close leaves step 3 as it was.
     if (imported.current) onImported();
-    else window.setTimeout(() => importTile.current?.focus(), 0);
+    else focusAfterRender(() => importTile.current);
   };
   const offered = new Set(view.templateIds);
   const templates = rt?.available ? (rt.templates ?? []).filter((t) => offered.has(t.id)) : [];
@@ -1013,6 +1015,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
   // Start with @team: today's Keep, then the composer, so the next thing is the first ask.
   const startTeam = () => {
     keep();
+    // Kept on a timer: the composer is already on screen, outside this card, and Keep can remove the card in the same update.
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('[data-composer-form] textarea')?.focus(), 0);
   };
   // "Bring your bots": like Keep, the card goes once step 2 is done; before that step 3 reads done.

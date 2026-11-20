@@ -9,6 +9,7 @@ import { CatalogEntry, ConnectionsError, connectionsApi } from '../connections';
 import { listNames, removeServer, serverIdOf, setServerEnabled } from '../appsAccounts';
 import { editorProps } from '../escape';
 import { KeyField, KeyPhase } from './FindTool';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 export interface ComposioTileApi {
   addKey: (key: string) => Promise<unknown>;
@@ -108,11 +109,12 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
     if (open === 'remove') keepRef.current?.focus();
   }, [open]);
 
+  const focusAfterRender = useFocusAfterRender();
   const openKey = (what: Open) => {
     setOpen(what);
     setPhase({ s: 'idle' });
     setActionError(null);
-    window.setTimeout(() => keyRef.current?.focus(), 0);
+    focusAfterRender(() => keyRef.current);
   };
   const close = () => {
     setOpen('none');
@@ -129,7 +131,7 @@ export const ComposioTile: React.FC<ComposioTileProps> = (p) => {
       const text = e instanceof Error ? e.message : 'Something went wrong.';
       const isRefused = e instanceof ConnectionsError && (e.status === 409 || e.status === 400);
       setPhase(isRefused ? { s: 'refused', text } : { s: 'down', text });
-      window.setTimeout(() => keyRef.current?.focus(), 0);
+      focusAfterRender(() => keyRef.current);
       return;
     }
     const was = open;

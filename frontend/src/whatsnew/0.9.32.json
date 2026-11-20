@@ -1,0 +1,27 @@
+{
+  "version": "0.9.32",
+  "date": "2026-11-20",
+  "highlights": [
+    {
+      "id": "point-bar-clear",
+      "title": "The Point bar stays readable",
+      "text": "Point at a part near the top of the view and its name tag now sits below or inside the outline, so \"Click the part you mean\" is never covered.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "point-off-after-send",
+      "title": "Point turns off after you send",
+      "text": "Pick parts, write your message and send it: Point switches off by itself and the cursor stays in the message box. A click on a part still keeps Point on.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Clicking the same quote twice now always highlights the original message again.",
+    "Saving Computer settings is faster when Docker is slow, and Run Claude inside the VM no longer flips to unavailable after you turn it on.",
+    "After you save a backup command on Dev mode's production floor card, focus always lands on Back up first.",
+    "Focus now lands on the right field or button after you open a key field, save a setting or close a popover, even on a slow machine.",
+    "After Take back, Pause again, Remove or a cancelled sign-in, focus lands on the next button instead of getting lost when the app is busy."
+  ]
+}
