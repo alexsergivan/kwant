@@ -1,0 +1,25 @@
+{
+  "version": "0.9.31",
+  "date": "2026-11-20",
+  "highlights": [
+    {
+      "id": "effort-one-piece",
+      "title": "The effort stays in one piece",
+      "text": "On a phone, Details' Ran on row used to split \"· medium effort\" across two lines. Now it moves to the next line whole.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "ran-on-phone",
+      "title": "Ran on reads cleanly on a phone",
+      "text": "Open Details under a reply on a narrow screen: the model, where it ran and the effort stay readable, with no word left hanging.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Go to the approval's flash no longer makes the approval card jump.",
+    "Stop on a chat now also stops the lead's follow-up to a hand-off that was just reporting back.",
+    "A second press on Go to the approval flashes the card again."
+  ]
+}
