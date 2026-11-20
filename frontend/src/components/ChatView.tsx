@@ -45,6 +45,7 @@ import { BrowsedChip } from './BrowsedChip';
 import { pagesOfReply, type ReplyPage } from '../browserPages';
 import { ReplyCheckLine } from './ReplyCheckLine';
 import { replyOutcome } from '../replyOutcome';
+import { effortWords, isCliRunLine } from '../reasoningEcho';
 import { FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
@@ -101,7 +102,6 @@ import { awayApi } from '../away';
 import { parseBudgetNotice } from '../botBudget';
 import { BudgetNotice, BudgetPausedBanner, useBudgets } from './BotBudget';
 import { isSystemNotice, parseExpiredApproval, parseInterruption, retryTargets } from '../interruptions';
-import { ringElement } from '../ring';
 import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
 import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
@@ -109,6 +109,7 @@ import { ideaBlockedLine, ideaLength } from '../ideaShell';
 import { JarIcon } from './JarIcon';
 import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
+import { approvalPillShows, stripStepsAside } from '../askHere';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
 import { SmartActionsSlot } from './results/SmartActions';
@@ -353,6 +354,10 @@ export interface ChatViewProps {
   needsYouStrip?: React.ReactNode;
   /** 22i: the strip shows an ask here, so the working line drops its own "Answer ↑". */
   needsYouOpen?: boolean;
+  /** 29w: the strip's only ask is this chat's live approval, so it steps aside while that card's buttons are on screen. */
+  stripOnlyApproval?: boolean;
+  /** 30a: the strip offers "Go to the approval" for a live approval here, so the "Approval waiting" pill steps aside. */
+  stripHasApproval?: boolean;
   onHighlightDone?: () => void;
   /** Set while `messages` is an older window (a search hit beyond the latest page). */
   viewingHistory?: boolean;
@@ -637,6 +642,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   highlightRing,
   needsYouStrip,
   needsYouOpen,
+  stripOnlyApproval = false,
+  stripHasApproval = false,
   onContinueFrom,
   threadKind,
   continuedFrom,
@@ -956,18 +963,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   // A waiting card whose buttons are off screen while the person reads further up.
   const [approvalOffscreen, setApprovalOffscreen] = useState(false);
+  // 29w: some card's Allow / Deny row is fully on screen (the same measurement), so the strip need not repeat it.
+  const [approvalCardInView, setApprovalCardInView] = useState(false);
+  // ...or the chat follows the bottom with a card in it (the follow pin would undo the strip coming back there).
+  const [followingCard, setFollowingCard] = useState(false);
   const approvalKey = pendingApprovals.map((a) => a.id).join(',');
   const checkApprovalVisible = () => {
     const el = scrollRef.current;
     if (!el) return;
     const view = el.getBoundingClientRect();
     const rows = Array.from(el.querySelectorAll<HTMLElement>('[data-approval-actions]'));
-    const action = approvalScrollAction({
-      waiting: rows.length,
-      following: stickRef.current,
-      buttonsVisible: rows.some((r) => fullyVisible(r.getBoundingClientRect(), view)),
-    });
+    const buttonsVisible = rows.some((r) => fullyVisible(r.getBoundingClientRect(), view));
+    const action = approvalScrollAction({ waiting: rows.length, following: stickRef.current, buttonsVisible });
     setApprovalOffscreen(action === 'notify');
+    setApprovalCardInView(buttonsVisible);
+    setFollowingCard(stickRef.current && rows.length > 0);
   };
   const onScroll = () => {
     const el = scrollRef.current;
@@ -1010,10 +1020,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const cards = scrollRef.current?.querySelectorAll<HTMLElement>('[data-approval-card]');
     const card = cards?.[cards.length - 1];
     if (!card) return;
+    // 30a: started from the keyboard (the pill or "Answer ↑" had keyboard focus), focus lands on the card itself,
+    // never on Allow / Deny, so a second Enter can't approve. A tap or click never moves focus.
+    const from = document.activeElement;
+    const keyboard = from instanceof HTMLButtonElement && from.matches(':focus-visible');
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     card.scrollIntoView({ block: 'end', behavior: reduce ? 'auto' : 'smooth' });
     setApprovalOffscreen(false);
+    if (keyboard) card.focus({ preventScroll: true });
   };
+  // 29w: the Needs-you strip steps aside while its one ask is the live approval whose buttons are on screen.
+  const stripAside = stripStepsAside({ strip: !!needsYouStrip, onlyApproval: stripOnlyApproval, cardInView: approvalCardInView, followingCard });
+  const stripSlotRef = useRef<HTMLDivElement | null>(null);
+  const stripHadFocusRef = useRef(false);
+  // Its "Go to the approval" brings the card into view and the strip goes: focus that was in it goes to the
+  // composer (as when the strip leaves), never to the page body.
+  useLayoutEffect(() => {
+    if (!stripAside || !stripHadFocusRef.current) return;
+    stripHadFocusRef.current = false;
+    const a = document.activeElement;
+    if (!a || a === document.body || stripSlotRef.current?.contains(a)) textareaRef.current?.focus({ preventScroll: true });
+  }, [stripAside]);
   // The running turn's summary line (WorkingStrip): inside the composer section, right above the box.
   const { byBot: budgetsByBot } = useBudgets();
   const chatBudget = budgetBotId ? budgetsByBot[budgetBotId] : undefined;
@@ -1103,7 +1130,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
       if (!card) return;
       const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-      if (highlightRing) ringElement(card);
+      // 30a: the strip's "Go to the approval" pressed from the keyboard lands focus on the card (as the question
+      // card's first choice does), never on Allow / Deny. A tap, an Inbox row or a notification leaves focus alone.
+      const from = document.activeElement;
+      if (from instanceof HTMLElement && stripSlotRef.current?.contains(from) && from.matches('[data-strip-action="decide"]:focus-visible')) card.focus({ preventScroll: true });
       setFlashKind(highlightRing ? 'ask' : 'search');
       setFlashId(highlightMessageId);
       onHighlightDone?.();
@@ -1872,6 +1902,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
               ranOn={ranOn}
               account={account}
+              effort={effortWords(msg.reasoning_content)}
               tokens={tokens}
               cost={cost}
               done={done}
@@ -1915,7 +1946,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
 
               {/* Collapsible Reasoning Disclosure (the steps above already hold the thinking when they have it) */}
-              {msg.reasoning_content && !hasThinkingText(savedActivity) && (
+              {/* 30e: a CLI reply's only "reasoning" is its run line, which Ran on already says; its effort moves there */}
+              {msg.reasoning_content && !isCliRunLine(msg.reasoning_content) && !hasThinkingText(savedActivity) && (
                 <div className="mb-2 max-w-full">
                   <button
                     type="button"
@@ -2699,16 +2731,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {prepush}
 
         {/* Pending Security Approval Ticket */}
-        {pendingApprovals.map((approval) =>
-          // 0.8.1 F6: a notification's tap lands on this card and flashes it
-          flashId === approval.id ? (
-            <div key={approval.id} className="rounded-xl kw-flash">
-              <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
-            </div>
-          ) : (
-            <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
-          ),
-        )}
+        {pendingApprovals.map((approval) => (
+          // 0.8.1 F6: a notification's tap lands on this card and flashes it. 30a: the wrapper is always there
+          // (display: contents when not flashing), so the flash never remounts the card: focus that "Go to the
+          // approval" put on it stays, and so does a half-typed Deny reason. 30h: while flashing, the wrapper is as wide
+          // as the card (the card's own max-w-2xl), so the amber box hugs the card instead of running to the column's
+          // edge. Top and bottom already match: the card's my-3 collapses through the wrapper. 30j: the wrapper has
+          // the same box idle and flashing (only kw-flash toggles), and !mt-0 cancels the list's space-y gap, so the
+          // card stays where it sat idle instead of hopping 8 / 12 px as the flash starts and ends. It is the one
+          // amber ring (the card root no longer gets its own), tagged with the flash kind as message rows are.
+          <div
+            key={approval.id}
+            className={`max-w-2xl rounded-xl !mt-0${flashId === approval.id ? ' kw-flash' : ''}`}
+            data-flash-kind={flashId === approval.id ? flashKind : undefined}
+          >
+            <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
+          </div>
+        ))}
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
@@ -2791,7 +2830,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* On a phone the strip's "Answer ↑" stands in for this pill while the bot waits on the card. */}
-        {approvalOffscreen && pendingApprovals.length > 0 && !(phone && stripWaitsOn === 'approval') && (
+        {/* 30a: one pointer per card: it also steps aside while the Needs-you strip offers "Go to the approval". */}
+        {approvalPillShows({ offscreen: approvalOffscreen, waiting: pendingApprovals.length, phoneAnswerUp: phone && stripWaitsOn === 'approval', stripHasApproval }) && (
           <div role="status" className="max-w-4xl mx-auto mb-2 flex justify-center">
             <button
               type="button"
@@ -2827,7 +2867,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {budgetBanner}
         {workingStrip}
         {/* 22i: below the working line, right above the box (design.md §2 order). */}
-        {needsYouStrip}
+        {/* 29w: it steps aside (instantly, kept mounted) while it only repeats the approval card on screen. */}
+        <div ref={stripSlotRef} className={stripAside ? 'hidden' : 'contents'} data-needs-you-slot={stripAside ? 'aside' : 'shown'} onFocus={(e) => (stripHadFocusRef.current = (e.target as HTMLElement).matches(':focus-visible'))} onBlur={() => (stripHadFocusRef.current = false)}>
+          {needsYouStrip}
+        </div>
 
         <form
           onSubmit={handleSubmit}

@@ -236,6 +236,27 @@ test('ranOnWords: "Claude Sonnet 5.5, on your Work account"', () => {
   assert.equal(m.ranOnWords(null, null), null);
 });
 
+test('ranOnWords: the built-in account reads "on this machine", named accounts keep their wording', () => {
+  assert.equal(m.ranOnWords('Claude · Opus 5.5', 'This machine'), 'Claude Opus 5.5, on this machine');
+  assert.equal(m.ranOnWords('Claude · Opus 5.5', '  this machine '), 'Claude Opus 5.5, on this machine');
+  assert.equal(m.ranOnWords('Codex', 'THIS MACHINE'), 'Codex, on this machine');
+  assert.equal(m.ranOnWords(null, 'This machine'), 'This machine');
+  assert.doesNotMatch(m.ranOnWords('Claude · Opus 5.5', 'This machine'), /This machine account/);
+  assert.equal(m.ranOnWords('Claude · Opus 5.5', 'Work'), 'Claude Opus 5.5, on the Work account');
+  assert.equal(m.ranOnWords('Claude · Opus 5.5', 'Work account'), 'Claude Opus 5.5, on your Work account');
+  assert.equal(m.ranOnWords('Claude · Opus 5.5', 'This machine 2'), 'Claude Opus 5.5, on the This machine 2 account');
+  assert.equal(m.ranOnWords(null, 'Work'), 'The Work account');
+});
+
+test('ReplyMeta: Details Ran on for a CLI reply on the built-in account reads "on this machine"', async () => {
+  const { host, unmount } = mount(ui.ReplyMeta, { name: 'Mia', ranOn: 'Claude · Opus 5.5', account: 'This machine' });
+  await click([...host.querySelectorAll('button')].find((b) => /Details/.test(b.textContent)));
+  const rows = [...host.querySelectorAll('[data-reply-details] dt')].map((dt) => [dt.textContent, dt.nextElementSibling.textContent]);
+  assert.deepEqual(rows.find(([k]) => k === 'Ran on'), ['Ran on', 'Claude Opus 5.5, on this machine']);
+  assert.doesNotMatch(host.textContent, /This machine account/);
+  unmount();
+});
+
 test('replyCostWords: cost and new work, cache reads as a note; never "fresh" or "cache"', () => {
   const meta = (u) => JSON.stringify({ usage: u });
   const full = m.replyCostWords(meta({ fresh_input: 9120, cache_write: 1880, output: 812, cache_read: 38400, cost_usd: 0.0412 }));

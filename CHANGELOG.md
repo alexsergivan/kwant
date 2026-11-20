@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.30] - 2026-11-19
+
+kwant 0.9.30: CLI replies without a run line posing as reasoning, and their effort in Details.
+
+### Fixed
+- A reply made through a CLI (for example Claude or Codex on This machine) no longer shows its "Executed via … CLI · … [Effort: …]" line as if it were the bot's reasoning. Details keeps the effort on the Ran on row instead (for example "· medium effort"). Real reasoning still shows, and older messages are covered too (#872)
+- After the idea jar hits a usage limit or its cap, it no longer starts one more take a few minutes later: the take is recorded as finished before the idea leaves its peek, so the pause and cap checks see it in time (#870)
+- Details' Ran on reads "on this machine" for a reply that ran on the built-in This machine account, instead of "on the This machine account"; named accounts read as before (#873)
+- When Go to the approval flashes the approval card, the amber outline now fits the card instead of running past it on a wide window (#875)
+- When a teammate finishes a hand-off, the chat now reads busy until its lead picks up the result, so the lead is never started on a second review of the same hand-off in that moment (#876)
+- Go to the approval, pressed from the keyboard (the "needs you" bar, the "Approval waiting" pill or Answer), now moves focus to the approval card itself, never to Allow or Deny, so a second Enter can't approve anything; a tap or click never moves focus. The "Approval waiting" pill also steps aside while the "needs you" bar already points at that approval, so there is one pointer (#869)
+
+## [Mac 0.9.29] - 2026-11-19
+
+kwant 0.9.29: an approval that asks once, on its own card.
+
+### Fixed
+- When a bot waits for one approval and its card's Allow once and Deny buttons are on screen, the "needs you" bar above the message box now steps aside instead of asking the same thing again. It comes back once you scroll the card away, and it stays when more than one thing is waiting (#861)
+
 ## [Mac 0.9.28] - 2026-11-19
 
 kwant 0.9.28: a runaway command that can't take kwant down, your reason for Deny in Details and a Deploy on Railway button.
