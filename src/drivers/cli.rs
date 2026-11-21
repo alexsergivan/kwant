@@ -164,16 +164,14 @@ pub fn forget_cli_binaries() {
 fn find_cli_binary_uncached(name: &str) -> Option<String> {
     use std::os::windows::process::CommandExt;
     // `where` lists PATH hits with every PATHEXT extension; an .exe beats a .cmd shim
-    let on_path: Vec<String> = std::process::Command::new("where")
-        .arg(name)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
-        .unwrap_or_default();
+    // held by kwnt's helper job, so it ends with kwnt.exe (stderr is captured and dropped)
+    let on_path: Vec<String> = crate::helper_process::output_blocking(
+        std::process::Command::new("where").arg(name).creation_flags(CREATE_NO_WINDOW),
+    )
+    .ok()
+    .filter(|o| o.status.success())
+    .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    .unwrap_or_default();
     let env = |k: &str| std::env::var_os(k).map(std::path::PathBuf::from);
     windows_cli_candidates(name, &on_path, env("USERPROFILE"), env("APPDATA"))
         .into_iter()

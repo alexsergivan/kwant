@@ -178,6 +178,10 @@ for (const width of [300, 270]) {
 // 31m chart-last-label-fits: on a phone, a line chart's off-cadence last label printed right after the regular one
 // ("2026-10-1926…"). Labels render at the card's measured width, so stub the measurement for narrow and wide.
 async function xLabelsAt(block, width) {
+  return (await xAxisAt(block, width)).at;
+}
+// The drawn axis texts and the point each names (a full date, or "MM-DD" once 31t drops a shared year).
+async function xAxisAt(block, width) {
   const cw = Object.getOwnPropertyDescriptor(dom.window.HTMLElement.prototype, 'clientWidth');
   const hadRO = 'ResizeObserver' in globalThis;
   Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width });
@@ -185,7 +189,9 @@ async function xLabelsAt(block, width) {
   try {
     const host = await mount(block);
     const xs = block.points.map((p) => p.x);
-    return [...host.querySelectorAll('svg[role="img"] text.fill-zinc-400')].map((t) => xs.indexOf(t.textContent));
+    const texts = [...host.querySelectorAll('svg[role="img"] text.fill-zinc-400')].map((t) => t.textContent);
+    const at = texts.map((t) => (xs.includes(t) ? xs.indexOf(t) : xs.findIndex((x) => x.slice(5) === t)));
+    return { host, texts, at };
   } finally {
     if (cw) Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', cw);
     else delete dom.window.HTMLElement.prototype.clientWidth;
@@ -215,7 +221,7 @@ test('a line chart labels the last point and never prints two dates on top of ea
       const what = `${size} n=${n}: ${at.join(',')}`;
       assert.deepEqual(at, expected[size][n], what);
       assert.equal(at.at(-1), n - 1, `last point labelled, ${what}`);
-      assert.ok(!at.includes(-1), `every label is a whole date, ${what}`);
+      assert.ok(!at.includes(-1), `every label names a whole point, ${what}`);
       // Thinned labels keep at least 2 steps between neighbours; unthinned (wide, n <= 10) keep every point.
       const minGap = Math.min(...at.slice(1).map((v, k) => v - at[k]));
       if (size === 'narrow' || n > 10) assert.ok(minGap >= 2, `neighbours >= 2 steps apart, ${what}`);
@@ -229,4 +235,44 @@ test('bar labels stay as they were: 5 to 9 bars at a phone width name every bar 
     const at = await xLabelsAt(weekly(n, 'bar'), 358);
     assert.equal(at.length, n, `n=${n}`);
   }
+});
+
+// 31t chart-axis-drops-same-year: on a phone, ten-character ISO dates sat edge to edge. When every date shares a year,
+// the axis prints "09-07"; the year stays everywhere else, and nothing else about the axis changes.
+test('a phone line chart drops a shared year from its date labels, and only there (31t)', async () => {
+  const mmdd = (b, at) => at.map((i) => b.points[i].x.slice(5));
+  const same = weekly(8);
+  const narrow = await xAxisAt(same, 358);
+  assert.deepEqual(narrow.texts, ['09-07', '09-21', '10-05', '10-26'], 'narrow, same year: MM-DD');
+  assert.deepEqual(narrow.at, [0, 2, 4, 7], 'cadence from 31m unchanged');
+  for (const n of [5, 9, 12]) {
+    const r = await xAxisAt(weekly(n), 358);
+    assert.deepEqual(r.texts, mmdd(weekly(n), r.at), `narrow n=${n} prints MM-DD`);
+  }
+  // Everything else keeps the full date.
+  const wide = await xAxisAt(same, 640);
+  assert.deepEqual(wide.texts, same.points.map((p) => p.x), 'wide: full dates');
+  const mixed = { ...weekly(8), points: weekly(8).points.map((p, i) => ({ ...p, x: i < 6 ? p.x : `2027-01-0${i - 5}` })) };
+  const mx = await xAxisAt(mixed, 358);
+  assert.ok(mx.texts.length && mx.texts.every((t) => /^\d{4}-\d{2}-\d{2}$/.test(t)), 'mixed years: full dates ' + mx.texts.join('|'));
+  const months = { ...weekly(8), points: weekly(8).points.map((p, i) => ({ ...p, x: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'][i] })) };
+  assert.deepEqual((await xAxisAt(months, 358)).texts, ['Jan', 'Mar', 'May', 'Aug'], 'non-date x: unchanged');
+  const notDay = { ...weekly(8), points: weekly(8).points.map((p) => ({ ...p, x: p.x + 'T00:00' })) };
+  assert.ok((await xAxisAt(notDay, 358)).texts.every((t) => t.startsWith('2026-')), 'only bare YYYY-MM-DD drops the year');
+  // Bars keep their own labels (shortened to the band, never year-dropped).
+  const bar = await xAxisAt(weekly(8, 'bar'), 358);
+  assert.ok(bar.texts.length === 8 && bar.texts.every((t) => t.startsWith('2026-')), 'bar: year kept ' + bar.texts.join('|'));
+});
+
+test('with the year dropped from the axis, the tooltip, table and accessible names keep the full date (31t)', async () => {
+  const block = weekly(8);
+  const { host } = await xAxisAt(block, 358);
+  const points = [...host.querySelectorAll('g[role="button"][tabindex="0"]')];
+  assert.equal(points[0].getAttribute('aria-label'), 'Orders at 2026-09-07: 10');
+  await focus(points[7]);
+  assert.match(host.querySelector('[aria-live="polite"]').textContent, /^Orders at 2026-10-26: 17$/);
+  await blur(points[7]);
+  await click([...host.querySelectorAll('button')][1]);
+  const firstCells = [...host.querySelectorAll('tbody tr td:first-child')].map((td) => td.textContent);
+  assert.deepEqual(firstCells, block.points.map((p) => p.x), 'table keeps full dates');
 });

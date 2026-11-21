@@ -144,8 +144,9 @@ pub async fn handle_update(state: &AppState, runner: &Runner, u: &Value) {
         return;
     };
     if is_command(text, "stop") {
-        if state.db.telegram_unpair(&runner.space, None).await.ok().flatten().is_some() {
+        if let Some((_, closed)) = state.db.telegram_unpair(&runner.space, None).await.ok().flatten() {
             runner.enqueue(chat_id, plain(copy::UNPAIRED));
+            unpaired(state, &runner.space, closed).await;
             emit_status(state, &runner.space);
         }
         return;
@@ -721,21 +722,69 @@ pub async fn allow_off(state: &AppState, space: &str) {
     }
 }
 
+/// Unpair or /stop closed `closed` (the asks that were open, as they were closed, `allow` as it
+/// was): the cards already in the chat lose the buttons a tap would answer with, so none looks
+/// like it can still be answered there (31r). An approval sent with Allow once becomes link-only,
+/// as when Allow approvals goes off: the bot still waits in kwant. A question keeps its text and
+/// says it was unpaired. An approval sent link-only and a human step's alert have only the Open in
+/// kwant link, which still holds: they stay as they are. Offline the edit is skipped; a tap is
+/// refused either way (the ask is closed).
+///
+/// A card still on its way has no message id yet, so it can't be edited here: the sender edits it
+/// as soon as its id is stored ([`ask_sent`]).
+pub async fn unpaired(state: &AppState, space: &str, closed: Vec<TelegramAsk>) {
+    let Some(r) = runner(state, space) else { return };
+    for ask in closed.iter().filter(|a| a.message_id.is_some()) {
+        if ask.kind == "question" || (ask.kind == "approval" && ask.allow) {
+            unpaired_card(state, &r, ask).await;
+        }
+    }
+}
+
+/// A question or an approval that went out with Allow once, after Unpair or /stop.
+async fn unpaired_card(state: &AppState, r: &Runner, ask: &TelegramAsk) {
+    if ask.kind == "approval" {
+        return link_only(state, r, ask, &approval_details(state, ask).await).await;
+    }
+    let Ok(Some(link)) = state.db.telegram_link(&ask.space_id).await else { return };
+    let html = format!("{}\n\n<i>{}</i>", ask.text, text::escape(copy::UNPAIRED));
+    edit(state, r, ask, html, open_markup(state, &link, &ask.space_id, None).await);
+}
+
+/// Whether an ask's source still waits for the person in kwant (the approval pending, the question
+/// or human step open), read as it is now.
+async fn still_waiting(state: &AppState, ask: &TelegramAsk) -> bool {
+    match ask.kind.as_str() {
+        "approval" => state.db.get_approval(&ask.ref_id).await.ok().flatten().is_some_and(|a| a.status == "pending"),
+        "question" => state.db.get_question(&ask.ref_id).await.ok().flatten().is_some_and(|q| q.status == "open"),
+        "alert" => state.db.get_human_step(&ask.ref_id).await.ok().flatten().is_some_and(|s| s.status == "open"),
+        _ => false,
+    }
+}
+
 /// An ask has just been sent and its Telegram id stored (`ask` is the row after that). Nothing
 /// could edit it while it was on its way, so what changed meanwhile is edited now:
-/// - closed (answered in kwant, its turn ended): its buttons go and it gets the line its source
-///   says ([`close_and_edit`] left it to the sender);
+/// - closed by Unpair or /stop and still waiting in kwant, with the space still unpaired: what
+///   [`unpaired`] does to the cards already in the chat (31r): a question or an approval sent
+///   with Allow once gets the unpaired form, any other card stays as sent;
+/// - closed otherwise (answered in kwant, its turn ended): its buttons go and it gets the line its
+///   source says ([`close_and_edit`] left it to the sender);
 /// - sent with Allow once but the switch went off: it becomes link-only.
 pub async fn ask_sent(state: &AppState, r: &Runner, ask: &TelegramAsk, markup: Option<&Value>) {
+    let sent_armed = markup
+        .and_then(|m| m["inline_keyboard"].as_array())
+        .is_some_and(|rows| rows.iter().filter_map(Value::as_array).flatten().any(|b| b["callback_data"].as_str().is_some_and(|d| d.starts_with("a:"))));
     if ask.state == "closed" {
-        if let Some(line) = closed_line(state, ask).await {
+        let not_paired = state.db.telegram_link(&ask.space_id).await.ok().flatten().is_some_and(|l| !l.is_paired());
+        if not_paired && still_waiting(state, ask).await {
+            if ask.kind == "question" || (ask.kind == "approval" && sent_armed) {
+                unpaired_card(state, r, ask).await;
+            }
+        } else if let Some(line) = closed_line(state, ask).await {
             edit_answered(state, r, ask, &line).await;
         }
         return;
     }
-    let sent_armed = markup
-        .and_then(|m| m["inline_keyboard"].as_array())
-        .is_some_and(|rows| rows.iter().filter_map(Value::as_array).flatten().any(|b| b["callback_data"].as_str().is_some_and(|d| d.starts_with("a:"))));
     if sent_armed && ask.kind == "approval" && ask.state == "open" && !ask.allow {
         link_only(state, r, ask, &approval_details(state, ask).await).await;
     }
