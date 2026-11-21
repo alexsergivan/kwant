@@ -8,9 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.35] - 2026-11-21
+
+kwant 0.9.35: a Copy button that says when it couldn't copy, Telegram cards that lose their buttons when you unpair, phone charts with shorter date labels, no docker.exe left running after kwant is closed by force on Windows, no empty band above the banner of a paused chat and "needs you" cleared the moment you answer an approval.
+
 ### Fixed
 - Copy now says when it couldn't copy, instead of always saying Copied. The Copy on a code block and under a reply show "Couldn't copy" for 2 seconds when the browser blocks the clipboard (for example on a plain http address), and the code block's Copy is easier to click on a wide screen (#937)
-- At a handoff in a team run, the next bot's name now appears together with its own words, never over the previous bot's reply (#965)
+- Unpairing Telegram, in kwant or with /stop, now clears the buttons on cards already in the chat: an approval sent with Allow once keeps only its link to kwant, and a question says it was unpaired. A card still on its way when you unpair is cleared too (#935)
+- On a phone, a line chart whose dates are all in one year shows them as month and day (09-07), so the labels have room. The tooltip, the table and screen readers keep the full date; wide charts, bar charts and mixed years are unchanged (#936)
+- On Windows, closing kwant by force no longer leaves docker.exe running in the background: the short Docker commands kwant runs for its browser and sandboxes now end when kwant ends, however it ends (#943)
+- On a computer, when a chat's budget is paused, the message box no longer leaves an empty band between the chat and the budget banner; the room for the "New" tag comes back once the budget clears (#944)
+- Answering an approval in the chat (Allow once, Always allow or Deny) now clears its "needs you" bar and sidebar row right away, instead of a moment later; another ask still waiting in that chat keeps them (#947)
 
 ## [Mac 0.9.34] - 2026-11-21
 
