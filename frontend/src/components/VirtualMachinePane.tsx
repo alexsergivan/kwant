@@ -1012,8 +1012,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                   {pointOn && point && (
                     <PointLayer
                       request={stream.request}
-                      page={stream.frame ? { width: stream.frame.width, height: stream.frame.height } : null}
-                      frameId={stream.frame?.id ?? null}
+                      page={steady.frame ? { width: steady.frame.width, height: steady.frame.height } : null}
+                      frameId={steady.frame?.id ?? null}
                       pageUrl={pageUrl}
                       phone={narrow}
                       sink={point}
@@ -1238,7 +1238,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           botName={pageBot}
           pageUrl={pageUrl}
           image={frameSrc}
-          page={stream.frame ? { width: stream.frame.width, height: stream.frame.height } : undefined}
+          page={steady.frame ? { width: steady.frame.width, height: steady.frame.height } : undefined}
           onFrameDone={() => {
             if (paneFrameId.current !== null) stream.acknowledgeFrame(paneFrameId.current);
           }}

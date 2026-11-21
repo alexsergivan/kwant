@@ -120,3 +120,17 @@ test('every browser view gets its picture through the steady frame, on the dark 
   assert.match(watch, /bg-\[#0a0719\]/, 'the pane behind the picture stays dark');
   assert.doesNotMatch(watch, /bg-(white|zinc-[1-4]00|gray-|neutral-[1-4])/);
 });
+
+// A held frame (this file's own tests above) keeps the on-screen picture at its old width/height while
+// stream.frame can already report a newer size. Point and Take over must scale clicks against the frame
+// that is actually drawn (steady.frame), or a click that looks right in the picture lands on the wrong
+// element/pixel of the real page. Reproduced live by a resize landing between a navigation's held blank
+// frame and the next picture: the Point tool's clickAt then misses its target by the drift between the
+// two frames' sizes.
+test('Point and Take over scale clicks against the frame actually on screen, not the raw stream frame', () => {
+  const src = readFileSync(new URL('../src/components/VirtualMachinePane.tsx', import.meta.url), 'utf8');
+  assert.match(src, /page=\{steady\.frame \? \{ width: steady\.frame\.width, height: steady\.frame\.height \} : null\}/, 'PointLayer');
+  assert.match(src, /frameId=\{steady\.frame\?\.id \?\? null\}/, 'PointLayer re-reads its pick only when the shown frame changes');
+  assert.match(src, /page=\{steady\.frame \? \{ width: steady\.frame\.width, height: steady\.frame\.height \} : undefined\}/, 'BrowserControlOverlay');
+  assert.doesNotMatch(src, /page=\{stream\.frame/, 'no coordinate box is built from the raw stream frame');
+});

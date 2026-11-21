@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- Point and Take over now scale a click against the frame actually drawn in the pane, not the newest one the stream has reported: a click could land on the wrong element right after a resize during a page's navigation
+
 ## [Mac 0.9.38] - 2026-11-21
 
 kwant 0.9.38: one card per handoff, results that say when a teammate switched accounts and a stopped summary that stays stopped after a restart.
