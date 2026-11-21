@@ -48,6 +48,46 @@ test('groups hits by channel or direct chat, keeping rank order', () => {
   assert.equal(groups[1].kwant_id, 'k1');
 });
 
+test('33i: thread hits group under "<Bot> · <thread title>", never "· bot"', () => {
+  const hit = (id, channel_id, channel_name, kwant_id) => ({ message_id: id, channel_id, channel_name, kwant_id, author: 'a', snippet: '', created_at: null });
+  const th = (id, kwant, thread, title) => ({ ...hit(id, null, null, kwant), thread_id: thread, thread_title: title });
+  const groups = c.groupHits(
+    [th('ask', 'led', 't1', '2025 tax return'), hit('d1', null, null, 'led'), th('ans', 'led', 't1', '2025 tax return'), hit('g1', 'c1', 'general', null), th('x', 'gone', 't2', 'Old job'), th('y', 'led', 't3', '  ')],
+    (id) => (id === 'led' ? 'Ledger' : undefined),
+  );
+  assert.deepEqual(groups.map((g) => [g.label, g.hits.map((h) => h.message_id)]), [
+    ['Ledger · 2025 tax return', ['ask', 'ans']],
+    ['Direct chat · Ledger', ['d1']],
+    ['#general', ['g1']],
+    ['Old job', ['x']],
+    ['Ledger · Untitled conversation', ['y']],
+  ]);
+  assert.equal(groups[0].thread_id, 't1');
+  assert.equal(groups[0].kwant_id, 'led');
+  assert.equal(groups[1].thread_id, null);
+  assert.ok(groups.every((g) => !/· bot$/i.test(g.label)));
+  // An older server sends no thread fields: grouped as before.
+  assert.deepEqual(c.groupHits([hit('2', null, null, 'k1')], () => 'Ada').map((g) => [g.key, g.label, g.thread_id]), [['k:k1', 'Direct chat · Ada', null]]);
+});
+
+test('33i: a thread hit jumps to its thread route, others to the chat route', () => {
+  assert.deepEqual(c.jumpRoute({ message_id: 'm 1', channel_id: null, kwant_id: 'led', thread_id: 't1' }), {
+    kind: 'thread',
+    kwant_id: 'led',
+    thread_id: 't1',
+    ctx: 't1',
+    latest: '/api/threads/t1/messages',
+    around: '/api/threads/t1/messages?around=m%201',
+  });
+  assert.deepEqual(c.jumpRoute({ message_id: 'm', channel_id: null, kwant_id: 'led', thread_id: null }), {
+    kind: 'chat', ctx: 'led', latest: '/api/channels/led/messages', around: '/api/channels/led/messages?around=m',
+  });
+  assert.deepEqual(c.jumpRoute({ message_id: 'm', channel_id: 'c1', kwant_id: null }), {
+    kind: 'chat', ctx: 'c1', latest: '/api/channels/c1/messages', around: '/api/channels/c1/messages?around=m',
+  });
+  assert.equal(c.jumpRoute({ message_id: 'm', channel_id: null, kwant_id: null, thread_id: null }), null);
+});
+
 const form = (over) => ({ ...c.emptyScheduleForm(new Date('2026-10-17T08:00:00Z'), 'Europe/Kyiv'), ...over });
 const NOW = Date.parse('2026-10-17T08:00:00Z');
 

@@ -14,6 +14,9 @@ export interface SearchHit {
   channel_id: string | null;
   channel_name: string | null;
   kwant_id: string | null;
+  /** 33i: set when the message is in one of a bot's threads (`kwant_id` is then the thread's bot). Older servers omit both. */
+  thread_id?: string | null;
+  thread_title?: string | null;
   author: string;
   /** Raw message text with `<mark>…</mark>` around hits. Not HTML-escaped. */
   snippet: string;
@@ -255,26 +258,59 @@ export interface HitGroup {
   key: string;
   channel_id: string | null;
   kwant_id: string | null;
+  /** 33i: the thread the group's hits are in. */
+  thread_id: string | null;
   label: string;
   hits: SearchHit[];
+}
+
+/** 33i: "Ledger · 2025 tax return"; the title alone when the bot isn't known, never the word "bot". */
+export function threadLabel(botName: string | undefined, title: string | null | undefined): string {
+  const t = title?.trim() || 'Untitled conversation';
+  return botName ? `${botName} · ${t}` : t;
 }
 
 /** Groups hits by where they were said, keeping the server's ranking (best group first). */
 export function groupHits(hits: SearchHit[], kwantName: (id: string) => string | undefined): HitGroup[] {
   const groups = new Map<string, HitGroup>();
   for (const h of hits) {
-    const key = h.channel_id ? `c:${h.channel_id}` : `k:${h.kwant_id ?? ''}`;
+    const thread = !h.channel_id && h.thread_id ? h.thread_id : null;
+    const key = h.channel_id ? `c:${h.channel_id}` : thread ? `t:${thread}` : `k:${h.kwant_id ?? ''}`;
     let g = groups.get(key);
     if (!g) {
+      const name = (h.kwant_id && kwantName(h.kwant_id)) || undefined;
       const label = h.channel_id
         ? channelLabel(h.channel_name ?? h.channel_id)
-        : `Direct chat · ${(h.kwant_id && kwantName(h.kwant_id)) || 'bot'}`;
-      g = { key, channel_id: h.channel_id, kwant_id: h.channel_id ? null : h.kwant_id, label, hits: [] };
+        : thread
+          ? threadLabel(name, h.thread_title)
+          : `Direct chat · ${name || 'bot'}`;
+      g = { key, channel_id: h.channel_id, kwant_id: h.channel_id ? null : h.kwant_id, thread_id: thread, label, hits: [] };
       groups.set(key, g);
     }
     g.hits.push(h);
   }
   return Array.from(groups.values());
+}
+
+/**
+ * 33i: where a search hit opens. A thread hit opens that thread (its route takes `around`); a channel or
+ * direct-chat hit opens that chat, as before. null when the hit names no place.
+ */
+export type JumpRoute =
+  | { kind: 'thread'; kwant_id: string; thread_id: string; ctx: string; latest: string; around: string }
+  | { kind: 'chat'; ctx: string; latest: string; around: string };
+
+export function jumpRoute(hit: Pick<SearchHit, 'message_id' | 'channel_id' | 'kwant_id' | 'thread_id'>): JumpRoute | null {
+  const enc = encodeURIComponent;
+  const around = `around=${enc(hit.message_id)}`;
+  if (!hit.channel_id && hit.thread_id && hit.kwant_id) {
+    const base = `/api/threads/${enc(hit.thread_id)}/messages`;
+    return { kind: 'thread', kwant_id: hit.kwant_id, thread_id: hit.thread_id, ctx: hit.thread_id, latest: base, around: `${base}?${around}` };
+  }
+  const ctx = hit.channel_id ?? hit.kwant_id;
+  if (!ctx) return null;
+  const base = `/api/channels/${enc(ctx)}/messages`;
+  return { kind: 'chat', ctx, latest: base, around: `${base}?${around}` };
 }
 
 export const channelLabel = (name: string) => (name.startsWith('team-') ? `@${name.slice(5)}` : `#${name}`);
