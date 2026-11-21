@@ -134,10 +134,17 @@ export function reloadOnTurnEnd(_turnId: string | null | undefined): boolean {
  * Loads of one chat can finish out of order (a slow first load landing after a later one). Each
  * load takes a number when it starts; only the newest started load for a chat may replace what's
  * on screen, so an older answer never hides a reply a newer one already showed.
+ *
+ * 33c: a message that arrives live while a load is running may be missing from that load's list (the
+ * load read the chat just before the server saved it; the lead's hand-off card did this). `noteLive`
+ * remembers it, and `keepLive` puts it back when that load lands, so it doesn't vanish until a reload.
  */
 export class ChatLoads {
   private seq: Record<string, number> = {};
   private newest: Record<string, Promise<void>> = {};
+  private running: Record<string, number> = {};
+  /** Messages that came live while a load was running, each with the newest load started before it. */
+  private live: Record<string, { after: number; message: { id: string } }[]> = {};
 
   start(ctx: string): number {
     this.seq[ctx] = (this.seq[ctx] ?? 0) + 1;
@@ -155,11 +162,40 @@ export class ChatLoads {
    * (dropped the working line) while the list without the reply was still on screen, so the asked-for OK was
    * the newest message again and "… is waiting for your OK" came back for a few frames.
    */
-  run(ctx: string, load: (isLatest: () => boolean) => Promise<void>): Promise<void> {
+  run(
+    ctx: string,
+    load: (isLatest: () => boolean, keepLive: <M extends { id: string }>(data: M[]) => M[]) => Promise<void>,
+  ): Promise<void> {
     const n = this.start(ctx);
-    const p = load(() => this.isLatest(ctx, n));
+    this.running[ctx] = (this.running[ctx] ?? 0) + 1;
+    const p = load(
+      () => this.isLatest(ctx, n),
+      (data) => this.keepLive(ctx, n, data),
+    ).finally(() => {
+      this.running[ctx] -= 1;
+      // The newest load has landed: every live message so far is in its list or was put back
+      if (this.isLatest(ctx, n)) delete this.live[ctx];
+    });
     this.newest[ctx] = p;
     return this.landed(ctx, p);
+  }
+
+  /** A message that just came live in `ctx` (33c): kept for the loads already running, which may have missed it. */
+  noteLive(ctx: string, message: { id: string }): void {
+    if (!this.running[ctx]) return;
+    (this.live[ctx] ??= []).push({ after: this.seq[ctx] ?? 0, message });
+  }
+
+  /**
+   * `data`, the list load `n` of `ctx` got, plus the messages that came live after that load started and aren't in
+   * it, in the order they came. A message the load also has is never added twice.
+   */
+  keepLive<M extends { id: string }>(ctx: string, n: number, data: M[]): M[] {
+    const missed = (this.live[ctx] ?? [])
+      .filter((l) => l.after >= n && !data.some((m) => m.id === l.message.id))
+      .map((l) => l.message as M);
+    const once = missed.filter((m, i) => missed.findIndex((x) => x.id === m.id) === i);
+    return once.length ? [...data, ...once] : data;
   }
 
   private async landed(ctx: string, p: Promise<void>): Promise<void> {
