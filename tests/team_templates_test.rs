@@ -235,8 +235,11 @@ async fn undo_keeps_a_chat_with_history_archived() {
         .await
         .unwrap();
     let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!(needs_done(&t), json!([]), "32q: a message that doesn't say what they sell doesn't tick it");
+    post_user(&e, &chat_id, "What we sell: bookkeeping for dentists").await;
+    let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
     assert_eq!(needs_done(&t), json!(["what_you_sell"]), "{t}");
-    assert_eq!(t["chat_messages"], 2);
+    assert_eq!(t["chat_messages"], 3);
     assert_eq!(t["archived_chat"], "archived-team-sales", "{t}");
     let (s, u) = undo(&e, v["action_id"].as_str().unwrap()).await;
     assert!(s.is_success(), "{s} {u}");
@@ -537,4 +540,96 @@ async fn a_create_that_fails_at_any_step_leaves_nothing() {
     assert_eq!(c.created.bots.len(), 3);
     let after = counts(&e).await;
     assert_eq!((after.bots, after.teams, after.skills, after.routines), (before.bots + 3, before.teams + 1, before.skills + 1, before.routines + 1));
+}
+
+async fn needs_done_of(e: &Env, team_id: &str) -> Value {
+    let (s, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!(s, StatusCode::OK, "{t}");
+    t["needs_done"].clone()
+}
+
+async fn post_user(e: &Env, chat_id: &str, text: &str) {
+    e.state
+        .db
+        .insert_message(&NewMessage {
+            channel_id: Some(chat_id.into()),
+            direct_kwant_id: None,
+            sender_role: "user".into(),
+            sender_id: "user".into(),
+            text: text.into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+        })
+        .await
+        .unwrap();
+}
+
+/// 32q (Mira's 0.9.36 UX pass, fix #2): "Tell the team what you sell" is done only when the
+/// person has said what they sell ("What we sell: …" with real text), not after any message,
+/// such as the card's own "Try asking" chip or the empty starter the button fills in.
+#[tokio::test]
+async fn sell_step_needs_an_answer() {
+    let e = setup().await;
+    let (s, v) = create(&e, json!({"template_id": "sales"})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let chat_id = v["channel_id"].as_str().unwrap().to_string();
+    let team_id = v["team"]["id"].as_str().unwrap().to_string();
+    let needs_done = || needs_done_of(&e, &team_id);
+    // The catalogue carries the prefix, and the copy says what is needed
+    let (_, cat) = call(&e.app, "GET", "/api/team-templates", &[], None).await;
+    let sales = cat["templates"].as_array().expect("catalogue list").iter().find(|t| t["id"] == "sales").expect("Sales in the catalogue");
+    let need = sales["needs"].as_array().unwrap().iter().find(|n| n["id"] == "what_you_sell").unwrap();
+    assert_eq!((need["answer_prefix"].as_str(), need["done_when"].as_str()), (Some("What we sell:"), Some("The person has said what they sell")));
+    assert!(sales["needs"].as_array().unwrap().iter().filter(|n| n["id"] != "what_you_sell").all(|n| n.get("answer_prefix").is_none()));
+
+    // 1. The card's "Try asking" chip is not an answer
+    post_user(&e, &chat_id, "Find 10 companies like our best customer").await;
+    assert_eq!(needs_done().await, json!([]), "the Try asking chip doesn't tick it");
+    // 2. The starter as the button fills it in, all 3 lines empty, is not an answer
+    post_user(&e, &chat_id, "What we sell: \nWho our best customer is: \nWhat they usually pay: ").await;
+    assert_eq!(needs_done().await, json!([]), "the empty starter doesn't tick it");
+    post_user(&e, &chat_id, "What we sell:    \nWho our best customer is: dentists").await;
+    assert_eq!(needs_done().await, json!([]), "text on another line doesn't answer What we sell");
+    // 3. A real answer ticks it
+    post_user(&e, &chat_id, "What we sell: bookkeeping for dentists\nWho our best customer is: a 3-chair practice\nWhat they usually pay: ").await;
+    assert_eq!(needs_done().await, json!(["what_you_sell"]));
+    // …and later chat doesn't untick it
+    for i in 0..3 {
+        post_user(&e, &chat_id, &format!("Lead list {i}, please.")).await;
+    }
+    assert_eq!(needs_done().await, json!(["what_you_sell"]));
+}
+
+/// 32q: a `composer_prompt` need without an answer prefix keeps today's rule: any message from the
+/// person ticks it, a bot's never does. A need with one needs a real answer line.
+#[tokio::test]
+async fn composer_need_without_answer_prefix_ticks_on_any_message() {
+    let e = setup().await;
+    let (s, v) = create(&e, json!({"template_id": "sales"})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let chat_id = v["channel_id"].as_str().unwrap().to_string();
+    let db = &e.state.db;
+    assert!(!db.composer_need_done(&chat_id, None).await.unwrap(), "nothing posted yet");
+    assert!(!db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap());
+    db.insert_message(&NewMessage {
+        channel_id: Some(chat_id.clone()),
+        direct_kwant_id: None,
+        sender_role: "kwant".into(),
+        sender_id: v["bots"][0]["id"].as_str().unwrap().into(),
+        text: "What we sell: a bot can't answer for the person".into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    })
+    .await
+    .unwrap();
+    assert!(!db.composer_need_done(&chat_id, None).await.unwrap(), "a bot's message doesn't tick it");
+    assert!(!db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap(), "nor a bot's answer line");
+    post_user(&e, &chat_id, "Find 10 companies like our best customer").await;
+    assert!(db.composer_need_done(&chat_id, None).await.unwrap(), "no prefix: any message from the person ticks it");
+    assert!(db.composer_need_done(&chat_id, Some("  ")).await.unwrap(), "a blank prefix is no prefix");
+    assert!(!db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap());
+    post_user(&e, &chat_id, "what we sell: bookkeeping for dentists").await;
+    assert!(db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap(), "case aside, it's an answer");
 }
