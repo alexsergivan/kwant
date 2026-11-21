@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Copy now says when it couldn't copy, instead of always saying Copied. The Copy on a code block and under a reply show "Couldn't copy" for 2 seconds when the browser blocks the clipboard (for example on a plain http address), and the code block's Copy is easier to click on a wide screen (#937)
+- A bot's reply card no longer flashes empty when a reply starts, when its first words appear, when the next bot takes over or after Allow once. The card and what is inside it now appear together (#961)
 
 ## [Mac 0.9.34] - 2026-11-21
 
