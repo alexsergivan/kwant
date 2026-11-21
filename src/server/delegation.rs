@@ -505,12 +505,18 @@ pub(super) async fn release_dependents(state: &AppState, prereq_id: &str) -> usi
                     .await;
                 }
                 (status, _) => {
+                    // 32h: the person stopped the task it waited for, so it is stopped too (not
+                    // failed: nothing went wrong, and the lead hears "Don't restart it")
+                    let stopped = status == "cancelled";
                     let why = if asked_in_reply {
                         format!("not started: it waits for {who}'s result, and {who} asked you something first. Answer {who}, then ask for it again")
+                    } else if stopped {
+                        format!("not started: {who}'s task was stopped")
                     } else {
                         format!("not started: it waited for {who}'s result, and {who}'s task was {status}")
                     };
-                    if !state.db.finish_delegation(&d.id, "failed", Some(&why), None).await.unwrap_or(false) {
+                    let ended = if stopped { "cancelled" } else { "failed" };
+                    if !state.db.finish_delegation(&d.id, ended, Some(&why), None).await.unwrap_or(false) {
                         continue;
                     }
                     let Ok(Some(done)) = state.db.get_delegation(&d.id).await else { continue };
@@ -1027,6 +1033,25 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
     true
 }
 
+/// Hand-offs whose lead's results turn the person stopped (or whose resume a Stop skipped), so
+/// [`super::missions::listener::sweep_unreviewed`] doesn't ask the lead to review their cards
+/// later (32h): the cards wait in Review for the person. Kept in memory, like
+/// [`RESUMED_BATCHES`]: after a restart the sweep may ask once more, as for any lost review.
+static STOPPED_REVIEWS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+
+fn stop_reviews(batch: &[Delegation]) {
+    let mut stopped = STOPPED_REVIEWS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if stopped.len() > 10_000 {
+        stopped.clear();
+    }
+    stopped.extend(batch.iter().map(|b| b.id.clone()));
+}
+
+/// Whether the person stopped the lead's turn on hand-off `id`'s result (see [`STOPPED_REVIEWS`]).
+pub fn review_stopped(id: &str) -> bool {
+    STOPPED_REVIEWS.get().is_some_and(|s| s.lock().unwrap_or_else(|e| e.into_inner()).contains(id))
+}
+
 /// Batches whose lead was already resumed, by their sorted ids (see [`finished_batch`]).
 static RESUMED_BATCHES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
 
@@ -1149,7 +1174,16 @@ async fn continue_lead(
     // job that held the chat while the result was reported, so the person stopped the lead's
     // resume before it began. The results stay posted and the cards stay as they are.
     if stop.is_some_and(CancellationToken::is_cancelled) {
+        stop_reviews(batch);
         return tracing::info!(delegation = %d.id, "the chat was stopped while its hand-off reported: the lead isn't resumed");
+    }
+    // The lead hears these results now (a hand-off sent back and finished again): an earlier Stop
+    // no longer holds the sweep back from their cards
+    if let Some(stopped) = STOPPED_REVIEWS.get() {
+        let mut stopped = stopped.lock().unwrap_or_else(|e| e.into_inner());
+        for b in batch {
+            stopped.remove(&b.id);
+        }
     }
     let Ok(scope) = scope_for(state, &lead, d.origin_channel_id.clone(), d.origin_thread_id.clone(), &job, d.depth - 1).await else {
         return;
@@ -1226,6 +1260,12 @@ async fn continue_lead(
     let context = d.origin_context().unwrap_or(&lead.id).to_string();
     let before = super::keep_going::snapshot(state, &context, &lead).await;
     let outcome = try_kwant_turn(&scope, &lead, prompt, opts).await;
+    // 32h: the person stopped the lead's turn: nothing runs after it, no review turn either (it
+    // posted "Both pass: …" under the stopped summary). The cards wait in Review for the person
+    if scope.cancel_token.is_cancelled() {
+        stop_reviews(batch);
+        return tracing::info!(delegation = %d.id, "the person stopped the lead's results turn: no review turn after it");
+    }
     // The cards of the batch are reviewed in a turn of their own that sees only each brief and
     // result (fresh eyes), then the ones still waiting get one reminder (a failed turn counts too)
     review_turn(state, batch, false).await;
