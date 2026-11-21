@@ -1657,6 +1657,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const folded = askCards ? foldedAnswerIds(arranged.messages) : null;
     return folded?.size ? arranged.messages.filter((m) => !folded.has(m.id)) : arranged.messages;
   }, [arranged.messages, askCards]);
+  // 32l: a teammate that waits on another gets a second `delegation_started` (same delegation_id) when it starts.
+  // Only the first one on screen is the live handoff card; later ones are the quiet line with their own text.
+  const repeatStarts = useMemo(() => {
+    if (!renderDelegation) return null;
+    const seen = new Set<string>();
+    const repeats = new Set<string>();
+    for (const m of listed) {
+      const d = m.meta ? parseDelegationMeta(m.meta) : null;
+      if (d?.kind !== 'delegation_started') continue;
+      if (seen.has(d.delegation_id)) repeats.add(m.id);
+      else seen.add(d.delegation_id);
+    }
+    return repeats;
+  }, [listed, renderDelegation]);
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
@@ -1739,6 +1753,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         />
       );
     const meta = msg.meta && renderDelegation ? parseDelegationMeta(msg.meta) : null;
+    if (meta && repeatStarts?.has(msg.id)) return <SystemNotice key={msg.id} messageId={msg.id} text={msg.text} flash={flashId === msg.id} />;
     if (meta && renderDelegation) return <React.Fragment key={msg.id}>{renderDelegation(msg, meta, flashId === msg.id)}</React.Fragment>;
     const question = msg.meta && renderQuestion ? parseQuestionMeta(msg.meta) : null;
     if (question && renderQuestion) return <React.Fragment key={msg.id}>{renderQuestion(msg, question, flashId === msg.id)}</React.Fragment>;
