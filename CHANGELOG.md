@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- When a teammate's reply hands over to another bot, its words keep their author's name until the next bot starts (#987)
+
 ## [Mac 0.9.36] - 2026-11-21
 
 kwant 0.9.36: replies that start with the bot's own words, reply cards that never show up empty, a focus ring on the code block's Copy button, old Telegram cards cleared when you switch bots, line chart dates that don't run into each other and handoffs where the name and the words change together.
