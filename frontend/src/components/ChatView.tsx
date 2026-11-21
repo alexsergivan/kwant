@@ -36,7 +36,7 @@ import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, foldedAnswerIds, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
-import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
+import { AllowedFromTelegram, AllowedInApp, ViaTelegram } from './TelegramMarks';
 import { RefusedCustomerCall } from './RefusedCustomerCall';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from '../activity';
@@ -267,7 +267,7 @@ export interface ChatViewProps {
   /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
   prepush?: React.ReactNode;
   /** Approvals answered in Telegram (G4), kept as a resolved row; `refused` marks a customer's call nobody allowed (22d). */
-  settledApprovals?: (PendingApproval & { refused?: true })[];
+  settledApprovals?: (PendingApproval & { refused?: true; via?: 'app' })[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -2807,10 +2807,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {liveRowShown && arranged.live.map((m) => renderMessage(m))}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload;
-            22d: a customer's call nobody allowed, in that customer's chat */}
+            33a: allowed once here, "✓ You allowed once"; 22d: a customer's call nobody allowed, in that customer's chat */}
         {settledApprovals.map((approval) =>
           approval.refused ? (
             <RefusedCustomerCall key={approval.id} approval={approval} />
+          ) : approval.via === 'app' ? (
+            <AllowedInApp key={approval.id} lead={approvalLead(approval)} />
           ) : (
             <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
           ),
