@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- Copy now says when it couldn't copy, instead of always saying Copied. The Copy on a code block and under a reply show "Couldn't copy" for 2 seconds when the browser blocks the clipboard (for example on a plain http address), and the code block's Copy is easier to click on a wide screen (#937)
+
 ## [Mac 0.9.34] - 2026-11-21
 
 kwant 0.9.34: long code blocks and logs that fold to 16 lines with a "Show all" button, files a bot shares that show a preview again, line charts whose last date label no longer overlaps the one before it, a sidebar that no longer shifts when you open Inbox, wide tables that fade at the edge while there is more to scroll, a composer whose New tag no longer sits on the chat and key numbers that show as tiles instead of one long line.
