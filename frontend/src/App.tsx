@@ -161,7 +161,7 @@ import {
   questionsApi,
   turnsAwaitingAnswer,
 } from './questions';
-import { AwayError, AwayItem, affectsAway, awayApi, resolveBody } from './away';
+import { AwayError, AwayItem, affectsAway, awayApi, clearAnswered, resolveBody } from './away';
 import { asksHere, closedId, onlyLiveApproval, stripHasLiveApproval, isHandOff, dismissKind, dropClosed, loadAskWindow, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
 import { NeedsYouStrip } from './components/NeedsYouStrip';
 import { chainBudgetApi } from './chainBudget';
@@ -2131,6 +2131,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       if (res.ok || res.status === 409 || res.status === 404) {
         const card = pendingApprovals.find((a) => a.id === ticketId);
         dropApproval(ticketId);
+        // 31y: its "Needs you" strip and sidebar row go with the card, not on the refetch.
+        setClearedAsks((prev) => clearAnswered(prev, ticketId));
         if (!res.ok) pushToast('This request expired', 'The bot is no longer waiting for this answer.');
         else if (card?.waiting && decision !== 'deny') {
           const bot = typeof card.details.kwant_name === 'string' ? card.details.kwant_name : null;

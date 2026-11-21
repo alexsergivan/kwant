@@ -1,0 +1,26 @@
+{
+  "version": "0.9.35",
+  "date": "2026-11-21",
+  "highlights": [
+    {
+      "id": "copy-says-if-it-failed",
+      "title": "Copy tells you when it didn't work",
+      "text": "If the browser blocks the clipboard, for example on a plain http address, Copy now says \"Couldn't copy\" instead of \"Copied\", so you know to copy the text another way.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "telegram-unpair-clears-cards",
+      "title": "Unpairing Telegram clears old buttons",
+      "text": "When you unpair Telegram, approval and question cards already in the chat lose their buttons, so an old tap can't approve or answer anything.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Phone line charts drop the repeated year from their date labels, so the dates have room.",
+    "On Windows, closing kwant by force no longer leaves docker.exe running in the background.",
+    "When a chat's budget is paused, the message box no longer leaves an empty band above the banner.",
+    "Answering an approval in the chat now clears its \"needs you\" bar and sidebar row right away."
+  ]
+}

@@ -186,7 +186,7 @@ test('approval words', () => {
 // ---- 3. Copy ----
 
 test('CopyGhost: an icon button named "Copy reply" with a tooltip, no border, 44 px on phone', () => {
-  const h = ui.html(ui.CopyGhost, { copied: false, tipId: 't1', onCopy() {} });
+  const h = ui.html(ui.CopyGhost, { copied: null, tipId: 't1', onCopy() {} });
   assert.match(h, /aria-label="Copy reply"/);
   assert.match(h, /aria-describedby="t1"/);
   assert.match(h, /id="t1" role="tooltip"/);
@@ -195,10 +195,16 @@ test('CopyGhost: an icon button named "Copy reply" with a tooltip, no border, 44
   assert.doesNotMatch(h, /title=/);
   assert.doesNotMatch(h, /Copy markdown/);
   assert.match(h, /\[@media\(hover:hover\)\]:peer-hover:opacity-100 peer-focus-visible:opacity-100/);
-  const done = ui.html(ui.CopyGhost, { copied: true, tipId: 't1', onCopy() {} });
+  const done = ui.html(ui.CopyGhost, { copied: 'ok', tipId: 't1', onCopy() {} });
   assert.match(done, /text-ok/);
   assert.match(done, /role="tooltip"[^>]*class="[^"]*opacity-100[^"]*">Copied</);
   assert.match(done, /aria-live="polite">Copied</);
+  // 31s: the clipboard refused: the same tooltip and live line say "Couldn't copy", no check.
+  const failed = ui.html(ui.CopyGhost, { copied: 'failed', tipId: 't1', onCopy() {} });
+  assert.doesNotMatch(failed, /text-ok/);
+  assert.match(failed, /text-bad/);
+  assert.match(failed, /role="tooltip"[^>]*class="[^"]*opacity-100[^"]*">Couldn’t copy</);
+  assert.match(failed, /aria-live="polite">Couldn’t copy</);
 });
 
 test('ChatView: the action row is Reply, thumbs, Copy, then smart actions', () => {
