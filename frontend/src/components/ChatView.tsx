@@ -570,13 +570,16 @@ const useNarrow = () => {
  * once a frame. The finished messages around it never do. `onGrow` keeps the bottom pinned. Its markdown
  * renders a block at a time (15a, StreamMarkdown): only the open block at the end is parsed each frame.
  */
+/** The words the live bubble shows from the raw stream: no reply markers, no decisions block being written. */
+const shownWords = (text: string): string => hideStreamingDecisions(stripDiscussionMarkers(text));
+
 const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { stream: StreamText; part: keyof StreamView; onGrow: () => void }) {
   const streamingText = useStreamPart(stream, part);
   useEffect(onGrow, [streamingText, onGrow]);
   if (part === 'thinking') return <>{streamingText}</>;
   return (
     <div className="kw-wa-in kw-wa-hold">
-      <StreamMarkdown content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} />
+      <StreamMarkdown content={shownWords(streamingText)} />
     </div>
   );
 });
@@ -994,8 +997,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!streamProp) propStream.show({ text: streamingTextProp, thinking: streamingThinkingProp });
   }, [streamProp, propStream, streamingTextProp, streamingThinkingProp]);
   // Whether the reply is writing (has words) or thinking (has a thinking line) yet; each flips once per reply.
-  // The words themselves reach StreamPart alone.
-  const writing = useStreamWriting(stream) || (!streamProp && !!streamingTextProp);
+  // The words themselves reach StreamPart alone. 32e: words the bubble would show, so the working scene stays
+  // while the text is only a marker or a held decision, instead of an empty bubble.
+  const writing = useStreamWriting(stream, shownWords) || (!streamProp && !!shownWords(streamingTextProp).trim());
   const thinking = useStreamThinking(stream) || (!streamProp && !!streamingThinkingProp);
   const lastScrollTopRef = useRef(0);
   // The empty chat's home and Get started open at their top: on a phone both are taller than the screen, and their heads come first (13d, 29u).
@@ -1373,11 +1377,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setOpenThoughts((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  // 31u: one 2 s Copied window for the list. A click on any reply restarts it, and unmount clears it.
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
   const handleCopy = async (text: string, id: string) => {
     const ok = await copyText(text);
     setCopiedId({ id, ok });
     if (ok) playSfx('click');
-    setTimeout(() => setCopiedId(null), 2000);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopiedId(null), 2000);
   };
 
   const patchUpload = (key: string, patch: Partial<PendingUpload>) =>
@@ -2740,14 +2748,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {/* On a phone the strip says "working" and "waiting": no skeleton, no "Paused on…" bubble. */}
               {(!phone || queued || writing) && (
-              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT}`} data-live-bubble-body="">
+              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
                     {queuedText(queued.reason, queued.slots)}
                   </p>
                 ) : writing ? (
-                  /* The scene's 62 px holds under the first words (kw-wa-hold, in StreamPart), so the bubble does not jump; they fade in once. */
+                  /* The scene's 62 px holds under the first words (kw-wa-hold, in StreamPart), so the bubble does not jump; they come up from half, never from nothing (32e). */
                   <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
                 ) : awaitingAnswer ? (
                   <p className="text-zinc-400" role="status">
