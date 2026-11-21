@@ -1019,6 +1019,71 @@ async fn a_new_bot_is_saved_even_when_the_old_token_is_refused() {
     assert_eq!(env.state.db.get_approval(&id).await.unwrap().unwrap().status, "pending");
 }
 
+/// 32f: an armed approval and a question sent by bot `old_n`, then `fault` on the old bot's first
+/// edit and a token for bot `new_n` saved. The save answers at once; within the 30 s budget kwant
+/// tries the refused card again and both cards end up without buttons (approval link-only, question
+/// the unpaired form), each edited successfully once. `edits` is how many edit calls that takes.
+async fn old_bot_cards_ride_out(old_n: u32, new_n: u32, tool: &str, fault: (u16, usize), edits: usize) {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let old = paired(&env, tg, old_n).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let (id, mut rx) = approval(&env, json!({"source": "mcp", "tool": tool, "server": "files"})).await;
+    let card = tg.wait_send(&old, |c| c.text().contains(&format!("<code>{tool}</code>"))).await;
+    assert!(card.callbacks().iter().any(|c| c.starts_with("a:")), "it went out with Allow once: {:?}", card.callbacks());
+    let question = format!("{tool} question?");
+    let q = ask(&env, &question, &["Yes", "No"]).await;
+    let qmsg = tg.wait_send(&old, |c| c.text().contains(&question)).await;
+    assert!(!qmsg.callbacks().is_empty(), "it went out with answer buttons");
+    for (kind, ref_id) in [("approval", &id), ("question", &q.id)] {
+        wait_for("the card's id stored", || async { asks_of(&env, kind, ref_id).await.iter().all(|a| a.message_id.is_some()) }).await;
+    }
+    tg.fault(&old, "editMessageText", fault.0, fault.1);
+
+    let new = tg.bot(new_n);
+    let started = std::time::Instant::now();
+    let (s, v) = call(&env.app, "PUT", &format!("{BASE}/token"), Some(json!({"token": new.token}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["state"], "token_saved", "{v}");
+    assert!(started.elapsed() < Duration::from_secs(5), "the save doesn't wait on the old bot: {:?}", started.elapsed());
+
+    wait_for("both old cards edited after the refusal", || async { tg.calls_of(&old, "editMessageText").len() >= edits }).await;
+    assert!(started.elapsed() < Duration::from_secs(30), "within the budget: {:?}", started.elapsed());
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let all = tg.calls_of(&old, "editMessageText");
+    assert_eq!(all.len(), edits, "the refused card tried again, nothing more: {all:?}");
+    let last = |m: i64| all.iter().rfind(|c| c.message_id() == m).cloned().unwrap_or_else(|| panic!("message {m} never edited: {all:?}"));
+    let edited = last(card.message_id());
+    assert!(edited.callbacks().is_empty(), "no live Allow once: {:?}", edited.buttons());
+    assert!(edited.text().ends_with("<i>Approve it in kwant.</i>"), "{}", edited.text());
+    let edited = last(qmsg.message_id());
+    assert!(edited.callbacks().is_empty(), "no answer buttons: {:?}", edited.buttons());
+    assert!(edited.text().contains(&question), "keeps its text: {}", edited.text());
+    assert!(edited.text().ends_with("<i>Unpaired. Pair again from kwant › Connections.</i>"), "{}", edited.text());
+    // The first edit is the refused one; it was the same card that went again
+    assert_eq!(all[0].message_id(), all[1].message_id(), "the same card again after the refusal: {all:?}");
+
+    // Nothing was answered: the bot still waits in kwant
+    assert_eq!(env.state.db.get_approval(&id).await.unwrap().unwrap().status, "pending");
+    assert!(rx.try_recv().is_err(), "nothing decided");
+    assert_eq!(env.state.db.get_question(&q.id).await.unwrap().unwrap().status, "open");
+}
+
+// 32f (Rigel's #941 QA): Telegram asks kwant to slow down (429, retry_after 1) on the first of the
+// old bot's edits. kwant waits it out and edits the same card again instead of leaving every card
+// with live buttons
+#[tokio::test]
+async fn the_old_bots_cards_wait_out_a_slow_down() {
+    old_bot_cards_ride_out(76, 77, "swap_slow", (429, 1), 3).await;
+}
+
+// 32f: one Telegram hiccup (502) on the old bot's edit is tried again after a short pause
+#[tokio::test]
+async fn the_old_bots_cards_ride_out_a_telegram_hiccup() {
+    old_bot_cards_ride_out(78, 79, "swap_hiccup", (502, 1), 3).await;
+}
+
 #[tokio::test]
 async fn a_revoked_token_stops_and_says_so() {
     let env = setup().await;
