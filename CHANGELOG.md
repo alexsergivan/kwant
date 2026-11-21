@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- In a team run, a teammate waiting on you now says so on its card in the team chat ("Writer needs your OK to send an email" or "Writer asked you a question") with a "Go to it" button, instead of "Writer is working on it" (#973)
+
 ## [Mac 0.9.35] - 2026-11-21
 
 kwant 0.9.35: a Copy button that says when it couldn't copy, Telegram cards that lose their buttons when you unpair, phone charts with shorter date labels, no docker.exe left running after kwant is closed by force on Windows, no empty band above the banner of a paused chat and "needs you" cleared the moment you answer an approval.
