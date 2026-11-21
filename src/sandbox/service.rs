@@ -346,8 +346,8 @@ impl BrowserService {
     }
 
     pub(crate) async fn docker(args: &[&str], seconds: u64) -> Result<String, BrowserError> {
-        let out = timeout(Duration::from_secs(seconds), Command::new("docker")
-            .args(args).kill_on_drop(true).output()).await
+        let out = timeout(Duration::from_secs(seconds),
+            crate::helper_process::output(Command::new("docker").args(args).kill_on_drop(true))).await
             .map_err(|_| BrowserError::Timeout)?
             .map_err(|e| BrowserError::Http(format!("docker: {e}")))?;
         // "docker:" marks it as Docker's failure, not the browser's (see [`outage`])

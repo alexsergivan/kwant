@@ -159,7 +159,8 @@ struct Out {
 }
 
 async fn docker(args: &[String], limit: Duration) -> Result<Out, String> {
-    let run = Command::new("docker").args(args).kill_on_drop(true).output();
+    let mut cmd = Command::new("docker");
+    let run = crate::helper_process::output(cmd.args(args).kill_on_drop(true));
     match timeout(limit, run).await {
         Err(_) => Err(format!("docker {} timed out", args.first().map(String::as_str).unwrap_or(""))),
         Ok(Err(e)) => Err(e.to_string()),

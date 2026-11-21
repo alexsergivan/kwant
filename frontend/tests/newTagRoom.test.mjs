@@ -58,10 +58,23 @@ dom.window.matchMedia = (q) => ({
   removeListener() {},
 });
 globalThis.matchMedia = dom.window.matchMedia;
+// 31x: a ResizeObserver fake that keeps its callback, so a test can fire it (the re-measure path: Ask row, strip,
+// banner, window resize) the way a real browser would after the composer's box changes.
+const observers = new Set();
+const fireResize = () => ui.flushSync(() => [...observers].forEach((o) => o.cb([], o)));
 globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
+  constructor(cb) {
+    this.cb = cb;
+  }
+  observe() {
+    observers.add(this);
+  }
+  unobserve() {
+    observers.delete(this);
+  }
+  disconnect() {
+    observers.delete(this);
+  }
 };
 dom.window.ResizeObserver = globalThis.ResizeObserver;
 globalThis.IntersectionObserver ??= class {
@@ -77,9 +90,11 @@ dom.window.HTMLElement.prototype.scrollTo ??= function () {};
 // (the composer is pinned to the window's bottom, so it grows upward).
 const room = () => Number(document.querySelector("[data-new-tag-room]")?.dataset.newTagRoom ?? 0);
 const rect = (top, h) => ({ top, bottom: top + h, height: h, left: 0, right: 40, width: 40, x: 0, y: top, toJSON() {} });
+let tagHidden = false;
 const realRect = dom.window.HTMLElement.prototype.getBoundingClientRect;
 dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
-  if (this.matches?.('[data-new-tag="mention"]')) return rect(771, 24);
+  // A tag that is display:none (hidden by the picker, dictation, drop layer or the paused banner) has no box.
+  if (this.matches?.('[data-new-tag="mention"]')) return this.classList.contains("hidden") || tagHidden ? rect(0, 0) : rect(771, 24);
   if (this.querySelector?.(":scope > form[data-composer-form]")) return rect(783 - room(), 117 + room());
   if (this.matches?.("form[data-composer-form]")) return rect(800, 54);
   return realRect.call(this);
@@ -91,6 +106,7 @@ const ui = await loadBundled(`
   import { createRoot } from 'react-dom/client';
   import { ChatView } from './src/components/ChatView';
   export * from './src/whatsNew';
+  export { budgetStore } from './src/botBudget';
   export { flushSync } from 'react-dom';
   export const mount = (p) => {
     const host = document.createElement('div');
@@ -102,7 +118,8 @@ const ui = await loadBundled(`
   };
 `);
 
-const props = (isStreaming = false) => ({
+const props = (isStreaming = false, extra = {}) => ({
+  ...extra,
   title: "Pip",
   subtitle: "Analyst",
   messages: [{ id: "m1", sender_role: "user", sender_id: "u", text: "October numbers please", created_at: "2026-11-05T00:00:00Z" }],
@@ -164,6 +181,77 @@ test("phone: unchanged, the tag sits in the @ button's own box and the composer 
   }
 });
 
+const budget = (state) => ({
+  kwant_id: "pip",
+  kwant_name: "Pip",
+  month: "2026-11",
+  timezone: "UTC",
+  used_tokens: 1000,
+  used_usd: 5,
+  budget_tokens: 0,
+  budget_usd: 5,
+  percent: state === "paused" ? 100 : 40,
+  over: state === "paused" ? "usd" : null,
+  state,
+  paused_since: state === "paused" ? "2026-11-21T01:00:00Z" : null,
+  resets_at: "2026-12-01T00:00:00Z",
+  estimated: false,
+});
+
+test("31x: a budget that pauses mid-session takes the room away (no empty band over the banner); it comes back when the budget clears", () => {
+  phoneNow = false;
+  ui.budgetStore.reset();
+  ui.budgetStore.put(budget("under"));
+  const v = ui.mount(props(false, { budgetBotId: "pip" }));
+  try {
+    assert.ok(tag(v.host), "the tag shows");
+    assert.equal(room(), 16, "room for the tag before the pause");
+    ui.flushSync(() => ui.budgetStore.put(budget("paused")));
+    assert.ok(v.host.querySelector("[data-budget-banner]"), "the paused banner shows");
+    fireResize(); // the banner grew the composer section
+    assert.equal(room(), 0, "paused is a lasting state, like streaming: no room, no empty band above the banner");
+    assert.equal(v.host.querySelector("[data-new-tag-room]"), null);
+    ui.flushSync(() => ui.budgetStore.put(budget("under")));
+    fireResize();
+    assert.equal(v.host.querySelector("[data-budget-banner]"), null, "banner gone");
+    assert.equal(room(), 16, "the room is back while mention is still new");
+  } finally {
+    v.unmount();
+    ui.budgetStore.reset();
+  }
+});
+
+test("31x: a chat that loads already paused makes no room", () => {
+  phoneNow = false;
+  ui.budgetStore.reset();
+  ui.budgetStore.put(budget("paused"));
+  const v = ui.mount(props(false, { budgetBotId: "pip" }));
+  try {
+    fireResize();
+    assert.equal(room(), 0);
+  } finally {
+    v.unmount();
+    ui.budgetStore.reset();
+  }
+});
+
+test("31x: a tag hidden only for a moment (picker, dictation pop, drop layer) keeps the room when the observer fires, so the chat doesn't jump", () => {
+  phoneNow = false;
+  const v = ui.mount(props());
+  try {
+    assert.equal(room(), 16);
+    tagHidden = true; // the overlay hides the tag: no box
+    fireResize();
+    assert.equal(room(), 16, "room stays under the overlay");
+    tagHidden = false;
+    fireResize();
+    assert.equal(room(), 16, "and is still right when the tag is back");
+  } finally {
+    tagHidden = false;
+    v.unmount();
+  }
+});
+
 test("once mention is seen, the room goes with the tag and the composer is as before", () => {
   phoneNow = false;
   const v = ui.mount(props());
@@ -182,3 +270,4 @@ test("once mention is seen, the room goes with the tag and the composer is as be
     w.unmount();
   }
 });
+
