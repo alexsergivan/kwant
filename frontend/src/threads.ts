@@ -446,22 +446,36 @@ export function parseDelegationMeta(raw: unknown): DelegationMeta | null {
 /** 32j: what a running teammate is waiting on the person for, if anything. */
 export type DelegationWaiting = 'approval' | 'question';
 
+type WaitingApproval = { kwant_id: string | null; link: { thread_id?: string | null } | null; refused?: true };
+
 /**
- * 32j: whether the teammate on a delegation is blocked on the person: a pending approval linked to
- * its thread (or, from the live event before /api/away links it, one with no link from that
- * teammate), else an open question in its thread. Structural types so threads.ts stays import-free.
+ * 32j: the pending approval that blocks the teammate on a delegation: one linked to its thread, or,
+ * from the live event before /api/away links it, one with no link from that teammate. Returned
+ * whole so App can name its action with the approval card's own words (approvalAction).
+ */
+export function delegationWaitingApproval<A extends WaitingApproval>(
+  meta: Pick<DelegationMeta, 'thread_id' | 'specialist_id'>,
+  approvals: ReadonlyArray<A>,
+): A | null {
+  return (
+    approvals.find(
+      (a) =>
+        !a.refused &&
+        (a.link ? !!a.link.thread_id && a.link.thread_id === meta.thread_id : !!meta.specialist_id && a.kwant_id === meta.specialist_id),
+    ) ?? null
+  );
+}
+
+/**
+ * 32j: whether the teammate on a delegation is blocked on the person: a pending approval (above),
+ * else an open question in its thread. Structural types so threads.ts stays import-free.
  */
 export function delegationWaiting(
   meta: Pick<DelegationMeta, 'thread_id' | 'specialist_id'>,
-  approvals: ReadonlyArray<{ kwant_id: string | null; link: { thread_id?: string | null } | null; refused?: true }>,
+  approvals: ReadonlyArray<WaitingApproval>,
   questions: Readonly<Record<string, { thread_id: string | null; status: string }>>,
 ): DelegationWaiting | null {
-  const approval = approvals.some(
-    (a) =>
-      !a.refused &&
-      (a.link ? !!a.link.thread_id && a.link.thread_id === meta.thread_id : !!meta.specialist_id && a.kwant_id === meta.specialist_id),
-  );
-  if (approval) return 'approval';
+  if (delegationWaitingApproval(meta, approvals)) return 'approval';
   for (const q of Object.values(questions)) if (q.status === 'open' && q.thread_id && q.thread_id === meta.thread_id) return 'question';
   return null;
 }
@@ -470,13 +484,14 @@ export function delegationWaiting(
 export function delegationStatusLine(
   status: DelegationStatus,
   specialist: string,
-  opts: { queuePos?: number | null; error?: string | null; waiting?: DelegationWaiting | null } = {},
+  opts: { queuePos?: number | null; error?: string | null; waiting?: DelegationWaiting | null; action?: string | null } = {},
 ): string {
   switch (status) {
     case 'queued':
       return opts.queuePos ? `Waiting for ${specialist} · #${opts.queuePos} in line` : `Waiting for ${specialist} to start`;
     case 'running':
-      if (opts.waiting === 'approval') return `${specialist} needs your OK to run a command`;
+      // The action is the approval card's own words ("send an email"); without one, never guess.
+      if (opts.waiting === 'approval') return opts.action ? `${specialist} needs your OK to ${opts.action}` : `${specialist} needs your OK`;
       if (opts.waiting === 'question') return `${specialist} asked you a question`;
       return `${specialist} is working on it`;
     case 'completed':

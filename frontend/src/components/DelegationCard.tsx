@@ -19,6 +19,8 @@ export interface DelegationCardProps {
   flash?: boolean;
   /** 32j: the teammate is blocked on the person (an approval or a question in its thread). */
   waiting?: DelegationWaiting | null;
+  /** 32j: for an approval, what it asks to do in the approval card's words ("send an email"). */
+  waitingAction?: string | null;
 }
 
 const LONG_RESULT = 1400;
@@ -39,7 +41,7 @@ const waitingTone = { ...tone.queued, icon: <Hand size={13} aria-hidden="true" /
  * A delegation in the lead's chat: who got the task, its live status, a link to the specialist's
  * thread and Stop while it runs. The result card also shows the specialist's answer.
  */
-export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, messageId, live, queuePos, onOpenThread, onCancel, flash, waiting }) => {
+export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, messageId, live, queuePos, onOpenThread, onCancel, flash, waiting, waitingAction }) => {
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -49,7 +51,7 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
   const running = isOpenDelegation({ status });
   const waitingOn = status === 'running' && waiting ? waiting : null;
   const t = waitingOn ? waitingTone : tone[status] ?? tone.queued;
-  const line = delegationStatusLine(status, meta.specialist_name, { queuePos, error: live?.error, waiting: waitingOn });
+  const line = delegationStatusLine(status, meta.specialist_name, { queuePos, error: live?.error, waiting: waitingOn, action: waitingAction });
   const headingId = `dlg-${messageId}`;
   const long = isResult && text.length > LONG_RESULT;
 

@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Fixed
-- In a team run, a teammate waiting on you now says so on its card in the team chat: "Writer needs your OK to run a command" or "Writer asked you a question", with a "Go to it" button, instead of "Writer is working on it" (#973)
+- In a team run, a teammate waiting on you now says so on its card in the team chat ("Writer needs your OK to send an email" or "Writer asked you a question") with a "Go to it" button, instead of "Writer is working on it" (#973)
 
 ## [Mac 0.9.35] - 2026-11-21
 

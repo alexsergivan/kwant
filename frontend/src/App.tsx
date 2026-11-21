@@ -78,6 +78,7 @@ import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToa
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, HelpCircle, Inbox, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
+import { approvalAction } from './components/ModernApprovalCard';
 import { ChatApproval, OpenChat, addSettled, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, awayTitle, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
@@ -119,6 +120,7 @@ import {
   messageContextId,
   parseDelegationMeta,
   delegationWaiting,
+  delegationWaitingApproval,
   queuePosition,
   queuedInChat,
   reloadOnTurnEnd,
@@ -2965,6 +2967,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
     const queued = turnsIn(turns, meta.thread_id).find((t) => t.state === 'queued');
+    // 32j: a teammate blocked on the person's OK or answer says so here, not "working on it",
+    // naming the approval's action in the approval card's own words.
+    const ask = delegationWaitingApproval(meta, pendingApprovals);
     return (
       <DelegationCard
         meta={meta}
@@ -2972,8 +2977,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         messageId={msg.id}
         live={delegations[meta.delegation_id]}
         queuePos={queued ? queuePosition(turns, queued.turn_id) : null}
-        // 32j: a teammate blocked on the person's OK or answer says so here, not "working on it".
         waiting={delegationWaiting(meta, pendingApprovals, questions)}
+        waitingAction={ask ? approvalAction(ask) : null}
         onOpenThread={(m) => openThread(m.specialist_id, m.thread_id)}
         onCancel={handleCancelDelegation}
         flash={flash}
