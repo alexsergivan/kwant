@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.34] - 2026-11-21
+
+kwant 0.9.34: long code blocks and logs that fold to 16 lines with a "Show all" button, files a bot shares that show a preview again, line charts whose last date label no longer overlaps the one before it, a sidebar that no longer shifts when you open Inbox, wide tables that fade at the edge while there is more to scroll, a composer whose New tag no longer sits on the chat and key numbers that show as tiles instead of one long line.
+
+### Changed
+- A code block or log in a reply that runs over 20 lines now shows its first 16 lines with a fade and a "Show all N lines" button; "Show less" folds it again and keeps the button in view. Copy still copies every line (#924)
+
+### Fixed
+- A CSV, TSV, Markdown or text file a bot shares in a chat shows its preview again (a table, or the text) above the download button, instead of only the button. Since 0.9.18 the preview was dropped for every real share. Files shared before this update stay as they were (#927)
+- On a narrow line chart, the last date on the x axis no longer overlaps the label before it: when the last label is added off the regular spacing, the regular label just before it is dropped. Wide charts and bar charts are unchanged (#925)
+- Opening Inbox no longer moves the sidebar's rows up by 2 px. The "New" count on the Inbox page is amber only when a bot is waiting on you, like the sidebar's Inbox count, and screen readers now hear which chat, team or bot is open in the sidebar (#913)
+- A wide table in a reply now fades at its right edge while there are more columns to scroll to, and the fade goes once you reach the end. On a phone's comparison card, a Pros or Cons with one entry gets its + or − mark like the others (#929)
+- On a computer, the "New" tag above the message box no longer sits over the chat: until you first use @, the box makes room for it, so no message or table passes under it. Phones are unchanged (#930)
+- Key numbers in a reply, like revenue and orders, show as tiles again: kwant now asks bots for them as a '- **Label:** value' list, the shape it draws, instead of bare lines that ran together into one paragraph (#932)
+
 ## [Mac 0.9.33] - 2026-11-20
 
 kwant 0.9.33: a sidebar that says "Needs you" only when a bot is waiting on you, and an Inbox count that counts a routine run once, goal drafts that reach the Mission board without a hidden card, a phone browser pane that points at Take over, a Settings "needs you" count that ignores unused accounts, a grey Inbox badge until a bot needs you, draft goal cards and board tiles that show their whole text, routine cards that say "Running" once while a run goes, a New space form without a choice you can't pick, cards you can answer the moment they appear, Telegram cards that close cleanly even while they are being sent and a browser that makes room for new pages instead of failing.

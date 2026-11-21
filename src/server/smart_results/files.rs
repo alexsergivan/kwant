@@ -72,12 +72,15 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
     }))
 }
 
-/// Shared by this message's sender, into this message's own chat and thread, and not yet tied to
-/// a message.
+/// Shared by the bot this card names, into this message's own chat and thread, and not yet tied to
+/// a message. The bot is the server-written `meta.kwant_id` (`share_file` saves the card with the
+/// bot's display name as sender, so the sender never matches an id); no id there, no block.
 fn belongs(row: &Attachment, input: &NewMessage, extra: &MessageExtra) -> bool {
+    let shared_by = extra.meta.as_ref().and_then(|m| m.get("kwant_id")).and_then(|v| v.as_str());
     row.source == "agent"
         && row.message_id.is_none()
-        && row.kwant_id.as_deref() == Some(input.sender_id.as_str())
+        && shared_by.is_some()
+        && row.kwant_id.as_deref() == shared_by
         && row.channel_id == input.channel_id
         && row.direct_kwant_id == input.direct_kwant_id
         && row.thread_id == extra.thread_id
