@@ -118,6 +118,7 @@ import {
   isStaleDelegationFetch,
   messageContextId,
   parseDelegationMeta,
+  delegationWaiting,
   queuePosition,
   queuedInChat,
   reloadOnTurnEnd,
@@ -2971,6 +2972,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         messageId={msg.id}
         live={delegations[meta.delegation_id]}
         queuePos={queued ? queuePosition(turns, queued.turn_id) : null}
+        // 32j: a teammate blocked on the person's OK or answer says so here, not "working on it".
+        waiting={delegationWaiting(meta, pendingApprovals, questions)}
         onOpenThread={(m) => openThread(m.specialist_id, m.thread_id)}
         onCancel={handleCancelDelegation}
         flash={flash}
