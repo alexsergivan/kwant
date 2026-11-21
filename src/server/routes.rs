@@ -796,6 +796,13 @@ fn turn_failed_text(name: &str, why: &str, activity: &super::activity::TurnActiv
     format!("⚠️ [{name}] Couldn't finish this reply: {clipped}{ellipsis}")
 }
 
+/// Red proof only (32k): today's text at routes.rs:4218, unchanged, so the new tests fail on their
+/// assertions rather than on a missing function. Never merges.
+#[cfg(test)]
+fn failed_step_why(model: &str, e: &crate::drivers::DriverError) -> String {
+    format!("the {model} driver failed: {e}")
+}
+
 /// Truncates to at most `max` bytes without splitting a UTF-8 character.
 pub(super) fn truncate_chars(text: &str, max: usize) -> &str {
     if text.len() <= max {
@@ -7929,6 +7936,63 @@ mod tests {
         let text = turn_failed_text("Lin", r"no config at /Users/Oleks Smith/.kwnt or C:\Users\Oleks Smith\.kwnt", &activity);
         assert!(!text.contains("Oleks") && !text.contains("Smith"), "{text}");
         assert!(text.ends_with(r"no config at ~/.kwnt or ~\.kwnt"), "{text}");
+    }
+
+    #[test]
+    fn a_model_that_stopped_silently_reads_in_plain_words() {
+        use crate::drivers::DriverError;
+        let plain = "its model stopped without an answer. Try again, or switch its model.";
+        // Mira's 0.9.35 pass: "Writer couldn't finish: the claude driver failed: Driver execution error: claude
+        // CLI exited with status 1 and no output"
+        let silent = DriverError::Execution("claude CLI exited with status 1 and no output".into());
+        assert_eq!(super::failed_step_why("claude", &silent), plain);
+        // any CLI driver, any status, and a CLI ended by a signal
+        for (model, inner) in [
+            ("codex", "codex CLI exited with status 137 and no output"),
+            ("grok", "grok CLI exited with a signal and no output"),
+        ] {
+            assert_eq!(super::failed_step_why(model, &DriverError::Execution(inner.into())), plain, "{inner}");
+        }
+        let tag = crate::drivers::events::TurnTag {
+            turn_id: "t-silent".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+        };
+        let activity = super::super::activity::TurnActivity::start(tokio::sync::broadcast::channel(4).0, tag);
+        let text = turn_failed_text("Writer", &super::failed_step_why("claude", &silent), &activity);
+        assert_eq!(text, format!("⚠️ [Writer] Couldn't finish this reply: {plain}"));
+        for internal in ["Driver execution error", "driver failed", "CLI exited", "no output", "status 1"] {
+            assert!(!text.contains(internal), "{internal} in {text}");
+        }
+    }
+
+    #[test]
+    fn another_driver_error_keeps_its_words_without_the_execution_layer() {
+        use crate::drivers::DriverError;
+        let e = DriverError::Execution("401 key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX was rejected".into());
+        let why = super::failed_step_why("claude", &e);
+        assert_eq!(why, "the claude driver failed: 401 key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX was rejected");
+        // still masked once saved
+        let tag = crate::drivers::events::TurnTag {
+            turn_id: "t-401".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+        };
+        let activity = super::super::activity::TurnActivity::start(tokio::sync::broadcast::channel(4).0, tag);
+        let text = turn_failed_text("Lin", &why, &activity);
+        assert!(text.starts_with("⚠️ [Lin] Couldn't finish this reply: the claude driver failed: 401 key"), "{text}");
+        assert!(!text.contains("sk-ant-api03-ABCDEF") && !text.contains("Driver execution error"), "{text}");
+        // a message that only mentions a silent exit isn't one
+        let e = DriverError::Execution("claude CLI exited with status 1 and no output; retried on codex: 429".into());
+        assert_eq!(
+            super::failed_step_why("claude", &e),
+            "the claude driver failed: claude CLI exited with status 1 and no output; retried on codex: 429"
+        );
+        // the other kinds keep their own words
+        let io = DriverError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"));
+        assert_eq!(super::failed_step_why("codex", &io), "the codex driver failed: I/O or Subprocess error: no such file");
     }
 
     #[test]
