@@ -88,12 +88,12 @@ const render = (over = {}) => m.renderToStaticMarkup(React.createElement(m.Sideb
 }));
 const doc = (html) => new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
 
-test('desktop: pinned "Needs you · 4" above Channels, copies with "Also listed in @core"', () => {
+test('desktop: pinned "Needs you · 3" (asks only) above Channels, copies with "Also listed in @core"', () => {
   const d = doc(render());
   const block = d.querySelector('[data-needs-attention]');
   assert.ok(block);
-  assert.equal(block.querySelector('h2').getAttribute('aria-label'), 'Needs you, 4');
-  assert.match(block.querySelector('h2').textContent, /Needs you · 4/);
+  assert.equal(block.querySelector('h2').getAttribute('aria-label'), 'Needs you, 3', '30z: only the asks (ranks 1–2) count');
+  assert.match(block.querySelector('h2').textContent, /Needs you · 3/);
   assert.match(block.querySelector('h2').getAttribute('class'), /text-amber-300/);
   const pins = [...block.querySelectorAll('[data-pin-row]')];
   assert.deepEqual(pins.map((p) => p.getAttribute('data-pin-row')), ['lin', 'pix', 'jun', 'iri']);

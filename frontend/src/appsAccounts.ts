@@ -85,6 +85,25 @@ const BAD = new Set(['needs_sign_in', 'error', 'limited', 'locked']);
 export const accountNeedsYou = (c: Pick<Connection, 'kind' | 'status' | 'used_by'>): boolean =>
   c.kind === 'account' && BAD.has(c.status) && c.used_by.length > 0;
 
+/**
+ * How many AI accounts the header's amber "needs you" counts (31a). The server lists every auto bot on each
+ * engine's main account, so `accountNeedsYou` alone also flags a signed-out account the panel shows under
+ * Not used. An account counts only when a bot really relies on it: it's in the used list (`usedIds`, as
+ * `accountGroups` splits it) and broken, or a bot is pinned to it (`pinnedIds`: it can't fail over), or
+ * nothing is used at all, when every broken account is worth the amber since no bot can run.
+ * Ids are profile ids; connections are `account:<profile id>`.
+ */
+export function accountsNeedingYou(connections: Array<Pick<Connection, 'id' | 'kind' | 'status' | 'used_by'>>, usedIds: string[], pinnedIds: string[]): number {
+  const used = new Set(usedIds);
+  const pinned = new Set(pinnedIds);
+  return connections.filter((c) => {
+    if (!accountNeedsYou(c)) return false;
+    if (!used.size) return true;
+    const id = c.id.startsWith('account:') ? c.id.slice(8) : c.id;
+    return used.has(id) || pinned.has(id);
+  }).length;
+}
+
 // ── Giving the Composio server to the chosen bots ────────────────────────────────────────────
 
 /** The MCP server id inside a connection id (`mcp:<id>`). */

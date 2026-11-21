@@ -163,6 +163,8 @@ export interface SidebarProps {
   /** Inbox: unseen count for the badge, whether it's open, and how to open it. */
   inboxCount?: number;
   inboxActive?: boolean;
+  /** 31c: App's page is the chat. On Inbox, Mission board and the other pages no channel, team or bot row is "here". */
+  onChat?: boolean;
   onOpenInbox?: () => void;
   /** Parallel Universe, a plain row (14c: the one-item "More" menu is gone). */
   parallelActive?: boolean;
@@ -239,32 +241,50 @@ export function botGroups(teams: Team[], kwants: Kwant[]): Array<{ team: Team | 
 /** H5: the most rows the desktop's pinned block shows before "and n more in Inbox". */
 export const PINNED_MAX = 5;
 
+/** 31c: a real ask is rank 1–2 (a question, an approval, a browser step, a failed or stuck bot). The pinned heading,
+ *  the Inbox pill and the phone's Inbox badge all go amber only when there is one. */
+export const realAskCount = (rows?: AttentionRow<Kwant>[]): number => (rows ?? []).filter((a) => a.rank <= 2).length;
+
+/** 31c: the Inbox count pill: amber when something really needs you, else a calm neutral count. */
+export const inboxPillClass = (ask: boolean) => (ask ? 'bg-amber-500 text-zinc-950' : 'bg-white/10 text-zinc-200');
+
 /**
- * H5 desktop: "Needs you · n" (14c: the phone's name too), ranks 1–4 above Channels. Gone when empty. The count is announced
- * politely, at most once per 10 s, from a live region holding only the heading's words.
+ * H5 desktop: ranks 1–4 pinned above Channels. Gone when empty. 30z: the heading says "Needs you · n" (14c: the phone's
+ * name too) in amber with a hand only for real asks (rank 1–2); with only things to review or read it is a calm
+ * "New · n" with the Inbox icon. The words are announced politely, at most once per 10 s, from a live region holding
+ * only the heading's words.
  */
 const NeedsAttention: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<Kwant>) => React.ReactNode; onOpenInbox?: () => void }> = ({ rows, row, onOpenInbox }) => {
   const n = rows.length;
-  const [said, setSaid] = useState(n);
+  const asks = realAskCount(rows);
+  const label = asks > 0 ? NEEDS_YOU_LABEL : 'New';
+  const count = asks > 0 ? asks : n;
+  const words = `${label}, ${count}`;
+  const [said, setSaid] = useState(words);
   const lastSaid = React.useRef(0);
   useEffect(() => {
-    if (n === said) return;
+    if (words === said) return;
     const wait = Math.max(0, lastSaid.current + 10_000 - Date.now());
     const t = setTimeout(() => {
       lastSaid.current = Date.now();
-      setSaid(n);
+      setSaid(words);
     }, wait);
     return () => clearTimeout(t);
-  }, [n, said]);
+  }, [words, said]);
   const more = n - PINNED_MAX;
   return (
     <section data-needs-attention aria-labelledby="needs-attention-head" className="rounded-xl border border-hairline bg-white/[0.015] my-1.5 pb-1.5">
-      <h2 id="needs-attention-head" className="px-2 pt-1.5 pb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-amber-300" aria-label={`${NEEDS_YOU_LABEL}, ${n}`}>
-        <Hand size={12} aria-hidden="true" />
-        <span aria-hidden="true">{NEEDS_YOU_LABEL} · {n}</span>
+      <h2
+        id="needs-attention-head"
+        data-needs-attention-head={asks > 0 ? 'asks' : 'new'}
+        className={`px-2 pt-1.5 pb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] ${asks > 0 ? 'text-amber-300' : 'text-zinc-400'}`}
+        aria-label={words}
+      >
+        {asks > 0 ? <Hand size={12} aria-hidden="true" /> : <Inbox size={12} aria-hidden="true" />}
+        <span aria-hidden="true">{label} · {count}</span>
       </h2>
       <span className="sr-only" aria-live="polite" data-needs-attention-live>
-        {said !== n || lastSaid.current ? `${NEEDS_YOU_LABEL}, ${said}` : ''}
+        {said !== words || lastSaid.current ? said : ''}
       </span>
       <div className="space-y-0.5 px-0.5">
         {rows.slice(0, PINNED_MAX).map((a) => (
@@ -329,6 +349,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateChannel,
   inboxCount = 0,
   inboxActive = false,
+  onChat = true,
   onOpenInbox,
   parallelActive = false,
   onOpenParallel,
@@ -413,6 +434,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     : [];
   const directBots = chatsTab && attention ? directIds(kwants, new Set(attention.filter((a) => a.rank < 7).map((a) => a.kwant.id))) : directBotsOld;
   // Desktop: ranks 1–4 (0.9 V1 adds To review), pinned above Channels (copies: the team list below keeps every bot in place).
+  const inboxAsk = realAskCount(attention) > 0;
   const pinned = !phone && attention ? attention.filter((a) => a.rank <= PINNED_RANK) : [];
   const rankOf = new Map((attention ?? []).map((a) => [a.kwant.id, a.rank]));
 
@@ -430,7 +452,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const isTeamActive = (team: Team) => {
-    if (phone) return false;
+    if (phone || !onChat) return false;
     if (selectedTeamId !== undefined && selectedTeamId !== null) {
       return selectedTeamId === team.id;
     }
@@ -441,7 +463,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const isChannelActive = (c: Channel) => {
-    if (phone || !isChannel) return false;
+    if (phone || !onChat || !isChannel) return false;
     if (selectedTeamId && teams.some((t) => t.id === selectedTeamId)) {
       return false;
     }
@@ -497,7 +519,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, []);
   const botRow = (k: Kwant, team?: Team, chat?: { needs?: NeedsYouRow; att?: AttentionRow<Kwant> }, pin?: { att: AttentionRow<Kwant>; alsoIn?: string }) => {
     // Phones never light a row: the list is a launcher, and coming back to it shows no stale selection
-    const active = !phone && !isChannel && selectedId === k.id;
+    const active = !phone && onChat && !isChannel && selectedId === k.id;
     const att = pin?.att ?? chat?.att;
     const asked = chat?.needs ?? (att?.rank === 1 ? att.needs : undefined);
     // H5 ranks 2–4 say what broke, what waits for review (0.9 V1) or what finished, in rose, lavender (info) or
@@ -1008,7 +1030,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Inbox size={15} className={inboxActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
             <span className="truncate flex-1">Inbox</span>
             {inboxCount > 0 && (
-              <span className="shrink-0 min-w-[18px] px-1.5 py-px rounded-full bg-amber-500 text-zinc-950 text-[10px] font-semibold text-center">
+              <span data-inbox-pill={inboxAsk ? 'ask' : 'calm'} className={`shrink-0 min-w-[18px] px-1.5 py-px rounded-full ${inboxPillClass(inboxAsk)} text-[10px] font-semibold text-center`}>
                 {badgeText(inboxCount)}
                 <span className="sr-only"> new</span>
               </span>
