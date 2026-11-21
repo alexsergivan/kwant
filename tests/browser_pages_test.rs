@@ -29,7 +29,7 @@ use kwnt::{
         browser_pages::{self, job_page_key, MAX_JOB_PAGES_PER_TEAM},
         continuity::{SelfScope, TurnOrigin},
         create_router, mcp_runtime,
-        routes::{get_or_create_browser_controller, HELD_FOR_BOT, PAGES_FULL},
+        routes::{get_or_create_browser_controller, PageRefusal, BROWSER_FULL, HELD_FOR_BOT, PAGES_FULL},
         AppState,
     },
     tools::ToolRunner,
@@ -470,6 +470,65 @@ async fn jobs_opening_pages_at_once_never_pass_the_cap() {
     assert_eq!(open_pages(&state).await.len(), MAX_JOB_PAGES_PER_TEAM);
     assert_eq!(state.browser_service.job_pages(&team).await.len(), MAX_JOB_PAGES_PER_TEAM);
     assert_eq!(page_targets().await, before + MAX_JOB_PAGES_PER_TEAM, "four job pages in the browser, the others closed");
+}
+
+/// 31b: the browser's pages, across every team, stay under the container's process budget. A job
+/// opening a page that would pass it first closes the least recently used idle job page of any
+/// team (never a team page, a held one, or one in use); when nothing can close, the job is told
+/// plainly the browser is full, through the HTTP route and the bot's browser tool alike, instead
+/// of Chrome failing to start the page's processes.
+#[tokio::test]
+async fn a_page_past_the_browsers_process_budget_closes_the_oldest_idle_job_page_of_any_team() {
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return };
+    let state = container_state(&tmp, endpoint).await;
+    let app = create_router(state.clone());
+    let bot = first_bot(&state).await;
+    // two teams: each bot is a sandbox target with its own browser context
+    let b = state.db.list_kwants(&SpaceId::default_space()).await.unwrap().remove(1).id;
+    let a = bot.id.clone();
+    assert_ne!(a, b);
+    let key = |team: &str, c: &str| job_page_key(team, "k", c).unwrap();
+    // room for two teams' pages and two job pages
+    state.job_pages.set_page_budget(2 * browser_pages::TEAM_PAGE_PIDS + 2 * browser_pages::JOB_PAGE_PIDS);
+    open_page(&state, &a, "a1").await.expect("a job page opens, with its team's page");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    open_page(&state, &b, "b1").await.expect("another team's job page opens");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut both = vec![key(&a, "a1"), key(&b, "b1")];
+    both.sort();
+    assert_eq!(open_pages(&state).await, both);
+
+    // A third job page would pass the budget: the oldest idle job page closes, though it's
+    // another team's, and well under that team's own cap of four
+    open_page(&state, &b, "b2").await.expect("a third job page opens");
+    assert_eq!(open_pages(&state).await, vec![key(&b, "b1"), key(&b, "b2")], "team a's idle page made room");
+    // A job page's team page is the browser service's (its context), not a kwant controller:
+    // check it where the budget counts it, as a live page in the browser
+    let team_pages_kept = || async {
+        let live: Vec<String> = state.browser_service.live_pages().await.into_iter().map(|(k, _)| k).collect();
+        live.contains(&a) && live.contains(&b)
+    };
+    assert!(team_pages_kept().await, "team pages are never closed to make room");
+
+    // Every job page held: nothing closes, and the job is told the browser is full
+    hold(&state, &b, &key(&b, "b1"), "t1").await;
+    hold(&state, &b, &key(&b, "b2"), "t2").await;
+    let refused = kwnt::server::routes::open_page(&state, &key(&a, "a2"), Duration::from_millis(300)).await;
+    assert_eq!(refused.err(), Some(PageRefusal::BrowserFull));
+    state.job_pages.set_wait(Duration::from_millis(300));
+    let navigate = format!("/api/sandbox/{}/navigate", key(&a, "a3").replace('#', "%23"));
+    let (status, v) = request(&app, "POST", &navigate, Some(json!({"url": "about:blank"}))).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(v["code"], BROWSER_FULL);
+    assert_eq!(v["error"], browser_pages::browser_full_message());
+    let token = turn_in_thread(&state, &bot, "turn-9", "t9", &a).await;
+    let (text, is_error) = call(&app, &token, "browser_open", json!({"url": "about:blank"})).await.unwrap();
+    assert!(is_error);
+    assert_eq!(text, browser_pages::browser_full_message());
+    assert_eq!(open_pages(&state).await, vec![key(&b, "b1"), key(&b, "b2")], "nothing was closed");
+    assert!(team_pages_kept().await, "nor a team page");
+    assert!(state.browser_service.job_pages(&a).await.is_empty(), "the refused pages aren't counted");
 }
 
 /// The repro for #753: before the fix, closing a job page never dropped its controller from

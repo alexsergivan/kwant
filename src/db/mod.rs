@@ -684,13 +684,26 @@ impl Database {
 
     // Approvals CRUD
     pub async fn save_approval(&self, input: &NewApproval) -> Result<Approval, DbError> {
-        let id = Uuid::new_v4().to_string();
+        self.save_approval_with_id(&Uuid::new_v4().to_string(), input, None).await
+    }
+
+    /// [`save_approval`](Self::save_approval) under an id picked beforehand, with the chat its
+    /// card is in (as [`set_approval_chat`](Self::set_approval_chat) stores it) in the same
+    /// write (31k): a card's waiter is registered under its id first, so the card is
+    /// answerable, and links to its chat, from the moment it is listed.
+    pub async fn save_approval_with_id(
+        &self,
+        id: &str,
+        input: &NewApproval,
+        chat: Option<&serde_json::Value>,
+    ) -> Result<Approval, DbError> {
+        let id = id.to_string();
         let params_json = serde_json::to_string(&input.parameters)?;
 
         sqlx::query(
             r#"
-            INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status)
-            VALUES (?, ?, ?, ?, ?, 'pending')
+            INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status, resume)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?)
             "#,
         )
         .bind(&id)
@@ -698,6 +711,7 @@ impl Database {
         .bind(&input.kwant_id)
         .bind(&input.tool_name)
         .bind(&params_json)
+        .bind(chat.map(|c| c.to_string()))
         .execute(&self.pool)
         .await?;
 

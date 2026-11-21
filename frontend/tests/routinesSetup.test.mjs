@@ -63,8 +63,9 @@ test('phone: the four actions sit in a 4-column grid of 44 px buttons; desktop k
   const h = ui.row(rowProps());
   assert.match(h, /grid grid-cols-4 gap-1\.5 sm:flex sm:flex-wrap sm:items-center sm:pl-9/);
   assert.equal((h.match(/min-h-11 sm:min-h-0 justify-center whitespace-nowrap/g) || []).length, 4, 'each label stays on one line');
-  // Like History's chevron, Run now's Play icon is desktop only, so "Run now" fits a phone column.
-  assert.match(h, /hidden sm:block[^"]*lucide-play|lucide-play[^"]*hidden sm:block/);
+  // 31f (Mira's UX pass row g): Run now keeps its Play icon on a phone like History, Edit and Delete; it still fits at 390.
+  assert.match(h, /class="lucide lucide-play" aria-hidden="true"/);
+  assert.doesNotMatch(h, /hidden sm:block[^"]*lucide-play|lucide-play[^"]*hidden sm:block/);
 });
 
 test('Settings scrolls the open tab into view (phone tab strip), without motion', async () => {

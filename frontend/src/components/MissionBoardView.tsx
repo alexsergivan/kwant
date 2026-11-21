@@ -432,7 +432,7 @@ export const InsightsStrip: React.FC<{
       hint: 'A bot said done, then the check failed (last 7 days)',
       tone: insights.false_success_7d > 0 ? 'rose' : undefined,
     },
-    { label: 'Board tasks waiting on you', value: String(needsNow), hint: 'Board tasks waiting on a question, approval or step from you. Your Inbox can hold more.', tone: needsNow > 0 ? 'amber' : undefined },
+    { label: 'Waiting on you', value: String(needsNow), hint: 'Board tasks waiting on a question, approval or step from you. Your Inbox can hold more.', tone: needsNow > 0 ? 'amber' : undefined },
     typeof blockedMin === 'number'
       ? {
           label: 'Blocked this week',
