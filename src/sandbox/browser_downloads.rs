@@ -53,6 +53,8 @@ const REMOTE_UPLOAD_CAP_BYTES: u64 = 100 * 1024 * 1024;
 const UPLOAD_CHUNK_BYTES: usize = 1024 * 1024;
 const FOLLOW_EVERY: Duration = Duration::from_secs(2);
 const RETRY_WAIT: Duration = Duration::from_secs(3);
+/// How often a download task waiting to retry checks that its session is still wanted.
+const GONE_CHECK: Duration = Duration::from_millis(100);
 const JOB_WAIT: Duration = Duration::from_secs(20);
 /// A staged download left in the shared incoming folder this long without being landed (no
 /// center's frame tree ever claimed it, or a crash interrupted the move) is swept as an orphan.
@@ -459,19 +461,26 @@ async fn run(
     };
     let mut ready = Some(ready);
     let _ = tokio::fs::create_dir_all(&staging_root).await;
+    // Every way out of the inner loop but `jobs` closing comes back here to reconnect: a page the
+    // browser closed (or a browser restart) fails each try. So each try first checks the session
+    // is still wanted, or this task would retry a closed page every few seconds forever, and its
+    // `ctrl` copy would keep the page's popups watcher, and its browser connection, open (31z).
     loop {
+        if jobs.is_closed() {
+            return;
+        }
         sweep_incoming(&staging_root).await;
         let ws_url = match ctrl.get_ws_url().await {
             Ok(u) => u,
             Err(_) => {
-                tokio::time::sleep(RETRY_WAIT).await;
+                if retry_wait_or_gone(&jobs).await { return; }
                 continue;
             }
         };
         let mut ws = match connect_cdp(&ws_url).await {
             Ok(w) => w,
             Err(_) => {
-                tokio::time::sleep(RETRY_WAIT).await;
+                if retry_wait_or_gone(&jobs).await { return; }
                 continue;
             }
         };
@@ -480,7 +489,7 @@ async fn run(
             prepare_container_dir(name).await;
         }
         if setup(&mut ws, &msg_id, &shared, &staging_root, &home, browser_context_id.as_deref()).await.is_err() {
-            tokio::time::sleep(RETRY_WAIT).await;
+            if retry_wait_or_gone(&jobs).await { return; }
             continue;
         }
         if let Some(tx) = ready.take() {
@@ -509,6 +518,21 @@ async fn run(
             }
         }
     }
+}
+
+/// Waits [`RETRY_WAIT`] before a download task's next try at its page, or less: `true` as soon as
+/// every [`DownloadCenter`] for the session is gone (its controller dropped, as a closed page's
+/// is), and then the task ends. A job still waiting on a reply holds its center, so no job is
+/// left unanswered (31z).
+async fn retry_wait_or_gone(jobs: &mpsc::Receiver<Job>) -> bool {
+    let until = tokio::time::Instant::now() + RETRY_WAIT;
+    while tokio::time::Instant::now() < until {
+        if jobs.is_closed() {
+            return true;
+        }
+        tokio::time::sleep(GONE_CHECK).await;
+    }
+    jobs.is_closed()
 }
 
 /// `incoming`: the shared staging folder (outside any workspace) every local session points
