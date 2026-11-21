@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Copy now says when it couldn't copy, instead of always saying Copied. The Copy on a code block and under a reply show "Couldn't copy" for 2 seconds when the browser blocks the clipboard (for example on a plain http address), and the code block's Copy is easier to click on a wide screen (#937)
+- The Copy button on code blocks now shows a focus ring when you reach it with the keyboard (#939)
 
 ## [Mac 0.9.33] - 2026-11-20
 
