@@ -111,9 +111,15 @@ export const useStreamPart = (s: StreamText, part: keyof StreamView): string => 
   return useSyncExternalStore(s.subscribe, get, get);
 };
 
-/** Whether any reply text has arrived yet; re-renders only when that flips. */
-export const useStreamWriting = (s: StreamText): boolean => {
-  const get = () => !!s.get().text;
+/**
+ * Whether the reply has words to show yet; re-renders only when that flips. `shown` is what the bubble
+ * would draw from the raw text (32e): text that is only a marker or a held decision has no words yet.
+ */
+export const useStreamWriting = (s: StreamText, shown: (text: string) => string = (t) => t): boolean => {
+  const get = () => {
+    const text = s.get().text;
+    return !!text && !!shown(text).trim();
+  };
   return useSyncExternalStore(s.subscribe, get, get);
 };
 
