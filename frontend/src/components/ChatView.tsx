@@ -24,9 +24,6 @@ import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
 import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
 import { isNewThing, markNewSeen, subscribeNew } from '../whatsNew';
-
-/** 31q: px the desktop mention tag keeps clear below the composer's top hairline. */
-const NEW_TAG_CLEAR = 4;
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -126,6 +123,9 @@ import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, us
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
 import type { FloorResolveOpts } from '../dev/types';
 import { useAfterRender } from '../focusAfterRender';
+
+/** 31q: px the desktop mention tag keeps clear below the composer's top hairline. */
+const NEW_TAG_CLEAR = 4;
 
 export interface ChatMessage {
   id: string;
@@ -737,6 +737,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const headerRef = useRef<HTMLDivElement>(null);
   const columnRef = useRef<HTMLDivElement>(null);
   const composerWrapRef = useRef<HTMLDivElement>(null);
+  const { byBot: budgetsByBot } = useBudgets();
+  const chatBudget = budgetBotId ? budgetsByBot[budgetBotId] : undefined;
+  // 31x: a paused budget is a lasting state (its banner replaces the tag until it clears), not a passing overlay,
+  // so like streaming it makes no room; the room comes back when the budget clears and "mention" is still new.
+  const budgetPaused = chatBudget?.state === 'paused';
   // 31q: desktop's "New" on "@" sits 6 px above the field (#478). With nothing else above the field it poked
   // past the composer's top edge into the chat and covered whatever scrolled under it. While it shows, the
   // composer grows by exactly that overhang (+4 px clear of the hairline), so the tag never sits on a message;
@@ -750,7 +755,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       newTagRoomRef.current = v;
       setNewTagRoom(v);
     };
-    if (!wrap || phone || isStreaming || !mentionNew) return set(0);
+    if (!wrap || phone || isStreaming || budgetPaused || !mentionNew) return set(0);
     const measure = () => {
       const tag = wrap.querySelector<HTMLElement>('[data-new-tag="mention"]');
       if (!tag) return set(0);
@@ -767,7 +772,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const ro = new ResizeObserver(measure);
     ro.observe(wrap);
     return () => ro.disconnect();
-  }, [phone, isStreaming, mentionNew]);
+  }, [phone, isStreaming, budgetPaused, mentionNew]);
   const rootRef = useRef<HTMLDivElement>(null);
   // Chips that came with the drop that just landed, by key, with their place in it (for the stagger).
   const [freshChips, setFreshChips] = useState<Record<string, number>>({});
@@ -1079,8 +1084,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!a || a === document.body || stripSlotRef.current?.contains(a)) textareaRef.current?.focus({ preventScroll: true });
   }, [stripAside]);
   // The running turn's summary line (WorkingStrip): inside the composer section, right above the box.
-  const { byBot: budgetsByBot } = useBudgets();
-  const chatBudget = budgetBotId ? budgetsByBot[budgetBotId] : undefined;
   const budgetBanner = chatBudget?.state === 'paused' ? <BudgetPausedBanner budget={chatBudget} onRaise={onRaiseBudget} /> : null;
   // Waiting state: the banner says whose move it is, so no strip and no running clock.
   const workingStrip = askOnly ? null : (
