@@ -294,6 +294,11 @@ async fn verdict(scope: &TurnScope, lead: &Kwant, snap: &Snapshot, reply: &str) 
         return Verdict::Moving;
     }
     let since = request_tail(&msgs).first().and_then(|m| m.created_at);
+    // 32h: the person stopped a hand-off of this request, so the team stops with it. A keep-going
+    // turn ("Do the next step now") would restart the stopped work, and its card would ask to
+    if delegations.iter().any(|d| d.status == "cancelled" && since.is_none_or(|s| d.created_at >= s)) {
+        return Verdict::Moving;
+    }
     for d in delegations.iter().filter(|d| since.is_none_or(|s| d.created_at >= s)) {
         if !state.db.list_questions(Some("open"), Some(&d.thread_id), None).await.unwrap_or_default().is_empty() {
             return Verdict::Moving;

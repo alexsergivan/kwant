@@ -411,6 +411,39 @@ export interface DelegationMeta {
   lead_id?: string;
   status: DelegationStatus;
   title: string;
+  /** 32m: the last account switch in the teammate's run (result messages only; from #975). */
+  failover?: DelegationFailover;
+}
+
+/** 32m: `meta.failover` on a `delegation_result`: the teammate ran out of usage or was signed out and switched account. */
+export interface DelegationFailover {
+  to_name: string;
+  from_name: string;
+  /** Why it switched: "quota" (out of usage) or "auth" (signed out); anything else is shown without a reason. */
+  class: string;
+  retry_at: string | null;
+}
+
+/** 32m: keeps a failover only when it is an object with a non-empty `to_name`; anything else means none. */
+function parseFailover(raw: unknown): DelegationFailover | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const f = raw as Record<string, unknown>;
+  if (typeof f.to_name !== 'string' || !f.to_name.trim()) return undefined;
+  return {
+    to_name: f.to_name,
+    from_name: typeof f.from_name === 'string' ? f.from_name : '',
+    class: typeof f.class === 'string' ? f.class : '',
+    retry_at: typeof f.retry_at === 'string' ? f.retry_at : null,
+  };
+}
+
+/** 32m: the chip's full wording: "Writer switched to Work Claude after Personal ran out of usage". */
+export function failoverText(name: string, f: DelegationFailover): string {
+  const base = `${name} switched to ${f.to_name}`;
+  if (!f.from_name.trim()) return base;
+  if (f.class === 'quota') return `${base} after ${f.from_name} ran out of usage`;
+  if (f.class === 'auth') return `${base} after ${f.from_name} was signed out`;
+  return base;
 }
 
 const META_KINDS: DelegationMetaKind[] = ['delegation_started', 'delegation_result', 'delegation_stalled'];
@@ -431,7 +464,9 @@ export function parseDelegationMeta(raw: unknown): DelegationMeta | null {
   if (!META_KINDS.includes(m.kind as DelegationMetaKind)) return null;
   if (typeof m.delegation_id !== 'string' || typeof m.thread_id !== 'string') return null;
   const str = (x: unknown, d = '') => (typeof x === 'string' ? x : d);
+  const failover = parseFailover(m.failover);
   return {
+    ...(failover ? { failover } : {}),
     kind: m.kind as DelegationMetaKind,
     delegation_id: m.delegation_id,
     thread_id: m.thread_id,
@@ -443,16 +478,56 @@ export function parseDelegationMeta(raw: unknown): DelegationMeta | null {
   };
 }
 
+/** 32j: what a running teammate is waiting on the person for, if anything. */
+export type DelegationWaiting = 'approval' | 'question';
+
+type WaitingApproval = { kwant_id: string | null; link: { thread_id?: string | null } | null; refused?: true };
+
+/**
+ * 32j: the pending approval that blocks the teammate on a delegation: one linked to its thread, or,
+ * from the live event before /api/away links it, one with no link from that teammate. Returned
+ * whole so App can name its action with the approval card's own words (approvalAction).
+ */
+export function delegationWaitingApproval<A extends WaitingApproval>(
+  meta: Pick<DelegationMeta, 'thread_id' | 'specialist_id'>,
+  approvals: ReadonlyArray<A>,
+): A | null {
+  return (
+    approvals.find(
+      (a) =>
+        !a.refused &&
+        (a.link ? !!a.link.thread_id && a.link.thread_id === meta.thread_id : !!meta.specialist_id && a.kwant_id === meta.specialist_id),
+    ) ?? null
+  );
+}
+
+/**
+ * 32j: whether the teammate on a delegation is blocked on the person: a pending approval (above),
+ * else an open question in its thread. Structural types so threads.ts stays import-free.
+ */
+export function delegationWaiting(
+  meta: Pick<DelegationMeta, 'thread_id' | 'specialist_id'>,
+  approvals: ReadonlyArray<WaitingApproval>,
+  questions: Readonly<Record<string, { thread_id: string | null; status: string }>>,
+): DelegationWaiting | null {
+  if (delegationWaitingApproval(meta, approvals)) return 'approval';
+  for (const q of Object.values(questions)) if (q.status === 'open' && q.thread_id && q.thread_id === meta.thread_id) return 'question';
+  return null;
+}
+
 /** The one-line status under a delegation card, from the live record when there is one. */
 export function delegationStatusLine(
   status: DelegationStatus,
   specialist: string,
-  opts: { queuePos?: number | null; error?: string | null } = {},
+  opts: { queuePos?: number | null; error?: string | null; waiting?: DelegationWaiting | null; action?: string | null } = {},
 ): string {
   switch (status) {
     case 'queued':
       return opts.queuePos ? `Waiting for ${specialist} · #${opts.queuePos} in line` : `Waiting for ${specialist} to start`;
     case 'running':
+      // The action is the approval card's own words ("send an email"); without one, never guess.
+      if (opts.waiting === 'approval') return opts.action ? `${specialist} needs your OK to ${opts.action}` : `${specialist} needs your OK`;
+      if (opts.waiting === 'question') return `${specialist} asked you a question`;
       return `${specialist} is working on it`;
     case 'completed':
       return `${specialist} finished`;
