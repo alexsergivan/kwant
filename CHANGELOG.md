@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Fixed
-- Answering an approval in the chat clears its "needs you" bar and sidebar row right away (#947)
+- Copy now says when it couldn't copy, instead of always saying Copied. The Copy on a code block and under a reply show "Couldn't copy" for 2 seconds when the browser blocks the clipboard (for example on a plain http address), and the code block's Copy is easier to click on a wide screen (#937)
 
 ## [Mac 0.9.34] - 2026-11-21
 

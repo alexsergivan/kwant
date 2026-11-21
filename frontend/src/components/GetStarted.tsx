@@ -60,6 +60,7 @@ import {
 import { type StepTeam, type TeamStepView, teamDoneValue, teamStepView } from '../firstScreen';
 import { type InstallTrack, forgetInstall, installDetails, startInstall, useInstallTrack, useStartVersion } from '../gettingStartedInstall';
 import { useFocusAfterRender } from '../focusAfterRender';
+import { copyText } from '../copyText';
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 const SLOW_S = 40;
@@ -78,14 +79,6 @@ export function hostOf(w: { location?: { hostname?: string } } | undefined = typ
 }
 const isMac = () => typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent || '');
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /** Counts seconds since `from` while `on`; the number is only shown, never announced. */
 function useSeconds(from: number | null, on: boolean) {
