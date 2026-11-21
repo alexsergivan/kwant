@@ -4241,7 +4241,7 @@ async fn run_kwant_turn_inner(
         let why = match driver_result {
             Some(Ok(Err(e))) => {
                 tracing::warn!(kwant = %target_kwant.id, model = %target_model, error = %e, "driver failed");
-                failed_step_why(&target_model, e)
+                failed_step_why(&target_model, &e)
             }
             Some(Err(_)) => format!("the {target_model} driver stopped unexpectedly"),
             _ => format!("the {target_model} turn ended without a reply"),
