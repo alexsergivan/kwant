@@ -991,14 +991,18 @@ async fn copy_out_of_container(container: &str, staging: &Path, guid: &str) -> R
 /// pipe, so the file stayed empty and the whole download sat in memory instead. The child is
 /// killed if this future is dropped (the copy-out's time limit).
 async fn run_into_file(mut command: tokio::process::Command, file: std::fs::File) -> std::io::Result<std::process::Output> {
-    command
+    let child = command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(file))
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
-        .spawn()?
-        .wait_with_output()
-        .await
+        .spawn()?;
+    // held by kwnt's helper job, so the `docker exec` ends with kwnt.exe (Windows)
+    #[cfg(windows)]
+    if let Some(handle) = child.raw_handle() {
+        crate::drivers::win_job::hold_helper(handle);
+    }
+    child.wait_with_output().await
 }
 
 /// A download finished inside kwant's browser container: copy it out into staging, land it in

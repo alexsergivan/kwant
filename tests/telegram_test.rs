@@ -823,6 +823,110 @@ async fn unpair_undo_and_disconnect() {
     assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::CONFLICT, Some("no_token")));
 }
 
+/// The asks in the space, as the database has them now.
+async fn asks_of(env: &Env, kind: &str, id: &str) -> Vec<kwnt::db::telegram::TelegramAsk> {
+    env.state.db.telegram_asks_for(kind, id).await.unwrap()
+}
+
+/// Each of `ids` was edited exactly once (after a pause for a second edit to show up).
+async fn edited_once(tg: &mock_telegram::MockTelegram, bot: &Bot, ids: &[i64]) {
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    for id in ids {
+        let edits: Vec<_> = tg.calls_of(bot, "editMessageText").into_iter().filter(|c| c.message_id() == *id).collect();
+        assert_eq!(edits.len(), 1, "message {id} edited once: {edits:?}");
+    }
+}
+
+// 31r (Juno's 31j finding): Unpair closes every ask in the space. The cards already in the chat
+// lose their buttons at once, and no Allow once on them counts: an approval says "Approve it in
+// kwant." (the bot is still waiting there), a question says it was unpaired, and a card that went
+// out link-only stays as it was
+#[tokio::test]
+async fn unpair_clears_the_buttons_on_cards_already_in_the_chat() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 70).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let (id, mut rx) = approval(&env, json!({"source": "mcp", "tool": "unpair_card", "server": "files"})).await;
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>unpair_card</code>")).await;
+    assert!(card.callbacks().iter().any(|c| c.starts_with("a:")), "it went out with Allow once: {:?}", card.callbacks());
+    let q = ask(&env, "Unpair question?", &["Yes", "No"]).await;
+    let qmsg = tg.wait_send(&bot, |c| c.text().contains("Unpair question?")).await;
+    assert!(!qmsg.callbacks().is_empty(), "it went out with answer buttons");
+    // Sent link-only (a command is never allowed from Telegram): nothing on it to take back
+    let (shell_id, _shell_rx) = approval(&env, json!({"source": "local_shell", "tool": "Bash"})).await;
+    let shell = tg.wait_send(&bot, |c| c.text().contains("<code>Bash</code>")).await;
+    assert!(shell.callbacks().is_empty(), "{:?}", shell.buttons());
+    for (kind, ref_id) in [("approval", &id), ("question", &q.id), ("approval", &shell_id)] {
+        wait_for("the card's id stored", || async { asks_of(&env, kind, ref_id).await.iter().all(|a| a.message_id.is_some()) }).await;
+    }
+
+    let (s, v) = call(&env.app, "POST", &format!("{BASE}/unpair"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let asks = asks_of(&env, "approval", &id).await;
+    assert!(asks.iter().all(|a| a.state == "closed" && !a.allow), "closed with Allow once off: {asks:?}");
+
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == card.message_id()).await;
+    assert!(edited.callbacks().is_empty(), "no live Allow once: {:?}", edited.buttons());
+    assert!(edited.text().ends_with("<i>Approve it in kwant.</i>"), "{}", edited.text());
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == qmsg.message_id()).await;
+    assert!(edited.callbacks().is_empty(), "no answer buttons: {:?}", edited.buttons());
+    assert!(edited.text().contains("Unpair question?"), "keeps its text: {}", edited.text());
+    assert!(edited.text().ends_with("<i>Unpaired. Pair again from kwant › Connections.</i>"), "{}", edited.text());
+    edited_once(tg, &bot, &[card.message_id(), qmsg.message_id()]).await;
+    let shell_edits = tg.calls_of(&bot, "editMessageText").into_iter().filter(|c| c.message_id() == shell.message_id()).count();
+    assert_eq!(shell_edits, 0, "the link-only card stays as sent, no second \"Approve it in kwant.\"");
+
+    // Nothing was answered: the bot still waits in kwant
+    assert_eq!(env.state.db.get_approval(&id).await.unwrap().unwrap().status, "pending");
+    assert!(rx.try_recv().is_err(), "nothing decided");
+    assert_eq!(env.state.db.get_question(&q.id).await.unwrap().unwrap().status, "open");
+}
+
+// 31r: /stop does the same from the chat, also for a card still on its way when it came: once that
+// card arrives it is made link-only, not "No longer waiting" (the bot is still waiting in kwant)
+#[tokio::test]
+async fn stop_clears_the_buttons_also_on_a_card_on_its_way() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 71).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let (sent_id, _rx) = approval(&env, json!({"source": "mcp", "tool": "stop_sent", "server": "files"})).await;
+    let sent = tg.wait_send(&bot, |c| c.text().contains("<code>stop_sent</code>")).await;
+    assert!(sent.callbacks().iter().any(|c| c.starts_with("a:")), "it went out with Allow once: {:?}", sent.callbacks());
+    wait_for("the card's id stored", || async { asks_of(&env, "approval", &sent_id).await.iter().all(|a| a.message_id.is_some()) }).await;
+
+    let held = tg.hold(&bot, "sendMessage", "<code>stop_flight</code>");
+    let (flight_id, _rx2) = approval(&env, json!({"source": "mcp", "tool": "stop_flight", "server": "files"})).await;
+    tg.wait_held(&bot, "sendMessage", "<code>stop_flight</code>").await;
+    tg.text(&bot, &PERSON, "/stop");
+    wait_for("unpaired", || async { status(&env).await["state"] == "token_saved" }).await;
+    closed_on_its_way(&env, "approval", &flight_id).await;
+    for id in [&sent_id, &flight_id] {
+        let asks = asks_of(&env, "approval", id).await;
+        assert!(asks.iter().all(|a| a.state == "closed" && !a.allow), "closed with Allow once off: {asks:?}");
+    }
+    held.release();
+
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == sent.message_id()).await;
+    assert!(edited.callbacks().is_empty(), "no live Allow once: {:?}", edited.buttons());
+    assert!(edited.text().ends_with("<i>Approve it in kwant.</i>"), "{}", edited.text());
+    let flight = tg.wait_send(&bot, |c| c.text().contains("<code>stop_flight</code>") && c.body.get("__sent_id").is_some()).await;
+    assert!(flight.callbacks().iter().any(|c| c.starts_with("a:")), "it went out with Allow once: {:?}", flight.callbacks());
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == flight.message_id()).await;
+    assert!(edited.callbacks().is_empty(), "no live Allow once: {:?}", edited.buttons());
+    assert!(edited.text().ends_with("<i>Approve it in kwant.</i>"), "{}", edited.text());
+    tg.wait_send(&bot, |c| c.text() == "Unpaired. Pair again from kwant › Connections.").await;
+    edited_once(tg, &bot, &[sent.message_id(), flight.message_id()]).await;
+    for id in [&sent_id, &flight_id] {
+        assert_eq!(env.state.db.get_approval(id).await.unwrap().unwrap().status, "pending");
+    }
+}
+
 #[tokio::test]
 async fn a_revoked_token_stops_and_says_so() {
     let env = setup().await;

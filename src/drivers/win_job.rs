@@ -1,4 +1,5 @@
-//! Windows only: one Job Object per bot turn, so Stop ends the whole process tree (plan decision 3).
+//! Windows only: one Job Object per bot turn, so Stop ends the whole process tree (plan decision 3),
+//! and one for kwnt's own helper commands, so they end with kwnt.exe ([`hold_helper`]).
 //!
 //! Windows has no process groups. Every process a job member starts joins the same job, so
 //! terminating the job ends the CLI or bot command, its children and their children. The job is
@@ -20,22 +21,25 @@ unsafe impl Sync for Job {}
 impl Job {
     /// A new kill-on-close job holding `process` (a raw process handle), or None if Windows refused.
     pub(crate) fn holding(process: *mut c_void) -> Option<Self> {
-        // SAFETY: plain Win32 calls on handles this function owns or was given; the info struct
-        // lives on the stack for the duration of the call and its size is passed with it.
-        unsafe {
-            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-            if handle.is_null() {
-                return None;
-            }
-            let job = Job(handle);
-            if !job.set_kill_on_close(true) {
-                return None;
-            }
-            if AssignProcessToJobObject(job.0, process as HANDLE) == 0 {
-                return None;
-            }
-            Some(job)
+        let job = Self::kill_on_close()?;
+        job.assign(process).then_some(job)
+    }
+
+    /// A new, empty kill-on-close job, or None if Windows refused.
+    fn kill_on_close() -> Option<Self> {
+        // SAFETY: a plain Win32 call; the handle it returns is owned by the Job from here on
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return None;
         }
+        let job = Job(handle);
+        job.set_kill_on_close(true).then_some(job)
+    }
+
+    /// Puts `process` (a raw process handle) in the job. False if Windows refused.
+    fn assign(&self, process: *mut c_void) -> bool {
+        // SAFETY: a valid job handle owned by self and a process handle the caller holds
+        unsafe { AssignProcessToJobObject(self.0, process as HANDLE) != 0 }
     }
 
     fn set_kill_on_close(&self, on: bool) -> bool {
@@ -75,6 +79,20 @@ impl Drop for Job {
             CloseHandle(self.0);
         }
     }
+}
+
+/// kwnt's own helper commands (docker, where): one kill-on-close job, made on first use and never
+/// closed by kwnt. Its only handle closes when kwnt.exe exits, however it ends (Task Manager,
+/// `Stop-Process -Force`, a crash), and Windows then ends every helper still in it. tokio's
+/// `kill_on_drop` covers only an orderly exit. Bot turns are not here: each has its own job
+/// ([`Job::holding`]), which Stop ends and [`Job::release`] can let go.
+static HELPERS: std::sync::OnceLock<Option<Job>> = std::sync::OnceLock::new();
+
+/// Puts a helper process kwnt just started in [`HELPERS`]. False if Windows refused (the helper
+/// then runs as before, ended only by `kill_on_drop`). Works when kwnt itself is inside a job (the
+/// desktop app, a CI runner): Windows 8 and later nest the new job under it.
+pub(crate) fn hold_helper(process: *mut c_void) -> bool {
+    HELPERS.get_or_init(Job::kill_on_close).as_ref().is_some_and(|job| job.assign(process))
 }
 
 /// Fallback when there is no job: `taskkill /T /F` ends `pid` and every process it started.

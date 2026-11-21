@@ -39,15 +39,35 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0935" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.35</p>
+      <h2>Copy says when it didn't work, and unpairing Telegram clears old buttons</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0935">Smaller changes in 0.9.35</h3>
+        <p>Copy on a code block or under a reply says "Couldn't copy" for 2 seconds when the browser blocks the clipboard, for example on a plain http address, instead of always saying Copied. Unpairing Telegram, or sending /stop, clears the buttons on approval and question cards already in the chat, so an old tap can't approve or answer anything. On a phone, a line chart whose dates are all in one year shows them as month and day; the tooltip and the table keep the full date. On Windows, closing kwant by force no longer leaves docker.exe running in the background. On a computer, a chat whose budget is paused no longer shows an empty band between the chat and the budget banner. Answering an approval in the chat clears its "needs you" bar and sidebar row right away; another ask still waiting there keeps them.</p>
+      </div>
+      <div class="frame">{{shot:v0935-copy-couldnt-copy|kwant on a desktop in Trailhead Outfitters, a direct chat with Cody. You asked "How do I run the checkout tests locally?". Cody replies "Sure. From the shop folder, install once and then run only the checkout tests:" above a bash code block with npm ci and npx vitest run src/checkout --reporter=verbose. The block's copy button in its top-right corner reads "Couldn’t copy" in red. Below, Cody adds that --watch keeps them running while you edit the coupon form.}}</div>
+    </div>
+  </div>
+</section>
+
 <section id="new-0934" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.9.34</p>
       <h2>Long logs fold up, and shared files show a preview again</h2>
     </div>
-    <ul class="flist">
-      <li id="fixes-0934" class="span3"><h3>Smaller changes in 0.9.34</h3><p>A code block or log over 20 lines shows its first 16 lines with a "Show all" button, "Show less" folds it again, and Copy still copies every line. A CSV, TSV, Markdown or text file a bot shares shows its table or text preview again, not only the download button (new shares only). On a narrow line chart, the last date on the x axis no longer overlaps the label before it. Opening Inbox no longer shifts the sidebar's rows, the Inbox page's "New" count is grey or amber by the same rule as the sidebar, and screen readers hear which chat is open. A wide table in a reply fades at its right edge while there are more columns to scroll to, and a one-item Pros or Cons on a phone's comparison card gets its + or − mark. On a computer, the "New" tag above the message box no longer covers a message or a table as you scroll; the box makes room for it until you first use @. When a bot gives key numbers such as revenue, orders and refunds, they show as tiles instead of one run-on line. Older replies stay as they were.</p></li>
-    </ul>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0934">Smaller changes in 0.9.34</h3>
+        <p>A code block or log over 20 lines shows its first 16 lines with a "Show all" button, "Show less" folds it again, and Copy still copies every line. A CSV, TSV, Markdown or text file a bot shares shows its table or text preview again, not only the download button (new shares only). On a narrow line chart, the last date on the x axis no longer overlaps the label before it. Opening Inbox no longer shifts the sidebar's rows, the Inbox page's "New" count is grey or amber by the same rule as the sidebar, and screen readers hear which chat is open. A wide table in a reply fades at its right edge while there are more columns to scroll to, and a one-item Pros or Cons on a phone's comparison card gets its + or − mark. On a computer, the "New" tag above the message box no longer covers a message or a table as you scroll; the box makes room for it until you first use @. When a bot gives key numbers such as revenue, orders and refunds, they show as tiles instead of one run-on line. Older replies stay as they were.</p>
+      </div>
+      <div class="frame">{{shot:v0934-long-log-folds|kwant on a desktop in Trailhead Outfitters, a direct chat with Ben. You asked why last night's build of the shop failed. Ben explains that one checkout test looks for a field labelled "Coupon code" while the form says "Promo code", and his log block shows the first lines of the test run with green checks, fading out above a "Show all 64 lines" button. Under it he says he'll rename the label back and re-run the build.}}</div>
+    </div>
   </div>
 </section>
 
