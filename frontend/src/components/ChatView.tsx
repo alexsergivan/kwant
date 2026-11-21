@@ -2595,7 +2595,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       : discussionState.askedBy
                         ? <> is answering {discussionState.askedBy}</>
                         : ' is responding'}
-                    {' '}• turn {discussionState.currentTurn || 1} of {discussionState.totalTurns || 1}
+                    {' '}• turn {discussionState.currentTurn || 1}, up to {discussionState.totalTurns || 1}
                   </>
                 )}
               </span>
@@ -2607,7 +2607,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 className="shrink-0 flex items-center gap-1 px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded border border-rose-500/30 transition-colors cursor-pointer"
               >
                 <Square size={11} fill="currentColor" />
-                <span>Stop<span className="hidden sm:inline"> Discussion</span></span>
+                {/* 32n: a handoff has no discussion, so it just says Stop, like its cards in the stream */}
+                <span>Stop{discussionState.kind !== 'handoff' && <span className="hidden sm:inline"> Discussion</span>}</span>
               </button>
             )}
           </div>
@@ -3148,8 +3149,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               type="button"
               onClick={onCancelDiscussion}
               className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
-              title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop'}
-              aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop'}
+              title={discussionState?.inProgress && discussionState.kind !== 'handoff' ? 'Stop Discussion' : 'Stop'}
+              aria-label={discussionState?.inProgress && discussionState.kind !== 'handoff' ? 'Stop discussion' : 'Stop'}
             >
               <Square size={12} fill="currentColor" aria-hidden="true" />
             </button>
