@@ -907,4 +907,69 @@ mod tests {
         assert!(db.close_human_step(&steps[0].id, "declined").await.unwrap());
         assert!(db.list_human_steps(Some("open"), None, Some(&space)).await.unwrap().is_empty());
     }
+
+
+    /// A message as kwnt saves it: `created_at` is SQLite's `CURRENT_TIMESTAMP` text
+    /// (`2026-11-21 10:00:00`), never sqlx's `2026-11-21T10:00:00…`.
+    async fn said_at(db: &Database, id: &str, role: &str, sender: &str, text: &str, at: &str, meta: Option<&str>) {
+        sqlx::query("INSERT INTO messages (id, direct_kwant_id, sender_role, sender_id, text, meta, created_at) VALUES (?, 'k1', ?, ?, ?, ?, ?)")
+            .bind(id)
+            .bind(role)
+            .bind(sender)
+            .bind(text)
+            .bind(meta)
+            .bind(at)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+
+    fn utc(at: &str) -> DateTime<Utc> {
+        chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S").unwrap().and_utc()
+    }
+
+    /// 33d: the request a `Done:` closes is the person's message before it, not the newest one of
+    /// that day (a bound `DateTime` is written with a `T`, and `' ' < 'T'`).
+    #[tokio::test]
+    async fn the_persons_message_before_is_not_the_newest_of_that_day() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        said_at(&db, "ask", "user", "user", "Plan a 3-day trip", "2026-11-21 10:00:00", None).await;
+        said_at(&db, "later", "user", "user", "And a packing list?", "2026-11-21 10:02:00", None).await;
+        let before = db.last_person_message_before("k1", utc("2026-11-21 10:01:00")).await.unwrap();
+        assert_eq!(before.map(|m| m.id).as_deref(), Some("ask"));
+        // The same second counts as before
+        let same = db.last_person_message_before("k1", utc("2026-11-21 10:02:00")).await.unwrap();
+        assert_eq!(same.map(|m| m.id).as_deref(), Some("later"));
+        assert!(db.last_person_message_before("k1", utc("2026-11-21 09:59:59")).await.unwrap().is_none());
+    }
+
+    /// 33d: a `Done:` reply later on the day of `since` is listed (it compared before `since`).
+    #[tokio::test]
+    async fn a_done_reply_later_the_same_day_is_after_since() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let done = r#"{"chain_done": {"text": "plan saved"}}"#;
+        said_at(&db, "early", "kwant", "Ann", "Done: list made", "2026-11-21 08:00:00", Some(done)).await;
+        said_at(&db, "late", "kwant", "Ann", "Done: plan saved", "2026-11-21 10:05:00", Some(done)).await;
+        let rows = db.done_replies(utc("2026-11-21 09:00:00"), 10).await.unwrap();
+        assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["late"]);
+    }
+
+    /// 33d: a task's result reply is the bot's first reply from its review within the slack, not
+    /// its newest reply of that day.
+    #[tokio::test]
+    async fn a_tasks_result_reply_is_the_one_after_its_review_not_the_newest_of_that_day() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        said_at(&db, "morning", "kwant", "Ann", "Earlier work", "2026-11-21 09:00:00", None).await;
+        said_at(&db, "result", "kwant", "Ann", "Here is the result", "2026-11-21 10:03:00", None).await;
+        said_at(&db, "evening", "kwant", "Ann", "Something else", "2026-11-21 18:00:00", None).await;
+        let review = utc("2026-11-21 10:02:30");
+        let m = db.task_result_message("k1", "Ann", review, chrono::Duration::minutes(5)).await.unwrap();
+        assert_eq!(m.map(|m| m.id).as_deref(), Some("result"));
+        // Nothing within the slack: the last reply before the review
+        let m = db.task_result_message("k1", "Ann", utc("2026-11-21 12:00:00"), chrono::Duration::minutes(5)).await.unwrap();
+        assert_eq!(m.map(|m| m.id).as_deref(), Some("result"));
+    }
 }
