@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { ArrowRightLeft, CheckCircle2, Clock, ExternalLink, Loader2, Square, XCircle, AlertTriangle } from 'lucide-react';
+import { ArrowRightLeft, CheckCircle2, Clock, ExternalLink, Hand, Loader2, Repeat, Square, XCircle, AlertTriangle } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModernAvatar } from './ModernAvatar';
-import { Delegation, DelegationMeta, DelegationStatus, delegationStatusLine, isOpenDelegation } from '../threads';
+import { Delegation, DelegationMeta, DelegationStatus, DelegationWaiting, delegationStatusLine, failoverText, isOpenDelegation } from '../threads';
 
 export interface DelegationCardProps {
   meta: DelegationMeta;
@@ -17,6 +17,10 @@ export interface DelegationCardProps {
   /** Stops the delegation; resolves to an error message on failure. */
   onCancel: (delegationId: string) => Promise<string | void>;
   flash?: boolean;
+  /** 32j: the teammate is blocked on the person (an approval or a question in its thread). */
+  waiting?: DelegationWaiting | null;
+  /** 32j: for an approval, what it asks to do in the approval card's words ("send an email"). */
+  waitingAction?: string | null;
 }
 
 const LONG_RESULT = 1400;
@@ -30,22 +34,29 @@ const tone: Record<DelegationStatus, { icon: React.ReactNode; ring: string; text
   interrupted: { icon: <AlertTriangle size={13} aria-hidden="true" />, ring: 'border-amber-500/30', text: 'text-amber-300' },
 };
 
+/** 32j: running but waiting on the person: queued's amber, a still hand instead of the spinner. */
+const waitingTone = { ...tone.queued, icon: <Hand size={13} aria-hidden="true" /> };
+
 /**
  * A delegation in the lead's chat: who got the task, its live status, a link to the specialist's
  * thread and Stop while it runs. The result card also shows the specialist's answer.
  */
-export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, messageId, live, queuePos, onOpenThread, onCancel, flash }) => {
+export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, messageId, live, queuePos, onOpenThread, onCancel, flash, waiting, waitingAction }) => {
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
   const status: DelegationStatus = live?.status ?? meta.status;
-  const t = tone[status] ?? tone.queued;
   const isResult = meta.kind === 'delegation_result';
   const running = isOpenDelegation({ status });
-  const line = delegationStatusLine(status, meta.specialist_name, { queuePos, error: live?.error });
+  const waitingOn = status === 'running' && waiting ? waiting : null;
+  const t = waitingOn ? waitingTone : tone[status] ?? tone.queued;
+  const line = delegationStatusLine(status, meta.specialist_name, { queuePos, error: live?.error, waiting: waitingOn, action: waitingAction });
   const headingId = `dlg-${messageId}`;
   const long = isResult && text.length > LONG_RESULT;
+  // 32m: only a finished result says it ran on another account; started, stalled, failed and stopped cards never do.
+  const failover = isResult && status === 'completed' && meta.failover ? meta.failover : null;
+  const failoverLabel = failover ? failoverText(meta.specialist_name, failover) : '';
 
   const stop = async () => {
     setStopping(true);
@@ -74,6 +85,17 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
             {isResult ? 'Result from' : meta.kind === 'delegation_stalled' ? 'Still running at' : 'Delegated to'}{' '}
             <span className="text-zinc-200">{meta.specialist_name}</span>
           </span>
+          {failover && (
+            <span
+              data-failover-chip
+              title={failoverLabel}
+              className="inline-flex items-center gap-1 min-w-0 max-w-full px-1.5 py-px rounded-md border border-zinc-700/70 bg-zinc-800/40 text-[11px] text-zinc-400"
+            >
+              <Repeat size={10} className="flex-shrink-0" aria-hidden="true" />
+              <span aria-hidden="true" className="min-w-0 [overflow-wrap:anywhere]">on {failover.to_name}</span>
+              <span className="sr-only">{failoverLabel}</span>
+            </span>
+          )}
           <h3 id={headingId} className="basis-full text-sm font-semibold text-zinc-100 break-words">
             {meta.title}
           </h3>
@@ -110,10 +132,11 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
           <button
             type="button"
             onClick={() => onOpenThread(meta)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-sky-300 bg-sky-500/10 border border-sky-500/30 hover:bg-sky-500/20 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+            aria-label={waitingOn ? `Go to ${meta.specialist_name}'s thread` : undefined}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-sky-300 bg-sky-500/10 border border-sky-500/30 hover:bg-sky-500/20 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${waitingOn ? 'max-sm:min-h-[44px] max-sm:px-3.5' : ''}`}
           >
             <ExternalLink size={12} aria-hidden="true" />
-            Open {meta.specialist_name}'s thread
+            {waitingOn ? 'Go to it' : `Open ${meta.specialist_name}'s thread`}
           </button>
           {running && (
             <button
@@ -121,7 +144,7 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
               onClick={stop}
               disabled={stopping}
               aria-label={`Stop “${meta.title}”`}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-300 bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-300 bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500 ${waitingOn ? 'max-sm:min-h-[44px] max-sm:px-3.5' : ''}`}
             >
               <Square size={10} fill="currentColor" aria-hidden="true" />
               {stopping ? 'Stopping…' : 'Stop'}

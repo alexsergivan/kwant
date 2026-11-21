@@ -30,6 +30,7 @@
   "handoff_ended",
   "held",
   "lead_review_asked",
+  "lead_review_stopped",
   "lease_expired",
   "lessons_held_out",
   "lessons_shown",
