@@ -169,3 +169,25 @@ test('4. InboxNew and the tool notes still open Advanced; only the card opens th
   assert.match(app, /recheck=\{settingsClosedCount\}/);
   assert.match(app, /const openConnectSheet = \(meta: ConnectionSuggestionMeta\) => \{[\s\S]{0,200}openSpaceSettings\('apps', 'apps'\)/);
 });
+
+test('5. after the sheet is closed, leaving Apps & accounts and coming back doesn’t open it again (Rigel’s QA defect 1)', async () => {
+  const composio = { id: 'composio', kind: 'mcp', name: 'Composio', description: 'Apps.', optional: true, added: false, connection_id: null, enabled: false, logins_stored: 'composio', warning: 'w', add: '/api/connections/composio' };
+  const props = (initialSheet) => ({
+    spaceName: 'Home', spaceMode: 'ask', kwants: [{ id: 'k1', name: 'Scout', approvals_effective: 'ask' }], data: { connections: [], counts: {}, vault: { status: 'ok' }, catalog: [composio] },
+    profiles: [], engines: [], manageAccounts: () => null, advanced: () => h('p', null, 'ADVANCED'), phone: false, initialSheet,
+  });
+  // The mechanism: Apps & accounts opens whatever sheet it is handed each time it mounts (a tab switch remounts it).
+  let a = mount(m.AppsAccounts, props(m.connectSheetFor(gmail())));
+  await until(() => document.querySelector('[data-connect-sheet="gmail"]'), 'the Gmail sheet');
+  for (const u of [...mounted]) u();
+  // Back on Apps & accounts after General: App has cleared connectApp, so nothing is handed over and no sheet opens.
+  a = mount(m.AppsAccounts, props(undefined));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(document.querySelector('[data-connect-sheet]'), null, 'no sheet by itself');
+
+  // App: every Settings tab change goes through changeSpaceSettingsTab, which clears connectApp first.
+  const app = src('App.tsx');
+  assert.match(app, /const changeSpaceSettingsTab = \(tab: SpaceSettingsTab\) => \{\s*setConnectApp\(null\);\s*setSpaceSettingsTab\(tab\);/);
+  assert.match(app, /<SpaceSettings[\s\S]{0,200}onTab=\{changeSpaceSettingsTab\}/);
+  assert.doesNotMatch(app, /onTab=\{setSpaceSettingsTab\}/);
+});

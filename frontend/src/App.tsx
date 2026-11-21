@@ -499,6 +499,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
   useSettingsCover(!!spaceSettingsTab, contentRef);
+  // Moving between Settings tabs drops the card's sheet too: Apps & accounts remounts on the way back and
+  // would open it again by itself (Rigel's 32x QA defect 1).
+  const changeSpaceSettingsTab = (tab: SpaceSettingsTab) => {
+    setConnectApp(null);
+    setSpaceSettingsTab(tab);
+  };
   const closeSpaceSettings = () => {
     setToolNoteFocus(null);
     setSpaceSettingsTab(null);
@@ -5045,7 +5051,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           space={space}
           spaces={spaces}
           tab={spaceSettingsTab}
-          onTab={setSpaceSettingsTab}
+          onTab={changeSpaceSettingsTab}
           onClose={closeSpaceSettings}
           kwants={kwants}
           channels={channels}
