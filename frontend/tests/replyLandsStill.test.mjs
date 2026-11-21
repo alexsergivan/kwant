@@ -72,7 +72,7 @@ test('the live row and the finished row share one geometry', () => {
   const liveRow = chat.slice(chat.indexOf('data-live-row=""'), chat.indexOf('data-live-bubble-body=""') + 30);
   assert.match(liveRow, /<span className="hidden sm:contents">\s+<ModernAvatar role=\{liveName\} name=\{liveName\} size=\{REPLY_AVATAR\} \/>/);
   assert.match(liveRow, /<span className="sm:hidden shrink-0 inline-flex">\s+<ModernAvatar role=\{liveName\} name=\{liveName\} size=\{REPLY_AVATAR_PHONE\} \/>/);
-  assert.match(liveRow, /className=\{`\$\{REPLY_BUBBLE\} min-h-\[3\.5rem\] \$\{REPLY_BUBBLE_BOT\}`\} data-live-bubble-body=""/);
+  assert.match(liveRow, /className=\{`\$\{REPLY_BUBBLE\} min-h-\[3\.5rem\] \$\{REPLY_BUBBLE_BOT\} kw-live-in`\} data-live-bubble-body=""/);
   assert.doesNotMatch(liveRow, /size=\{34\}|p-4 sm:p-5/);
   // The finished row uses the same strings.
   assert.match(chat, /size=\{REPLY_AVATAR\}\s+kwantId=\{replyKwantId\}/);

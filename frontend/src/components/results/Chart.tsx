@@ -172,6 +172,23 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   const year = block.points[0]?.x.slice(0, 4);
   const dropYear = !isBar && narrow && block.points.every((p) => ISO_DAY.test(p.x) && p.x.startsWith(year));
   const axisText = (x: string) => (dropYear ? x.slice(5) : x);
+  // Which points get an axis label: the cadence, plus the last point when it sits at least half a step off it.
+  const labelled = (i: number) =>
+    i === lastX ? showLastX : i % labelEvery === 0 && !(gapX > 0 && showLastX && i === lastX - gapX);
+  // A line's last label is end-anchored at the right edge, so on a wide chart that labels every point it sat 5 px
+  // from the middle-anchored label before it and the two dates read as one. Estimate both widths (11 px digits are
+  // about 7 px wide) and, when they would sit closer than 8 px, drop the label before the last one. Never the first.
+  const MIN_LABEL_GAP = 8;
+  const CHAR_W = 7;
+  const shownChars = (x: string) => Math.min(axisText(x).length, labelChars);
+  let prevX = -1;
+  if (!isBar && n > 1 && showLastX) for (let i = lastX - 1; i >= 0 && prevX < 0; i--) if (labelled(i)) prevX = i;
+  const crowdedX =
+    prevX > 0 &&
+    xPos(lastX) - shownChars(block.points[lastX].x) * CHAR_W - (xPos(prevX) + (shownChars(block.points[prevX].x) * CHAR_W) / 2) <
+      MIN_LABEL_GAP
+      ? prevX
+      : -1;
 
   const activePoint = active ? block.points[active.pointIdx] : null;
   const activeSeries = active ? block.series[active.seriesIdx] : null;
@@ -248,9 +265,10 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
             <line x1={PAD.left} x2={WIDTH - PAD.right} y1={HEIGHT - PAD.bottom} y2={HEIGHT - PAD.bottom} className="stroke-zinc-700" strokeWidth={1} />
 
             {/* X labels, thinned out so 390 px never clips. The last point is labelled when it sits at least half a
-                step off the cadence; the regular label just before it then goes, so the two never overlap. */}
+                step off the cadence; the regular label just before it then goes, so the two never overlap, and so does the
+                one before an end-anchored last label that would sit closer than 8 px (crowdedX). */}
             {block.points.map((p, i) => {
-              if (i === lastX ? !showLastX : i % labelEvery !== 0 || (gapX > 0 && showLastX && i === lastX - gapX)) return null;
+              if (!labelled(i) || i === crowdedX) return null;
               return (
                 <text
                   key={p.id}
