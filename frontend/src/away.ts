@@ -54,6 +54,15 @@ export interface AwayItem {
   dismissable?: boolean;
 }
 
+/**
+ * 31y: an approval answered on its chat card (or found lapsed) leaves the "Needs you" strip and its sidebar row in
+ * the same update that drops the card, as an ask cleared from the strip does (22i). Its waiting item carries the
+ * ticket's own id (server away.rs `item`), so that id is what clears; it leaves the set once the server's list
+ * no longer has it. Any other ask in that chat stays.
+ */
+export const clearAnswered = (cleared: ReadonlySet<string>, ticketId: string): ReadonlySet<string> =>
+  cleared.has(ticketId) ? cleared : new Set(cleared).add(ticketId);
+
 export interface AwayCounts {
   waiting: number;
   finished: number;

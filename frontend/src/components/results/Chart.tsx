@@ -4,6 +4,7 @@ import type { RendererProps } from './registry';
 import { ReplyText } from './ReplyText';
 
 const MAX_VALUE = 1e15;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** 1-4 series (unique by key) and 3-60 points, each with one cell/value per series (plan §A.3). */
 export function validChart(raw: unknown): ChartBlock | null {
@@ -166,6 +167,11 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   const gapX = lastX % labelEvery;
   const showLastX = gapX === 0 || gapX * 2 >= labelEvery;
   const labelChars = isBar ? Math.max(3, Math.floor((xStep * labelEvery - 4) / 6)) : 10;
+  // A phone line chart whose dates all fall in one year prints "09-07", not "2026-09-07": the repeated year is what
+  // packed the labels edge to edge. Only the axis text changes; the tooltip, table and accessible names keep the year.
+  const year = block.points[0]?.x.slice(0, 4);
+  const dropYear = !isBar && narrow && block.points.every((p) => ISO_DAY.test(p.x) && p.x.startsWith(year));
+  const axisText = (x: string) => (dropYear ? x.slice(5) : x);
 
   const activePoint = active ? block.points[active.pointIdx] : null;
   const activeSeries = active ? block.series[active.seriesIdx] : null;
@@ -254,13 +260,13 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
                   fontSize={11}
                   className="fill-zinc-400"
                 >
-                  {p.x.length > labelChars ? (
+                  {axisText(p.x).length > labelChars ? (
                     <>
                       <title>{p.x}</title>
-                      {`${p.x.slice(0, labelChars - 1)}…`}
+                      {`${axisText(p.x).slice(0, labelChars - 1)}…`}
                     </>
                   ) : (
-                    p.x
+                    axisText(p.x)
                   )}
                 </text>
               );

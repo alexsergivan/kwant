@@ -25,10 +25,7 @@ pub const EXECUTOR_IMAGE: &str = "kwnt-executor:v1";
 
 /// True when the image `tag` is already built.
 pub async fn image_exists(tag: &str) -> bool {
-    Command::new("docker")
-        .args(["image", "inspect", tag])
-        .kill_on_drop(true)
-        .output()
+    crate::helper_process::output(Command::new("docker").args(["image", "inspect", tag]).kill_on_drop(true))
         .await
         .is_ok_and(|out| out.status.success())
 }
@@ -50,7 +47,7 @@ pub async fn ensure_image(tag: &str, files: &[(&str, &str)], build_args: &[(&str
         for (k, v) in build_args {
             cmd.arg("--build-arg").arg(format!("{k}={v}"));
         }
-        cmd.arg(&build).kill_on_drop(true).output().await
+        crate::helper_process::output(cmd.arg(&build).kill_on_drop(true)).await
     }
     .await;
     let _ = tokio::fs::remove_dir_all(&build).await;
@@ -109,7 +106,7 @@ impl SandboxManager {
         matches!(
             timeout(
                 Duration::from_secs(3),
-                Command::new("docker").arg("version").kill_on_drop(true).output(),
+                crate::helper_process::output(Command::new("docker").arg("version").kill_on_drop(true)),
             ).await,
             Ok(Ok(output)) if output.status.success()
         )
@@ -133,10 +130,10 @@ impl SandboxManager {
         let mut lock = self.sandboxes.lock().await;
         if let Some(existing) = lock.get(team_id) {
             // Check if still running
-            let inspect = Command::new("docker")
-                .args(["inspect", "-f", "{{.State.Running}}", &existing.container_name])
-                .output()
-                .await;
+            let inspect = crate::helper_process::output(
+                Command::new("docker").args(["inspect", "-f", "{{.State.Running}}", &existing.container_name]),
+            )
+            .await;
             if let Ok(out) = inspect {
                 if String::from_utf8_lossy(&out.stdout).trim() == "true" {
                     return Ok(existing.clone());
@@ -149,27 +146,25 @@ impl SandboxManager {
         let container_name = format!("kwnt-executor-{}-{}", safe_name, id_suffix);
 
         // Remove old container if exists
-        let _ = Command::new("docker").args(["rm", "-f", &container_name]).output().await;
+        let _ = crate::helper_process::output(Command::new("docker").args(["rm", "-f", &container_name])).await;
 
         let ws_str = workspace_dir.to_string_lossy().to_string();
         ensure_executor_image().await?;
-        let run_res = Command::new("docker")
-            .args([
-                "run",
-                "-d",
-                "--name",
-                &container_name,
-                "--cpus=2.0",
-                "--memory=1536m",
-                "-v",
-                &format!("{}:/workspace:rw", ws_str),
-                "-w",
-                "/workspace",
-                EXECUTOR_IMAGE,
-            ])
-            .output()
-            .await
-            .map_err(|e| SandboxError::StartFailed(e.to_string()))?;
+        let run_res = crate::helper_process::output(Command::new("docker").args([
+            "run",
+            "-d",
+            "--name",
+            &container_name,
+            "--cpus=2.0",
+            "--memory=1536m",
+            "-v",
+            &format!("{}:/workspace:rw", ws_str),
+            "-w",
+            "/workspace",
+            EXECUTOR_IMAGE,
+        ]))
+        .await
+        .map_err(|e| SandboxError::StartFailed(e.to_string()))?;
 
         if !run_res.status.success() {
             let err = String::from_utf8_lossy(&run_res.stderr);
@@ -197,7 +192,7 @@ impl SandboxManager {
         let mut cmd = Command::new("docker");
         cmd.args(["exec", "-w", "/workspace", container_name, "bash", "-c", command_str]);
 
-        let output = timeout(Duration::from_secs(timeout_secs), cmd.output())
+        let output = timeout(Duration::from_secs(timeout_secs), crate::helper_process::output(&mut cmd))
             .await
             .map_err(|_| SandboxError::Timeout)?
             .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
@@ -227,10 +222,7 @@ impl SandboxManager {
     pub async fn stop_sandbox(&self, team_id: &str) -> Result<(), SandboxError> {
         let mut lock = self.sandboxes.lock().await;
         if let Some(active) = lock.remove(team_id) {
-            let _ = Command::new("docker")
-                .args(["rm", "-f", &active.container_name])
-                .output()
-                .await;
+            let _ = crate::helper_process::output(Command::new("docker").args(["rm", "-f", &active.container_name])).await;
         }
         Ok(())
     }
