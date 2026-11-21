@@ -1491,6 +1491,55 @@ mod tests {
         assert!(plan(ItemId::Claude, &installed).steps.is_empty());
     }
 
+    // 32w: a download that fails (offline, proxy, firewall) fails the step. Under plain `sh -c`,
+    // `curl … | bash` exited 0 because bash ran the empty script, so Get started spun forever.
+    #[cfg(unix)]
+    #[test]
+    fn cli_installs_run_with_pipefail_under_bash() {
+        let p = bare(Platform::Linux);
+        for (item, url) in [(ItemId::Claude, "https://claude.ai/install.sh"), (ItemId::Grok, "https://x.ai/cli/install.sh")] {
+            let pl = plan(item, &p);
+            let [Step::Run(c)] = pl.steps.as_slice() else { panic!("{pl:?}") };
+            assert_eq!(c.argv, vec!["bash".to_string(), "-c".into(), format!("set -o pipefail; curl -fsSL {url} | bash")]);
+            // What the person reads in the log and copies stays the plain command
+            assert_eq!(c.display(), format!("curl -fsSL {url} | bash"));
+        }
+        // Without curl it's still shown to the person to run, unchanged
+        let mut no_curl = bare(Platform::Linux);
+        no_curl.curl = false;
+        assert_eq!(shown(&plan(ItemId::Claude, &no_curl)), vec!["curl -fsSL https://claude.ai/install.sh | bash"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_pipe_fails_the_step() {
+        let quiet = |_: String| {};
+        let failed = run_cmd(&Cmd::new("x", &["bash", "-c", "set -o pipefail; false | bash"]), &quiet).await;
+        assert_eq!(failed, Err("exited with exit status: 1".into()));
+        assert_eq!(run_cmd(&Cmd::new("x", &["bash", "-c", "set -o pipefail; true | bash"]), &quiet).await, Ok(()));
+    }
+
+    // The real Claude step, pointed at a port nothing listens on: curl's own error ends the job,
+    // which Get started reads as a network failure and shows Try again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreachable_claude_download_fails_the_step() {
+        if which("curl").is_none() || which("bash").is_none() {
+            return;
+        }
+        let pl = plan(ItemId::Claude, &bare(Platform::Linux));
+        let [Step::Run(c)] = pl.steps.as_slice() else { panic!("{pl:?}") };
+        let mut c = c.clone().env("no_proxy", "*").env("NO_PROXY", "*");
+        for a in &mut c.argv {
+            *a = a.replace("https://claude.ai/install.sh", "http://127.0.0.1:9/install.sh");
+        }
+        let lines = std::sync::Mutex::new(Vec::new());
+        let result = run_cmd(&c, &|l: String| lines.lock().unwrap().push(l)).await;
+        let e = result.expect_err("a download that never started must fail the step");
+        assert!(e.starts_with("exited with exit status: 7"), "{e}");
+        assert!(e.contains("curl: (7)"), "{e}");
+    }
+
     #[test]
     fn docker_is_never_run_with_sudo_and_only_on_request() {
         let p = bare(Platform::Linux);
