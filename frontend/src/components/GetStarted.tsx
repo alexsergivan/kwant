@@ -64,6 +64,8 @@ import { copyText } from '../copyText';
 
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 const SLOW_S = 40;
+/** "Getting {name} ready…" with the CLI still missing this long reads as stalled (32y). */
+const STALL_MS = 20_000;
 const KEY_PROVIDERS = [
   { card: 'anthropic_api', label: 'Anthropic', note: 'Paid per use on your Anthropic account.' },
   { card: 'openai_api', label: 'OpenAI', note: 'Paid per use on your OpenAI account.' },
@@ -314,6 +316,42 @@ const InstallPanel: React.FC<{
     );
   }
   return null;
+};
+
+/** "Getting {name} ready…" once the install is done but the CLI isn't there yet; after 20 s, Try again (32y). */
+const ReadyWait: React.FC<{ name: string; phone: boolean; onRetry: () => void; onOther: () => void }> = ({ name, phone, onRetry, onOther }) => {
+  const [stalled, setStalled] = useState(false);
+  const [round, setRound] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setStalled(true), STALL_MS);
+    return () => clearTimeout(t);
+  }, [round]);
+  if (!stalled)
+    return (
+      <p className="text-[13px] text-zinc-300 inline-flex items-center gap-2" role="status">
+        <Spinner />
+        Getting {name} ready…
+      </p>
+    );
+  return (
+    <FailRow tone="bad" icon="alert" title={`${name} still isn’t ready.`} reason="Getting it ready is taking longer than it should.">
+      <Btn
+        phone={phone}
+        kind="primary"
+        onClick={() => {
+          setStalled(false);
+          setRound((r) => r + 1);
+          onRetry();
+        }}
+      >
+        <RotateCw size={13} aria-hidden="true" />
+        Try again
+      </Btn>
+      <Btn phone={phone} kind="link" onClick={onOther}>
+        Choose another AI
+      </Btn>
+    </FailRow>
+  );
 };
 
 /** The O1 install route can't do this one here (e.g. Codex without its standalone build, §11). */
@@ -742,7 +780,7 @@ const KeyPanel: React.FC<{ phone: boolean; onAdded: () => void }> = ({ phone, on
         ))}
       </div>
       <div className="mt-2">
-        <NewKeyAccountForm key={card} card={card} onCancel={() => undefined} onCreated={onAdded} />
+        <NewKeyAccountForm key={card} card={card} onCancel={() => undefined} onCreated={onAdded} getStarted={{ label: p.label }} />
       </div>
       <p className="mt-1 text-xs text-zinc-400">{p.note} The key stays on this computer.</p>
     </div>
@@ -1045,12 +1083,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
       return <InstallPanel track={track} name={cliName(le)} host={host} where={where} phone={phone} onRetry={() => install(le)} onOther={other} />;
     if (missing) {
       if (canAuto === false) return <CantInstall engine={engineOf(le)} name={cliName(le)} choice={le} />;
-      return (
-        <p className="text-[13px] text-zinc-300 inline-flex items-center gap-2" role="status">
-          <Spinner />
-          Getting {cliName(le)} ready…
-        </p>
-      );
+      return <ReadyWait key={le} name={cliName(le)} phone={phone} onRetry={() => install(le)} onOther={other} />;
     }
     if (le === 'claude') return <ClaudePaste api={api} phone={phone} onDone={signedIn} onOther={other} />;
     if (noRoute[le]) return <TerminalSignIn engine={le} phone={phone} recheck={reloadEngines} />;
