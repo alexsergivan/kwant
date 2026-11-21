@@ -2516,6 +2516,10 @@ pub(super) async fn turn_once(
         outcome: "cancelled",
         running_row: None,
         quiet: opts.quiet_finish,
+        // 33e: only a failure in the person's own chat says "stopped"; a hand-off, routine run,
+        // mission, discussion round or unsaved view reports it where it belongs (as [`stop_asks`])
+        silent_failure: !stop_asks(scope, &opts),
+        reply: None,
     };
     // After the guard, which clears it however the turn ends
     if let Some(source) = opts.source.clone() {
@@ -2604,6 +2608,10 @@ pub(super) async fn turn_once(
         (Err(_), true) => "cancelled",
         (Err(_), false) => "failed",
     };
+    // 33e: its notification says when the reply ended Blocked or Done
+    if let Ok(text) = &reply {
+        ended.reply = Some(text.as_str().into());
+    }
     // The save step asked for the delivery continuation: it starts on this turn's chat slot
     let continues = next.is_some_and(|n| n.lock().is_ok_and(|n| n.is_some()));
     if let (true, false, Some(h)) = (continues && slot.holds_chat(), scope.cancel_token.is_cancelled(), handover) {
@@ -2781,6 +2789,10 @@ struct TurnEndedGuard {
     running_row: Option<crate::db::Database>,
     /// See [`TurnOpts::quiet_finish`].
     quiet: bool,
+    /// No notification if the turn fails (33e): not a turn of the person's own chat (see [`stop_asks`]).
+    silent_failure: bool,
+    /// The completed turn's reply (see `RuntimeEvent::TurnEnded::reply`).
+    reply: Option<std::sync::Arc<str>>,
 }
 
 impl Drop for TurnEndedGuard {
@@ -2803,7 +2815,8 @@ impl Drop for TurnEndedGuard {
             outcome: self.outcome.to_string(),
             turn_id: Some(tag.turn_id),
             thread_id: tag.thread_id,
-            quiet: self.quiet,
+            quiet: self.quiet || (self.outcome == "failed" && self.silent_failure),
+            reply: self.reply.take(),
         });
     }
 }

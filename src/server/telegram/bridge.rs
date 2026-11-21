@@ -1033,6 +1033,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_stopped_or_blocked_bot_is_stuck() {
+        // 33e: a bot that stopped or is blocked reaches Telegram like a stalled hand-off
+        assert!(STUCK_KINDS.contains(&"turn_stopped"));
+        assert!(!DONE_KINDS.contains(&"turn_stopped"));
+        let notify = crate::server::continuity::NOTIFY_KINDS;
+        assert!(STUCK_KINDS.iter().chain(DONE_KINDS).all(|k| notify.contains(k)));
+    }
+
+    #[test]
     fn unknown_names_lose_their_at_sign_only() {
         let n = vec!["Nobodyhere".to_string()];
         assert_eq!(drop_at("@Nobodyhere are you there", &n), "Nobodyhere are you there");
