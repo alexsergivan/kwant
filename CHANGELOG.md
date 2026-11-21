@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- Get started now waits for your API key before adding the account, names it for you and makes it the default, so an empty key no longer makes an account that can't answer (#998)
+- If getting Claude ready stalls, Get started now offers Try again and Choose another AI after 20 seconds (#998)
+
 ## [Mac 0.9.37] - 2026-11-21
 
 kwant 0.9.37: a Stop that stops the whole team, add-ons that wait for a busy teammate, team cards that say when a teammate waits for you and plain words when a teammate's model stops.
