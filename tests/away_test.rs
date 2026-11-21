@@ -419,11 +419,16 @@ async fn live_approval(app: &Router, state: &AppState, kwant: &kwnt::db::models:
     let item = item.expect("the approval never showed up under waiting");
     assert_eq!(state.db.get_approval(item["id"].as_str().unwrap()).await.unwrap().unwrap().turn_id, turn_id);
     // The item carries what the live event did, so the client can render it the same way.
+    // The server saves the card before it sends the event, so the row can show up in /api/away
+    // first: wait for the event (at most 5 s) instead of draining once (CI flake on #939, Nov 21).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     let (tool_name, details) = loop {
-        match events.try_recv() {
-            Ok(kwnt::drivers::events::RuntimeEvent::ApprovalRequired { id, tool_name, details }) if id == item["id"] => break (tool_name, details),
-            Ok(_) => continue,
-            Err(e) => panic!("no approval_required event for the item: {e:?}"),
+        use tokio::sync::broadcast::error::RecvError;
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Ok(kwnt::drivers::events::RuntimeEvent::ApprovalRequired { id, tool_name, details })) if id == item["id"] => break (tool_name, details),
+            Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Err(e)) => panic!("no approval_required event for the item: {e:?}"),
+            Err(_) => panic!("no approval_required event for the item within 5 s"),
         }
     };
     assert_eq!(item["tool_name"], tool_name);
