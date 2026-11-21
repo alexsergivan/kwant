@@ -158,6 +158,37 @@ fn meta(kind: &str, d: &Delegation, specialist: &str) -> Value {
     })
 }
 
+/// The newest message in `thread_id` now. A turn that starts after this saves its replies after
+/// it, so [`last_switch`] reads only that turn's replies.
+async fn thread_mark(state: &AppState, thread_id: &str) -> Option<String> {
+    state.db.list_messages(thread_id, 1).await.ok()?.pop().map(|m| m.id)
+}
+
+/// 32m: the last account switch in `specialist`'s replies in `thread_id` saved after `mark`
+/// (see [`thread_mark`]), for its result card in the team chat:
+/// `{to_name, from_name, class, retry_at}` from the reply's `meta.failover`. `None` when those
+/// replies didn't switch, so an older turn's switch never shows on a newer result. The switch
+/// notice's own text stays in the thread.
+async fn last_switch(state: &AppState, thread_id: &str, specialist: &str, mark: Option<&str>) -> Option<Value> {
+    let recent = state.db.list_messages(thread_id, 50).await.ok()?;
+    // A mark that is no longer among the newest 50 means all of them came after it
+    let from = mark.and_then(|id| recent.iter().position(|m| m.id == id)).map_or(0, |i| i + 1);
+    let switch = recent[from..]
+        .iter()
+        .rev()
+        .filter(|m| m.sender_role == "kwant" && m.sender_id == specialist)
+        .find_map(|m| {
+            let meta: Value = serde_json::from_str(m.meta.as_deref()?).ok()?;
+            meta.get("failover")?.as_array()?.last().cloned()
+        })?;
+    Some(json!({
+        "to_name": switch["to_name"],
+        "from_name": switch["from_name"],
+        "class": switch["class"],
+        "retry_at": switch["retry_at"],
+    }))
+}
+
 async fn name_of(state: &AppState, id: &str) -> String {
     state.db.get_kwant(id).await.ok().flatten().map(|k| k.name).unwrap_or_else(|| "A bot".into())
 }
@@ -546,12 +577,14 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     let carried_on = carry_on.is_some() || sent_back.is_some();
     // H3: a hand-off held for a stuck or waiting specialist starts once it can take it
     if !super::bot_status::wait_released(&state, &d.id, &job.token).await {
-        return finish(&state, &d, &specialist, Err("stopped".into()), carried_on, None).await;
+        return finish(&state, &d, &specialist, Err("stopped".into()), carried_on, None, None).await;
     }
     let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
         Ok(s) => s,
-        Err(why) => return finish(&state, &d, &specialist, Err(why), carried_on, None).await,
+        Err(why) => return finish(&state, &d, &specialist, Err(why), carried_on, None, None).await,
     };
+    // 32m: this run's replies are the ones saved after this, for the account switch on its result
+    let mark = thread_mark(&state, &d.thread_id).await;
     // Queued until the specialist's turn gets its slot: a busy specialist runs one turn at a time
     let (started_state, started_id) = (state.clone(), d.id.clone());
     let on_started = Box::pin(async move {
@@ -640,7 +673,11 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
             return;
         }
     }
-    finish(&state, &d, &specialist, outcome, carried_on, Some(&reporting.token)).await;
+    let failover = match &outcome {
+        Ok(_) => last_switch(&state, &d.thread_id, &specialist.name, mark.as_deref()).await,
+        Err(_) => None,
+    };
+    finish(&state, &d, &specialist, outcome, carried_on, Some(&reporting.token), failover).await;
 }
 
 /// How [`run`] runs a delegation's task.
@@ -762,6 +799,8 @@ pub(super) fn report_text(title: &str, outcome: &Result<String, String>) -> Stri
 /// Ends `d` with `outcome`: the result in the origin chat, then the lead (with its batch, or on
 /// its own when the person sent the task back: `carried_on`). `stop` is the token of the job that
 /// holds the origin chat meanwhile (see `run`): a Stop on that chat skips the lead's resume.
+/// `failover`: the account switch of the specialist's run (see [`last_switch`]), shown on the
+/// result card as `meta.failover`.
 async fn finish(
     state: &AppState,
     d: &Delegation,
@@ -769,6 +808,7 @@ async fn finish(
     outcome: Result<String, String>,
     carried_on: bool,
     stop: Option<&CancellationToken>,
+    failover: Option<Value>,
 ) {
     let (status, error) = ended_as(&outcome);
     // Someone may have cancelled it meanwhile; then the cancel already reported it
@@ -779,7 +819,11 @@ async fn finish(
         return;
     };
     let text = report_text(&done.title, &outcome);
-    let result_id = post_to_origin(state, &done, "kwant", &specialist.name, text, meta("delegation_result", &done, &specialist.name)).await;
+    let mut m = meta("delegation_result", &done, &specialist.name);
+    if let (Ok(_), Some(f)) = (&outcome, failover) {
+        m["failover"] = f;
+    }
+    let result_id = post_to_origin(state, &done, "kwant", &specialist.name, text, m).await;
     if let Some(id) = &result_id {
         let _ = state.db.set_delegation_result_message(&done.id, id).await;
     }
@@ -993,12 +1037,17 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
             Ok(s) => s,
             Err(_) => return,
         };
+        let mark = thread_mark(&state, &d.thread_id).await;
         let outcome = try_kwant_turn(&scope, &specialist, prompt, TurnOpts::default()).await;
         let outcome = continue_once_if_capped(&scope, &specialist, outcome, None).await;
         let stopped = job.token.is_cancelled();
         // Busy until the result is posted and the lead's own job took over, as in `run`
         let reporting = state.turns.start_job([d.id.clone(), d.origin_context().unwrap_or(&d.lead_kwant_id).to_string()]);
         drop(job);
+        let failover = match &outcome {
+            Ok(_) => last_switch(&state, &d.thread_id, &specialist.name, mark.as_deref()).await,
+            Err(_) => None,
+        };
         let reply = match outcome {
             Ok(reply) => reply,
             // A failed turn already said why in the thread; a stopped one was the person's choice
@@ -1008,6 +1057,9 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
         let text = result_text(&reply);
         let mut m = meta("delegation_result", &d, &specialist.name);
         m["late"] = json!(true);
+        if let Some(f) = failover {
+            m["failover"] = f;
+        }
         if let Some(id) = post_to_origin(&state, &d, "kwant", &specialist.name, text, m).await {
             let _ = state.db.set_delegation_result_message(&d.id, &id).await;
         }
