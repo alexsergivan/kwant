@@ -161,7 +161,7 @@ import {
   questionsApi,
   turnsAwaitingAnswer,
 } from './questions';
-import { AwayError, AwayItem, affectsAway, awayApi, resolveBody } from './away';
+import { AwayError, AwayItem, affectsAway, awayApi, clearAnswered, resolveBody } from './away';
 import { asksHere, closedId, onlyLiveApproval, stripHasLiveApproval, isHandOff, dismissKind, dropClosed, loadAskWindow, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
 import { NeedsYouStrip } from './components/NeedsYouStrip';
 import { chainBudgetApi } from './chainBudget';
@@ -353,6 +353,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [routingState, setRoutingState] = useState<RoutingState | null>(null);
   const routingStartedAtRef = useRef<number>(0);
   const discussionInProgressRef = useRef(false);
+  // 32g: counts handoffs, so only the newest one's reload swaps the speaker.
+  const handoffRef = useRef(0);
   const kwantsRef = useRef<Kwant[]>(kwants);
   kwantsRef.current = kwants;
   const channelsRef = useRef<Channel[]>(channels);
@@ -1700,6 +1702,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'discussion_started':
           case 'DiscussionStarted': {
             discussionInProgressRef.current = true;
+            handoffRef.current += 1; // 32g: a handoff still waiting on its reload belongs to the run before
             const teamId = event.data?.team_id;
             const initialSpeakerId = event.data?.speakers?.[0];
             const initialSpeakerName =
@@ -1728,25 +1731,33 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'DiscussionTurnStarted': {
             discussionInProgressRef.current = true;
             const spkName = event.data?.speaker_name;
-            setDiscussionState((prev) => ({
-              ...prev,
-              inProgress: true,
-              currentSpeaker: spkName,
-              askedBy: event.data?.asked_by,
-              phase: event.data?.phase,
-              currentTurn: event.data?.turn_index,
-              totalTurns: event.data?.total_turns ?? prev.totalTurns,
-            }));
-            const targetId = streamingContextIdRef.current || selectedIdRef.current;
-            if (targetId) {
-              refreshContext(targetId).then(() => {
+            // 32g: the new speaker's name (live card and Handoff band) and the cleared text land in one render, after the
+            // reload that brings the previous reply in, so B's name never shows over A's words. A failed reload swaps too;
+            // an older handoff whose reload lands after a newer one's (A to B to C) changes nothing.
+            const handoff = ++handoffRef.current;
+            const swap = () => {
+              if (handoff !== handoffRef.current || !discussionInProgressRef.current) return;
+              flushSync(() => {
+                setDiscussionState((prev) => ({
+                  ...prev,
+                  inProgress: true,
+                  currentSpeaker: spkName,
+                  askedBy: event.data?.asked_by,
+                  phase: event.data?.phase,
+                  currentTurn: event.data?.turn_index,
+                  totalTurns: event.data?.total_turns ?? prev.totalTurns,
+                }));
+                if (!targetId) return;
                 streamsRef.current[targetId] = { text: '', thinking: '' };
                 if (openCtxRef.current === targetId) {
                   streamStore.show({ text: '', thinking: '' });
                 }
+                markLive(targetId, spkName);
               });
-              markLive(targetId, spkName);
-            }
+            };
+            const targetId = streamingContextIdRef.current || selectedIdRef.current;
+            if (targetId) refreshContext(targetId).then(swap, swap);
+            else swap();
             break;
           }
           case 'discussion_completed':
@@ -2131,6 +2142,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       if (res.ok || res.status === 409 || res.status === 404) {
         const card = pendingApprovals.find((a) => a.id === ticketId);
         dropApproval(ticketId);
+        // 31y: its "Needs you" strip and sidebar row go with the card, not on the refetch.
+        setClearedAsks((prev) => clearAnswered(prev, ticketId));
         if (!res.ok) pushToast('This request expired', 'The bot is no longer waiting for this answer.');
         else if (card?.waiting && decision !== 'deny') {
           const bot = typeof card.details.kwant_name === 'string' ? card.details.kwant_name : null;

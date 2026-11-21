@@ -41,12 +41,16 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
 
   // 31s: "copied" is the 2 s result window; copyFailed says the clipboard refused (or there is none).
   const [copyFailed, setCopyFailed] = useState(false);
+  // 31u: one 2 s window per block. A new click restarts it, and unmount clears it.
+  const copyTimer = React.useRef<ReturnType<typeof setTimeout>>();
+  React.useEffect(() => () => clearTimeout(copyTimer.current), []);
   const handleCopy = async () => {
     const ok = await copyText(value);
     setCopyFailed(!ok);
     setCopied(true);
     if (ok) playSfx('click');
-    setTimeout(() => setCopied(false), 2000);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -59,7 +63,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
         <button
           type="button"
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-0.5 sm:py-1.5 sm:-my-1 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors cursor-pointer"
+          className="flex items-center gap-1 px-2 py-0.5 sm:py-1.5 sm:-my-1 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 cursor-pointer"
           title="Copy code"
         >
           {copied && !copyFailed ? (
