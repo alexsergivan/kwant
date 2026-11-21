@@ -149,27 +149,37 @@ pub async fn put_token(State(state): State<AppState>, headers: HeaderMap, Scope(
         Err(api::TgError::TooMany { .. }) => return fail(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Telegram asked kwant to slow down. Try again in a minute."),
         Err(_) => return fail(StatusCode::BAD_GATEWAY, "telegram_unreachable", "kwant couldn't reach Telegram. Check the connection and try again."),
     };
+    let before = state.db.telegram_link(&space).await.ok().flatten();
+    let same_bot = before.as_ref().is_some_and(|l| l.bot_id == Some(bot.id));
+    // Another bot: the old one's token, read before the vault's copy is replaced, only to take the
+    // buttons off the cards it sent (31v). Not for a token Telegram already rejected
+    let old_token = match &before {
+        Some(l) if !same_bot && l.bot_id.is_some() && l.state != db::REJECTED => super::load_token(&state, &space).await.ok().flatten(),
+        _ => None,
+    };
     if let Err(e) = super::save_token(&state, &space, &token).await {
         return vault_error(e);
     }
-    let before = state.db.telegram_link(&space).await.ok().flatten();
-    let same_bot = before.as_ref().is_some_and(|l| l.bot_id == Some(bot.id));
     let r = if same_bot {
         let l = before.as_ref().expect("checked");
         let next = if l.user_id.is_some() && l.chat_id.is_some() { db::PAIRED } else { db::TOKEN_SAVED };
-        state.db.telegram_set_state(&space, next, None).await
+        state.db.telegram_set_state(&space, next, None).await.map(|_| Vec::new())
     } else {
         // Telegram keeps a token for each bot; the old bot's token is no longer kwant's to keep
         state.db.telegram_save_bot(&space, bot.id, &bot.username, &bot.name).await
     };
-    if let Err(e) = r {
-        return db_error(e);
-    }
+    let closed = match r {
+        Ok(closed) => closed,
+        Err(e) => return db_error(e),
+    };
     if app_url.is_some() {
         let _ = state.db.telegram_set_app_url(&space, app_url.as_deref()).await;
     }
     super::ensure_running(&state).await;
     super::start(&state, &space, token);
+    if let Some(old) = old_token {
+        bridge::old_bot_cards(&state, &space, old, closed);
+    }
     emit_status(&state, &space);
     Json(view(&state, &space).await).into_response()
 }
