@@ -314,3 +314,38 @@ test('a wide line chart keeps 8 px before its end-anchored last date, dropping t
   assert.equal((await xAxisAt(weekly(8, 'bar'), 786)).at.length, 8, 'bars at 1280: every bar named');
   assert.equal((await xAxisAt(weekly(8, 'bar'), 358)).at.length, 8, 'bars at 390: every bar named');
 });
+
+// 32c chart-middle-labels-fit: the wide cadence ceil(n / 10) ignored how wide a date is, so between 480 and ~760 px
+// the middle labels overlapped (10 points at 640 px: a 64 px step for a ~70 px date). Every drawn neighbour pair keeps
+// at least 8 px, with the same ~7 px per character estimate as 32b: middle-anchored labels, the last end-anchored.
+function drawnGaps(block, width, at) {
+  const n = block.points.length;
+  const step = (width - 44 - 16) / (n - 1);
+  const box = (i) => {
+    const w = block.points[i].x.length * CHAR_W;
+    const x = 44 + i * step;
+    return i === n - 1 ? [x - w, x] : [x - w / 2, x + w / 2];
+  };
+  return at.slice(1).map((v, k) => box(v)[0] - box(at[k])[1]);
+}
+test('a wide line chart never draws two date labels closer than 8 px, 480 to 760 px wide (32c)', async () => {
+  const bad = [];
+  for (const width of [480, 560, 640, 720, 760]) {
+    for (let n = 6; n <= 20; n++) {
+      const b = weekly(n);
+      const { at } = await xAxisAt(b, width);
+      const gaps = drawnGaps(b, width, at);
+      if (Math.min(...gaps) < 8) bad.push(`${width} px n=${n}: ${at.join(',')} gaps ${gaps.map((g) => g.toFixed(0)).join('/')}`);
+      if (at[0] !== 0 || at.at(-1) !== n - 1) bad.push(`${width} px n=${n}: first and last must stay, got ${at.join(',')}`);
+    }
+  }
+  assert.deepEqual(bad, [], bad.join('\n'));
+});
+test('phones and 1280 keep their labels where they already fit (32c)', async () => {
+  // 390 (358 px chart): 31m cadence and 31t MM-DD, untouched by the wide rule.
+  const narrow = { 6: [0, 2, 5], 8: [0, 2, 4, 7], 9: [0, 3, 8], 12: [0, 3, 6, 11], 16: [0, 4, 8, 15], 20: [0, 5, 10, 19] };
+  for (const [n, at] of Object.entries(narrow)) assert.deepEqual((await xAxisAt(weekly(+n), 358)).at, at, `390 n=${n}`);
+  // 1280 (786 px chart): every point up to 10 (32b drops the one before a crowded last), then every other one.
+  const wide = { 5: [0, 1, 2, 3, 4], 8: [0, 1, 2, 3, 4, 5, 7], 10: [0, 1, 2, 3, 4, 5, 6, 7, 9], 12: [0, 2, 4, 6, 8, 11], 16: [0, 2, 4, 6, 8, 10, 12, 15] };
+  for (const [n, at] of Object.entries(wide)) assert.deepEqual((await xAxisAt(weekly(+n), 786)).at, at, `1280 n=${n}`);
+});
