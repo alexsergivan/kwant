@@ -48,7 +48,8 @@ test('a different speaker draws a different bot (team discussions follow the cur
 test('the scene replaces the grey lines; the first words keep its height and fade in once', () => {
   assert.doesNotMatch(chat, /kws-skel|Waiting for the first words/);
   // 15a: the live reply renders through StreamMarkdown (a block at a time), with the same cleaned text.
-  assert.match(chat, /<div className="kw-wa-in kw-wa-hold">\s+<StreamMarkdown content=\{hideStreamingDecisions\(stripDiscussionMarkers\(streamingText\)\)\} \/>/);
+  assert.match(chat, /const shownWords = \(text: string\): string => hideStreamingDecisions\(stripDiscussionMarkers\(text\)\);/);
+  assert.match(chat, /<div className="kw-wa-in kw-wa-hold">\s+<StreamMarkdown content=\{shownWords\(streamingText\)\} \/>/);
   assert.match(css, /\.kw-wa-hold \{ min-height: 62px; \}/);
   assert.match(css, /\.kw-wa \{[^}]*height: 62px;/);
   assert.match(css, /\.kw-wa-scene \{[^}]*flex: none;[^}]*height: 54px;/);
@@ -76,8 +77,8 @@ test('motion is CSS keyframes on transform and opacity only, no JS timers, a 2.4
 });
 
 test('reduced motion stops every animation and leaves the still frame (lines shown, spark hidden, dots "…")', () => {
-  const rm = css.match(/@media \(prefers-reduced-motion: reduce\) \{\s+\.kw-wa, \.kw-wa-in, \.kw-wa-scene \*, \.kw-wa-dots > \* \{ animation: none !important; \}\s+\.kw-wa-dots > \* \{ opacity: 0\.8; \}\s+\}/);
-  assert.ok(rm, 'reduced-motion block covers the wrapper, the fade, every scene part and the dots');
+  const rm = css.match(/@media \(prefers-reduced-motion: reduce\) \{\s+\.kw-wa, \.kw-wa-in, \.kw-live-in, \.kw-wa-scene \*, \.kw-wa-dots > \* \{ animation: none !important; \}\s+\.kw-wa-dots > \* \{ opacity: 0\.8; \}\s+\}/);
+  assert.ok(rm, 'reduced-motion block covers the wrapper, the fades (32e: the bubble too), every scene part and the dots');
   assert.match(css, /\.kw-wa-spark rect \{ opacity: 0; \}/);
   const html = scene('Writer');
   for (const w of [11, 9, 6]) assert.match(html, new RegExp(`class="kw-wa-l kw-wa-l\\d" x="19" y="\\d+" width="${w}"`), `line of ${w} cells drawn at rest`);
