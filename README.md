@@ -83,6 +83,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.32.** **Point stays out of the way**: its hover tag no longer covers the Point bar, and Point turns off once you send your picks.
 - **New in 0.9.33.** **"Needs you" means it**: the sidebar says "Needs you" only when a bot asks, approves or failed, and a routine run counts once in the Inbox.
 - **New in 0.9.34.** **Long logs fold**: a code block or log over 20 lines shows 16 with a "Show all" button, and Copy still copies it all. **Shared files preview again**: a CSV or text file a bot shares shows its table or text in the chat, not only a download button.
+- **New in 0.9.35.** **Copy tells you when it fails**: a blocked clipboard shows "Couldn't copy" instead of "Copied". **Unpair clears Telegram buttons**: cards already in the chat lose their buttons when you unpair.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 
