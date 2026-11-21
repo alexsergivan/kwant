@@ -27,21 +27,15 @@ pub(crate) async fn output(cmd: &mut tokio::process::Command) -> io::Result<Outp
     }
 }
 
-/// `cmd.output()` (blocking), with the helper held by kwnt's helper job on Windows. As with
-/// `output()`, stdin is null and stdout and stderr are captured.
+/// `cmd.output()` (blocking), with the helper held by kwnt's helper job. As with `output()`, stdin
+/// is null and stdout and stderr are captured. Windows only: its one caller is the `where` lookup.
+#[cfg(windows)]
 pub(crate) fn output_blocking(cmd: &mut std::process::Command) -> io::Result<Output> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawHandle;
-        use std::process::Stdio;
-        let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-        crate::drivers::win_job::hold_helper(child.as_raw_handle());
-        child.wait_with_output()
-    }
-    #[cfg(not(windows))]
-    {
-        cmd.output()
-    }
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Stdio;
+    let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    crate::drivers::win_job::hold_helper(child.as_raw_handle());
+    child.wait_with_output()
 }
 
 /// `cmd.status()` (blocking), with the helper held by kwnt's helper job on Windows. The stdio
@@ -84,10 +78,13 @@ mod tests {
     #[test]
     fn the_blocking_ones_match_output_and_status() {
         let (program, args) = echo_hi();
-        let out = output_blocking(std::process::Command::new(program).args(&args)).unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hi");
-        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "err");
-        assert_eq!(out.status.code(), Some(3));
+        #[cfg(windows)]
+        {
+            let out = output_blocking(std::process::Command::new(program).args(&args)).unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hi");
+            assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "err");
+            assert_eq!(out.status.code(), Some(3));
+        }
         let status = status_blocking(
             std::process::Command::new(program).args(&args).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()),
         )
