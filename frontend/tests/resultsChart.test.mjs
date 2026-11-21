@@ -174,3 +174,59 @@ for (const width of [300, 270]) {
     }
   });
 }
+
+// 31m chart-last-label-fits: on a phone, a line chart's off-cadence last label printed right after the regular one
+// ("2026-10-1926…"). Labels render at the card's measured width, so stub the measurement for narrow and wide.
+async function xLabelsAt(block, width) {
+  const cw = Object.getOwnPropertyDescriptor(dom.window.HTMLElement.prototype, 'clientWidth');
+  const hadRO = 'ResizeObserver' in globalThis;
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width });
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  try {
+    const host = await mount(block);
+    const xs = block.points.map((p) => p.x);
+    return [...host.querySelectorAll('svg[role="img"] text.fill-zinc-400')].map((t) => xs.indexOf(t.textContent));
+  } finally {
+    if (cw) Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', cw);
+    else delete dom.window.HTMLElement.prototype.clientWidth;
+    if (!hadRO) delete globalThis.ResizeObserver;
+  }
+}
+const weekly = (n, kind = 'line') => ({
+  ...lineBlock(),
+  id: `b-weekly-${kind}-${n}`,
+  chart_kind: kind,
+  x: { label: 'Week', kind: kind === 'line' ? 'time' : 'category' },
+  series: [{ key: 'orders', label: 'Orders', unit: null }],
+  points: Array.from({ length: n }, (_, i) => {
+    const d = new Date(Date.UTC(2026, 8, 7 + 7 * i)).toISOString().slice(0, 10);
+    return { id: `w${i}`, x: d, cells: [String(10 + i)], values: [10 + i] };
+  }),
+});
+
+test('a line chart labels the last point and never prints two dates on top of each other (31m)', async () => {
+  const expected = {
+    narrow: { 5: [0, 2, 4], 7: [0, 2, 4, 6], 8: [0, 2, 4, 7], 9: [0, 3, 8], 12: [0, 3, 6, 11] },
+    wide: { 5: [0, 1, 2, 3, 4], 7: [0, 1, 2, 3, 4, 5, 6], 8: [0, 1, 2, 3, 4, 5, 6, 7], 9: [0, 1, 2, 3, 4, 5, 6, 7, 8], 12: [0, 2, 4, 6, 8, 11] },
+  };
+  for (const [size, width] of [['narrow', 358], ['wide', 640]]) {
+    for (const n of [5, 7, 8, 9, 12]) {
+      const at = await xLabelsAt(weekly(n), width);
+      const what = `${size} n=${n}: ${at.join(',')}`;
+      assert.deepEqual(at, expected[size][n], what);
+      assert.equal(at.at(-1), n - 1, `last point labelled, ${what}`);
+      assert.ok(!at.includes(-1), `every label is a whole date, ${what}`);
+      // Thinned labels keep at least 2 steps between neighbours; unthinned (wide, n <= 10) keep every point.
+      const minGap = Math.min(...at.slice(1).map((v, k) => v - at[k]));
+      if (size === 'narrow' || n > 10) assert.ok(minGap >= 2, `neighbours >= 2 steps apart, ${what}`);
+      else assert.equal(at.length, n, `wide n<=10 labels every point, ${what}`);
+    }
+  }
+});
+
+test('bar labels stay as they were: 5 to 9 bars at a phone width name every bar (31m)', async () => {
+  for (const n of [5, 7, 8, 9]) {
+    const at = await xLabelsAt(weekly(n, 'bar'), 358);
+    assert.equal(at.length, n, `n=${n}`);
+  }
+});
