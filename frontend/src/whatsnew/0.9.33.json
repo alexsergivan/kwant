@@ -1,0 +1,32 @@
+{
+  "version": "0.9.33",
+  "date": "2026-11-20",
+  "highlights": [
+    {
+      "id": "needs-you-real-asks",
+      "title": "\"Needs you\" means a bot is waiting on you",
+      "text": "The sidebar says \"Needs you\" only for a question, an approval or a failed run. Finished work, like a routine run, shows as \"New\" in grey.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "inbox-count-once",
+      "title": "A routine run counts once",
+      "text": "A finished routine run and its review item now count as one, so the sidebar, the Inbox page and the phone tab bar show the same number.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Drafting a goal no longer stops on a hidden \"Allow once\" card: the draft shows on the Mission board.",
+    "On a phone, the idle browser pane now says to ask a bot or use Take over, not to enter a URL above.",
+    "Settings › Apps & accounts no longer says \"1 needs you\" for a signed-out account that no bot uses.",
+    "The Inbox count turns amber only when a bot is waiting on you, and the sidebar highlights only the page you have open.",
+    "Draft goal cards on the Mission board show their whole title, and the \"Waiting on you\" tile no longer cuts its label.",
+    "A routine card says \"Running\" once while it runs, and Run now shows its icon on a phone.",
+    "New space no longer offers a \"Copy bots · Coming soon\" choice you can't pick.",
+    "Answering a card the instant it appears now reaches the bot instead of saying it expired.",
+    "A Telegram approval or question that closes while it's still being sent now says so, instead of keeping live buttons.",
+    "With many bots browsing at once, the browser closes the oldest idle bot page to make room, or says plainly that it's full."
+  ]
+}

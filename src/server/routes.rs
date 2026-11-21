@@ -6149,6 +6149,9 @@ pub enum PageRefusal {
     PagesFull,
     /// VM mode: the browser is there but didn't answer in time (overloaded). Temporary.
     Busy,
+    /// The browser holds as many pages as its process limit allows and every one is held or in
+    /// use (31b, [`super::browser_pages::PAGE_PID_BUDGET`]).
+    BrowserFull,
 }
 
 /// The page's controller for a bot's browser call: like [`get_or_create_browser_controller`],
@@ -6208,11 +6211,18 @@ pub(crate) fn page_refused(state: &AppState, refusal: PageRefusal) -> (StatusCod
             "code": PAGES_FULL,
             "is_running": true,
         }))),
+        PageRefusal::BrowserFull => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
+            "error": super::browser_pages::browser_full_message(),
+            "code": BROWSER_FULL,
+            "is_running": true,
+        }))),
     }
 }
 
 /// The `code` of a call refused because every job page of the team is in use.
 pub const PAGES_FULL: &str = "PAGES_FULL";
+/// The `code` of a call refused because the browser is full (31b).
+pub const BROWSER_FULL: &str = "BROWSER_FULL";
 
 /// Opens (or returns) a page's controller. A job page that isn't open yet is made room for and
 /// opened under its team's lock, so two jobs opening at once never pass the cap; with no room it
@@ -6243,18 +6253,36 @@ pub async fn open_page(
     loop {
         let lock = state.job_pages.team_lock(&team);
         let opening = lock.lock().await;
+        // 31b: then the whole browser's, so two teams opening at once never pass its process
+        // budget together (always after a team's lock; other teams' locks are only tried)
+        let room_lock = state.job_pages.room_lock();
+        let room = room_lock.lock().await;
         let open = state.browser_controllers.lock().await.contains_key(key);
-        if open || super::browser_pages::make_room(state, &team, key).await {
+        let refusal = if open {
+            None
+        } else if !super::browser_pages::make_room(state, &team, key).await {
+            Some(PageRefusal::PagesFull)
+        } else if !super::browser_pages::make_browser_room(state, key).await {
+            Some(PageRefusal::BrowserFull)
+        } else {
+            None
+        };
+        let Some(refusal) = refusal else {
             state.browser_service.touch_page(key);
             let ctrl = controller_for(state, key, &team).await;
+            drop(room);
             drop(opening);
             return ctrl.map_err(refusal_for);
-        }
+        };
+        drop(room);
         drop(opening);
         let now = std::time::Instant::now();
         if now >= deadline {
-            tracing::warn!(page = %key, "every job page of this team is held or in use; no room for another");
-            return Err(PageRefusal::PagesFull);
+            match refusal {
+                PageRefusal::BrowserFull => tracing::warn!(page = %key, "the browser is full: every page is held or in use; no room for another"),
+                _ => tracing::warn!(page = %key, "every job page of this team is held or in use; no room for another"),
+            }
+            return Err(refusal);
         }
         tokio::time::sleep((deadline - now).min(std::time::Duration::from_secs(1))).await;
     }

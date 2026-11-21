@@ -394,22 +394,8 @@ async fn approve_local_shell_with(
         }
         return true;
     }
-    let ticket = match state
-        .db
-        .save_approval(&NewApproval {
-            turn_id: String::new(),
-            kwant_id: target_id.to_string(),
-            tool_name: "execute_shell".into(),
-            parameters: details.clone(),
-        })
-        .await
-    {
-        Ok(a) => a.id,
-        Err(e) => {
-            tracing::warn!(error = %e, "could not store local shell approval; denying");
-            return false;
-        }
-    };
+    // 31k: the waiter first, then the row, so a listed card is always answerable
+    let ticket = uuid::Uuid::new_v4().to_string();
     let rx = state
         .broker
         .request_approval(ApprovalRequest {
@@ -419,6 +405,25 @@ async fn approve_local_shell_with(
             details: details.clone(),
         })
         .await;
+    let saved = state
+        .db
+        .save_approval_with_id(
+            &ticket,
+            &NewApproval {
+                turn_id: String::new(),
+                kwant_id: target_id.to_string(),
+                tool_name: "execute_shell".into(),
+                parameters: details.clone(),
+            },
+            None,
+        )
+        .await;
+    if let Err(e) = saved {
+        state.broker.cancel(&ticket).await;
+        tracing::warn!(error = %e, "could not store local shell approval; denying");
+        return false;
+    }
+    super::mcp_runtime::card_listed(target_id).await;
     let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
         id: ticket.clone(),
         tool_name: "execute_shell".into(),

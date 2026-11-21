@@ -6,14 +6,14 @@ export interface PhoneTabItem<T extends string> {
   label: string;
   icon: React.ReactNode;
   badge?: number;
-  /** amber = needs you (Inbox); violet = an offer, like the Idea jar's ready takes. */
-  badgeTone?: 'amber' | 'violet';
+  /** amber = needs you (Inbox); violet = an offer, like the Idea jar's ready takes; neutral = new, nothing to do (31c). */
+  badgeTone?: 'amber' | 'violet' | 'neutral';
   /** What the count means, for the aria-label: "Inbox, 2 waiting" / "Jar, 2 takes ready". */
   badgeNoun?: string;
 }
 
 /** The phone's bottom tab bar (spec A6): 56px plus the home-indicator inset, the app's own violet
- *  palette, a 24×3 bar over the active tab and an 18px amber count on the icon's top-right. */
+ *  palette, a 24×3 bar over the active tab and an 18px count (amber only for a real ask) on the icon's top-right. */
 export function PhoneTabBar<T extends string>({
   label,
   tabs,
@@ -62,7 +62,9 @@ export function PhoneTabBar<T extends string>({
                   className={`absolute top-[-4px] left-[10px] h-[18px] min-w-[18px] px-1 rounded-full ${
                     t.badgeTone === 'violet'
                       ? 'bg-[#8b7bff] text-white text-[11px] leading-[18px] font-semibold text-center ring-2 ring-[#0e0a21]'
-                      : 'bg-[#fcd34d] text-[#1b1033] text-[11px] leading-[18px] font-semibold text-center'
+                      : t.badgeTone === 'neutral'
+                        ? 'bg-zinc-600 text-zinc-50 text-[11px] leading-[18px] font-semibold text-center'
+                        : 'bg-[#fcd34d] text-[#1b1033] text-[11px] leading-[18px] font-semibold text-center'
                   }`}
                 >
                   {badgeText(t.badge)}
