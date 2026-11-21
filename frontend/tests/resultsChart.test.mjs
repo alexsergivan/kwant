@@ -214,8 +214,8 @@ test('a line chart labels the last point and never prints two dates on top of ea
   const expected = {
     narrow: { 5: [0, 2, 4], 7: [0, 2, 4, 6], 8: [0, 2, 4, 7], 9: [0, 3, 8], 12: [0, 3, 6, 11] },
     // 32b: at 640 px a 7 to 9 point line labels every point, so the end-anchored last date crowds the one before it,
-    // which goes.
-    wide: { 5: [0, 1, 2, 3, 4], 7: [0, 1, 2, 3, 4, 6], 8: [0, 1, 2, 3, 4, 5, 7], 9: [0, 1, 2, 3, 4, 5, 6, 8], 12: [0, 2, 4, 6, 8, 11] },
+    // which goes. 32c: 9 points leave a 72 px step for a ~70 px date, so they step by 2 like 12 do.
+    wide: { 5: [0, 1, 2, 3, 4], 7: [0, 1, 2, 3, 4, 6], 8: [0, 1, 2, 3, 4, 5, 7], 9: [0, 2, 4, 6, 8], 12: [0, 2, 4, 6, 8, 11] },
   };
   for (const [size, width] of [['narrow', 358], ['wide', 640]]) {
     for (const n of [5, 7, 8, 9, 12]) {
@@ -224,11 +224,11 @@ test('a line chart labels the last point and never prints two dates on top of ea
       assert.deepEqual(at, expected[size][n], what);
       assert.equal(at.at(-1), n - 1, `last point labelled, ${what}`);
       assert.ok(!at.includes(-1), `every label names a whole point, ${what}`);
-      // Thinned labels keep at least 2 steps between neighbours; unthinned (wide, n <= 10) keep every point but,
-      // when crowded, the one before the last (32b).
+      // Thinned labels keep at least 2 steps between neighbours; unthinned (wide, n <= 8 at 640 px, 32c) keep every
+      // point but, when crowded, the one before the last (32b).
       const minGap = Math.min(...at.slice(1).map((v, k) => v - at[k]));
-      if (size === 'narrow' || n > 10) assert.ok(minGap >= 2, `neighbours >= 2 steps apart, ${what}`);
-      else assert.ok(at.length >= n - 1 && at.every((v, k) => v === k || k === at.length - 1), `wide n<=10 labels every point up to the last, ${what}`);
+      if (size === 'narrow' || n > 8) assert.ok(minGap >= 2, `neighbours >= 2 steps apart, ${what}`);
+      else assert.ok(at.length >= n - 1 && at.every((v, k) => v === k || k === at.length - 1), `wide n<=8 labels every point up to the last, ${what}`);
     }
   }
 });
