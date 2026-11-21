@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- Answering an approval in the chat clears its "needs you" bar and sidebar row right away (#947)
+
 ## [Mac 0.9.33] - 2026-11-20
 
 kwant 0.9.33: a sidebar that says "Needs you" only when a bot is waiting on you, and an Inbox count that counts a routine run once, goal drafts that reach the Mission board without a hidden card, a phone browser pane that points at Take over, a Settings "needs you" count that ignores unused accounts, a grey Inbox badge until a bot needs you, draft goal cards and board tiles that show their whole text, routine cards that say "Running" once while a run goes, a New space form without a choice you can't pick, cards you can answer the moment they appear, Telegram cards that close cleanly even while they are being sent and a browser that makes room for new pages instead of failing.
