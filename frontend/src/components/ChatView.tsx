@@ -122,6 +122,7 @@ import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageRe
 import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, useDictation } from './DictationMic';
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
 import type { FloorResolveOpts } from '../dev/types';
+import { useAfterRender } from '../focusAfterRender';
 
 export interface ChatMessage {
   id: string;
@@ -919,6 +920,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (isMentionOpen) markNewSeen('mention');
   }, [isMentionOpen]);
 
+  const afterRender = useAfterRender();
   const handleSelectMention = (item: MentionItem) => {
     if (mentionStartIndex < 0) return;
     const cursorPos = textareaRef.current?.selectionStart ?? inputVal.length;
@@ -932,14 +934,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setMentionStartIndex(-1);
 
     const nextCursor = mentionStartIndex + mentionText.length;
-    setTimeout(() => {
+    // After the render that shows the new text, so the caret and the height are set on it.
+    afterRender(() => {
       if (textareaRef.current) {
         textareaRef.current.focus();
         textareaRef.current.setSelectionRange(nextCursor, nextCursor);
         textareaRef.current.style.height = 'auto';
         textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
       }
-    }, 0);
+    });
   };
 
   // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.
@@ -1122,12 +1125,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
   // 22i: a Needs-attention landing ('ask') is the same amber flash as search, tagged so tests tell them apart.
   const [flashKind, setFlashKind] = useState<'search' | 'quote' | 'ask'>('search');
-  // 30n: a second "Go to the approval" (or search hit) on what is already flashing restarts the ring and its 2.4 s,
-  // like the quote jump: clear the flash, then set it again. Setting the same id again would change nothing. The
-  // second step waits for the cleared flash to commit, then two frames, so the browser draws a frame without
+  // 30n: a second "Go to the approval" (or search hit) on what is already flashing restarts the ring and its 2.4 s;
+  // 30q: so does a second quote jump (1.6 s). Clear the flash, then set it again. Setting the same id again would
+  // change nothing. The second step waits for the cleared flash to commit, then two frames, so the browser draws a frame without
   // kw-flash and the CSS animation starts over (rAFs queued at once can both run before React commits the null).
   const [flashNext, setFlashNext] = useState<string | null>(null);
-  const restartFlash = (id: string, kind: 'search' | 'ask') => {
+  const restartFlash = (id: string, kind: 'search' | 'quote' | 'ask') => {
     setFlashId(null);
     setFlashKind(kind);
     setFlashNext(id);
@@ -1200,6 +1203,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     if (!focusComposerKey) return;
     // After the new chat's first paint, so its composer is the one that takes focus
+    // Focus on a frame, not after render (kept): an effect after the commit; the composer is already rendered and the frame is cancelled on cleanup
     const raf = requestAnimationFrame(() => focusComposer());
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1280,9 +1284,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
     if (el.tabIndex < 0 || el.hasAttribute('tabindex')) el.focus({ preventScroll: true });
-    setFlashId(null);
-    setFlashKind('quote');
-    requestAnimationFrame(() => setFlashId(quoteJump.id));
+    // 30q: same race-free restart as search and approvals, so a second click on a quote always rings again.
+    restartFlash(quoteJump.id, 'quote');
   }, [quoteJump, messages, openThoughts]);
 
   // Thumbs on the bot's newest question are a yes or no; once one has answered it, they're feedback again.
@@ -1389,7 +1392,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   // G3 Point at it: a pick from the browser pane is a composer upload with a `point`
+  // 30o: counts the sent messages that carried a pick; the pane turns Point off when it goes up.
+  const [sentPicks, setSentPicks] = useState(0);
   const pointSink: PointSink = {
+    sentPicks,
     picks: pointPicks(uploads),
     filesLeft: uploadSlotsLeft(uploads),
     start: (label, n, { fromMouse }) => {
@@ -1437,6 +1443,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const slashOpen = !ideaMode && inputVal.length > 0 && inputVal.length < 5 && '/idea'.startsWith(inputVal.toLowerCase()) && !uploads.length;
   const completeIdea = () => {
     setInputVal('/idea ');
+    // Focus on a frame, not after render (kept): only Tab, Enter or a click calls this, and React renders that update before the next frame
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
@@ -1483,7 +1490,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     playSfx('click');
     stickRef.current = true;
     const replying = replyTo;
-    const sent = onSendMessage(inputVal.trim(), readyAttachments(uploads), replying ? { replyTo: replying } : undefined);
+    const refs = readyAttachments(uploads);
+    const sent = onSendMessage(inputVal.trim(), refs, replying ? { replyTo: replying } : undefined);
+    if (refs.some((r) => r.point)) setSentPicks((n) => n + 1);
     setReplyTo(null);
     // A send that fails keeps the reply, unless the person has moved on to another one.
     if (replying && sent && typeof (sent as Promise<unknown>).then === 'function')
@@ -1561,7 +1570,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       const text = (e as CustomEvent<{ text?: unknown }>).detail?.text;
       if (typeof text !== 'string' || !text) return;
       setInputVal((prev) => withPrefill(prev, text));
-      requestAnimationFrame(() => {
+      // After the render that shows the new text: the caret and height need it (the event can come from any caller)
+      afterRender(() => {
         const el = textareaRef.current;
         if (!el) return;
         el.focus();

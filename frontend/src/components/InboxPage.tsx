@@ -58,6 +58,7 @@ export const InboxPage: React.FC<{
                 e.preventDefault();
                 const next = TABS[(TABS.findIndex((x) => x.id === tab) + 1) % TABS.length].id;
                 onTab(next);
+                // Focus on a frame, not after render (kept): an arrow key: React renders the tab change before the next frame, and the tabs are always on screen
                 requestAnimationFrame(() => document.getElementById(`inbox-tab-${next}`)?.focus());
               }}
               tabIndex={on ? 0 : -1}

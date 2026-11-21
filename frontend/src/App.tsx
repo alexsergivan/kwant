@@ -4787,6 +4787,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     </main>
   ) : chat;
 
+  const inboxAsk = realAskCount(attention) > 0;
   const phoneTabs: Array<PhoneTabItem<PhoneTab>> = [
     { id: 'chats', label: 'Chats', icon: <MessageSquare size={20} aria-hidden="true" /> },
     { id: 'bots', label: 'Bots', icon: <Bot size={20} aria-hidden="true" /> },

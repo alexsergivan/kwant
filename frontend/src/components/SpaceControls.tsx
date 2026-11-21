@@ -11,6 +11,7 @@ import { DEV_FEATURES, DEV_GUIDE_URL, EXPLAINER, SUB_ACTION_TEXT, type DevModeSt
 import { approvalsRow, type SpaceApprovals } from '../approvalMode';
 import { DevModeSwitch, useDevMode } from './DevModeSwitch';
 import { backGestureEntry } from './BrowserControlOverlay';
+import { useFocusAfterRender } from '../focusAfterRender';
 
 export interface SpaceControlsProps {
   space: { id: string; name: string; approvals?: SpaceApprovals };
@@ -58,10 +59,14 @@ export const SpaceControls: React.FC<SpaceControlsProps> = ({ space, phone = fal
     return () => window.clearTimeout(t);
   }, [space.id, space.approvals]);
 
-  const close = useCallback((refocus: boolean) => {
-    setOpen(false);
-    if (refocus) setTimeout(() => help.current?.focus(), 0);
-  }, []);
+  const focusAfterRender = useFocusAfterRender();
+  const close = useCallback(
+    (refocus: boolean) => {
+      setOpen(false);
+      if (refocus) focusAfterRender(() => help.current);
+    },
+    [focusAfterRender],
+  );
 
   return (
     <div role="group" aria-label="Space controls" className={`kw-sc${phone ? ' kw-sc-phone' : ''}`} data-space-controls>

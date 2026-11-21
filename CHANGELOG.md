@@ -8,6 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.33] - 2026-11-20
+
+kwant 0.9.33: a sidebar that says "Needs you" only when a bot is waiting on you, and an Inbox count that counts a routine run once, goal drafts that reach the Mission board without a hidden card, a phone browser pane that points at Take over, a Settings "needs you" count that ignores unused accounts, a grey Inbox badge until a bot needs you, draft goal cards and board tiles that show their whole text, routine cards that say "Running" once while a run goes, a New space form without a choice you can't pick, cards you can answer the moment they appear, Telegram cards that close cleanly even while they are being sent and a browser that makes room for new pages instead of failing.
+
+### Changed
+- The sidebar heading says "Needs you" (amber, with the hand) only for a question, an approval or a failed run; when only finished work is waiting it reads "New" in grey with the Inbox icon. A finished routine run that has a review item now counts once, so the sidebar, the Inbox page and the phone tab bar show the same number (#907)
+
+### Fixed
+- Drafting a goal from the Mission board (New goal, Draft checks) no longer stops on an "Allow once" card in the bot's chat that you never saw: the draft now shows on the board, where you approve it. Other changes the bot makes in that turn still ask first (#904)
+- On a phone, the idle browser pane no longer says "Enter a URL above to open a page", since phones have no address bar there: it reads "Ask a bot to open a page, or use Take over below" (or "Ask a bot to open a page" until the Take over button shows). Wide screens are unchanged (#906)
+- Settings › Apps & accounts no longer shows an amber "1 needs you" for a signed-out account that no bot uses. An account counts only when a bot uses it or is pinned to it (or when no account is in use at all), and that account's row says "Used by <bot>" with an amber Sign in (#908)
+- The Inbox count in the sidebar and on a phone's tab bar is amber only when a bot is waiting on you (a question, an approval or a failed run); otherwise it's grey and reads "1 new". With Inbox, the Mission board or another page open, only that page is highlighted in the sidebar, not the last chat as well (#909)
+- On the Mission board, a draft goal's card now spans the row, so its title and "proposed this" line show in full (on a phone the title wraps to two lines). The drafting line no longer ends in a double period, and the "Board tasks waiting on you" tile is now "Waiting on you", which fits instead of being cut off (#914)
+- While a routine runs, its card says "Running" once, in its header: the run's row in History keeps its spinner without repeating the word (screen readers still hear it). On a phone, the Run now button shows its Play icon like History, Edit and Delete (#916)
+- The New space form no longer shows a "Start with" choice whose second option, "Copy bots from another space · Coming soon", could never be picked; on a phone the form now fits without scrolling (#921)
+- Answering a bot's card (Allow or Deny) the instant it appears now reaches the bot: before, the answer could come back "This card expired" while the bot kept waiting for it (#923)
+- A Telegram approval or question that is answered or closed in kwant while it is still being sent now gets its closing line ("Answered in kwant" or "No longer waiting") and loses its buttons, instead of keeping buttons that no longer did anything (#918)
+- With several bots browsing at once, the built-in browser no longer runs out of room and fails with a download that never ends, an empty page or "browser busy": before a bot opens a new page it closes the least recently used idle bot page of any team, and if every page is in use it says plainly that the browser is full. Team pages are never closed (#910)
+
+## [Mac 0.9.32] - 2026-11-20
+
+kwant 0.9.32: a Point bar the hover tag no longer covers, and Point turning off once you send your picks.
+
+### Fixed
+- While Point is on, the tag naming the part under the pointer no longer covers the Point bar: when there is no room above the outline it sits below it, or inside it at the bottom left, so "Click the part you mean" stays readable. Point also turns off once you send a message with picks, and the cursor stays in the message box; a click, Esc and removing picks work as before (#891)
+- Clicking a reply's quote again while the original message is still highlighted now starts the highlight over, so a second click always answers, as it already did for search hits and Go to the approval (#894)
+- Saving App settings › Computer (Run Claude inside the VM, or where bots work) now asks Docker once instead of up to three times, so a save on a slow Docker answers in about 3 s instead of up to 9 s, and Run Claude inside the VM no longer shows as unavailable right after you turn it on (#895)
+- Dev mode's production floor card now moves keyboard focus only after the screen shows its target, so after you save a backup command focus always lands on Back up first (and on the field or button you opened or closed), instead of now and then getting lost on a slow machine (#897)
+- Keyboard focus now waits until the screen shows its target in 14 more places, so after you open a key field, allow approvals from Telegram, pick a mention, dictate or close a popover, focus lands on the right field or button instead of now and then getting lost on a slow machine (#898)
+- After you take back an approval, pause a budget again, cancel a Claude sign-in, remove a coding-agent connection, a file or a hand row, focus now waits for the screen to update before it moves, so it lands on the next button (or Undo) instead of now and then getting lost when the app is busy (#900)
+
 ## [Mac 0.9.31] - 2026-11-20
 
 kwant 0.9.31: an approval card that stays put when Go to the approval flashes it and Details' Ran on keeping its effort on one line.

@@ -2,7 +2,7 @@
 // The rule (modelBadgeFor), the live store (turn_runs_on → turn_ended → last until the list refreshes),
 // and the badge as ModernAvatar draws it: size, tooltip, reduced motion, can't run, and the dev-mode hat.
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
@@ -149,8 +149,24 @@ const root = createRoot(host);
 const draw = (props) => flushSync(() => root.render(h(m.ModernAvatar, { name: 'Ann', role: 'designer', kwantId: 'k1', size: 32, ...props })));
 const badge = () => host.querySelector('[data-model-badge]');
 const marks = () => [...host.querySelectorAll('[data-model-badge] [data-mark]')].map((e) => e.getAttribute('data-mark'));
+// React's scheduler runs on setImmediate, which a mocked clock leaves alone: let it drain without waiting on setTimeout.
+const drain = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
 
-test('a live change: Claude, then Laya picks Grok, then failover to Codex; resting on Codex after', async () => {
+// Each test leaves things as it found them, even when it fails part-way: no avatar drawn (so no half-done fade),
+// no live run, no kept last run, full motion, every engine signed in. A failed test can't leak into the next one.
+afterEach(() => {
+  flushSync(() => root.render(null));
+  flushSync(() => {
+    m.turnEnded('k1');
+    m.forgetLastRuns();
+    m.setBadgeEngines(ENGINES);
+  });
+  reduceMotion = false;
+});
+
+test('a live change: Claude, then Laya picks Grok, then failover to Codex; resting on Codex after', async (t) => {
+  // The 150 ms cross-fade runs on a clock this test moves, so a slow runner can't end it early.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   reduceMotion = false;
   m.setBadgeEngines(ENGINES);
   m.setBadgeBots([{ id: 'k1', preferred_model: 'auto', last_ran_on: run('claude', 'sonnet', 'Sonnet', 'laya') }]);
@@ -165,7 +181,7 @@ test('a live change: Claude, then Laya picks Grok, then failover to Codex; resti
     m.turnStarted('k1', 'turn_1');
     m.turnRunsOn('k1', run('grok', 'grok-4.6', null, 'laya'));
   });
-  await settle();
+  await drain();
   assert.equal(badge().getAttribute('data-model-badge'), 'grok');
   assert.equal(badge().hasAttribute('data-badge-resting'), false);
   assert.equal(host.querySelector('[data-badge-spark]'), null);
@@ -174,16 +190,18 @@ test('a live change: Claude, then Laya picks Grok, then failover to Codex; resti
   assert.deepEqual(marks(), ['claude', 'grok']);
   assert.ok(host.querySelector('.kw-mb-out [data-mark="claude"]'));
   assert.ok(host.querySelector('.kw-mb-in [data-mark="grok"]'));
-  await settle(200);
+  flushSync(() => t.mock.timers.tick(200));
+  await drain();
   assert.deepEqual(marks(), ['grok'], 'the fade is over after 150 ms');
 
   flushSync(() => m.turnRunsOn('k1', run('codex', 'gpt-6.1-sol', 'GPT-6.1 Sol', 'fallback')));
-  await settle();
+  await drain();
   assert.equal(badge().getAttribute('data-model-badge'), 'codex');
   assert.equal(badge().getAttribute('title'), 'Moved to Codex · GPT-6.1 Sol for this reply');
 
   flushSync(() => m.turnEnded('k1', 'turn_1'));
-  await settle(200);
+  flushSync(() => t.mock.timers.tick(200));
+  await drain();
   assert.equal(badge().getAttribute('data-model-badge'), 'codex', 'rests on the engine it ended on');
   assert.ok(badge().hasAttribute('data-badge-resting'));
   assert.equal(badge().getAttribute('title'), 'Laya picks the model. Last reply: Codex · GPT-6.1 Sol');

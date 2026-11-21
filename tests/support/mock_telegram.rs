@@ -20,6 +20,8 @@
 //!   token); a revoked one answers 401.
 //! - [`MockTelegram::fault`] queues error answers for one method of one bot.
 //! - Every call is kept with its JSON body ([`MockTelegram::calls`]).
+//! - [`MockTelegram::hold`] makes the next call of one method with a given text wait until the
+//!   test releases it (a message still on its way to Telegram).
 
 #![allow(dead_code)]
 
@@ -116,6 +118,19 @@ struct BotState {
     updates: VecDeque<Value>,
     calls: Vec<Call>,
     faults: HashMap<String, VecDeque<(u16, Value)>>,
+    /// (method, text it contains, gate): the next such call waits on the gate ([`MockTelegram::hold`]).
+    holds: Vec<(String, String, Arc<tokio::sync::Notify>)>,
+    /// (method, body) of calls waiting on a hold, kept as calls only once released.
+    held: Vec<(String, Value)>,
+}
+
+/// A held call: [`Held::release`] lets it through.
+pub struct Held(Arc<tokio::sync::Notify>);
+
+impl Held {
+    pub fn release(&self) {
+        self.0.notify_one();
+    }
 }
 
 #[derive(Default)]
@@ -175,6 +190,15 @@ async fn handle(State(inner): State<Arc<Inner>>, Path((bot, method)): Path<(Stri
         return reply(tg_error(404, "Not Found"));
     };
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    // A held call waits for the test (seen in `held` meanwhile), then is answered as usual
+    let gate = inner.bots.lock().unwrap().get_mut(&token).and_then(|b| {
+        let i = b.holds.iter().position(|(m, t, _)| *m == method && body["text"].as_str().is_some_and(|x| x.contains(t.as_str())))?;
+        b.held.push((method.clone(), body.clone()));
+        Some(b.holds.remove(i).2)
+    });
+    if let Some(gate) = gate {
+        gate.notified().await;
+    }
     // getUpdates may wait for an update; everything else answers at once
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     loop {
@@ -258,6 +282,29 @@ impl MockTelegram {
             }
             b.faults.entry(method.to_string()).or_default().push_back(f);
         }
+    }
+
+    /// The next call of `method` whose `text` contains `text` waits, unanswered (and not yet in
+    /// [`Self::calls`]), until the returned [`Held`] is released.
+    pub fn hold(&self, bot: &Bot, method: &str, text: &str) -> Held {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        self.inner.bots.lock().unwrap().get_mut(&bot.token).expect("a mock bot").holds.push((method.to_string(), text.to_string(), gate.clone()));
+        Held(gate)
+    }
+
+    /// Waits (up to 60 s) until a call of `method` whose `text` contains `text` is waiting on a
+    /// hold; its body.
+    pub async fn wait_held(&self, bot: &Bot, method: &str, text: &str) -> Value {
+        for _ in 0..600 {
+            let found = self.inner.bots.lock().unwrap().get(&bot.token).and_then(|b| {
+                b.held.iter().find(|(m, body)| m == method && body["text"].as_str().is_some_and(|x| x.contains(text))).map(|(_, body)| body.clone())
+            });
+            if let Some(body) = found {
+                return body;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("no held {method} with {text:?}");
     }
 
     /// Queues an update (its `update_id` is added) and returns the id.

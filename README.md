@@ -80,6 +80,8 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.29.** **An approval asks once**: while a bot's approval card is on screen, the "needs you" bar above the message box steps aside instead of repeating it.
 - **New in 0.9.30.** **Details shows the effort**: a reply made through a CLI no longer shows its "Executed via … CLI" line as reasoning; Details' Ran on row ends with the effort instead.
 - **New in 0.9.31.** **The approval card stays put**: when Go to the approval flashes it, only the amber outline shows; the card no longer jumps. **Ran on keeps the effort together**: on a narrow window, Details' Ran on row keeps "· medium effort" on one line.
+- **New in 0.9.32.** **Point stays out of the way**: its hover tag no longer covers the Point bar, and Point turns off once you send your picks.
+- **New in 0.9.33.** **"Needs you" means it**: the sidebar says "Needs you" only when a bot asks, approves or failed, and a routine run counts once in the Inbox.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 

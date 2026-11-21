@@ -556,6 +556,14 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     setPointing(false);
     pointButton.current?.focus();
   }, []);
+  // 30o: a message with picks went out, so Point turns off; focus stays in the composer (not stopPointing)
+  const sentPicks = point?.sentPicks ?? 0;
+  const lastSentPicks = useRef(sentPicks);
+  useEffect(() => {
+    if (sentPicks === lastSentPicks.current) return;
+    lastSentPicks.current = sentPicks;
+    setPointing(false);
+  }, [sentPicks]);
 
   // 0.9.8 D: a panel the bot opened stays open while the person controls it or has picks to send
   const pointPending = (point?.picks ?? 0) > 0;
@@ -634,6 +642,15 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
         {POINT_COPY.button}
       </button>
     ) : null;
+
+  // 30y: a phone has no address bar (typing a URL is a Take over job), so the idle hint points at what is there.
+  // It names Take over only when the action row under the preview shows it (same rule as that row).
+  const takeOverShown = !isWindow && Boolean(pointButtonEl || stream.connected || isControlMode);
+  const readyHint = !narrow
+    ? 'Enter a URL above to open a page'
+    : takeOverShown
+      ? 'Ask a bot to open a page, or use Take over below'
+      : 'Ask a bot to open a page';
 
   return (
     // 0.9.8 E: on a phone the panel is a 70 % bottom sheet over a scrim; the chat stays readable above it.
@@ -1073,7 +1090,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 <div className="text-center p-6 text-zinc-500 text-xs">
                   <Globe size={32} className="mx-auto mb-2 opacity-40 text-zinc-500" />
                   <p>{browserReady ? 'Browser idle' : 'Browser unavailable'}</p>
-                  <p className="text-[10px] text-zinc-500 mt-1">{browserReady ? 'Enter a URL above to open a page' : isLocal ? 'Check that Chrome is installed, then use Restart browser below' : 'Start Docker, then use Restart browser below'}</p>
+                  <p className="text-[10px] text-zinc-500 mt-1">{browserReady ? readyHint : isLocal ? 'Check that Chrome is installed, then use Restart browser below' : 'Start Docker, then use Restart browser below'}</p>
                 </div>
               )}
             </div>
