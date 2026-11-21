@@ -9,6 +9,7 @@ mod mock_telegram;
 use axum::http::StatusCode;
 use common::{call, call_with, setup, Env};
 use kwnt::broker::{ApprovalDecision, ApprovalRequest};
+use kwnt::db::human_steps::HumanStepPlace;
 use kwnt::db::models::NewApproval;
 use kwnt::db::questions::QuestionPlace;
 use kwnt::drivers::events::RuntimeEvent;
@@ -1201,6 +1202,134 @@ async fn a_card_closed_on_its_way_is_edited_when_it_arrives() {
         let edits = tg.calls_of(&bot, "editMessageText").into_iter().filter(|c| c.message_id() == id).count();
         assert_eq!(edits, 1, "message {id} edited once");
     }
+}
+
+/// An open human step of bot A in #general, announced as kwant does; its id.
+async fn human_step(env: &Env, kind: &str) -> String {
+    let place = HumanStepPlace { kwant_id: env.a.clone(), channel_id: Some(general(env).await), ..Default::default() };
+    let (step, _, _) = env.state.db.create_human_step_with_card(&place, kind, "a step", None, None, "bot", |_| None).await.unwrap();
+    let _ = env.state.event_sender.send(RuntimeEvent::HumanStepUpdated { step: serde_json::to_value(&step).unwrap() });
+    step.id
+}
+
+/// Closes a human step with `status`, announced as kwant does.
+async fn close_step(env: &Env, id: &str, status: &str) {
+    assert!(env.state.db.close_human_step(id, status).await.unwrap(), "{id} was open");
+    let step = env.state.db.get_human_step(id).await.unwrap().unwrap();
+    let _ = env.state.event_sender.send(RuntimeEvent::HumanStepUpdated { step: serde_json::to_value(&step).unwrap() });
+}
+
+// 31j (Rigel's note on #918): a human step's alert takes the same path as a card. One that
+// closes while it is still on its way to Telegram gets its closing line as soon as it arrives:
+// "Done in kwant" when the step was done, "No longer waiting" otherwise
+#[tokio::test]
+async fn a_human_step_closed_on_its_way_gets_its_closing_line() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 63).await;
+
+    let mut alerts = Vec::new();
+    for (kind, what, status, line) in [
+        ("sign_in", "needs you to sign in", "done", "✓ Done in kwant · "),
+        ("captcha", "needs you to solve a CAPTCHA", "declined", "<i>No longer waiting</i>"),
+    ] {
+        let held = tg.hold(&bot, "sendMessage", what);
+        let id = human_step(&env, kind).await;
+        tg.wait_held(&bot, "sendMessage", what).await;
+        close_step(&env, &id, status).await;
+        closed_on_its_way(&env, "alert", &id).await;
+        held.release();
+        let alert = tg.wait_send(&bot, |c| c.text().contains(what)).await;
+        let edited = tg.wait_edit(&bot, |c| c.message_id() == alert.message_id()).await;
+        assert!(edited.text().starts_with(&format!("{}\n\n{line}", alert.text())), "{status}: {}", edited.text());
+        assert!(edited.buttons().is_empty(), "{status}: {:?}", edited.buttons());
+        alerts.push(alert.message_id());
+    }
+
+    // Each was edited once
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    for id in alerts {
+        let edits = tg.calls_of(&bot, "editMessageText").into_iter().filter(|c| c.message_id() == id).count();
+        assert_eq!(edits, 1, "alert {id} edited once");
+    }
+}
+
+// 31j (Rigel's note on #918): Unpair and a new bot's token close every ask in the space at once
+// (db/telegram.rs telegram_unpair, telegram_save_bot), also a card still on its way to Telegram.
+// Once that card arrives no Allow once on it counts, even after the pairing comes back
+#[tokio::test]
+async fn a_bulk_close_on_its_way_leaves_no_live_allow_once() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 64).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Unpaired while its card is on its way, then paired again with Undo and the switch back on:
+    // the card arrives with Allow once, is edited to "No longer waiting" with no buttons, and the
+    // person's tap on it allows nothing
+    let held = tg.hold(&bot, "sendMessage", "<code>bulk_unpair</code>");
+    let (unpair_id, mut unpair_rx) = approval(&env, json!({"source": "mcp", "tool": "bulk_unpair", "server": "files"})).await;
+    tg.wait_held(&bot, "sendMessage", "<code>bulk_unpair</code>").await;
+    let (s, v) = call(&env.app, "POST", &format!("{BASE}/unpair"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    closed_on_its_way(&env, "approval", &unpair_id).await;
+    let (s, v) = call(&env.app, "POST", &format!("{BASE}/unpair/undo"), None).await;
+    assert_eq!((s, v["state"].as_str()), (StatusCode::OK, Some("paired")), "{v}");
+    let (s, v) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!((s, v["allow_approvals"].as_bool()), (StatusCode::OK, Some(true)), "{v}");
+    held.release();
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>bulk_unpair</code>")).await;
+    let cbs = card.callbacks();
+    assert!(cbs.iter().any(|c| c.starts_with("a:")), "it went out with Allow once: {cbs:?}");
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == card.message_id()).await;
+    assert!(edited.text().contains("<i>No longer waiting</i>"), "{}", edited.text());
+    assert!(edited.buttons().is_empty(), "no live Allow once: {:?}", edited.buttons());
+    let tap = tg.tap(&bot, &PERSON, card.message_id(), &cbs[0]);
+    tg.wait_call(&bot, "answerCallbackQuery", |c| c.body["callback_query_id"] == tap.as_str() && c.body["text"] == "Already answered in kwant.").await;
+    assert_eq!(env.state.db.get_approval(&unpair_id).await.unwrap().unwrap().status, "pending");
+    assert!(unpair_rx.try_recv().is_err(), "nothing decided");
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let edits: Vec<_> = tg.calls_of(&bot, "editMessageText").into_iter().filter(|c| c.message_id() == card.message_id()).collect();
+    assert_eq!(edits.len(), 1, "edited once: {edits:?}");
+
+    // Another bot's token saved while a card is on its way: the old bot finishes sending it, its
+    // copy is closed with Allow once off, and the same tap through the new bot, paired and with
+    // the switch on, allows nothing
+    let held = tg.hold(&bot, "sendMessage", "<code>bulk_token</code>");
+    let (token_id, mut token_rx) = approval(&env, json!({"source": "mcp", "tool": "bulk_token", "server": "files"})).await;
+    tg.wait_held(&bot, "sendMessage", "<code>bulk_token</code>").await;
+    let new_bot = connect(&env, tg, 65).await;
+    closed_on_its_way(&env, "approval", &token_id).await;
+    held.release();
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>bulk_token</code>") && c.body.get("__sent_id").is_some()).await;
+    let cbs = card.callbacks();
+    assert!(cbs.iter().any(|c| c.starts_with("a:")), "it went out with Allow once: {cbs:?}");
+    let mut sent = None;
+    for _ in 0..100 {
+        let asks = env.state.db.telegram_asks_for("approval", &token_id).await.unwrap();
+        if asks.iter().all(|a| a.message_id.is_some()) {
+            sent = Some(asks);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let asks = sent.expect("the old bot's send was stored");
+    assert!(asks.iter().all(|a| a.state == "closed" && !a.allow && a.message_id == Some(card.message_id())), "{asks:?}");
+
+    let code = new_code(&env).await;
+    tg.text(&new_bot, &PERSON, &format!("/start {code}"));
+    tg.wait_send(&new_bot, |c| c.text().contains("Paired with kwant")).await;
+    wait_for("paired with the new bot", || async { status(&env).await["state"] == "paired" }).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let tap = tg.tap(&new_bot, &PERSON, card.message_id(), &cbs[0]);
+    tg.wait_call(&new_bot, "answerCallbackQuery", |c| c.body["callback_query_id"] == tap.as_str() && c.body["text"] == "Already answered in kwant.").await;
+    assert_eq!(env.state.db.get_approval(&token_id).await.unwrap().unwrap().status, "pending");
+    assert!(token_rx.try_recv().is_err(), "nothing decided");
+    // Whether or not the stopped old bot got to edit its copy, no edit put a button back
+    let old = tg.calls_of(&bot, "editMessageText").into_iter().filter(|c| c.message_id() == card.message_id()).collect::<Vec<_>>();
+    assert!(old.iter().all(|c| c.buttons().is_empty()), "{old:?}");
 }
 
 // --- Stuck: the spending stop (Rigel's F-D1) -------------------------------------------------

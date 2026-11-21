@@ -44,7 +44,7 @@ pub fn handles(name: &str) -> bool {
 pub fn tools() -> Vec<Value> {
     vec![json!({
         "name": NAME,
-        "description": "Optional. Declare the one block kwant should draw for your final reply (a comparison table, a numbered-steps list), only when the answer's data reads better that way than as plain text; never for a simple answer, and never instead of writing the reply. The data must match your reply text exactly: every label, cell, item and link is checked against it, and a call that doesn't match is dropped and the plain reply is shown. For a comparison, `source` is required: the index (from 0) of the table in your reply that it describes. For a recipe, no `source`: your reply must hold the recipe as an 'Ingredients' list then numbered steps. Call it once, just before your final reply. Types today: comparison, steps and recipe; kwant draws charts, metrics, facts, cards and findings from your reply's own structure (use '**Label:** value' lines for key numbers).",
+        "description": "Optional. Declare the one block kwant should draw for your final reply (a comparison table, a numbered-steps list), only when the answer's data reads better that way than as plain text; never for a simple answer, and never instead of writing the reply. The data must match your reply text exactly: every label, cell, item and link is checked against it, and a call that doesn't match is dropped and the plain reply is shown. For a comparison, `source` is required: the index (from 0) of the table in your reply that it describes. For a recipe, no `source`: your reply must hold the recipe as an 'Ingredients' list then numbered steps. Call it once, just before your final reply. Types today: comparison, steps and recipe; kwant draws charts, metrics, facts, cards and findings from your reply's own structure (use a '- **Label:** value' list for key numbers).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -149,7 +149,7 @@ fn declared(args: &Value) -> Result<Declared, String> {
             steps(data, source)?
         }
         "chart" | "metrics" | "facts" | "cards" | "findings" => {
-            return Err(format!("{kind} can't be declared yet; kwant draws it from your reply's own table or '**Label:** value' lines"));
+            return Err(format!("{kind} can't be declared yet; kwant draws it from your reply's own table or '- **Label:** value' list"));
         }
         "verification" | "files" => return Err(format!("{kind} comes only from kwant's own data")),
         other => return Err(format!("unknown type {other:?}")),

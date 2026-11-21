@@ -316,6 +316,13 @@ async fn agents_share_files_as_download_cards_from_inside_their_workspace_only()
     assert_eq!(meta["kind"], "file");
     assert_eq!(meta["attachments"][0]["mime"], "text/csv");
     let aid = meta["attachments"][0]["id"].as_str().unwrap();
+    // 31n: the card is saved with the bot's name as sender; it still gets the CSV's table preview
+    let mut shown = [card.clone()];
+    env.state.db.attach_results(&mut shown).await;
+    let block = shown[0].results.clone().expect("a shared CSV gets a files block")["blocks"][0].clone();
+    assert_eq!(block["type"], "files", "{block}");
+    assert_eq!(block["items"][0]["attachment_id"], aid);
+    assert_eq!(block["items"][0]["preview"]["kind"], "table", "{block}");
     let (s, h, body) = fetch(&env, &format!("/api/attachments/{aid}/content"), &[]).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body, b"a,b\n1,2\n");

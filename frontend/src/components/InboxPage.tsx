@@ -5,6 +5,7 @@ import { ChevronLeft } from 'lucide-react';
 import type { InboxTab } from '../nav';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
+import { inboxPillClass } from './Sidebar';
 
 const TABS: { id: InboxTab; label: string }[] = [
   { id: 'new', label: 'New' },
@@ -16,11 +17,13 @@ export const InboxPage: React.FC<{
   onTab: (tab: InboxTab) => void;
   /** Unseen items, shown on the New tab. */
   count?: number;
+  /** Something really needs you (a rank 1–2 row): only then is the count amber, as on the sidebar pill. */
+  ask?: boolean;
   /** Phones: back to the list. */
   onBack?: () => void;
   newPage: React.ReactNode;
   loosePage: React.ReactNode;
-}> = ({ tab, onTab, count = 0, onBack, newPage, loosePage }) => (
+}> = ({ tab, onTab, count = 0, ask = false, onBack, newPage, loosePage }) => (
   <div className="flex-1 min-w-0 flex flex-col h-full bg-zinc-950 overflow-hidden" data-inbox>
     <div className={`shrink-0 flex items-center gap-2 border-b border-zinc-800/80 ${onBack ? 'px-2' : 'px-4'} sm:px-6 pt-2 bg-zinc-900/30 select-none`}>
       {onBack && (
@@ -65,7 +68,7 @@ export const InboxPage: React.FC<{
             >
               {t.label}
               {t.id === 'new' && count > 0 && (
-                <span className="min-w-[16px] px-1 rounded-full bg-amber-500 text-zinc-950 text-[9px] font-semibold text-center">
+                <span className={`min-w-[16px] px-1 rounded-full ${inboxPillClass(ask)} text-[9px] font-semibold text-center`}>
                   {badgeText(count)}
                   <span className="sr-only"> new</span>
                 </span>
