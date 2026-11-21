@@ -1578,6 +1578,9 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       const lead = str(d.lead_kwant_id);
       return `${Who} asked ${(lead && names[lead]) || 'the lead'} to review the hand-off`;
     }
+    case 'lead_review_stopped':
+      // listener.rs REVIEW_STOPPED: the person stopped the lead's summary, so nothing asks it to review the card.
+      return 'Review skipped: you stopped the summary';
     case 'spec': {
       // auditor.rs SPEC_EVENT: the bot's own "what done means" lines, written before a high-impact task starts.
       const n = Array.isArray(d.lines) ? d.lines.length : 0;

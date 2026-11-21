@@ -162,10 +162,20 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
 
   // Bars: every category is named when its band fits a shortened label (5 bars at 390 px do); lines thin out.
   const MIN_BAND_LABEL = 28;
-  const labelEvery = isBar ? Math.max(1, Math.ceil(MIN_BAND_LABEL / xStep)) : Math.max(1, Math.ceil(n / (narrow ? 4 : 10)));
+  // A line's labels sit at least 8 px apart (MIN_LABEL_GAP), with 11 px digits about 7 px wide (CHAR_W).
+  const MIN_LABEL_GAP = 8;
+  const CHAR_W = 7;
+  // Wide lines also step far enough that the longest date fits between neighbours: ceil(n / 10) alone ignored width, so
+  // 10 dates at 640 px overlapped by ~6 px. Phones keep 31m's cadence (31t shortens their dates instead).
+  const lineLabelW = !isBar && !narrow && xStep > 0 ? Math.max(...block.points.map((p) => Math.min(p.x.length, 10))) * CHAR_W : 0;
+  const labelEvery = isBar
+    ? Math.max(1, Math.ceil(MIN_BAND_LABEL / xStep))
+    : Math.max(1, Math.ceil(n / (narrow ? 4 : 10)), lineLabelW ? Math.ceil((lineLabelW + MIN_LABEL_GAP) / xStep) : 1);
   const lastX = n - 1;
   const gapX = lastX % labelEvery;
-  const showLastX = gapX === 0 || gapX * 2 >= labelEvery;
+  // The last date says how recent the data is. A wide line keeps it even when it sits under half a step past the
+  // cadence (possible once the cadence is 3+, 32c): the cadence label next to it goes instead. Phones and bars keep 31m.
+  const showLastX = gapX === 0 || gapX * 2 >= labelEvery || lineLabelW > 0;
   const labelChars = isBar ? Math.max(3, Math.floor((xStep * labelEvery - 4) / 6)) : 10;
   // A phone line chart whose dates all fall in one year prints "09-07", not "2026-09-07": the repeated year is what
   // packed the labels edge to edge. Only the axis text changes; the tooltip, table and accessible names keep the year.
@@ -178,8 +188,6 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   // A line's last label is end-anchored at the right edge, so on a wide chart that labels every point it sat 5 px
   // from the middle-anchored label before it and the two dates read as one. Estimate both widths (11 px digits are
   // about 7 px wide) and, when they would sit closer than 8 px, drop the label before the last one. Never the first.
-  const MIN_LABEL_GAP = 8;
-  const CHAR_W = 7;
   const shownChars = (x: string) => Math.min(axisText(x).length, labelChars);
   let prevX = -1;
   if (!isBar && n > 1 && showLastX) for (let i = lastX - 1; i >= 0 && prevX < 0; i--) if (labelled(i)) prevX = i;

@@ -432,3 +432,61 @@ test('32j: a non-shell approval reads in the approval card\'s own words', async 
   const sh = appr({ tool_name: 'Bash', details: { command: 'npm test' } });
   assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'approval', action: approvalAction(sh) }), 'Writer needs your OK to run a command');
 });
+
+// ---------------------------------------------------------------------------
+// 32m-ui: a teammate that switched account mid-run says so on its Result card
+
+const fo = (extra = {}) => ({ to_name: 'Work Claude', from_name: 'Personal', class: 'quota', retry_at: '2026-11-21T08:49:00Z', ...extra });
+
+test('32m: parse keeps a good failover and drops bad ones', () => {
+  const m = t.parseDelegationMeta(metaJson({ failover: fo() }));
+  assert.deepEqual(m.failover, { to_name: 'Work Claude', from_name: 'Personal', class: 'quota', retry_at: '2026-11-21T08:49:00Z' });
+  assert.equal(t.parseDelegationMeta(metaJson({ failover: fo({ retry_at: null, class: 'auth' }) })).failover.retry_at, null);
+  const sparse = t.parseDelegationMeta(metaJson({ failover: { to_name: 'Work Claude' } })).failover;
+  assert.deepEqual(sparse, { to_name: 'Work Claude', from_name: '', class: '', retry_at: null }, 'only to_name is required');
+  for (const bad of [null, [], [fo()], 'Work Claude', 42, {}, { to_name: '' }, { to_name: '   ' }, { to_name: 5 }, { from_name: 'Personal' }]) {
+    const p = t.parseDelegationMeta(metaJson({ failover: bad }));
+    assert.ok(p, `still parses with failover ${JSON.stringify(bad)}`);
+    assert.equal(p.failover, undefined, JSON.stringify(bad));
+  }
+  assert.equal(t.parseDelegationMeta(metaJson()).failover, undefined, 'no key, no failover');
+});
+
+test('32m: the switch wording follows the class', () => {
+  assert.equal(t.failoverText('Writer', fo()), 'Writer switched to Work Claude after Personal ran out of usage');
+  assert.equal(t.failoverText('Writer', fo({ class: 'auth' })), 'Writer switched to Work Claude after Personal was signed out');
+  assert.equal(t.failoverText('Writer', fo({ class: 'other' })), 'Writer switched to Work Claude');
+  assert.equal(t.failoverText('Writer', fo({ from_name: '' })), 'Writer switched to Work Claude', 'never names an empty account');
+});
+
+const foMeta = (extra = {}) => t.parseDelegationMeta(metaJson({ specialist_name: 'Writer', title: 'Draft the email', failover: fo(), ...extra }));
+
+test('32m: a result card with failover shows a quiet "on Work Claude" chip with the full wording', () => {
+  for (const [cls, why] of [['quota', 'after Personal ran out of usage'], ['auth', 'after Personal was signed out']]) {
+    const html = card.render(props({ meta: foMeta({ failover: fo({ class: cls }) }), text: 'Here is the draft.' }));
+    assert.match(html, /data-failover-chip/);
+    assert.match(html, /<span aria-hidden="true" class="min-w-0 \[overflow-wrap:anywhere\]">on Work Claude<\/span>/, "wraps a long name instead of clipping");
+    assert.match(html, new RegExp(`title="Writer switched to Work Claude ${why}"`));
+    assert.match(html, new RegExp(`class="sr-only">Writer switched to Work Claude ${why}<`));
+    assert.match(html, /data-failover-chip[^>]*class="[^"]*text-\[11px\][^"]*text-zinc-400/, 'zinc, 11 px');
+    assert.doesNotMatch(html, /holo|kw-sticker|amber|rose/, 'a plain chip');
+    assert.match(html, /Writer finished/, 'card text unchanged');
+    assert.match(html, /Here is the draft\./);
+  }
+});
+
+test('32m: no chip without the key, or on started, stalled, failed or stopped cards', () => {
+  const plain = card.render(props({ meta: foMeta({ failover: undefined }), text: 'Here is the draft.' }));
+  assert.doesNotMatch(plain, /data-failover-chip|on Work Claude|switched to/);
+  const cases = [
+    props({ meta: foMeta({ kind: 'delegation_started', status: 'running' }) }),
+    props({ meta: foMeta({ kind: 'delegation_stalled', status: 'running' }), text: 'still at it' }),
+    props({ meta: foMeta({ status: 'failed' }), text: 'x' }),
+    props({ meta: foMeta({ status: 'cancelled' }), text: 'x' }),
+    props({ meta: foMeta(), text: 'x', live: { ...delegation('cancelled'), id: 'd1' } }),
+  ];
+  for (const p of cases) {
+    const html = card.render(p);
+    assert.doesNotMatch(html, /data-failover-chip|on Work Claude|switched to/, `${p.meta.kind} ${p.meta.status}`);
+  }
+});
