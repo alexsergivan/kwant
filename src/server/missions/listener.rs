@@ -501,7 +501,8 @@ pub async fn sweep_unreviewed(state: &AppState, grace: std::time::Duration) {
     for t in state.db.tasks_in_state("review").await.unwrap_or_default() {
         let Some(id) = t.source_id.as_deref().filter(|_| t.source_kind == "delegation") else { continue };
         let Ok(Some(d)) = state.db.get_delegation(id).await else { continue };
-        if d.status != "completed" || !d.continue_lead || state.turns.has_job(&d.id) {
+        // 32h: the person stopped the lead's turn on this result; the card waits for the person
+        if d.status != "completed" || !d.continue_lead || state.turns.has_job(&d.id) || crate::server::delegation::review_stopped(&d.id) {
             continue;
         }
         if !wants_lead_review(state, &t).await || crate::server::delegation::batch_running(state, &d).await {
