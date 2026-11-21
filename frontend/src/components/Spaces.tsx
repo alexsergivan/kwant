@@ -403,19 +403,6 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
           </span>
         </label>
 
-        <fieldset className="space-y-1.5">
-          <legend className="text-xs font-medium text-zinc-300 mb-1.5">Start with</legend>
-          <label className="flex items-center gap-2.5 p-2.5 rounded-lg border border-sky-500/40 bg-sky-500/5 text-xs text-zinc-200">
-            <input type="radio" name="space-start" checked readOnly className="accent-sky-500" />
-            An empty space
-          </label>
-          <label className="flex items-center gap-2.5 p-2.5 rounded-lg border border-zinc-800 text-xs text-zinc-500 cursor-not-allowed">
-            <input type="radio" name="space-start" disabled className="accent-sky-500" />
-            <span className="flex-1">Copy bots from another space</span>
-            <span className="px-1.5 py-px rounded bg-zinc-800 text-[10px] text-zinc-400">Coming soon</span>
-          </label>
-        </fieldset>
-
         {error && (
           <div role="alert" className="bg-rose-500/10 border border-rose-500/20 text-rose-300 px-3 py-2 rounded-lg text-xs flex items-center gap-2">
             <AlertTriangle size={14} /> <span>{error}</span>

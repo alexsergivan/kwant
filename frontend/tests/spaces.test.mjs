@@ -80,11 +80,15 @@ test('the rail marks the open space and shows other spaces’ unread', () => {
   assert.doesNotMatch(html, /\b[Aa]gents?\b/);
 });
 
-test('a new space preselects the first unused colour and offers Copy bots as coming soon', () => {
+test('a new space preselects the first unused colour and offers no Coming soon choice', () => {
   const html = m.newSpace({ spaces: [space()], onClose: noop, onCreated: noop });
   assert.match(html, /#10b981/);
   assert.match(html, /This machine/);
-  assert.match(html, /Coming soon/);
+  // Every choice in the dialog works: no disabled "Copy bots" radio, no one-option "Start with" group.
+  assert.doesNotMatch(html, /Coming soon/i);
+  assert.doesNotMatch(html, /Copy bots/i);
+  assert.doesNotMatch(html, /Start with/i);
+  assert.doesNotMatch(html, /space-start/);
 });
 
 test('a reload or link reopens the bot or channel in the address, and a gone one falls back to #general', () => {

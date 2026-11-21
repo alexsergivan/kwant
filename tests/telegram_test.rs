@@ -1021,6 +1021,84 @@ async fn a_closed_card_says_where_and_how_it_was_answered() {
     tg.wait_edit(&bot, |c| c.message_id() == card.message_id() && c.text().contains("No longer waiting")).await;
 }
 
+/// Waits (up to 10 s) until every Telegram copy of `kind`/`id` is closed, and checks it closed
+/// while still on its way (no Telegram id stored yet).
+async fn closed_on_its_way(env: &Env, kind: &str, id: &str) {
+    for _ in 0..100 {
+        let asks = env.state.db.telegram_asks_for(kind, id).await.unwrap();
+        if !asks.is_empty() && asks.iter().all(|a| a.state == "closed") {
+            assert!(asks.iter().all(|a| a.message_id.is_none()), "closed after it arrived, not on its way: {asks:?}");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the {kind} copy of {id} never closed");
+}
+
+// 31g (main red at 5f3b4ef8): a card that closes while it is still on its way to Telegram has no
+// message id to edit yet. Once it arrives it is edited at once: its buttons go and it says what
+// its source says, never keeping a live Allow once
+#[tokio::test]
+async fn a_card_closed_on_its_way_is_edited_when_it_arrives() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 62).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let mut events = env.state.event_sender.subscribe();
+
+    // Denied in kwant while its card is on its way: "Answered in kwant"
+    let held = tg.hold(&bot, "sendMessage", "<code>flight_deny</code>");
+    let (deny_id, rx) = approval(&env, json!({"source": "mcp", "tool": "flight_deny", "server": "files"})).await;
+    tg.wait_held(&bot, "sendMessage", "<code>flight_deny</code>").await;
+    let (s, v) = call(&env.app, "POST", &format!("/api/approvals/{deny_id}/resolve"), Some(json!({"decision": "deny"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(matches!(tokio::time::timeout(Duration::from_secs(20), rx).await.unwrap().unwrap(), ApprovalDecision::Deny));
+    closed_on_its_way(&env, "approval", &deny_id).await;
+    held.release();
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>flight_deny</code>")).await;
+    assert!(card.callbacks().iter().any(|c| c.starts_with("a:")), "it went out with Allow once: {:?}", card.callbacks());
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == card.message_id()).await;
+    assert!(edited.text().contains("✓ Answered in kwant · "), "{}", edited.text());
+    assert!(edited.buttons().is_empty(), "no live Allow once: {:?}", edited.buttons());
+    let denied = card.message_id();
+
+    // Its turn ended while its card was on its way: "No longer waiting"
+    let held = tg.hold(&bot, "sendMessage", "<code>flight_ends</code>");
+    let waiting = ask_through_the_approver(&env, "turn-tg-flight", "flight_ends", false);
+    tg.wait_held(&bot, "sendMessage", "<code>flight_ends</code>").await;
+    let ended_id = env.state.broker.pending_ids().await.into_iter().next().expect("the card waits");
+    waiting.abort();
+    assert_eq!(withdrawn(&mut events, &ended_id).await, (None, Some("cancelled".into())));
+    closed_on_its_way(&env, "approval", &ended_id).await;
+    held.release();
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>flight_ends</code>")).await;
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == card.message_id()).await;
+    assert!(edited.text().contains("No longer waiting"), "{}", edited.text());
+    assert!(edited.buttons().is_empty(), "no live Allow once: {:?}", edited.buttons());
+    let ended = card.message_id();
+
+    // A question answered in kwant while its copy was on its way: "Answered in kwant"
+    let held = tg.hold(&bot, "sendMessage", "Flight question?");
+    let q = ask(&env, "Flight question?", &["Yes", "No"]).await;
+    tg.wait_held(&bot, "sendMessage", "Flight question?").await;
+    let (s, v) = call(&env.app, "POST", &format!("/api/questions/{}/answer", q.id), Some(json!({"choice": 0}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    closed_on_its_way(&env, "question", &q.id).await;
+    held.release();
+    let msg = tg.wait_send(&bot, |c| c.text().contains("Flight question?")).await;
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == msg.message_id()).await;
+    assert!(edited.text().contains("✓ Answered in kwant · "), "{}", edited.text());
+    assert!(edited.buttons().is_empty());
+
+    // Each was edited once
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    for id in [denied, ended, msg.message_id()] {
+        let edits = tg.calls_of(&bot, "editMessageText").into_iter().filter(|c| c.message_id() == id).count();
+        assert_eq!(edits, 1, "message {id} edited once");
+    }
+}
+
 // --- Stuck: the spending stop (Rigel's F-D1) -------------------------------------------------
 
 /// The spending-stop notifications sent so far: (space_id, title, body).

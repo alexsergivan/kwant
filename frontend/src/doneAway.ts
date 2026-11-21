@@ -7,7 +7,7 @@
 import { parseActivityMeta, plainTitle } from './activity';
 import { readableStepTitle } from './toolLabel';
 import type { DoneTrailStep, InboxGroup, InboxItem, InboxResponse, ReviewItem, TeamMember } from './api/inbox';
-import { isReview } from './api/inbox';
+import { inboxBadge, isReview } from './api/inbox';
 import { type Routine, type RoutineRun, type Schedule, WEEKDAYS, monthDaysText } from './continuity';
 import { parseMetaObject } from './questions';
 import { relativeTime } from './away';
@@ -100,6 +100,18 @@ export function sectionItems(r: Pick<InboxResponse, 'items'>): Sections {
     done: [...by.to_review, ...by.finished].filter(keep),
     runFor,
   };
+}
+
+/**
+ * 30z: the one Inbox count (sidebar, Inbox page, phone tab bar). The server's badge counts a routine's finished run
+ * once as unseen and again as its review item; the list folds that run into the review (`runFor`), so the count
+ * folds it too: one finished routine run reads 1, not 2.
+ */
+export function inboxCount(inbox: Pick<InboxResponse, 'items' | 'counts'> | null | undefined, away: { unseen: { total: number } } | null | undefined, prepushWaiting = 0): number {
+  const badge = inboxBadge(inbox, away, prepushWaiting);
+  if (!inbox?.items?.length) return badge;
+  const folded = Object.values(sectionItems(inbox).runFor).filter((r) => r.unread).length;
+  return Math.max(0, badge - folded);
 }
 
 /** The row's first line before the bot's name: "Routine" for a routine's work, else nothing. */

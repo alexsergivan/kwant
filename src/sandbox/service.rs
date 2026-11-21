@@ -10,6 +10,11 @@ use serde_json::json;
 use std::{collections::HashMap, path::{Path, PathBuf}, time::Duration};
 use tokio::{process::Command, sync::Mutex, time::{sleep, timeout}};
 
+/// The `--pids-limit` of kwant's own browser container ([`managed_run_args`]): processes and
+/// threads together. Chrome and its DevTools proxy can't fork past it, so the browser's pages are
+/// kept under a budget derived from it (31b, [`crate::server::browser_pages::PAGE_PID_BUDGET`]).
+pub const BROWSER_PIDS_LIMIT: u64 = 512;
+
 /// The VM browser's image. Bump it whenever `docker/browser.Dockerfile` or
 /// `docker/browser-entrypoint.sh` change: kwant builds an image only when its tag is missing, and
 /// replaces a browser container made from another tag, so the bump is what ships the change.
@@ -614,6 +619,29 @@ impl BrowserService {
         let mut pages: Vec<_> = keys.into_iter().map(|k| { let at = *use_.entry(k.clone()).or_insert(now); (k, at) }).collect();
         pages.sort_by_key(|(_, at)| *at);
         pages
+    }
+
+    /// [`Self::open_pages`] whose page is still there in the browser (31b): after the container
+    /// restarts, pages kept from before stay listed until reused or closed, and must not count
+    /// toward the browser's process budget. Every open page when the browser can't be asked.
+    pub async fn live_pages(&self) -> Vec<(String, std::time::Instant)> {
+        let alive: Option<std::collections::HashSet<String>> = {
+            let lock = self.state.lock().await;
+            let Some(state) = lock.as_ref() else { return Vec::new() };
+            match state.browser.send_cdp_command("Target.getTargets", json!({})).await {
+                Ok(targets) => {
+                    let live: std::collections::HashSet<&str> = targets["targetInfos"].as_array().into_iter().flatten()
+                        .filter_map(|t| t["targetId"].as_str()).collect();
+                    Some(state.sessions.iter().filter(|(_, s)| live.contains(s.target.as_str())).map(|(k, _)| k.clone()).collect())
+                }
+                Err(_) => None,
+            }
+        };
+        let pages = self.open_pages().await;
+        match alive {
+            Some(alive) => pages.into_iter().filter(|(k, _)| alive.contains(k)).collect(),
+            None => pages,
+        }
     }
 
     /// Records that the idle sweep put a page to rest.

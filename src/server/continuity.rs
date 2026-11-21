@@ -461,7 +461,8 @@ pub fn self_server(base_url: &str, token: &str) -> McpServer {
 }
 
 /// Lets calls to the agents' own tools through without a card; everything else goes to `inner`.
-/// With `always_ask`, only the self tools that just read go through; the rest ask too.
+/// With `always_ask`, only the self tools that just read, a note and a goal draft go through; the
+/// rest ask too.
 pub struct SelfToolsApprover {
     pub inner: Arc<dyn ToolApprover>,
     pub always_ask: bool,
@@ -529,6 +530,8 @@ impl ToolApprover for SelfToolsApprover {
             || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())
             // P5: a note changes nothing outside kwant and the person checks every one
             || req.tool == super::tool_notes::TOOL
+            // A goal proposal only writes a draft; the person approves it on the board (30x)
+            || req.tool == super::goals::tool::TOOL
             || super::missions::auditor::take_retry(&req.kwant_id, &req.tool, &req.arguments);
         if req.server == SELF_SERVER_NAME && free {
             // Flight School: a tier below act cards kwant's own tools that change things
@@ -889,7 +892,7 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     }
     match opened {
         Ok(ctrl) => ctrl.site_guard.set_driver(&scope.kwant_id),
-        Err(refusal @ (super::routes::PageRefusal::PagesFull | super::routes::PageRefusal::Busy)) => {
+        Err(refusal @ (super::routes::PageRefusal::PagesFull | super::routes::PageRefusal::BrowserFull | super::routes::PageRefusal::Busy)) => {
             return (page_refusal_text(state, refusal), true)
         }
         Err(super::routes::PageRefusal::Unavailable) => {}
@@ -933,6 +936,7 @@ fn wall_check_helps(text: &str, page: Option<&Value>) -> bool {
 fn page_refusal_text(state: &AppState, refusal: super::routes::PageRefusal) -> String {
     match refusal {
         super::routes::PageRefusal::PagesFull => super::browser_pages::pages_full_message(),
+        super::routes::PageRefusal::BrowserFull => super::browser_pages::browser_full_message(),
         super::routes::PageRefusal::Unavailable => state.browser_service.unavailable_reason(),
         super::routes::PageRefusal::Busy => crate::sandbox::service::BROWSER_BUSY.to_string(),
     }
