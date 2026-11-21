@@ -2976,4 +2976,49 @@ mod tests {
         let (_, key) = ApiDriver::new(None, None).resolve_endpoint_and_key("grok-4");
         assert_eq!(key.as_deref(), Some("xai-host-key"));
     }
+
+    /// 32z: a model call that never reaches its provider (here through a proxy nothing answers at)
+    /// says which provider and what to check, never "The model request failed: connection failed".
+    /// It doesn't fail over: no other account would get through from this computer either.
+    #[tokio::test]
+    async fn an_unreachable_provider_is_named_in_the_reply() {
+        let client = Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
+            .build()
+            .unwrap();
+        let driver = ApiDriver { client, ..ApiDriver::for_profile(Some("sk-ant-test-key".into())) };
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = driver.stream_turn(turn("hi", vec![]), tx).await.unwrap();
+        assert!(out.failure.is_none(), "an unreachable provider doesn't fail over: {:?}", out.failure);
+        assert_eq!(
+            out.text,
+            "⚠️ Couldn't reach Anthropic from this computer. Check the internet connection (or proxy), then send again."
+        );
+        assert!(!out.text.contains("connection failed"), "{}", out.text);
+    }
+
+    /// 32z: a rejected key (401/403) still goes the refusal way (Auth, no reply text), and any
+    /// other status error keeps today's "The model request failed: API returned …" reply.
+    #[tokio::test]
+    async fn status_errors_keep_their_paths() {
+        for (status, kind) in [(401, "authentication_error"), (403, "permission_error")] {
+            let (url, _) = mock(status, json!({"type": "error", "error": {"type": kind, "message": "no"}})).await;
+            let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+            let (tx, mut rx) = mpsc::channel(64);
+            tokio::spawn(async move { while rx.recv().await.is_some() {} });
+            let out = driver.stream_turn(turn("hi", vec![]), tx).await.unwrap();
+            let failure = out.failure.unwrap_or_else(|| panic!("{status} was not refused: {}", out.text));
+            assert_eq!(failure.class, crate::profiles::FailClass::Auth, "{status}");
+            assert!(out.text.is_empty(), "{status}: {}", out.text);
+        }
+        let body = json!({"type": "error", "error": {"type": "invalid_request_error", "message": "prompt is too long"}});
+        let (url, _) = mock(400, body).await;
+        let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = driver.stream_turn(turn("hi", vec![]), tx).await.unwrap();
+        assert!(out.failure.is_none());
+        assert_eq!(out.text, "⚠️ The model request failed: API returned 400: invalid_request_error: prompt is too long");
+    }
 }
