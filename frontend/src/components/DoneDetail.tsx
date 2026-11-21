@@ -205,6 +205,8 @@ export const DoneSections: React.FC<{
   const bot = item.kwant_name;
   const excerpt = typeof item.answer_excerpt === 'string' && item.answer_excerpt.trim() ? item.answer_excerpt : null;
   const text = answerText(d.message) ?? excerpt ?? (item.summary?.trim() ? item.summary : null);
+  // The server's excerpt is plain lines (list markers stripped), so its line breaks are kept (Mira, 33h).
+  const fromMessage = !!answerText(d.message);
   // Part B serves the trail on the item (with skipped steps and a team member's name); else the loaded message.
   const served = trailFromServed(item, place);
   const trail = served ?? trailFrom(d.message, place);
@@ -231,7 +233,7 @@ export const DoneSections: React.FC<{
             tabIndex={0}
             role="region"
             aria-label={`${bot}’s answer`}
-            className="kw-focus rounded min-w-0 overflow-x-auto [&_.markdown-content]:text-body max-sm:[&_th]:whitespace-nowrap max-sm:[&_td]:whitespace-nowrap"
+            className={`kw-focus rounded min-w-0 overflow-x-auto [&_.markdown-content]:text-body max-sm:[&_th]:whitespace-nowrap max-sm:[&_td]:whitespace-nowrap${fromMessage ? '' : ' [&_p]:whitespace-pre-line'}`}
             data-answer-text
           >
             <MarkdownRenderer content={text} />

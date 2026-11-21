@@ -406,3 +406,19 @@ test('33h: a solo team job’s Done row says its bot, not "1 bot"; its pane says
   assert.equal(q('[data-done-trail] h3').textContent, 'What Ann did');
   root.unmount();
 });
+
+// 33h re-check (Mira): the excerpt is plain lines with list markers stripped, so its line breaks stay.
+test('33h: an excerpt-only list answer keeps its line breaks; a loaded message keeps normal markdown flow', async () => {
+  const data = clone(fx.AWAY_INBOX);
+  data.items.find((i) => i.id === 'tj-spring').answer_excerpt = 'Found:\nBen checked 2 shops\nCody drafted the email';
+  const { q, root } = await mountInbox({}, data);
+  await click(q('[data-option="tj-spring"]'));
+  const ans = q('[data-answer-text]');
+  assert.match(ans.className, /\[&_p\]:whitespace-pre-line/);
+  assert.match(ans.querySelector('p').textContent, /Found:\nBen checked 2 shops\nCody drafted the email/);
+  root.unmount();
+  const m2 = await mountInbox({ doneDetails: { 'r-prices': fx.AWAY_DETAIL } });
+  await click(m2.q('[data-option="r-prices"]'));
+  assert.doesNotMatch(m2.q('[data-answer-text]').className, /whitespace-pre-line/, 'the loaded message flows as markdown');
+  m2.root.unmount();
+});
