@@ -833,10 +833,8 @@ impl BrowserService {
         self.pages_seen.forget(key);
         let mut lock = self.state.lock().await;
         if let Some(state) = lock.as_mut() {
-            // Drop this page's own cached controller too (#753): otherwise its downloads/site
-            // guard/popups connections to the browser outlive the page they were opened for,
-            // even though `Target.closeTarget` below ends the page itself.
-            state.controllers.remove(key);
+            // 31z RED PROOF (never merges): the #753 fix reverted, so closing a page leaves its
+            // cached controller, and its downloads/site guard/popups connections, behind.
             if let Some(session) = state.sessions.remove(key) {
                 let _ = state.browser.send_cdp_command("Target.closeTarget", json!({"targetId": session.target})).await;
                 self.save_sessions(&state.sessions).await?;
