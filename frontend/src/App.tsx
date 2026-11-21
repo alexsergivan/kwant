@@ -51,7 +51,7 @@ import { AUTO_CLOSE_DELAY_MS, PANE_EXIT_MS, PHONE_PANE_QUERY, type PaneOpener, s
 import { McpSuggestionCard, type SuggestionSignInResult } from './components/McpSuggestionCard';
 import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
-import type { ConnectionSuggestionMeta } from './connectionSuggestions';
+import { connectSheetFor, type ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
 import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
 import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
@@ -398,8 +398,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [appsSection, setAppsSection] = useState<{ section: AppsSection; seq: number } | null>(() =>
     initialView?.kind === 'settings' && initialView.scope === 'space' && initialView.section ? { section: initialView.section, seq: 1 } : null,
   );
+  // A connection card's button: the Connect <App> sheet to open in Apps & accounts (cleared by any other way in).
+  const [connectApp, setConnectApp] = useState<{ slug: string; initial: { picked: string[] }; seq: number } | null>(null);
   const openSpaceSettings = (tab: SpaceSettingsTab = 'general', section?: AppsSection) => {
     setAppsSection(section ? { section, seq: Date.now() } : null);
+    setConnectApp(null);
     setClaudeSignInFocus(0);
     if (tab !== 'routines') setRoutineFocus(null);
     setSettingsScope('space');
@@ -441,6 +444,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     openAppSettings();
   };
   const openConnections = () => openSpaceSettings('apps', 'advanced');
+  // A bot's "suggests a connection" card: Apps & accounts with that app's Connect sheet open and the bot ticked.
+  const openConnectSheet = (meta: ConnectionSuggestionMeta) => {
+    openSpaceSettings('apps', 'apps');
+    setConnectApp({ ...connectSheetFor(meta), seq: Date.now() });
+  };
   // 0.9.0 P5: "See the note" in a chat opens Connections on that one note.
   const [toolNoteFocus, setToolNoteFocus] = useState<string | null>(null);
   const openToolNote = (noteId: string) => {
@@ -494,6 +502,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const closeSpaceSettings = () => {
     setToolNoteFocus(null);
     setSpaceSettingsTab(null);
+    setConnectApp(null);
     setSettingsFocusRow(null);
     setSettingsClosedCount((n) => n + 1);
     // A key may have been added or removed: the dictation mic asks again.
@@ -2833,7 +2842,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         messageId={msg.id}
         kwantName={name ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
         kwantId={meta.kwant_id ?? undefined}
-        onOpenConnections={openConnections}
+        onOpenConnections={openConnectSheet}
+        recheck={settingsClosedCount}
         flash={flash}
       />
     );
@@ -5063,6 +5073,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           connections={connectionsPage}
           appsSection={appsSection}
           toolNoteOpen={!!toolNoteFocus}
+          connectApp={connectApp}
           appSettings={
             <Suspense
               fallback={

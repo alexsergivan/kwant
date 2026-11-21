@@ -93,9 +93,9 @@ test('connected: says so, and no button is left', () => {
   assert.deepEqual(buttons(html), []);
 });
 
-test('Composio missing, without a key or off: the reason and Open Connections instead of Connect', () => {
+test('Composio missing, without a key or off: the reason and Connect <App> (the Connect sheet) instead of Connect', () => {
   for (const [composio, reason] of [
-    ['not_added', /Composio, which isn't added yet\. Add it in Connections first/],
+    ['not_added', /Google Search Console connects through Composio \(free\)\. It takes about a minute\./],
     ['needs_key', /has no API key yet\. Add your Composio API key in Connections first/],
     ['off', /switched off\. Switch it on in Connections first/],
   ]) {
@@ -103,9 +103,10 @@ test('Composio missing, without a key or off: the reason and Open Connections in
     assert.equal(st.phase, 'missing', composio);
     const html = m.view({ meta: meta({ composio }), state: st });
     assert.match(text(html), reason, composio);
-    assert.deepEqual(buttons(html), ['Open Connections'], composio);
+    assert.deepEqual(buttons(html), ['Connect Google Search Console'], composio);
   }
   assert.equal(m.composioMissingText('ready'), null);
+  assert.equal(m.composioMissingText('not_added'), 'This app connects through Composio (free). It takes about a minute.');
 });
 
 test('timed out, unchecked and error: never a false "Connected", always a way on', () => {

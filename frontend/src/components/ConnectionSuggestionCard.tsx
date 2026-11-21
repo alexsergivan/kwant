@@ -25,7 +25,8 @@ export interface ConnectionSuggestionViewProps {
   /** The Mac app: sign-ins open in the default browser, not a new tab. */
   mac?: boolean;
   onConnect: () => void;
-  onOpenConnections?: () => void;
+  /** Opens the Connect <App> sheet for this card's app (Settings → Apps & accounts). */
+  onOpenConnections?: (meta: ConnectionSuggestionMeta) => void;
   flash?: boolean;
 }
 
@@ -92,8 +93,8 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
                 <span>{state.message}</span>
               </p>
               {onOpenConnections && (
-                <button type="button" onClick={onOpenConnections} className={mainBtn} data-open-connections>
-                  <Plug size={13} aria-hidden="true" /> Open Connections
+                <button type="button" onClick={() => onOpenConnections(meta)} className={mainBtn} data-open-connections>
+                  <Plug size={13} aria-hidden="true" /> Connect {meta.name}
                 </button>
               )}
             </>
@@ -128,7 +129,7 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
               <div className="flex flex-wrap items-center gap-2">
                 {again}
                 {onOpenConnections && (
-                  <button type="button" onClick={onOpenConnections} className={quietBtn}>
+                  <button type="button" onClick={() => onOpenConnections(meta)} className={quietBtn}>
                     Open Connections
                   </button>
                 )}
@@ -164,7 +165,9 @@ export interface ConnectionSuggestionCardProps {
   messageId: string;
   kwantName: string;
   kwantId?: string;
-  onOpenConnections?: () => void;
+  onOpenConnections?: (meta: ConnectionSuggestionMeta) => void;
+  /** Goes up when Settings closes, so the card asks Composio again. */
+  recheck?: number;
   flash?: boolean;
   api?: ConnectApi;
 }
@@ -175,17 +178,28 @@ export const ConnectionSuggestionCard: React.FC<ConnectionSuggestionCardProps> =
   const stopRef = useRef<(() => void) | null>(null);
   const mac = inDesktopApp();
 
-  // An app connected earlier (or from another card) shows as connected when the card appears.
+  // Asks Composio whether the app is signed in: when the card appears, when the window gets focus back
+  // and when Settings closes. Connected shows as connected; a card that said Composio was missing offers
+  // Connect once Composio answers. Unknown (older server, Composio still unusable) changes nothing.
   useEffect(() => {
-    if (props.meta.composio !== 'ready') return;
     let live = true;
-    connectedNow(api, props.meta.app).then((c) => {
-      if (live && c) setState((s) => (s.phase === 'ready' ? { phase: 'connected' } : s));
-    });
+    const check = () => {
+      void connectedNow(api, props.meta.app).then((c) => {
+        if (!live || c === null) return;
+        setState((s) => {
+          if (c && (s.phase === 'ready' || s.phase === 'missing' || s.phase === 'timed_out')) return { phase: 'connected' };
+          if (!c && s.phase === 'missing') return { phase: 'ready' };
+          return s;
+        });
+      });
+    };
+    check();
+    window.addEventListener('focus', check);
     return () => {
       live = false;
+      window.removeEventListener('focus', check);
     };
-  }, [api, props.meta.app, props.meta.composio]);
+  }, [api, props.meta.app, props.recheck]);
 
   useEffect(() => () => stopRef.current?.(), []);
 

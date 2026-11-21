@@ -145,7 +145,7 @@ test('3. a card that said "isn’t added yet" turns Connected on focus and when 
   window.dispatchEvent(new window.Event('focus'));
   await until(() => phase(c.host) === 'ready', 'ready once Composio can start a sign-in');
   assert.deepEqual(buttons(c.host), ['Connect']);
-  assert.doesNotMatch(text(c.host), /isn't added yet/);
+  assert.doesNotMatch(text(c.host), /connects through Composio \(free\)/);
 });
 
 test('4. InboxNew and the tool notes still open Advanced; only the card opens the sheet', () => {

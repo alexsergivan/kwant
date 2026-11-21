@@ -39,10 +39,10 @@ export function parseConnectionMeta(raw: unknown): ConnectionSuggestionMeta | nu
 }
 
 /** Why Connect can't start yet, in the card's words; null when it can. */
-export function composioMissingText(r: ComposioReady): string | null {
+export function composioMissingText(r: ComposioReady, name = 'This app'): string | null {
   switch (r) {
     case 'not_added':
-      return 'Connecting apps goes through Composio, which isn’t added yet. Add it in Connections first (free account at composio.dev).';
+      return `${name} connects through Composio (free). It takes about a minute.`;
     case 'needs_key':
       return 'Composio is added but has no API key yet. Add your Composio API key in Connections first.';
     case 'off':
@@ -73,10 +73,16 @@ export interface CardState {
   link?: string;
 }
 
-export const initialState = (meta: Pick<ConnectionSuggestionMeta, 'composio'>): CardState => {
-  const missing = composioMissingText(meta.composio);
+export const initialState = (meta: Pick<ConnectionSuggestionMeta, 'composio'> & Partial<Pick<ConnectionSuggestionMeta, 'name'>>): CardState => {
+  const missing = composioMissingText(meta.composio, meta.name);
   return missing ? { phase: 'missing', message: missing } : { phase: 'ready' };
 };
+
+/** The card's button: Settings → Apps & accounts with the Connect <App> sheet open and the bot that asked ticked. */
+export const connectSheetFor = (meta: Pick<ConnectionSuggestionMeta, 'app' | 'kwant_id'>): { slug: string; initial: { picked: string[] } } => ({
+  slug: meta.app,
+  initial: { picked: meta.kwant_id ? [meta.kwant_id] : [] },
+});
 
 export interface ConnectApi {
   connect: (slug: string) => Promise<{ redirect_url: string }>;
