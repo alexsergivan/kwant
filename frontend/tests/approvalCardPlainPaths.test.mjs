@@ -112,18 +112,45 @@ test('Allow once in the app adds one "✓ You allowed once" line in that chat an
   assert.equal(ui.ALLOWED_FROM_TELEGRAM, '✓ Allowed once from Telegram');
   const html = ui.chat(chatProps(here));
   assert.equal((html.match(/data-resolved-via="app"/g) ?? []).length, 1);
-  assert.match(html, /Drafter: Bash · <b[^>]*>✓ You allowed once<\/b>/);
+  assert.match(html, /Drafter wanted to run a command · <b[^>]*>✓ You allowed once<\/b>/); // Mira fix 2: the card's own words
   assert.doesNotMatch(html, /Allowed once from Telegram/);
   assert.doesNotMatch(html.slice(html.indexOf('data-resolved-via="app"')), /^[^]*?<button[^>]*>[^<]*(Allow|Deny)/, 'nothing to answer');
 
   // Telegram's line is unchanged beside it.
   const tg = a.settledFromRecords([row({ id: 'ap_tg', answered_via: 'telegram' })], now);
   const both = ui.chat(chatProps([...tg, ...here]));
-  assert.match(both, /data-resolved-via="telegram"[^]*Drafter: Bash · <b[^>]*>✓ Allowed once from Telegram<\/b>/);
+  assert.match(both, /data-resolved-via="telegram"[^]*Drafter wanted to run a command · <b[^>]*>✓ Allowed once from Telegram<\/b>/);
   assert.equal((both.match(/data-resolved-via="app"/g) ?? []).length, 1);
 
   // App.tsx keeps the line when the app's Allow once succeeds.
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const resolve = app.slice(app.indexOf('const handleResolveApproval'), app.indexOf('const handleSelectTeam'));
   assert.match(resolve, /if \(res\.ok\) setSettledApprovals\(\(prev\) => keepAllowedOnce\(prev, card, decision\)\)/);
+});
+
+// Mira's design check, fix 1: a kept line sits where its card was, in time order with the messages.
+const msg = (id, role, text, at) => ({ id, sender_role: role, sender_id: role === 'user' ? 'u' : 'k_drafter', sender_name: role === 'user' ? undefined : 'Drafter', text, created_at: at });
+const order = (html, marks) => marks.map((m) => [m, html.indexOf(m)]).sort((x, y) => x[1] - y[1]).map(([m, i]) => (i < 0 ? `${m}?` : m));
+
+test('a kept line sits after the last message before its card, not under the newest answer; no time keeps the end', () => {
+  const messages = [
+    msg('m1', 'user', 'Copy my notes please', '2026-11-21T17:00:00Z'),
+    msg('m2', 'kwant', 'I need your OK first', '2026-11-21T17:00:10Z'),
+    msg('m4', 'kwant', 'Done, notes.md is on your Desktop', '2026-11-21T17:01:00Z'),
+  ];
+  const line = { id: 'ap_t3', tool_name: 'Bash', details: { kwant_name: 'Drafter' }, kwant_id: 'k_drafter', link: null, asked_at: '2026-11-21T17:00:20Z', via: 'app' };
+  const html = ui.chat({ ...chatProps([line]), messages });
+  assert.deepEqual(order(html, ['Copy my notes please', 'I need your OK first', 'data-resolved-via="app"', 'Done, notes.md']), ['Copy my notes please', 'I need your OK first', 'data-resolved-via="app"', 'Done, notes.md']);
+  assert.equal((html.match(/data-resolved-via="app"/g) ?? []).length, 1);
+  // No asked_at: after every message, as before.
+  const untimed = ui.chat({ ...chatProps([{ ...line, asked_at: undefined }]), messages });
+  assert.ok(untimed.indexOf('data-resolved-via="app"') > untimed.indexOf('Done, notes.md'));
+  // Asked after the newest message: still after it. Asked before every message: before the first.
+  const newest = ui.chat({ ...chatProps([{ ...line, asked_at: '2026-11-21T17:02:00Z' }]), messages });
+  assert.ok(newest.indexOf('data-resolved-via="app"') > newest.indexOf('Done, notes.md'));
+  const first = ui.chat({ ...chatProps([{ ...line, asked_at: '2026-11-21T16:00:00Z' }]), messages });
+  assert.ok(first.indexOf('data-resolved-via="app"') < first.indexOf('Copy my notes please'));
+  // Telegram and refused lines follow the same rule.
+  const tg = ui.chat({ ...chatProps([{ ...line, via: undefined }]), messages });
+  assert.ok(tg.indexOf('data-resolved-via="telegram"') > tg.indexOf('I need your OK first') && tg.indexOf('data-resolved-via="telegram"') < tg.indexOf('Done, notes.md'));
 });
