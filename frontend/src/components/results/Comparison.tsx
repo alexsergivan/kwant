@@ -24,10 +24,11 @@ const PickSticker: React.FC<{ reason: string | null }> = ({ reason }) => (
   </Sticker>
 );
 
-/** A pros or cons cell in a stacked card: a short list with + or −, else the reply's cell. */
+/** A pros or cons cell in a stacked card: a short list with + or −. One item keeps the reply's own cell
+ *  (links, bold) as its item, with the same mark (31p). Other columns and empty cells stay as they are. */
 const Cell: React.FC<{ role: ColumnRole; text: string; node: React.ReactNode }> = ({ role, text, node }) => {
-  const parts = role === 'pros' || role === 'cons' ? shortList(text) : null;
-  if (!parts) return <>{node}</>;
+  if ((role !== 'pros' && role !== 'cons') || !plainText(text).trim()) return <>{node}</>;
+  const parts: React.ReactNode[] = shortList(text) ?? [node];
   const Mark = role === 'pros' ? Plus : Minus;
   return (
     <ul role="list" className="space-y-0.5">

@@ -10,6 +10,7 @@ import { ReplyText } from './results/ReplyText';
 import { inlineCodeClass, linkClass } from './markdownInline';
 import { DOC_SCHEME } from '../spaceDocs';
 import { DocQuoteChip } from './DocQuoteChip';
+import { ScrollTable } from './ScrollTable';
 
 /** react-markdown drops unknown schemes; a space document's address is kept for its quote chip. */
 const urlTransform = (url: string) => (url.startsWith(DOC_SCHEME) ? url : defaultUrlTransform(url));
@@ -309,11 +310,11 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
           // Tables
           table: ({ node, children }) => {
             const plain = (
-              <div className="my-3.5 overflow-x-auto rounded-xl border border-zinc-700/60 bg-zinc-900/60 shadow-[var(--kws-shadow)]">
+              <ScrollTable>
                 <table className="w-full text-left border-collapse text-xs font-sans">
                   {children}
                 </table>
-              </div>
+              </ScrollTable>
             );
             const index = (node as HastNode | undefined)?.data?.smartIndex;
             const raw = smart && typeof index === 'number' ? blockAt(results, { kind: 'table', index }) : null;

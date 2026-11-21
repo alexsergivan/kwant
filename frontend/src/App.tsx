@@ -4514,7 +4514,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       addImap={looseAddImap > 0}
     />
   );
-  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={inboxCount} onBack={backToList} newPage={away} loosePage={loose} />;
+  // One rule for amber everywhere (sidebar pill, phone badge, Inbox page count): a rank 1–2 ask waits
+  const inboxAsk = realAskCount(attention) > 0;
+  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={inboxCount} ask={inboxAsk} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
           spaceId={space.id}
@@ -4785,7 +4787,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     </main>
   ) : chat;
 
-  const inboxAsk = realAskCount(attention) > 0;
   const phoneTabs: Array<PhoneTabItem<PhoneTab>> = [
     { id: 'chats', label: 'Chats', icon: <MessageSquare size={20} aria-hidden="true" /> },
     { id: 'bots', label: 'Bots', icon: <Bot size={20} aria-hidden="true" /> },
