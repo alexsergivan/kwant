@@ -926,6 +926,98 @@ async fn stop_clears_the_buttons_also_on_a_card_on_its_way() {
     }
 }
 
+// 31v (Rigel's #935 QA): a token for another bot closes every ask, and the cards the old bot already
+// sent lose their buttons too, edited once with the OLD bot's token (the new bot can't edit them):
+// the armed approval says "Approve it in kwant.", the question says it was unpaired, a card that
+// went out link-only stays as sent. Nothing is answered in kwant, and the new bot sends nothing for
+// them. (Bots 72 and 73: 70 and 71 are taken by the 31r tests in this binary's shared mock.)
+#[tokio::test]
+async fn a_new_bot_clears_the_buttons_on_the_old_bot_s_cards() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let old = paired(&env, tg, 72).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let (id, mut rx) = approval(&env, json!({"source": "mcp", "tool": "swap_card", "server": "files"})).await;
+    let card = tg.wait_send(&old, |c| c.text().contains("<code>swap_card</code>")).await;
+    assert!(card.callbacks().iter().any(|c| c.starts_with("a:")), "it went out with Allow once: {:?}", card.callbacks());
+    let q = ask(&env, "Swap question?", &["Yes", "No"]).await;
+    let qmsg = tg.wait_send(&old, |c| c.text().contains("Swap question?")).await;
+    assert!(!qmsg.callbacks().is_empty(), "it went out with answer buttons");
+    let (shell_id, _shell_rx) = approval(&env, json!({"source": "local_shell", "tool": "Bash"})).await;
+    let shell = tg.wait_send(&old, |c| c.text().contains("<code>Bash</code>")).await;
+    assert!(shell.callbacks().is_empty(), "{:?}", shell.buttons());
+    for (kind, ref_id) in [("approval", &id), ("question", &q.id), ("approval", &shell_id)] {
+        wait_for("the card's id stored", || async { asks_of(&env, kind, ref_id).await.iter().all(|a| a.message_id.is_some()) }).await;
+    }
+
+    let new = tg.bot(73);
+    let (s, v) = call(&env.app, "PUT", &format!("{BASE}/token"), Some(json!({"token": new.token}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["state"], "token_saved", "{v}");
+    tg.wait_call(&new, "getUpdates", |_| true).await;
+    for (kind, ref_id) in [("approval", &id), ("question", &q.id), ("approval", &shell_id)] {
+        let asks = asks_of(&env, kind, ref_id).await;
+        assert!(asks.iter().all(|a| a.state == "closed" && !a.allow), "closed with Allow once off: {asks:?}");
+    }
+
+    let edited = tg.wait_edit(&old, |c| c.message_id() == card.message_id()).await;
+    assert!(edited.callbacks().is_empty(), "no live Allow once: {:?}", edited.buttons());
+    assert!(edited.text().ends_with("<i>Approve it in kwant.</i>"), "{}", edited.text());
+    let edited = tg.wait_edit(&old, |c| c.message_id() == qmsg.message_id()).await;
+    assert!(edited.callbacks().is_empty(), "no answer buttons: {:?}", edited.buttons());
+    assert!(edited.text().contains("Swap question?"), "keeps its text: {}", edited.text());
+    assert!(edited.text().ends_with("<i>Unpaired. Pair again from kwant › Connections.</i>"), "{}", edited.text());
+    edited_once(tg, &old, &[card.message_id(), qmsg.message_id()]).await;
+    let shell_edits = tg.calls_of(&old, "editMessageText").into_iter().filter(|c| c.message_id() == shell.message_id()).count();
+    assert_eq!(shell_edits, 0, "the link-only card stays as sent");
+    let from_new: Vec<_> = tg.calls(&new).into_iter().filter(|c| c.method == "sendMessage" || c.method == "editMessageText").collect();
+    assert!(from_new.is_empty(), "the new bot sends nothing for the old cards: {from_new:?}");
+
+    // Nothing was answered: the bot still waits in kwant
+    assert_eq!(env.state.db.get_approval(&id).await.unwrap().unwrap().status, "pending");
+    assert!(rx.try_recv().is_err(), "nothing decided");
+    assert_eq!(env.state.db.get_question(&q.id).await.unwrap().unwrap().status, "open");
+}
+
+// 31v: the old bot's token is refused when kwant tries to clear its cards (revoked in BotFather
+// meanwhile). The new token is still saved, at once, and kwant stops at the first refusal instead
+// of trying every card
+#[tokio::test]
+async fn a_new_bot_is_saved_even_when_the_old_token_is_refused() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let old = paired(&env, tg, 74).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let (id, _rx) = approval(&env, json!({"source": "mcp", "tool": "swap_refused", "server": "files"})).await;
+    tg.wait_send(&old, |c| c.text().contains("<code>swap_refused</code>")).await;
+    let q = ask(&env, "Swap refused question?", &["Yes", "No"]).await;
+    tg.wait_send(&old, |c| c.text().contains("Swap refused question?")).await;
+    for (kind, ref_id) in [("approval", &id), ("question", &q.id)] {
+        wait_for("the card's id stored", || async { asks_of(&env, kind, ref_id).await.iter().all(|a| a.message_id.is_some()) }).await;
+    }
+    tg.fault(&old, "editMessageText", 401, 5);
+
+    let new = tg.bot(75);
+    let started = std::time::Instant::now();
+    let (s, v) = call(&env.app, "PUT", &format!("{BASE}/token"), Some(json!({"token": new.token}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["state"], "token_saved", "{v}");
+    assert!(started.elapsed() < Duration::from_secs(5), "the save doesn't wait on the old bot: {:?}", started.elapsed());
+    tg.wait_call(&new, "getUpdates", |_| true).await;
+    tg.wait_edit(&old, |_| true).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(tg.calls_of(&old, "editMessageText").len(), 1, "stopped at the first refusal");
+    for (kind, ref_id) in [("approval", &id), ("question", &q.id)] {
+        let asks = asks_of(&env, kind, ref_id).await;
+        assert!(asks.iter().all(|a| a.state == "closed" && !a.allow), "closed with Allow once off: {asks:?}");
+    }
+    assert_eq!(status(&env).await["state"], "token_saved");
+    assert_eq!(env.state.db.get_approval(&id).await.unwrap().unwrap().status, "pending");
+}
+
 #[tokio::test]
 async fn a_revoked_token_stops_and_says_so() {
     let env = setup().await;
