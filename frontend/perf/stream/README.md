@@ -38,3 +38,19 @@ node perf/stream/run.mjs --n 300 --width 390 --message-html m.html  # the landed
 
 It needs `playwright-core` and a Chromium; point `PLAYWRIGHT_CORE` (path to its `index.mjs`) and `CHROMIUM`
 at them. Numbers depend on the machine and its load: compare runs from the same machine and the same hour.
+
+## Typing in a long chat (33j)
+
+`typing.mjs` opens the same harness chat, focuses the composer and types 57 keys 60 ms apart (Mira's UX-pass run).
+For each key it times keydown until after the next frame, and prints `p50`, `p95`, `max` (ms), the React `commits`
+and the page's DOM `nodes`. `?results=10` (its default `--results 10`) gives ten bot replies a smart result
+(tables, charts, metrics, findings, a timeline), spread evenly over the chat.
+
+```sh
+cd frontend
+npx vite build --config perf/stream/vite.config.mts          # on the team server: through bin/heavy
+node perf/stream/typing.mjs --n 100 --width 1440 --label after
+node perf/stream/typing.mjs --n 100 --width 390 --motion no-preference
+node perf/stream/typing.mjs --n 14 --results 0               # a short chat, to compare
+node perf/stream/typing.mjs --dist /path/to/other/dist ...   # another build (before and after on one machine)
+```
