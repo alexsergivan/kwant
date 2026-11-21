@@ -401,13 +401,19 @@ mod tests {
                 .unwrap()
         }
 
-        /// What `share_file` does: the card is saved first, the attachment linked after.
-        async fn card(&self, sender: &str, direct: &str, attachments: &[&crate::db::attachments::Attachment]) -> Message {
+        /// What `share_file` does: the card is saved first, the attachment linked after. Like a real
+        /// share, the message's sender is the bot's display name and its id is in `meta.kwant_id`.
+        async fn card(&self, kwant: &str, direct: &str, attachments: &[&crate::db::attachments::Attachment]) -> Message {
+            let cards: Vec<Value> = attachments.iter().map(|a| a.card()).collect();
+            self.card_as("Pip", direct, json!({"kind": "file", "attachments": cards, "kwant_id": kwant, "kwant_name": "Pip"})).await
+        }
+
+        /// A file card saved with this sender and exactly this meta.
+        async fn card_as(&self, sender: &str, direct: &str, meta: Value) -> Message {
             let mut msg = message("kwant", "Shared a file");
             msg.sender_id = sender.into();
             msg.direct_kwant_id = Some(direct.into());
-            let cards: Vec<Value> = attachments.iter().map(|a| a.card()).collect();
-            self.db.insert_message_with(&msg, &with_meta(json!({"kind": "file", "attachments": cards}))).await.unwrap()
+            self.db.insert_message_with(&msg, &with_meta(meta)).await.unwrap()
         }
     }
 
@@ -543,6 +549,30 @@ mod tests {
         let tied = f.shared("tied.csv", "text/csv", b"a,b\n9,9\n", "k1", Some("k1")).await;
         sqlx::query("UPDATE attachments SET message_id = 'm0' WHERE id = ?").bind(&tied.id).execute(&f.db.pool).await.unwrap();
         assert_eq!(f.card("k1", "k1", &[&tied]).await.results, None);
+    }
+
+    /// 31n: `share_file` saves the card with the bot's display name as sender and the bot's id in
+    /// `meta.kwant_id`; the files block checks that id, never the sender.
+    #[tokio::test]
+    async fn a_share_is_matched_by_the_bot_id_in_its_meta_not_its_sender() {
+        let f = Fixture::new().await;
+        let csv = f.shared("data.csv", "text/csv", b"a,b\n1,2\n", "k1", Some("k1")).await;
+        let cards = json!([csv.card()]);
+        // A real share: display name as sender, the bot's id in the meta
+        let real = f.card_as("Pip", "k1", json!({"kind": "file", "attachments": cards.clone(), "kwant_id": "k1", "kwant_name": "Pip"})).await;
+        let block = &real.results.expect("a real share gets its files block")["blocks"][0];
+        assert_eq!(block["items"][0]["preview"]["kind"], "table");
+        // Another bot's id in the meta
+        let other = f.card_as("Pip", "k1", json!({"kind": "file", "attachments": cards.clone(), "kwant_id": "k2"})).await;
+        assert_eq!(other.results, None, "meta names another bot");
+        // No bot id in the meta, even when the sender is the bot's id
+        let bare = f.card_as("k1", "k1", json!({"kind": "file", "attachments": cards.clone()})).await;
+        assert_eq!(bare.results, None, "no meta kwant_id");
+        let not_text = f.card_as("k1", "k1", json!({"kind": "file", "attachments": cards.clone(), "kwant_id": 1})).await;
+        assert_eq!(not_text.results, None, "a meta kwant_id that isn't text");
+        // A sender naming the bot doesn't stand in for another bot's id in the meta
+        let spoof = f.card_as("k1", "k1", json!({"kind": "file", "attachments": cards.clone(), "kwant_id": "k2"})).await;
+        assert_eq!(spoof.results, None, "sender k1, meta k2");
     }
 
     #[tokio::test]

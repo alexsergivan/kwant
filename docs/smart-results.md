@@ -32,7 +32,7 @@ Code: `src/server/smart_results/` (contract types, selectors, checks) and
   one block.
 - **The bot prompt line:** every turn's system prompt carries `smart_results::PROMPT_LINE` once
   (in the cached tail, `drivers::TurnInput::system_prompt_parts`), asking for tables, numbered
-  steps, an "Ingredients" list then numbered steps for a recipe, and `**Label:** value` lines.
+  steps, an "Ingredients" list then numbered steps for a recipe, and a `- **Label:** value` list for key numbers.
 - **What it never costs:** the reply. If a selector panics, a block fails its checks, or the write
   fails, kwant logs it and saves the message exactly as before.
 - **Edits:** when a reply's text is replaced (`set_message_text`), its block is deleted, because the

@@ -1,0 +1,27 @@
+{
+  "version": "0.9.34",
+  "date": "2026-11-21",
+  "highlights": [
+    {
+      "id": "long-logs-fold",
+      "title": "Long logs fold up",
+      "text": "A code block or log over 20 lines now shows its first 16 lines and a \"Show all\" button, so the rest of the reply stays in reach. Copy still copies every line.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "shared-file-preview",
+      "title": "Shared files show a preview again",
+      "text": "When a bot shares a CSV or a text file, you see the table or the text right in the chat again, above the download button. Files shared earlier stay as they were.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "On a narrow line chart, the last date label no longer overlaps the one before it.",
+    "Opening Inbox no longer shifts the sidebar, and the Inbox page's \"New\" count is amber only when a bot is waiting on you.",
+    "A wide table in a reply fades at its right edge while there is more to scroll, and one-item Pros or Cons get their mark.",
+    "The \"New\" tag above the message box no longer covers part of the chat on a computer.",
+    "Key numbers in a reply, like revenue and orders, now show as tiles instead of one long line."
+  ]
+}

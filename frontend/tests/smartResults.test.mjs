@@ -363,7 +363,10 @@ test('pros and cons columns: tinted headers, and short lists in the stacked card
   assert.match(header(v.host, 'Pros').querySelector('button').className, /text-ok/);
   assert.match(header(v.host, 'Cons').querySelector('button').className, /text-rose-300/);
   const card = v.host.querySelectorAll('[data-smart-result="comparison"] > div.sm\\:hidden > ul > li')[1];
-  assert.deepEqual([...card.querySelectorAll('dd ul li')].map((li) => li.textContent), ['Preview builds', 'EU region', 'chat support']);
+  const [pros, cons] = [...card.querySelectorAll('dd')].slice(-2);
+  assert.deepEqual([...pros.querySelectorAll('ul li')].map((li) => li.textContent), ['Preview builds', 'EU region', 'chat support']);
+  // 31p: a one-item Cons gets its mark too, as one item.
+  assert.deepEqual([...cons.querySelectorAll('ul li')].map((li) => li.textContent), ['Two seats only']);
   assert.deepEqual(m.shortList('Cheapest; simple setup'), ['Cheapest', 'simple setup']);
   assert.deepEqual(m.shortList('Fast, cheap, small'), ['Fast', 'cheap', 'small']);
   assert.equal(m.shortList('No preview builds'), null);
