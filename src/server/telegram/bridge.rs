@@ -763,6 +763,9 @@ async fn unpaired_form(state: &AppState, ask: &TelegramAsk) -> Option<(String, O
 const OLD_BOT_BUDGET: Duration = Duration::from_secs(30);
 /// At most this many of the old bot's cards are edited.
 const OLD_BOT_MAX_CARDS: usize = 30;
+/// A card the old bot couldn't edit because Telegram was unreachable or failed goes again at most
+/// this many times (after 1 s, then 2 s).
+const OLD_BOT_RETRIES: u32 = 2;
 
 /// A token for another bot was saved and closed `closed` (the asks that were open, as they were).
 /// The new bot can't edit what the old one sent, and the old runner is gone, so the cards with
@@ -771,9 +774,12 @@ const OLD_BOT_MAX_CARDS: usize = 30;
 ///
 /// Best effort, in the background, so the save never waits on it: at most [`OLD_BOT_MAX_CARDS`]
 /// cards within [`OLD_BOT_BUDGET`], paced as the send loop is. A message Telegram won't edit (one
-/// the person deleted) is skipped; any other refusal (the old token revoked, Telegram unreachable
-/// or asking to slow down) ends it, logged once. The token is used only for these edits, never
-/// stored or logged, and is wiped when they end.
+/// the person deleted) is skipped. When Telegram asks to slow down (429), the same card goes again
+/// after its `retry_after`; when it is unreachable or fails (network, 5xx), after 1 s, then 2 s, at
+/// most [`OLD_BOT_RETRIES`] times per card (32f). The budget still caps the whole job. Any other
+/// refusal (the old token revoked, the chat closed to the bot, another program on the token), or
+/// a card still failing after its retries, ends it, logged once. The token is used only for these
+/// edits, never stored or logged, and is wiped when they end.
 pub fn old_bot_cards(state: &AppState, space: &str, token: Zeroizing<String>, closed: Vec<TelegramAsk>) {
     let cards: Vec<TelegramAsk> = closed
         .into_iter()
@@ -790,10 +796,19 @@ pub fn old_bot_cards(state: &AppState, space: &str, token: Zeroizing<String>, cl
             let mut last = None;
             for ask in &cards {
                 let (Some(m), Some((html, markup))) = (ask.message_id, unpaired_form(&state, ask).await) else { continue };
-                super::pace(&mut last).await;
-                match client.edit_message(ask.chat_id, m, &html, markup.as_ref()).await {
-                    Ok(()) | Err(api::TgError::BadRequest(_)) => {}
-                    Err(e) => return Err(e),
+                let mut hiccups = 0;
+                loop {
+                    super::pace(&mut last).await;
+                    match client.edit_message(ask.chat_id, m, &html, markup.as_ref()).await {
+                        Ok(()) | Err(api::TgError::BadRequest(_)) => break,
+                        // Waited out within the budget, which ends the job if it runs out first
+                        Err(api::TgError::TooMany { retry_after }) => tokio::time::sleep(Duration::from_secs(retry_after)).await,
+                        Err(api::TgError::Network | api::TgError::Server(_)) if hiccups < OLD_BOT_RETRIES => {
+                            hiccups += 1;
+                            tokio::time::sleep(Duration::from_secs(u64::from(hiccups))).await;
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
             }
             Ok(())

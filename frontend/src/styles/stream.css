@@ -246,7 +246,7 @@
   align-items: center;
   gap: 16px;
   height: 62px;
-  animation: kw-wa-in 150ms var(--kw-ease, cubic-bezier(0.2, 0.7, 0.2, 1)) both;
+  animation: kw-wa-swap 150ms var(--kw-ease, cubic-bezier(0.2, 0.7, 0.2, 1)) both;
 }
 .kw-wa[hidden] { display: none; }
 .kw-wa-scene { flex: none; display: block; width: 108px; height: 54px; shape-rendering: crispEdges; image-rendering: pixelated; }
@@ -285,9 +285,13 @@
 [data-theme="light"] .kw-wa-open { color: #5b4bc4; }
 .kw-wa-dots { display: inline-block; width: 1.1em; }
 
-/* The first words fade in over the place the scene held. */
+/* 32e: the live bubble fades in as one piece with what is inside it, so its frame never shows empty. */
 @keyframes kw-wa-in { from { opacity: 0; } to { opacity: 1; } }
-.kw-wa-in { animation: kw-wa-in 150ms var(--kw-ease, cubic-bezier(0.2, 0.7, 0.2, 1)) both; }
+.kw-live-in { animation: kw-wa-in 150ms var(--kw-ease, cubic-bezier(0.2, 0.7, 0.2, 1)) both; }
+/* Inside a bubble already on screen, the first words (over the place the scene held) and the scene (back after
+   Allow once or a handoff) come up from half, never from nothing: no frame of an empty bubble at the swap. */
+@keyframes kw-wa-swap { from { opacity: 0.5; } to { opacity: 1; } }
+.kw-wa-in { animation: kw-wa-swap 150ms var(--kw-ease, cubic-bezier(0.2, 0.7, 0.2, 1)) both; }
 
 /* 1. The bot bobs 1 px (a third of a cell) twice per 2.4 s loop. */
 @keyframes kw-wa-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-0.3333px); } }
@@ -346,6 +350,6 @@
 
 /* Reduced motion: the resting frame. Lines full, paw down, no spark, no bob, dots still ("…"). */
 @media (prefers-reduced-motion: reduce) {
-  .kw-wa, .kw-wa-in, .kw-wa-scene *, .kw-wa-dots > * { animation: none !important; }
+  .kw-wa, .kw-wa-in, .kw-live-in, .kw-wa-scene *, .kw-wa-dots > * { animation: none !important; }
   .kw-wa-dots > * { opacity: 0.8; }
 }

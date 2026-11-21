@@ -9,8 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Fixed
-- In a team run, a teammate waiting on you now says so on its card in the team chat ("Writer needs your OK to send an email" or "Writer asked you a question") with a "Go to it" button, instead of "Writer is working on it" (#973)
 - In a team chat, a teammate's result now says when it ran on another account: a small "on Work Claude" next to "Result from", with the reason (ran out of usage or signed out) when you point at it (#979)
+
+## [Mac 0.9.36] - 2026-11-21
+
+kwant 0.9.36: replies that start with the bot's own words, reply cards that never show up empty, a focus ring on the code block's Copy button, old Telegram cards cleared when you switch bots, line chart dates that don't run into each other and handoffs where the name and the words change together.
+
+### Fixed
+- Replies no longer flash an internal routing line ("Laya Router: model=…" or "Laya Team Router: Routed to …") before they start. kwant still picks the model and the bot the same way; that note now goes to kwant's log only (#959)
+- A bot's reply card no longer flashes empty when a reply starts, when its first words appear, when the next bot takes over or after Allow once. The card and what is inside it now appear together (#961)
+- The Copy button on code blocks now shows a focus ring when you reach it with the keyboard (#939)
+- Switching kwant to another Telegram bot now clears the buttons on the cards the old bot sent, so an old tap can't approve or answer anything. kwant edits them through the old bot once, in the background (#941)
+- Line chart date labels no longer run into each other at the right edge: the last date is always shown, and the label before it gives way when they would touch (#953)
+- Switching kwant to another Telegram bot now clears the old bot's buttons even when Telegram asks kwant to slow down or has a short outage: kwant waits as asked and tries again (#963)
+- At a handoff in a team run, the next bot's name now appears together with its own words, never over the previous bot's reply (#965)
 
 ## [Mac 0.9.35] - 2026-11-21
 
