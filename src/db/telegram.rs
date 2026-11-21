@@ -196,7 +196,9 @@ impl Database {
     }
 
     /// A new token was accepted: the bot is (re)set, any pairing and the approvals switch end.
-    pub async fn telegram_save_bot(&self, space: &str, bot_id: i64, username: &str, name: &str) -> Result<(), DbError> {
+    /// Returns the asks that were open, as they were (`allow` and the message id), so the old bot's
+    /// cards can lose their buttons (31v).
+    pub async fn telegram_save_bot(&self, space: &str, bot_id: i64, username: &str, name: &str) -> Result<Vec<TelegramAsk>, DbError> {
         let now = crate::clock::now();
         let mut tx = self.pool.begin().await?;
         sqlx::query(
@@ -219,12 +221,17 @@ impl Database {
         .bind(now)
         .execute(&mut *tx)
         .await?;
-        // A new bot can't edit the old one's messages, and none of them may allow anything now
-        sqlx::query("UPDATE telegram_asks SET state = 'closed', allow = 0 WHERE space_id = ?").bind(space).execute(&mut *tx).await?;
+        // The new bot can't answer taps on the old one's messages, and none of them may allow
+        // anything now. Only the old bot can edit its cards: the caller does that with its token
+        let closed = sqlx::query_as::<_, TelegramAsk>("UPDATE telegram_asks SET state = 'closed' WHERE space_id = ? AND state = 'open' RETURNING *")
+            .bind(space)
+            .fetch_all(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE telegram_asks SET allow = 0 WHERE space_id = ? AND allow = 1").bind(space).execute(&mut *tx).await?;
         // Update ids are per bot: the new bot's start again, and must not look already handled (N-T1)
         sqlx::query("DELETE FROM telegram_updates WHERE space_id = ?").bind(space).execute(&mut *tx).await?;
         tx.commit().await?;
-        Ok(())
+        Ok(closed)
     }
 
     /// A fresh pairing code replaces any earlier one (one outstanding code, G-P15) and lifts the
