@@ -1,0 +1,27 @@
+{
+  "version": "0.9.36",
+  "date": "2026-11-21",
+  "highlights": [
+    {
+      "id": "router-line-stays-internal",
+      "title": "Replies start with the bot's own words",
+      "text": "A reply no longer flashes a line about which model or bot kwant picked before it starts. kwant still picks the same way; that note now stays in kwant's log.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "empty-card-never-blinks",
+      "title": "Reply cards appear in one piece",
+      "text": "A bot's reply card no longer shows up empty for a moment when a reply starts, when the next bot takes over or after Allow once. The card and its words now appear together.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "The Copy button on code blocks now shows a focus ring when you reach it with the keyboard.",
+    "Switching kwant to another Telegram bot now clears the buttons on the old bot's cards.",
+    "Line chart date labels no longer run into each other at the right edge.",
+    "Switching Telegram bots now clears the old bot's buttons even when Telegram asks kwant to slow down.",
+    "At a handoff in a team run, the next bot's name now appears together with its own words."
+  ]
+}

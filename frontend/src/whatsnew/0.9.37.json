@@ -1,0 +1,31 @@
+{
+  "version": "0.9.37",
+  "date": "2026-11-21",
+  "highlights": [
+    {
+      "id": "team-stop-stops-the-team",
+      "title": "Stop stops the whole team",
+      "text": "When you stop a teammate, the team stops with it. Nothing restarts the work on its own, and a teammate that was waiting shows Stopped, not Failed.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "team-add-on-waits-its-turn",
+      "title": "Add-ons reach a busy teammate",
+      "text": "If you add something while a teammate is still working, it no longer gets lost. It waits its turn and starts as soon as their current task is done.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "team-card-says-waiting-on-you",
+      "title": "See when a teammate waits for you",
+      "text": "When a teammate needs your OK or asked you a question, its card in the team chat says so, with a Go to it button, instead of a spinner that says it is still working.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A teammate whose model stops without answering now says so in plain words, with what to do next.",
+    "Line chart dates no longer overlap on tablets and medium-width windows."
+  ]
+}
