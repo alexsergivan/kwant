@@ -213,7 +213,9 @@ const weekly = (n, kind = 'line') => ({
 test('a line chart labels the last point and never prints two dates on top of each other (31m)', async () => {
   const expected = {
     narrow: { 5: [0, 2, 4], 7: [0, 2, 4, 6], 8: [0, 2, 4, 7], 9: [0, 3, 8], 12: [0, 3, 6, 11] },
-    wide: { 5: [0, 1, 2, 3, 4], 7: [0, 1, 2, 3, 4, 5, 6], 8: [0, 1, 2, 3, 4, 5, 6, 7], 9: [0, 1, 2, 3, 4, 5, 6, 7, 8], 12: [0, 2, 4, 6, 8, 11] },
+    // 32b: at 640 px a 7 to 9 point line labels every point, so the end-anchored last date crowds the one before it,
+    // which goes. 32c: 9 points leave a 72 px step for a ~70 px date, so they step by 2 like 12 do.
+    wide: { 5: [0, 1, 2, 3, 4], 7: [0, 1, 2, 3, 4, 6], 8: [0, 1, 2, 3, 4, 5, 7], 9: [0, 2, 4, 6, 8], 12: [0, 2, 4, 6, 8, 11] },
   };
   for (const [size, width] of [['narrow', 358], ['wide', 640]]) {
     for (const n of [5, 7, 8, 9, 12]) {
@@ -222,10 +224,11 @@ test('a line chart labels the last point and never prints two dates on top of ea
       assert.deepEqual(at, expected[size][n], what);
       assert.equal(at.at(-1), n - 1, `last point labelled, ${what}`);
       assert.ok(!at.includes(-1), `every label names a whole point, ${what}`);
-      // Thinned labels keep at least 2 steps between neighbours; unthinned (wide, n <= 10) keep every point.
+      // Thinned labels keep at least 2 steps between neighbours; unthinned (wide, n <= 8 at 640 px, 32c) keep every
+      // point but, when crowded, the one before the last (32b).
       const minGap = Math.min(...at.slice(1).map((v, k) => v - at[k]));
-      if (size === 'narrow' || n > 10) assert.ok(minGap >= 2, `neighbours >= 2 steps apart, ${what}`);
-      else assert.equal(at.length, n, `wide n<=10 labels every point, ${what}`);
+      if (size === 'narrow' || n > 8) assert.ok(minGap >= 2, `neighbours >= 2 steps apart, ${what}`);
+      else assert.ok(at.length >= n - 1 && at.every((v, k) => v === k || k === at.length - 1), `wide n<=8 labels every point up to the last, ${what}`);
     }
   }
 });
@@ -251,7 +254,7 @@ test('a phone line chart drops a shared year from its date labels, and only ther
   }
   // Everything else keeps the full date.
   const wide = await xAxisAt(same, 640);
-  assert.deepEqual(wide.texts, same.points.map((p) => p.x), 'wide: full dates');
+  assert.deepEqual(wide.texts, wide.at.map((i) => same.points[i].x), 'wide: full dates (32b may drop the one before the last)');
   const mixed = { ...weekly(8), points: weekly(8).points.map((p, i) => ({ ...p, x: i < 6 ? p.x : `2027-01-0${i - 5}` })) };
   const mx = await xAxisAt(mixed, 358);
   assert.ok(mx.texts.length && mx.texts.every((t) => /^\d{4}-\d{2}-\d{2}$/.test(t)), 'mixed years: full dates ' + mx.texts.join('|'));
@@ -275,4 +278,74 @@ test('with the year dropped from the axis, the tooltip, table and accessible nam
   await click([...host.querySelectorAll('button')][1]);
   const firstCells = [...host.querySelectorAll('tbody tr td:first-child')].map((td) => td.textContent);
   assert.deepEqual(firstCells, block.points.map((p) => p.x), 'table keeps full dates');
+});
+
+// 32b chart-last-label-gap: on a wide line that labels every point, the end-anchored last date sat 5 px from the
+// middle-anchored one before it (Rigel, 31t QA at 1280). With ~7 px digits at 11 px, keep at least 8 px between them:
+// otherwise the label before the last goes. The first and last labels always stay.
+const CHAR_W = 7;
+function lastGap(block, width, at) {
+  const plotW = width - 44 - 16;
+  const step = plotW / (block.points.length - 1);
+  const [prev, last] = at.slice(-2);
+  const w = (i) => block.points[i].x.length * CHAR_W;
+  return (44 + last * step - w(last)) - (44 + prev * step + w(prev) / 2);
+}
+test('a wide line chart keeps 8 px before its end-anchored last date, dropping the label before it (32b)', async () => {
+  // Mira's 8-point weekly chart at 1280 (the plot is 786 px wide there).
+  const eight = weekly(8);
+  const r = await xAxisAt(eight, 786);
+  assert.deepEqual(r.at, [0, 1, 2, 3, 4, 5, 7], '1280: the label before the last goes');
+  assert.equal(r.at[0], 0, 'first kept');
+  assert.equal(r.at.at(-1), 7, 'last kept');
+  assert.deepEqual(r.texts, [0, 1, 2, 3, 4, 5, 7].map((i) => eight.points[i].x), 'full dates, untruncated');
+  assert.ok(lastGap(eight, 786, r.at) >= 8, `last gap ${lastGap(eight, 786, r.at).toFixed(1)} px >= 8`);
+  // A roomy chart keeps every label: 5 points at 786 px leave far more than 8 px.
+  assert.deepEqual((await xAxisAt(weekly(5), 786)).at, [0, 1, 2, 3, 4], 'room enough: nothing dropped');
+  // Never the first: with only two labels left, both stay even when close.
+  const two = weekly(2);
+  assert.deepEqual((await xAxisAt(two, 120)).at, [0, 1], 'two points: first and last both stay');
+  // Phones (31m cadence, 31t MM-DD) are unchanged.
+  assert.deepEqual((await xAxisAt(eight, 358)).texts, ['09-07', '09-21', '10-05', '10-26'], '390: unchanged');
+  for (const [n, at] of [[5, [0, 2, 4]], [9, [0, 3, 8]], [12, [0, 3, 6, 11]]]) {
+    assert.deepEqual((await xAxisAt(weekly(n), 358)).at, at, `390 n=${n}: unchanged`);
+  }
+  // Bars are middle-anchored and keep every label.
+  assert.equal((await xAxisAt(weekly(8, 'bar'), 786)).at.length, 8, 'bars at 1280: every bar named');
+  assert.equal((await xAxisAt(weekly(8, 'bar'), 358)).at.length, 8, 'bars at 390: every bar named');
+});
+
+// 32c chart-middle-labels-fit: the wide cadence ceil(n / 10) ignored how wide a date is, so between 480 and ~760 px
+// the middle labels overlapped (10 points at 640 px: a 64 px step for a ~70 px date). Every drawn neighbour pair keeps
+// at least 8 px, with the same ~7 px per character estimate as 32b: middle-anchored labels, the last end-anchored.
+function drawnGaps(block, width, at) {
+  const n = block.points.length;
+  const step = (width - 44 - 16) / (n - 1);
+  const box = (i) => {
+    const w = block.points[i].x.length * CHAR_W;
+    const x = 44 + i * step;
+    return i === n - 1 ? [x - w, x] : [x - w / 2, x + w / 2];
+  };
+  return at.slice(1).map((v, k) => box(v)[0] - box(at[k])[1]);
+}
+test('a wide line chart never draws two date labels closer than 8 px, 480 to 760 px wide (32c)', async () => {
+  const bad = [];
+  for (const width of [480, 560, 640, 720, 760]) {
+    for (let n = 6; n <= 20; n++) {
+      const b = weekly(n);
+      const { at } = await xAxisAt(b, width);
+      const gaps = drawnGaps(b, width, at);
+      if (Math.min(...gaps) < 8) bad.push(`${width} px n=${n}: ${at.join(',')} gaps ${gaps.map((g) => g.toFixed(0)).join('/')}`);
+      if (at[0] !== 0 || at.at(-1) !== n - 1) bad.push(`${width} px n=${n}: first and last must stay, got ${at.join(',')}`);
+    }
+  }
+  assert.deepEqual(bad, [], bad.join('\n'));
+});
+test('phones and 1280 keep their labels where they already fit (32c)', async () => {
+  // 390 (358 px chart): 31m cadence and 31t MM-DD, untouched by the wide rule.
+  const narrow = { 6: [0, 2, 5], 8: [0, 2, 4, 7], 9: [0, 3, 8], 12: [0, 3, 6, 11], 16: [0, 4, 8, 15], 20: [0, 5, 10, 19] };
+  for (const [n, at] of Object.entries(narrow)) assert.deepEqual((await xAxisAt(weekly(+n), 358)).at, at, `390 n=${n}`);
+  // 1280 (786 px chart): every point up to 10 (32b drops the one before a crowded last), then every other one.
+  const wide = { 5: [0, 1, 2, 3, 4], 8: [0, 1, 2, 3, 4, 5, 7], 10: [0, 1, 2, 3, 4, 5, 6, 7, 9], 12: [0, 2, 4, 6, 8, 11], 16: [0, 2, 4, 6, 8, 10, 12, 15] };
+  for (const [n, at] of Object.entries(wide)) assert.deepEqual((await xAxisAt(weekly(+n), 786)).at, at, `1280 n=${n}`);
 });

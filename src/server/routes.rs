@@ -796,6 +796,30 @@ fn turn_failed_text(name: &str, why: &str, activity: &super::activity::TurnActiv
     format!("⚠️ [{name}] Couldn't finish this reply: {clipped}{ellipsis}")
 }
 
+/// What a failed driver run says in the chat and on a teammate's card (32k): a CLI that exited
+/// with no output says so in the person's words; any other error keeps its own message, without
+/// the "Driver execution error: " layer. The server log keeps the full driver text.
+fn failed_step_why(model: &str, e: &crate::drivers::DriverError) -> String {
+    match e {
+        crate::drivers::DriverError::Execution(m) if is_silent_exit(m) => {
+            "its model stopped without an answer. Try again, or switch its model.".into()
+        }
+        crate::drivers::DriverError::Execution(m) => format!("the {model} driver failed: {m}"),
+        other => format!("the {model} driver failed: {other}"),
+    }
+}
+
+/// "<kind> CLI exited with status N and no output" (or "with a signal"), from drivers/cli.rs.
+fn is_silent_exit(m: &str) -> bool {
+    m.strip_suffix(" and no output")
+        .and_then(|head| head.split_once(" CLI exited with "))
+        .is_some_and(|(kind, how)| {
+            !kind.is_empty()
+                && !kind.contains(char::is_whitespace)
+                && (how == "a signal" || how.strip_prefix("status ").is_some_and(|c| c.parse::<i64>().is_ok()))
+        })
+}
+
 /// Truncates to at most `max` bytes without splitting a UTF-8 character.
 pub(super) fn truncate_chars(text: &str, max: usize) -> &str {
     if text.len() <= max {
@@ -1452,6 +1476,10 @@ where
 /// A teammate's result @mentioned one already in this chain of relays.
 const RELAY_PING_PONG: &str = "it already worked on this chain of hand-offs, so a teammate's result can't hand it back. Ask the lead to send it";
 const IN_CODE_BLOCK: &str = "the mention was inside code. Write the name as plain text to ask them";
+/// Why a teammate's result (a relay) doesn't hand work to a teammate still on an earlier task from
+/// this chat, and why the lead's same line to it again isn't sent. A lead's other mention of it
+/// waits for that task instead (see [`delegate_mentions`]).
+const STILL_ON_IT: &str = "still working on an earlier task from this chat";
 /// The same task, normalised, already went to this teammate for this user message.
 pub const REPEATED_TASK: &str = "already asked {name} exactly this in this request";
 /// The teammate's last [`FAILURE_STREAK_LEN`] delegations for this user message all failed.
@@ -1557,6 +1585,9 @@ pub(super) struct Relay<'a> {
 /// ceiling [`MAX_DELEGATIONS_PER_REQUEST`] do mentions wait on a Continue notice
 /// ([`super::budget::pause_capped`]). Every mention that hands nothing on is said in the channel.
 /// Teammates the lead already delegated to from this channel (with the tool) aren't sent it twice.
+/// A teammate the lead mentions while it is still on an earlier task from this chat gets the new
+/// task after that one, with its result ("Waiting for … to start"); a teammate's result (a relay)
+/// doesn't hand it more, and the lead's same line again isn't sent ([`STILL_ON_IT`]).
 /// `resumed`: the person pressed Continue on such a notice: only these teammates are handed the
 /// work, with a fresh allowance.
 pub(super) async fn delegate_mentions(
@@ -1607,6 +1638,10 @@ pub(super) async fn delegate_mentions(
     let mut targets: Vec<&Kwant> = Vec::new();
     // Past the ceiling: they wait on a Continue notice instead of a dead end
     let mut capped: Vec<&Kwant> = Vec::new();
+    // A teammate the lead mentions while it is still on an earlier task from this chat: the new
+    // task waits for that one (its newest open task here) and then gets its result, instead of
+    // being dropped (Mira's UX pass at 0.9.35: "Also mention free shipping" never reached the Writer)
+    let mut wait_on: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for &i in &found.targets {
         let k = &scope.teammates[i];
         if not_a_handoff(&k.id) || targets.iter().any(|t| t.id == k.id) || resumed.is_some_and(|ids| !ids.contains(&k.id)) {
@@ -1622,11 +1657,14 @@ pub(super) async fn delegate_mentions(
             continue;
         } else if just_reported.contains(&k.id) && crate::router::only_credited(text, &k.name) {
             skipped.push((k.name.clone(), CREDIT_ONLY.to_string()));
-        } else if open.contains(&k.id.as_str()) {
-            skipped.push((k.name.clone(), "still working on an earlier task from this chat".to_string()));
+        } else if relay.is_some() && open.contains(&k.id.as_str()) {
+            skipped.push((k.name.clone(), STILL_ON_IT.to_string()));
         } else if failure_streak(this_request.iter().copied(), &k.id) {
             skipped.push((k.name.clone(), FAILURE_STREAK.replace("{name}", &k.name)));
         } else {
+            if let Some(d) = mine.iter().find(|d| d.is_open() && d.specialist_kwant_id == k.id) {
+                wait_on.insert(k.id.clone(), d.id.clone());
+            }
             targets.push(k);
         }
     }
@@ -1702,6 +1740,11 @@ pub(super) async fn delegate_mentions(
     for (specialist, line) in units {
         let unit_task = line.as_deref().map_or_else(|| task.clone(), line_task);
         let key = repeat_key(&unit_task, &specialist.name);
+        // The task it is still on, from an earlier message: the same line again isn't an add-on
+        if mine.iter().any(|d| d.is_open() && d.specialist_kwant_id == specialist.id && repeat_key(&d.task, &specialist.name) == key) {
+            skipped.push((specialist.name.clone(), STILL_ON_IT.to_string()));
+            continue;
+        }
         let repeated = asked_now.iter().any(|(id, k)| id == &specialist.id && *k == key)
             || this_request.iter().any(|d| {
                 // A failed one may be retried as-is; the failure-streak guard stops that loop
@@ -1717,9 +1760,11 @@ pub(super) async fn delegate_mentions(
             }
             continue;
         }
-        // Waits for a teammate started here, or for one still on an earlier task from this chat
-        let after = match after_of.get(&specialist.id) {
-            Some(p) => {
+        // Waits for its own earlier task still open here, else for a teammate started here, or
+        // for one still on an earlier task from this chat
+        let after = match (wait_on.get(&specialist.id), after_of.get(&specialist.id)) {
+            (Some(own), _) => Some(own.clone()),
+            (None, Some(p)) => {
                 let earlier = || mine.iter().find(|d| d.is_open() && &d.specialist_kwant_id == p).map(|d| d.id.clone());
                 match started.get(p).cloned().or_else(earlier) {
                     Some(id) => Some(id),
@@ -1731,7 +1776,7 @@ pub(super) async fn delegate_mentions(
                     None => None,
                 }
             }
-            None => None,
+            (None, None) => None,
         };
         let req = super::delegation::StartRequest {
             lead: lead.clone(),
@@ -3019,13 +3064,18 @@ async fn run_kwant_turn_inner(
         let pinned_model = route.model.clone();
         let pinned_family = crate::router::parse_pin(pin).family.is_some();
 
-        event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
-            "🔮 Laya Router: model='{}', effort='{}' ({:.0}% conf) — {}",
-            target_model,
-            effort_level,
-            route.confidence * 100.0,
-            route.reasoning
-        )));
+        // 32d: the routing decision is for the server log only. As a thinking line it became the
+        // live reply's status line until "Running on …" replaced it; the model badge and Details'
+        // "Ran on … · <effort>" already tell the person what ran
+        tracing::info!(
+            kwant = %target_kwant.id,
+            turn = %tag.turn_id,
+            model = %target_model,
+            effort = %effort_level,
+            confidence = %format!("{:.0}%", route.confidence * 100.0),
+            reason = %route.reasoning,
+            "Laya Router picked the model"
+        );
 
         let context_id = tag.context_id.clone();
 
@@ -4215,7 +4265,10 @@ async fn run_kwant_turn_inner(
             return Ok(reply_text);
         }
         let why = match driver_result {
-            Some(Ok(Err(e))) => format!("the {target_model} driver failed: {e}"),
+            Some(Ok(Err(e))) => {
+                tracing::warn!(kwant = %target_kwant.id, model = %target_model, error = %e, "driver failed");
+                failed_step_why(&target_model, &e)
+            }
             Some(Err(_)) => format!("the {target_model} driver stopped unexpectedly"),
             _ => format!("the {target_model} turn ended without a reply"),
         };
@@ -4773,10 +4826,8 @@ async fn send_chat_routed(
                     basis: Some(basis),
                 });
 
-                let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
-                    "🔮 Laya Team Router: Routed to {} ({}) — {}",
-                    target_kwant.name, target_kwant.title, reason
-                )));
+                // 32d: RoutingDecided above is what the person sees; this line is for the server log
+                tracing::info!(kwant = %target_kwant.id, name = %target_kwant.name, reason = %reason, "Laya Team Router routed the message");
 
                 file_wakes_browser_wait(&state, &target_kwant.id, direct_chat(&payload), !uploads.is_empty(), from_person).await;
                 let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id, from_person).await;
@@ -4829,10 +4880,8 @@ async fn send_chat_routed(
                     });
                 }
 
-                let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
-                    "🔮 Laya Team Router: Initiating {}-turn autonomous discussion with @{}",
-                    turns, team.name
-                )));
+                // 32d: RoutingDecided above is what the person sees; this line is for the server log
+                tracing::info!(team = %team.id, turns, "Laya Team Router started a team discussion");
 
                 let planned: Vec<Kwant> = speakers
                     .iter()
@@ -7929,6 +7978,63 @@ mod tests {
         let text = turn_failed_text("Lin", r"no config at /Users/Oleks Smith/.kwnt or C:\Users\Oleks Smith\.kwnt", &activity);
         assert!(!text.contains("Oleks") && !text.contains("Smith"), "{text}");
         assert!(text.ends_with(r"no config at ~/.kwnt or ~\.kwnt"), "{text}");
+    }
+
+    #[test]
+    fn a_model_that_stopped_silently_reads_in_plain_words() {
+        use crate::drivers::DriverError;
+        let plain = "its model stopped without an answer. Try again, or switch its model.";
+        // Mira's 0.9.35 pass: "Writer couldn't finish: the claude driver failed: Driver execution error: claude
+        // CLI exited with status 1 and no output"
+        let silent = DriverError::Execution("claude CLI exited with status 1 and no output".into());
+        assert_eq!(super::failed_step_why("claude", &silent), plain);
+        // any CLI driver, any status, and a CLI ended by a signal
+        for (model, inner) in [
+            ("codex", "codex CLI exited with status 137 and no output"),
+            ("grok", "grok CLI exited with a signal and no output"),
+        ] {
+            assert_eq!(super::failed_step_why(model, &DriverError::Execution(inner.into())), plain, "{inner}");
+        }
+        let tag = crate::drivers::events::TurnTag {
+            turn_id: "t-silent".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+        };
+        let activity = super::super::activity::TurnActivity::start(tokio::sync::broadcast::channel(4).0, tag);
+        let text = turn_failed_text("Writer", &super::failed_step_why("claude", &silent), &activity);
+        assert_eq!(text, format!("⚠️ [Writer] Couldn't finish this reply: {plain}"));
+        for internal in ["Driver execution error", "driver failed", "CLI exited", "no output", "status 1"] {
+            assert!(!text.contains(internal), "{internal} in {text}");
+        }
+    }
+
+    #[test]
+    fn another_driver_error_keeps_its_words_without_the_execution_layer() {
+        use crate::drivers::DriverError;
+        let e = DriverError::Execution("401 key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX was rejected".into());
+        let why = super::failed_step_why("claude", &e);
+        assert_eq!(why, "the claude driver failed: 401 key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX was rejected");
+        // still masked once saved
+        let tag = crate::drivers::events::TurnTag {
+            turn_id: "t-401".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+        };
+        let activity = super::super::activity::TurnActivity::start(tokio::sync::broadcast::channel(4).0, tag);
+        let text = turn_failed_text("Lin", &why, &activity);
+        assert!(text.starts_with("⚠️ [Lin] Couldn't finish this reply: the claude driver failed: 401 key"), "{text}");
+        assert!(!text.contains("sk-ant-api03-ABCDEF") && !text.contains("Driver execution error"), "{text}");
+        // a message that only mentions a silent exit isn't one
+        let e = DriverError::Execution("claude CLI exited with status 1 and no output; retried on codex: 429".into());
+        assert_eq!(
+            super::failed_step_why("claude", &e),
+            "the claude driver failed: claude CLI exited with status 1 and no output; retried on codex: 429"
+        );
+        // the other kinds keep their own words
+        let io = DriverError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"));
+        assert_eq!(super::failed_step_why("codex", &io), "the codex driver failed: I/O or Subprocess error: no such file");
     }
 
     #[test]

@@ -332,3 +332,103 @@ test('turn_started keeps an audit turn’s who-and-why (14a)', () => {
   m = t.applyTurnEvent({}, ev('turn_started', { turn_id: 'y', kwant_id: 'ben', context_id: 'ben' }));
   assert.equal('audit' in m.y, false);
 });
+
+// ---------------------------------------------------------------------------
+// 32j: a teammate waiting on the person says so on its delegation card
+
+test('32j: waiting lines name the teammate and the ask; no ask keeps "working on it"', () => {
+  assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'approval', action: 'run a command' }), 'Writer needs your OK to run a command');
+  assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'approval', action: 'send an email' }), 'Writer needs your OK to send an email');
+  assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'approval' }), 'Writer needs your OK', 'no action: never guesses one');
+  assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'question', action: 'send an email' }), 'Writer asked you a question');
+  assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'question' }), 'Writer asked you a question');
+  assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: null }), 'Writer is working on it');
+  assert.equal(t.delegationStatusLine('running', 'Writer'), 'Writer is working on it');
+  // Only a running teammate can be waiting on the person: other states keep their own line.
+  assert.equal(t.delegationStatusLine('completed', 'Writer', { waiting: 'approval' }), 'Writer finished');
+  assert.equal(t.delegationStatusLine('queued', 'Writer', { waiting: 'question' }), 'Waiting for Writer to start');
+});
+
+const wMeta = { kind: 'delegation_started', delegation_id: 'd1', thread_id: 'th-writer', specialist_id: 'writer', specialist_name: 'Writer', status: 'running', title: 'Draft the email' };
+const appr = (extra = {}) => ({ id: 'a1', tool_name: 'Bash', details: {}, kwant_id: 'writer', link: { thread_id: 'th-writer' }, ...extra });
+const ques = (extra = {}) => ({ id: 'q1', kwant_id: 'writer', thread_id: 'th-writer', status: 'open', ...extra });
+
+test('32j: an approval in the teammate\'s thread, or a live one with no link yet from that teammate, means "approval"', () => {
+  assert.equal(t.delegationWaiting(wMeta, [appr()], {}), 'approval');
+  assert.equal(t.delegationWaiting(wMeta, [appr({ link: null })], {}), 'approval', 'live event: link is null until /api/away syncs');
+  assert.equal(t.delegationWaiting(wMeta, [appr({ link: null, kwant_id: null, details: { kwant_id: 'writer' } })], {}), null, 'kwant_id is the field matched');
+});
+
+test('32j: delegationWaitingApproval returns the matched approval, so the card can name its action', () => {
+  const a = appr({ id: 'a9', tool_name: 'mcp__github__create_pull_request' });
+  assert.equal(t.delegationWaitingApproval(wMeta, [appr({ id: 'x', link: { thread_id: 'th-other' } }), a]), a);
+  assert.equal(t.delegationWaitingApproval(wMeta, [appr({ link: { thread_id: 'th-other' } })]), null);
+});
+
+test('32j: an open question in the teammate\'s thread means "question"; an answered one does not', () => {
+  assert.equal(t.delegationWaiting(wMeta, [], { q1: ques() }), 'question');
+  assert.equal(t.delegationWaiting(wMeta, [], { q1: ques({ status: 'answered' }) }), null);
+  assert.equal(t.delegationWaiting(wMeta, [], { q1: ques({ status: 'cancelled' }) }), null);
+  assert.equal(t.delegationWaiting(wMeta, [appr()], { q1: ques() }), 'approval', 'an approval blocks the run first');
+});
+
+test('32j: another thread\'s ask never marks this card', () => {
+  assert.equal(t.delegationWaiting(wMeta, [appr({ link: { thread_id: 'th-other' } })], {}), null);
+  assert.equal(t.delegationWaiting(wMeta, [appr({ link: { channel_id: 'general' } })], {}), null, 'a linked ask elsewhere');
+  assert.equal(t.delegationWaiting(wMeta, [appr({ link: null, kwant_id: 'researcher' })], {}), null, 'another bot\'s live ask');
+  assert.equal(t.delegationWaiting(wMeta, [], { q1: ques({ thread_id: 'th-other' }) }), null);
+  assert.equal(t.delegationWaiting(wMeta, [], { q1: ques({ thread_id: null }) }), null);
+  assert.equal(t.delegationWaiting(wMeta, [appr({ refused: true })], {}), null, 'a refused line is not waiting');
+  assert.equal(t.delegationWaiting(wMeta, [], {}), null);
+});
+
+test('32j: the card says the teammate is waiting, in amber with a hand, and its button reads "Go to it"', () => {
+  for (const [waiting, line, waitingAction] of [['approval', 'Writer needs your OK to open a pull request on GitHub', 'open a pull request on GitHub'], ['approval', 'Writer needs your OK', null], ['question', 'Writer asked you a question', null]]) {
+    const html = card.render(props({ meta: wMeta, live: { ...delegation('running'), id: 'd1' }, waiting, waitingAction }));
+    assert.match(html, new RegExp(`role="status"[^>]*>.*${line}`, 's'));
+    assert.doesNotMatch(html, /is working on it/);
+    assert.doesNotMatch(html, /animate-spin/, 'no spinner while it waits');
+    assert.match(html, /lucide-hand/, 'a hand icon');
+    assert.match(html, /border-amber-500\/30/);
+    assert.match(html, /text-amber-300/);
+    assert.match(html, />Go to it</);
+    assert.doesNotMatch(html, /Open Writer/);
+    assert.match(html, /min-h-\[44px\]/, '44 px target on a phone');
+    assert.match(html, /Stop “Draft the email”/, 'Stop stays');
+    assert.doesNotMatch(html, /holo|kw-sticker/);
+  }
+});
+
+test('32j: without an ask, or once finished, the card is unchanged', () => {
+  const working = card.render(props({ meta: wMeta, live: { ...delegation('running'), id: 'd1' }, waiting: null }));
+  assert.match(working, /Writer is working on it/);
+  assert.match(working, /animate-spin/);
+  assert.match(working, /Open Writer&#x27;s thread|Open Writer's thread/);
+  const done = card.render(props({ meta: wMeta, live: { ...delegation('completed'), id: 'd1' }, waiting: 'approval' }));
+  assert.match(done, /Writer finished/);
+  assert.doesNotMatch(done, /Go to it|needs your OK/);
+});
+
+test('32j: App passes the waiting state to the delegation card from pending approvals and questions', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const fn = app.slice(app.indexOf('const renderDelegation'), app.indexOf('// Search result picked'));
+  assert.match(fn, /delegationWaiting\(meta, pendingApprovals, questions\)/);
+  assert.match(fn, /delegationWaitingApproval\(meta, pendingApprovals\)/);
+  assert.match(fn, /approvalAction\(/, 'the approval card\'s own words');
+  assert.match(fn, /waiting=\{/);
+  assert.match(fn, /waitingAction=\{/);
+});
+
+test('32j: a non-shell approval reads in the approval card\'s own words', async () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const out = await build({
+    stdin: { contents: "export { approvalAction } from './src/components/ModernApprovalCard';", resolveDir: root, loader: 'tsx' },
+    bundle: true, write: false, format: 'esm', platform: 'node', jsx: 'automatic', logLevel: 'silent', define: { 'process.env.NODE_ENV': '"production"' },
+  });
+  const { approvalAction } = await import(`data:text/javascript;base64,${Buffer.from(out.outputFiles[0].text).toString('base64')}`);
+  const pr = appr({ tool_name: 'mcp__github__create_pull_request', details: { kwant_id: 'writer' } });
+  const action = approvalAction(t.delegationWaitingApproval(wMeta, [pr]));
+  assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'approval', action }), 'Writer needs your OK to open a pull request on GitHub');
+  const sh = appr({ tool_name: 'Bash', details: { command: 'npm test' } });
+  assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'approval', action: approvalAction(sh) }), 'Writer needs your OK to run a command');
+});

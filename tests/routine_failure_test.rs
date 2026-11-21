@@ -129,16 +129,19 @@ async fn failed_routine_run_records_the_engine_error() {
         Probe { status: EngineStatus::Ready, detail: None, version: None, models: Vec::new() },
     )]);
 
-    // A CLI that dies silently used to be recorded as an ok run with an empty reply
+    // A CLI that dies silently used to be recorded as an ok run with an empty reply. It's a failed run, in plain
+    // words (the server log keeps the driver's own "exited with status 3 and no output")
     std::fs::write(&crash, "").unwrap();
     let error = run_once(&app, &id).await;
-    assert!(error.contains("exited with status 3 and no output"), "{error}");
+    let plain = "its model stopped without an answer. Try again, or switch its model.";
+    assert_eq!(error, format!("the bot's turn failed: {plain}"));
 
     // The failure is saved in the chat, so it still shows after a reload (the live error event doesn't)
     let saved = state.db.list_messages(&kid, 50).await.unwrap();
     let failed = saved.iter().find(|m| m.text.contains("Couldn't finish this reply")).expect("a saved failure");
     assert_eq!(failed.sender_role, "kwant");
-    assert!(failed.text.contains("exited with status 3 and no output"), "{}", failed.text);
+    assert!(failed.text.ends_with(&format!("Couldn't finish this reply: {plain}")), "{}", failed.text);
+    assert!(!failed.text.contains("Driver execution error"), "{}", failed.text);
     let meta: Value = serde_json::from_str(failed.meta.as_deref().unwrap()).unwrap();
     assert_eq!(meta["kind"], "turn_failed");
 }
