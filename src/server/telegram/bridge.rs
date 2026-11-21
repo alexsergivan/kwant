@@ -18,6 +18,7 @@ use crate::broker::ApprovalDecision;
 use crate::db::spaces::SpaceId;
 use crate::db::telegram::{TelegramAsk, TelegramLink};
 use crate::drivers::events::RuntimeEvent;
+use zeroize::Zeroizing;
 
 /// How long bot replies in #general keep going back after the person last wrote from Telegram,
 /// unless they write in kwant first (A19).
@@ -743,12 +744,81 @@ pub async fn unpaired(state: &AppState, space: &str, closed: Vec<TelegramAsk>) {
 
 /// A question or an approval that went out with Allow once, after Unpair or /stop.
 async fn unpaired_card(state: &AppState, r: &Runner, ask: &TelegramAsk) {
-    if ask.kind == "approval" {
-        return link_only(state, r, ask, &approval_details(state, ask).await).await;
+    if let Some((html, markup)) = unpaired_form(state, ask).await {
+        edit(state, r, ask, html, markup);
     }
-    let Ok(Some(link)) = state.db.telegram_link(&ask.space_id).await else { return };
+}
+
+/// What [`unpaired_card`] makes of a card: the text and the buttons it keeps.
+async fn unpaired_form(state: &AppState, ask: &TelegramAsk) -> Option<(String, Option<Value>)> {
+    if ask.kind == "approval" {
+        return link_only_form(state, ask, &approval_details(state, ask).await).await;
+    }
+    let link = state.db.telegram_link(&ask.space_id).await.ok().flatten()?;
     let html = format!("{}\n\n<i>{}</i>", ask.text, text::escape(copy::UNPAIRED));
-    edit(state, r, ask, html, open_markup(state, &link, &ask.space_id, None).await);
+    Some((html, open_markup(state, &link, &ask.space_id, None).await))
+}
+
+/// How long kwant keeps clearing the old bot's cards after another bot's token is saved.
+const OLD_BOT_BUDGET: Duration = Duration::from_secs(30);
+/// At most this many of the old bot's cards are edited.
+const OLD_BOT_MAX_CARDS: usize = 30;
+/// A card the old bot couldn't edit because Telegram was unreachable or failed goes again at most
+/// this many times (after 1 s, then 2 s).
+const OLD_BOT_RETRIES: u32 = 2;
+
+/// A token for another bot was saved and closed `closed` (the asks that were open, as they were).
+/// The new bot can't edit what the old one sent, and the old runner is gone, so the cards with
+/// something to take back (a question, an approval sent with Allow once) are edited once with the
+/// old bot's `token`, as after Unpair (31v): none keeps a button that goes nowhere.
+///
+/// Best effort, in the background, so the save never waits on it: at most [`OLD_BOT_MAX_CARDS`]
+/// cards within [`OLD_BOT_BUDGET`], paced as the send loop is. A message Telegram won't edit (one
+/// the person deleted) is skipped. When Telegram asks to slow down (429), the same card goes again
+/// after its `retry_after`; when it is unreachable or fails (network, 5xx), after 1 s, then 2 s, at
+/// most [`OLD_BOT_RETRIES`] times per card (32f). The budget still caps the whole job. Any other
+/// refusal (the old token revoked, the chat closed to the bot, another program on the token), or
+/// a card still failing after its retries, ends it, logged once. The token is used only for these
+/// edits, never stored or logged, and is wiped when they end.
+pub fn old_bot_cards(state: &AppState, space: &str, token: Zeroizing<String>, closed: Vec<TelegramAsk>) {
+    let cards: Vec<TelegramAsk> = closed
+        .into_iter()
+        .filter(|a| a.message_id.is_some() && (a.kind == "question" || (a.kind == "approval" && a.allow)))
+        .take(OLD_BOT_MAX_CARDS)
+        .collect();
+    if cards.is_empty() {
+        return;
+    }
+    let Ok(client) = api::Client::new(token) else { return };
+    let (state, space) = (state.clone(), space.to_string());
+    tokio::spawn(async move {
+        let edits = async {
+            let mut last = None;
+            for ask in &cards {
+                let (Some(m), Some((html, markup))) = (ask.message_id, unpaired_form(&state, ask).await) else { continue };
+                let mut hiccups = 0;
+                loop {
+                    super::pace(&mut last).await;
+                    match client.edit_message(ask.chat_id, m, &html, markup.as_ref()).await {
+                        Ok(()) | Err(api::TgError::BadRequest(_)) => break,
+                        // Waited out within the budget, which ends the job if it runs out first
+                        Err(api::TgError::TooMany { retry_after }) => tokio::time::sleep(Duration::from_secs(retry_after)).await,
+                        Err(api::TgError::Network | api::TgError::Server(_)) if hiccups < OLD_BOT_RETRIES => {
+                            hiccups += 1;
+                            tokio::time::sleep(Duration::from_secs(u64::from(hiccups))).await;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+            Ok(())
+        };
+        match tokio::time::timeout(OLD_BOT_BUDGET, edits).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::info!(space = %space, "telegram: left the old bot's cards as they were: {e}"),
+            Err(_) => tracing::info!(space = %space, "telegram: stopped clearing the old bot's cards after {} s", OLD_BOT_BUDGET.as_secs()),
+        }
+    });
 }
 
 /// Whether an ask's source still waits for the person in kwant (the approval pending, the question
@@ -798,11 +868,18 @@ async fn approval_details(state: &AppState, ask: &TelegramAsk) -> Value {
 }
 
 async fn link_only(state: &AppState, r: &Runner, ask: &TelegramAsk, details: &Value) {
-    let Ok(Some(link)) = state.db.telegram_link(&ask.space_id).await else { return };
+    if let Some((html, markup)) = link_only_form(state, ask, details).await {
+        edit(state, r, ask, html, markup);
+    }
+}
+
+/// An approval card with its reason line and only the Open in kwant link.
+async fn link_only_form(state: &AppState, ask: &TelegramAsk, details: &Value) -> Option<(String, Option<Value>)> {
+    let link = state.db.telegram_link(&ask.space_id).await.ok().flatten()?;
     let why = super::allow_refusal(state, &ask.space_id, details).await;
     let html = format!("{}\n\n<i>{}</i>", ask.text, text::escape(&excluded_reason(why, link.allow_approvals)));
     let kwant = details["kwant_id"].as_str();
-    edit(state, r, ask, html, open_markup(state, &link, &ask.space_id, kwant).await);
+    Some((html, open_markup(state, &link, &ask.space_id, kwant).await))
 }
 
 /// The message with its buttons removed and `line` added (A21).

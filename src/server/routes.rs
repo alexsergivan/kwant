@@ -3040,13 +3040,18 @@ async fn run_kwant_turn_inner(
         let pinned_model = route.model.clone();
         let pinned_family = crate::router::parse_pin(pin).family.is_some();
 
-        event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
-            "🔮 Laya Router: model='{}', effort='{}' ({:.0}% conf) — {}",
-            target_model,
-            effort_level,
-            route.confidence * 100.0,
-            route.reasoning
-        )));
+        // 32d: the routing decision is for the server log only. As a thinking line it became the
+        // live reply's status line until "Running on …" replaced it; the model badge and Details'
+        // "Ran on … · <effort>" already tell the person what ran
+        tracing::info!(
+            kwant = %target_kwant.id,
+            turn = %tag.turn_id,
+            model = %target_model,
+            effort = %effort_level,
+            confidence = %format!("{:.0}%", route.confidence * 100.0),
+            reason = %route.reasoning,
+            "Laya Router picked the model"
+        );
 
         let context_id = tag.context_id.clone();
 
@@ -4794,10 +4799,8 @@ async fn send_chat_routed(
                     basis: Some(basis),
                 });
 
-                let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
-                    "🔮 Laya Team Router: Routed to {} ({}) — {}",
-                    target_kwant.name, target_kwant.title, reason
-                )));
+                // 32d: RoutingDecided above is what the person sees; this line is for the server log
+                tracing::info!(kwant = %target_kwant.id, name = %target_kwant.name, reason = %reason, "Laya Team Router routed the message");
 
                 file_wakes_browser_wait(&state, &target_kwant.id, direct_chat(&payload), !uploads.is_empty(), from_person).await;
                 let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id, from_person).await;
@@ -4850,10 +4853,8 @@ async fn send_chat_routed(
                     });
                 }
 
-                let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
-                    "🔮 Laya Team Router: Initiating {}-turn autonomous discussion with @{}",
-                    turns, team.name
-                )));
+                // 32d: RoutingDecided above is what the person sees; this line is for the server log
+                tracing::info!(team = %team.id, turns, "Laya Team Router started a team discussion");
 
                 let planned: Vec<Kwant> = speakers
                     .iter()
