@@ -8,8 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.37] - 2026-11-21
+
+kwant 0.9.37: a Stop that stops the whole team, add-ons that wait for a busy teammate, team cards that say when a teammate waits for you and plain words when a teammate's model stops.
+
 ### Fixed
-- In a team chat, a teammate's result now says when it ran on another account: a small "on Work Claude" next to "Result from", with the reason (ran out of usage or signed out) when you point at it (#979)
+- Stop on a teammate now stops the team: nothing restarts the stopped work (no keep-going turn, no review turn after you stop the lead's summary), and a teammate that was waiting on the stopped one shows Stopped, not Failed (#970)
+- Something you add while the team works now reaches the teammate: when the lead passes on a new line for a teammate that is still on a task from the same chat, it queues after that task ("Waiting for Writer to start") instead of being dropped. The same line twice is still sent once (#968)
+- In a team run, a teammate waiting on you now says so on its card in the team chat ("Writer needs your OK to send an email" or "Writer asked you a question") with a "Go to it" button, instead of "Writer is working on it" (#973)
+- A teammate whose model stops without answering now says so in plain words, with what to do next ("its model stopped without an answer. Try again, or switch its model."), and other driver errors lose the "Driver execution error:" prefix. The full text stays in kwant's log (#971)
+- Line chart dates no longer overlap on tablets and medium-width windows: labels in the middle of the axis keep at least 8 px apart, and the first and last dates stay (#960)
 
 ## [Mac 0.9.36] - 2026-11-21
 
