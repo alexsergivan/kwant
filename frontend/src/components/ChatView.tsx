@@ -93,6 +93,7 @@ import { APPROVE_TEXT, approveRowId, changePlaceholder, refocusAfterApprove } fr
 import { DoneCheckLine } from './DoneMarker';
 import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
+import { copyText } from '../copyText';
 import { ContinuedLine, MessageMore, MessageMoreError } from './MessageMore';
 import { CONTINUE_LABEL, canContinueFrom } from '../continueChat';
 import { RoutineRow } from './RoutineRow';
@@ -780,7 +781,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     return () => clearTimeout(t);
   }, [dropAnnounce]);
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<{ id: string; ok: boolean } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Dictation (design.md): the mic between @ and Send; one line at the top of the box says what's happening.
@@ -1369,10 +1370,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setOpenThoughts((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    playSfx('click');
+  const handleCopy = async (text: string, id: string) => {
+    const ok = await copyText(text);
+    setCopiedId({ id, ok });
+    if (ok) playSfx('click');
     setTimeout(() => setCopiedId(null), 2000);
   };
 
@@ -2162,7 +2163,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   )}
                 </>
               )}
-              <CopyGhost copied={copiedId === msg.id} tipId={`copy-tip-${msg.id}`} onCopy={() => handleCopy(text, msg.id)} />
+              <CopyGhost copied={copiedId?.id === msg.id ? (copiedId.ok ? 'ok' : 'failed') : null} tipId={`copy-tip-${msg.id}`} onCopy={() => handleCopy(text, msg.id)} />
               {continueMenu(msg, `${displayName}'s reply`, 'start')}
               {!phone && msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>

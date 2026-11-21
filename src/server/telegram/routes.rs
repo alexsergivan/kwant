@@ -219,11 +219,12 @@ pub async fn unpair(State(state): State<AppState>, headers: HeaderMap, Scope(spa
     }
     let space = space.as_str().to_string();
     let until = crate::clock::now() + chrono::Duration::seconds(UNDO_SECS);
-    match state.db.telegram_unpair(&space, Some(until)).await {
-        Ok(Some(_)) => {}
+    let closed = match state.db.telegram_unpair(&space, Some(until)).await {
+        Ok(Some((_, closed))) => closed,
         Ok(None) => return fail(StatusCode::CONFLICT, "not_paired", "Telegram isn't paired."),
         Err(e) => return db_error(e),
-    }
+    };
+    bridge::unpaired(&state, &space, closed).await;
     emit_status(&state, &space);
     Json(view(&state, &space).await).into_response()
 }

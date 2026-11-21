@@ -315,8 +315,12 @@ impl Database {
     }
 
     /// Ends the pairing (Unpair, /stop). The pairing is kept for `undo_until` so Undo can bring
-    /// it back; the approvals switch goes off either way (A23).
-    pub async fn telegram_unpair(&self, space: &str, undo_until: Option<DateTime<Utc>>) -> Result<Option<TelegramLink>, DbError> {
+    /// it back; the approvals switch goes off either way (A23). Every ask closes with Allow once
+    /// off. The asks that were open are returned as they were closed, with `allow` as it was (so
+    /// the caller knows which went out with Allow once) and the Telegram message id they had at
+    /// that moment: the caller edits those that have one, and the sender edits the others once
+    /// their id is stored (31r, see [`Self::telegram_ask_sent`]).
+    pub async fn telegram_unpair(&self, space: &str, undo_until: Option<DateTime<Utc>>) -> Result<Option<(TelegramLink, Vec<TelegramAsk>)>, DbError> {
         let Some(link) = self.telegram_link(space).await? else { return Ok(None) };
         if !link.is_paired() {
             return Ok(None);
@@ -339,8 +343,14 @@ impl Database {
         .bind(PAIRED)
         .execute(&self.pool)
         .await?;
-        sqlx::query("UPDATE telegram_asks SET state = 'closed' WHERE space_id = ?").bind(space).execute(&self.pool).await?;
-        Ok(Some(link))
+        let mut tx = self.pool.begin().await?;
+        let closed = sqlx::query_as::<_, TelegramAsk>("UPDATE telegram_asks SET state = 'closed' WHERE space_id = ? AND state = 'open' RETURNING *")
+            .bind(space)
+            .fetch_all(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE telegram_asks SET allow = 0 WHERE space_id = ? AND allow = 1").bind(space).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(Some((link, closed)))
     }
 
     /// Undo of an Unpair within its window. The approvals switch stays off.
