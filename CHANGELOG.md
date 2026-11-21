@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- An approval card now shows folders in your home as ~/… (hover for the full path), and Allow once leaves a short note in the chat: "✓ You allowed once" (#1002)
+
 ## [Mac 0.9.37] - 2026-11-21
 
 kwant 0.9.37: a Stop that stops the whole team, add-ons that wait for a busy teammate, team cards that say when a teammate waits for you and plain words when a teammate's model stops.
