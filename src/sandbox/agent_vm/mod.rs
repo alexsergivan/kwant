@@ -576,12 +576,13 @@ impl AgentVm {
 
     /// Whether the image is in Docker already (blocking `docker image inspect`, a few ms).
     fn image_present_sync(&self) -> bool {
-        let ok = std::process::Command::new("docker")
-            .args(["image", "inspect", "--format", "{{.Id}}", &self.image()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
+        let ok = crate::helper_process::status_blocking(
+            std::process::Command::new("docker")
+                .args(["image", "inspect", "--format", "{{.Id}}", &self.image()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null()),
+        )
+        .is_ok_and(|s| s.success());
         if ok {
             *self.image.lock().unwrap() = ImageState::Ready;
         }
@@ -610,16 +611,13 @@ impl AgentVm {
     async fn start_container(&self, bot_id: &str, workdir: &Path, home: &Path, run_dir: &Path) -> Result<String, Refusal> {
         let name = Self::container_name(bot_id, workdir);
         let fail = |why: String| Refusal::new(codes::CONTAINER_FAILED, why);
-        let running = Command::new("docker")
-            .args(["inspect", "-f", "{{.State.Running}}", &name])
-            .kill_on_drop(true)
-            .output()
+        let running = crate::helper_process::output(Command::new("docker").args(["inspect", "-f", "{{.State.Running}}", &name]).kill_on_drop(true))
             .await
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "true");
         if running {
             return Ok(name);
         }
-        let _ = Command::new("docker").args(["rm", "-f", &name]).kill_on_drop(true).output().await;
+        let _ = crate::helper_process::output(Command::new("docker").args(["rm", "-f", &name]).kill_on_drop(true)).await;
         for d in [home, run_dir] {
             std::fs::create_dir_all(d).map_err(|e| fail(format!("Couldn't prepare the bot's computer folders: {e}")))?;
             set_private(d);
@@ -628,10 +626,7 @@ impl AgentVm {
         prepare_ro_hooks(&ro_hooks).map_err(|e| fail(format!("Couldn't prepare the bot's computer folders: {e}")))?;
         let mounts = Mounts::new(workdir, home, run_dir, &ro_hooks)?;
         let args = run_args(&name, &self.root_label(), &mounts, &self.image(), host_ids(), self.limits.memory_mb);
-        let out = Command::new("docker")
-            .args(&args)
-            .kill_on_drop(true)
-            .output()
+        let out = crate::helper_process::output(Command::new("docker").args(&args).kill_on_drop(true))
             .await
             .map_err(|e| fail(format!("Docker didn't start: {e}")))?;
         if !out.status.success() {
@@ -666,7 +661,7 @@ impl AgentVm {
             }
             map.remove(container);
         }
-        match Command::new("docker").args(["rm", "-f", container]).kill_on_drop(true).output().await {
+        match crate::helper_process::output(Command::new("docker").args(["rm", "-f", container]).kill_on_drop(true)).await {
             Ok(o) if o.status.success() => {}
             Ok(o) => tracing::warn!(container, error = %String::from_utf8_lossy(&o.stderr).trim(), "couldn't remove an agent container after its last turn"),
             Err(e) => tracing::warn!(container, error = %e, "couldn't remove an agent container after its last turn"),
@@ -702,18 +697,19 @@ impl AgentVm {
 
     /// Removes this kwnt's agent containers whose name `pick` accepts.
     pub async fn remove_containers(&self, pick: impl Fn(&str) -> bool) {
-        let Ok(out) = Command::new("docker")
-            .args(["ps", "-a", "--filter", "label=kwnt.agent=1", "--filter"])
-            .arg(format!("label=kwnt.root={}", self.root_label()))
-            .args(["--format", "{{.Names}}"])
-            .kill_on_drop(true)
-            .output()
-            .await
+        let Ok(out) = crate::helper_process::output(
+            Command::new("docker")
+                .args(["ps", "-a", "--filter", "label=kwnt.agent=1", "--filter"])
+                .arg(format!("label=kwnt.root={}", self.root_label()))
+                .args(["--format", "{{.Names}}"])
+                .kill_on_drop(true),
+        )
+        .await
         else {
             return;
         };
         for name in String::from_utf8_lossy(&out.stdout).lines().map(str::trim).filter(|n| n.starts_with("kwnt-agent-") && pick(n)) {
-            let _ = Command::new("docker").args(["rm", "-f", name]).kill_on_drop(true).output().await;
+            let _ = crate::helper_process::output(Command::new("docker").args(["rm", "-f", name]).kill_on_drop(true)).await;
         }
     }
 }
@@ -1175,7 +1171,7 @@ impl Drop for IsolatedTurn {
         let script = format!("p=$(cat {f} 2>/dev/null) && kill -TERM -- -$p 2>/dev/null; rm -f {f}", f = self.pid_file());
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             rt.spawn(async move {
-                let _ = Command::new("docker").args(["exec", &container, "sh", "-c", &script]).kill_on_drop(true).output().await;
+                let _ = crate::helper_process::output(Command::new("docker").args(["exec", &container, "sh", "-c", &script]).kill_on_drop(true)).await;
                 if last {
                     vm.end_container(&container).await;
                 }
