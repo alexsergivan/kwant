@@ -601,3 +601,35 @@ async fn a_local_command_runs_without_a_card_when_off() {
     .await;
     assert!(waiting.is_err(), "it should wait for the person");
 }
+
+/// 30x: the goal draft turn (Mission board > New goal > Draft checks) asks always, like a turn
+/// kwant starts on its own. `goal_propose` only writes a draft the person approves on the board, so
+/// it runs without a card there: before, it waited on a hidden "Allow once" card in the bot's DM
+/// while the board said Needs you 0. A tool that changes something still asks in the same turn.
+#[tokio::test]
+async fn a_goal_draft_turn_proposes_without_a_card_and_still_asks_for_a_write() {
+    let e = setup().await;
+    let draft = || mcp_runtime::TurnApprovalOpts { always_ask: true, started_by: Some("Goal draft".into()), ..Default::default() };
+    let self_name = |name: &str| format!("mcp__{}__{name}", kwnt::mcp::SELF_SERVER_NAME);
+    let args = json!({"title": "Report exists", "checks": [{"kind": "file_exists", "spec": {"path": "report.md"}}]});
+
+    let asked = ask_with(&e, &e.bot, &self_name("goal_propose"), args.clone(), draft()).await;
+    assert_eq!(asked, Ok(true), "goal_propose runs without a card in a goal draft turn");
+    let away = get(&e, "/api/away").await;
+    assert!(away["waiting"].as_array().unwrap().iter().all(|i| i["kind"] != "approval"), "{away}");
+
+    // The call it allowed writes the draft, which waits for the person on the board
+    let (turn_id, token, _folder) = turn_with(&e, &e.bot, draft()).await;
+    let (text, err) = self_tool(&e, &token, "goal_propose", args).await;
+    mcp_runtime::finish_turn(&e.state, &token).await;
+    e.state.turns.end_turn(&turn_id);
+    assert!(!err, "{text}");
+    assert_eq!(e.state.db.count_draft_goals("spc_default").await.unwrap(), 1);
+    let goal_id = serde_json::from_str::<Value>(&text).unwrap()["goal_id"].as_str().unwrap().to_string();
+    assert_eq!(e.state.db.get_goal(&goal_id).await.unwrap().unwrap().status, "draft");
+
+    // A tool that changes something still asks in the same kind of turn, and says who started it
+    let card = ask_with(&e, &e.bot, &self_name("memory_add"), json!({"text": "x"}), draft()).await.expect_err("a write asks");
+    assert_eq!(card["always_ask"], true, "{card}");
+    assert_eq!(card["started_by"], "Goal draft", "{card}");
+}
