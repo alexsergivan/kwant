@@ -1336,11 +1336,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setOpenThoughts((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  // 31u: one 2 s Copied window for the list. A click on any reply restarts it, and unmount clears it.
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
   const handleCopy = async (text: string, id: string) => {
     const ok = await copyText(text);
     setCopiedId({ id, ok });
     if (ok) playSfx('click');
-    setTimeout(() => setCopiedId(null), 2000);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopiedId(null), 2000);
   };
 
   const patchUpload = (key: string, patch: Partial<PendingUpload>) =>
