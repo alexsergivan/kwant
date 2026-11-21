@@ -46,8 +46,13 @@ async fn stop_ends_the_child_and_the_grandchild() {
 /// Windows only: kwnt.exe killed outright (Task Manager, `Stop-Process -Force`, a crash) takes its
 /// own helper commands with it. Here the helper is the `docker ps` the browser-container reaper
 /// runs at startup (serve.rs), the docker.exe that outlived kwnt.exe in the 0.9.33 release smoke.
-/// A fake `docker.exe` first on PATH keeps appending to a file for two minutes; once kwnt.exe is
-/// terminated, the file must stop growing. No real Docker is needed.
+/// A fake `docker.exe` keeps appending to a file for two minutes; once kwnt.exe is terminated, the
+/// file must stop growing. No real Docker is needed.
+///
+/// The fake sits next to a copy of kwnt.exe, and that copy is the one started. Windows looks for a
+/// program in the starting program's own folder first, then in System32, and only then on PATH.
+/// GitHub's Windows runners put the real docker.exe in System32, so a fake that is only first on
+/// PATH is never reached: kwnt.exe runs the real docker instead and the fake never writes.
 #[cfg(windows)]
 mod killed_kwnt {
     use super::size;
@@ -85,6 +90,10 @@ fn main() {
             .expect("rustc runs");
         assert!(built.status.success(), "couldn't build the fake docker.exe: {}", String::from_utf8_lossy(&built.stderr));
 
+        // kwnt.exe's own folder is searched before System32 (see above): run a copy from `bin`
+        let exe = bin.join("kwnt.exe");
+        std::fs::copy(env!("CARGO_BIN_EXE_kwnt"), &exe).expect("copy kwnt.exe next to the fake docker.exe");
+
         let log = tmp.path().join("docker.log");
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let path = std::env::join_paths(
@@ -92,7 +101,7 @@ fn main() {
         )
         .unwrap();
         let (out, err) = (tmp.path().join("kwnt.out"), tmp.path().join("kwnt.err"));
-        let mut kwnt = Command::new(env!("CARGO_BIN_EXE_kwnt"))
+        let mut kwnt = Command::new(&exe)
             .args(["serve", "--host", "127.0.0.1", "--port", &port.to_string(), "--no-laya"])
             .env("KWNT_DATA_DIR", &data)
             .env("PATH", &path)
@@ -113,7 +122,11 @@ fn main() {
         }
         if size(&log) == 0 {
             let _ = kwnt.kill();
-            panic!("kwnt.exe never ran docker in 90 s: {}", std::fs::read_to_string(&err).unwrap_or_default());
+            panic!(
+                "kwnt.exe never ran the fake docker in 90 s.\nstdout: {}\nstderr: {}",
+                std::fs::read_to_string(&out).unwrap_or_default(),
+                std::fs::read_to_string(&err).unwrap_or_default()
+            );
         }
 
         // Killed outright: TerminateProcess, so none of kwnt's own cleanup runs
