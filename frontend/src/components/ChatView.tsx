@@ -23,7 +23,10 @@ import { NewTag } from './NewTag';
 import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
 import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
-import { markNewSeen } from '../whatsNew';
+import { isNewThing, markNewSeen, subscribeNew } from '../whatsNew';
+
+/** 31q: px the desktop mention tag keeps clear below the composer's top hairline. */
+const NEW_TAG_CLEAR = 4;
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -735,6 +738,37 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const headerRef = useRef<HTMLDivElement>(null);
   const columnRef = useRef<HTMLDivElement>(null);
   const composerWrapRef = useRef<HTMLDivElement>(null);
+  // 31q: desktop's "New" on "@" sits 6 px above the field (#478). With nothing else above the field it poked
+  // past the composer's top edge into the chat and covered whatever scrolled under it. While it shows, the
+  // composer grows by exactly that overhang (+4 px clear of the hairline), so the tag never sits on a message;
+  // when it goes, so does the room. The chat's own follow-the-bottom pin handles the list getting shorter.
+  const mentionNew = useSyncExternalStore(subscribeNew, () => isNewThing('mention'), () => false);
+  const [newTagRoom, setNewTagRoom] = useState(0);
+  const newTagRoomRef = useRef(0);
+  useLayoutEffect(() => {
+    const wrap = composerWrapRef.current;
+    const set = (v: number) => {
+      newTagRoomRef.current = v;
+      setNewTagRoom(v);
+    };
+    if (!wrap || phone || isStreaming || !mentionNew) return set(0);
+    const measure = () => {
+      const tag = wrap.querySelector<HTMLElement>('[data-new-tag="mention"]');
+      if (!tag) return set(0);
+      const r = tag.getBoundingClientRect();
+      // Hidden for a moment (picker, dictation, drop layer): keep the room, so the chat doesn't jump.
+      if (r.height === 0) return;
+      const edge = wrap.getBoundingClientRect().top + wrap.clientTop + NEW_TAG_CLEAR;
+      const over = edge - r.top;
+      const next = Math.max(0, Math.ceil(newTagRoomRef.current + over));
+      if (Math.abs(next - newTagRoomRef.current) >= 1) set(next);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [phone, isStreaming, mentionNew]);
   const rootRef = useRef<HTMLDivElement>(null);
   // Chips that came with the drop that just landed, by key, with their place in it (for the stagger).
   const [freshChips, setFreshChips] = useState<Record<string, number>>({});
@@ -2806,6 +2840,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ref={composerWrapRef}
         className={`px-3 ${phone ? 'pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]' : 'pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]'} sm:p-4 border-t border-hairline bg-surface-side/60`}
       >
+        {newTagRoom > 0 && <div aria-hidden="true" data-new-tag-room={newTagRoom} style={{ height: newTagRoom }} />}
         {teamMembers && teamMembers.length > 0 && (
           <ScrollRow
             className={
