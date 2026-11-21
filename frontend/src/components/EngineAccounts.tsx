@@ -403,7 +403,7 @@ const KeyOrLoginForm: React.FC<{
       {kind === 'api_key' ? (
         <div>
           <label htmlFor={`${id}-key`} className="block text-[11px] font-medium text-zinc-400 mb-1">
-            API key <span className="text-zinc-600 font-normal">{needKey ? '· never shown again' : '· can be added later, never shown again'}</span>
+            API key <span className="text-zinc-500 font-normal">{needKey ? '· never shown again' : '· can be added later, never shown again'}</span>
           </label>
           <input
             id={`${id}-key`}
@@ -416,8 +416,9 @@ const KeyOrLoginForm: React.FC<{
             aria-describedby={needKey && !apiKey.trim() ? `${id}-key-hint` : undefined}
             className={input}
           />
-          {needKey && !apiKey.trim() ? (
-            <p id={`${id}-key-hint`} data-key-hint className="mt-1 text-[11px] text-zinc-500">
+          {needKey ? (
+            // Kept in place once a key is typed (only hidden), so Add account doesn't jump.
+            <p id={`${id}-key-hint`} data-key-hint className={`mt-1 text-[11px] text-zinc-500${apiKey.trim() ? ' invisible' : ''}`}>
               Paste your key to continue
             </p>
           ) : null}

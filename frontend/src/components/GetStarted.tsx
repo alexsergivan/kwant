@@ -334,7 +334,7 @@ const ReadyWait: React.FC<{ name: string; phone: boolean; onRetry: () => void; o
       </p>
     );
   return (
-    <FailRow tone="bad" icon="alert" title={`${name} still isn’t ready.`} reason="Getting it ready is taking longer than it should.">
+    <FailRow tone="bad" icon="alert" title={`Getting ${name} ready is taking too long.`} reason="It usually takes a few seconds, and kwant still can’t find it.">
       <Btn
         phone={phone}
         kind="primary"

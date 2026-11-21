@@ -99,7 +99,9 @@ test('32y: Get started key panel: Add account is disabled with an empty key, say
   assert.equal(creates().length, 0, 'no keyless account');
   flushSync(() => typeInto(q.key(), 'sk-ant-test'));
   assert.equal(q.add().disabled, false, 'enabled once a key is typed');
-  assert.doesNotMatch(panel.textContent, /Paste your key to continue/);
+  // The hint keeps its line (no jump) but is hidden and no longer describes the field.
+  assert.match(hint.className, /\binvisible\b/);
+  assert.equal(q.key().getAttribute('aria-describedby'), null);
   flushSync(() => typeInto(q.key(), '   '));
   assert.equal(q.add().disabled, true, 'spaces are not a key');
   r.done();
@@ -193,6 +195,8 @@ test('32y: track done but the CLI still missing: the spinner first, after 20 s a
     assert.ok(row, 'the FailRow after 20 s');
     assert.equal(row.getAttribute('data-fail-row'), 'bad');
     assert.equal(row.getAttribute('role'), 'alert');
+    assert.match(row.textContent, /Getting Claude ready is taking too long\./);
+    assert.match(row.textContent, /It usually takes a few seconds, and kwant still can’t find it\./);
     assert.doesNotMatch(r.host.textContent, /Getting Claude ready…/, 'the spinner line is gone');
     const labels = [...row.querySelectorAll('button')].map((b) => b.textContent.trim());
     assert.deepEqual(labels, ['Try again', 'Choose another AI']);
