@@ -45,8 +45,9 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
   const headingId = `conn-s-${messageId}`;
   const { phase } = state;
   const where = mac ? 'your browser' : 'the new tab';
+  const warn = phase === 'missing' && meta.composio === 'off';
   const border =
-    phase === 'connected' ? 'border-teal-400/30' : phase === 'error' ? 'border-rose-500/40' : phase === 'missing' ? 'border-amber-500/30' : 'border-sky-500/35';
+    phase === 'connected' ? 'border-teal-400/30' : phase === 'error' ? 'border-rose-500/40' : warn ? 'border-amber-500/30' : 'border-sky-500/35';
   const again = (
     <button type="button" onClick={onConnect} className={quietBtn} data-connect-again>
       <Link2 size={13} aria-hidden="true" /> Open the sign-in again
@@ -88,10 +89,16 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
             </p>
           ) : phase === 'missing' ? (
             <>
-              <p className="flex items-start gap-1.5 text-amber-200 break-words">
-                <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
-                <span>{state.message}</span>
-              </p>
+              {warn ? (
+                <p className="flex items-start gap-1.5 text-amber-200 break-words">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <span>{state.message}</span>
+                </p>
+              ) : (
+                <p className="text-zinc-300 break-words" data-next-step>
+                  {state.message}
+                </p>
+              )}
               {onOpenConnections && (
                 <button type="button" onClick={() => onOpenConnections(meta)} className={mainBtn} data-open-connections>
                   <Plug size={13} aria-hidden="true" /> Connect {meta.name}
@@ -124,13 +131,13 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
           ) : phase === 'timed_out' ? (
             <>
               <p className="text-zinc-300 break-words">
-                The sign-in hasn’t finished yet. If you closed it, open it again; if you finished, the connection shows in Connections.
+                The sign-in hasn’t finished yet. If you closed it, open it again. If you finished, this card turns Connected when you’re back.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 {again}
                 {onOpenConnections && (
                   <button type="button" onClick={() => onOpenConnections(meta)} className={quietBtn}>
-                    Open Connections
+                    Check in Settings
                   </button>
                 )}
               </div>

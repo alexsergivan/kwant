@@ -44,9 +44,9 @@ export function composioMissingText(r: ComposioReady, name = 'This app'): string
     case 'not_added':
       return `${name} connects through Composio (free). It takes about a minute.`;
     case 'needs_key':
-      return 'Composio is added but has no API key yet. Add your Composio API key in Connections first.';
+      return `${name} needs your free Composio key first. It takes about a minute.`;
     case 'off':
-      return 'The Composio connector is switched off. Switch it on in Connections first.';
+      return `Composio is switched off. Connecting ${name} turns it back on for the bots you pick.`;
     default:
       return null;
   }

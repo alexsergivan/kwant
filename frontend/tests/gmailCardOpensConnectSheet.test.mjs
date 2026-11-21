@@ -90,6 +90,19 @@ test('1. the card’s button reads "Connect Gmail" and hands over its app and bo
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(phase(host), 'missing', composio);
     assert.deepEqual(buttons(host), ['Connect Gmail'], composio);
+    // Mira's fix 1: not_added / needs_key read as a next step (neutral, no icon); only `off` keeps the amber warning.
+    const card = host.querySelector('[data-connection-card]');
+    const amber = card.querySelector('.text-amber-200');
+    const warnIcon = card.querySelector('svg.lucide-triangle-alert, svg.lucide-alert-triangle');
+    if (composio === 'off') {
+      assert.ok(amber && warnIcon, 'off keeps the amber AlertTriangle');
+      assert.ok(card.querySelector('[class*="border-amber-500/30"]'), 'off keeps the amber border');
+    } else {
+      assert.equal(amber, null, `${composio}: no amber text`);
+      assert.equal(warnIcon, null, `${composio}: no AlertTriangle`);
+      assert.equal(card.querySelector('[class*="amber"]'), null, `${composio}: nothing amber`);
+      assert.ok(card.querySelector('[data-next-step].text-zinc-300'), `${composio}: neutral next-step line`);
+    }
     host.querySelector('[data-open-connections]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
     assert.equal(opened.length, 1, composio);
     assert.deepEqual(m.connectSheetFor(opened[0]), { slug: 'gmail', initial: { picked: ['k1'] } }, composio);

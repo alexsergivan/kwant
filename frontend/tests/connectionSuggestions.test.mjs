@@ -96,8 +96,8 @@ test('connected: says so, and no button is left', () => {
 test('Composio missing, without a key or off: the reason and Connect <App> (the Connect sheet) instead of Connect', () => {
   for (const [composio, reason] of [
     ['not_added', /Google Search Console connects through Composio \(free\)\. It takes about a minute\./],
-    ['needs_key', /has no API key yet\. Add your Composio API key in Connections first/],
-    ['off', /switched off\. Switch it on in Connections first/],
+    ['needs_key', /Google Search Console needs your free Composio key first\. It takes about a minute\./],
+    ['off', /Composio is switched off\. Connecting Google Search Console turns it back on for the bots you pick\./],
   ]) {
     const st = m.initialState(meta({ composio }));
     assert.equal(st.phase, 'missing', composio);
@@ -111,8 +111,8 @@ test('Composio missing, without a key or off: the reason and Connect <App> (the 
 
 test('timed out, unchecked and error: never a false "Connected", always a way on', () => {
   const late = m.view({ meta: meta(), state: { phase: 'timed_out' } });
-  assert.match(text(late), /hasn't finished yet/);
-  assert.deepEqual(buttons(late), ['Open the sign-in again', 'Open Connections']);
+  assert.match(text(late), /hasn't finished yet\. If you closed it, open it again\. If you finished, this card turns Connected when you're back\./);
+  assert.deepEqual(buttons(late), ['Open the sign-in again', 'Check in Settings']);
 
   const older = m.view({ meta: meta(), state: { phase: 'unchecked' } });
   assert.match(text(older), /Once you have, its tools reach your bots from their next turn\./);
