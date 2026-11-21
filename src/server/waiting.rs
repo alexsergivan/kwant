@@ -25,6 +25,15 @@ use std::collections::HashSet;
 pub const HOURS_SETTING: &str = "waiting_follow_up_hours";
 pub const DEFAULT_HOURS: i64 = 24;
 pub const MAX_HOURS: i64 = 30 * 24;
+/// How a plain item from a reply's `Blocked: …` line starts (33f). Needs you lists such an item
+/// as a stopped row (`away::stopped_items`), as other plain items (prose questions) are not.
+pub const BLOCKED_PREFIX: &str = "Blocked: ";
+
+/// A plain item (no question card, no kind) opened from a reply's `Blocked: …` line (33f).
+pub fn is_blocked_reply(w: &WaitingItem) -> bool {
+    w.question_id.is_none() && w.kind.is_none() && w.question.starts_with(BLOCKED_PREFIX)
+}
+
 /// Longest question quoted in a reminder.
 const REMINDER_QUOTE_CHARS: usize = 200;
 
@@ -47,7 +56,8 @@ fn last_line(text: &str) -> &str {
 
 /// A turn ended with `reply` (not stopped, not failed). Records what its bot now waits for:
 /// the questions it asked in this turn that are still open, else (in a person's chat, not a
-/// delegation) a reply that ends by asking the person something without handing on to a teammate.
+/// delegation) a reply that ends by asking the person something, or with a `Blocked: …` line
+/// (33f), without handing on to a teammate.
 pub(super) async fn turn_ended(scope: &TurnScope, kwant: &Kwant, turn_id: &str, reply: &str) {
     let state = &scope.state;
     // A reply finished here: what stopped in this chat before has moved on (0.9.5)
@@ -78,7 +88,11 @@ pub(super) async fn turn_ended(scope: &TurnScope, kwant: &Kwant, turn_id: &str, 
     if scope.delegation_depth > 0 {
         return;
     }
-    let Some(question) = crate::router::sticky::person_question(reply) else {
+    // 33f: a reply that ends `Blocked: …` waits on the person too, as a lead's becomes a card
+    // (keep_going's card replaces this plain item, so a lead's Blocked is still one item)
+    let Some(question) = crate::router::sticky::person_question(reply)
+        .or_else(|| super::keep_going::blocked_line(reply).map(|b| format!("{BLOCKED_PREFIX}{b}")))
+    else {
         return;
     };
     let names: Vec<&str> = scope.teammates.iter().filter(|k| k.id != kwant.id).map(|k| k.name.as_str()).collect();
