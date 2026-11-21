@@ -444,16 +444,10 @@ async fn on_question(state: &AppState, q: &Value) {
     let Some(space) = state.db.space_of_kwant(kwant).await.ok().flatten() else { return };
     let space = space.as_str().to_string();
     if status != "open" {
-        let line = match (status, q["answered_via"].as_str()) {
-            ("answered", Some("telegram")) => return,
-            ("answered", _) => format!("{TEAL_CHECK} Answered in kwant · {}", hhmm(state).await),
-            _ => format!("<i>{}</i>", text::escape(copy::NO_LONGER_WAITING)),
-        };
+        let Some(line) = question_line(state, status, q["answered_via"].as_str()).await else { return };
         for ask in state.db.telegram_asks_for("question", id).await.unwrap_or_default() {
-            if ask.state == "open" && state.db.telegram_close_ask(&ask.id).await.unwrap_or(false) {
-                if let Some(r) = runner(state, &ask.space_id) {
-                    edit_answered(state, &r, &ask, &line).await;
-                }
+            if ask.state == "open" {
+                close_and_edit(state, &ask, &line).await;
             }
         }
         return;
@@ -552,11 +546,8 @@ async fn on_human_step(state: &AppState, step: &Value) {
     let (Some(id), Some(status), Some(kwant)) = (step["id"].as_str(), step["status"].as_str(), step["kwant_id"].as_str()) else { return };
     if status != "open" {
         for ask in state.db.telegram_asks_for("alert", id).await.unwrap_or_default() {
-            if ask.state == "open" && state.db.telegram_close_ask(&ask.id).await.unwrap_or(false) {
-                if let Some(r) = runner(state, &ask.space_id) {
-                    let line = if status == "done" { format!("{TEAL_CHECK} Done in kwant · {}", hhmm(state).await) } else { format!("<i>{}</i>", text::escape(copy::NO_LONGER_WAITING)) };
-                    edit_answered(state, &r, &ask, &line).await;
-                }
+            if ask.state == "open" {
+                close_and_edit(state, &ask, &step_line(state, status).await).await;
             }
         }
         return;
@@ -646,11 +637,70 @@ pub async fn approval_answered(state: &AppState, id: &str, via: Option<&str>) {
 
 async fn approval_closed(state: &AppState, id: &str, line: &str) {
     for ask in state.db.telegram_asks_for("approval", id).await.unwrap_or_default() {
-        if ask.state == "open" && state.db.telegram_close_ask(&ask.id).await.unwrap_or(false) {
-            if let Some(r) = runner(state, &ask.space_id) {
-                edit_answered(state, &r, &ask, line).await;
-            }
+        if ask.state == "open" {
+            close_and_edit(state, &ask, line).await;
         }
+    }
+}
+
+/// Closes an open ask its source closed (answered in kwant, or no longer waiting) and edits its
+/// Telegram copy to `line`. A copy still on its way has no message id yet: the sender edits it
+/// once its id is stored ([`ask_sent`]), so it never keeps live buttons.
+async fn close_and_edit(state: &AppState, ask: &TelegramAsk, line: &str) {
+    // The row as it was closed, not as it was read: its id may have been stored in between
+    let Ok(Some(closed)) = state.db.telegram_close_open_ask(&ask.id).await else { return };
+    if let Some(r) = runner(state, &closed.space_id) {
+        edit_answered(state, &r, &closed, line).await;
+    }
+}
+
+/// The line a question's Telegram copy gets once the question isn't open; `None` when it was
+/// answered from Telegram (the answer edited it).
+async fn question_line(state: &AppState, status: &str, via: Option<&str>) -> Option<String> {
+    match (status, via) {
+        ("answered", Some("telegram")) => None,
+        ("answered", _) => Some(format!("{TEAL_CHECK} Answered in kwant · {}", hhmm(state).await)),
+        _ => Some(format!("<i>{}</i>", text::escape(copy::NO_LONGER_WAITING))),
+    }
+}
+
+/// The line a human step's alert gets once the step isn't open.
+async fn step_line(state: &AppState, status: &str) -> String {
+    if status == "done" {
+        format!("{TEAL_CHECK} Done in kwant · {}", hhmm(state).await)
+    } else {
+        format!("<i>{}</i>", text::escape(copy::NO_LONGER_WAITING))
+    }
+}
+
+/// The line an approval's Telegram copy gets once it closed: "Answered in kwant" for a person's
+/// answer there, "No longer waiting" for a card nobody answered (its turn ended, it expired), as
+/// [`approval_answered`] and the `ApprovalWithdrawn` listener say. `None` when it was answered from
+/// Telegram (the tap edited it).
+async fn approval_line(state: &AppState, approval_id: &str) -> Option<String> {
+    let a = state.db.get_approval(approval_id).await.ok().flatten();
+    match a {
+        Some(a) if RuntimeEvent::is_answer(Some(a.status.as_str())) => match a.answered_via.as_deref() {
+            Some("telegram") => None,
+            _ => Some(format!("{TEAL_CHECK} Answered in kwant · {}", hhmm(state).await)),
+        },
+        _ => Some(format!("<i>{}</i>", text::escape(copy::NO_LONGER_WAITING))),
+    }
+}
+
+/// The line for an ask its source closed, read from the source as it is now.
+async fn closed_line(state: &AppState, ask: &TelegramAsk) -> Option<String> {
+    match ask.kind.as_str() {
+        "approval" => approval_line(state, &ask.ref_id).await,
+        "question" => {
+            let q = state.db.get_question(&ask.ref_id).await.ok().flatten()?;
+            question_line(state, &q.status, q.answered_via.as_deref()).await
+        }
+        "alert" => {
+            let step = state.db.get_human_step(&ask.ref_id).await.ok().flatten()?;
+            Some(step_line(state, &step.status).await)
+        }
+        _ => None,
     }
 }
 
@@ -671,10 +721,18 @@ pub async fn allow_off(state: &AppState, space: &str) {
     }
 }
 
-/// An ask has just been sent and its Telegram id stored (`ask` is the row after that). If it went
-/// out with Allow once but the switch went off while it was on its way, nothing could edit it then,
-/// so it becomes link-only now.
+/// An ask has just been sent and its Telegram id stored (`ask` is the row after that). Nothing
+/// could edit it while it was on its way, so what changed meanwhile is edited now:
+/// - closed (answered in kwant, its turn ended): its buttons go and it gets the line its source
+///   says ([`close_and_edit`] left it to the sender);
+/// - sent with Allow once but the switch went off: it becomes link-only.
 pub async fn ask_sent(state: &AppState, r: &Runner, ask: &TelegramAsk, markup: Option<&Value>) {
+    if ask.state == "closed" {
+        if let Some(line) = closed_line(state, ask).await {
+            edit_answered(state, r, ask, &line).await;
+        }
+        return;
+    }
     let sent_armed = markup
         .and_then(|m| m["inline_keyboard"].as_array())
         .is_some_and(|rows| rows.iter().filter_map(Value::as_array).flatten().any(|b| b["callback_data"].as_str().is_some_and(|d| d.starts_with("a:"))));
