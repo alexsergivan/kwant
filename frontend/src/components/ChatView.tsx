@@ -1136,6 +1136,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     stickRef.current = true;
     // 33k: an earlier page for the chat left behind never lands here.
     earlierAnchorRef.current = null;
+    focusStartRef.current = false;
     if (scrollRef.current) scrollRef.current.style.overflowAnchor = '';
   }, [contextKey]);
   // Phone: the field's width picks the placeholder (A1), and its height follows when it moves between
@@ -1163,6 +1164,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const earlierBtnRef = useRef<HTMLButtonElement>(null);
   const chatStartRef = useRef<HTMLParagraphElement>(null);
   const earlierAnchorRef = useRef<{ id: string; top: number; fromBottom: number; hadFocus: boolean } | null>(null);
+  /** The button had focus and the chat reached its start with nothing new: focus goes to the start line once drawn. */
+  const focusStartRef = useRef(false);
   const firstId = messages[0]?.id;
   const loadEarlier = () => {
     const el = scrollRef.current;
@@ -1179,9 +1182,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
     // When messages came in front, the layout effect below puts the view back once they're drawn. When nothing
     // did (an error, an empty last page, another chat), the browser gets its own anchoring back now.
     const nothingCame = () => {
-      if (earlierAnchorRef.current?.id !== firstId) return;
+      const a = earlierAnchorRef.current;
+      if (a?.id !== firstId) return;
       earlierAnchorRef.current = null;
       if (scrollRef.current) scrollRef.current.style.overflowAnchor = '';
+      // An empty last page (an exact multiple of 100): the start line replaces the button with no new first
+      // message, so the layout effect below never runs. Focus follows to the line now, or once it's drawn.
+      if (!a.hadFocus) return;
+      if (chatStartRef.current?.isConnected && !earlierBtnRef.current?.isConnected) chatStartRef.current.focus({ preventScroll: true });
+      else focusStartRef.current = true;
     };
     void Promise.resolve(onLoadEarlier()).then((came) => {
       if (!came) nothingCame();
@@ -1200,6 +1209,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
     // At the start the button gives way to the start line: focus follows it there.
     if (a.hadFocus && !earlierBtnRef.current?.isConnected) chatStartRef.current?.focus({ preventScroll: true });
   }, [firstId]);
+  useLayoutEffect(() => {
+    if (!focusStartRef.current) return;
+    if (earlier !== 'start') {
+      if (earlier !== 'loading') focusStartRef.current = false;
+      return;
+    }
+    focusStartRef.current = false;
+    if (!earlierBtnRef.current?.isConnected) chatStartRef.current?.focus({ preventScroll: true });
+  }, [earlier]);
   // Scrolled up to the button: it loads by itself (only once the person has left the bottom, never on open).
   useEffect(() => {
     const btn = earlierBtnRef.current;

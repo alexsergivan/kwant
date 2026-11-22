@@ -201,3 +201,20 @@ test('33k: a thread starts with "Start of this conversation", a channel names it
   assert.equal(m.startLabel({ thread: false, channel: true, title: '@helpers' }), 'Start of @helpers');
   assert.equal(m.startLabel({ thread: false, channel: false, title: 'Ada' }), 'Start of your chat with Ada');
 });
+
+test('33k: a 200-message chat by keyboard: the last ask comes back empty and focus lands on the start line', async () => {
+  chats.k1 = seed(200);
+  await openAda();
+  earlier().focus();
+  await click(earlier());
+  assert.equal(shownIds().length, 200);
+  const btn = earlier();
+  assert.ok(btn, 'still a button: a full page came back');
+  btn.focus();
+  assert.equal(document.activeElement, btn);
+  await click(btn);
+  const line = startLine();
+  assert.ok(line, 'the empty page marks the start');
+  assert.equal(earlier(), undefined);
+  assert.equal(document.activeElement, line, 'focus follows the button to the start line, never the page body');
+});
