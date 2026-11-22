@@ -1014,7 +1014,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // from their kw-row-lazy estimate, and the row re-pin below must not pull the view back. When it ends, one instant
   // scroll lands it on the real heights (the smooth scroll set off from the estimates). Reduced motion is instant already.
   const jumpingRef = useRef(false);
+  const jumpLeftRef = useRef(false);
+  const jumpUpRef = useRef(false);
   const jumpEndRef = useRef<(() => void) | null>(null);
+  const onScreen = (target: HTMLElement, box: HTMLElement) => {
+    const r = target.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    return r.bottom > b.top && r.top < b.bottom;
+  };
   const jumpTo = (target: HTMLElement, block: ScrollLogicalPosition) => {
     jumpEndRef.current?.();
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -1024,20 +1031,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
       return;
     }
     jumpingRef.current = true;
+    jumpLeftRef.current = false;
+    jumpUpRef.current = target.getBoundingClientRect().top < box.getBoundingClientRect().top;
     let t = 0;
     const end = (settle: boolean) => {
       box.removeEventListener('scrollend', onEnd);
       window.clearTimeout(t);
       if (jumpEndRef.current === stop) jumpEndRef.current = null;
-      if (settle && target.isConnected) target.scrollIntoView({ block, behavior: 'auto' });
+      // Only when the scroll got there: a reader who scrolled away mid-jump is not pulled back.
+      if (settle && target.isConnected && onScreen(target, box)) target.scrollIntoView({ block, behavior: 'auto' });
       jumpingRef.current = false;
     };
-    const onEnd = () => end(true);
+    // A scrollend with the target still off screen (a wheel mid-jump can end one early while the jump goes on) waits
+    // for the next; the timer is the last word.
+    const onEnd = () => {
+      if (target.isConnected && onScreen(target, box)) end(true);
+    };
     const stop = () => end(false);
     jumpEndRef.current = stop;
     box.addEventListener('scrollend', onEnd);
-    // No scrollend where the browser lacks it, or when the target was already in place.
-    t = window.setTimeout(onEnd, 1500);
+    // The timer covers a browser without scrollend, or a target already in place.
+    t = window.setTimeout(() => end(true), 3000);
     target.scrollIntoView({ block, behavior: 'smooth' });
   };
   // A waiting card whose buttons are off screen while the person reads further up.
@@ -1061,8 +1075,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const onScroll = () => {
     const el = scrollRef.current;
     if (el) {
+      // 33q: during a jump up, a move down at the bottom is the reader taking over (the jump itself only goes up).
+      const backDown = jumpingRef.current && jumpUpRef.current && isNearBottom(el) && el.scrollTop > lastScrollTopRef.current + 1;
       stickRef.current = nextFollowing(stickRef.current, { nearBottom: isNearBottom(el), scrollTop: el.scrollTop, lastScrollTop: lastScrollTopRef.current });
       lastScrollTopRef.current = el.scrollTop;
+      // 33q: a jump that left the bottom, then the reader came back to it: the jump is over and the re-pin is theirs again.
+      if (jumpingRef.current) {
+        if (!stickRef.current) jumpLeftRef.current = true;
+        else if (jumpLeftRef.current || backDown) jumpEndRef.current?.();
+      }
     }
     checkApprovalVisible();
   };

@@ -127,10 +127,19 @@ test('33q: a smooth jump is not pulled back to the bottom by a row settling, and
     resize(old, 420);
     resize(row, 360);
     assert.equal(pins, 0, 'rows settling while the jump runs never pull the view back to the bottom');
+    log.getBoundingClientRect = () => ({ top: 0, bottom: 600, left: 0, right: 0, width: 0, height: 600 });
+    old.getBoundingClientRect = () => ({ top: 200, bottom: 300, left: 0, right: 0, width: 0, height: 100 });
     log.dispatchEvent(new dom.window.Event('scrollend'));
     assert.deepEqual(calls.at(-1), { id: 'a1', behavior: 'auto' }, 'when the smooth scroll ends, it lands once more on the real heights');
     resize(row, 400);
     assert.ok(pins > 0, 'after the jump, the re-pin works again (only while following)');
+    m.flushSync(() => root.render(m.React.createElement(m.ChatView, { ...base, highlightMessageId: 'a2' })));
+    const n = calls.length;
+    const away = log.querySelector('[data-message-id="a2"]');
+    away.getBoundingClientRect = () => ({ top: -900, bottom: -800, left: 0, right: 0, width: 0, height: 100 });
+    log.getBoundingClientRect = () => ({ top: 0, bottom: 600, left: 0, right: 0, width: 0, height: 600 });
+    log.dispatchEvent(new dom.window.Event('scrollend'));
+    assert.equal(calls.length, n, 'a reader who scrolled away during the jump is not pulled back by the settle step');
   } finally {
     proto.scrollIntoView = was;
     root.unmount();
