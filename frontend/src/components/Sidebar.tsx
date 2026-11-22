@@ -321,10 +321,15 @@ const WorkingNow: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<
   const n = rows.length;
   const more = n - WORKING_MAX;
   const showFirst = () => {
-    const ids = new Set(rows.map((a) => a.kwant.id));
+    // Only the bots the block doesn't show (Mira's design check 1)
+    const ids = new Set(rows.slice(WORKING_MAX).map((a) => a.kwant.id));
     const first = [...(box.current?.closest('aside') ?? document).querySelectorAll<HTMLElement>('[data-bot-row]')].find((el) => ids.has(el.dataset.botRow ?? ''));
-    first?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
-    first?.focus({ preventScroll: true });
+    if (!first) return;
+    first.scrollIntoView?.({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    // Focus from code shows no focus-visible ring after a mouse click: a ring that stays until the row loses focus
+    first.dataset.arrived = '';
+    first.addEventListener('blur', () => delete first.dataset.arrived, { once: true });
+    first.focus({ preventScroll: true });
   };
   return (
     <section ref={box} data-working-now aria-labelledby="working-now-head" className="rounded-xl border border-hairline bg-white/[0.015] my-1.5 pb-1.5">
@@ -343,7 +348,7 @@ const WorkingNow: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<
           onClick={showFirst}
           className="ml-2 mt-0.5 px-1 rounded text-[12px] text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
         >
-          +{more} more
+          and {more} more below
         </button>
       )}
     </section>
@@ -657,7 +662,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         data-rank={att?.rank}
         aria-describedby={[tipId, pin?.alsoIn ? `pin-also-${k.id}` : null].filter(Boolean).join(' ') || undefined}
         data-chat-row={chat ? (asked ? 'needs' : 'bot') : undefined}
-        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 data-[arrived]:outline data-[arrived]:outline-2 data-[arrived]:outline-sky-400 ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >

@@ -73,11 +73,11 @@ test('desktop, working with nothing pinned: the Working block still shows, befor
   assert.equal(d.querySelector('[data-working-now]').nextElementSibling.getAttribute('data-chats-section'), 'channels');
 });
 
-test('desktop, 5 working: 3 rows and "+2 more"', () => {
+test('desktop, 5 working: 3 rows and "and 2 more below"', () => {
   const block = doc([...asks, ...working('lin', 'pixel', 'iris', 'juno', 'scout')]).querySelector('[data-working-now]');
   assert.equal(block.querySelector('h2').textContent, 'Working · 5');
   assert.equal(block.querySelectorAll('[data-pin-row]').length, 3);
-  assert.equal(block.querySelector('[data-working-more]').textContent, '+2 more');
+  assert.equal(block.querySelector('[data-working-more]').textContent, 'and 2 more below');
 });
 
 test('desktop, nobody working: no block', () => {
@@ -86,20 +86,25 @@ test('desktop, nobody working: no block', () => {
   assert.equal(d.querySelector('[data-needs-attention] h2').textContent, 'Needs you · 2');
 });
 
-test('"+n more" scrolls to and focuses the first working bot in the list below', async () => {
+test('"and n more below" scrolls to and focuses the first hidden working bot in the list below, with a ring until blur', async () => {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = m.createRoot(host);
-  m.flushSync(() => root.render(React.createElement(m.Sidebar, props([...asks, ...working('vega', 'lin', 'pixel', 'iris', 'scout')]))));
+  m.flushSync(() => root.render(React.createElement(m.Sidebar, props([...asks, ...working('lin', 'pixel', 'iris', 'vega', 'scout')]))));
   await new Promise((r) => setTimeout(r, 0));
   const more = host.querySelector('[data-working-more]');
-  assert.equal(more.textContent, '+2 more');
+  assert.equal(more.textContent, 'and 2 more below');
   scrolled.length = 0;
   m.flushSync(() => more.click());
-  // The team list draws Lin before Vega (and Scout, in No team, last), so Lin is the first working bot below
-  const first = host.querySelector('[data-bot-row="lin"]');
-  assert.equal(document.activeElement, first, 'focus on the first working bot\'s own row');
+  // Shown: Lin, Pixel, Iris (Lin is also first in the list). Hidden: Vega (in Ship) and Scout (No team, last), so Vega
+  const first = host.querySelector('[data-bot-row="vega"]');
+  assert.equal(document.activeElement, first, 'focus on the first hidden working bot\'s own row');
   assert.deepEqual(scrolled, [first]);
+  assert.ok(first.hasAttribute('data-arrived'), 'a ring after a mouse click');
+  assert.match(first.className, /data-\[arrived\]:outline-sky-400/);
+  assert.doesNotMatch(first.className, /kw-flash|amber/);
+  first.blur();
+  assert.equal(first.hasAttribute('data-arrived'), false, 'the ring goes when focus leaves');
   root.unmount();
   host.remove();
 });
