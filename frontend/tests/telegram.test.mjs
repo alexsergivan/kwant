@@ -497,8 +497,10 @@ test('after a reload: GET /api/approvals rows allowed in Telegram come back as t
     { id: 'ap_0', kwant_id: 'k_drafter', tool_name: 'Bash', status: 'allowed_once', answered_via: 'telegram', created_at: '2026-11-05T10:00:00Z', details: {} },
     { id: 'ap_x', tool_name: 'Bash', status: 'allowed_once', answered_via: 'telegram', created_at: '2026-11-07T11:30:00Z', details: {} },
   ];
-  const settled = m.settledFromRecords(rows, now);
-  assert.deepEqual(settled.map((a) => a.id), ['ap_1', 'ap_3'], 'Telegram only, the last day, oldest first, never without a bot');
+  const all = m.settledFromRecords(rows, now);
+  // 33a: the app's own Allow once (ap_2, no answered_via) comes back too, as its own "You allowed once" line.
+  assert.deepEqual(all.map((a) => [a.id, a.via ?? 'telegram']), [['ap_1', 'telegram'], ['ap_2', 'app'], ['ap_3', 'telegram']], 'the last day, oldest first, never without a bot');
+  const settled = all.filter((a) => !a.via);
   assert.equal(settled[1].kwant_id, 'k_drafter');
   // A live line and the reloaded one are drawn once.
   assert.equal(m.addSettled([card('ap_3')], settled).length, 2);

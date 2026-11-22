@@ -2516,6 +2516,10 @@ pub(super) async fn turn_once(
         outcome: "cancelled",
         running_row: None,
         quiet: opts.quiet_finish,
+        // 33e: only a failure in the person's own chat says "stopped"; a hand-off, routine run,
+        // mission, discussion round or unsaved view reports it where it belongs (as [`stop_asks`])
+        silent_failure: !stop_asks(scope, &opts),
+        reply: None,
     };
     // After the guard, which clears it however the turn ends
     if let Some(source) = opts.source.clone() {
@@ -2604,6 +2608,17 @@ pub(super) async fn turn_once(
         (Err(_), true) => "cancelled",
         (Err(_), false) => "failed",
     };
+    // 33e: its notification says when the reply ended Blocked or Done
+    if let Ok(text) = &reply {
+        ended.reply = Some(text.as_str().into());
+    }
+    // 33e: a turn parked behind a usage limit (or held for the bot's budget) retries by itself, and
+    // its chat says when; "stopped… retry" would ask the person for nothing (as the Needs-you item,
+    // which skips `resumes_itself`)
+    if ended.outcome == "failed" && !ended.silent_failure {
+        let waiting = scope.state.db.parked_waiting_in(&target_kwant.id, scope.channel_id.as_deref(), scope.thread_id.as_deref()).await;
+        ended.silent_failure = waiting.unwrap_or(false);
+    }
     // The save step asked for the delivery continuation: it starts on this turn's chat slot
     let continues = next.is_some_and(|n| n.lock().is_ok_and(|n| n.is_some()));
     if let (true, false, Some(h)) = (continues && slot.holds_chat(), scope.cancel_token.is_cancelled(), handover) {
@@ -2781,6 +2796,10 @@ struct TurnEndedGuard {
     running_row: Option<crate::db::Database>,
     /// See [`TurnOpts::quiet_finish`].
     quiet: bool,
+    /// No notification if the turn fails (33e): not a turn of the person's own chat (see [`stop_asks`]).
+    silent_failure: bool,
+    /// The completed turn's reply (see `RuntimeEvent::TurnEnded::reply`).
+    reply: Option<std::sync::Arc<str>>,
 }
 
 impl Drop for TurnEndedGuard {
@@ -2803,7 +2822,8 @@ impl Drop for TurnEndedGuard {
             outcome: self.outcome.to_string(),
             turn_id: Some(tag.turn_id),
             thread_id: tag.thread_id,
-            quiet: self.quiet,
+            quiet: self.quiet || (self.outcome == "failed" && self.silent_failure),
+            reply: self.reply.take(),
         });
     }
 }
@@ -4174,6 +4194,22 @@ async fn run_kwant_turn_inner(
                 let failed_before = super::delivery_check::FailedBefore::of_turn(own_steps.as_ref(), before);
                 if let Some(blocked) = blocked {
                     meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = blocked;
+                }
+                // 33d: a reply that ends with `Done: …` where the bot did the person's request
+                // itself is a finished job ("Done while you were away"). Only a turn for the
+                // person's own message: not a routine, mission, audit or other turn kwnt started
+                // (they have rows of their own), nor a discussion or unsaved turn
+                let for_person = opts.busy_slot.is_none()
+                    && !opts.always_ask
+                    && opts.audit.is_none()
+                    && opts.rehearse.is_none()
+                    && opts.task.is_none()
+                    && opts.discussion.is_none()
+                    && !opts.unsaved;
+                if for_person {
+                    if let Some(done) = super::keep_going::solo_done(scope, target_kwant, &asst_msg.text).await {
+                        meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::DONE_KEY] = done;
+                    }
                 }
                 let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);

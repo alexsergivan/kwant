@@ -1774,7 +1774,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends", "human_step", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "turn_quiet"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends", "human_step", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "turn_quiet", "turn_stopped"])
     );
 
     let (status, _) = req(
@@ -1886,6 +1886,7 @@ async fn notifications_are_filtered_and_content_free() {
         turn_id: None,
         thread_id: None,
         quiet: false,
+        reply: None,
     });
     let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
         kwant_id: k.id.clone(),
@@ -1894,6 +1895,7 @@ async fn notifications_are_filtered_and_content_free() {
         turn_id: None,
         thread_id: None,
         quiet: false,
+        reply: None,
     });
     // A quiet turn (a mission runner turn) leaves its notification to the runner
     let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
@@ -1903,6 +1905,7 @@ async fn notifications_are_filtered_and_content_free() {
         turn_id: None,
         thread_id: None,
         quiet: true,
+        reply: None,
     });
     let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
         id: "a1".into(),
