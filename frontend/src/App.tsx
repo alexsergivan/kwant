@@ -186,7 +186,7 @@ import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { BudgetNeedsYou } from './components/BotBudget';
 import { GoalsNeedYou } from './components/GoalsNeedYou';
-import { openGoalNotice, openGoalOnBoard } from './goals';
+import { dropGoalIfNoBoard, openGoalNotice, openGoalOnBoard } from './goals';
 import { budgetStore, isBudgetMessage, requestBudgetFocus, sendWaitsForBudget } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
@@ -865,9 +865,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         const on = parseMissionBoardSetting(d);
-        if (live && on !== null) setMissionBoard(on);
+        if (!live) return;
+        if (on !== null) setMissionBoard(on);
+        dropGoalIfNoBoard(on);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (live) dropGoalIfNoBoard(null);
+      });
     const onSetting = (e: Event) => setMissionBoard(Boolean((e as CustomEvent<boolean>).detail));
     window.addEventListener(MISSION_BOARD_SETTING_EVENT, onSetting);
     return () => {

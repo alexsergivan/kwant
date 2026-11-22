@@ -166,6 +166,24 @@ test('the open app: the worker’s message with goal_id opens the board and the 
   assert.ok(opened.indexOf('openGoalNotice') < opened.indexOf('openPlaceRef.current(n)'));
 });
 
+test('the board off: a goal held by a notice is dropped, so its drawer can’t open later by surprise', () => {
+  // Mira and Rigel at 5001341f: first load with ?goal= holds the goal even when the board is off
+  b.takePendingGoal();
+  for (const off of [false, null]) {
+    onWindow(() => b.openGoalOnBoard('g1'));
+    b.dropGoalIfNoBoard(off);
+    assert.equal(b.takePendingGoal(), null);
+  }
+  onWindow(() => b.openGoalOnBoard('g1'));
+  b.dropGoalIfNoBoard(true);
+  assert.equal(b.takePendingGoal(), 'g1');
+  // App: once the server says whether the board is on (or can't say), the held goal is kept only for the board
+  const app = src('App.tsx');
+  const effect = app.match(/fetch\('\/api\/settings'\)[\s\S]*?\.catch\([\s\S]*?\}\);/)[0];
+  assert.match(effect, /const on = parseMissionBoardSetting\(d\);[\s\S]*dropGoalIfNoBoard\(on\);/);
+  assert.match(effect, /\.catch\(\(\) => \{[^}]*dropGoalIfNoBoard\(null\)/);
+});
+
 // ---------------------------------------------------------------- the page's own notification
 
 test('the page’s own notification carries the goal to the tap', async () => {

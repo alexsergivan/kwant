@@ -930,6 +930,11 @@ export const takePendingGoal = (): string | null => {
   pendingGoal = null;
   return id;
 };
+/** 34d: the Mission board is off here (or the server can't say): drop a goal held for it, so a notice's goal
+ *  can't open its drawer by surprise if the board is turned on later. */
+export const dropGoalIfNoBoard = (boardOn: boolean | null): void => {
+  if (boardOn !== true) pendingGoal = null;
+};
 
 /**
  * 34d: a tap on a goal notice opens the Mission board with that goal's drawer. false when it names no goal or the
