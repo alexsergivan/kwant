@@ -20,7 +20,7 @@ import { accountCardShows } from '../firstScreen';
 import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine, teamChipLabel, teamChipTitle } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
-import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
+import { PHONE_QUERY, SM_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
 import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
 import { isNewThing, markNewSeen, subscribeNew } from '../whatsNew';
@@ -713,6 +713,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // rows while in use. Desktop never changes.
   const phone = useMedia(PHONE_QUERY);
   const touch = useMedia(TOUCH_QUERY);
+  // 33q: a row draws only the avatar this width shows (gutter from `sm` up, name line below), not both behind CSS.
+  const wideRows = useMedia(SM_QUERY);
 
   const [composerFocused, setComposerFocused] = useState(false);
   const kbd = keyboardMode({ phone, touch, focused: composerFocused });
@@ -1122,6 +1124,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
     el.querySelectorAll('[data-approval-card]').forEach((c) => ro.observe(c));
     return () => ro.disconnect();
   }, [approvalKey]);
+  // 33q: rows settle to their real height after the first paint (kw-row-lazy rows start at an estimate, a chart
+  // measures its width), so while the person follows the bottom a row changing height keeps the newest in view.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (stickRef.current) pinToBottom(el);
+    });
+    el.querySelectorAll('[data-message-id]').forEach((r) => ro.observe(r));
+    return () => ro.disconnect();
+  }, [messages, contextKey]);
   useEffect(() => {
     stickRef.current = true;
   }, [contextKey]);
@@ -1806,7 +1819,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const setup = msg.meta && onOpenAccounts ? parseSetupMeta(msg.meta) : null;
     if (setup && onOpenAccounts)
       return (
-        <div key={msg.id} data-message-id={msg.id} className="w-full max-w-5xl">
+        <div key={msg.id} data-message-id={msg.id} className="kw-row-lazy w-full max-w-5xl">
           <SetupNeededCard
             meta={setup}
             botName={botDisplayName(msg.sender_id, knownBots)}
@@ -1947,7 +1960,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         data-shared-under={underReply ? '' : undefined}
         // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
         style={underReply ? { marginTop: '0.5rem' } : undefined}
-        className={`group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${onYourSide ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+        className={`kw-row-lazy group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${onYourSide ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
@@ -1961,7 +1974,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
             {otherSender ? (
               <SenderLetter name={otherSender} />
-            ) : (
+            ) : wideRows ? (
               <ModernAvatar
                 role={isUser ? 'user' : title}
                 name={displayName}
@@ -1969,7 +1982,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 kwantId={replyKwantId}
                 modelBadge={false}
               />
-            )}
+            ) : null}
           </span>
         </span>
         )}
@@ -1988,7 +2001,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
+              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
               ranOn={ranOn}
               account={account}
               effort={effortWords(msg.reasoning_content)}
