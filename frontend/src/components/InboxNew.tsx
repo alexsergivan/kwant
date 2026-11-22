@@ -187,14 +187,20 @@ const AwaySubline: React.FC<{ item: InboxItem }> = ({ item }) => {
   const { label, tone } = itemLabel(item as AwayItem);
   const toneText = tone === 'amber' ? 'text-amber-300' : tone === 'rose' ? 'text-rose-300' : tone === 'emerald' ? 'text-teal-300' : tone === 'sky' ? 'text-sky-300' : 'text-zinc-400';
   const sum = awaySummary(item as AwayItem);
-  const showSum = sum && item.kind !== 'approval' && item.kind !== 'stopped' && !(item.kind === 'question' && item.choices?.length);
+  // 33m: a stopped row titled with the person's request shows its reason here; titled with the reason, it doesn't say it twice.
+  const stoppedWhy = item.kind === 'stopped' && (item as AwayItem).title_is_request === true;
+  const showSum = sum && item.kind !== 'approval' && (item.kind !== 'stopped' || stoppedWhy) && !(item.kind === 'question' && item.choices?.length);
   // F6: an approval titled with its own question still says what the bot wants to use: "Needs approval · use gmail".
   const asked = item.kind === 'approval' && typeof item.question === 'string' && !!item.question.trim();
   const use = asked ? awayTitle(item as AwayItem) : '';
   return (
     <span className="flex items-center gap-1.5 min-w-0">
       <span className={`shrink-0 font-semibold ${toneText}`}>{label}</span>
-      {showSum && <span className="min-w-0 truncate text-zinc-400">{sum}</span>}
+      {showSum && (
+        <span className="min-w-0 truncate text-zinc-400" data-stopped-why={stoppedWhy ? '' : undefined}>
+          {stoppedWhy ? `· ${sum}` : sum}
+        </span>
+      )}
       {use && (
         <span className="min-w-0 truncate text-zinc-400" data-approval-use>
           · {use.charAt(0).toLowerCase() + use.slice(1)}

@@ -16,6 +16,7 @@ pub mod engine_login;
 pub mod auth;
 pub mod signin;
 pub mod continuity;
+pub mod tool_words;
 pub mod memory_recall;
 pub mod fresh_eyes;
 pub mod goals_remediation;

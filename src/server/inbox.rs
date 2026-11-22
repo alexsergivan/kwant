@@ -842,8 +842,9 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     };
     // What a mission watcher left for the person (P1), listed and counted as on /api/away
     let watch = super::missions::watch::waiting_items(&state, &space).await;
-    // Work that stopped and waits for the person to resume it (0.9.5), as on /api/away
-    let stopped = away::stopped_items(&state, &space).await;
+    // Work that stopped and waits for the person to resume it (0.9.5), as on /api/away, but
+    // titled with the person's request it was working on (33m)
+    let stopped = away::stopped_items(&state, &space, true).await;
     // A connection only the person can fix (0.9.5), as listed on /api/waiting
     let connections = match state.db.list_kwants(&space).await {
         Ok(kwants) => super::tool_failures::needs_you(&state, &kwants).await,

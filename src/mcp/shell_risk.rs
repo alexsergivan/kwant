@@ -539,7 +539,7 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
                 return Err(format!("`cargo {}` reaches outside the folder", sub.text));
             }
             new_package(name, args)?;
-            all_paths_inside(args, ctx)
+            script_args(name, args, ctx)
         }
         "pipx" => Err("`pipx` installs or runs packages outside the folder".into()),
         "pip" | "pip3" | "gem" | "go" | "uv" | "poetry" | "hatch" | "flit" | "mvn" | "gradle" | "gradlew" | "dotnet" => {
@@ -564,13 +564,13 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
                 return Err("`dotnet add package` downloads a new package, whose code runs when the project builds or runs".into());
             }
             new_package(name, args)?;
-            all_paths_inside(args, ctx)
+            script_args(name, args, ctx)
         }
         "make" | "gmake" => {
             if let Some(a) = args.iter().find(|a| a.text == "-E" || a.text.starts_with("--eval")) {
                 return Err(format!("`make {}` runs make code kwnt can't see", a.text));
             }
-            all_paths_inside(args, ctx)
+            script_args(name, args, ctx)
         }
         "find" => {
             if let Some(a) = args.iter().find(|a| matches!(a.text.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir" | "-delete") || a.text.starts_with("-fprint") || a.text.starts_with("-fls")) {
@@ -722,15 +722,24 @@ fn interpreter(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
 /// `python3 x.py`, `python -m mod`): every path inside the folder, and no email address or web
 /// address that isn't this computer, since the script may send something there (Ada's policy
 /// call, Nov 22). An address written inside the script itself isn't judged (see the module docs).
+/// 33t: a project runner that starts the project's own code (`npm run send -- a@b.co`, `uv run
+/// x.py`, `cargo run --`, `make send TO=a@b.co`, `poetry run`, …) ends here too, after its own
+/// checks, so it is judged the same way and the reason names the runner.
 fn script_args(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
-    if let Some((outward, shown)) = outward_arg(args) {
-        return Err(match outward {
-            Outward::Kwnt => format!("`{name}` is given kwnt's own address (`{shown}`), whose settings only the person may change"),
-            Outward::Email => format!("`{name}` is given an email address (`{shown}`), so it may send something outside the folder"),
-            Outward::Web => format!("`{name}` is given a web address (`{shown}`), so it may send something outside the folder"),
-        });
-    }
+    outward_reason(name, args)?;
     all_paths_inside(args, ctx)
+}
+
+/// 33o/33t: asks, naming the address, when any of `args` is an email address or a web address that
+/// isn't this computer ([`outward_arg`]).
+fn outward_reason(name: &str, args: &[Word]) -> Verdict {
+    let Some((outward, shown)) = outward_arg(args) else { return Ok(()) };
+    Err(match outward {
+        Outward::Kwnt => format!("`{name}` is given kwnt's own address (`{shown}`), whose settings only the person may change"),
+        Outward::LocalApi => format!("`{name}` is given a local address under /api/ (`{shown}`), which may reach kwnt's own server"),
+        Outward::Email => format!("`{name}` is given an email address (`{shown}`), so it may send something outside the folder"),
+        Outward::Web => format!("`{name}` is given a web address (`{shown}`), so it may send something outside the folder"),
+    })
 }
 
 /// What [`outward_arg`] found.
@@ -738,8 +747,11 @@ fn script_args(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
 enum Outward {
     Email,
     Web,
-    /// A loopback address that reaches kwnt's own server ([`kwnt_url`]).
+    /// A loopback address on kwnt's own port ([`kwnt_port`]).
     Kwnt,
+    /// 33t (33o QA Finding 2): a loopback address under `/api/` on another port. It may be a dev
+    /// server proxying to kwnt, so it still asks ([`kwnt_url`]), but it may be the person's own.
+    LocalApi,
 }
 
 /// The first argument that names somewhere outside this computer, with the text to show for it:
@@ -764,9 +776,9 @@ fn outward_arg(args: &[Word]) -> Option<(Outward, String)> {
             let more = if end < rest.len() && &rest[end..] != "/" { "/…" } else { "" };
             let shown: String = format!("{}://{host_port}{more}", scheme.to_ascii_lowercase()).chars().take(80).collect();
             match split_url(&as_http) {
-                Some((host, _, _)) if script_local_host(&host) => {
+                Some((host, port, _)) if script_local_host(&host) => {
                     if kwnt_url(&as_http) {
-                        return Some((Outward::Kwnt, shown));
+                        return Some((if kwnt_port(port) { Outward::Kwnt } else { Outward::LocalApi }, shown));
                     }
                     continue;
                 }
@@ -940,7 +952,7 @@ fn packages(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
         return Err(format!("`{name} {}` can download and run a package's code", a.text));
     }
     new_package(name, args)?;
-    all_paths_inside(args, ctx)
+    script_args(name, args, ctx)
 }
 
 /// Commands that add a package the project doesn't list yet (`npm install left-pad`, `cargo add
@@ -1530,8 +1542,13 @@ pub fn kwnt_url(url: &str) -> bool {
     if !loopback_host(&host) {
         return false;
     }
+    kwnt_port(port) || path.starts_with("/api/") || path == "/api"
+}
+
+/// The port kwnt serves on ([`set_serve_port`]), 8799 or 8800.
+fn kwnt_port(port: u32) -> bool {
     let serve = SERVE_PORT.load(std::sync::atomic::Ordering::Relaxed);
-    [u32::from(serve), 8799, 8800].contains(&port) || path.starts_with("/api/") || path == "/api"
+    [u32::from(serve), 8799, 8800].contains(&port)
 }
 
 /// Whether `host` (lowercase, as [`split_url`] gives it) is this computer: `localhost`,
@@ -2400,6 +2417,129 @@ mod tests {
         }
         // curl/wget keep their own reasons
         assert_eq!(classify("curl https://example.com", &ws), ask("`curl` uses the network"));
+    }
+
+    /// 33t (33o QA Finding 4, Rigel): the same script started through a project runner (npm, uv,
+    /// cargo, make, poetry, …) given an email address or an outside web address asks too, and the
+    /// reason names the runner. What already asks keeps its own reason; with no address, a local
+    /// one or a file name it still runs. Finding 2: a local `/api/` address on a port that isn't
+    /// kwnt's says it *may* reach kwnt.
+    #[test]
+    fn a_project_runner_given_an_outside_address_asks() {
+        let (_tmp, ws) = folder();
+        for cmd in [
+            // Rigel's five (33o qa.md, Finding 4): ran with no card at 7eada20f
+            "npm run send -- a@b.co",
+            "uv run x.py --to a@b.co",
+            "cargo run -- --to a@b.co",
+            "make send TO=a@b.co",
+            "poetry run python x.py a@b.co",
+            // Every runner, every verb
+            "pnpm run send a@b.co",
+            "yarn run send https://hooks.slack.com/services/T/B/x",
+            "yarn send ops@acme.example",
+            "bun run send a@b.co",
+            "npm start -- --to ops@acme.example",
+            "npm test -- --url https://api.example.com",
+            "npm --prefix src run send -- ops@acme.example",
+            "go run . --to ops@acme.example",
+            "dotnet run -- --to ops@acme.example",
+            "deno task send ops@acme.example",
+            "deno run x.ts --webhook https://hooks.example.com/x",
+            "gradle run -Durl=https://x.example",
+            "gradlew run -Durl=https://x.example",
+            "mvn exec:java -Dexec.args=ops@acme.example",
+            "hatch run send --to ops@acme.example",
+            "make send URL=https://x.example",
+            "gmake send TO=a@b.co",
+            "cargo run --bin mailer -- ops@acme.example",
+            "uv run python -m mailer --to ops@acme.example",
+            "timeout 60 npm run send -- a@b.co",
+            "npm run send -- http://localhost:8799/api/spaces",
+            "make e2e URL=http://localhost:3000/api/users",
+        ] {
+            assert!(!classify(cmd, &ws).is_allowed(), "should ask: {cmd:?}");
+        }
+        let ask = |why: &str| SmartVerdict::Ask(why.into());
+        let email = |name: &str, shown: &str| ask(&format!("`{name}` is given an email address (`{shown}`), so it may send something outside the folder"));
+        assert_eq!(classify("npm run send -- a@b.co", &ws), email("npm", "a@b.co"));
+        assert_eq!(classify("uv run x.py --to a@b.co", &ws), email("uv", "a@b.co"));
+        assert_eq!(classify("cargo run -- --to a@b.co", &ws), email("cargo", "a@b.co"));
+        assert_eq!(classify("make send TO=a@b.co", &ws), email("make", "a@b.co"));
+        assert_eq!(classify("poetry run python x.py a@b.co", &ws), email("poetry", "a@b.co"));
+        assert_eq!(classify("bun run send a@b.co", &ws), email("bun", "a@b.co"));
+        assert_eq!(
+            classify("yarn run send https://hooks.slack.com/services/T/B/x", &ws),
+            ask("`yarn` is given a web address (`https://hooks.slack.com/…`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("gradle run -Durl=https://x.example", &ws),
+            ask("`gradle` is given a web address (`https://x.example`), so it may send something outside the folder")
+        );
+        // What already asked keeps its own reason
+        assert_eq!(
+            classify("npm install left-pad --registry https://r.example", &ws),
+            ask("`npm install left-pad` downloads a new package and runs its install scripts")
+        );
+        assert_eq!(classify("cargo install --git https://github.com/x/y", &ws), ask("`cargo install` reaches outside the folder"));
+        assert_eq!(classify("uv run --with requests python x.py --to a@b.co", &ws), ask("`uv run --with` downloads packages and runs them"));
+        assert_eq!(classify("make -E x=1 send TO=a@b.co", &ws), ask("`make -E` runs make code kwnt can't see"));
+        assert_eq!(classify("npm exec cowsay a@b.co", &ws), ask("`npm exec` can download and run a package's code"));
+        assert_eq!(classify("deno run https://example.com/x.ts", &ws), ask("`deno` downloads and runs code from `https://example.com/x.ts`"));
+
+        // Finding 2: kwnt's own ports keep their words; another local port under /api/ says "may"
+        assert_eq!(
+            classify("npm run send -- http://127.0.0.1:8800/api/x", &ws),
+            ask("`npm` is given kwnt's own address (`http://127.0.0.1:8800/…`), whose settings only the person may change")
+        );
+        assert_eq!(
+            classify("python3 x.py http://localhost:8799/api/spaces", &ws),
+            ask("`python3` is given kwnt's own address (`http://localhost:8799/…`), whose settings only the person may change")
+        );
+        assert_eq!(
+            classify("node e2e.js http://localhost:5173/api/health", &ws),
+            ask("`node` is given a local address under /api/ (`http://localhost:5173/…`), which may reach kwnt's own server")
+        );
+        assert_eq!(
+            classify("npm run e2e -- http://localhost:3000/api/users", &ws),
+            ask("`npm` is given a local address under /api/ (`http://localhost:3000/…`), which may reach kwnt's own server")
+        );
+        assert_eq!(
+            classify("python3 x.py http://localhost/api/x", &ws),
+            ask("`python3` is given a local address under /api/ (`http://localhost/…`), which may reach kwnt's own server")
+        );
+
+        for cmd in [
+            // The brief's list: no address
+            "npm test",
+            "npm run build",
+            "cargo run -- add x",
+            "uv run pytest",
+            "make test",
+            "yarn build",
+            "pnpm run build",
+            "bun run build",
+            "go test ./...",
+            "go run . --addr localhost:8080",
+            "dotnet run",
+            "poetry run pytest -q",
+            "hatch run test",
+            "gradle build",
+            "mvn -q test",
+            "deno task build",
+            // A local address
+            "npm run e2e -- --base-url http://localhost:3000",
+            "cargo run -- --listen http://127.0.0.1:8080",
+            "uv run serve.py http://localhost:8000",
+            "make test URL=http://localhost:3000",
+            "npm run send -- user@localhost",
+            // A file name with an `@`, a package version
+            "npm run build -- --asset logo@2x.png",
+            "make icons OUT=icon@3x.svg",
+            "uv run x.py left-pad@1.2.3",
+        ] {
+            assert!(classify(cmd, &ws).is_allowed(), "should run: {cmd:?} → {:?}", classify(cmd, &ws));
+        }
     }
 
     /// 0.9.7: what a turn kwnt started on its own may run under "Ask only when risky" without a

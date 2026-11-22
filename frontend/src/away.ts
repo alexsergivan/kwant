@@ -43,6 +43,9 @@ export interface AwayItem {
   message_id?: string | null;
   retry?: { type: 'continue' } | { type: 'approval'; approval_id: string } | null;
   human_step_id?: string | null;
+  /** 33m, stopped items in the Inbox only: `title` is the person's request the job was working on,
+   * and `summary` the reason it stopped. Absent when the title is the reason (no request found). */
+  title_is_request?: boolean;
   /** 0.9.5, connection items only (Inbox): a sign-in only the person can redo, and its fix button. */
   connection?: string;
   /** "sign_in" or "reconnect" (an app to connect again); older servers may leave it out. */
