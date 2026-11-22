@@ -1085,13 +1085,16 @@ const DOT: Record<ReturnType<typeof goalEventTone>, string> = {
   plain: 'bg-zinc-500',
 };
 
-/** Oldest first, as the story went: broke → looked into → approved → fixed → verified. */
+/** Oldest first, as the story went: broke → looked into → approved → fixed → verified. Each run's `checked` event is
+ *  left out: the heartbeat draws those, and 24 "Checked: OK" lines a day would bury the story. */
 export const GoalTimeline: React.FC<{ events: GoalEvent[]; names: Record<string, string>; now: number; bot?: string | null; onOpenTask?: (id: string) => void }> = ({ events, names, now, bot = null, onOpenTask }) => {
-  if (events.length === 0) return <p className="text-[11px] text-zinc-500">Nothing has happened yet.</p>;
+  const story = events.filter((e) => e.kind !== 'checked');
+  if (story.length === 0) return <p className="text-[11px] text-zinc-500">Nothing has happened yet.</p>;
+  // firstMetIds reads the full list: it already steps over passing `checked` events.
   const first = firstMetIds(events);
   return (
     <ol className="space-y-2 border-l border-zinc-800 pl-3" data-goal-timeline>
-      {events.map((e) => {
+      {story.map((e) => {
         const task = eventTaskId(e);
         const quote = goalEventQuote(e);
         return (
@@ -1150,7 +1153,7 @@ export const GoalDetailBody: React.FC<{
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <GoalStatusPill status={g.status} />
-          <GoalHeartbeat dots={heartbeatDots(d.events)} status={g.status} fixing={!!(g.open_fix_task || g.open_mission)} />
+          <GoalHeartbeat dots={heartbeatDots(d.events)} status={g.status} fixing={!!(g.open_fix_task || g.open_mission)} className="kws-heartbeat-fit" />
           {/* A draft's hint already says nothing runs yet. */}
           {!draft && <span className="text-[11px] text-zinc-500">{scheduleText(g, now)}</span>}
         </div>
@@ -1882,6 +1885,9 @@ export const GoalsStrip: React.FC<{
     return r ? { ...g, ...r.goal, checks: g.checks.length ? g.checks : r.goal.checks } : g;
   });
   const eventsOf = (id: string) => reads[id]?.events ?? (detail && detail.goal.id === id ? detail.events : []);
+  // The row's squares: the open detail's (the freshest), else what the list row carries (every goal, healthy ones
+  // too, which never read the detail), else a detail read.
+  const rowBeats = (g: Goal) => (detail && detail.goal.id === g.id ? detail.events : null) ?? g.heartbeat ?? reads[g.id]?.events ?? [];
   const sorted = sortGoals(merged.map((g) => ({ ...g, raw_status: g.status, status: displayStatus(g, eventsOf(g.id), now, notNow[g.id] ?? null) })));
   const firstMet = useFirstMoment('goal_met', spaceId ?? '', goals ? sorted.map((g) => ({ id: g.id, reached: g.status === 'met' })) : null);
   const [firstDone, setFirstDone] = useState(false);
@@ -2091,7 +2097,7 @@ export const GoalsStrip: React.FC<{
                 error={errors[g.id] ?? null}
                 decision={decision}
                 hideOnPhone={i >= cap}
-                heartbeat={heartbeatDots(eventsOf(g.id))}
+                heartbeat={heartbeatDots(rowBeats(g))}
                 onOpen={(x) => setPanel({ kind: 'goal', id: x.id })}
                 onOpenTask={openTask}
                 onAction={(a) => void act(g, a)}

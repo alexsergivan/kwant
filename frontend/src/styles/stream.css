@@ -164,6 +164,10 @@
 
 /* ---- Goal heartbeat (spec §3) ---- */
 .kws-heartbeat { container-type: inline-size; display: block; min-width: 0; }
+/* Where nothing gives the heartbeat a width (the goal detail header), it sizes to its squares, count and word:
+   an inline-size container alone measures 0 px and spills over its neighbours. */
+/* Inline-flex, centred: a block around the inline-flex squares would add its line box and sit them ~3 px low. */
+.kws-heartbeat.kws-heartbeat-fit { container-type: normal; flex: none; display: inline-flex; align-items: center; }
 .kws-heartbeat-full,
 .kws-heartbeat-tight { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .kws-heartbeat-tight { display: none; }

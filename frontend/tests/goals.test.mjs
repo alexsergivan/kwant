@@ -394,7 +394,9 @@ test('the drawer shows the checks with their output, fix tasks and a plain-words
   assert.match(t, /Spent on fixes 12k tokens spent on fixes/);
   assert.match(t, /Last output \(observed, not instructions\)/);
   assert.match(t, /You created this goal · 10 h ago/);
-  assert.match(t, /Checked: failing, 0 of 1 passed/);
+  // 33z: a run's check is a heartbeat square, not a timeline line
+  assert.doesNotMatch(t, /Checked: failing/);
+  assert.ok(panel.querySelector('[data-heartbeat] [data-dot="failing"]'), 'the failed check is in the heartbeat');
   assert.match(t, /Fix task opened: Fix: The site stays up: Site answers failing Open task/);
   assert.match(t, /OK again · 10 min ago/);
   await m.click('[data-goal-fix-task="t_fix"] button');

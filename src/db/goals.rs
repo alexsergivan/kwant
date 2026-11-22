@@ -15,8 +15,15 @@ use uuid::Uuid;
 pub const MAX_DRAFTS: i64 = 3;
 /// Observations kept per goal, newest first.
 pub const KEEP_OBSERVATIONS: i64 = 200;
-/// Timeline events kept per goal, newest first.
+/// Timeline events kept per goal, newest first, `checked` aside.
 pub const KEEP_EVENTS: i64 = 500;
+/// `checked` events (one per run, for the heartbeat) kept per goal, newest first. Kept apart from
+/// [`KEEP_EVENTS`], so hourly checks never push the goal's story (broke, fixes, notices) out.
+pub const KEEP_CHECKED: i64 = 50;
+/// The kind of the event every run logs: what it saw (`verdict`, required checks `passed`, `total`).
+pub const CHECKED: &str = "checked";
+/// The kinds the heartbeat draws a square for (`heartbeatDots`, frontend/src/signature.ts).
+pub const BEAT_KINDS: [&str; 3] = [CHECKED, "fix_opened", "replanned"];
 /// A run's lease (`checking_since`) older than this is taken over: that run died with the server.
 pub const LEASE_STALE_MS: i64 = 15 * 60 * 1000;
 /// A fix task in one of these states is done with; any other is the goal's open fix.
@@ -455,10 +462,35 @@ impl Database {
         .await?)
     }
 
-    /// The goal's newest events, newest first.
+    /// The goal's newest events, newest first: its story, without the [`CHECKED`] event every run
+    /// logs (those are [`Database::goal_checked_events`]), so a reader looking back for a fix or a
+    /// diagnosis isn't crowded out by hourly checks.
     pub async fn goal_events(&self, goal_id: &str, limit: i64) -> Result<Vec<GoalEvent>, DbError> {
-        Ok(sqlx::query_as("SELECT id, goal_id, kind, actor, detail, created_at FROM goal_events WHERE goal_id = ? ORDER BY id DESC LIMIT ?")
+        Ok(sqlx::query_as("SELECT id, goal_id, kind, actor, detail, created_at FROM goal_events WHERE goal_id = ? AND kind <> ? ORDER BY id DESC LIMIT ?")
             .bind(goal_id)
+            .bind(CHECKED)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// The goal's newest [`CHECKED`] events (one per run), newest first.
+    pub async fn goal_checked_events(&self, goal_id: &str, limit: i64) -> Result<Vec<GoalEvent>, DbError> {
+        Ok(sqlx::query_as("SELECT id, goal_id, kind, actor, detail, created_at FROM goal_events WHERE goal_id = ? AND kind = ? ORDER BY id DESC LIMIT ?")
+            .bind(goal_id)
+            .bind(CHECKED)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// The goal's newest heartbeat events ([`BEAT_KINDS`]), newest first: what its list row draws.
+    pub async fn goal_beat_events(&self, goal_id: &str, limit: i64) -> Result<Vec<GoalEvent>, DbError> {
+        Ok(sqlx::query_as("SELECT id, goal_id, kind, actor, detail, created_at FROM goal_events WHERE goal_id = ? AND kind IN (?, ?, ?) ORDER BY id DESC LIMIT ?")
+            .bind(goal_id)
+            .bind(BEAT_KINDS[0])
+            .bind(BEAT_KINDS[1])
+            .bind(BEAT_KINDS[2])
             .bind(limit)
             .fetch_all(&self.pool)
             .await?)
@@ -696,15 +728,20 @@ impl Database {
             for (kind, detail) in &u.events {
                 event_in(&mut tx, id, kind, "kwant", detail, now).await?;
             }
-            sqlx::query(
-                "DELETE FROM goal_events WHERE goal_id = ? AND id NOT IN
-                 (SELECT id FROM goal_events WHERE goal_id = ? ORDER BY id DESC LIMIT ?)",
-            )
-            .bind(id)
-            .bind(id)
-            .bind(KEEP_EVENTS)
-            .execute(&mut *tx)
-            .await?;
+            // Checks and the story are kept apart: the newest KEEP_CHECKED checks, the newest KEEP_EVENTS of the rest
+            for (op, keep) in [("=", KEEP_CHECKED), ("<>", KEEP_EVENTS)] {
+                sqlx::query(&format!(
+                    "DELETE FROM goal_events WHERE goal_id = ? AND kind {op} ? AND id NOT IN
+                     (SELECT id FROM goal_events WHERE goal_id = ? AND kind {op} ? ORDER BY id DESC LIMIT ?)"
+                ))
+                .bind(id)
+                .bind(CHECKED)
+                .bind(id)
+                .bind(CHECKED)
+                .bind(keep)
+                .execute(&mut *tx)
+                .await?;
+            }
         } else {
             let r = sqlx::query("UPDATE goals SET checking_since = NULL WHERE id = ? AND checking_since = ?").bind(id).bind(lease).execute(&mut *tx).await?;
             if r.rows_affected() != 1 {

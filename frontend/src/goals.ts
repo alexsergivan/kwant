@@ -140,6 +140,9 @@ export interface Goal {
   version: number;
   created_at: string;
   updated_at: string;
+  /** List rows: the newest heartbeat events (checks, fixes opened, replans), oldest first, so a row that never
+   *  reads the detail still draws its squares. Absent when the server didn't send them (the detail, older servers). */
+  heartbeat?: GoalEvent[];
   /** Present when the list or the detail includes them. */
   checks: GoalCheck[];
   open_fix_task: GoalFixTask | null;
@@ -380,6 +383,9 @@ export function parseGoal(v: unknown): Goal | null {
     open_fix_task: open && isOpenTask(open) ? open : null,
     open_mission: mission && isOpenMission(mission) ? mission : null,
     spent_tokens: typeof spent === 'number' ? spent : null,
+    // Only when sent, so merging a detail read over a list row keeps the row's squares. Newest first on the wire:
+    // reversed before the time sort, events logged in the same millisecond keep the order they were logged in.
+    ...(Array.isArray(g.heartbeat) ? { heartbeat: list(g.heartbeat, parseEvent).reverse().sort((a, b) => byTime(a.created_at, b.created_at)) } : {}),
   };
 }
 
