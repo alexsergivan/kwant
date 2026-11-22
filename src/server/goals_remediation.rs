@@ -1044,6 +1044,96 @@ impl Drop for DraftSlot {
     }
 }
 
+/// 34f: what `goal_propose` did in a space's running draft turn, so a turn that saved no draft can
+/// say why. Lives only while the turn runs; nothing is stored.
+#[derive(Default)]
+struct DraftWatch {
+    kwant_id: String,
+    saved: bool,
+    refusal: Option<String>,
+}
+
+static DRAFT_WATCH: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, DraftWatch>>> = std::sync::LazyLock::new(Default::default);
+
+fn watch_key(state: &AppState, space_id: &str) -> String {
+    format!("{}:{space_id}", state.config.data_dir.display())
+}
+
+/// Ends a draft turn's watch however the turn ends (a dropped task too).
+struct WatchGuard(String);
+
+impl Drop for WatchGuard {
+    fn drop(&mut self) {
+        DRAFT_WATCH.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
+/// The most of a reason the board shows.
+const DRAFT_REASON_CHARS: usize = 200;
+pub const NO_PROPOSAL: &str = "it didn’t propose any checks";
+
+/// One plain line of at most [`DRAFT_REASON_CHARS`]: no control characters or line breaks, and no
+/// closing full stop (the board's sentence adds its own).
+fn short_reason(text: &str) -> String {
+    let line = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>();
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = line.trim_end_matches(['.', ' ']);
+    if line.chars().count() <= DRAFT_REASON_CHARS {
+        return line.to_string();
+    }
+    let mut cut: String = line.chars().take(DRAFT_REASON_CHARS - 1).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('…');
+    cut
+}
+
+/// `goal_propose` tells the space's running draft turn what happened: `Ok` when it saved a draft,
+/// `Err(why)` when it was refused (`why` is kwant's own message, never the bot's arguments). A
+/// call from any other bot, or with no draft running in the space, changes nothing.
+pub fn note_draft_call(state: &AppState, space_id: &str, kwant_id: &str, outcome: Result<(), &str>) {
+    let mut watches = DRAFT_WATCH.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(w) = watches.get_mut(&watch_key(state, space_id)) else {
+        return;
+    };
+    if w.kwant_id != kwant_id {
+        return;
+    }
+    match outcome {
+        Ok(()) => w.saved = true,
+        Err(why) => w.refusal = Some(why.to_string()),
+    }
+}
+
+/// Runs one draft `turn` of `kwant_id` in `space_id` and, when it saved no draft, sends that space
+/// one [`RuntimeEvent::GoalDraftFailed`] with why: the last refusal of its `goal_propose`, else the
+/// turn's error, else [`NO_PROPOSAL`]. Returns the reason it sent.
+pub async fn run_draft<F>(state: &AppState, space_id: &str, kwant_id: &str, turn: F) -> Option<String>
+where
+    F: std::future::Future<Output = Result<String, String>>,
+{
+    let key = watch_key(state, space_id);
+    DRAFT_WATCH.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), DraftWatch { kwant_id: kwant_id.into(), ..Default::default() });
+    let guard = WatchGuard(key);
+    let reply = turn.await;
+    let watch = DRAFT_WATCH.lock().unwrap_or_else(|e| e.into_inner()).remove(&guard.0).unwrap_or_default();
+    drop(guard);
+    if let Err(e) = &reply {
+        tracing::info!(bot = %kwant_id, error = %e, "the goal draft turn ended without a reply");
+    }
+    if watch.saved {
+        return None;
+    }
+    let reason = match (watch.refusal, reply) {
+        (Some(why), _) => short_reason(&why),
+        (None, Err(e)) => short_reason(&e),
+        (None, Ok(_)) => String::new(),
+    };
+    let reason = if reason.is_empty() { NO_PROPOSAL.to_string() } else { reason };
+    tracing::info!(bot = %kwant_id, space = %space_id, reason = %reason, "the goal draft turn saved no draft");
+    let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::GoalDraftFailed { space_id: space_id.into(), kwant_id: kwant_id.into(), reason: reason.clone() });
+    Some(reason)
+}
+
 /// What the bot is asked in a draft turn (the plan's prompt, with the person's words quoted as
 /// data so they cannot rewrite it).
 pub fn draft_prompt(text: &str) -> String {
@@ -1091,21 +1181,22 @@ pub async fn draft(State(state): State<AppState>, Json(body): Json<DraftBody>) -
     };
     let prompt = draft_prompt(text);
     let started = state.clone();
+    let space_id = body.space_id.clone();
     tokio::spawn(async move {
         let _slot = slot;
         use crate::server::routes::{scope_for, turn_once, TurnOpts};
         let job = started.turns.start_job([bot.id.clone()]);
-        let reply = match scope_for(&started, &bot, None, None, &job, 0).await {
-            Ok(scope) => {
-                let mut opts = TurnOpts::always_asking("Goal draft");
-                (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(DRAFT_PURPOSE.into()));
-                tokio::time::timeout(DRAFT_TIMEOUT, turn_once(&scope, &bot, prompt, opts)).await.unwrap_or_else(|_| Err("the draft took longer than ten minutes".into()))
+        let turn = async {
+            match scope_for(&started, &bot, None, None, &job, 0).await {
+                Ok(scope) => {
+                    let mut opts = TurnOpts::always_asking("Goal draft");
+                    (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(DRAFT_PURPOSE.into()));
+                    tokio::time::timeout(DRAFT_TIMEOUT, turn_once(&scope, &bot, prompt, opts)).await.unwrap_or_else(|_| Err("the draft took longer than ten minutes".into()))
+                }
+                Err(e) => Err(e),
             }
-            Err(e) => Err(e),
         };
-        if let Err(e) = reply {
-            tracing::info!(bot = %bot.id, error = %e, "the goal draft turn ended without a reply");
-        }
+        run_draft(&started, &space_id, &bot.id, turn).await;
     });
     (StatusCode::ACCEPTED, Json(json!({ "started": true, "kwant_id": body.kwant_id, "space_id": body.space_id }))).into_response()
 }
@@ -1113,6 +1204,20 @@ pub async fn draft(State(state): State<AppState>, Json(body): Json<DraftBody>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_draft_reason_is_one_short_plain_line() {
+        assert_eq!(short_reason("check 1: spec.url must start with http:// or https://"), "check 1: spec.url must start with http:// or https://");
+        assert_eq!(short_reason("  two\nlines\t and\u{7}a bell.  "), "two lines and a bell");
+        assert_eq!(short_reason("..."), "");
+        let long = short_reason(&format!("{} tail", "word ".repeat(80)));
+        assert_eq!(long.chars().count(), 200, "{long}");
+        assert!(long.ends_with("word…") || long.ends_with('…'));
+        assert!(!long.contains("tail"));
+        // Multi-byte text is cut on a character, never inside one
+        let wide = short_reason(&"é".repeat(300));
+        assert_eq!(wide.chars().count(), 200);
+    }
 
     #[test]
     fn the_gates_apply_in_order() {

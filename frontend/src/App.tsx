@@ -186,7 +186,7 @@ import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { BudgetNeedsYou } from './components/BotBudget';
 import { GoalsNeedYou } from './components/GoalsNeedYou';
-import { openGoalOnBoard } from './goals';
+import { openGoalOnBoard, parseGoalDraftFailed } from './goals';
 import { budgetStore, isBudgetMessage, requestBudgetFocus, sendWaitsForBudget } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
@@ -1647,6 +1647,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'GoalUpdated': {
             const id = event.data?.id ?? event.data?.goal?.id;
             if (typeof id === 'string' && id) emitMission({ type: 'goal_updated', data: { id, status: event.data?.status ?? event.data?.goal?.status ?? null } });
+            break;
+          }
+          // 34f: a goal draft turn saved no draft; the strip waiting on that bot says why.
+          case 'goal_draft_failed':
+          case 'GoalDraftFailed': {
+            const failed = parseGoalDraftFailed(event.data);
+            if (failed) emitMission({ type: 'goal_draft_failed', data: failed });
             break;
           }
           case 'routine_run':

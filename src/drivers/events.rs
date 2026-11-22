@@ -382,6 +382,12 @@ pub enum RuntimeEvent {
     /// A goal changed (status, checks, schedule, its fix task); `GET /api/goals/:id` has the rest.
     #[serde(rename = "goal_updated", alias = "GoalUpdated")]
     GoalUpdated { id: String, status: String, space_id: String },
+    /// 34f: a bot's goal draft turn (Mission board > New goal > Draft checks) ended without saving
+    /// a draft. `reason` is short and plain: kwant's last refusal of its `goal_propose`, else why the
+    /// turn failed, else "it didn't propose any checks". It never holds the person's words or the
+    /// bot's tool arguments.
+    #[serde(rename = "goal_draft_failed", alias = "GoalDraftFailed")]
+    GoalDraftFailed { space_id: String, kwant_id: String, reason: String },
     /// A Dev mode card was added or changed (plan §3.2); refetch `GET /api/spaces/:id/dev/…`.
     /// `kind` is `landed`, `review` or `release_notes`; `status` `pending`, `ready`, `failed` or `stale`.
     #[serde(rename = "dev_card", alias = "DevCard")]
