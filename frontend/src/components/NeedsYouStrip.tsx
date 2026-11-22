@@ -11,7 +11,7 @@ import {
   askAction,
   askHint,
   askKind,
-  askLine,
+  bandLine,
   canClear,
   retryRoute,
   failLine,
@@ -370,7 +370,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
           </p>
           {/* The whole line, never cut: it wraps, and the box scrolls past 240 px. */}
           <p data-strip-line className="mt-0.5 text-body font-medium text-zinc-50 break-words">
-            {approvalLine(item) ?? askLine(item)}
+            {approvalLine(item) ?? bandLine(item, action)}
           </p>
           <p data-strip-hint className={`mt-0.5 text-meta ${gone ? 'text-zinc-300' : 'text-zinc-400'}`}>
             {hint}

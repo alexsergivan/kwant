@@ -277,7 +277,6 @@ test('Why for a task and a hand-off (Needs B 3)', () => {
   assert.equal(a.whyLead({ ...base, why_kind: 'routine' }), null, 'routines keep their own copy');
   assert.equal(a.whyLead({ ...base, why: '  ', why_kind: 'task' }), null);
   assert.equal(a.ledLine({ ...fx.AWAY_TEAM_JOB, members: [1, 2, 3, 4].map((n) => ({ kwant_id: `k${n}`, kwant_name: `B${n}` })) }), 'Ann led B1, B2 and 2 more');
-  assert.equal(a.teamSize({ ...fx.AWAY_TEAM_JOB, members: [] }), '1 bot');
   assert.equal(a.teamSize({ ...fx.AWAY_TEAM_JOB, members: undefined }), null, 'no members field: no count');
 });
 
@@ -354,4 +353,72 @@ test('F4: on a phone, Ask Ben to redo… spans the row when there is no Roll bac
 test('routine History: a run with a result message links to it', () => {
   assert.deepEqual(m.runResultTarget(fx.AWAY_ROUTINE, fx.AWAY_RUN), fx.AWAY_TARGET);
   assert.equal(m.runResultTarget(fx.AWAY_ROUTINE, { ...fx.AWAY_RUN, message_id: null }), null);
+});
+
+// 33h (autonomy/done-pane-polish/brief.md) minor b: an answer served as the excerpt (or summary) is markdown too.
+test('33h: an excerpt-only answer with a markdown table renders a table in the same named region', async () => {
+  const data = clone(fx.AWAY_INBOX);
+  const tj = data.items.find((i) => i.id === 'tj-spring');
+  tj.answer_excerpt = 'Done: prices checked.\n\n| Shop | 1 kg |\n|---|---|\n| Beanline | $24.00 |\n| RoastCo | $26.50 |';
+  const { q, root } = await mountInbox({}, data);
+  await click(q('[data-option="tj-spring"]'));
+  const ans = q('[data-answer-text]');
+  assert.ok(ans.querySelector('table'), 'a table, not raw pipes');
+  assert.equal(ans.querySelectorAll('td').length, 4);
+  assert.equal(/\|---/.test(ans.textContent), false, 'no raw markdown left');
+  assert.equal(ans.getAttribute('role'), 'region');
+  assert.equal(ans.getAttribute('tabindex'), '0');
+  assert.equal(ans.getAttribute('aria-label'), 'Ann’s answer');
+  assert.match(ans.className, /max-sm:\[&_td\]:whitespace-nowrap/);
+  root.unmount();
+});
+
+test('33h: a summary-only answer renders through the same region too', async () => {
+  const data = clone(fx.AWAY_INBOX);
+  data.items.push({ ...clone(fx.AWAY_HANDOFF), summary: '**Drafted** the sale email' });
+  const { q, root } = await mountInbox({}, data);
+  await click(q('[data-option="d-spring"]'));
+  const ans = q('[data-answer-text]');
+  assert.equal(ans.getAttribute('role'), 'region');
+  assert.ok(ans.querySelector('strong'), 'markdown, not literal asterisks');
+  assert.equal(ans.textContent.includes('**'), false);
+  root.unmount();
+});
+
+// 33h minor a: a team of one is a solo job: no "1 bot", and its trail is "What Ann did".
+test('33h: teamSize is null for a team of 1; the trail heading names the bot', () => {
+  const solo = { ...fx.AWAY_TEAM_JOB, members: [] };
+  assert.equal(a.teamSize(solo), null);
+  assert.equal(a.teamSize({ ...fx.AWAY_TEAM_JOB, members: [{ kwant_id: 'k-ann', kwant_name: 'Ann' }] }), null, 'only the lead');
+  assert.equal(a.teamSize(fx.AWAY_TEAM_JOB), '3 bots');
+  assert.equal(a.trailHeading(solo), 'What Ann did');
+  assert.equal(a.trailHeading({ ...fx.AWAY_TEAM_JOB, members: undefined }), 'What Ann did', 'no members sent (33d server)');
+  assert.equal(a.trailHeading(fx.AWAY_TEAM_JOB), 'What the team did');
+});
+
+test('33h: a solo team job’s Done row says its bot, not "1 bot"; its pane says "What Ann did"', async () => {
+  const data = clone(fx.AWAY_INBOX);
+  data.items.find((i) => i.id === 'tj-spring').members = [];
+  const { q, root } = await mountInbox({}, data);
+  const row = q('[data-option="tj-spring"]');
+  assert.equal(/1 bot/.test(row.textContent), false, row.textContent);
+  await click(row);
+  assert.equal(q('[data-done-trail] h3').textContent, 'What Ann did');
+  root.unmount();
+});
+
+// 33h re-check (Mira): the excerpt is plain lines with list markers stripped, so its line breaks stay.
+test('33h: an excerpt-only list answer keeps its line breaks; a loaded message keeps normal markdown flow', async () => {
+  const data = clone(fx.AWAY_INBOX);
+  data.items.find((i) => i.id === 'tj-spring').answer_excerpt = 'Found:\nBen checked 2 shops\nCody drafted the email';
+  const { q, root } = await mountInbox({}, data);
+  await click(q('[data-option="tj-spring"]'));
+  const ans = q('[data-answer-text]');
+  assert.match(ans.className, /\[&_p\]:whitespace-pre-line/);
+  assert.match(ans.querySelector('p').textContent, /Found:\nBen checked 2 shops\nCody drafted the email/);
+  root.unmount();
+  const m2 = await mountInbox({ doneDetails: { 'r-prices': fx.AWAY_DETAIL } });
+  await click(m2.q('[data-option="r-prices"]'));
+  assert.doesNotMatch(m2.q('[data-answer-text]').className, /whitespace-pre-line/, 'the loaded message flows as markdown');
+  m2.root.unmount();
 });
