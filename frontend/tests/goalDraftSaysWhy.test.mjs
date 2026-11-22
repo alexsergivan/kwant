@@ -45,12 +45,16 @@ test.afterEach(() => {
   mounted.clear();
 });
 
-async function mountDrafting(goals) {
+async function mountDrafting(goals, { beforeReply } = {}) {
   const calls = [];
   const api = {
     list: async () => goals,
     get: async () => null,
-    draft: async (body) => (calls.push(body), null),
+    draft: async (body) => {
+      calls.push(body);
+      await beforeReply?.();
+      return null;
+    },
   };
   const host = document.createElement('div');
   document.body.appendChild(host);
@@ -106,6 +110,8 @@ for (const [label, goals] of [['an empty strip', []], ['a strip with goals', [me
     assert.equal(s.line(), null, 'no spinner any more');
     assert.equal(s.failed(), `Patch couldn’t draft it: ${REASON}. Write the checks yourself.`);
     assert.equal(s.q('[data-goals-draft-failed]').getAttribute('role'), 'status');
+    // A link inside the sentence: it opts out of the phone 44 px button rule so the lines don't open up
+    assert.ok(s.q('[data-goals-draft-write]').hasAttribute('data-compact'), 'the inline link is data-compact');
 
     // Write the checks yourself: the form, with the person's words in it
     await s.click('[data-goals-draft-write]');
@@ -120,9 +126,26 @@ test('the failed line can be dismissed, and a reason that already ends in a full
   b.emitMission({ type: 'goal_draft_failed', data: { space_id: 's1', kwant_id: 'k_patch', reason: 'it didn’t propose any checks.' } });
   await settle();
   assert.equal(s.failed(), 'Patch couldn’t draft it: it didn’t propose any checks. Write the checks yourself.');
+  s.q('[data-goals-draft-dismiss]').focus();
   await s.click('[data-goals-draft-dismiss]');
   assert.equal(s.failed(), null);
   assert.equal(s.line(), null);
+  assert.ok(document.activeElement?.hasAttribute('data-new-goal'), 'keyboard focus goes to New goal, not the page');
+});
+
+test('a turn that fails before the draft request is answered still says why', async () => {
+  const s = await mountDrafting([], {
+    beforeReply: async () => {
+      b.emitMission({ type: 'goal_draft_failed', data: { space_id: 's1', kwant_id: 'k_cody', reason: 'not this bot' } });
+      b.emitMission({ type: 'goal_draft_failed', data: { space_id: 's1', kwant_id: 'k_patch', reason: REASON } });
+      await settle();
+    },
+  });
+  await settle(); // the reply comes after the event's own settle
+  assert.equal(s.line(), null, 'no spinner for a draft that already failed');
+  assert.equal(s.failed(), `Patch couldn’t draft it: ${REASON}. Write the checks yourself.`);
+  await s.click('[data-goals-draft-write]');
+  assert.equal(s.q('[data-goal-form] [data-field="title"]').value, 'kwant.si answers with HTTP 200.');
 });
 
 test('the wire event is read defensively', () => {
