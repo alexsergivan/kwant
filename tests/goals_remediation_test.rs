@@ -1224,6 +1224,12 @@ async fn goal_checked_by(e: &Env, bot: &str, checks: Vec<NewGoalCheck>) -> Goal 
     }
 }
 
+/// Logs the `not_met` event a real check run writes when the goal goes failing; the incident
+/// starts at the first one since it was last met.
+async fn logged_not_met(e: &Env, id: &str) {
+    e.state.db.add_goal_event(id, "not_met", "kwant", &json!({"failing": ["answers in 500 ms"], "confirmed_after": 2})).await.unwrap();
+}
+
 async fn needs_you_sent(e: &Env, id: &str) -> usize {
     e.state.db.goal_events(id, 100).await.unwrap().into_iter().filter(|x| x.kind == "notified" && x.detail_value()["kind"] == json!("needs_you")).count()
 }
@@ -1233,6 +1239,7 @@ async fn g_r_34b_a_goal_no_fix_can_test_goes_to_needs_you_once_and_says_why() {
     let e = setup().await;
     let bot = e.bot.clone();
     let g = goal_checked_by(&e, &bot, vec![http_check("answers in 500 ms", "latency_ms", Some("lt"), "500")]).await;
+    logged_not_met(&e, &g.id).await;
     break_goal(&e, &g.id).await;
     tick_at(&e.state, now()).await;
     assert_eq!(status(&e, &g.id).await, ("needs_you".into(), "no_fix_check".into()), "it says why nothing is fixing it");
@@ -1241,6 +1248,8 @@ async fn g_r_34b_a_goal_no_fix_can_test_goes_to_needs_you_once_and_says_why() {
     assert!(e.state.db.list_missions(&SpaceId::default_space(), None).await.unwrap().is_empty());
     // More ticks in the same incident, even with the status put back to failing, tell no one again
     tick_at(&e.state, now()).await;
+    // The next run sees it failing again (needs_you to not_met logs another not_met, same incident)
+    logged_not_met(&e, &g.id).await;
     break_quiet(&e, &g.id).await;
     tick_at(&e.state, now()).await;
     assert_eq!(status(&e, &g.id).await, ("needs_you".into(), "no_fix_check".into()));
