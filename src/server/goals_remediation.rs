@@ -1110,6 +1110,68 @@ mod tests {
         assert!(untrusted(&"x".repeat(5000), 100).chars().count() <= 101);
     }
 
+    fn gc(kind: &str, spec: serde_json::Value, metric: Option<&str>, operator: Option<&str>, target: Option<&str>) -> GoalCheck {
+        GoalCheck {
+            id: "c".into(), goal_id: "g".into(), position: 0, label: "check".into(), kind: kind.into(), spec: spec.to_string(),
+            metric: metric.map(Into::into), operator: operator.map(Into::into), target: target.map(Into::into),
+            severity: "required".into(), freshness_minutes: 180,
+        }
+    }
+
+    #[test]
+    fn fix_checks_test_what_the_goal_tests() {
+        let url = json!({"url": "http://127.0.0.1:1/sitemap.xml"});
+        // body_contains: the Fix check must find the same text, not just any 2xx
+        let p = plan_checks(&[gc("http", url.clone(), Some("body_contains"), None, Some("/pricing"))]);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].kind, "http");
+        assert_eq!(p[0].spec, json!({"url": "http://127.0.0.1:1/sitemap.xml", "contains": "/pricing"}));
+        assert!(p[0].goal_approved && p[0].required == Some(true));
+        // status eq 200, and a status with no operator (eq is its default)
+        let p = plan_checks(&[gc("http", url.clone(), Some("status"), Some("eq"), Some("200"))]);
+        assert_eq!(p[0].spec["expect_status"], json!(200));
+        let p = plan_checks(&[gc("http", url.clone(), Some("status"), None, Some("404"))]);
+        assert_eq!(p[0].spec["expect_status"], json!(404));
+        // no metric: the kind's default, status eq 200
+        let p = plan_checks(&[gc("http", url.clone(), None, None, None)]);
+        assert_eq!(p[0].spec["expect_status"], json!(200));
+        // a command check is the same test only for exit code 0
+        let cmd = json!({"command": "true"});
+        assert_eq!(plan_checks(&[gc("command", cmd.clone(), None, None, None)])[0].spec, cmd);
+        assert_eq!(plan_checks(&[gc("command", cmd.clone(), Some("exit_code"), Some("eq"), Some("0"))]).len(), 1);
+        // the file kinds carry over as they are
+        let f = json!({"path": "ok.txt"});
+        assert_eq!(plan_checks(&[gc("file_exists", f.clone(), None, None, None)])[0].spec, f);
+    }
+
+    #[test]
+    fn a_goal_check_the_fix_cannot_express_is_left_out() {
+        let url = json!({"url": "http://127.0.0.1:1/"});
+        let cmd = json!({"command": "true"});
+        for c in [
+            gc("http", url.clone(), Some("status"), Some("ne"), Some("500")),
+            gc("http", url.clone(), Some("latency_ms"), Some("lt"), Some("500")),
+            gc("http", json!({"url": "http://127.0.0.1:1/", "pointer": "/ok"}), Some("json_value"), Some("eq"), Some("true")),
+            gc("command", cmd.clone(), Some("exit_code"), Some("ne"), Some("0")),
+            gc("command", cmd.clone(), Some("exit_code"), Some("eq"), Some("3")),
+            gc("command", cmd.clone(), Some("stdout_contains"), None, Some("ok")),
+            gc("command", cmd.clone(), Some("stdout_number"), Some("gt"), Some("1")),
+            gc("http", url.clone(), Some("status"), Some("eq"), Some("oops")),
+            gc("ftp", url.clone(), None, None, None),
+        ] {
+            assert!(plan_checks(std::slice::from_ref(&c)).is_empty(), "{:?} {:?} {:?}", c.kind, c.metric, c.operator);
+        }
+        // only the one it can express stays
+        let both = [gc("http", url.clone(), Some("latency_ms"), Some("lt"), Some("500")), gc("http", url.clone(), Some("body_contains"), None, Some("ok"))];
+        let p = plan_checks(&both);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].spec["contains"], json!("ok"));
+        // advisory checks never were Fix checks
+        let mut adv = gc("http", url, Some("body_contains"), None, Some("ok"));
+        adv.severity = "advisory".into();
+        assert!(plan_checks(&[adv]).is_empty());
+    }
+
     #[test]
     fn briefs_label_observed_output_as_data() {
         let goal = crate::db::goals::Goal {
