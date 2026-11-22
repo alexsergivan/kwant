@@ -71,9 +71,9 @@ test('a bot’s draft card spans the strip and its "proposed this" line wraps; a
   assert.doesNotMatch(failing, /col-span/, 'a failing goal stays in one cell');
 });
 
-test('the Mission board tile reads "Waiting on you"; its hint still says these are board tasks', () => {
+test('the Mission board tile reads "Waiting on you"; its hint says it counts tasks and goals (33x)', () => {
   const html = b.insightsHtml({ insights: { verified_7d: 0, false_success_7d: 0, needs_you_now: 2, blocked_now: 0, blocked_minutes_7d: 0, interventions_7d: 0, tokens_7d: 0, tokens_per_verified_7d: null }, needsYou: 2 });
   assert.match(html, />Waiting on you<\/dt>/);
   assert.doesNotMatch(html, /Board tasks waiting on you/);
-  assert.match(html, /Board tasks waiting on a question, approval or step from you\. Your Inbox can hold more\./);
+  assert.match(html, /Tasks and goals waiting on a question, approval or step from you\./);
 });

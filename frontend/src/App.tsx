@@ -185,6 +185,8 @@ import { isNotificationOpen, placeOfNotification, showDeviceNotification } from 
 import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { BudgetNeedsYou } from './components/BotBudget';
+import { GoalsNeedYou } from './components/GoalsNeedYou';
+import { openGoalOnBoard } from './goals';
 import { budgetStore, isBudgetMessage, requestBudgetFocus, sendWaitsForBudget } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
@@ -4550,6 +4552,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         <>
           <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} acted={prepush.acted} />
           <SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />
+          {missionBoard && (
+            <GoalsNeedYou
+              key={space.id}
+              onOpen={(id) => {
+                showPage('board');
+                openGoalOnBoard(id);
+              }}
+            />
+          )}
           <BudgetNeedsYou onRaise={raiseBudget} />
         </>
       }
