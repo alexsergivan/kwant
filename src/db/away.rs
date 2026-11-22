@@ -447,6 +447,14 @@ const CHAT_COLUMNS: [&str; 3] = ["channel_id", "direct_kwant_id", "thread_id"];
 const ROUTINE_RUN_RESULT: &str =
     "SELECT r.message_id, rt.instructions, r.routine_id, r.trigger FROM routine_runs r JOIN routines rt ON rt.id = r.routine_id WHERE r.id = ?";
 
+/// `messages.created_at` is SQLite's `CURRENT_TIMESTAMP` text (`2026-11-21 19:02:20`), while sqlx
+/// writes a bound `DateTime` as `2026-11-21T19:02:20…`: as `' ' < 'T'`, every message of that day
+/// compared before it (33d). Bound in the column's own format (as `db/auditor.rs` does), the
+/// comparison is right and still uses the `(chat, created_at)` indexes.
+fn message_time(t: DateTime<Utc>) -> String {
+    t.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 /// `?` = chat id, at.
 fn person_before_sql(col: &str) -> String {
     format!("SELECT * FROM messages WHERE {col} = ? AND created_at <= ? AND sender_role = 'user' ORDER BY created_at DESC, rowid DESC LIMIT 1")
@@ -470,12 +478,15 @@ fn task_reply_before_sql(col: &str) -> String {
 
 /// `?` = lead, from, to. `delegations_by_lead` is on `(lead_kwant_id, created_at)`.
 const LEAD_DELEGATIONS: &str =
-    "SELECT * FROM delegations WHERE lead_kwant_id = ? AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC, rowid DESC LIMIT 100";
+    "SELECT * FROM delegations WHERE lead_kwant_id = ? AND created_at >= ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT 100";
 
 impl Database {
     /// The hand-offs `lead` made between `from` and `to` (at most 100, newest first): a team
-    /// job's members.
+    /// job's members. `to` counts to the end of its second: a message's time is whole seconds
+    /// and a hand-off's keeps its fraction, so one made in the reply's own second is still in.
     pub async fn lead_delegations(&self, lead: &str, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<Delegation>, DbError> {
+        use chrono::Timelike;
+        let to = to.with_nanosecond(0).unwrap_or(to) + chrono::Duration::seconds(1);
         Ok(sqlx::query_as(LEAD_DELEGATIONS).bind(lead).bind(from).bind(to).fetch_all(&self.pool).await?)
     }
 
@@ -483,7 +494,7 @@ impl Database {
     /// keeps the ones whose lead is in its space).
     pub async fn done_replies(&self, since: DateTime<Utc>, limit: i64) -> Result<Vec<DoneReplyRow>, DbError> {
         Ok(sqlx::query_as(&format!("{DONE_REPLIES} ORDER BY created_at DESC, rowid DESC LIMIT ?2"))
-            .bind(since)
+            .bind(message_time(since))
             .bind(limit)
             .fetch_all(&self.pool)
             .await?)
@@ -516,7 +527,7 @@ impl Database {
         for col in CHAT_COLUMNS {
             let row = sqlx::query_as::<_, Message>(&person_before_sql(col))
             .bind(context)
-            .bind(at)
+            .bind(message_time(at))
             .fetch_optional(&self.pool)
             .await?;
             if row.is_some() {
@@ -540,8 +551,8 @@ impl Database {
             let after = sqlx::query_as::<_, Message>(&task_reply_after_sql(col))
             .bind(context)
             .bind(bot_name)
-            .bind(review_at)
-            .bind(review_at + slack)
+            .bind(message_time(review_at))
+            .bind(message_time(review_at + slack))
             .fetch_optional(&self.pool)
             .await?;
             if after.is_some() {
@@ -550,7 +561,7 @@ impl Database {
             let before = sqlx::query_as::<_, Message>(&task_reply_before_sql(col))
             .bind(context)
             .bind(bot_name)
-            .bind(review_at)
+            .bind(message_time(review_at))
             .fetch_optional(&self.pool)
             .await?;
             if before.is_some() {
@@ -906,5 +917,93 @@ mod tests {
         assert_eq!(steps.len(), 1);
         assert!(db.close_human_step(&steps[0].id, "declined").await.unwrap());
         assert!(db.list_human_steps(Some("open"), None, Some(&space)).await.unwrap().is_empty());
+    }
+
+
+    /// A message as kwnt saves it: `created_at` is SQLite's `CURRENT_TIMESTAMP` text
+    /// (`2026-11-21 10:00:00`), never sqlx's `2026-11-21T10:00:00…`.
+    async fn said_at(db: &Database, id: &str, role: &str, sender: &str, text: &str, at: &str, meta: Option<&str>) {
+        sqlx::query("INSERT INTO messages (id, direct_kwant_id, sender_role, sender_id, text, meta, created_at) VALUES (?, 'k1', ?, ?, ?, ?, ?)")
+            .bind(id)
+            .bind(role)
+            .bind(sender)
+            .bind(text)
+            .bind(meta)
+            .bind(at)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+
+    fn utc(at: &str) -> DateTime<Utc> {
+        chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S").unwrap().and_utc()
+    }
+
+    /// 33d: the request a `Done:` closes is the person's message before it, not the newest one of
+    /// that day (a bound `DateTime` is written with a `T`, and `' ' < 'T'`).
+    #[tokio::test]
+    async fn the_persons_message_before_is_not_the_newest_of_that_day() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        said_at(&db, "ask", "user", "user", "Plan a 3-day trip", "2026-11-21 10:00:00", None).await;
+        said_at(&db, "later", "user", "user", "And a packing list?", "2026-11-21 10:02:00", None).await;
+        let before = db.last_person_message_before("k1", utc("2026-11-21 10:01:00")).await.unwrap();
+        assert_eq!(before.map(|m| m.id).as_deref(), Some("ask"));
+        // The same second counts as before
+        let same = db.last_person_message_before("k1", utc("2026-11-21 10:02:00")).await.unwrap();
+        assert_eq!(same.map(|m| m.id).as_deref(), Some("later"));
+        assert!(db.last_person_message_before("k1", utc("2026-11-21 09:59:59")).await.unwrap().is_none());
+    }
+
+    /// 33d: a `Done:` reply later on the day of `since` is listed (it compared before `since`).
+    #[tokio::test]
+    async fn a_done_reply_later_the_same_day_is_after_since() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let done = r#"{"chain_done": {"text": "plan saved"}}"#;
+        said_at(&db, "early", "kwant", "Ann", "Done: list made", "2026-11-21 08:00:00", Some(done)).await;
+        said_at(&db, "late", "kwant", "Ann", "Done: plan saved", "2026-11-21 10:05:00", Some(done)).await;
+        let rows = db.done_replies(utc("2026-11-21 09:00:00"), 10).await.unwrap();
+        assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["late"]);
+    }
+
+    /// 33d: a hand-off made in the same second as the `Done:` reply (whole seconds) still counts
+    /// (its time keeps a fraction, which compared after the reply's); the next second doesn't.
+    #[tokio::test]
+    async fn a_hand_off_in_the_done_replys_own_second_is_a_member() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let reply = utc("2026-11-21 10:05:07");
+        for (id, ms) in [("before", -400), ("same", 650), ("next", 1200)] {
+            sqlx::query("INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, task, title, status, created_at) VALUES (?, 't', 'lead', 'spec', 'task', 'job', 'completed', ?)")
+                .bind(id)
+                .bind(reply + chrono::Duration::milliseconds(ms))
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        let ids = |v: Vec<Delegation>| v.into_iter().map(|d| d.id).collect::<Vec<_>>();
+        let got = ids(db.lead_delegations("lead", utc("2026-11-21 10:05:00"), reply).await.unwrap());
+        assert_eq!(got, ["same", "before"]);
+        // The request's own second is in too (`from` is whole seconds as well)
+        let got = ids(db.lead_delegations("lead", utc("2026-11-21 10:05:06"), utc("2026-11-21 10:05:06")).await.unwrap());
+        assert_eq!(got, ["before"]);
+    }
+
+    /// 33d: a task's result reply is the bot's first reply from its review within the slack, not
+    /// its newest reply of that day.
+    #[tokio::test]
+    async fn a_tasks_result_reply_is_the_one_after_its_review_not_the_newest_of_that_day() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        said_at(&db, "morning", "kwant", "Ann", "Earlier work", "2026-11-21 09:00:00", None).await;
+        said_at(&db, "result", "kwant", "Ann", "Here is the result", "2026-11-21 10:03:00", None).await;
+        said_at(&db, "evening", "kwant", "Ann", "Something else", "2026-11-21 18:00:00", None).await;
+        let review = utc("2026-11-21 10:02:30");
+        let m = db.task_result_message("k1", "Ann", review, chrono::Duration::minutes(5)).await.unwrap();
+        assert_eq!(m.map(|m| m.id).as_deref(), Some("result"));
+        // Nothing within the slack: the last reply before the review
+        let m = db.task_result_message("k1", "Ann", utc("2026-11-21 12:00:00"), chrono::Duration::minutes(5)).await.unwrap();
+        assert_eq!(m.map(|m| m.id).as_deref(), Some("result"));
     }
 }

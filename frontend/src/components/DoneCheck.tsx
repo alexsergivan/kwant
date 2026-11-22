@@ -212,9 +212,24 @@ export const DoneCheck: React.FC<{
   );
 };
 
-/** The list row's marker before the summary: the holo sticker for Checked, words for the rest. */
+/**
+ * The list row's marker before the summary: the holo sticker for Checked, words for Partly checked and Check failed.
+ * A Not checked row with a summary shows just its Done line (33v): the words repeat on every such row and pushed the
+ * line itself out of view; a screen reader still hears "Not checked:" first. With no summary the word stays, so the
+ * line is never empty. Only Inbox rows use this; the pane keeps its own words.
+ */
 export const CheckMarker: React.FC<{ state: CheckState; summary: React.ReactNode }> = ({ state, summary }) => {
   const has = summary !== null && summary !== undefined && summary !== '';
+  if (state === 'not_checked' && has) {
+    return (
+      <>
+        <span className="sr-only" data-check-marker={state}>
+          {`${MARKER.not_checked.word}: `}
+        </span>
+        {summary}
+      </>
+    );
+  }
   if (state === 'checked') {
     return (
       <>

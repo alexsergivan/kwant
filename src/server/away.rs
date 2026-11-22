@@ -336,12 +336,15 @@ async fn space_of(state: &AppState, cache: &mut HashMap<String, SpaceId>, kwant_
 
 /// The space's open stopped items, as Needs-you cards: `title` is what stopped and what resumes
 /// it, `message_id` the chat notice that carries Retry or Continue, `retry` set when Retry is
-/// `POST /api/waiting/:id/retry` rather than the chat's own.
+/// `POST /api/waiting/:id/retry` rather than the chat's own. A bot's reply that ended
+/// `Blocked: …` outside a team chain (33f) is one too: its line already says what is blocked and
+/// what unblocks it, and Retry in the chat sends the person's message again.
 pub(super) async fn stopped_items(state: &AppState, space: &SpaceId) -> Vec<Value> {
     close_gone_places(state, space).await;
     let rows = state.db.list_waiting(Some(space)).await.unwrap_or_default();
     let mut out = Vec::new();
-    for w in rows.into_iter().filter(|w| w.kind.as_deref() == Some(crate::db::waiting::STOPPED)) {
+    let listed = |w: &crate::db::waiting::WaitingItem| w.kind.as_deref() == Some(crate::db::waiting::STOPPED) || super::waiting::is_blocked_reply(w);
+    for w in rows.into_iter().filter(listed) {
         let name = state.db.get_kwant(&w.kwant_id).await.ok().flatten().map(|k| k.name);
         out.push(json!({
             "kind": "stopped",
