@@ -11,6 +11,8 @@ export interface ChatApproval extends PendingApproval {
   link: AwayLink | null;
   /** 22d: a customer's call nobody allowed (a closed `refused` row), drawn as a quiet line, never a card. */
   refused?: true;
+  /** 33a: allowed once in the app (not Telegram), kept in the chat as a quiet line. */
+  via?: 'app';
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
@@ -158,24 +160,42 @@ export interface ApprovalRecord {
   link?: AwayLink | null;
 }
 
-/** How long after it was asked a Telegram-allowed approval is still drawn after a reload. */
+/** 33a: whether a closed row was allowed once in the app: no `answered_via` (the server stores none for an app answer). */
+const allowedInApp = (c: ApprovalClosed): boolean => c.answered_via == null && c.outcome === 'allowed_once';
+
+/**
+ * 33a: after the app's Allow once succeeds, the card stays in the chat as "✓ You allowed once".
+ * Anything else (Deny, Always allow, no card) leaves the list as it is.
+ */
+export function keepAllowedOnce(settled: ChatApproval[], card: ChatApproval | undefined, decision: string): ChatApproval[] {
+  if (!card || decision !== 'allow_once') return settled;
+  return addSettled(settled, [{ ...card, waiting: undefined, via: 'app' }]);
+}
+
+/** How long after it was asked an allowed-once approval is still drawn after a reload. */
 export const SETTLED_KEEP_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The rows to draw again after a reload: allowed once in Telegram, asked in the last day. The
- * card comes from the row's own (masked) details, so it reads like the live one.
+ * The rows to draw again after a reload: allowed once in Telegram or (33a) in the app, asked in
+ * the last day. The card comes from the row's own (masked) details, so it reads like the live one.
+ * An app row keeps the chat it was asked in (its `link`); a Telegram row stays in every chat with
+ * its bot, as before.
  */
 export function settledFromRecords(rows: unknown, now = Date.now()): ChatApproval[] {
   if (!Array.isArray(rows)) return [];
   const out: ChatApproval[] = [];
   for (const r of rows as ApprovalRecord[]) {
-    if (!r || typeof r.id !== 'string' || !allowedInTelegram({ answered_via: r.answered_via, outcome: r.status })) continue;
+    if (!r || typeof r.id !== 'string') continue;
+    const closed = { answered_via: r.answered_via, outcome: r.status };
+    const app = allowedInApp(closed);
+    if (!app && !allowedInTelegram(closed)) continue;
     const at = str(r.created_at) ? Date.parse(r.created_at as string) : NaN;
     if (!Number.isFinite(at) || now - at > SETTLED_KEEP_MS) continue;
     const details = r.details && typeof r.details === 'object' && !Array.isArray(r.details) ? (r.details as Record<string, unknown>) : {};
     const kwantId = str(r.kwant_id) ?? str(details.kwant_id);
     if (!kwantId) continue; // no chat to put it in
-    out.push({ id: r.id, tool_name: str(r.tool_name) ?? 'tool', details, kwant_id: kwantId, link: null, asked_at: r.created_at as string });
+    const base = { id: r.id, tool_name: str(r.tool_name) ?? 'tool', details, kwant_id: kwantId, asked_at: r.created_at as string };
+    out.push(app ? { ...base, link: recordLink(r.link), via: 'app' } : { ...base, link: null });
   }
   return out.reverse(); // the server sends newest first; the chat reads oldest first
 }

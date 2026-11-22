@@ -126,6 +126,45 @@ fn is_anthropic(url: &str) -> bool {
     url.ends_with("/v1/messages")
 }
 
+/// Who a model call to `url` goes to, in words a person knows: Anthropic, OpenAI, xAI, OpenRouter,
+/// or Ollama on its usual port (11434); else the address's host, with its port when it has one.
+pub(crate) fn provider_name(url: &str) -> String {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return "the model's server".into();
+    };
+    let host = parsed.host_str().unwrap_or_default().trim_end_matches('.').to_ascii_lowercase();
+    let under = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+    let known = if under("anthropic.com") {
+        "Anthropic"
+    } else if under("openai.com") {
+        "OpenAI"
+    } else if under("x.ai") {
+        "xAI"
+    } else if under("openrouter.ai") {
+        "OpenRouter"
+    } else if parsed.port() == Some(11434) {
+        "Ollama"
+    } else {
+        return match (host.is_empty(), parsed.port()) {
+            (true, _) => "the model's server".into(),
+            (false, Some(port)) => format!("{host}:{port}"),
+            (false, None) => host,
+        };
+    };
+    known.into()
+}
+
+/// The reply for a model call that failed and doesn't fail over: one that never reached its
+/// provider names it and says what to check; any other keeps the provider's own words.
+fn failed_reply(e: &ApiError) -> String {
+    match &e.unreachable {
+        Some(provider) => format!(
+            "⚠️ Couldn't reach {provider} from this computer. Check the internet connection (or proxy), then send again."
+        ),
+        None => format!("⚠️ The model request failed: {e}"),
+    }
+}
+
 /// A failed model call: HTTP status when there was a response, and a short redacted message.
 #[derive(Debug, Clone)]
 pub struct ApiError {
@@ -133,6 +172,8 @@ pub struct ApiError {
     pub message: String,
     /// Seconds from a `retry-after` header.
     pub retry_after: Option<u64>,
+    /// The provider (`provider_name`) when the call got no response at all and didn't time out.
+    pub unreachable: Option<String>,
 }
 
 impl std::fmt::Display for ApiError {
@@ -1110,14 +1151,16 @@ impl ApiDriver {
     /// Sends one model call; `Err` for no answer or an error status, with the provider's message.
     async fn send_chat(&self, request: &ChatRequest<'_>, body: &Value) -> Result<reqwest::Response, ApiError> {
         let req = self.chat_request(request.url, request.api_key, body);
-        let resp = req.send().await.map_err(|e| ApiError {
-            status: None,
-            message: match (&self.custom_base, e.is_timeout()) {
-                (_, true) => "request timed out".into(),
-                (Some(base), false) => super::custom::not_answering(base),
-                (None, false) => "connection failed".into(),
-            },
-            retry_after: None,
+        let resp = req.send().await.map_err(|e| {
+            let (message, unreachable) = match (&self.custom_base, e.is_timeout()) {
+                (_, true) => ("request timed out".into(), None),
+                (Some(base), false) => (super::custom::not_answering(base), None),
+                (None, false) => {
+                    let provider = provider_name(request.url);
+                    (format!("couldn't reach {provider} from this computer"), Some(provider))
+                }
+            };
+            ApiError { status: None, message, retry_after: None, unreachable }
         })?;
         let status = resp.status();
         if !status.is_success() {
@@ -1131,6 +1174,7 @@ impl ApiDriver {
                 status: Some(status.as_u16()),
                 message: error_message(&body),
                 retry_after,
+                unreachable: None,
             });
         }
         Ok(resp)
@@ -1142,6 +1186,7 @@ impl ApiDriver {
             status: None,
             message: "invalid response from the model API".into(),
             retry_after: None,
+            unreachable: None,
         })
     }
 
@@ -1401,6 +1446,7 @@ impl ApiDriver {
             status: None,
             message: "no model calls were allowed".into(),
             retry_after: None,
+            unreachable: None,
         })
     }
 }
@@ -1581,7 +1627,7 @@ impl Driver for ApiDriver {
                         }
                         _ => {
                             tracing::warn!(status = ?e.status, "model API call failed");
-                            (format!("⚠️ The model request failed: {e}"), 0, false)
+                            (failed_reply(&e), 0, false)
                         }
                     }
                 }
@@ -2975,5 +3021,79 @@ mod tests {
         assert_eq!(key.as_deref(), Some("xai-profile"));
         let (_, key) = ApiDriver::new(None, None).resolve_endpoint_and_key("grok-4");
         assert_eq!(key.as_deref(), Some("xai-host-key"));
+    }
+
+    /// 32z: the provider a call goes to, named from its address (host only, never the path).
+    #[test]
+    fn provider_names_come_from_the_host() {
+        assert_eq!(provider_name("https://api.anthropic.com/v1/messages"), "Anthropic");
+        assert_eq!(provider_name("https://api.openai.com/v1/chat/completions"), "OpenAI");
+        assert_eq!(provider_name("https://api.x.ai/v1/chat/completions"), "xAI");
+        assert_eq!(provider_name("https://openrouter.ai/api/v1/chat/completions"), "OpenRouter");
+        assert_eq!(provider_name("http://localhost:11434/v1/chat/completions"), "Ollama");
+        assert_eq!(provider_name("https://llm.example.com/v1/messages"), "llm.example.com");
+        assert_eq!(provider_name("http://10.0.0.5:8080/v1/chat/completions"), "10.0.0.5:8080");
+        assert_eq!(provider_name("https://api.anthropic.com.evil.test/v1/messages"), "api.anthropic.com.evil.test");
+        assert_eq!(provider_name("not a url"), "the model's server");
+    }
+
+    /// 32z: the unreachable sentence is never read as a failover class (it would skip to another
+    /// account that can't get through either), and timeouts still are (Transient, retried).
+    #[test]
+    fn the_unreachable_message_is_not_a_failover_class() {
+        let now = chrono::Utc::now();
+        for p in ["Anthropic", "OpenAI", "xAI", "OpenRouter", "Ollama", "llm.example.com"] {
+            let msg = format!("couldn't reach {p} from this computer");
+            assert!(crate::profiles::classify(None, &msg, now).is_none(), "{msg}");
+        }
+        assert_eq!(
+            crate::profiles::classify(None, "request timed out", now).map(|c| c.0),
+            Some(crate::profiles::FailClass::Transient)
+        );
+    }
+
+    /// 32z: a model call that never reaches its provider (here through a proxy nothing answers at)
+    /// says which provider and what to check, never "The model request failed: connection failed".
+    /// It doesn't fail over: no other account would get through from this computer either.
+    #[tokio::test]
+    async fn an_unreachable_provider_is_named_in_the_reply() {
+        let client = Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
+            .build()
+            .unwrap();
+        let driver = ApiDriver { client, ..ApiDriver::for_profile(Some("sk-ant-test-key".into())) };
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = driver.stream_turn(turn("hi", vec![]), tx).await.unwrap();
+        assert!(out.failure.is_none(), "an unreachable provider doesn't fail over: {:?}", out.failure);
+        assert_eq!(
+            out.text,
+            "⚠️ Couldn't reach Anthropic from this computer. Check the internet connection (or proxy), then send again."
+        );
+        assert!(!out.text.contains("connection failed"), "{}", out.text);
+    }
+
+    /// 32z: a rejected key (401/403) still goes the refusal way (Auth, no reply text), and any
+    /// other status error keeps today's "The model request failed: API returned …" reply.
+    #[tokio::test]
+    async fn status_errors_keep_their_paths() {
+        for (status, kind) in [(401, "authentication_error"), (403, "permission_error")] {
+            let (url, _) = mock(status, json!({"type": "error", "error": {"type": kind, "message": "no"}})).await;
+            let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+            let (tx, mut rx) = mpsc::channel(64);
+            tokio::spawn(async move { while rx.recv().await.is_some() {} });
+            let out = driver.stream_turn(turn("hi", vec![]), tx).await.unwrap();
+            let failure = out.failure.unwrap_or_else(|| panic!("{status} was not refused: {}", out.text));
+            assert_eq!(failure.class, crate::profiles::FailClass::Auth, "{status}");
+            assert!(out.text.is_empty(), "{status}: {}", out.text);
+        }
+        let body = json!({"type": "error", "error": {"type": "invalid_request_error", "message": "prompt is too long"}});
+        let (url, _) = mock(400, body).await;
+        let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = driver.stream_turn(turn("hi", vec![]), tx).await.unwrap();
+        assert!(out.failure.is_none());
+        assert_eq!(out.text, "⚠️ The model request failed: API returned 400: invalid_request_error: prompt is too long");
     }
 }

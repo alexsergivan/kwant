@@ -25,7 +25,8 @@ export interface ConnectionSuggestionViewProps {
   /** The Mac app: sign-ins open in the default browser, not a new tab. */
   mac?: boolean;
   onConnect: () => void;
-  onOpenConnections?: () => void;
+  /** Opens the Connect <App> sheet for this card's app (Settings → Apps & accounts). */
+  onOpenConnections?: (meta: ConnectionSuggestionMeta) => void;
   flash?: boolean;
 }
 
@@ -44,8 +45,9 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
   const headingId = `conn-s-${messageId}`;
   const { phase } = state;
   const where = mac ? 'your browser' : 'the new tab';
+  const warn = phase === 'missing' && meta.composio === 'off';
   const border =
-    phase === 'connected' ? 'border-teal-400/30' : phase === 'error' ? 'border-rose-500/40' : phase === 'missing' ? 'border-amber-500/30' : 'border-sky-500/35';
+    phase === 'connected' ? 'border-teal-400/30' : phase === 'error' ? 'border-rose-500/40' : warn ? 'border-amber-500/30' : 'border-sky-500/35';
   const again = (
     <button type="button" onClick={onConnect} className={quietBtn} data-connect-again>
       <Link2 size={13} aria-hidden="true" /> Open the sign-in again
@@ -87,13 +89,19 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
             </p>
           ) : phase === 'missing' ? (
             <>
-              <p className="flex items-start gap-1.5 text-amber-200 break-words">
-                <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
-                <span>{state.message}</span>
-              </p>
+              {warn ? (
+                <p className="flex items-start gap-1.5 text-amber-200 break-words">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <span>{state.message}</span>
+                </p>
+              ) : (
+                <p className="text-zinc-300 break-words" data-next-step>
+                  {state.message}
+                </p>
+              )}
               {onOpenConnections && (
-                <button type="button" onClick={onOpenConnections} className={mainBtn} data-open-connections>
-                  <Plug size={13} aria-hidden="true" /> Open Connections
+                <button type="button" onClick={() => onOpenConnections(meta)} className={mainBtn} data-open-connections>
+                  <Plug size={13} aria-hidden="true" /> Connect {meta.name}
                 </button>
               )}
             </>
@@ -123,13 +131,13 @@ export const ConnectionSuggestionView: React.FC<ConnectionSuggestionViewProps> =
           ) : phase === 'timed_out' ? (
             <>
               <p className="text-zinc-300 break-words">
-                The sign-in hasn’t finished yet. If you closed it, open it again; if you finished, the connection shows in Connections.
+                The sign-in hasn’t finished yet. If you closed it, open it again. If you finished, this card turns Connected when you’re back.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 {again}
                 {onOpenConnections && (
-                  <button type="button" onClick={onOpenConnections} className={quietBtn}>
-                    Open Connections
+                  <button type="button" onClick={() => onOpenConnections(meta)} className={quietBtn}>
+                    Check in Settings
                   </button>
                 )}
               </div>
@@ -164,7 +172,9 @@ export interface ConnectionSuggestionCardProps {
   messageId: string;
   kwantName: string;
   kwantId?: string;
-  onOpenConnections?: () => void;
+  onOpenConnections?: (meta: ConnectionSuggestionMeta) => void;
+  /** Goes up when Settings closes, so the card asks Composio again. */
+  recheck?: number;
   flash?: boolean;
   api?: ConnectApi;
 }
@@ -175,17 +185,28 @@ export const ConnectionSuggestionCard: React.FC<ConnectionSuggestionCardProps> =
   const stopRef = useRef<(() => void) | null>(null);
   const mac = inDesktopApp();
 
-  // An app connected earlier (or from another card) shows as connected when the card appears.
+  // Asks Composio whether the app is signed in: when the card appears, when the window gets focus back
+  // and when Settings closes. Connected shows as connected; a card that said Composio was missing offers
+  // Connect once Composio answers. Unknown (older server, Composio still unusable) changes nothing.
   useEffect(() => {
-    if (props.meta.composio !== 'ready') return;
     let live = true;
-    connectedNow(api, props.meta.app).then((c) => {
-      if (live && c) setState((s) => (s.phase === 'ready' ? { phase: 'connected' } : s));
-    });
+    const check = () => {
+      void connectedNow(api, props.meta.app).then((c) => {
+        if (!live || c === null) return;
+        setState((s) => {
+          if (c && (s.phase === 'ready' || s.phase === 'missing' || s.phase === 'timed_out')) return { phase: 'connected' };
+          if (!c && s.phase === 'missing') return { phase: 'ready' };
+          return s;
+        });
+      });
+    };
+    check();
+    window.addEventListener('focus', check);
     return () => {
       live = false;
+      window.removeEventListener('focus', check);
     };
-  }, [api, props.meta.app, props.meta.composio]);
+  }, [api, props.meta.app, props.recheck]);
 
   useEffect(() => () => stopRef.current?.(), []);
 
