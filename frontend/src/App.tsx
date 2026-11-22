@@ -263,6 +263,10 @@ function useIsPhone(): boolean {
 }
 
 type PhoneTab = 'chats' | 'bots' | 'jar' | 'inbox' | 'space';
+type MainPage = 'inbox' | 'board' | 'parallel' | 'dev' | 'jar';
+
+/** Phones: what a page shows, opened by a tap or by a link. Every page covers the list but the jar, a tab of it (spec §2.2). */
+const phoneViewForPage = (page: MainPage): 'list' | 'chat' => (page === 'jar' ? 'list' : 'chat');
 
 /** One space: its bots, teams, channels and chats. Remounted for every space, so nothing carries over. */
 export const SpaceApp: React.FC<SpaceAppProps> = ({
@@ -281,10 +285,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 }) => {
   const isPhone = useIsPhone();
   // Phones: the list (one tab of it) or the open chat.
-  // The Idea jar is a tab of the list on phones, so a link to it opens on the list. The Inbox opens
-  // over it, as a tap does (a notification's Needs you lands there).
+  // A link to a page opens it as a tap does (showPage): the Inbox, the Mission board, Parallel Universe
+  // and the Dev desk cover the list; the Idea jar is a tab of it. Otherwise a chat link opens the chat.
   const [phoneView, setPhoneView] = useState<'list' | 'chat'>(() =>
-    initialView?.kind === 'inbox' || (initialView?.kind !== 'jar' && (initialTarget?.channelId || initialTarget?.botId || initialTarget?.live)) ? 'chat' : 'list',
+    initialView && initialView.kind !== 'settings'
+      ? phoneViewForPage(initialView.kind)
+      : initialTarget?.channelId || initialTarget?.botId || initialTarget?.live
+        ? 'chat'
+        : 'list',
   );
   const [phoneTab, setPhoneTab] = useState<PhoneTab>(() => (initialView?.kind === 'jar' ? 'jar' : 'chats'));
   const [loaded, setLoaded] = useState(false);
@@ -552,15 +560,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       : 'chat',
   );
   const [inboxTab, setInboxTab] = useState<InboxTab>(() => (initialView?.kind === 'inbox' ? initialView.tab : 'new'));
-  const showPage = (next: 'inbox' | 'board' | 'parallel' | 'dev' | 'jar', tab: InboxTab = 'new') => {
+  const showPage = (next: MainPage, tab: InboxTab = 'new') => {
     setPage(next);
     if (next === 'inbox') setInboxTab(tab);
     if (spaceSettingsTab) closeSpaceSettings();
     // Phones keep the tab bar under the jar (it's a tab, spec §2.2); every other page covers the list.
-    if (next === 'jar' && isPhoneRef.current) {
-      setPhoneTab('jar');
-      setPhoneView('list');
-    } else setPhoneView('chat');
+    if (next === 'jar' && isPhoneRef.current) setPhoneTab('jar');
+    setPhoneView(isPhoneRef.current ? phoneViewForPage(next) : 'chat');
   };
   const isPhoneRef = useRef(isPhone);
   isPhoneRef.current = isPhone;
