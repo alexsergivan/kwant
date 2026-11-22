@@ -460,6 +460,36 @@ pub async fn lead_review_note(state: &AppState, d: &crate::db::threads::Delegati
 /// a review turn or the reminder).
 pub const REVIEW_ASKED: &str = "lead_review_asked";
 
+/// Task event logged on a hand-off card when the person stopped its lead's results turn (or the
+/// lead's resume) on it (32h, 32o): [`sweep_unreviewed`] then leaves the card for the person, also
+/// after a restart, until the lead is asked about it again or the card moves on.
+pub const REVIEW_STOPPED: &str = "lead_review_stopped";
+
+/// Logs [`REVIEW_STOPPED`] on the card of finished hand-off `d`, when it is still open.
+pub async fn note_review_stopped(state: &AppState, d: &crate::db::threads::Delegation) {
+    if !super::enabled(state).await {
+        return;
+    }
+    let Ok(Some(t)) = state.db.task_by_source("delegation", &d.id).await else { return };
+    if !matches!(t.state.as_str(), "review" | "working" | "needs_you") {
+        return;
+    }
+    let detail = serde_json::json!({"delegation_id": d.id, "lead_kwant_id": d.lead_kwant_id});
+    if let Err(e) = state.db.log_task_event(&t.id, REVIEW_STOPPED, "kwant", &detail).await {
+        tracing::warn!(error = %e, task_id = %t.id, "could not log a stopped lead review");
+    }
+}
+
+/// Whether the person's Stop on the lead's turn still holds for card `task_id`: its latest
+/// [`REVIEW_STOPPED`] has no later [`REVIEW_ASKED`] (the lead heard the result again) and no later
+/// move to a state other than Review (sent back, blocked, closed). A move into Review after it
+/// doesn't end it: the Stop can land before the board moves the card to Review.
+pub async fn review_stopped_on_card(state: &AppState, task_id: &str) -> bool {
+    let events = state.db.task_events(task_id, 500).await.unwrap_or_default();
+    let Some(at) = events.iter().rposition(|e| e.kind == REVIEW_STOPPED) else { return false };
+    !events[at + 1..].iter().any(|e| e.kind == REVIEW_ASKED || e.to_state.as_deref().is_some_and(|s| s != "review"))
+}
+
 /// How often the lead is asked per stay in Review: its results turn and one reminder. After
 /// that the card waits ("Waiting for <lead> to review") for the lead or the person.
 pub const MAX_REVIEW_ASKS: usize = 2;
@@ -505,7 +535,8 @@ pub async fn sweep_unreviewed(state: &AppState, grace: std::time::Duration) {
         if d.status != "completed" || !d.continue_lead || state.turns.has_job(&d.id) || crate::server::delegation::review_stopped(&d.id) {
             continue;
         }
-        if !wants_lead_review(state, &t).await || crate::server::delegation::batch_running(state, &d).await {
+        // 32o: the same Stop, read from the card, so it holds after a restart
+        if !wants_lead_review(state, &t).await || review_stopped_on_card(state, &t.id).await || crate::server::delegation::batch_running(state, &d).await {
             continue;
         }
         let (asks, last) = review_asks(state, &t.id).await;

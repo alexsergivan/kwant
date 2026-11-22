@@ -256,6 +256,9 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
         setMade((x) => ({ ...x, [team.id]: null }));
         setConfirm(null);
         setToast((t) => ({ text: `Removed @${handle}.`, n: (t?.n ?? 0) + 1 }));
+        // 32r: the template is free again here; ask for the catalogue again so its tile comes back now (the cache
+        // keeps the tiles on screen while the call is out).
+        setLoadSeq((n) => n + 1);
         onUndone?.(team);
         onChanged();
       } catch (e) {
@@ -316,6 +319,8 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
     if (r.routine) parts.push('1 routine (off)');
     const text = `Created @${handle}: ${parts.join(', ')}.`;
     setToast((x) => ({ text, team: { id: r.team.id, name: handle }, n: (x?.n ?? 0) + 1 }));
+    // 32r: the template is used here now; the catalogue's used_in_space hides its tile.
+    setLoadSeq((n) => n + 1);
   };
 
   // ---- a team from your own words

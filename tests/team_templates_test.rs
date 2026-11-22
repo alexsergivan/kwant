@@ -235,8 +235,11 @@ async fn undo_keeps_a_chat_with_history_archived() {
         .await
         .unwrap();
     let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!(needs_done(&t), json!([]), "32q: a message that doesn't say what they sell doesn't tick it");
+    post_user(&e, &chat_id, "What we sell: bookkeeping for dentists").await;
+    let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
     assert_eq!(needs_done(&t), json!(["what_you_sell"]), "{t}");
-    assert_eq!(t["chat_messages"], 2);
+    assert_eq!(t["chat_messages"], 3);
     assert_eq!(t["archived_chat"], "archived-team-sales", "{t}");
     let (s, u) = undo(&e, v["action_id"].as_str().unwrap()).await;
     assert!(s.is_success(), "{s} {u}");
@@ -537,4 +540,182 @@ async fn a_create_that_fails_at_any_step_leaves_nothing() {
     assert_eq!(c.created.bots.len(), 3);
     let after = counts(&e).await;
     assert_eq!((after.bots, after.teams, after.skills, after.routines), (before.bots + 3, before.teams + 1, before.skills + 1, before.routines + 1));
+}
+
+// 32p: a renamed bot or handle reaches every text the team's bots read.
+
+/// `word` standing alone in `text`: not part of a longer name such as `Researcher2` or `OutreachWriter`.
+fn says(text: &str, word: &str) -> bool {
+    let wordy = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word)
+        .any(|(i, _)| !text[..i].chars().next_back().is_some_and(wordy) && !text[i + word.len()..].chars().next().is_some_and(wordy))
+}
+
+/// Every text the new team's bots read, by label: the team's instructions, each new bot's persona
+/// and soul, and their skills (description and body) and routines.
+async fn team_texts(e: &Env, created: &Value) -> Vec<(String, String)> {
+    let team_id = created["team"]["id"].as_str().unwrap();
+    let team = e.state.db.list_teams(&e.space).await.unwrap().into_iter().find(|t| t.id == team_id).unwrap();
+    let mut out = vec![("team instructions".to_string(), team.instructions.unwrap_or_default())];
+    let ids: Vec<String> = created["bots"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap().to_string()).collect();
+    for k in e.state.db.list_kwants(&e.space).await.unwrap().into_iter().filter(|k| ids.contains(&k.id)) {
+        out.push((format!("{} persona", k.name), k.persona_prompt));
+        out.push((format!("{} soul", k.name), k.soul));
+    }
+    for s in e.state.db.list_skills(&e.space, None, None).await.unwrap() {
+        if s.kwant_id.as_ref().is_some_and(|k| ids.contains(k)) {
+            out.push((format!("skill {} description", s.name), s.description));
+            out.push((format!("skill {}", s.name), s.body));
+        }
+    }
+    for r in e.state.db.list_routines(&e.space).await.unwrap().into_iter().filter(|r| ids.contains(&r.kwant_id)) {
+        out.push((format!("routine {}", r.name), r.instructions));
+    }
+    out
+}
+
+fn text<'a>(texts: &'a [(String, String)], label: &str) -> &'a str {
+    &texts.iter().find(|(l, _)| l == label).unwrap_or_else(|| panic!("no {label} in {texts:?}")).1
+}
+
+#[tokio::test]
+async fn a_fresh_install_inbox_tells_its_lead_about_researcher2() {
+    let e = setup().await;
+    // The seeded @helpers has a Researcher, so the preview offers Researcher2 and the sheet posts it unedited
+    let (_, p) = call(&e.app, "GET", "/api/team-templates/inbox/preview", &[], None).await;
+    assert_eq!(p["names"]["Researcher"], "Researcher2", "{p}");
+    let (s, v) = create(&e, json!({"template_id": "inbox", "handle": p["handle"], "names": p["names"]})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let texts = team_texts(&e, &v).await;
+    assert!(texts.len() >= 10, "instructions, 3 personas, 3 souls, 2 skills x2, 1 routine: {texts:?}");
+
+    for label in ["team instructions", "InboxManager persona", "Researcher2 persona"] {
+        assert!(says(text(&texts, label), "Researcher2"), "{label}: {}", text(&texts, label));
+    }
+    for (label, t) in &texts {
+        assert!(!says(t, "Researcher"), "{label} still names the other team's Researcher: {t}");
+        assert!(!says(t, "@helpers"), "{label}: {t}");
+    }
+    // The other names didn't change, so neither did their mentions
+    assert!(says(text(&texts, "InboxManager persona"), "Drafter"));
+    assert!(says(text(&texts, "InboxManager persona"), "@inbox"));
+
+    // The seeded @helpers' own Researcher is untouched
+    let seeded = e.state.db.list_kwants(&e.space).await.unwrap().into_iter().find(|k| k.name == "Researcher").unwrap();
+    assert!(seeded.persona_prompt.contains("You are the Researcher on the @helpers team"), "{}", seeded.persona_prompt);
+}
+
+#[tokio::test]
+async fn a_sales_team_with_a_renamed_bot_and_handle_says_them_everywhere() {
+    let e = setup().await;
+    let (s, v) = create(&e, json!({"template_id": "sales", "handle": "helpers2", "names": {"Prospector": "Scout"}})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let texts = team_texts(&e, &v).await;
+
+    assert!(says(text(&texts, "team instructions"), "Scout"), "{}", text(&texts, "team instructions"));
+    for bot in ["SalesLead", "Scout", "OutreachWriter"] {
+        let persona = text(&texts, &format!("{bot} persona"));
+        assert!(says(persona, "Scout"), "{bot}: {persona}");
+        assert!(says(persona, "@helpers2"), "{bot}: {persona}");
+    }
+    assert!(says(text(&texts, "skill Write a first outreach email"), "Scout"));
+    for (label, t) in &texts {
+        assert!(!says(t, "Prospector"), "{label}: {t}");
+        assert!(!says(t, "@sales"), "{label}: {t}");
+    }
+    // OutreachWriter wasn't renamed, and its "Outreach Writer" title line has no bot named Writer to follow
+    assert!(says(text(&texts, "SalesLead persona"), "OutreachWriter"));
+    assert!(text(&texts, "OutreachWriter persona").contains("You are the Outreach Writer on the @helpers2 team"), "{}", text(&texts, "OutreachWriter persona"));
+}
+
+async fn needs_done_of(e: &Env, team_id: &str) -> Value {
+    let (s, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!(s, StatusCode::OK, "{t}");
+    t["needs_done"].clone()
+}
+
+async fn post_user(e: &Env, chat_id: &str, text: &str) {
+    e.state
+        .db
+        .insert_message(&NewMessage {
+            channel_id: Some(chat_id.into()),
+            direct_kwant_id: None,
+            sender_role: "user".into(),
+            sender_id: "user".into(),
+            text: text.into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+        })
+        .await
+        .unwrap();
+}
+
+/// 32q (Mira's 0.9.36 UX pass, fix #2): "Tell the team what you sell" is done only when the
+/// person has said what they sell ("What we sell: …" with real text), not after any message,
+/// such as the card's own "Try asking" chip or the empty starter the button fills in.
+#[tokio::test]
+async fn sell_step_needs_an_answer() {
+    let e = setup().await;
+    let (s, v) = create(&e, json!({"template_id": "sales"})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let chat_id = v["channel_id"].as_str().unwrap().to_string();
+    let team_id = v["team"]["id"].as_str().unwrap().to_string();
+    let needs_done = || needs_done_of(&e, &team_id);
+    // The catalogue carries the prefix, and the copy says what is needed
+    let (_, cat) = call(&e.app, "GET", "/api/team-templates", &[], None).await;
+    let sales = cat["templates"].as_array().expect("catalogue list").iter().find(|t| t["id"] == "sales").expect("Sales in the catalogue");
+    let need = sales["needs"].as_array().unwrap().iter().find(|n| n["id"] == "what_you_sell").unwrap();
+    assert_eq!((need["answer_prefix"].as_str(), need["done_when"].as_str()), (Some("What we sell:"), Some("The person has said what they sell")));
+    assert!(sales["needs"].as_array().unwrap().iter().filter(|n| n["id"] != "what_you_sell").all(|n| n.get("answer_prefix").is_none()));
+
+    // 1. The card's "Try asking" chip is not an answer
+    post_user(&e, &chat_id, "Find 10 companies like our best customer").await;
+    assert_eq!(needs_done().await, json!([]), "the Try asking chip doesn't tick it");
+    // 2. The starter as the button fills it in, all 3 lines empty, is not an answer
+    post_user(&e, &chat_id, "What we sell: \nWho our best customer is: \nWhat they usually pay: ").await;
+    assert_eq!(needs_done().await, json!([]), "the empty starter doesn't tick it");
+    post_user(&e, &chat_id, "What we sell:    \nWho our best customer is: dentists").await;
+    assert_eq!(needs_done().await, json!([]), "text on another line doesn't answer What we sell");
+    // 3. A real answer ticks it
+    post_user(&e, &chat_id, "What we sell: bookkeeping for dentists\nWho our best customer is: a 3-chair practice\nWhat they usually pay: ").await;
+    assert_eq!(needs_done().await, json!(["what_you_sell"]));
+    // …and later chat doesn't untick it
+    for i in 0..3 {
+        post_user(&e, &chat_id, &format!("Lead list {i}, please.")).await;
+    }
+    assert_eq!(needs_done().await, json!(["what_you_sell"]));
+}
+
+/// 32q: a `composer_prompt` need without an answer prefix keeps today's rule: any message from the
+/// person ticks it, a bot's never does. A need with one needs a real answer line.
+#[tokio::test]
+async fn composer_need_without_answer_prefix_ticks_on_any_message() {
+    let e = setup().await;
+    let (s, v) = create(&e, json!({"template_id": "sales"})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let chat_id = v["channel_id"].as_str().unwrap().to_string();
+    let db = &e.state.db;
+    assert!(!db.composer_need_done(&chat_id, None).await.unwrap(), "nothing posted yet");
+    assert!(!db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap());
+    db.insert_message(&NewMessage {
+        channel_id: Some(chat_id.clone()),
+        direct_kwant_id: None,
+        sender_role: "kwant".into(),
+        sender_id: v["bots"][0]["id"].as_str().unwrap().into(),
+        text: "What we sell: a bot can't answer for the person".into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    })
+    .await
+    .unwrap();
+    assert!(!db.composer_need_done(&chat_id, None).await.unwrap(), "a bot's message doesn't tick it");
+    assert!(!db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap(), "nor a bot's answer line");
+    post_user(&e, &chat_id, "Find 10 companies like our best customer").await;
+    assert!(db.composer_need_done(&chat_id, None).await.unwrap(), "no prefix: any message from the person ticks it");
+    assert!(db.composer_need_done(&chat_id, Some("  ")).await.unwrap(), "a blank prefix is no prefix");
+    assert!(!db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap());
+    post_user(&e, &chat_id, "what we sell: bookkeeping for dentists").await;
+    assert!(db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap(), "case aside, it's an answer");
 }
