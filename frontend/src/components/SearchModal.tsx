@@ -29,6 +29,8 @@ export const SearchModal: React.FC<{
 }> = ({ isOpen, onClose, kwants, onJump }) => {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<SearchHit[] | null>(null);
+  // 33p: the term these hits came from; groups order by it, not the live input, so they don't jump while typing.
+  const [hitsTerm, setHitsTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
@@ -59,6 +61,7 @@ export const SearchModal: React.FC<{
         (r) => {
           if (seq !== seqRef.current) return;
           setHits(r);
+          setHitsTerm(term);
           setError(null);
           setActive(0);
           setLoading(false);
@@ -73,7 +76,7 @@ export const SearchModal: React.FC<{
     return () => clearTimeout(t);
   }, [q, isOpen]);
 
-  const groups = useMemo(() => groupHits(hits ?? [], (id) => kwants.find((k) => k.id === id)?.name), [hits, kwants]);
+  const groups = useMemo(() => groupHits(hits ?? [], (id) => kwants.find((k) => k.id === id)?.name, hitsTerm), [hits, hitsTerm, kwants]);
   const flat = useMemo(() => groups.flatMap((g) => g.hits), [groups]);
 
   useEffect(() => {

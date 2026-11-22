@@ -20,7 +20,7 @@ import { accountCardShows } from '../firstScreen';
 import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine, teamChipLabel, teamChipTitle } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
-import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
+import { PHONE_QUERY, SM_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
 import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
 import { isNewThing, markNewSeen, subscribeNew } from '../whatsNew';
@@ -735,6 +735,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // rows while in use. Desktop never changes.
   const phone = useMedia(PHONE_QUERY);
   const touch = useMedia(TOUCH_QUERY);
+  // 33q: a row draws only the avatar this width shows (gutter from `sm` up, name line below), not both behind CSS.
+  const wideRows = useMedia(SM_QUERY);
 
   const [composerFocused, setComposerFocused] = useState(false);
   const kbd = keyboardMode({ phone, touch, focused: composerFocused });
@@ -1030,6 +1032,50 @@ export const ChatView: React.FC<ChatViewProps> = ({
     el.scrollTop = homeShowingRef.current ? 0 : el.scrollHeight;
     lastScrollTopRef.current = el.scrollTop;
   };
+  // 33q: a jump (search hit, quote, waiting card) scrolls smoothly from the bottom. While it runs, rows it passes settle
+  // from their kw-row-lazy estimate, and the row re-pin below must not pull the view back. When it ends, one instant
+  // scroll lands it on the real heights (the smooth scroll set off from the estimates). Reduced motion is instant already.
+  const jumpingRef = useRef(false);
+  const jumpLeftRef = useRef(false);
+  const jumpUpRef = useRef(false);
+  const jumpEndRef = useRef<(() => void) | null>(null);
+  const onScreen = (target: HTMLElement, box: HTMLElement) => {
+    const r = target.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    return r.bottom > b.top && r.top < b.bottom;
+  };
+  const jumpTo = (target: HTMLElement, block: ScrollLogicalPosition) => {
+    jumpEndRef.current?.();
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const box = scrollRef.current;
+    if (reduce || !box) {
+      target.scrollIntoView({ block, behavior: 'auto' });
+      return;
+    }
+    jumpingRef.current = true;
+    jumpLeftRef.current = false;
+    jumpUpRef.current = target.getBoundingClientRect().top < box.getBoundingClientRect().top;
+    let t = 0;
+    const end = (settle: boolean) => {
+      box.removeEventListener('scrollend', onEnd);
+      window.clearTimeout(t);
+      if (jumpEndRef.current === stop) jumpEndRef.current = null;
+      // Only when the scroll got there: a reader who scrolled away mid-jump is not pulled back.
+      if (settle && target.isConnected && onScreen(target, box)) target.scrollIntoView({ block, behavior: 'auto' });
+      jumpingRef.current = false;
+    };
+    // A scrollend with the target still off screen (a wheel mid-jump can end one early while the jump goes on) waits
+    // for the next; the timer is the last word.
+    const onEnd = () => {
+      if (target.isConnected && onScreen(target, box)) end(true);
+    };
+    const stop = () => end(false);
+    jumpEndRef.current = stop;
+    box.addEventListener('scrollend', onEnd);
+    // The timer covers a browser without scrollend, or a target already in place.
+    t = window.setTimeout(() => end(true), 3000);
+    target.scrollIntoView({ block, behavior: 'smooth' });
+  };
   // A waiting card whose buttons are off screen while the person reads further up.
   const [approvalOffscreen, setApprovalOffscreen] = useState(false);
   // 29w: some card's Allow / Deny row is fully on screen (the same measurement), so the strip need not repeat it.
@@ -1051,8 +1097,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const onScroll = () => {
     const el = scrollRef.current;
     if (el) {
+      // 33q: during a jump up, a move down at the bottom is the reader taking over (the jump itself only goes up).
+      const backDown = jumpingRef.current && jumpUpRef.current && isNearBottom(el) && el.scrollTop > lastScrollTopRef.current + 1;
       stickRef.current = nextFollowing(stickRef.current, { nearBottom: isNearBottom(el), scrollTop: el.scrollTop, lastScrollTop: lastScrollTopRef.current });
       lastScrollTopRef.current = el.scrollTop;
+      // 33q: a jump that left the bottom, then the reader came back to it: the jump is over and the re-pin is theirs again.
+      if (jumpingRef.current) {
+        if (!stickRef.current) jumpLeftRef.current = true;
+        else if (jumpLeftRef.current || backDown) jumpEndRef.current?.();
+      }
     }
     checkApprovalVisible();
   };
@@ -1144,6 +1197,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
     el.querySelectorAll('[data-approval-card]').forEach((c) => ro.observe(c));
     return () => ro.disconnect();
   }, [approvalKey]);
+  // 33q: rows settle to their real height after the first paint (kw-row-lazy rows start at an estimate, a chart
+  // measures its width), so while the person follows the bottom a row changing height keeps the newest in view.
+  // Only a real change of height counts (not a row's first observation), and never during a jump.
+  const rowHeightsRef = useRef(new WeakMap<Element, number>());
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const heights = rowHeightsRef.current;
+    const ro = new ResizeObserver((entries) => {
+      let grew = false;
+      for (const e of entries) {
+        const h = e.borderBoxSize?.[0]?.blockSize ?? e.contentRect.height;
+        const was = heights.get(e.target);
+        heights.set(e.target, h);
+        if (was !== undefined && Math.abs(was - h) > 0.5) grew = true;
+      }
+      if (grew && stickRef.current && !jumpingRef.current) pinToBottom(el);
+    });
+    el.querySelectorAll('[data-message-id]').forEach((r) => ro.observe(r));
+    return () => ro.disconnect();
+  }, [messages, contextKey]);
+  useEffect(() => () => jumpEndRef.current?.(), []);
   useEffect(() => {
     stickRef.current = true;
   }, [contextKey]);
@@ -1215,8 +1290,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (pendingApprovals.some((a) => a.id === highlightMessageId)) {
       const card = scrollRef.current?.querySelector<HTMLElement>(`[data-approval-card="${CSS.escape(highlightMessageId)}"]`);
       if (!card) return;
-      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+      jumpTo(card, 'center');
       // 30a: the strip's "Go to the approval" pressed from the keyboard lands focus on the card (as the question
       // card's first choice does), never on Allow / Deny. A tap, an Inbox row or a notification leaves focus alone.
       const from = document.activeElement;
@@ -1235,8 +1309,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
     const el = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(highlightMessageId)}"]`);
     if (!el) return;
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    jumpTo(el, 'center');
     restartFlash(highlightMessageId, highlightRing ? 'ask' : 'search');
     onHighlightDone?.();
   }, [highlightMessageId, highlightRing, messages, openThoughts, onHighlightDone, pendingApprovals]);
@@ -1345,8 +1418,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const el = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(quoteJump.id)}"]`);
     setQuoteJump(null);
     if (!el) return;
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    jumpTo(el, 'center');
     if (el.tabIndex < 0 || el.hasAttribute('tabindex')) el.focus({ preventScroll: true });
     // 30q: same race-free restart as search and approvals, so a second click on a quote always rings again.
     restartFlash(quoteJump.id, 'quote');
@@ -1829,7 +1901,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const setup = msg.meta && onOpenAccounts ? parseSetupMeta(msg.meta) : null;
     if (setup && onOpenAccounts)
       return (
-        <div key={msg.id} data-message-id={msg.id} className="w-full max-w-5xl">
+        <div key={msg.id} data-message-id={msg.id} className="kw-row-lazy w-full max-w-5xl">
           <SetupNeededCard
             meta={setup}
             botName={botDisplayName(msg.sender_id, knownBots)}
@@ -1970,7 +2042,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         data-shared-under={underReply ? '' : undefined}
         // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
         style={underReply ? { marginTop: '0.5rem' } : undefined}
-        className={`group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${onYourSide ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+        className={`kw-row-lazy group/msg flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${onYourSide ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
@@ -1984,7 +2056,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
             {otherSender ? (
               <SenderLetter name={otherSender} />
-            ) : (
+            ) : wideRows ? (
               <ModernAvatar
                 role={isUser ? 'user' : title}
                 name={displayName}
@@ -1992,7 +2064,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 kwantId={replyKwantId}
                 modelBadge={false}
               />
-            )}
+            ) : null}
           </span>
         </span>
         )}
@@ -2011,7 +2083,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
+              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
               ranOn={ranOn}
               account={account}
               effort={effortWords(msg.reasoning_content)}

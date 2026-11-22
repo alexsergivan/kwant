@@ -205,6 +205,7 @@ export const DoneSections: React.FC<{
   const bot = item.kwant_name;
   const excerpt = typeof item.answer_excerpt === 'string' && item.answer_excerpt.trim() ? item.answer_excerpt : null;
   const text = answerText(d.message) ?? excerpt ?? (item.summary?.trim() ? item.summary : null);
+  // The server's excerpt is plain lines (list markers stripped), so its line breaks are kept (Mira, 33h).
   const fromMessage = !!answerText(d.message);
   // Part B serves the trail on the item (with skipped steps and a team member's name); else the loaded message.
   const served = trailFromServed(item, place);
@@ -225,23 +226,18 @@ export const DoneSections: React.FC<{
             <Loader2 size={13} className="motion-safe:animate-spin" aria-hidden="true" /> Loading the answer…
           </p>
         ) : text ? (
-          fromMessage ? (
-            // F5: on a phone the answer's table keeps each cell on one line and scrolls sideways as a whole;
-            // the scroller is a focusable, named region so a keyboard can reach it.
-            <div
-              tabIndex={0}
-              role="region"
-              aria-label={`${bot}’s answer`}
-              className="kw-focus rounded min-w-0 overflow-x-auto [&_.markdown-content]:text-body max-sm:[&_th]:whitespace-nowrap max-sm:[&_td]:whitespace-nowrap"
-              data-answer-text
-            >
-              <MarkdownRenderer content={text} />
-            </div>
-          ) : (
-            <p className="text-body text-zinc-100 whitespace-pre-wrap break-words" data-answer-text>
-              {text}
-            </p>
-          )
+          // F5: on a phone the answer's table keeps each cell on one line and scrolls sideways as a whole;
+          // the scroller is a focusable, named region so a keyboard can reach it. The loaded message and the
+          // item's excerpt or summary both render here, so a table is a table either way (33h, minor b).
+          <div
+            tabIndex={0}
+            role="region"
+            aria-label={`${bot}’s answer`}
+            className={`kw-focus rounded min-w-0 overflow-x-auto [&_.markdown-content]:text-body max-sm:[&_th]:whitespace-nowrap max-sm:[&_td]:whitespace-nowrap${fromMessage ? '' : ' [&_p]:whitespace-pre-line'}`}
+            data-answer-text
+          >
+            <MarkdownRenderer content={text} />
+          </div>
         ) : (
           <p className="text-meta text-zinc-400">The answer isn’t here any more. Open the chat to see what is.</p>
         )}

@@ -1,4 +1,4 @@
-import React, { useCallback, useSyncExternalStore } from 'react';
+import React, { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { moodOf, noticesOf, subscribeMood, type Mood } from '../kwantMood';
 
 const noop = () => undefined;
@@ -7,6 +7,28 @@ const noop = () => undefined;
 export function useKwantMood(kwantId: string | undefined): Mood {
   const subscribe = useCallback((on: () => void) => (kwantId ? subscribeMood(kwantId, on) : noop), [kwantId]);
   return useSyncExternalStore(subscribe, () => moodOf(kwantId), () => moodOf(kwantId));
+}
+
+/**
+ * 33r: the moods of a list of bots, as one map that changes only when one of their moods does (a joined-string
+ * snapshot over the same store, so no polling and no extra renders while nothing changes).
+ */
+export function useKwantMoods(ids: string[]): Record<string, Mood> {
+  const key = ids.join('\n');
+  const subscribe = useCallback(
+    (on: () => void) => {
+      const offs = key ? key.split('\n').map((id) => subscribeMood(id, on)) : [];
+      return () => offs.forEach((off) => off());
+    },
+    [key],
+  );
+  const snap = () => (key ? key.split('\n').map((id) => moodOf(id)).join('\n') : '');
+  const moods = useSyncExternalStore(subscribe, snap, snap);
+  return useMemo(() => {
+    const out: Record<string, Mood> = {};
+    if (key) moods.split('\n').forEach((m, i) => (out[key.split('\n')[i]] = m as Mood));
+    return out;
+  }, [key, moods]);
 }
 
 /** How many times the person has messaged this bot; the avatar blinks once per change. */

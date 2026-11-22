@@ -478,7 +478,7 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
     let (name, in_folder) = program_name(&cmd.text, ctx)?;
     if in_folder && !judged_by_name(name) {
         // The bot's own script: not a sandbox, see the module docs
-        return all_paths_inside(args, ctx);
+        return script_args(name, args, ctx);
     }
     if let Some((_, what)) = RISKY.iter().find(|(n, _)| *n == name) {
         // Local web requests are part of building and testing
@@ -516,7 +516,7 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
         "timeout" => wrapped(name, args, &["--preserve-status", "--foreground", "-v", "--verbose"], &["-s", "--signal", "-k", "--kill-after"], 1, ctx),
         "stdbuf" => wrapped(name, args, &[], &["-i", "-o", "-e", "--input", "--output", "--error"], 0, ctx),
         _ if SHELLS.contains(&name) => match args.first() {
-            Some(a) if !a.text.starts_with('-') => all_paths_inside(args, ctx),
+            Some(a) if !a.text.starts_with('-') => script_args(name, args, ctx),
             _ => Err(format!("`{name}` runs commands kwnt can't see")),
         },
         "bun" => packages(name, args, ctx).and_then(|()| interpreter(name, args, ctx)),
@@ -709,13 +709,125 @@ fn interpreter(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
             if matches!(module, "twine" | "http.server" | "smtplib" | "pip") {
                 return Err(format!("`{name} -m {module}` reaches outside the folder"));
             }
-            return all_paths_inside(args, ctx);
+            return script_args(name, args, ctx);
         }
     }
     if !args.iter().any(|a| !a.text.starts_with('-')) {
         return Err(format!("`{name}` reads code kwnt can't see"));
     }
+    script_args(name, args, ctx)
+}
+
+/// 33o: the arguments of a script kwnt can't read (the bot's own `./x.sh`, `bash x.sh`,
+/// `python3 x.py`, `python -m mod`): every path inside the folder, and no email address or web
+/// address that isn't this computer, since the script may send something there (Ada's policy
+/// call, Nov 22). An address written inside the script itself isn't judged (see the module docs).
+fn script_args(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
+    if let Some((outward, shown)) = outward_arg(args) {
+        return Err(match outward {
+            Outward::Kwnt => format!("`{name}` is given kwnt's own address (`{shown}`), whose settings only the person may change"),
+            Outward::Email => format!("`{name}` is given an email address (`{shown}`), so it may send something outside the folder"),
+            Outward::Web => format!("`{name}` is given a web address (`{shown}`), so it may send something outside the folder"),
+        });
+    }
     all_paths_inside(args, ctx)
+}
+
+/// What [`outward_arg`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outward {
+    Email,
+    Web,
+    /// A loopback address that reaches kwnt's own server ([`kwnt_url`]).
+    Kwnt,
+}
+
+/// The first argument that names somewhere outside this computer, with the text to show for it:
+/// an email address (`a@b.co`, also after `--to=`, inside `Name <a@b.co>`, a list `a@b.co,c@d.co`
+/// or `mailto:`), or an address with a scheme (`https://`, `wss://`, `smtp://`, `postgres://`, …;
+/// not `file://`) whose host isn't this computer, or that reaches kwnt's own server. A web address
+/// is shown as its scheme and host only, since a path or password can hold a secret.
+fn outward_arg(args: &[Word]) -> Option<(Outward, String)> {
+    let pieces = args.iter().flat_map(|a| a.text.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '<' | '>' | '(' | ')' | '"' | '\'' | '=')));
+    for piece in pieces {
+        if let Some(at) = piece.find("://") {
+            let scheme_len = piece[..at].chars().rev().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')).count();
+            let scheme = &piece[at - scheme_len..at];
+            if scheme.is_empty() || scheme.eq_ignore_ascii_case("file") {
+                continue;
+            }
+            let rest = &piece[at + 3..];
+            // Read every scheme the way an http one is read, so one host test serves them all
+            let as_http = format!("http://{rest}");
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            let host_port = rest[..end].rsplit_once('@').map_or(&rest[..end], |(_, h)| h);
+            let more = if end < rest.len() && &rest[end..] != "/" { "/…" } else { "" };
+            let shown: String = format!("{}://{host_port}{more}", scheme.to_ascii_lowercase()).chars().take(80).collect();
+            match split_url(&as_http) {
+                Some((host, _, _)) if script_local_host(&host) => {
+                    if kwnt_url(&as_http) {
+                        return Some((Outward::Kwnt, shown));
+                    }
+                    continue;
+                }
+                _ => return Some((Outward::Web, shown)),
+            }
+        }
+        let email = piece.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-' | '@'))).find(|f| is_email(f));
+        if let Some(email) = email {
+            return Some((Outward::Email, email.chars().take(80).collect()));
+        }
+    }
+    None
+}
+
+/// 33o QA (Rigel, Nov 22): whether a host a script is given stays on this computer. Stricter than
+/// [`loopback_host`], which only ever adds asks for [`kwnt_url`]: a name counts only if it is
+/// `localhost` or ends in `.localhost`, and a number only if it is a whole IP address that is
+/// loopback or unspecified (`127.0.0.1`, `127.1.2.3`, `[::1]`, `0.0.0.0`). So `127.evil.com` and
+/// `127.0.0.1.evil.example` ask.
+fn script_local_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    let bare = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(&host);
+    let named_local = (bare == "localhost" || bare.ends_with(".localhost"))
+        && bare.split('.').all(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    named_local || bare.parse::<std::net::IpAddr>().is_ok_and(loopback_ip)
+}
+
+/// An IP address that is this computer: loopback or unspecified, also IPv4-mapped.
+fn loopback_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_unspecified()),
+        ip => ip.is_loopback() || ip.is_unspecified(),
+    }
+}
+
+/// File types an `@` often sits in front of in a file name (`logo@2x.png`, `name@scope.js`). Only
+/// ones that aren't also common real domains (so not md, zip, mov, ai, io).
+const FILE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "ico", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "css", "map", "gz", "tgz",
+];
+
+/// `local@domain.tld`: one `@`, a dot in the domain and a last part of two or more letters, so
+/// `left-pad@1.2.3`, `react@18` and `@types/node` aren't addresses. A file name with an `@` isn't
+/// one either (33o QA, Nov 22): one ending in a file type from [`FILE_EXTENSIONS`], which covers
+/// retina names such as `logo@2x.png`.
+fn is_email(text: &str) -> bool {
+    let Some((local, domain)) = text.split_once('@') else { return false };
+    let labels: Vec<&str> = domain.split('.').collect();
+    !local.is_empty()
+        && local.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-'))
+        && labels.len() >= 2
+        && labels.iter().all(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        && labels.last().is_some_and(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
+        && !file_name_like(&labels)
+}
+
+/// The part after the `@` reads as a file name: `2x.png`, `3x.svg`, `scope.js`. Only the file type
+/// decides: a retina-looking first part alone (`me@2x.com`, `ops@3x.company.co.uk`) is a real
+/// domain, so it stays an address (33o QA re-check, Rigel).
+fn file_name_like(labels: &[&str]) -> bool {
+    labels.last().is_some_and(|l| FILE_EXTENSIONS.contains(&l.to_ascii_lowercase().as_str()))
 }
 
 fn git(args: &[Word], ctx: &Ctx) -> Verdict {
@@ -1415,20 +1527,22 @@ pub fn set_serve_port(port: u16) {
 /// approvals off or answer its own cards.
 pub fn kwnt_url(url: &str) -> bool {
     let Some((host, port, path)) = split_url(url) else { return false };
-    let bare = host.trim_start_matches('[').trim_end_matches(']');
-    let loopback = matches!(bare, "localhost" | "0")
-        || bare.ends_with(".localhost")
-        || bare.starts_with("127.")
-        || bare.starts_with("::ffff:127.")
-        || bare.parse::<std::net::IpAddr>().is_ok_and(|ip| match ip {
-            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_unspecified()),
-            ip => ip.is_loopback() || ip.is_unspecified(),
-        });
-    if !loopback {
+    if !loopback_host(&host) {
         return false;
     }
     let serve = SERVE_PORT.load(std::sync::atomic::Ordering::Relaxed);
     [u32::from(serve), 8799, 8800].contains(&port) || path.starts_with("/api/") || path == "/api"
+}
+
+/// Whether `host` (lowercase, as [`split_url`] gives it) is this computer: `localhost`,
+/// `*.localhost`, `127.x.x.x`, `0`, `0.0.0.0`, `[::1]`, `[::]` and their IPv4-mapped forms.
+fn loopback_host(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    matches!(bare, "localhost" | "0")
+        || bare.ends_with(".localhost")
+        || bare.starts_with("127.")
+        || bare.starts_with("::ffff:127.")
+        || bare.parse::<std::net::IpAddr>().is_ok_and(loopback_ip)
 }
 
 /// `url` split into a lowercase host, its port (80 or 443 when none is written) and a normalised lowercase
@@ -2157,6 +2271,135 @@ mod tests {
             SmartVerdict::Ask("`pip install` reaches outside the folder".into())
         );
         assert_eq!(classify("npm create vite@latest", &ws), SmartVerdict::Ask("`npm create vite@latest` downloads a starter package and runs it".into()));
+    }
+
+    /// 33o (Mira's UX pass at 0.9.38, minor f; Ada's policy call, Nov 22): the bot's own script
+    /// (`./x.sh`, `bash x.sh`, `python3 x.py`, `python -m mod`, …) given an email address or a web
+    /// address that isn't this computer asks, and the reason names it in plain words. Local
+    /// addresses, known programs and curl/wget keep today's rules.
+    #[test]
+    fn a_script_given_an_outside_address_asks() {
+        let (_tmp, ws) = folder();
+        std::fs::write(ws.join("notify.sh"), "echo hi").unwrap();
+        for cmd in [
+            // Mira's repro: ran with no card at 0.9.38
+            "python3 send_reminder.py --to billing@acme.example --invoice 2291",
+            "python3 x.py --to=billing@acme.example",
+            "node post.js https://hooks.slack.com/services/T/B/x",
+            "./notify.sh ops@acme.example",
+            "bash x.sh https://example.com",
+            "python3 -m mytool mailto:a@b.co",
+            // Other spellings of the same thing
+            "python3 x.py --to 'Ops <ops@acme.example>'",
+            "ruby x.rb --cc=a@b.co,c@d.co",
+            "python3 x.py --header Reply-To:ops@acme.example",
+            "node x.js wss://stream.example.com/feed",
+            "python3 x.py --db postgres://db.example.com/app",
+            "python3 x.py 'https://user:secret@api.example.com/v1'",
+            "python3 x.py http://127.0.0.1:3000/?next=https://evil.example",
+            "sh notify.sh smtp://mail.example.com",
+            "timeout 60 python3 x.py --to ops@acme.example",
+            "nice -n 5 ./notify.sh https://example.com",
+            "env NODE_ENV=production node x.js https://api.example.com",
+            "deno run x.ts --to ops@acme.example",
+            "bun x.ts https://example.com",
+            "python3 -m mytool --url https://example.com",
+            "python3 x.py http://10.0.0.5:8080/",
+            // 33o QA Finding 1: hosts that only start like this computer
+            "python3 x.py http://127.evil.com/",
+            "python3 x.py http://127.0.0.1.evil.example/x",
+            "node x.js http://localhost.evil.example:3000/",
+            "python3 x.py http://[::ffff:127.0.0.1.evil.example]/",
+            // 33o QA Minor 1: a real address that only looks like a file stays an address
+            "python3 x.py --to me@x.io",
+            "python3 x.py --to ops@company.co.uk",
+            // 33o QA re-check: a retina-looking domain is still a domain
+            "python3 x.py --to me@2x.com",
+            "python3 x.py --to me@1x.io",
+            "python3 x.py --to me@2x.example.com",
+            "python3 x.py --to ops@3x.company.co.uk",
+            // kwnt's own server is never fine for a script either
+            "python3 x.py http://localhost:8799/api/spaces",
+            "node x.js ws://127.0.0.1:8800/",
+        ] {
+            assert!(!classify(cmd, &ws).is_allowed(), "should ask: {cmd:?}");
+        }
+        let ask = |why: &str| SmartVerdict::Ask(why.into());
+        assert_eq!(
+            classify("python3 send_reminder.py --to billing@acme.example --invoice 2291", &ws),
+            ask("`python3` is given an email address (`billing@acme.example`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("python3 x.py --to=billing@acme.example", &ws),
+            ask("`python3` is given an email address (`billing@acme.example`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("./notify.sh ops@acme.example", &ws),
+            ask("`notify.sh` is given an email address (`ops@acme.example`), so it may send something outside the folder")
+        );
+        // A web address shows only where it goes: its path and any password can hold a secret
+        assert_eq!(
+            classify("node post.js https://hooks.slack.com/services/T/B/x", &ws),
+            ask("`node` is given a web address (`https://hooks.slack.com/…`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("bash x.sh https://example.com", &ws),
+            ask("`bash` is given a web address (`https://example.com`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("python3 x.py 'https://user:secret@api.example.com/v1'", &ws),
+            ask("`python3` is given a web address (`https://api.example.com/…`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("python3 x.py http://127.evil.com/", &ws),
+            ask("`python3` is given a web address (`http://127.evil.com`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("python3 x.py http://127.evil.com:8799/api/spaces", &ws),
+            ask("`python3` is given a web address (`http://127.evil.com:8799/…`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("python3 x.py http://localhost:8799/api/spaces", &ws),
+            ask("`python3` is given kwnt's own address (`http://localhost:8799/…`), whose settings only the person may change")
+        );
+
+        for cmd in [
+            "python3 src/tool.py --flag",
+            "python3 serve.py http://localhost:8000",
+            "node e2e.js http://127.0.0.1:5173/",
+            "python3 x.py http://[::1]:8000/",
+            "node x.js http://0.0.0.0:3000",
+            "bash run.sh http://app.localhost:3000/",
+            "./run.sh ws://localhost:5173/hmr",
+            "python3 x.py left-pad@1.2.3",
+            "node x.js @types/node",
+            "node x.js react@18 lodash@latest",
+            "python3 x.py user@localhost",
+            "python3 -m pytest -q",
+            "./run.sh --out=src/x.txt",
+            // 33o QA Finding 1: whole loopback addresses still run
+            "node e2e.js http://127.1.2.3:3000/",
+            "python3 x.py http://[::1]:3000/",
+            "python3 x.py http://[::ffff:127.0.0.1]:3000/",
+            "python3 x.py http://LOCALHOST:8000/",
+            "python3 serve.py localhost:8000",
+            "python3 x.py http://evil.example@127.0.0.1:3000/",
+            // 33o QA Minor 1: file names with an `@` aren't email addresses
+            "node build.js logo@2x.png",
+            "node build.js icon@3x.svg",
+            "node build.js --out=results@2x.png",
+            "node build.js name@scope.js",
+            "node build.js Logo@2X.PNG",
+            // Known programs keep today's rules
+            "echo billing@acme.example",
+            "git commit -m 'Mail ops@acme.example about the invoice'",
+            "grep -rn https://example.com src",
+            "curl -s http://127.0.0.1:18947/health",
+        ] {
+            assert!(classify(cmd, &ws).is_allowed(), "should run: {cmd:?} → {:?}", classify(cmd, &ws));
+        }
+        // curl/wget keep their own reasons
+        assert_eq!(classify("curl https://example.com", &ws), ask("`curl` uses the network"));
     }
 
     /// 0.9.7: what a turn kwnt started on its own may run under "Ask only when risky" without a
