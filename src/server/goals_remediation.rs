@@ -1212,7 +1212,7 @@ mod tests {
         assert_eq!(short_reason("..."), "");
         let long = short_reason(&format!("{} tail", "word ".repeat(80)));
         assert_eq!(long.chars().count(), 200, "{long}");
-        assert!(long.ends_with("word…") || long.ends_with('…'));
+        assert!(long.ends_with("word…"), "{long}");
         assert!(!long.contains("tail"));
         // Multi-byte text is cut on a character, never inside one
         let wide = short_reason(&"é".repeat(300));
